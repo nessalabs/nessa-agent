@@ -190,7 +190,7 @@ impl OwnershipCoordinator {
             self.inner.remember(weak, lifetime.clone(), false);
             Ok(evidence)
         })?;
-        if let Err(error) = self.inner.publish_spawn(&evidence, None).await {
+        if let Err(error) = self.inner.publish_evidence(&evidence, None).await {
             // The caller does not receive the id on this path, so a failed
             // publication must not leave an open root that the next open cannot
             // replace. Nothing else can name this id until publication succeeds.
@@ -241,7 +241,7 @@ impl OwnershipCoordinator {
             command.cause,
             command.initiator,
         )?;
-        let committed = self.inner.commit_close(&evidence).await;
+        let committed = self.inner.persist_evidence(&evidence).await;
         Arc::clone(&self.inner).start_drain(command.lifetime.clone(), command.external_attachment);
         let waited = match command.timeout {
             Some(duration) => {
@@ -343,7 +343,7 @@ impl OwnershipCoordinator {
             .inner
             .with_graph(|graph| graph.report_state(&report))
             .ok_or(OwnershipFailure::Domain(OwnershipError::UnknownChild))?;
-        self.inner.publish_spawn(&evidence, None).await?;
+        self.inner.publish_evidence(&evidence, None).await?;
         Ok(state)
     }
 }
@@ -468,7 +468,7 @@ impl Shared {
             shared: Arc::clone(self),
             id: admitted.child.clone(),
         };
-        self.publish_spawn(&admitted.evidence, Some(&command.request_id))
+        self.publish_evidence(&admitted.evidence, Some(&command.request_id))
             .await?;
         self.preparing_factory(&command, admitted).await
     }
@@ -736,7 +736,7 @@ impl Shared {
                 .advance_spawn(request, next)
                 .map_err(OwnershipFailure::Domain)
         })?;
-        self.publish_spawn(&evidence, None).await
+        self.publish_evidence(&evidence, None).await
     }
 
     fn receipt(&self, request: &SpawnRequestId) -> Result<SpawnReceipt, OwnershipFailure> {
@@ -766,7 +766,9 @@ impl Shared {
         })
     }
 
-    async fn publish_spawn(
+    /// Audit this evidence, then write the snapshot only when that audit is accepted.
+    /// `unconfirmed_request` marks that spawn unconfirmed when the audit or the store is uncertain.
+    async fn publish_evidence(
         &self,
         evidence: &OwnershipEvidence,
         unconfirmed_request: Option<&SpawnRequestId>,
@@ -815,7 +817,9 @@ impl Shared {
         }
     }
 
-    async fn commit_close(&self, evidence: &OwnershipEvidence) -> Result<(), OwnershipFailure> {
+    /// Write the snapshot even when the audit port rejects the record.
+    /// Close intent and an interrupted cascade stay durable across that rejection.
+    async fn persist_evidence(&self, evidence: &OwnershipEvidence) -> Result<(), OwnershipFailure> {
         let audit = self.audit.record(evidence).await;
         let snapshot = self.with_graph(|graph| graph.snapshot());
         let stored = self.store.write(&snapshot).await;
@@ -1002,6 +1006,8 @@ impl Shared {
     async fn resume_from_store(self: &Arc<Self>) -> Result<(), OwnershipFailure> {
         let snapshot = self.store.read().await.map_err(OwnershipFailure::Store)?;
         let mut restored = OwnershipGraph::restore(snapshot);
+        let recovery = restored.recovery_records().to_vec();
+        let refused = restored.refusal().is_some();
         let requests: Vec<_> = restored
             .snapshot()
             .spawns
@@ -1009,7 +1015,7 @@ impl Shared {
             .map(|row| row.binding.request_id)
             .collect();
         let mut advances = Vec::new();
-        if restored.refusal().is_none() {
+        if !refused {
             for request in &requests {
                 let Some(progress) = restored.spawn_progress(request).cloned() else {
                     continue;
@@ -1037,14 +1043,17 @@ impl Shared {
                 self.remember(
                     Weak::clone(&weak),
                     row.lifetime_id.clone(),
-                    row.state != LifetimeState::Open,
+                    refused || row.state != LifetimeState::Open,
                 );
             }
         });
         for evidence in &advances {
-            let _ = self.commit_close(evidence).await;
+            let _ = self.persist_evidence(evidence).await;
         }
-        if self.with_graph(|graph| graph.refusal().is_some()) {
+        for evidence in &recovery {
+            let _ = self.persist_evidence(evidence).await;
+        }
+        if refused {
             return Ok(());
         }
         let closing: Vec<_> = rows
@@ -1189,7 +1198,7 @@ impl OwnedLifetime for LifetimeGate {
         };
         let shared_for_commit = Arc::clone(&shared);
         tokio::spawn(async move {
-            let _ = shared_for_commit.commit_close(&evidence).await;
+            let _ = shared_for_commit.persist_evidence(&evidence).await;
         });
         shared.start_drain(self.lifetime.clone(), true);
     }
@@ -1204,7 +1213,7 @@ impl OwnedLifetime for LifetimeGate {
                 Initiator::Host(host_actor(actor)?),
             )
             .map_err(to_agent)?;
-        let committed = shared.commit_close(&evidence).await;
+        let committed = shared.persist_evidence(&evidence).await;
         shared.start_drain(self.lifetime.clone(), true);
         committed.map_err(to_agent)
     }

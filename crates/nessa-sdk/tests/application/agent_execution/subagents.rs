@@ -18,10 +18,10 @@ use nessa_sdk::application::agent_execution::subagents::{
 };
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::agent_execution::subagents::{
-    AgentLifetimeId, ApprovalPolicy, DeliveryState, EvidenceFact, HostActor, Initiator,
-    LifetimeCause, LifetimeRow, LifetimeState, OwnershipError, OwnershipEvidence, OwnershipGraph,
-    OwnershipSnapshot, PhysicalFact, PolicyRead, ReportId, SpawnAdmission, SpawnBinding,
-    SpawnOrigin, SpawnProgress, SpawnRequestId, SpawnRow, TaskDigest, TaskReceiptId,
+    AgentLifetimeId, ApprovalPolicy, CloseOperationId, DeliveryState, EvidenceFact, HostActor,
+    Initiator, LifetimeCause, LifetimeRow, LifetimeState, OwnershipError, OwnershipEvidence,
+    OwnershipGraph, OwnershipSnapshot, PhysicalFact, PolicyRead, ReportId, SpawnAdmission,
+    SpawnBinding, SpawnOrigin, SpawnProgress, SpawnRequestId, SpawnRow, TaskDigest, TaskReceiptId,
 };
 use tokio::sync::Notify;
 
@@ -1031,6 +1031,136 @@ async fn r3_resume_of_a_closing_tree_does_not_dispatch() {
 }
 
 #[tokio::test]
+async fn r3_an_open_child_of_a_closing_parent_is_not_runnable() {
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let parent = AgentLifetimeId::new("root-life").unwrap();
+    let child = AgentLifetimeId::new("child-life").unwrap();
+    let request = SpawnRequestId::new("child-req").unwrap();
+    let snapshot = OwnershipSnapshot {
+        lifetimes: vec![
+            LifetimeRow {
+                lifetime_id: parent.clone(),
+                session_id: SessionId::new("root-session").unwrap(),
+                state: LifetimeState::Closing,
+                close_operation: Some(CloseOperationId::new("close-1").unwrap()),
+                cause: Some(LifetimeCause::HostClose),
+                initiator: Some(Initiator::Host(actor("close"))),
+                cascaded_from: None,
+            },
+            open_row(&child, "child-session"),
+        ],
+        spawns: vec![SpawnRow {
+            child_lifetime: child.clone(),
+            child_session: SessionId::new("child-session").unwrap(),
+            binding: binding(&parent, &request, "task"),
+            progress: SpawnProgress::Reserved,
+        }],
+        settlements: Vec::new(),
+        reports: Vec::new(),
+    };
+    store.write(&snapshot).await.unwrap();
+    let world = resumed(Arc::clone(&store));
+    world.coordinator.resume().await.unwrap();
+    assert_eq!(
+        world.coordinator.lifetime_state(&child),
+        Some(LifetimeState::Closing)
+    );
+    assert_eq!(
+        world.coordinator.cascaded_from(&child).as_ref(),
+        Some(&parent)
+    );
+    assert_eq!(
+        world.coordinator.close_cause(&parent),
+        Some(LifetimeCause::HostClose)
+    );
+    assert!(world
+        .coordinator
+        .participation(&child)
+        .expect("child gate")
+        .is_sealed());
+    assert_eq!(world.factory.prepares(), 0);
+    let refused = world
+        .coordinator
+        .spawn(world.command(&child, "grand-req", "task"))
+        .await;
+    assert_eq!(
+        refused,
+        Err(OwnershipFailure::Domain(OwnershipError::ParentClosing))
+    );
+    let saved = store.read().await.unwrap();
+    let saved_child = saved
+        .lifetimes
+        .iter()
+        .find(|row| row.lifetime_id == child)
+        .expect("child row");
+    assert_eq!(saved_child.state, LifetimeState::Closing);
+}
+
+#[tokio::test]
+async fn r5_an_open_child_under_a_closed_parent_is_not_runnable() {
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let parent = AgentLifetimeId::new("root-life").unwrap();
+    let child = AgentLifetimeId::new("child-life").unwrap();
+    let request = SpawnRequestId::new("child-req").unwrap();
+    let snapshot = OwnershipSnapshot {
+        lifetimes: vec![
+            LifetimeRow {
+                lifetime_id: parent.clone(),
+                session_id: SessionId::new("root-session").unwrap(),
+                state: LifetimeState::Closed,
+                close_operation: Some(CloseOperationId::new("close-1").unwrap()),
+                cause: Some(LifetimeCause::HostClose),
+                initiator: Some(Initiator::Host(actor("close"))),
+                cascaded_from: None,
+            },
+            open_row(&child, "child-session"),
+        ],
+        spawns: vec![SpawnRow {
+            child_lifetime: child.clone(),
+            child_session: SessionId::new("child-session").unwrap(),
+            binding: binding(&parent, &request, "task"),
+            progress: SpawnProgress::Ended {
+                known: nessa_sdk::domain::agent_execution::subagents::KnownMilestone::Reserved,
+            },
+        }],
+        settlements: Vec::new(),
+        reports: Vec::new(),
+    };
+    store.write(&snapshot).await.unwrap();
+    let world = resumed(Arc::clone(&store));
+    world.coordinator.resume().await.unwrap();
+    assert_eq!(
+        world.coordinator.lifetime_state(&child),
+        Some(LifetimeState::Open)
+    );
+    assert_eq!(
+        world.coordinator.lifetime_state(&parent),
+        Some(LifetimeState::Closed)
+    );
+    assert!(world
+        .coordinator
+        .participation(&child)
+        .expect("child gate")
+        .is_sealed());
+    assert_eq!(world.factory.prepares(), 0);
+    let refused = world
+        .coordinator
+        .spawn(world.command(&child, "grand-req", "task"))
+        .await;
+    assert_eq!(
+        refused,
+        Err(OwnershipFailure::Domain(OwnershipError::DispatchRefused))
+    );
+    let saved = store.read().await.unwrap();
+    let saved_child = saved
+        .lifetimes
+        .iter()
+        .find(|row| row.lifetime_id == child)
+        .expect("child row");
+    assert_eq!(saved_child.state, LifetimeState::Open);
+}
+
+#[tokio::test]
 async fn r4_reopen_mints_a_new_lifetime_and_does_not_adopt_children() {
     let world = World::new(8);
     let root = world.root().await;
@@ -1087,6 +1217,11 @@ async fn r5_a_cycle_stays_readable_and_refuses_dispatch() {
     let page = world.coordinator.children(&left, None, 10).unwrap();
     assert_eq!(page.children.len(), 1);
     assert_eq!(world.factory.prepares(), 0);
+    assert!(world
+        .coordinator
+        .participation(&left)
+        .expect("cycle gate")
+        .is_sealed());
 }
 
 fn resumed(store: Arc<MemoryOwnershipStore>) -> World {

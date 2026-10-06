@@ -40,6 +40,8 @@ pub struct OwnershipGraph {
     settlements: BTreeMap<(AgentLifetimeId, AgentLifetimeId), Settlement>,
     reports: BTreeMap<ReportId, ReportRow>,
     refusal: Option<OwnershipError>,
+    /// Open descendants joined to a closing ancestor while reloading.
+    recovery: Vec<OwnershipEvidence>,
 }
 
 /// A spawn the caller wants admitted.
@@ -111,12 +113,19 @@ impl OwnershipGraph {
             settlements: BTreeMap::new(),
             reports: BTreeMap::new(),
             refusal: None,
+            recovery: Vec::new(),
         }
     }
 
     /// Why dispatch is refused, when restoration found illegal history.
     pub fn refusal(&self) -> Option<&OwnershipError> {
         self.refusal.as_ref()
+    }
+
+    /// Close intents for open descendants joined to a closing ancestor during reload.
+    /// Empty when the snapshot was already consistent, or when dispatch is refused.
+    pub fn recovery_records(&self) -> &[OwnershipEvidence] {
+        &self.recovery
     }
 
     /// Session bound to this lifetime, when the id is present.
@@ -405,7 +414,7 @@ impl OwnershipGraph {
             }
             LifetimeState::Open => {}
         }
-        self.seal(lifetime, operation, cause, initiator, None);
+        let _sealed = self.seal(lifetime, operation, cause, initiator, None);
         let targets = self.unsettled_targets(lifetime);
         let current = self.lifetimes.get(lifetime).expect("sealed lifetime");
         Ok(CloseAdmission {
@@ -615,29 +624,29 @@ impl OwnershipGraph {
         }
     }
 
-    /// Reload rows. Illegal history stays readable and refuses later dispatch.
+    /// Reload rows.
+    ///
+    /// An open descendant of a closing ancestor joins that close, so it is not
+    /// runnable. An open descendant of a closed ancestor is contradictory: those
+    /// rows stay as stored and later dispatch is refused. Other illegal history
+    /// stays readable and refuses later dispatch.
     pub fn restore(snapshot: OwnershipSnapshot) -> Self {
         let mut graph = Self::new();
         let mut refusal = None;
-        let mut remember = |error: OwnershipError| {
-            if refusal.is_none() {
-                refusal = Some(error);
-            }
-        };
         for row in snapshot.lifetimes {
             if graph.lifetimes.contains_key(&row.lifetime_id) {
-                remember(OwnershipError::Contradictory);
+                note_refusal(&mut refusal, OwnershipError::Contradictory);
                 continue;
             }
             if row.state == LifetimeState::Open
                 && (row.cause.is_some() || row.close_operation.is_some() || row.initiator.is_some())
             {
-                remember(OwnershipError::Contradictory);
+                note_refusal(&mut refusal, OwnershipError::Contradictory);
             }
             if row.state != LifetimeState::Open
                 && (row.cause.is_none() || row.initiator.is_none() || row.close_operation.is_none())
             {
-                remember(OwnershipError::Contradictory);
+                note_refusal(&mut refusal, OwnershipError::Contradictory);
             }
             graph
                 .lifetimes
@@ -645,23 +654,23 @@ impl OwnershipGraph {
         }
         for row in snapshot.spawns {
             if row.child_lifetime == row.binding.parent_lifetime {
-                remember(OwnershipError::SelfParent);
+                note_refusal(&mut refusal, OwnershipError::SelfParent);
             }
             if graph.spawns.contains_key(&row.binding.request_id)
                 || graph.child_request.contains_key(&row.child_lifetime)
             {
-                remember(OwnershipError::Contradictory);
+                note_refusal(&mut refusal, OwnershipError::Contradictory);
                 continue;
             }
             match graph.lifetimes.get(&row.binding.parent_lifetime) {
-                None => remember(OwnershipError::ParentMissing),
+                None => note_refusal(&mut refusal, OwnershipError::ParentMissing),
                 Some(parent) if parent.row.session_id != row.binding.parent_session => {
-                    remember(OwnershipError::ForeignParent);
+                    note_refusal(&mut refusal, OwnershipError::ForeignParent);
                 }
                 Some(_) => {}
             }
             if !graph.lifetimes.contains_key(&row.child_lifetime) {
-                remember(OwnershipError::Contradictory);
+                note_refusal(&mut refusal, OwnershipError::Contradictory);
             }
             graph
                 .child_request
@@ -670,8 +679,15 @@ impl OwnershipGraph {
                 .spawns
                 .insert(row.binding.request_id.clone(), Spawn { row });
         }
-        if graph.has_cycle() {
-            remember(OwnershipError::Cycle);
+        let cascade = if graph.has_cycle() {
+            Some(OwnershipError::Cycle)
+        } else if refusal.is_some() {
+            None
+        } else {
+            graph.continue_interrupted_cascade()
+        };
+        if let Some(error) = cascade {
+            note_refusal(&mut refusal, error);
         }
         for row in snapshot.settlements {
             graph.settlements.insert(
@@ -684,7 +700,7 @@ impl OwnershipGraph {
         }
         for row in snapshot.reports {
             if graph.reports.contains_key(&row.report_id) {
-                remember(OwnershipError::Contradictory);
+                note_refusal(&mut refusal, OwnershipError::Contradictory);
                 continue;
             }
             graph.reports.insert(row.report_id.clone(), row);
@@ -740,7 +756,7 @@ impl OwnershipGraph {
         cause: LifetimeCause,
         initiator: Initiator,
         cascaded_from: Option<AgentLifetimeId>,
-    ) {
+    ) -> Vec<AgentLifetimeId> {
         let descendants: Vec<AgentLifetimeId> = self
             .spawns
             .values()
@@ -756,18 +772,111 @@ impl OwnershipGraph {
         row.row.cause = Some(cause.clone());
         row.row.initiator = Some(initiator.clone());
         row.row.cascaded_from = cascaded_from;
+        let mut sealed = vec![lifetime.clone()];
         for child in descendants {
             let child_state = self.lifetime_state(&child);
             if child_state == Some(LifetimeState::Open) {
-                self.seal(
+                sealed.extend(self.seal(
                     &child,
                     operation.clone(),
                     cause.clone(),
                     initiator.clone(),
                     Some(lifetime.clone()),
-                );
+                ));
             }
         }
+        sealed
+    }
+
+    /// Join open descendants to a closing ancestor. An open descendant of a
+    /// closed ancestor is left unchanged and reported as contradictory.
+    fn continue_interrupted_cascade(&mut self) -> Option<OwnershipError> {
+        let open: Vec<AgentLifetimeId> = self
+            .lifetimes
+            .iter()
+            .filter(|(_, lifetime)| lifetime.row.state == LifetimeState::Open)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &open {
+            if self.non_open_ancestor(id) == Some(LifetimeState::Closed) {
+                return Some(OwnershipError::Contradictory);
+            }
+        }
+        let gaps: Vec<AgentLifetimeId> = open
+            .into_iter()
+            .filter(|id| {
+                self.parent_id(id)
+                    .and_then(|parent| self.lifetime_state(&parent))
+                    == Some(LifetimeState::Closing)
+            })
+            .collect();
+        let mut records = Vec::new();
+        for id in gaps {
+            let parent = self
+                .parent_id(&id)
+                .expect("an open child of a closing parent names that parent");
+            let operation = self
+                .close_operation(&parent)
+                .cloned()
+                .expect("a closing parent keeps its close operation");
+            let cause = self
+                .close_cause(&parent)
+                .cloned()
+                .expect("a closing parent keeps its cause");
+            let initiator = self
+                .close_initiator(&parent)
+                .cloned()
+                .expect("a closing parent keeps its initiator");
+            let sealed = self.seal(&id, operation, cause, initiator, Some(parent));
+            for lifetime in sealed {
+                let row = self
+                    .lifetimes
+                    .get(&lifetime)
+                    .expect("sealed lifetime is recorded");
+                records.push(OwnershipEvidence {
+                    parent_lifetime: lifetime,
+                    child_lifetime: None,
+                    close_operation: row.row.close_operation.clone(),
+                    before: OwnershipMeaning::Open,
+                    after: OwnershipMeaning::Closing,
+                    cause: row.row.cause.clone(),
+                    initiator: row
+                        .row
+                        .initiator
+                        .clone()
+                        .expect("a sealed lifetime keeps its initiator"),
+                });
+            }
+        }
+        self.recovery = records;
+        None
+    }
+
+    fn non_open_ancestor(&self, lifetime: &AgentLifetimeId) -> Option<LifetimeState> {
+        let mut current = lifetime.clone();
+        loop {
+            let parent = self.parent_id(&current)?;
+            let state = self
+                .lifetime_state(&parent)
+                .expect("a spawn parent is a recorded lifetime");
+            if state != LifetimeState::Open {
+                return Some(state);
+            }
+            current = parent;
+        }
+    }
+
+    fn parent_id(&self, lifetime: &AgentLifetimeId) -> Option<AgentLifetimeId> {
+        let request = self.child_request.get(lifetime)?;
+        Some(
+            self.spawns
+                .get(request)
+                .expect("child request maps to a spawn")
+                .row
+                .binding
+                .parent_lifetime
+                .clone(),
+        )
     }
 
     fn unsettled_targets(&self, root: &AgentLifetimeId) -> Vec<AgentLifetimeId> {
@@ -881,6 +990,12 @@ impl OwnershipGraph {
 impl Default for OwnershipGraph {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn note_refusal(slot: &mut Option<OwnershipError>, error: OwnershipError) {
+    if slot.is_none() {
+        *slot = Some(error);
     }
 }
 

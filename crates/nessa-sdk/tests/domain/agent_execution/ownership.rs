@@ -1046,6 +1046,7 @@ fn child_pages_use_the_published_bound_and_a_cursor() {
     let again = graph.snapshot();
     let restored = OwnershipGraph::restore(again.clone());
     assert!(restored.refusal().is_none());
+    assert!(restored.recovery_records().is_empty());
     assert_eq!(restored.snapshot().spawns.len(), again.spawns.len());
 }
 
@@ -1662,5 +1663,199 @@ fn a_closed_child_is_omitted_when_the_parent_seals() {
     assert_eq!(
         graph.lifetime_state(&life("child")),
         Some(LifetimeState::Closed)
+    );
+}
+
+fn row(name: &str, state: LifetimeState) -> LifetimeRow {
+    let sealed = state != LifetimeState::Open;
+    LifetimeRow {
+        lifetime_id: life(name),
+        session_id: session(name),
+        state,
+        close_operation: sealed.then_some(close_id("close-1")),
+        cause: sealed.then_some(LifetimeCause::HostClose),
+        initiator: sealed.then_some(Initiator::Host(actor("close"))),
+        cascaded_from: None,
+    }
+}
+
+fn child_spawn(parent: &str, child: &str, request: &str) -> SpawnRow {
+    SpawnRow {
+        child_lifetime: life(child),
+        child_session: session(child),
+        binding: binding(parent, request, request),
+        progress: SpawnProgress::Reserved,
+    }
+}
+
+#[test]
+fn r3_an_open_descendant_of_a_closing_ancestor_joins_that_close() {
+    let mut snapshot = OwnershipSnapshot::default();
+    snapshot
+        .lifetimes
+        .push(row("parent", LifetimeState::Closing));
+    snapshot.lifetimes.push(row("child", LifetimeState::Open));
+    snapshot.lifetimes.push(row("grand", LifetimeState::Open));
+    snapshot
+        .spawns
+        .push(child_spawn("parent", "child", "child-req"));
+    snapshot
+        .spawns
+        .push(child_spawn("child", "grand", "grand-req"));
+    let mut graph = OwnershipGraph::restore(snapshot);
+    assert!(graph.refusal().is_none());
+    assert_eq!(
+        graph.lifetime_state(&life("parent")),
+        Some(LifetimeState::Closing)
+    );
+    assert_eq!(
+        graph.close_cause(&life("parent")),
+        Some(&LifetimeCause::HostClose)
+    );
+    assert!(graph.cascaded_from(&life("parent")).is_none());
+    assert_eq!(
+        graph.lifetime_state(&life("child")),
+        Some(LifetimeState::Closing)
+    );
+    assert_eq!(
+        graph.lifetime_state(&life("grand")),
+        Some(LifetimeState::Closing)
+    );
+    assert_eq!(graph.cascaded_from(&life("child")), Some(&life("parent")));
+    assert_eq!(graph.cascaded_from(&life("grand")), Some(&life("child")));
+    assert_eq!(
+        graph.close_cause(&life("child")),
+        Some(&LifetimeCause::HostClose)
+    );
+    assert_eq!(
+        graph
+            .close_operation(&life("grand"))
+            .map(CloseOperationId::as_str),
+        Some("close-1")
+    );
+    assert_eq!(graph.recovery_records().len(), 2);
+    assert!(graph.recovery_records().iter().all(|record| {
+        record.before == OwnershipMeaning::Open && record.after == OwnershipMeaning::Closing
+    }));
+    let joined = graph
+        .begin_close(
+            &life("parent"),
+            close_id("close-again"),
+            LifetimeCause::OwnerDisposed,
+            Initiator::Runtime,
+        )
+        .unwrap();
+    assert!(joined.joined);
+    assert_eq!(
+        graph.close_cause(&life("parent")),
+        Some(&LifetimeCause::HostClose)
+    );
+    assert!(joined.targets.contains(&life("child")));
+    assert!(joined.targets.contains(&life("grand")));
+    assert_eq!(
+        graph.admit_spawn(SpawnAdmission {
+            child_lifetime: life("extra"),
+            child_session: session("extra"),
+            binding: binding("child", "extra-req", "extra"),
+            live_room: true,
+        }),
+        Err(OwnershipError::ParentClosing)
+    );
+
+    let mut direct = OwnershipSnapshot::default();
+    direct.lifetimes.push(row("parent", LifetimeState::Closing));
+    let mut child = row("child", LifetimeState::Closing);
+    child.cause = Some(LifetimeCause::OwnerDisposed);
+    child.close_operation = Some(close_id("close-child"));
+    child.initiator = Some(Initiator::Runtime);
+    child.cascaded_from = Some(life("parent"));
+    direct.lifetimes.push(child);
+    direct.lifetimes.push(row("grand", LifetimeState::Open));
+    direct
+        .spawns
+        .push(child_spawn("parent", "child", "child-req"));
+    direct
+        .spawns
+        .push(child_spawn("child", "grand", "grand-req"));
+    let graph = OwnershipGraph::restore(direct);
+    assert!(graph.refusal().is_none());
+    assert_eq!(
+        graph.close_cause(&life("child")),
+        Some(&LifetimeCause::OwnerDisposed)
+    );
+    assert_eq!(
+        graph
+            .close_operation(&life("child"))
+            .map(CloseOperationId::as_str),
+        Some("close-child")
+    );
+    assert_eq!(
+        graph.close_cause(&life("parent")),
+        Some(&LifetimeCause::HostClose)
+    );
+    assert_eq!(
+        graph.lifetime_state(&life("grand")),
+        Some(LifetimeState::Closing)
+    );
+    assert_eq!(
+        graph.close_cause(&life("grand")),
+        Some(&LifetimeCause::OwnerDisposed)
+    );
+    assert_eq!(graph.cascaded_from(&life("grand")), Some(&life("child")));
+    assert_eq!(graph.recovery_records().len(), 1);
+    assert_eq!(graph.recovery_records()[0].parent_lifetime, life("grand"));
+}
+
+#[test]
+fn r5_an_open_child_under_a_closed_ancestor_stays_readable() {
+    let mut snapshot = OwnershipSnapshot::default();
+    snapshot
+        .lifetimes
+        .push(row("closed-root", LifetimeState::Closed));
+    snapshot
+        .lifetimes
+        .push(row("closed-child", LifetimeState::Open));
+    snapshot
+        .lifetimes
+        .push(row("closing", LifetimeState::Closing));
+    snapshot.lifetimes.push(row("gap", LifetimeState::Open));
+    snapshot
+        .spawns
+        .push(child_spawn("closed-root", "closed-child", "closed-req"));
+    snapshot
+        .spawns
+        .push(child_spawn("closing", "gap", "gap-req"));
+    let mut graph = OwnershipGraph::restore(snapshot);
+    assert_eq!(graph.refusal(), Some(&OwnershipError::Contradictory));
+    assert!(graph.recovery_records().is_empty());
+    assert_eq!(
+        graph.lifetime_state(&life("closed-child")),
+        Some(LifetimeState::Open)
+    );
+    assert_eq!(
+        graph.lifetime_state(&life("gap")),
+        Some(LifetimeState::Open)
+    );
+    assert_eq!(
+        graph.lifetime_state(&life("closed-root")),
+        Some(LifetimeState::Closed)
+    );
+    assert_eq!(
+        graph.admit_spawn(SpawnAdmission {
+            child_lifetime: life("extra"),
+            child_session: session("extra"),
+            binding: binding("gap", "extra-req", "extra"),
+            live_room: true,
+        }),
+        Err(OwnershipError::DispatchRefused)
+    );
+    assert_eq!(
+        graph.begin_close(
+            &life("closing"),
+            close_id("close-again"),
+            LifetimeCause::HostClose,
+            Initiator::Runtime,
+        ),
+        Err(OwnershipError::DispatchRefused)
     );
 }

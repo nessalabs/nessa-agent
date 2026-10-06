@@ -698,4 +698,54 @@ mod tests {
             .unwrap();
         assert_eq!(body, "not-json");
     }
+
+    #[tokio::test]
+    async fn an_illegal_body_and_a_foreign_schema_version_are_left_unchanged() {
+        let directory = private_directory();
+        let path = directory.path().join("private").join("ownership.sqlite3");
+        let store = SqliteOwnershipStore::open(&path).unwrap();
+        let mut graph = OwnershipGraph::new();
+        let _evidence = graph
+            .open_root(
+                SessionId::new("root-session").unwrap(),
+                AgentLifetimeId::new("root-life").unwrap(),
+                Initiator::Runtime,
+            )
+            .unwrap();
+        store.write(&graph.snapshot()).await.unwrap();
+        drop(store);
+
+        let illegal = r#"{"lifetimes":[{"lifetime_id":"root-life","session_id":"root-session","state":"nope","close_operation":null,"cause":null,"initiator":null,"cascaded_from":null}],"spawns":[],"settlements":[],"reports":[]}"#;
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "UPDATE ownership_snapshot SET body = ?1 WHERE id = 1",
+                [illegal],
+            )
+            .unwrap();
+        drop(connection);
+        let refused = SqliteOwnershipStore::open(&path).unwrap();
+        assert!(matches!(refused.read().await, Err(PortFailure::Rejected)));
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        let body: String = connection
+            .query_row(
+                "SELECT body FROM ownership_snapshot WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(body, illegal);
+        connection.pragma_update(None, "user_version", 2).unwrap();
+        drop(connection);
+        let before = std::fs::read(&path).unwrap();
+        let opened = SqliteOwnershipStore::open(&path);
+        assert!(matches!(
+            opened,
+            Err(OpenError::Version {
+                found: 2,
+                expected: 1
+            })
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
 }
