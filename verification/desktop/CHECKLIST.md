@@ -29,6 +29,15 @@ production build at 4× CPU throttling.
   _Check:_ `perf-budget.mjs` (defaults: `--mode prod --throttle 4 --runs 3`).
   Read max and median per row; every over-budget frame carries its Long
   Animation Frame attribution (scripts, forced layout, style-and-layout time).
+- [ ] **The budget decides on the unrounded frame** (#369). The table rounds
+  maxima for display. A 50.1 ms frame fails when that table shows 50; an exact
+  50 ms frame and a 49.6 ms frame pass.
+  _Check:_ `lib/perf.test.mjs` (`frame budget`).
+- [ ] **Style-and-layout time is a duration on the performance clock** (#369). The
+  sample shifts `start`, `renderStart`, and `styleAndLayoutStart` together
+  onto the interaction. A zero phase start means that phase did not run, so
+  the diagnostic is absent rather than a negative duration.
+  _Check:_ `lib/perf.test.mjs` (`long animation frame clock`).
 - [ ] **The measurement works.** The calibration busy loop slows by roughly
   the throttle rate, and a 120 ms frame of known cost is measured and attributed.
   _Check:_ the `calibration` result of `perf-budget.mjs`; if it fails, no
