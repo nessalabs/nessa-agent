@@ -159,7 +159,8 @@ withdrawn review), calls an MCP tool, fails the turn, waits for
 the file answers. A run without `--scenario` is the default above: the first
 completed prompt is one recorded call, and a later prompt is text and no tool
 call. `scenarios/text-reply.json` is the
-plain reply `gateway-window.mjs --scripted` uses. `scenarios/window.json` is
+plain reply `gateway-window.mjs --scripted` uses, and the turn that calls
+`review_rows` when the prompt says "show the server's app". `scenarios/window.json` is
 the permission, failure and cancel `scripted-scenarios.mjs` drives. The
 state table is in `scripted-scenario.mjs`, and its tests are
 `scripted-scenario.test.mjs`.

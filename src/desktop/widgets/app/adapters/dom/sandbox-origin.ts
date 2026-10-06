@@ -40,17 +40,33 @@ export function sandboxFor(
     case "browser":
       return pageSandbox(document)
     case "other":
-      return {
+      return desktopSandbox(document, {
         url: "http://nessa-sandbox.localhost/proxy.html",
         origin: "http://nessa-sandbox.localhost",
-      }
+      })
     case "macos":
     case "linux":
-      return {
+      return desktopSandbox(document, {
         url: "nessa-sandbox://localhost/proxy.html",
         origin: "nessa-sandbox://localhost",
-      }
+      })
   }
+}
+
+/**
+ * The scheme, or the proxy the page names when this page's host did not
+ * install `convertFileSrc`. The real webview does. An IPC stub does not,
+ * and a sandboxed frame cannot open a scheme that host did not register.
+ */
+function desktopSandbox(document: Document, scheme: SandboxOrigin): SandboxOrigin {
+  if (hostInstallsConvertFileSrc()) return scheme
+  return pageSandbox(document) ?? scheme
+}
+
+function hostInstallsConvertFileSrc(): boolean {
+  const internals = (globalThis as { __TAURI_INTERNALS__?: { convertFileSrc?: unknown } })
+    .__TAURI_INTERNALS__
+  return typeof internals?.convertFileSrc === "function"
 }
 
 /** The proxy the page names, if it names one this page may use. */

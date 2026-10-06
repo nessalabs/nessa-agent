@@ -34,7 +34,12 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 
-import { TEXT_REPLY_SCENARIO } from "../../../scripts/mcp-test-server/scenarios.mjs"
+import { SERVER, toolPrompt } from "../../../scripts/mcp-test-server/local-gateway.mjs"
+import {
+  TEXT_REPLY_APP_PROMPT,
+  TEXT_REPLY_SCENARIO,
+} from "../../../scripts/mcp-test-server/scenarios.mjs"
+import { appFrame, oneMount } from "./lib/apps.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log, resultOfThrown } from "./lib/cli.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
@@ -44,18 +49,25 @@ import {
   startGatewayStack,
   waitFor,
 } from "./lib/gateway-stack.mjs"
-import { lastTurn } from "./lib/gateway-view.mjs"
+import {
+  admitOnce,
+  callKey,
+  lastTurn,
+  permissionKey,
+  setupOutcome,
+} from "./lib/gateway-view.mjs"
 import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
 import { css } from "./lib/selectors.mjs"
 import { inside, settled } from "./lib/workspace.mjs"
 
-const steps = ["handshake", "lists", "opens", "live"]
+const APP_TOOL = "review_rows"
+const steps = ["handshake", "lists", "opens", "live", "apps"]
 
 const meta = {
   name: "gateway-window",
   summary:
-    "the desktop app's window over a real gateway: its handshake, a conversation, a turn made elsewhere",
+    "the desktop app's window over a real gateway: its handshake, a conversation, a turn made elsewhere, the server's MCP App",
   defaults: { engine: "chromium,webkit", layout: "columns" },
   options: {
     only: { type: "string" },
@@ -75,8 +87,9 @@ previews a production build; the default is a dev server.
 Options:
   --agent claude|codex  the agent the gateway runs (default: claude)
   --scripted            run the text-reply scenario (scenarios/text-reply.json)
-                        as that agent: no model, no sign-in; each prompt is
-                        answered "Ready."
+                        as that agent: no model, no sign-in. A prompt is
+                        answered "Ready.", except "show the server's app",
+                        which calls review_rows.
   --evidence <dir>      with --scripted, write acp.jsonl, mcp.jsonl, gateway.log
                         and view.json there
 
@@ -91,6 +104,13 @@ Steps, per engine and layout, in order on one page (--only <names> to pick):
           then the agent's reply, exactly as the gateway holds them (W2)
   live    a turn sent from another surface, once the gateway holds it, is
           drawn in the open transcript, in order, the page not reloaded (W3)
+  apps    the test server's review_rows app is drawn inline in the main
+          window, one frame, live, its document the server's (#574). Dev
+          server only: --mode prod leaves this step out unless --only names
+          it, and then it could not run. With --scripted the prompt contains
+          "show the server's app", which is the text-reply scenario's turn
+          that calls review_rows. Each page gets its own conversation, so a
+          second engine is not a second call in the first.
 
 After the steps, once handshake has run:
   handshakes  every handshake the window made — its first and each reconnect
@@ -373,12 +393,101 @@ const checks = {
     if (kept !== mark) failures.push("the page was reloaded during the turn")
     return { seen: { before, messages: now, reloaded: kept !== mark }, failures }
   },
+
+  apps: async (page, stack, options) => {
+    if (options.mode === "prod") throw new CannotRun("not run: dev server only")
+    const failures = []
+    const conversationId = randomUUID()
+    const marker = `A${randomUUID().slice(0, 8)}`
+    const prompt = options.scripted
+      ? `${marker}: ${TEXT_REPLY_APP_PROMPT}`
+      : toolPrompt([{ name: APP_TOOL }])
+    let admitted = null
+    const answered = new Set()
+    const { view, turn: ended } = await agentTurn(stack.client, conversationId, prompt, {
+      agent: options.agent,
+      create: true,
+      onView: async (current) => {
+        for (;;) {
+          const { allow, extra } = admitOnce(
+            current,
+            admitted,
+            answered,
+            SERVER,
+            APP_TOOL,
+          )
+          if (extra)
+            throw new CannotRun(
+              `${options.agent} called ${APP_TOOL} more than once (${admitted}, ${extra})`,
+            )
+          if (!allow) break
+          admitted = allow.call
+          answered.add(permissionKey(allow.permission))
+          await stack.client.conversation.answer(
+            conversationId,
+            allow.permission.executionId,
+            allow.permission.permissionId,
+            allow.option.id,
+          )
+        }
+      },
+    })
+    if (ended.status !== "completed")
+      throw new CannotRun(`${options.agent}'s app turn ended ${ended.status}`)
+    const outcome = setupOutcome(view, SERVER, APP_TOOL)
+    if (outcome.kind !== "ready")
+      throw new CannotRun(
+        `${APP_TOOL} is ${outcome.kind}${
+          outcome.call ? ` (${outcome.call.status}, ${callKey(outcome.call)})` : ""
+        }`,
+      )
+    const { conversations } = await stack.client.conversation.list({})
+    const title = conversations.find(
+      (each) => each.conversationId === conversationId,
+    )?.title
+    if (!title) throw new CannotRun("the app conversation has no title to find it by")
+    const row = page.locator(css.sessionRow, { hasText: title }).first()
+    const listed = await row
+      .waitFor({ timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!listed)
+      return {
+        seen: { title },
+        failures: [`no session row "${title}" for the app turn`],
+      }
+    await row.click()
+    await settled(page)
+    const drawn = await page
+      .waitForSelector(css.appFrameIn("inline"), { timeout: 30_000, state: "attached" })
+      .then(() => true)
+      .catch(() => false)
+    const frames = drawn ? (await page.$$(css.appFrameIn("inline"))).length : 0
+    const once = oneMount(frames)
+    if (once) failures.push(once)
+    if (!drawn) return { seen: { frames }, failures }
+    const { app } = await appFrame(page, "inline", 30_000)
+    await app
+      .waitForSelector(css.reviewState("live"), { timeout: 20_000 })
+      .catch(() => {})
+    const seen = await app.evaluate(() => ({
+      state: document.body.getAttribute("data-review-state"),
+      heading: document.querySelector("h1")?.textContent ?? null,
+    }))
+    seen.frames = frames
+    if (seen.state !== "live") failures.push(`the app is ${seen.state}, not live`)
+    if (seen.heading !== "Review rows (nessa-test)")
+      failures.push(`the app's document is not the server's: ${seen.heading}`)
+    return { seen, failures }
+  },
 }
 
 await main(
   meta,
   async ({ options, rep, target: stack }) => {
-    const only = chosen(options.only, steps, options.list)
+    const only = chosen(options.only, steps, options.list).filter(
+      (name) => name !== "apps" || options.mode !== "prod" || Boolean(options.only),
+    )
     rep.add({
       name: "setup",
       seen: { title: stack.title },
@@ -447,7 +556,11 @@ await main(
               (result.failures ?? []).length === 0
             ) {
               mkdirSync(options.shots, { recursive: true })
-              await opened.page
+              const surface =
+                name === "apps"
+                  ? opened.page.locator(css.appFrameIn("inline")).first()
+                  : opened.page
+              await surface
                 .screenshot({
                   path: join(
                     options.shots,

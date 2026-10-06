@@ -24,7 +24,11 @@ import {
   scenarioScript,
   turnFor,
 } from "./scripted-scenario.mjs"
-import { WINDOW_SCENARIO } from "./scenarios.mjs"
+import {
+  TEXT_REPLY_APP_PROMPT,
+  TEXT_REPLY_SCENARIO,
+  WINDOW_SCENARIO,
+} from "./scenarios.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const mcptest = {
@@ -746,4 +750,16 @@ test("codex allow carries no claude call id on the MCP call", async () => {
     ),
     true,
   )
+})
+
+test("text-reply answers any prompt with Ready, and show the server's app calls review_rows", () => {
+  const scenario = parseScenario(JSON.parse(readFileSync(TEXT_REPLY_SCENARIO, "utf8")))
+  const plain = turnFor(scenario, "Wabc: reply with exactly that word")
+  assert.equal(plain?.when, undefined)
+  assert.equal(plain?.steps[0].chunks.join(""), "Ready.")
+  const app = turnFor(scenario, TEXT_REPLY_APP_PROMPT)
+  assert.equal(app?.when, TEXT_REPLY_APP_PROMPT)
+  assert.deepEqual(app?.steps[0], { do: "tool", tool: "review_rows", arguments: {} })
+  const marked = turnFor(scenario, `A123: ${TEXT_REPLY_APP_PROMPT}`)
+  assert.equal(marked, app)
 })

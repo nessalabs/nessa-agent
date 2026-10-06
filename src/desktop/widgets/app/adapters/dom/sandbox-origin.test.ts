@@ -15,16 +15,43 @@ const name = (url: string | null) => {
 afterEach(() => name(null))
 
 describe("the desktop app's proxy", () => {
+  const scheme = {
+    url: "nessa-sandbox://localhost/proxy.html",
+    origin: "nessa-sandbox://localhost",
+  }
+  const windows = {
+    url: "http://nessa-sandbox.localhost/proxy.html",
+    origin: "http://nessa-sandbox.localhost",
+  }
+
   it("is the nessa-sandbox scheme, an http host on Windows (other)", () => {
-    expect(sandboxFor("macos", document)).toEqual({
-      url: "nessa-sandbox://localhost/proxy.html",
-      origin: "nessa-sandbox://localhost",
-    })
-    expect(sandboxFor("linux", document)).toEqual(sandboxFor("macos", document))
-    expect(sandboxFor("other", document)).toEqual({
-      url: "http://nessa-sandbox.localhost/proxy.html",
-      origin: "http://nessa-sandbox.localhost",
-    })
+    expect(sandboxFor("macos", document)).toEqual(scheme)
+    expect(sandboxFor("linux", document)).toEqual(scheme)
+    expect(sandboxFor("other", document)).toEqual(windows)
+  })
+
+  it("uses the scheme when convertFileSrc is installed, even if the page names a proxy", () => {
+    name("http://127.0.0.1:43941/proxy.html")
+    const internals = { convertFileSrc: () => "asset://local" }
+    Object.assign(globalThis, { __TAURI_INTERNALS__: internals })
+    try {
+      expect(sandboxFor("linux", document)).toEqual(scheme)
+      expect(sandboxFor("macos", document)).toEqual(scheme)
+      expect(sandboxFor("other", document)).toEqual(windows)
+    } finally {
+      delete (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+    }
+  })
+
+  it("uses the proxy the page names when convertFileSrc is not installed", () => {
+    name("http://127.0.0.1:43941/proxy.html")
+    const named = {
+      url: "http://127.0.0.1:43941/proxy.html",
+      origin: "http://127.0.0.1:43941",
+    }
+    expect(sandboxFor("linux", document)).toEqual(named)
+    expect(sandboxFor("macos", document)).toEqual(named)
+    expect(sandboxFor("other", document)).toEqual(named)
   })
 })
 
