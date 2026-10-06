@@ -531,19 +531,15 @@ impl AuthorizationOwner {
         let flight = {
             let mut guard = slot.lock().await;
             if !rejected {
-                if let Admission::Bearer { generation } = guard
-                    .auth
-                    .admission(self.clock.now_ms(), &guard.auth.resource)
-                {
+                if let Admission::Bearer { generation } = self.live_admission(&guard, server) {
                     guard.handed = generation;
-                    return self.bearer_of(&guard.auth).await;
+                    drop(guard);
+                    return self.release_bearer(&slot, server, generation).await;
                 }
             } else if guard.auth.generation > guard.handed {
-                if let Admission::Bearer { generation } = guard
-                    .auth
-                    .admission(self.clock.now_ms(), &guard.auth.resource)
-                {
-                    return self.bearer_of_generation(&guard.auth, generation).await;
+                if let Admission::Bearer { generation } = self.live_admission(&guard, server) {
+                    drop(guard);
+                    return self.release_bearer(&slot, server, generation).await;
                 }
             }
             let decision = guard.auth.step(Command::RefreshRequested {
@@ -585,18 +581,22 @@ impl AuthorizationOwner {
                 .await;
             return Err(McpError::Unauthorized);
         }
-        let (endpoint, refresh_token, client_id, resource, generation) = {
+        let (endpoint, client_id, resource, generation) = {
             let guard = slot.lock().await;
-            let server = guard.auth.server;
-            let secret = self.records.load_secret(server).await.ok().flatten();
             (
                 guard.token_endpoint.clone(),
-                secret.and_then(|secret| secret.refresh_token),
                 guard.auth.client_id.clone(),
                 guard.auth.resource.clone(),
                 guard.auth.generation,
             )
         };
+        let refresh_token = self
+            .records
+            .load_secret(server)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|secret| secret.refresh_token);
         let Some(endpoint) = endpoint.filter(|url| discovery::https_url(url)) else {
             self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched)
                 .await;
@@ -639,8 +639,7 @@ impl AuthorizationOwner {
         let answer = self.publish_token(&slot, &outcome.body, true).await;
         let result = match answer {
             AuthorizeAnswer::Ready { generation } => {
-                let guard = slot.lock().await;
-                self.bearer_of_generation(&guard.auth, generation).await
+                self.release_bearer(&slot, server, generation).await
             }
             _ => Err(McpError::Unauthorized),
         };
@@ -664,25 +663,40 @@ impl AuthorizationOwner {
         flight.notify.notify_waiters();
     }
 
-    async fn bearer_of(&self, auth: &ServerAuth) -> Result<Option<Bearer>, McpError> {
-        match auth.admission(self.clock.now_ms(), &auth.resource) {
-            Admission::NoneRequired => Ok(None),
-            Admission::InsufficientScope => Err(McpError::InsufficientScope),
-            Admission::Unauthorized => Err(McpError::Unauthorized),
-            Admission::NeedsRefresh => Err(McpError::Unauthorized),
-            Admission::Bearer { generation } => self.bearer_of_generation(auth, generation).await,
+    /// What `bearer` may do against the URL configured now. No configured
+    /// URL refuses a token.
+    fn live_admission(&self, guard: &Slot, server: Uuid) -> Admission {
+        if matches!(guard.auth.phase, Phase::Unauthenticated) {
+            return Admission::NoneRequired;
+        }
+        match self.resources.resource(server) {
+            Some(resource) => guard.auth.admission(self.clock.now_ms(), &resource),
+            None => Admission::Unauthorized,
         }
     }
 
-    async fn bearer_of_generation(
+    /// Load the secret after the slot lock is released, then return it only
+    /// when the same generation is still admitted for the live URL.
+    async fn release_bearer(
         &self,
-        auth: &ServerAuth,
+        slot: &Arc<Mutex<Slot>>,
+        server: Uuid,
         generation: u64,
     ) -> Result<Option<Bearer>, McpError> {
-        match self.records.load_secret(auth.server).await {
-            Ok(Some(secret)) if secret.generation == generation => Ok(Some(secret.bearer())),
-            Ok(Some(_)) | Ok(None) => Err(McpError::Unauthorized),
-            Err(RecordFailure::Unavailable) => Err(McpError::Unreachable),
+        let loaded = self.records.load_secret(server).await;
+        let guard = slot.lock().await;
+        match self.live_admission(&guard, server) {
+            Admission::Bearer {
+                generation: current,
+            } if current == generation => match loaded {
+                Ok(Some(secret)) if secret.generation == generation => Ok(Some(secret.bearer())),
+                Ok(Some(_)) | Ok(None) => Err(McpError::Unauthorized),
+                Err(RecordFailure::Unavailable) => Err(McpError::Unreachable),
+            },
+            Admission::Bearer { .. } => Err(McpError::Unauthorized),
+            Admission::InsufficientScope => Err(McpError::InsufficientScope),
+            Admission::NoneRequired => Ok(None),
+            Admission::NeedsRefresh | Admission::Unauthorized => Err(McpError::Unauthorized),
         }
     }
 
@@ -1115,22 +1129,12 @@ impl RemoteAuthorization for AuthorizationOwner {
         };
         let admission = {
             let guard = slot.lock().await;
-            let resource = self
-                .resources
-                .resource(server)
-                .unwrap_or_else(|| guard.auth.resource.clone());
-            if resource != guard.auth.resource {
-                return Err(McpError::Unauthorized);
-            }
-            guard.auth.admission(self.clock.now_ms(), &resource)
+            self.live_admission(&guard, server)
         };
         match admission {
             Admission::NoneRequired => Ok(None),
-            Admission::Bearer { .. } => {
-                let guard = slot.lock().await;
-                let result = self.bearer_of(&guard.auth).await;
-                drop(guard);
-                result
+            Admission::Bearer { generation } => {
+                self.release_bearer(&slot, server, generation).await
             }
             Admission::InsufficientScope => Err(McpError::InsufficientScope),
             Admission::NeedsRefresh => self.refresh(server, false).await,

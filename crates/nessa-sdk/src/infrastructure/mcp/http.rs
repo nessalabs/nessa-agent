@@ -394,11 +394,10 @@ impl HttpSession {
             })
             .await
             .map_err(|_| {
-                if body_is_initialize(body) && !self.is_open() {
-                    McpError::Unreachable
-                } else {
-                    McpError::Unconfirmed
-                }
+                // `HttpFailure` carries no status. The call did not complete,
+                // so it is unreachable on the opening request and on a later
+                // one. A body that has already started is handled above.
+                McpError::Unreachable
             })
     }
 
@@ -490,7 +489,7 @@ impl HttpSession {
                                 SendOutcome::Done
                             }
                             Ok(_) => SendOutcome::End(McpError::Unauthorized),
-                            Err(_) => SendOutcome::End(McpError::Unconfirmed),
+                            Err(_) => SendOutcome::End(McpError::Unreachable),
                         }
                     }
                     Ok(None) | Err(McpError::Unauthorized) => {
@@ -503,7 +502,7 @@ impl HttpSession {
                 id,
                 error: McpError::Unreachable,
             },
-            Err(_) => SendOutcome::End(McpError::Unconfirmed),
+            Err(_) => SendOutcome::End(McpError::Unreachable),
         }
     }
 

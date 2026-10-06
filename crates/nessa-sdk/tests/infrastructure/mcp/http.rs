@@ -93,6 +93,10 @@ enum Behavior {
     Block,
     /// Legacy HTTP+SSE: POST 405, GET endpoint event, replies on that stream.
     Legacy,
+    /// A call after initialize has no HTTP status.
+    UnreachableCall,
+    /// Legacy GET starts, then the message POST has no HTTP status.
+    LegacyUnreachable,
 }
 
 impl Peer {
@@ -148,7 +152,10 @@ impl HttpExchange for Peer {
 
 impl Peer {
     async fn answer_get(&self, request: HttpRequest) -> Result<HttpResponse, HttpFailure> {
-        if matches!(self.behavior, Behavior::Legacy) {
+        if matches!(
+            self.behavior,
+            Behavior::Legacy | Behavior::LegacyUnreachable
+        ) {
             let (tx, rx) = mpsc::unbounded_channel();
             let endpoint = endpoint_of(&request.url);
             let _ = tx.send(Some(
@@ -192,9 +199,15 @@ impl Peer {
                 return Ok(response(status, vec![], b"{}".to_vec()));
             }
         }
-        if matches!(self.behavior, Behavior::Legacy) {
+        if matches!(
+            self.behavior,
+            Behavior::Legacy | Behavior::LegacyUnreachable
+        ) {
             if request.url.ends_with("/mcp") {
                 return Ok(response(405, vec![], Vec::new()));
+            }
+            if matches!(self.behavior, Behavior::LegacyUnreachable) {
+                return Err(HttpFailure::Unreachable);
             }
             let message = reply_message(&request.body, method);
             if let Some(tx) = &self.log.lock().expect("log").legacy {
@@ -208,6 +221,9 @@ impl Peer {
         }
         if method == Some("initialize") {
             return Ok(self.initialize(&request));
+        }
+        if matches!(self.behavior, Behavior::UnreachableCall) {
+            return Err(HttpFailure::Unreachable);
         }
         if method.is_none() || !body_has_id(&request.body) {
             return Ok(response(202, vec![], Vec::new()));
@@ -520,6 +536,23 @@ async fn c5_a_second_404_ends_the_session() {
     assert_eq!(
         session.list_tools().await.unwrap_err(),
         McpError::SessionExpired
+    );
+}
+
+#[tokio::test]
+async fn an_inflight_exchange_with_no_status_is_unreachable() {
+    let session = open(Peer::new(Behavior::UnreachableCall)).await.unwrap();
+    assert_eq!(
+        session.list_tools().await.unwrap_err(),
+        McpError::Unreachable
+    );
+}
+
+#[tokio::test]
+async fn a_legacy_post_with_no_status_is_unreachable() {
+    assert_eq!(
+        must_err(open(Peer::new(Behavior::LegacyUnreachable)).await),
+        McpError::Unreachable
     );
 }
 

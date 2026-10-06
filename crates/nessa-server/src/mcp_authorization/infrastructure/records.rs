@@ -406,3 +406,51 @@ fn delete_secret(
 
 /// The secret half of [`FileRecords`], named for composition.
 pub type SecretStore = FileRecords;
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod tests {
+    use nessa_agent_credentials::CredentialNamespace;
+    use uuid::Uuid;
+
+    use super::FileRecords;
+    use crate::mcp_authorization::application::{
+        AuthorizationRecords, RecordFailure, TokenMaterial,
+    };
+
+    #[tokio::test]
+    async fn a_missing_secret_writer_stores_no_token_file() {
+        let directory = std::env::temp_dir().join(format!("nessa-mcp-auth-{}", Uuid::new_v4()));
+        let records = FileRecords::new(
+            &directory,
+            CredentialNamespace::new("ci".into(), Some("one".into())).unwrap(),
+        );
+        assert!(!records.writer_available());
+        let server = Uuid::new_v4();
+        let secret = TokenMaterial {
+            access_token: "sekret".into(),
+            refresh_token: Some("refresh-sekret".into()),
+            generation: 1,
+        };
+        assert!(matches!(
+            records.store_secret(server, &secret).await,
+            Err(RecordFailure::Unavailable)
+        ));
+        assert!(matches!(
+            records.load_secret(server).await,
+            Err(RecordFailure::Unavailable)
+        ));
+        if directory.exists() {
+            for entry in std::fs::read_dir(&directory).unwrap() {
+                let path = entry.unwrap().path();
+                let bytes = std::fs::read(&path).unwrap_or_default();
+                let text = String::from_utf8_lossy(&bytes);
+                assert!(
+                    !text.contains("sekret"),
+                    "{} contains a token",
+                    path.display()
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+}
