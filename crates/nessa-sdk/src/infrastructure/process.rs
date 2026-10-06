@@ -368,11 +368,15 @@ impl ProcessScope {
         let end = Instant::now() + budget;
         loop {
             // try_wait reaps the parent; unreaped descendants still count as live.
-            if self.child.try_wait().is_err() {
-                return false;
-            }
-            if matches!(group_exists(self.group), Ok(false)) {
-                return true;
+            // An interrupted wait is not a liveness fact: keep the same budget.
+            let watched = match self.child.try_wait() {
+                Ok(_) => watch_scope(Ok(()), group_exists(self.group)),
+                Err(error) => watch_scope(Err(error), Ok(true)),
+            };
+            match watched {
+                ScopeWatch::Gone => return true,
+                ScopeWatch::Lost => return false,
+                ScopeWatch::Pending => {}
             }
             if Instant::now() >= end {
                 return false;
@@ -402,47 +406,118 @@ enum SignalDelivery {
     #[cfg(unix)]
     NotDelivered,
 }
+/// One `kill` of a process group. Rows are the cleanup probe table in
+/// `docs/state/services/sdk/runtime/stop-cancels-owned-work-and-confirms-process-cleanup.md`.
 #[cfg(unix)]
-fn signal_group(group: u32, force: bool) -> Result<SignalDelivery, AgentError> {
-    // The group ID is assigned by the OS to this child's new process group.
-    let result = unsafe {
-        libc::kill(
-            -(group as i32),
-            if force { libc::SIGKILL } else { libc::SIGTERM },
-        )
-    };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GroupSignal {
+    /// `kill` returned 0. A real signal was delivered; a probe saw a member.
+    Reached,
+    /// `ESRCH`: no such group.
+    Empty,
+    /// `EPERM`: no verdict. On macOS this is also an exiting or unreaped leader.
+    Refused,
+    /// `EINTR`: the call was interrupted. Not a verdict.
+    Interrupted,
+}
+/// What one wait-and-probe step established. The budget, not one interrupt,
+/// is what ends a wait that has not yet seen `ESRCH`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScopeWatch {
+    Gone,
+    Pending,
+    Lost,
+}
+#[cfg(unix)]
+fn classify_kill(result: i32, errno: Option<i32>) -> Result<GroupSignal, AgentError> {
     if result == 0 {
-        return Ok(SignalDelivery::Delivered);
+        return Ok(GroupSignal::Reached);
     }
-    let error = std::io::Error::last_os_error();
-    match error.raw_os_error() {
-        // The group is gone; `wait_scope` will see the same.
-        Some(libc::ESRCH) => Ok(SignalDelivery::NotDelivered),
-        // macOS: EPERM also means every member is exiting or exited-but-unreaped,
-        // which is our group when the adapter quits on stdin EOF just before this
-        // signal; `wait_scope` then reaps it and sees ESRCH. Linux and macOS:
-        // EPERM can be a real refusal (a member we may not signal). Then
-        // `wait_scope` never sees ESRCH, its probe refuses too, and cleanup ends
-        // in CleanupUncertain after the kill budget instead of at once: the
-        // same result, later. Held by `infrastructure::process::tests::
-        // signalling_an_exited_unreaped_group_is_not_a_cleanup_failure` (bites on
-        // macOS) and `a_group_that_refuses_signals_is_never_confirmed_gone`.
-        Some(libc::EPERM) => {
-            tracing::debug!(group, force, %error, "process group signal refused; wait_scope decides");
-            Ok(SignalDelivery::NotDelivered)
-        }
+    match errno {
+        Some(libc::EINTR) => Ok(GroupSignal::Interrupted),
+        Some(libc::ESRCH) => Ok(GroupSignal::Empty),
+        Some(libc::EPERM) => Ok(GroupSignal::Refused),
         _ => Err(AgentError::CleanupUncertain),
     }
 }
 #[cfg(unix)]
-fn group_exists(group: u32) -> Result<bool, AgentError> {
-    let result = unsafe { libc::kill(-(group as i32), 0) };
-    if result == 0 {
-        Ok(true)
-    } else if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
-        Ok(false)
+fn signal_verdict(signal: GroupSignal) -> SignalDelivery {
+    match signal {
+        GroupSignal::Reached => SignalDelivery::Delivered,
+        GroupSignal::Empty | GroupSignal::Refused | GroupSignal::Interrupted => {
+            SignalDelivery::NotDelivered
+        }
+    }
+}
+/// An interrupted reap is pending. Any other wait error cannot be told from a
+/// live leader, so the phase stops. A probe error, including `EPERM`, is pending
+/// until `ESRCH` or the budget. The group probe is ignored when the wait itself
+/// returned an error.
+fn watch_scope(waited: Result<(), io::Error>, group_gone: Result<bool, AgentError>) -> ScopeWatch {
+    match waited {
+        Err(error) if error.kind() == io::ErrorKind::Interrupted => ScopeWatch::Pending,
+        Err(_) => ScopeWatch::Lost,
+        Ok(()) => match group_gone {
+            Ok(false) => ScopeWatch::Gone,
+            Ok(true) | Err(_) => ScopeWatch::Pending,
+        },
+    }
+}
+/// Repeated `EINTR` from `kill(2)`. macOS documents that a caught signal
+/// interrupts `kill`. Past this bound the call is still not a verdict.
+#[cfg(unix)]
+const SIGNAL_INTERRUPT_RETRIES: u32 = 16;
+/// Asks `kill` again only for `EINTR`. `kill` is the process-group signal:
+/// the process passes [`libc_group_kill`], and a test passes a substitute
+/// that returns the scripted verdicts.
+#[cfg(unix)]
+fn kill_group(
+    group: u32,
+    signal: i32,
+    kill: impl Fn(u32, i32) -> Result<GroupSignal, AgentError>,
+) -> Result<GroupSignal, AgentError> {
+    for _ in 0..SIGNAL_INTERRUPT_RETRIES {
+        match kill(group, signal)? {
+            GroupSignal::Interrupted => continue,
+            verdict => return Ok(verdict),
+        }
+    }
+    Ok(GroupSignal::Interrupted)
+}
+/// The real process-group `kill`. The group id is the one assigned when this
+/// child was spawned with `process_group(0)`.
+#[cfg(unix)]
+fn libc_group_kill(group: u32, signal: i32) -> Result<GroupSignal, AgentError> {
+    let result = unsafe { libc::kill(-(group as i32), signal) };
+    let errno = if result == 0 {
+        None
     } else {
-        Err(AgentError::CleanupUncertain)
+        io::Error::last_os_error().raw_os_error()
+    };
+    classify_kill(result, errno)
+}
+#[cfg(unix)]
+fn signal_group(group: u32, force: bool) -> Result<SignalDelivery, AgentError> {
+    let signal = if force { libc::SIGKILL } else { libc::SIGTERM };
+    let killed = kill_group(group, signal, libc_group_kill)?;
+    if matches!(killed, GroupSignal::Refused | GroupSignal::Interrupted) {
+        tracing::debug!(
+            group,
+            force,
+            ?killed,
+            "process group signal was not a verdict; wait_scope decides"
+        );
+    }
+    Ok(signal_verdict(killed))
+}
+#[cfg(unix)]
+fn group_exists(group: u32) -> Result<bool, AgentError> {
+    match kill_group(group, 0, libc_group_kill)? {
+        GroupSignal::Reached => Ok(true),
+        GroupSignal::Empty => Ok(false),
+        // Refused or still interrupted: not `ESRCH`. `wait_scope` keeps polling
+        // until the budget. A real refusal never becomes `ESRCH`.
+        GroupSignal::Refused | GroupSignal::Interrupted => Err(AgentError::CleanupUncertain),
     }
 }
 #[cfg(not(unix))]
