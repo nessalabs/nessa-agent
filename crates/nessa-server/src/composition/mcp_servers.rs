@@ -38,7 +38,6 @@ use crate::mcp_servers::{
     },
 };
 use crate::product::mcp_servers::list_fits;
-use nessa_agent_credentials::CredentialNamespace;
 use nessa_sdk::infrastructure::{
     acp::sessions::{McpServerList, McpServerSource, StandInSessions, StdioMcpServer},
     clock::RuntimeClock,
@@ -390,7 +389,7 @@ pub(super) fn settings(
     config: PathBuf,
     audit: PathBuf,
 ) -> Result<Option<McpServerSettings>, RunError> {
-    Ok(manage(mcp, agents, config, audit, gateway_namespace())?.map(|managed| managed.settings))
+    Ok(manage(mcp, agents, config, audit)?.map(|managed| managed.settings))
 }
 
 /// [`settings`] together with the authorization owner, for the product routes.
@@ -399,20 +398,8 @@ pub(super) fn manage(
     agents: &AgentsConfig,
     config: PathBuf,
     audit: PathBuf,
-    namespace: CredentialNamespace,
 ) -> Result<Option<ManagedMcp>, RunError> {
-    manage_over(
-        mcp,
-        agents,
-        Arc::new(OsConfigFiles::new(config)),
-        audit,
-        namespace,
-    )
-}
-
-#[cfg_attr(not(all(test, unix)), allow(dead_code))]
-fn gateway_namespace() -> CredentialNamespace {
-    CredentialNamespace::new("gateway".into(), None).expect("gateway namespace")
+    manage_over(mcp, agents, Arc::new(OsConfigFiles::new(config)), audit)
 }
 
 /// [`settings`] over `files`: the real file and its lock, or — in a test —
@@ -424,10 +411,7 @@ pub(super) fn settings_over(
     files: Arc<dyn ConfigFiles>,
     audit: PathBuf,
 ) -> Result<Option<McpServerSettings>, RunError> {
-    Ok(
-        manage_over(mcp, agents, files, audit, gateway_namespace())?
-            .map(|managed| managed.settings),
-    )
+    Ok(manage_over(mcp, agents, files, audit)?.map(|managed| managed.settings))
 }
 
 fn manage_over(
@@ -435,7 +419,6 @@ fn manage_over(
     agents: &AgentsConfig,
     files: Arc<dyn ConfigFiles>,
     audit: PathBuf,
-    namespace: CredentialNamespace,
 ) -> Result<Option<ManagedMcp>, RunError> {
     let Some(fallback) = fallback_agents(agents) else {
         tracing::error!(
@@ -461,10 +444,7 @@ fn manage_over(
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| audit.clone());
-    let records = Arc::new(FileRecords::new(
-        parent.join("mcp-authorization"),
-        namespace,
-    ));
+    let records = Arc::new(FileRecords::new(parent.join("mcp-authorization")));
     let writer = records.writer_available();
     let http: Arc<dyn crate::mcp_authorization::application::OAuthHttp> = match HttpsOAuth::new() {
         Some(client) => Arc::new(client),

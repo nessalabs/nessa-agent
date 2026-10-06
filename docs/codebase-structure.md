@@ -771,7 +771,7 @@ generation, refresh and revoke (ADR 392): the domain statechart, the
 owner that fences a URL change before the live set is replaced, the
 transport adapter that names an admitted token for the HTTP session, HTTPS
 discovery and token calls, the loopback callback, and the non-secret
-record beside the macOS keychain. `mcpServers.authorize` and
+record beside the sealed token files. `mcpServers.authorize` and
 `mcpServers.revoke` are the product methods. An app call that the remote
 refuses, cannot reach, or answers with insufficient scope is
 `mcp_unauthorized`, `mcp_unreachable`, or `mcp_insufficient_scope`, not

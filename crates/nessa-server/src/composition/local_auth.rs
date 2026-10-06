@@ -246,7 +246,7 @@ pub(super) async fn product_state(
     )
     .map_err(setup_error)?;
     let agent_credentials: Arc<dyn AgentCredentialSource> = Arc::new(
-        LocalAgentCredentials::from_environment(credential_namespace.clone()),
+        LocalAgentCredentials::from_environment(credential_namespace),
     );
     // Built here, before the launch files below, because building it is how
     // this server finds out which configured agents cannot be started at all,
@@ -264,7 +264,6 @@ pub(super) async fn product_state(
                 packaged_agents,
                 record_origin.clone(),
                 limits.read_work_budget(),
-                credential_namespace.clone(),
             )
             .await?;
             (
@@ -770,7 +769,6 @@ pub(crate) fn conversation_root(namespace: &Path) -> std::path::PathBuf {
 }
 
 #[cfg(unix)]
-#[allow(clippy::too_many_arguments)]
 async fn conversations(
     agents: &AgentsConfig,
     directory: &Path,
@@ -779,7 +777,6 @@ async fn conversations(
     packaged_agents: bool,
     record_origin: RecordId,
     read_work_budget: std::time::Duration,
-    credential_namespace: CredentialNamespace,
 ) -> Result<BuiltConversations, RunError> {
     let mut warm_ups = Vec::new();
     // The gateway holds the one connection to each MCP server (ADR 344), so
@@ -815,7 +812,6 @@ async fn conversations(
                 &agents,
                 super::runtime_config::config_path(namespace),
                 root.join("audit").join("mcp-servers"),
-                credential_namespace,
             )? {
                 Some(managed) => {
                     let remotes: Vec<_> = mcp

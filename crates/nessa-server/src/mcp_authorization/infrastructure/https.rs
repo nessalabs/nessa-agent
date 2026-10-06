@@ -11,7 +11,10 @@ use crate::mcp_authorization::application::{
     https_url, OAuthCallFailure, OAuthHttp, OAuthResponse,
 };
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Shorter than [`CALL_TIMEOUT`]. A connect that never completes has to fail
+/// on its own: the call timeout replaces that failure with a plain timeout,
+/// which is how a refused connect was reported as lost on Windows.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// One metadata or token document. A larger body is dropped, not stored.
 const BODY_LIMIT: usize = 1_048_576;
@@ -38,9 +41,12 @@ impl HttpsOAuth {
     }
 
     /// A short total timeout and a small body cap, for the loopback tests.
+    /// The connect timeout stays shorter so a refused connect is not rewritten
+    /// as the call timeout.
     #[cfg(test)]
     fn bounded(timeout: Duration, body_limit: usize) -> Self {
-        Self::build(timeout, timeout, body_limit).expect("oauth client")
+        let connect = (timeout / 4).max(Duration::from_millis(50));
+        Self::build(connect, timeout, body_limit).expect("oauth client")
     }
 }
 
@@ -91,17 +97,7 @@ impl HttpsOAuth {
         }
         let mut response = match request.send().await {
             Ok(response) => response,
-            // Connect and builder failures never left. A timeout after the
-            // request was written is lost: the token endpoint may have
-            // issued a token we did not retain.
-            Err(error)
-                if error.is_connect()
-                    || error.is_builder()
-                    || (error.is_request() && !error.is_timeout()) =>
-            {
-                return Err(OAuthCallFailure::NotSent);
-            }
-            Err(_) => return Err(OAuthCallFailure::Lost),
+            Err(error) => return Err(classify_send(&error)),
         };
         let status = response.status().as_u16();
         let www_authenticate = response
@@ -131,6 +127,34 @@ impl HttpsOAuth {
     }
 }
 
+/// A refused connect never left the machine. Windows does not always mark
+/// that `io::Error` as `is_connect`, so the source chain is checked too.
+/// A timeout after the request was written stays [`OAuthCallFailure::Lost`].
+fn classify_send(error: &reqwest::Error) -> OAuthCallFailure {
+    if error.is_builder() || error.is_connect() || connection_refused(error) {
+        return OAuthCallFailure::NotSent;
+    }
+    if error.is_request() && !error.is_timeout() {
+        return OAuthCallFailure::NotSent;
+    }
+    OAuthCallFailure::Lost
+}
+
+fn connection_refused(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(item) = current {
+        if let Some(io) = item.downcast_ref::<std::io::Error>() {
+            if io.kind() == std::io::ErrorKind::ConnectionRefused
+                || io.raw_os_error() == Some(10061)
+            {
+                return true;
+            }
+        }
+        current = item.source();
+    }
+    false
+}
+
 /// Authorization-server URLs are HTTPS. A resource probe may be loopback HTTP.
 fn allowed(url: &str) -> bool {
     if https_url(url) {
@@ -155,6 +179,35 @@ mod tests {
     use tokio::net::TcpListener;
 
     use crate::mcp_authorization::application::OAuthCallFailure;
+
+    #[test]
+    fn a_refused_io_error_buried_in_the_source_chain_is_refused() {
+        #[derive(Debug)]
+        struct Wrap(std::io::Error);
+        impl std::fmt::Display for Wrap {
+            fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                output.write_str("wrapped")
+            }
+        }
+        impl std::error::Error for Wrap {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+        let wrapped = Wrap(std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "refused",
+        ));
+        assert!(connection_refused(&wrapped));
+    }
+
+    #[test]
+    fn windows_connection_refused_code_is_refused_even_when_the_kind_is_not() {
+        let refused = std::io::Error::from_raw_os_error(10061);
+        assert!(connection_refused(&refused));
+        let timeout = std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out");
+        assert!(!connection_refused(&timeout));
+    }
 
     async fn read_headers(stream: &mut tokio::net::TcpStream) {
         let mut buf = Vec::new();

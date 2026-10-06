@@ -14,7 +14,7 @@
 //! ```
 //!
 //! Arrows are calls. The domain chooses a transition and names the effects.
-//! It does not open a socket, touch a keychain, or read the clock. The owner
+//! It does not open a socket, open the private store, or read the clock. The owner
 //! performs one effect at a time and brings the result back as the next
 //! command. A token is never written to a log or to `config.json`.
 pub mod application;

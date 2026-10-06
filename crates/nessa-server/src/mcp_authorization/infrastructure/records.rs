@@ -1,11 +1,16 @@
-//! Non-secret authorization records on disk, and secret material in the
-//! macOS keychain. Another platform has no secret writer: it does not write
-//! a token to a file.
+//! Non-secret authorization records on disk, and secret material in a sealed
+//! file beside them. The same store runs on macOS, Linux, and Windows: a
+//! local key file and one sealed blob per server, both created with
+//! user-only permissions. A token is not written into the non-secret record.
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use nessa_agent_credentials::CredentialNamespace;
+use hmac::{Hmac, Mac};
+use nessa_local_storage::{open, OpenMode, PrivateTempFile};
 use serde_json::{json, Value};
+use sha2::Sha256;
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 use crate::mcp_authorization::application::{AuthorizationRecords, RecordFailure, TokenMaterial};
@@ -14,26 +19,26 @@ use crate::mcp_authorization::domain::{
     TokenAvailability,
 };
 
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-const SERVICE: &str = "nessa-mcp-oauth";
+type HmacSha256 = Hmac<Sha256>;
+
+const KEY_LABEL_ENC: &[u8] = b"nessa-mcp-oauth-enc";
+const KEY_LABEL_MAC: &[u8] = b"nessa-mcp-oauth-mac";
 
 pub struct FileRecords {
     directory: PathBuf,
-    namespace: CredentialNamespace,
 }
 
 impl FileRecords {
-    pub fn new(directory: impl Into<PathBuf>, namespace: CredentialNamespace) -> Self {
+    pub fn new(directory: impl Into<PathBuf>) -> Self {
         Self {
             directory: directory.into(),
-            namespace,
         }
     }
 
-    /// macOS can write a keychain item. Every other platform reports the
-    /// writer missing, and authorize refuses before discovery.
+    /// The sealed file store is the writer on every OS. A later write that
+    /// cannot create the directory still fails as unavailable.
     pub fn writer_available(&self) -> bool {
-        cfg!(target_os = "macos")
+        true
     }
 
     fn path(&self, server: Uuid) -> PathBuf {
@@ -66,7 +71,7 @@ impl AuthorizationRecords for FileRecords {
     }
 
     async fn load_secret(&self, server: Uuid) -> Result<Option<TokenMaterial>, RecordFailure> {
-        read_secret(&self.namespace, server)
+        read_secret(&self.directory, server)
     }
 
     async fn store_secret(
@@ -74,14 +79,14 @@ impl AuthorizationRecords for FileRecords {
         server: Uuid,
         secret: &TokenMaterial,
     ) -> Result<crate::mcp_authorization::domain::Publication, RecordFailure> {
-        write_secret(&self.namespace, server, secret)
+        write_secret(&self.directory, server, secret)
     }
 
     async fn delete_secret(
         &self,
         server: Uuid,
     ) -> Result<crate::mcp_authorization::domain::Deletion, RecordFailure> {
-        delete_secret(&self.namespace, server)
+        delete_secret(&self.directory, server)
     }
 }
 
@@ -312,145 +317,299 @@ fn settlement_of(value: &Value) -> Option<Settlement> {
     })
 }
 
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn account(namespace: &CredentialNamespace, server: Uuid) -> Result<String, RecordFailure> {
-    namespace
-        .account(&format!("mcp-{server}"))
-        .map_err(|_| RecordFailure::Unavailable)
+fn secrets_dir(directory: &Path) -> PathBuf {
+    directory.join("secrets")
 }
 
-#[cfg(target_os = "macos")]
-fn read_secret(
-    namespace: &CredentialNamespace,
-    server: Uuid,
-) -> Result<Option<TokenMaterial>, RecordFailure> {
-    let account = account(namespace, server)?;
-    match security_framework::passwords::generic_password(SERVICE, &account) {
-        Ok(bytes) => {
-            let value: Value =
-                serde_json::from_slice(&bytes).map_err(|_| RecordFailure::Unavailable)?;
-            Some(TokenMaterial {
-                access_token: value.get("access")?.as_str()?.to_owned(),
-                refresh_token: value
-                    .get("refresh")
-                    .and_then(|item| item.as_str())
-                    .map(str::to_owned),
-                generation: value.get("generation")?.as_u64()?,
-            })
-            .map(Ok)
-            .unwrap_or(Err(RecordFailure::Unavailable))
-        }
-        Err(error) if error.code() == security_framework_sys::base::errSecItemNotFound => Ok(None),
-        Err(_) => Err(RecordFailure::Unavailable),
-    }
+fn seal_path(directory: &Path, server: Uuid) -> PathBuf {
+    secrets_dir(directory).join(format!("{server}.seal"))
 }
 
-#[cfg(target_os = "macos")]
+fn ensure_secrets(directory: &Path) -> Result<PathBuf, RecordFailure> {
+    let secrets = secrets_dir(directory);
+    nessa_local_storage::create_directory(&secrets).map_err(|_| RecordFailure::Unavailable)?;
+    Ok(secrets)
+}
+
+fn read_secret(directory: &Path, server: Uuid) -> Result<Option<TokenMaterial>, RecordFailure> {
+    let path = seal_path(directory, server);
+    let sealed = match read_private(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(RecordFailure::Unavailable),
+    };
+    let key = match read_private(&secrets_dir(directory).join("key")) {
+        Ok(bytes) => bytes,
+        Err(_) => return Err(RecordFailure::Unavailable),
+    };
+    let plain = unseal(&key, &sealed).ok_or(RecordFailure::Unavailable)?;
+    material_of(&plain)
+}
+
 fn write_secret(
-    namespace: &CredentialNamespace,
+    directory: &Path,
     server: Uuid,
     secret: &TokenMaterial,
 ) -> Result<crate::mcp_authorization::domain::Publication, RecordFailure> {
-    let account = account(namespace, server)?;
-    let body = serde_json::to_vec(&json!({
+    let secrets = ensure_secrets(directory)?;
+    let key = load_or_create_key(&secrets)?;
+    let plain = serde_json::to_vec(&json!({
         "access": secret.access_token,
         "refresh": secret.refresh_token,
         "generation": secret.generation,
     }))
     .map_err(|_| RecordFailure::Unavailable)?;
-    let _ = security_framework::passwords::delete_generic_password(SERVICE, &account);
-    security_framework::passwords::set_generic_password(SERVICE, &account, &body)
-        .map(|_| crate::mcp_authorization::domain::Publication::Acknowledged)
-        .map_err(|_| RecordFailure::Unavailable)
+    let sealed = seal(&key, &plain).map_err(|_| RecordFailure::Unavailable)?;
+    write_private(&secrets, &seal_path(directory, server), &sealed)?;
+    Ok(crate::mcp_authorization::domain::Publication::Acknowledged)
 }
 
-#[cfg(target_os = "macos")]
 fn delete_secret(
-    namespace: &CredentialNamespace,
+    directory: &Path,
     server: Uuid,
 ) -> Result<crate::mcp_authorization::domain::Deletion, RecordFailure> {
-    let account = account(namespace, server)?;
-    match security_framework::passwords::delete_generic_password(SERVICE, &account) {
+    match std::fs::remove_file(seal_path(directory, server)) {
         Ok(()) => Ok(crate::mcp_authorization::domain::Deletion::Deleted),
-        Err(error) if error.code() == security_framework_sys::base::errSecItemNotFound => {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             Ok(crate::mcp_authorization::domain::Deletion::Deleted)
         }
         Err(_) => Ok(crate::mcp_authorization::domain::Deletion::Failed),
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn read_secret(
-    _namespace: &CredentialNamespace,
-    _server: Uuid,
-) -> Result<Option<TokenMaterial>, RecordFailure> {
-    Err(RecordFailure::Unavailable)
+fn load_or_create_key(secrets: &Path) -> Result<Vec<u8>, RecordFailure> {
+    let path = secrets.join("key");
+    if let Ok(bytes) = read_private(&path) {
+        if bytes.len() == 32 {
+            return Ok(bytes);
+        }
+        return Err(RecordFailure::Unavailable);
+    }
+    let mut key = vec![0; 32];
+    getrandom::fill(&mut key).map_err(|_| RecordFailure::Unavailable)?;
+    match publish_exclusive(secrets, &path, &key) {
+        Ok(()) => Ok(key),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => read_private(&path)
+            .ok()
+            .filter(|bytes| bytes.len() == 32)
+            .ok_or(RecordFailure::Unavailable),
+        Err(_) => Err(RecordFailure::Unavailable),
+    }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn write_secret(
-    _namespace: &CredentialNamespace,
-    _server: Uuid,
-    _secret: &TokenMaterial,
-) -> Result<crate::mcp_authorization::domain::Publication, RecordFailure> {
-    Err(RecordFailure::Unavailable)
+fn publish_exclusive(directory: &Path, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = PrivateTempFile::new_in(directory)?;
+    file.as_file_mut().write_all(bytes)?;
+    file.as_file().sync_all()?;
+    file.publish(path)
 }
 
-#[cfg(not(target_os = "macos"))]
-fn delete_secret(
-    _namespace: &CredentialNamespace,
-    _server: Uuid,
-) -> Result<crate::mcp_authorization::domain::Deletion, RecordFailure> {
-    Ok(crate::mcp_authorization::domain::Deletion::Unknown)
+fn read_private(path: &Path) -> std::io::Result<Vec<u8>> {
+    let mut file = open(path, OpenMode::ReadNonblocking)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn write_private(directory: &Path, path: &Path, bytes: &[u8]) -> Result<(), RecordFailure> {
+    let mut file = PrivateTempFile::new_in(directory).map_err(|_| RecordFailure::Unavailable)?;
+    file.as_file_mut()
+        .write_all(bytes)
+        .map_err(|_| RecordFailure::Unavailable)?;
+    file.as_file()
+        .sync_all()
+        .map_err(|_| RecordFailure::Unavailable)?;
+    file.persist(path).map_err(|_| RecordFailure::Unavailable)?;
+    Ok(())
+}
+
+fn material_of(bytes: &[u8]) -> Result<Option<TokenMaterial>, RecordFailure> {
+    let value: Value = serde_json::from_slice(bytes).map_err(|_| RecordFailure::Unavailable)?;
+    let access = value
+        .get("access")
+        .and_then(Value::as_str)
+        .ok_or(RecordFailure::Unavailable)?;
+    let generation = value
+        .get("generation")
+        .and_then(Value::as_u64)
+        .ok_or(RecordFailure::Unavailable)?;
+    Ok(Some(TokenMaterial {
+        access_token: access.to_owned(),
+        refresh_token: value
+            .get("refresh")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        generation,
+    }))
+}
+
+/// `nonce || ciphertext || mac`. The mac covers the nonce and ciphertext.
+fn seal(key: &[u8], plain: &[u8]) -> Result<Vec<u8>, RecordFailure> {
+    let mut nonce = [0_u8; 16];
+    getrandom::fill(&mut nonce).map_err(|_| RecordFailure::Unavailable)?;
+    let mut body = plain.to_vec();
+    apply_keystream(&derive(key, KEY_LABEL_ENC), &nonce, &mut body);
+    let mut sealed = Vec::with_capacity(16 + body.len() + 32);
+    sealed.extend_from_slice(&nonce);
+    sealed.extend_from_slice(&body);
+    sealed.extend_from_slice(&tag(&derive(key, KEY_LABEL_MAC), &nonce, &body));
+    Ok(sealed)
+}
+
+fn unseal(key: &[u8], sealed: &[u8]) -> Option<Vec<u8>> {
+    if sealed.len() < 16 + 32 {
+        return None;
+    }
+    let (nonce, rest) = sealed.split_at(16);
+    let (body, mac) = rest.split_at(rest.len() - 32);
+    let expected = tag(&derive(key, KEY_LABEL_MAC), nonce, body);
+    if !bool::from(mac.ct_eq(expected.as_slice())) {
+        return None;
+    }
+    let mut plain = body.to_vec();
+    apply_keystream(&derive(key, KEY_LABEL_ENC), nonce, &mut plain);
+    Some(plain)
+}
+
+fn derive(key: &[u8], label: &[u8]) -> [u8; 32] {
+    let mut mac = HmacSha256::new_from_slice(key).expect("hmac accepts this key length");
+    mac.update(label);
+    mac.finalize().into_bytes().into()
+}
+
+fn tag(mac_key: &[u8], nonce: &[u8], body: &[u8]) -> [u8; 32] {
+    let mut mac = HmacSha256::new_from_slice(mac_key).expect("hmac accepts this key length");
+    mac.update(nonce);
+    mac.update(body);
+    mac.finalize().into_bytes().into()
+}
+
+fn apply_keystream(enc_key: &[u8], nonce: &[u8], data: &mut [u8]) {
+    let mut offset = 0;
+    let mut counter = 0_u32;
+    while offset < data.len() {
+        let mut mac = HmacSha256::new_from_slice(enc_key).expect("hmac accepts this key length");
+        mac.update(nonce);
+        mac.update(&counter.to_be_bytes());
+        let block = mac.finalize().into_bytes();
+        let take = (data.len() - offset).min(block.len());
+        for (slot, byte) in data[offset..offset + take].iter_mut().zip(block) {
+            *slot ^= byte;
+        }
+        offset += take;
+        counter = counter.saturating_add(1);
+    }
 }
 
 /// The secret half of [`FileRecords`], named for composition.
 pub type SecretStore = FileRecords;
 
-#[cfg(all(test, not(target_os = "macos")))]
+#[cfg(test)]
 mod tests {
-    use nessa_agent_credentials::CredentialNamespace;
+    use std::io::{Read, Seek, SeekFrom, Write};
+
     use uuid::Uuid;
 
     use super::FileRecords;
     use crate::mcp_authorization::application::{
         AuthorizationRecords, RecordFailure, TokenMaterial,
     };
+    use crate::mcp_authorization::domain::{Deletion, Publication, ServerAuth};
 
-    #[tokio::test]
-    async fn a_missing_secret_writer_stores_no_token_file() {
-        let directory = std::env::temp_dir().join(format!("nessa-mcp-auth-{}", Uuid::new_v4()));
-        let records = FileRecords::new(
-            &directory,
-            CredentialNamespace::new("ci".into(), Some("one".into())).unwrap(),
-        );
-        assert!(!records.writer_available());
-        let server = Uuid::new_v4();
-        let secret = TokenMaterial {
-            access_token: "sekret".into(),
+    fn secret() -> TokenMaterial {
+        TokenMaterial {
+            access_token: "sekret-token".into(),
             refresh_token: Some("refresh-sekret".into()),
-            generation: 1,
-        };
-        assert!(matches!(
-            records.store_secret(server, &secret).await,
-            Err(RecordFailure::Unavailable)
-        ));
-        assert!(matches!(
-            records.load_secret(server).await,
-            Err(RecordFailure::Unavailable)
-        ));
-        if directory.exists() {
-            for entry in std::fs::read_dir(&directory).unwrap() {
-                let path = entry.unwrap().path();
-                let bytes = std::fs::read(&path).unwrap_or_default();
-                let text = String::from_utf8_lossy(&bytes);
-                assert!(
-                    !text.contains("sekret"),
-                    "{} contains a token",
-                    path.display()
-                );
+            generation: 3,
+        }
+    }
+
+    fn records() -> (FileRecords, std::path::PathBuf) {
+        let directory = std::env::temp_dir().join(format!("nessa-mcp-auth-{}", Uuid::new_v4()));
+        (FileRecords::new(&directory), directory)
+    }
+
+    fn contains_token(directory: &std::path::Path, token: &str) -> bool {
+        let mut pending = vec![directory.to_path_buf()];
+        while let Some(path) = pending.pop() {
+            let Ok(entries) = std::fs::read_dir(&path) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                let Ok(bytes) = std::fs::read(&path) else {
+                    continue;
+                };
+                if bytes
+                    .windows(token.len())
+                    .any(|window| window == token.as_bytes())
+                {
+                    return true;
+                }
             }
         }
+        false
+    }
+
+    #[tokio::test]
+    async fn a_sealed_file_round_trips_and_never_stores_the_token_in_the_clear() {
+        let (records, directory) = records();
+        assert!(records.writer_available());
+        let server = Uuid::new_v4();
+        let secret = secret();
+        assert_eq!(
+            records.store_secret(server, &secret).await,
+            Ok(Publication::Acknowledged)
+        );
+        let loaded = records.load_secret(server).await.unwrap().unwrap();
+        assert_eq!(loaded.access_token, secret.access_token);
+        assert_eq!(loaded.refresh_token, secret.refresh_token);
+        assert_eq!(loaded.generation, secret.generation);
+        assert!(!contains_token(&directory, "sekret-token"));
+        assert!(!contains_token(&directory, "refresh-sekret"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for name in ["key", &format!("{server}.seal")] {
+                let mode = std::fs::metadata(directory.join("secrets").join(name))
+                    .unwrap()
+                    .permissions()
+                    .mode();
+                assert_eq!(mode & 0o077, 0, "{name} is not user-only: {mode:o}");
+            }
+        }
+        let facts = ServerAuth::consent_needed(server, "docs", "https://mcp.example/mcp");
+        records.store(&facts).await.unwrap();
+        let record = std::fs::read(directory.join(format!("{server}.json"))).unwrap();
+        assert!(!record
+            .windows(b"sekret-token".len())
+            .any(|window| window == b"sekret-token"));
+        assert_eq!(records.delete_secret(server).await, Ok(Deletion::Deleted));
+        assert_eq!(records.load_secret(server).await, Ok(None));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[tokio::test]
+    async fn a_tampered_seal_is_unavailable_and_not_a_token() {
+        let (records, directory) = records();
+        let server = Uuid::new_v4();
+        records.store_secret(server, &secret()).await.unwrap();
+        let path = directory.join("secrets").join(format!("{server}.seal"));
+        let mut file =
+            nessa_local_storage::open(&path, nessa_local_storage::OpenMode::ReadWrite).unwrap();
+        let mut byte = [0_u8; 1];
+        file.read_exact(&mut byte).unwrap();
+        byte[0] ^= 0xff;
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.write_all(&byte).unwrap();
+        assert_eq!(
+            records.load_secret(server).await,
+            Err(RecordFailure::Unavailable)
+        );
         let _ = std::fs::remove_dir_all(&directory);
     }
 }

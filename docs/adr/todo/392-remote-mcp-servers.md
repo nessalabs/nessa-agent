@@ -12,8 +12,8 @@ separate stateful concerns with explicit synchronization.
 - **Statechart revision:** 2026-10-05
 - **Status:** accepted. The gateway owns remote Streamable HTTP (and the
   scoped HTTP+SSE fallback), OAuth 2.1 (discovery, PKCE S256, dynamic
-  registration or `registration_unsupported`, loopback callback, macOS
-  keychain, refresh, revoke, and the fence before a URL change is live),
+  registration or `registration_unsupported`, loopback callback, the
+  private token file, refresh, revoke, and the fence before a URL change is live),
   honest app-call outcomes, and the desktop authorize/revoke/consent
   states. An owner-run check against a consenting remote server is still
   outside cloud evidence.
@@ -164,7 +164,7 @@ session. Presentation names and URLs are attributes, not operation identities.
 Local transition selection is serialized by the owning session or per-server
 coordinator. No global lock spans all servers. Effects carry their selected
 identity/generation through the injected port and return as correlated events.
-Slow HTTP, keychain and audit work runs outside the local decision. Their
+Slow HTTP, private-store and audit work runs outside the local decision. Their
 supervisors retain accepted work and resource accounting after a caller leaves.
 
 Closing/revoking seals future admission before effects. Results already observed
@@ -615,7 +615,7 @@ old parallel reader or advertising a gateway transport from fixture tests.
 | T1 modern HTTP + remote definition, after T0 | SDK MCP HTTP codec/descriptor; gateway `mcp_servers/domain/{configured_server,stand_in}.rs`, `application/{settings,ports}.rs`, `infrastructure/{stored_servers,live_set,inspector,relay,grants}.rs`, `composition/mcp_servers.rs`, product schema/generator/client mapping. Add async reqwest adapter with owned stream/drain, remote UUID/config publication, no-auth connections and factual 401/store-required outcomes | C1/C3–C11, U1/U2 no-token cases and A1; actual SDK/gateway calls against loopback fixture, old stdio/env/revision/live/restoration regressions |
 | T2 scoped legacy HTTP+SSE, after T1 | Same SDK HTTP owner and gateway adapter; bounded endpoint/message decoding, same-origin endpoint policy and only the agreed initial POST fallback statuses | C2/C4/C6–C11 in legacy mode; non-fallback auth/5xx/malformed neighbors |
 | A0 authorization domain + substitutes, after T1 identities | New gateway `mcp_authorization/{domain,application,contracts}` and matching tests; pure generation/attempt/fence decisions, private-record/audit/HTTP/clock/entropy ports and deterministic TLS server/store fixtures. Domain emits effects rather than accessing SDK internals or keychain | A1–A10 domain/ordering cases, including scopes and uncertain publication; no claim of completed network or product rows |
-| A1 consent + private store integration, after A0 | `mcp_authorization/{application,infrastructure,entrypoint}`, gateway composition and generated product/client `mcpServers.authorize/revoke` mappings. Add protected-resource/OIDC discovery, S256/dynamic registration, loopback callback, durable fence/secret records and macOS private writer; wire manage authority and ready-token port into MCP. Include basic URL-change/removal fencing and retained session/credential cleanup through settings publication, plus revoke/cleanup for pending consent and Ready, before exposing ready-token dispatch | A1–A4/A8–A10 and token-backed U1/U2 through public product routes and real deterministic TLS listener without concurrent refresh; ready-token URL edit/removal, unavailable store/platform, callback restart, basic revoke, discovery/scope and audit neighbors |
+| A1 consent + private store integration, after A0 | `mcp_authorization/{application,infrastructure,entrypoint}`, gateway composition and generated product/client `mcpServers.authorize/revoke` mappings. Add protected-resource/OIDC discovery, S256/dynamic registration, loopback callback, durable fence/secret records and the private token file; wire manage authority and ready-token port into MCP. Include basic URL-change/removal fencing and retained session/credential cleanup through settings publication, plus revoke/cleanup for pending consent and Ready, before exposing ready-token dispatch | A1–A4/A8–A10 and token-backed U1/U2 through public product routes and real deterministic TLS listener without concurrent refresh; ready-token URL edit/removal, unavailable store, callback restart, basic revoke, discovery/scope and audit neighbors |
 | A2 refresh/revoke + definition handoff, after A1 | Same per-server owner, token request seam and current settings/live-set/relay-grant close owners; extend the existing revoke owner to single-flight refresh and concurrent generation races, retained candidates, refresh-specific definition-handoff races, secret deletion, remote observation and evidence settlement | A5–A10, C5/C8/C11 and U2 with tokens; rotating/lost replies, every effect/ack restart point, late write/revoke races, failed drain/deletion/audit |
 | U desktop/apps, after T2+A2 | `src/desktop/settings/{model,adapters,ui}`, desktop dependency factory, existing `src/host`/`src-tauri/src/links.rs` native URL seam; gateway/SDK MCP app resource/CSP and current review/ticket owners; generated client API consumption | U1–U5, browser gateway scripts in Chromium/WebKit, narrow layout/focus/pending/failure evidence and one owner-run real remote app check |
 
@@ -660,8 +660,9 @@ the desktop would make refresh depend on a window. These alternatives remain
 rejected in favor of gateway-owned sessions and authorization.
 
 Transparent stream resumption, pre-registered/client-metadata registration,
-unrestricted legacy endpoint origins and portable OS keychain adapters are
-separate capabilities. Publish supported protocol versions and finite HTTP/SSE,
-request, metadata and operation limits in their owning implementation slices.
+and unrestricted legacy endpoint origins are separate capabilities. MCP
+tokens stay in the private file store. Publish supported protocol versions
+and finite HTTP/SSE, request, metadata and operation limits in their owning
+implementation slices.
 No additional compatibility readers or schema version bump is implied by this
 record. The two protocol eras are the explicit transport scope of #392.

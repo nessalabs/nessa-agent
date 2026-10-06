@@ -1,8 +1,9 @@
 //! Adapters the process actually runs: the loopback callback, the HTTPS
-//! authorization client, the non-secret record file, and the macOS keychain.
+//! authorization client, the non-secret record file, and the sealed token
+//! files beside it.
 //!
 //! ```text
-//! AuthorizationOwner ──▶ LoopbackCallback / HttpsOAuth / FileRecords / KeychainSecrets
+//! AuthorizationOwner ──▶ LoopbackCallback / HttpsOAuth / FileRecords
 //! TransportAuthorization ──bearer──▶ HttpSession
 //! ```
 mod audit;
