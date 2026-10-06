@@ -162,3 +162,62 @@ state table is in `scripted-scenario.mjs`, and its tests are
 Chromium and WebKit. It does not need harness `node_modules`. The summary it
 writes is what a pull request that changes UI, gateway, ACP, or MCP behavior
 shows ([Browser verification for UI](../../CODING_STANDARDS.md#browser-verification-for-ui)).
+
+## HTTP contract fixture
+
+`http-server.mjs` recovers the developer HTTP fixture from commit `b93383c3d`
+(branch `392-remote-mcp`), imports current `server.mjs` answers and preserves
+its stdio behavior. No product HTTP client, remote configuration or OAuth is
+implemented by this fixture.
+
+```sh
+node scripts/mcp-test-server/http-server.mjs 8931
+node scripts/mcp-test-server/http-server.mjs 8931 --sse
+node --test scripts/mcp-test-server/http-server.test.mjs
+node scripts/mcp-test-server/capture-http.mjs /tmp/http-frames.json
+```
+
+The tests need only bare Node and loopback networking; no credentials, harness
+installation or live model. Each network read has a five-second client budget.
+The fixture listens only on `127.0.0.1`. Streamable HTTP serves `/mcp` with JSON
+responses; initialize creates an `Mcp-Session-Id`, subsequent requests need it,
+notifications return 202, GET returns 405 and DELETE removes the named session.
+Legacy HTTP+SSE returns 405 for POST `/mcp` and an endpoint event on GET; requests
+POSTed to that endpoint return 202, with replies as message events on that stream.
+Closing one stream removes that endpoint while another stream continues.
+
+| Module | Responsibility |
+| --- | --- |
+| `http-server.mjs` | Developer transport, loopback listener, session/stream ownership, request bounds |
+| `capture-http.mjs` | Credential-free refresh of the local HTTP corpus with source hashes |
+| `fixtures/http-frames.json` | Recorded local HTTP initialize, ping, structured/chart and error results, UI resource and invalid tool response |
+| `http-server.test.mjs` | Replay the corpus through JSON and SSE; check session isolation, challenges, malformed bodies, expiry and cleanup |
+
+The corpus records actual loopback HTTP responses, with session headers omitted;
+it is local deterministic MCP test-server evidence, not live remote provider data.
+Tests compare the response payloads with those recorded frames, including app
+metadata/resource contents. Session tests use the actual HTTP headers/endpoints
+from each live local listener.
+
+| State/event | Fixture outcome and test evidence |
+| --- | --- |
+| Initialize | New session; headers distinguish two independently opened sessions |
+| Missing/foreign/deleted identity | 400 for missing, 404 for unknown; survivor still answers after another session's DELETE |
+| Unauthorized | Optional `serveHttp({ bearerToken })` challenges with 401/`WWW-Authenticate: Bearer` before creation/deletion; authorized session survives rejected deletion |
+| Expiry | Absolute TTL checked on incoming requests; injected `now` tests exact expiry without sleeping; an expired legacy stream ends |
+| Legacy disconnect | Endpoint removed when its owning stream closes; bounded polling verifies 404 and a second stream survives |
+| Malformed/oversized body | 400 parse/invalid request or 413 beyond 1 MiB; next valid session still initializes and answers |
+
+`bearerToken` is a developer fixture option, not OAuth or a stored credential.
+The request body retains at most 1 MiB and drains the remainder before replying;
+there is no independent per-request server deadline. Expiry is lazy: a request
+checks/removes expired sessions, so an idle legacy stream does not close just
+because time passes. These are fixture limits, not promises for the product
+transport. No test here proves Nessa session isolation, authenticated refresh,
+remote network cancellation, restart recovery or physical provider cleanup; those
+remain the implementation slices in [ADR 392](../../docs/adr/todo/392-remote-mcp-servers.md).
+
+The HTTP replay suite also recomputes `server.mjs`, `http-server.mjs` and
+`capture-http.mjs` SHA-256 values against the corpus provenance. Changing any
+producer without refreshing its corpus fails the check even if current replies
+still match. `.gitattributes` keeps those hashed sources at LF on each checkout.

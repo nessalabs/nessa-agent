@@ -5,6 +5,11 @@ that the gateway owns the connection to each configured MCP server and hands
 the harness a stand-in. This document says how, and writes down the states
 and orderings the tests come from ([gate 15](../../CODING_STANDARDS.md#gates)).
 
+The proposed remote HTTP and OAuth extension is owned by
+[ADR 392](../adr/todo/392-remote-mcp-servers.md). Its lifecycle charts, ordering
+tables and fixture/implementation plan remain proposed; this guide describes the
+implemented connection contract below.
+
 ## What is built
 
 ```text

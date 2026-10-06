@@ -1,0 +1,6 @@
+# Provenance hashes refer to checkout bytes; keep these sources LF on every host.
+scripts/subagent-contracts/*.mjs text eol=lf
+crates/nessa-sdk/harnesses/codex-acp/package-lock.json text eol=lf
+scripts/mcp-test-server/server.mjs text eol=lf
+scripts/mcp-test-server/http-server.mjs text eol=lf
+scripts/mcp-test-server/capture-http.mjs text eol=lf
