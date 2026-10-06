@@ -47,6 +47,25 @@ describe("the desktop app's proxy", () => {
     expect(sandboxFor("macos", document, false)).toEqual(named)
     expect(sandboxFor("other", document, false)).toEqual(named)
   })
+
+  it("is none when the host registered no scheme and the page names none it can use", () => {
+    for (const host of ["macos", "linux", "other"] as const) {
+      for (const url of [
+        null,
+        "",
+        "not a url",
+        "javascript:alert(1)",
+        "nessa-sandbox://localhost/proxy.html",
+        `${document.location.origin}/proxy.html`,
+      ]) {
+        name(url)
+        expect(
+          sandboxFor(host, document, false),
+          `${host} ${String(url)}`,
+        ).toBeUndefined()
+      }
+    }
+  })
 })
 
 describe("the browser build's proxy", () => {

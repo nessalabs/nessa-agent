@@ -5,7 +5,8 @@
  * Windows, where WebView2 serves a custom scheme as an `http` host — and in
  * the browser build, the listener the dev server started for it, named in
  * the page (`sandbox/serve.ts`); and the sandbox the window frames it in
- * (`proxyFrameSandbox`).
+ * (`proxyFrameSandbox`). A desktop host that has not registered the scheme
+ * uses that page proxy, or none when the page names none it can use.
  *
  * A page that names none, or names something that is not an `http(s)` URL
  * on another origin than its own, has no sandbox: every app in it is one the
@@ -65,15 +66,16 @@ export function sandboxFor(
 /**
  * The scheme the host registered, or the proxy the page names when it
  * registered none. A sandboxed frame cannot open a scheme this host did
- * not register.
+ * not register, so an unregistered scheme with no usable page proxy is
+ * no sandbox.
  */
 function desktopSandbox(
   document: Document,
   scheme: SandboxOrigin,
   schemeRegistered: boolean,
-): SandboxOrigin {
+): SandboxOrigin | undefined {
   if (schemeRegistered) return scheme
-  return pageSandbox(document) ?? scheme
+  return pageSandbox(document)
 }
 
 /** The proxy the page names, if it names one this page may use. */
