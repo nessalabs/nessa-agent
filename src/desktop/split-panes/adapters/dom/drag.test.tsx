@@ -271,6 +271,9 @@ it("previews the outcome of the layout the source holds, and commits it through 
   await liftOntoTwo()
   expect(said()).toBe("Swap with Pane b")
   pointer("pointerup", 827, 400)
+  // The pointerup turn flies the copy and does not commit: the commit lays
+  // the new arrangement out, and that layout is the next frame's.
+  expect(fake.state.drops).toEqual([])
   await frames()
   expect(fake.state.drops).toEqual([
     {
@@ -285,6 +288,58 @@ it("previews the outcome of the layout the source holds, and commits it through 
   expect(items(fake)).toEqual(["b", "a"])
   expect(carrying()).toBe(false)
   await act(async () => root.unmount())
+})
+
+it("does not commit a drop whose preview no longer holds when its frame runs", async () => {
+  const fake = fakeSource(two())
+  const root = await mounted(fake)
+  await liftOntoTwo()
+  pointer("pointerup", 827, 400)
+  expect(fake.state.drops).toEqual([])
+  const layout = fake.layout()
+  if (!layout) throw new Error("no layout")
+  // A pane opens in the frame the commit waits: that is not the swap shown.
+  fake.change({ layout: splitPane(layout, 2, "bottom", "c") })
+  await frames()
+  expect(fake.state.drops).toEqual([])
+  expect(items(fake)).toEqual(["a", "b", "c"])
+  expect(fake.state.subscribed).toBe(1)
+  await act(async () => root.unmount())
+})
+
+it("does not commit a drop after a resize in the frame it waits, and still commits when a watched value is unchanged", async () => {
+  const kept = { open: true }
+  const resized = fakeSource(two())
+  const resizedRoot = await mounted(resized)
+  await liftOntoTwo()
+  pointer("pointerup", 827, 400)
+  window.dispatchEvent(new Event("resize"))
+  await frames()
+  expect(resized.state.drops).toEqual([])
+  expect(items(resized)).toEqual(["a", "b"])
+  await act(async () => resizedRoot.unmount())
+
+  const same = fakeSource(two())
+  same.state.watched = [kept]
+  const sameRoot = await mounted(same)
+  await liftOntoTwo()
+  pointer("pointerup", 827, 400)
+  same.change({ watched: [kept] })
+  await frames()
+  expect(same.state.drops).toHaveLength(1)
+  expect(items(same)).toEqual(["b", "a"])
+  await act(async () => sameRoot.unmount())
+})
+
+it("does not commit a drop whose frame was cancelled by unmount", async () => {
+  const fake = fakeSource(two())
+  const root = await mounted(fake)
+  await liftOntoTwo()
+  pointer("pointerup", 827, 400)
+  await act(async () => root.unmount())
+  await frames()
+  expect(fake.state.drops).toEqual([])
+  expect(fake.state.subscribed).toBe(0)
 })
 
 it("with less motion, previews a swap at once — the other pane drawn where the drop puts it — and lets it go as the drop lands", async () => {
@@ -311,10 +366,11 @@ it("with less motion, previews a swap at once — the other pane drawn where the
     // Dropped: the panes are laid out where the preview drew them, and the
     // preview is let go as they are — left on, it would draw them moved again.
     const preview = animated.filter(({ element: of }) => of.closest("[data-pane-key]"))
-    act(() => pointer("pointerup", 827, 400))
+    pointer("pointerup", 827, 400)
+    expect(items(fake)).toEqual(["a", "b"])
+    await frames()
     expect(items(fake)).toEqual(["b", "a"])
     expect(preview.filter(({ cancelled }) => !cancelled)).toEqual([])
-    await frames()
     await act(async () => root.unmount())
   } finally {
     delete document.documentElement.dataset.motion

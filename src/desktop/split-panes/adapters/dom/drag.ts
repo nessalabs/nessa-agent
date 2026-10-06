@@ -18,9 +18,13 @@
  *   the one outcome the drop commits (`dropOutcome` of the layout the source
  *   reads), and the copy takes the placeholder's shape about the pointer
  *   (`copyShape`);
- * - **dropping**: released while a zone is shown, the source commits what is
- *   shown (`commitDrop`) in the room the press read, and the copy flies into
- *   the placeholder's rect and hands over to the real pane;
+ * - **dropping**: released while a zone is shown, the copy flies into the
+ *   placeholder's rect. The source commits what is shown (`commitDrop`) on
+ *   the next frame, in the room the press read, so that pointerup does not
+ *   also lay the new arrangement out (`drag.test.tsx`). That frame commits
+ *   only while the preview still holds — the panes and watched values the
+ *   press read, a carried item still held, and no resize since the release —
+ *   and not at all if the drag is gone before it (`drag.test.tsx`);
  * - **cancelling**: the copy flies home as the panes go back — or, when the
  *   room, the panes or the view changed under it, both go at once and the
  *   change plays as it would with no drag.
@@ -487,6 +491,8 @@ export function useSplitPanesDrag(
 
     /** The press's frame, then the task after it, that make what a drag needs. */
     let waiting: { frame: number; timer: number } | null = null
+    /** Drops the pending commit's frame and its listeners, if a drop is waiting on one. */
+    let releaseDrop: (() => void) | null = null
 
     /**
      * What the press found: the panes' arrangement — not which has focus:
@@ -1115,15 +1121,58 @@ export function useSplitPanesDrag(
         })
     }
 
-    /** Let go with a zone shown: what is shown is committed, and the copy hands over. */
+    /** Let go with a zone shown: the copy flies, and what is shown is committed on the next frame. */
     const drop = (made: Made, what: Carried, aim: Aim) => {
       const { ghost, room, drawing } = made
-      // The drop first, in the room the preview was drawn for — nothing of
-      // the page is read — then the copy's flight and the tidying.
-      source.commitDrop({ carried: what, target: aim.target, zone: aim.zone, room })
-      // Now it snaps: the copy flies from the pointer into the place it takes.
+      // The copy flies from the pointer into the place it takes. That place
+      // was drawn while carrying; the flight does not read the page.
       const flight = drawing.landing ? flyTo(made, drawing.landing, false) : null
       tidy(made, true)
+      // The commit lays the panes out at their new sizes, and FlipScope reads
+      // that layout in the same turn (`play`). On pointerup that read shared
+      // the frame with this flight and ran past the frame budget. One frame
+      // on, the preview is still up — tidy waits two — so the commit's flight
+      // measures through it. `drag.test.tsx` holds that the commit is not in
+      // the pointerup turn.
+      // The frame commits the preview, not whatever the panes became while it
+      // waited: a resize, a watched change, or a carried item let go. The
+      // dropping phase ignores those, so the frame itself checks.
+      const previewHolds = () => {
+        const watched = source.watched()
+        if (
+          layoutNow()?.columns !== seen.columns ||
+          watched.length !== seen.watched.length ||
+          watched.some((value, index) => value !== seen.watched[index])
+        )
+          return false
+        return what.kind !== "item" || source.holds(what.item)
+      }
+      let accept = true
+      const refuse = () => {
+        accept = false
+      }
+      window.addEventListener("resize", refuse)
+      const unsubscribe = source.subscribe(() => {
+        if (!previewHolds()) refuse()
+      })
+      const frame = requestAnimationFrame(() => {
+        release()
+        if (accept && previewHolds()) {
+          source.commitDrop({ carried: what, target: aim.target, zone: aim.zone, room })
+          return
+        }
+        // The preview was the arrangement this frame is not committing.
+        scope.removeAttribute(marks.takesSpare)
+        letGoOfDragPreview(scope)
+        previewed.clear()
+      })
+      const release = () => {
+        cancelAnimationFrame(frame)
+        window.removeEventListener("resize", refuse)
+        unsubscribe()
+        if (releaseDrop === release) releaseDrop = null
+      }
+      releaseDrop = release
       // Whatever `FlipScope` did not measure through — a drop that changed no
       // arrangement — lets go a frame on.
       requestAnimationFrame(() =>
@@ -1361,6 +1410,7 @@ export function useSplitPanesDrag(
       window.removeEventListener("keydown", onKeyDown, true)
       document.removeEventListener("selectstart", onSelectStart)
       stopWaiting()
+      releaseDrop?.()
       if (phase.kind === "pressed" || phase.kind === "carrying") {
         phase.made?.layer.remove()
         if (phase.made) tidy(phase.made)
