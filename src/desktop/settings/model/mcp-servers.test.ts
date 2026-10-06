@@ -13,6 +13,7 @@ import {
   canRemoveByName,
   canWrite,
   editedServer,
+  authorizationLabel,
   formReady,
   launchChanged,
   namesKept,
@@ -249,6 +250,8 @@ describe("the form", () => {
       args: [],
       env: [],
       enabled: true,
+      kind: "stdio",
+      url: "",
     })
     expect(formReady(state.form!, undefined)).toBe(false)
     expect(run(state, { type: "save" }).pending).toBeNull()
@@ -545,7 +548,9 @@ describe("a stored value kept only for the same launch (V1–V10)", () => {
     })
   const sentEnv = (state: McpServersState) => {
     const pending = run(state, { type: "save" }).pending
-    return pending?.kind === "save" ? pending.request.server.env : undefined
+    return pending?.kind === "save" && pending.request.server.kind === "stdio"
+      ? pending.request.server.env
+      : undefined
   }
   /** A new variable row named `name`, with `typed` for its value. */
   const added = (state: McpServersState, name: string, typed = "") => {
@@ -684,7 +689,10 @@ describe("a stored value kept only for the same launch (V1–V10)", () => {
     )
     // Adding is no launch at all: nothing is stored to keep.
     expect(
-      namesKept({ name: "", command: "", args: [], env: [], enabled: true }, undefined),
+      namesKept(
+        { name: "", command: "", args: [], env: [], enabled: true, kind: "stdio", url: "" },
+        undefined,
+      ),
     ).toBe(true)
   })
 
@@ -757,6 +765,7 @@ describe("the switch", () => {
       request: {
         revision: "r1",
         server: {
+          kind: "stdio",
           name: "charts",
           command: "/usr/bin/node",
           args: ["server.mjs", "--port", "1"],
@@ -1574,7 +1583,8 @@ describe("a variable's value (S1–S8)", () => {
   const edit = () => run(listed(), { type: "edit", name: "charts" })
   const saved = (state: McpServersState) => {
     const next = run(state, { type: "save" })
-    if (next.pending?.kind !== "save") throw new Error("no save")
+    if (next.pending?.kind !== "save" || next.pending.request.server.kind !== "stdio")
+      throw new Error("no save")
     return next.pending.request.server.env
   }
 
@@ -1832,5 +1842,97 @@ describe("also (F8–F12)", () => {
     expect(lineBreaks(state.form!.args[0].value)).toBe(2)
     expect(sentences.argumentBreaks(1)).toBe("Has a line break")
     expect(sentences.argumentBreaks(2)).toBe("Has 2 line breaks")
+  })
+})
+
+const remote: ListedServer = {
+  name: "docs",
+  command: "",
+  args: [],
+  envNames: [],
+  enabled: true,
+  managed: false,
+  url: "https://mcp.example/mcp",
+  remoteId: "11111111-1111-4111-8111-111111111111",
+  authorization: {
+    phase: "consent_needed",
+    tokenExpired: false,
+    refreshFailing: false,
+    scopeRequired: false,
+  },
+}
+
+describe("remote authorization", () => {
+  it("a URL change the fence holds is saved, the form closes, and the list is read", () => {
+    let state = run(listed(), { type: "edit", name: "charts" })
+    state = run(state, { type: "save" })
+    state = answer(state, no({ kind: "authorizationHeld" }))
+    expect(state.form).toBeNull()
+    expect(state.pending?.kind).toBe("list")
+    expect(state.notice?.text).toBe(sentences.authorizationHeld)
+  })
+
+  it("asks to authorize a remote by its id and the list's revision", () => {
+    const state = run(listed(listOf(remote, nessa)), { type: "authorize", name: "docs" })
+    expect(state.pending).toMatchObject({
+      kind: "authorize",
+      id: remote.remoteId,
+      name: "docs",
+      revision: "r1",
+    })
+    expect(run(listed(), { type: "authorize", name: "charts" }).pending).toBeNull()
+  })
+
+  it("keeps a consent URL when authorization is waiting, and lists again once ready", () => {
+    const asking = run(listed(listOf(remote, nessa)), { type: "authorize", name: "docs" })
+    const waiting = answer(
+      asking,
+      ok({ status: "pending_consent", consentUrl: "http://127.0.0.1:9/mcp-oauth/callback" }),
+    )
+    expect(waiting.consent).toEqual({
+      name: "docs",
+      url: "http://127.0.0.1:9/mcp-oauth/callback",
+    })
+    expect(waiting.pending).toBeNull()
+    const ready = answer(asking, ok({ status: "ready" }))
+    expect(ready.consent).toBeNull()
+    expect(ready.pending?.kind).toBe("list")
+    expect(ready.notice?.text).toBe(sentences.authorizeReady)
+  })
+
+  it("says revocation is incomplete until the gateway says it settled", () => {
+    const asking = run(listed(listOf(remote, nessa)), { type: "revoke", name: "docs" })
+    const held = answer(asking, ok({ settled: false }))
+    expect(held.notice?.text).toBe(sentences.revokeIncomplete)
+    expect(held.pending?.kind).toBe("list")
+    const settled = answer(asking, ok({ settled: true }))
+    expect(settled.notice?.text).toBe(sentences.revokeSettled)
+    expect(settled.pending?.kind).toBe("list")
+  })
+
+  it("names the consent a remote row still needs", () => {
+    expect(authorizationLabel(remote)).toBe(sentences.consentNeeded)
+    expect(
+      authorizationLabel({
+        ...remote,
+        authorization: {
+          phase: "scope_required",
+          tokenExpired: false,
+          refreshFailing: false,
+          scopeRequired: true,
+        },
+      }),
+    ).toBe(sentences.scopeRequired)
+    expect(authorizationLabel(charts)).toBeUndefined()
+  })
+
+  it("a remote form is ready once it has a name and a URL", () => {
+    let state = run(listed(), { type: "add" })
+    state = run(state, {
+      type: "change",
+      patch: { kind: "remote", name: "docs", url: "https://mcp.example/mcp" },
+    })
+    expect(formReady(state.form!, undefined)).toBe(true)
+    expect(state.form?.kind).toBe("remote")
   })
 })

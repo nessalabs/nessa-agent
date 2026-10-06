@@ -110,6 +110,9 @@ pub enum ConversationErrorCode {
     McpResultTooLarge,
     McpTimedOut,
     McpRemoteError,
+    McpUnauthorized,
+    McpUnreachable,
+    McpInsufficientScope,
 }
 impl ConversationErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -157,6 +160,9 @@ impl ConversationErrorCode {
             Self::McpResultTooLarge => "mcp_result_too_large",
             Self::McpTimedOut => "mcp_timed_out",
             Self::McpRemoteError => "mcp_remote_error",
+            Self::McpUnauthorized => "mcp_unauthorized",
+            Self::McpUnreachable => "mcp_unreachable",
+            Self::McpInsufficientScope => "mcp_insufficient_scope",
         }
     }
 }

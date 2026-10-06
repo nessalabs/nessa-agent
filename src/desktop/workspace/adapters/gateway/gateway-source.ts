@@ -1232,6 +1232,9 @@ function reasonFor(
     case ConversationErrorCode.McpResultTooLarge:
     case ConversationErrorCode.McpTimedOut:
     case ConversationErrorCode.McpRemoteError:
+    case ConversationErrorCode.McpUnauthorized:
+    case ConversationErrorCode.McpUnreachable:
+    case ConversationErrorCode.McpInsufficientScope:
       return "unavailable"
   }
 }

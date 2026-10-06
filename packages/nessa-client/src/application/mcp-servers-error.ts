@@ -69,7 +69,12 @@ export type McpServersRefusal =
 
 /** The method a {@link NessaMcpServersError} answers. */
 export type McpServersMethod =
-  "mcpServers.list" | "mcpServers.save" | "mcpServers.remove" | "mcpServers.inspect"
+  | "mcpServers.list"
+  | "mcpServers.save"
+  | "mcpServers.remove"
+  | "mcpServers.inspect"
+  | "mcpServers.authorize"
+  | "mcpServers.revoke"
 
 /** The session's refusal of a caller its policy does not allow, before the method is dispatched. */
 const forbiddenCode = "forbidden"

@@ -6,15 +6,21 @@ import type { RequestDeadline, RpcRequester } from "../application/session-port.
 import {
   mcpServerInspect,
   ProductMethod,
+  type McpServersAuthorizeParams,
+  type McpServersAuthorizeResult,
   type McpServersInspectResult,
   type McpServersListResult,
   type McpServersRemoveParams,
+  type McpServersRevokeParams,
+  type McpServersRevokeResult,
   type McpServersSaveParams,
   type McpServersWriteResult,
 } from "../generated/product.js"
 import {
+  mcpServersAuthorizeResult,
   mcpServersInspectResult,
   mcpServersListResult,
+  mcpServersRevokeResult,
   mcpServersWriteResult,
 } from "../protocol/mcp-servers-validate.js"
 
@@ -67,6 +73,18 @@ export type McpServersApi = {
    * `mcp_servers_not_found`, `mcp_servers_reserved_name`.
    */
   inspect(name: string): Promise<McpServersInspectResult>
+  /**
+   * Begin consent for the remote server `id` at the revision last listed.
+   * `pending_consent` carries the URL the host opens. No token is returned.
+   * @throws {@link NessaMcpServersError} when the store, discovery, or the
+   * revision refuses the request.
+   */
+  authorize(params: McpServersAuthorizeParams): Promise<McpServersAuthorizeResult>
+  /**
+   * Fence the remote server `id`. `settled` is false while drain, deletion,
+   * remote observation, or evidence is still outstanding.
+   */
+  revoke(params: McpServersRevokeParams): Promise<McpServersRevokeResult>
 }
 
 const inspectDeadline: RequestDeadline = { atLeastMs: mcpServerInspect.requestDeadlineMs }
@@ -100,5 +118,8 @@ export function createMcpServersApi(session: RpcRequester): McpServersApi {
         mcpServersInspectResult,
         inspectDeadline,
       ),
+    authorize: (params) =>
+      call(ProductMethod.McpServersAuthorize, params, mcpServersAuthorizeResult),
+    revoke: (params) => call(ProductMethod.McpServersRevoke, params, mcpServersRevokeResult),
   }
 }

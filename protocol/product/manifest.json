@@ -43,6 +43,8 @@
     "mcpServers.save": "McpServersSaveParams",
     "mcpServers.remove": "McpServersRemoveParams",
     "mcpServers.inspect": "McpServersInspectParams",
+    "mcpServers.authorize": "McpServersAuthorizeParams",
+    "mcpServers.revoke": "McpServersRevokeParams",
     "pairing.create": null,
     "pairing.pending": null,
     "pairing.status": "PairingInvitationParams",

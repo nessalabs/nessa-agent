@@ -87,6 +87,11 @@ const outcomes: Readonly<Record<ConversationErrorCode, Outcome>> = {
   [ConversationErrorCode.McpTimedOut]: "failed",
   [ConversationErrorCode.McpRemoteError]: "failed",
   [ConversationErrorCode.McpResultTooLarge]: "failed",
+  // The session was not reported as ended. These are a refusal, a miss, or a
+  // scope the token does not carry — never "the server stopped".
+  [ConversationErrorCode.McpUnauthorized]: "failed",
+  [ConversationErrorCode.McpUnreachable]: "failed",
+  [ConversationErrorCode.McpInsufficientScope]: "failed",
   // Nothing an app's call is answered with; failed if a gateway ever does.
   [ConversationErrorCode.AgentNotConfigured]: "failed",
   [ConversationErrorCode.AgentUnsupported]: "failed",

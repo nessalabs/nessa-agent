@@ -28,6 +28,12 @@ pub enum McpAppFailure {
     NoSession,
     /// The session ended before it answered.
     SessionEnded,
+    /// The remote endpoint could not be reached. Nothing was retained.
+    Unreachable,
+    /// The remote endpoint refused the caller. The tool was not run.
+    Unauthorized,
+    /// The caller's scope was not enough. The call was not retried.
+    InsufficientScope,
     /// No answer in time.
     TimedOut,
     /// The server answered with a JSON-RPC error.
@@ -352,6 +358,12 @@ pub enum McpAppError {
     Remote(Option<(i64, String)>),
     /// The session cannot take another request now; nothing was sent.
     Busy,
+    /// The remote endpoint could not be reached. Nothing was retained.
+    Unreachable,
+    /// The remote endpoint refused the caller. The tool was not run.
+    Unauthorized,
+    /// The caller's scope was not enough. The call was not retried.
+    InsufficientScope,
 }
 impl McpAppError {
     /// The protocol code audit records and the wire answers with.
@@ -369,6 +381,9 @@ impl McpAppError {
             Self::TimedOut => ConversationErrorCode::McpTimedOut,
             Self::Remote(_) => ConversationErrorCode::McpRemoteError,
             Self::Busy => ConversationErrorCode::TemporarilyUnavailable,
+            Self::Unreachable => ConversationErrorCode::McpUnreachable,
+            Self::Unauthorized => ConversationErrorCode::McpUnauthorized,
+            Self::InsufficientScope => ConversationErrorCode::McpInsufficientScope,
         }
     }
 }
@@ -383,6 +398,9 @@ impl From<McpAppFailure> for McpAppError {
             McpAppFailure::NotAnApp => Self::AppUnknown,
             McpAppFailure::Malformed => Self::Remote(None),
             McpAppFailure::Busy => Self::Busy,
+            McpAppFailure::Unreachable => Self::Unreachable,
+            McpAppFailure::Unauthorized => Self::Unauthorized,
+            McpAppFailure::InsufficientScope => Self::InsufficientScope,
         }
     }
 }

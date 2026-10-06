@@ -7,7 +7,7 @@
 //! save, remove, inspect ─▶ admitted (or stopping) ─▶ a task this owns, tracked until its outcome record
 //! edit    ─▶ audit requested ─▶ store.lock (bounded wait) ─▶ read ─▶ revision? ─▶ ServerEdit::apply
 //!         ─▶ LiveServerSet::problem (the SDK's rules) ─▶ store.write (revision again, parse, bound, publish)
-//!         ─▶ LiveServerSet::replace ─▶ unlock ─▶ audit outcome
+//!         ─▶ authorization fence ─▶ LiveServerSet::replace ─▶ unlock ─▶ audit outcome
 //! inspect ─▶ a slot (or busy) ─▶ read ─▶ the stored server ─▶ audit requested
 //!         ─▶ ServerInspector::inspect (deadline, caps, the stop; stopped after) ─▶ audit outcome
 //! close    ─▶ admit no more ─▶ stop the inspections        (as the gateway's cleanup begins)
@@ -76,6 +76,7 @@ use super::ports::{
     McpServerInitiator, McpServerOutcome, McpServerStore, ServerInspector, ServerNames,
     ServerProblem, StoreError, StoreLock, StoredServers,
 };
+use crate::mcp_authorization::application::{AuthorizationHandoff, BindingChange};
 use crate::mcp_servers::domain::{
     EditRefusal, RemoteServerSave, ServerEdit, ServerSave, StdioServer, StoredMcpServer,
     MANAGED_SERVER_NAME,
@@ -214,6 +215,9 @@ pub enum McpServerSettingsError {
     /// because the gateway is stopping ([`InspectFailure::Stopping`]); it is
     /// not running.
     Inspect(InspectFailure),
+    /// The file was published and the live set was not. The old token binding
+    /// could not be fenced, so the new URL is not admitted.
+    AuthorizationHeld,
 }
 
 impl McpServerSettingsError {
@@ -230,6 +234,7 @@ impl McpServerSettingsError {
             Self::StorageUnavailable { .. } => "storage_unavailable",
             Self::Stopping => "stopping",
             Self::AuditUnavailable { .. } => "audit_unavailable",
+            Self::AuthorizationHeld => "authorization_held",
             Self::Inspect(failure) => match failure {
                 InspectFailure::Invalid(_) => "invalid",
                 InspectFailure::StartFailed => "start_failed",
@@ -255,6 +260,7 @@ impl McpServerSettingsError {
                 | Self::Stopping
                 | Self::AuditUnavailable { .. }
                 | Self::Inspect(_)
+                | Self::AuthorizationHeld
         )
     }
 }
@@ -288,6 +294,8 @@ struct Operations {
     inspector: Arc<dyn ServerInspector>,
     /// Whether a save's resulting list can still be listed.
     list_fits: ListFits,
+    /// Fences a remote token before a new URL or a removal is live.
+    handoff: Arc<dyn AuthorizationHandoff>,
     /// One permit per inspection that may run at once
     /// (`i6_a_third_inspection_at_once_is_busy`).
     inspections: Arc<Semaphore>,
@@ -304,6 +312,7 @@ impl McpServerSettings {
         live: Arc<dyn LiveServerSet>,
         inspector: Arc<dyn ServerInspector>,
         list_fits: ListFits,
+        handoff: Arc<dyn AuthorizationHandoff>,
     ) -> Self {
         Self {
             operations: Arc::new(Operations {
@@ -312,6 +321,7 @@ impl McpServerSettings {
                 live,
                 inspector,
                 list_fits,
+                handoff,
                 inspections: Arc::new(Semaphore::new(MCP_SERVER_INSPECT_MAX_CONCURRENT)),
                 stop: watch::channel(false).0,
             }),
@@ -703,6 +713,12 @@ impl Operations {
                 cause: (!change.durable).then(|| Box::new(not_durable)),
             }),
             (Err((error, _)), Ok(())) => Err(error),
+            (Err((McpServerSettingsError::AuthorizationHeld, _)), Err(AuditUnavailable)) => {
+                Err(McpServerSettingsError::AuditUnavailable {
+                    applied: true,
+                    cause: Some(Box::new(McpServerSettingsError::AuthorizationHeld)),
+                })
+            }
             (Err((error, _)), Err(AuditUnavailable)) => {
                 Err(McpServerSettingsError::AuditUnavailable {
                     applied: false,
@@ -919,6 +935,11 @@ impl Operations {
         // follows it.
         let written = written?;
         reached.mark_applied();
+        let changes = binding_changes(&kept, &edited);
+        if self.handoff.fence(&changes).await.is_err() {
+            drop(lock);
+            return Err(McpServerSettingsError::AuthorizationHeld);
+        }
         // Published: the live set follows, under the same lock. A remove
         // always takes its server out of it: when the list it leaves cannot
         // be made live as a whole — a hand-edited list still past a bound —
@@ -984,6 +1005,34 @@ impl Operations {
             .await
             .unwrap_or(Err(AuditUnavailable))
     }
+}
+
+/// URL changes and removals. A rename, an enable change, and a new id are
+/// not fenced: the token stays bound to the same resource, or there is no
+/// old binding.
+fn binding_changes(before: &[StoredMcpServer], after: &[StoredMcpServer]) -> Vec<BindingChange> {
+    let mut changes = Vec::new();
+    for previous in before.iter().filter_map(StoredMcpServer::remote) {
+        match after
+            .iter()
+            .filter_map(StoredMcpServer::remote)
+            .find(|server| server.id() == previous.id())
+        {
+            Some(next) if next.url() != previous.url() => {
+                changes.push(BindingChange::ResourceChanged {
+                    id: previous.id(),
+                    previous_url: previous.url().to_owned(),
+                    url: next.url().to_owned(),
+                })
+            }
+            Some(_) => {}
+            None => changes.push(BindingChange::Removed {
+                id: previous.id(),
+                url: previous.url().to_owned(),
+            }),
+        }
+    }
+    changes
 }
 
 /// `servers` at `revision`, and the one stored as `target`, if any.

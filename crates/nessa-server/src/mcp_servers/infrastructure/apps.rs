@@ -74,15 +74,15 @@ pub(crate) fn failure(error: McpError) -> McpAppFailure {
         // passes with time.
         McpError::Busy => McpAppFailure::Busy,
         // Ended, gone or stopped: the session cannot answer this call.
+        McpError::Unreachable => McpAppFailure::Unreachable,
+        McpError::Unauthorized => McpAppFailure::Unauthorized,
+        McpError::InsufficientScope => McpAppFailure::InsufficientScope,
         McpError::ServerGone
         | McpError::Closed
         | McpError::Stopped
         | McpError::Start(_)
         | McpError::ConfigurationChanged
         | McpError::InvalidConfiguration(_)
-        | McpError::Unreachable
-        | McpError::Unauthorized
-        | McpError::InsufficientScope
         | McpError::SessionExpired
         | McpError::Unconfirmed
         | McpError::SessionCollision => McpAppFailure::SessionEnded,

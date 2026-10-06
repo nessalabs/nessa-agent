@@ -157,6 +157,11 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.McpApprovalDenied:
     case ConversationErrorCode.McpApprovalExpired:
     case ConversationErrorCode.McpCancelled:
+    // The remote refused, could not be reached, or the token's scope was not
+    // enough. The tool was not run, so the call did not take effect.
+    case ConversationErrorCode.McpUnauthorized:
+    case ConversationErrorCode.McpUnreachable:
+    case ConversationErrorCode.McpInsufficientScope:
       return true
     // Possibly after the server was asked: its session ended, it did not
     // answer in time, it answered with an error, or its answer was too large

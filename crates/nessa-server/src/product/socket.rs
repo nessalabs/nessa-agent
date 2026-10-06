@@ -1539,7 +1539,12 @@ fn action_for_method(method: &str) -> Option<&'static str> {
         // A configured MCP server is started with the gateway's authority
         // and given its variables, credentials among them (#391).
         // Inspecting runs a stored server's executable with those variables.
-        "mcpServers.list" | "mcpServers.save" | "mcpServers.remove" | "mcpServers.inspect" => {
+        "mcpServers.list"
+        | "mcpServers.save"
+        | "mcpServers.remove"
+        | "mcpServers.inspect"
+        | "mcpServers.authorize"
+        | "mcpServers.revoke" => {
             Some("credential.manage")
         }
         // Enrolling a device creates a credential for it; Auth asks again for
@@ -2664,6 +2669,8 @@ mod tests {
             "mcpServers.save",
             "mcpServers.remove",
             "mcpServers.inspect",
+            "mcpServers.authorize",
+            "mcpServers.revoke",
         ] {
             assert_eq!(action_for_method(method), Some("credential.manage"));
             let (ok, answer) =

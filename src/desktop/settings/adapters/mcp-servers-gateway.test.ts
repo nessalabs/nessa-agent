@@ -47,6 +47,11 @@ describe("failureOf", () => {
       "unauthorized",
       "insufficientScope",
       "sessionCollision",
+      "authorizationHeld",
+      "storeUnavailable",
+      "registrationUnsupported",
+      "discoveryFailed",
+      "authorizationIncomplete",
     ])
   })
 
@@ -214,6 +219,7 @@ describe("mcpServersGateway", () => {
         revision: "r1",
         previousName: "a",
         server: {
+          kind: "stdio",
           name: "b",
           command: "/c",
           args: ["x"],

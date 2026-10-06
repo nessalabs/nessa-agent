@@ -2,10 +2,15 @@ import {
   bounds,
   McpServerKind,
   McpServerProblemCode,
+  McpAuthorizationPhase,
+  McpRemoteObservation,
   McpServersErrorCode,
   McpServersInspectCut,
   type McpInspectedTool,
+  type McpServerAuthorization,
   type McpServerListEntry,
+  type McpServersAuthorizeResult,
+  type McpServersRevokeResult,
   type McpServersAuditUnavailableDetails,
   type McpServersConfigTooLargeDetails,
   type McpServersInspectResult,
@@ -35,6 +40,7 @@ const entryKeys = [
   "managed",
   "id",
   "url",
+  "authorization",
 ]
 const toolKeys = ["name", "readOnlyHint", "destructiveHint", "ui"]
 
@@ -106,6 +112,8 @@ function entry(value: unknown): McpServerListEntry {
     item.envNames !== undefined
   )
     throw new Error("Invalid MCP server entry")
+  const authorization =
+    item.authorization === undefined ? undefined : authorizationOf(item.authorization)
   return {
     kind,
     name: item.name,
@@ -113,6 +121,51 @@ function entry(value: unknown): McpServerListEntry {
     url: item.url,
     enabled: item.enabled,
     managed: item.managed,
+    ...(authorization ? { authorization } : {}),
+  }
+}
+
+function authorizationOf(value: unknown): McpServerAuthorization {
+  const item = object(
+    value,
+    [
+      "phase",
+      "generation",
+      "tokenExpired",
+      "refreshFailing",
+      "scopeRequired",
+      "remoteObservation",
+      "domainsDigest",
+    ],
+    "authorization",
+  )
+  const phase = member(McpAuthorizationPhase, item.phase)
+  if (
+    !phase ||
+    typeof item.generation !== "number" ||
+    typeof item.tokenExpired !== "boolean" ||
+    typeof item.refreshFailing !== "boolean" ||
+    typeof item.scopeRequired !== "boolean"
+  )
+    throw new Error("Invalid MCP server authorization")
+  const remote =
+    item.remoteObservation === undefined
+      ? undefined
+      : member(McpRemoteObservation, item.remoteObservation)
+  if (item.remoteObservation !== undefined && !remote)
+    throw new Error("Invalid MCP server authorization")
+  if (item.domainsDigest !== undefined && !text(item.domainsDigest))
+    throw new Error("Invalid MCP server authorization")
+  return {
+    phase,
+    generation: item.generation,
+    tokenExpired: item.tokenExpired,
+    refreshFailing: item.refreshFailing,
+    scopeRequired: item.scopeRequired,
+    ...(remote ? { remoteObservation: remote } : {}),
+    ...(item.domainsDigest === undefined
+      ? {}
+      : { domainsDigest: item.domainsDigest as string }),
   }
 }
 
@@ -128,6 +181,62 @@ export function mcpServersListResult(value: unknown): McpServersListResult {
  * The answer to `mcpServers.save` and `.remove`: the stored list's revision
  * now, and whether new conversations get that list as written.
  */
+const authorizeStatuses = ["not_required", "pending_consent", "ready"] as const
+
+/** The answer to `mcpServers.authorize`. No token is in it. */
+export function mcpServersAuthorizeResult(value: unknown): McpServersAuthorizeResult {
+  const item = object(
+    value,
+    ["status", "attemptId", "consentUrl", "deadlineMs", "generation"],
+    "authorize",
+  )
+  const status = authorizeStatuses.find((each) => each === item.status)
+  if (!status) throw new Error("Invalid authorize result")
+  if (item.attemptId !== undefined && !text(item.attemptId))
+    throw new Error("Invalid authorize result")
+  if (item.consentUrl !== undefined && !text(item.consentUrl))
+    throw new Error("Invalid authorize result")
+  if (item.deadlineMs !== undefined && typeof item.deadlineMs !== "number")
+    throw new Error("Invalid authorize result")
+  if (item.generation !== undefined && typeof item.generation !== "number")
+    throw new Error("Invalid authorize result")
+  return {
+    status,
+    ...(item.attemptId === undefined ? {} : { attemptId: item.attemptId as string }),
+    ...(item.consentUrl === undefined ? {} : { consentUrl: item.consentUrl as string }),
+    ...(item.deadlineMs === undefined ? {} : { deadlineMs: item.deadlineMs as number }),
+    ...(item.generation === undefined ? {} : { generation: item.generation as number }),
+  }
+}
+
+/** The answer to `mcpServers.revoke`. `settled` is false while work remains. */
+export function mcpServersRevokeResult(value: unknown): McpServersRevokeResult {
+  const item = object(
+    value,
+    ["settled", "localDrained", "secretDeleted", "remoteObservation", "evidenceAcknowledged"],
+    "revoke",
+  )
+  if (
+    typeof item.settled !== "boolean" ||
+    typeof item.localDrained !== "boolean" ||
+    typeof item.secretDeleted !== "boolean" ||
+    typeof item.evidenceAcknowledged !== "boolean"
+  )
+    throw new Error("Invalid revoke result")
+  const remote =
+    item.remoteObservation === undefined
+      ? undefined
+      : member(McpRemoteObservation, item.remoteObservation)
+  if (item.remoteObservation !== undefined && !remote) throw new Error("Invalid revoke result")
+  return {
+    settled: item.settled,
+    localDrained: item.localDrained,
+    secretDeleted: item.secretDeleted,
+    evidenceAcknowledged: item.evidenceAcknowledged,
+    ...(remote ? { remoteObservation: remote } : {}),
+  }
+}
+
 export function mcpServersWriteResult(value: unknown): McpServersWriteResult {
   const item = object(value, ["revision", "live"], "MCP server write")
   if (!text(item.revision) || typeof item.live !== "boolean")

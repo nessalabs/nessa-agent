@@ -10,8 +10,13 @@ separate stateful concerns with explicit synchronization.
 
 - **Date:** 2026-10-03
 - **Statechart revision:** 2026-10-05
-- **Status:** proposed. This record refines the local transport draft and the
-  design on #392; it does not claim remote gateway support is implemented.
+- **Status:** accepted. The gateway owns remote Streamable HTTP (and the
+  scoped HTTP+SSE fallback), OAuth 2.1 (discovery, PKCE S256, dynamic
+  registration or `registration_unsupported`, loopback callback, macOS
+  keychain, refresh, revoke, and the fence before a URL change is live),
+  honest app-call outcomes, and the desktop authorize/revoke/consent
+  states. An owner-run check against a consenting remote server is still
+  outside cloud evidence.
 - **Tracking:** #392. Existing configuration work #391 is merged. The local
   `392-remote-mcp` branch retains three transport/test-server/design commits based
   on `bc2448f3`; this planning change does not merge its SDK/gateway code.

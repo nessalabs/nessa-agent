@@ -22,6 +22,10 @@ use super::agent::{agent_search_path, AgentsConfig};
 use super::runtime_config::{RuntimeConfig, MAX_CONFIG_BYTES};
 use crate::conversation::application::{DroppedContexts, McpAppAudit};
 use crate::core::RunError;
+use crate::mcp_authorization::application::AuthorizationOwner;
+use crate::mcp_authorization::infrastructure::{
+    FileAuthorizationAudit, FileRecords, HttpsOAuth, LoopbackCallback, OsEntropy, SystemAuthClock,
+};
 use crate::mcp_servers::{
     application::{McpServerSettings, Unfinished},
     domain::{relay_arguments, ConfigurationKey},
@@ -33,6 +37,7 @@ use crate::mcp_servers::{
     },
 };
 use crate::product::mcp_servers::list_fits;
+use nessa_agent_credentials::CredentialNamespace;
 use nessa_sdk::infrastructure::{
     acp::sessions::{McpServerList, McpServerSource, StandInSessions, StdioMcpServer},
     clock::RuntimeClock,
@@ -351,6 +356,12 @@ pub(super) async fn compose(
     }))
 }
 
+/// The stored-server owner and the authorization owner for one gateway run.
+pub(super) struct ManagedMcp {
+    pub(super) settings: McpServerSettings,
+    pub(super) authorization: Arc<AuthorizationOwner>,
+}
+
 /// What manages the stored servers of the namespace whose `config.json` is
 /// at `config` (`mcpServers.list`, `.save`, `.remove`, `.inspect`): the file
 /// and its lock, checked by the runtime configuration's own parse and bound;
@@ -376,7 +387,28 @@ pub(super) fn settings(
     config: PathBuf,
     audit: PathBuf,
 ) -> Result<Option<McpServerSettings>, RunError> {
-    settings_over(mcp, agents, Arc::new(OsConfigFiles::new(config)), audit)
+    Ok(manage(mcp, agents, config, audit, gateway_namespace())?.map(|managed| managed.settings))
+}
+
+/// [`settings`] together with the authorization owner, for the product routes.
+pub(super) fn manage(
+    mcp: &McpComposition,
+    agents: &AgentsConfig,
+    config: PathBuf,
+    audit: PathBuf,
+    namespace: CredentialNamespace,
+) -> Result<Option<ManagedMcp>, RunError> {
+    manage_over(
+        mcp,
+        agents,
+        Arc::new(OsConfigFiles::new(config)),
+        audit,
+        namespace,
+    )
+}
+
+fn gateway_namespace() -> CredentialNamespace {
+    CredentialNamespace::new("gateway".into(), None).expect("gateway namespace")
 }
 
 /// [`settings`] over `files`: the real file and its lock, or — in a test —
@@ -387,6 +419,19 @@ pub(super) fn settings_over(
     files: Arc<dyn ConfigFiles>,
     audit: PathBuf,
 ) -> Result<Option<McpServerSettings>, RunError> {
+    Ok(
+        manage_over(mcp, agents, files, audit, gateway_namespace())?
+            .map(|managed| managed.settings),
+    )
+}
+
+fn manage_over(
+    mcp: &McpComposition,
+    agents: &AgentsConfig,
+    files: Arc<dyn ConfigFiles>,
+    audit: PathBuf,
+    namespace: CredentialNamespace,
+) -> Result<Option<ManagedMcp>, RunError> {
     let Some(fallback) = fallback_agents(agents) else {
         tracing::error!(
             "MCP server settings are off this run: the catalog or workspace path is not UTF-8, \
@@ -404,22 +449,104 @@ pub(super) fn settings_over(
         Arc::new(RuntimeClock::new()),
         mcp.key.clone(),
     );
-    let audit = DurableMcpServerAudit::new(audit, Arc::new(super::local_auth::SystemClock))
+    let audit_clock = Arc::new(super::local_auth::SystemClock);
+    let server_audit = DurableMcpServerAudit::new(audit.clone(), audit_clock)
         .map_err(|_| RunError::Agent("the MCP server audit could not be opened".into()))?;
-    Ok(Some(McpServerSettings::new(
-        Arc::new(store),
-        Arc::new(audit),
-        Arc::new(LiveMcpServers::new(
-            mcp.servers.clone(),
-            mcp.launches.clone(),
+    let parent = audit
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| audit.clone());
+    let records = Arc::new(FileRecords::new(
+        parent.join("mcp-authorization"),
+        namespace,
+    ));
+    let writer = records.writer_available();
+    let http: Arc<dyn crate::mcp_authorization::application::OAuthHttp> = match HttpsOAuth::new() {
+        Some(client) => Arc::new(client),
+        None => Arc::new(RefusingOAuth),
+    };
+    let authorization = Arc::new(AuthorizationOwner::new(
+        records,
+        Arc::new(FileAuthorizationAudit::new(
+            parent.join("mcp-authorization-audit.jsonl"),
         )),
-        Arc::new(McpServerInspector::new(
-            mcp.servers.clone(),
-            mcp.launches.clone(),
-            Arc::new(RuntimeClock::new()),
-        )),
-        list_fits,
-    )))
+        http,
+        Arc::new(LoopbackCallback),
+        Arc::new(SystemAuthClock),
+        Arc::new(OsEntropy),
+        Arc::new(NamedDrain(mcp.servers.clone())),
+        Arc::new(ConfiguredResources(mcp.servers.clone())),
+        writer,
+    ));
+    mcp.servers.set_authorization(authorization.clone());
+    Ok(Some(ManagedMcp {
+        settings: McpServerSettings::new(
+            Arc::new(store),
+            Arc::new(server_audit),
+            Arc::new(LiveMcpServers::new(
+                mcp.servers.clone(),
+                mcp.launches.clone(),
+            )),
+            Arc::new(McpServerInspector::new(
+                mcp.servers.clone(),
+                mcp.launches.clone(),
+                Arc::new(RuntimeClock::new()),
+            )),
+            list_fits,
+            authorization.clone(),
+        ),
+        authorization,
+    }))
+}
+
+/// The configured remote URL a bearer would be sent to.
+struct ConfiguredResources(McpServers);
+
+impl crate::mcp_authorization::application::ResourceLookup for ConfiguredResources {
+    fn resource(&self, server: uuid::Uuid) -> Option<String> {
+        self.0
+            .configured_remotes()
+            .into_iter()
+            .find(|remote| remote.id() == server)
+            .map(|remote| remote.url().as_str().to_owned())
+    }
+}
+
+/// Closes the local sessions of one server name.
+struct NamedDrain(McpServers);
+
+#[async_trait::async_trait]
+impl crate::mcp_authorization::application::SessionDrain for NamedDrain {
+    async fn drain(&self, server_name: &str) {
+        self.0.close_named(server_name);
+    }
+}
+
+/// Used when the HTTPS client cannot be built. No request is sent.
+struct RefusingOAuth;
+
+#[async_trait::async_trait]
+impl crate::mcp_authorization::application::OAuthHttp for RefusingOAuth {
+    async fn get(
+        &self,
+        _url: &str,
+    ) -> Result<
+        crate::mcp_authorization::application::OAuthResponse,
+        crate::mcp_authorization::application::OAuthCallFailure,
+    > {
+        Err(crate::mcp_authorization::application::OAuthCallFailure::NotSent)
+    }
+
+    async fn post_form(
+        &self,
+        _url: &str,
+        _body: &str,
+    ) -> Result<
+        crate::mcp_authorization::application::OAuthResponse,
+        crate::mcp_authorization::application::OAuthCallFailure,
+    > {
+        Err(crate::mcp_authorization::application::OAuthCallFailure::NotSent)
+    }
 }
 
 /// The `agents` block a first write starts from: the running catalog and

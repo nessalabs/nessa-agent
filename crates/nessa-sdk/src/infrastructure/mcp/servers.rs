@@ -405,6 +405,13 @@ impl McpServers {
         authorization: Arc<dyn RemoteAuthorization>,
     ) {
         *self.inner.http.lock().expect("http exchange") = Some(http);
+        self.set_authorization(authorization);
+    }
+
+    /// The authorization owner later remote openings ask. Replacing it does
+    /// not retarget a session already open, and does not replace the HTTP
+    /// exchange.
+    pub fn set_authorization(&self, authorization: Arc<dyn RemoteAuthorization>) {
         *self.inner.authorization.lock().expect("authorization") = authorization;
     }
 
@@ -917,6 +924,27 @@ impl McpServers {
     fn open_sessions(&self) -> Vec<Arc<Session>> {
         let live = self.inner.live.lock().expect("live sessions");
         live.sessions.values().filter_map(Weak::upgrade).collect()
+    }
+
+    /// Close every open session of the configured server `name`. Calls waiting
+    /// end [`McpError::Closed`]. Other servers' sessions stay open. An
+    /// authorization owner calls this when a grant is retired, so a token
+    /// that must not be used again is not left on an open session.
+    pub fn close_named(&self, name: &str) {
+        let sessions: Vec<Arc<Session>> = self
+            .open_sessions()
+            .into_iter()
+            .filter(|session| session.server == name)
+            .collect();
+        for session in sessions {
+            session.connection.close(McpError::Closed);
+            match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => {
+                    runtime.spawn(close(session, McpError::Closed));
+                }
+                Err(_) => session.kill_now(McpError::Closed),
+            }
+        }
     }
 
     /// Revoke `owner`'s grant: no session opens under it from now on — one
