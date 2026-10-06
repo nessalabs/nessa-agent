@@ -4,6 +4,12 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createInterface } from "node:readline"
 
 const [scenario, file] = process.argv.slice(2)
+if (scenario === "hold-prompt" || scenario === "cleanup-hold") {
+  process.on("SIGTERM", () => {
+    writeFileSync(file, JSON.stringify({ phase: "term", pid: process.pid }))
+  })
+  setInterval(() => {}, 1000)
+}
 if (scenario === "ignore-term") {
   process.on("SIGTERM", () => {})
   process.send?.({ ready: true })
@@ -45,6 +51,10 @@ if (scenario === "ignore-term") {
   createInterface({ input: process.stdin }).on("line", (line) => {
     const request = JSON.parse(line)
     if (request.method === "initialize") {
+      if (scenario === "hold-initialize") {
+        writeFileSync(file, JSON.stringify({ phase: "started", pid: process.pid }))
+        return
+      }
       if (scenario === "startup-native")
         process.stdout.write(`${JSON.stringify(captured.frames[0].frame)}\n`)
       const agentInfo = { name: "scripted-fixture", version: "1" }
@@ -92,6 +102,10 @@ if (scenario === "ignore-term") {
       else send(request.id, result)
     }
     if (request.method === "session/prompt") {
+      if (scenario === "hold-prompt") {
+        writeFileSync(file, JSON.stringify({ phase: "prompt", pid: process.pid }))
+        return
+      }
       if (file && scenario.startsWith("metadata-"))
         writeFileSync(file, "prompt-dispatched")
       for (const { frame } of captured.frames) {
@@ -126,6 +140,12 @@ if (scenario === "ignore-term") {
         process.stdout.write(`${JSON.stringify(captured.frames[0].frame)}\n`)
     }
     if (request.method === "session/close") {
+      if (scenario === "cleanup-hold") {
+        process.stdout.write(
+          `${JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "SECRET_DENIAL" } })}\n`,
+        )
+        return
+      }
       const reply = JSON.stringify({ jsonrpc: "2.0", id: request.id, result: {} })
       if (scenario === "close-eof") process.stdout.end(reply, () => process.exit(0))
       else if (scenario === "close-null") process.stdout.write(`${reply}\nnull\n`)

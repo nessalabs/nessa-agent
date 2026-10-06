@@ -9,7 +9,7 @@ This does not implement Nessa's proposed Agent parent relationship.
 
 | File | Owns |
 | --- | --- |
-| `capture.mjs` | Direct provider probe orchestration, source hashes, controlled-result selection and final attempt output |
+| `capture.mjs` | Direct provider probe orchestration, manual SIGINT/SIGTERM supervision, source hashes, controlled-result selection and final attempt output |
 | `acp-session.mjs` | Sequential RPC/opening authority, pre-parse framing, first-failure retention and immutable record sealing |
 | `processes.mjs` | POSIX process-group cleanup independent of leader exit; bounded provider-version subprocess |
 | `metadata.mjs` | Installed-adapter identity match, capability presence and closed mode/kind projection; provider text and nested metadata are omitted |
@@ -88,10 +88,14 @@ outside this fixture's ownership. This is local probe cleanup, not evidence for
 the proposed product cascade.
 Direct native-provider success does not establish current Nessa support; this
 probe bypasses its binding and changes no tool policy.
-Cleanup confirmation requires the capture process to survive through its cleanup
-owner. Manual SIGINT/SIGTERM currently bypass asynchronous cleanup; parent crash
-and SIGKILL have no in-process cleanup guarantee. Graceful signal handling is
-tracked in [#591](https://github.com/nessalabs/nessa-agent/issues/591).
+Cleanup confirmation requires the capture process to reach its cleanup owner.
+Catchable manual `SIGINT` and `SIGTERM` record one interrupted attempt, then use
+that same owner. The process writes the attempt and exits only after the owner
+reports confirmed group release or explicit unconfirmed workspace ownership. A
+later catchable signal does not replace the first cause. Parent crash and
+`SIGKILL` do not enter the handler: the detached provider group and any workspace
+are then the supervisor's to reap. That boundary is
+[#591](https://github.com/nessalabs/nessa-agent/issues/591).
 
 ## Capture lifecycle and ordering cases
 
@@ -130,6 +134,12 @@ This is a structural repair of the developer probe, not Nessa Agent ownership.
 | Inspecting sealed evidence; cancelled/errored/non-sentinel outcome | Typed unsuccessful probe; success requires `end_turn` and completed `CHILD_DONE` wait/close reports | Controlled-outcome tests |
 | Version process stalls/overflows | Bound and stop its separate group; record version unavailable | Stalled-version test |
 | Closing group; leader exits first | Retain group authority through SIGKILL and live-member confirmation | Leader-first real-process test |
+| Manual command; no signal; scripted success or recording failure | Handlers stay idle; completed and failed attempts keep their causes, cleanup, and exit status | Manual-entry complete and invalid-json |
+| Manual command; SIGINT/SIGTERM before `session/new` is admitted | Record `interrupted` and that signal as the attempt cause; do not prompt; the shared cleanup owner confirms release or records unconfirmed ownership; delete the workspace only after confirmed stop; write the attempt and exit after that settlement | Manual-entry hold-initialize SIGINT |
+| Manual command; SIGINT/SIGTERM during a pending provider RPC | Same interrupted cause; a later SIGINT/SIGTERM does not replace the first signal; cleanup evidence stays independent of the attempt cause; unconfirmed cleanup keeps that cause and the workspace | Manual-entry hold-prompt, SIGINT then SIGTERM during group grace; grace/confirm 0 retains the workspace |
+| Manual command; SIGINT/SIGTERM while cleanup is settling an earlier cause | Preserve the earlier attempt cause and do not relabel it interrupted; confirmed release still removes the workspace | Manual-entry cleanup-hold, SIGINT during SIGTERM grace |
+| Sealed attempt; SIGINT/SIGTERM during bounded version lookup | Finish that lookup's own group cleanup; the first signal is the attempt cause because none was stored yet; a later signal does not replace it; then the probe group uses the shared owner | Manual-entry complete provider with version-stall, SIGINT then SIGTERM |
+| Parent SIGKILL or crash | No handler runs; in-process cleanup of the detached group or workspace is not claimed | Supervisor boundary; no in-process pass |
 
 The sealing boundary covers complete frames and partial bytes already delivered
 in the same decoder chunk as close. A later chunk is outside the recording after
@@ -144,6 +154,10 @@ Only maintainers refreshing a provider contract need to run live sessions:
 ```sh
 node scripts/subagent-contracts/capture.mjs /tmp/subagent-selected.json
 ```
+
+Interruption regressions launch this same process with `--controlled` and the
+scripted provider. That entry does not call the live model or require credentials.
+It is not a second cleanup implementation.
 
 Live capture requires POSIX process-group ownership and `/bin/ps` state queries;
 Windows live capture is explicitly refused, while credential-free evidence
@@ -190,4 +204,7 @@ match the trusted installed adapter; capabilities retain known presence flags,
 and mode values/kinds use the pinned closed vocabulary. Names, descriptions,
 titles, unknown fields and nested metadata are not copied from the provider.
 Source bytes are pinned to LF by `.gitattributes` so provenance is stable under
-Git's platform line-ending conversion.
+Git's platform line-ending conversion. The retained frames and `capturedAt` are
+the October 6 live run. `probeSha256` is the checkout lock for `capture.mjs`;
+the interruption supervisor realigned that lock without repeating the provider
+session.

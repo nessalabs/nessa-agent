@@ -1,12 +1,20 @@
 import { strict as assert } from "node:assert"
-import { execFile } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
 import { once } from "node:events"
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
+import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
-import { captureProbe } from "./capture.mjs"
+import { captureProbe, parseManualArgs } from "./capture.mjs"
 import { boundedFrames } from "./acp-session.mjs"
 import { providerVersion, startProbeProcess, stopProbeProcess } from "./processes.mjs"
 
@@ -279,6 +287,7 @@ test(
       cleanupOptions: { graceMs: 0, confirmMs: 0 },
     })
     assert.equal(result.outcome.code, "close_rejected")
+    assert.equal(result.outcome.rpcCode, -32000)
     assert.equal(result.outcome.cleanupCode, "cleanup_unconfirmed")
     assert.equal(result.source.probeCleanup.kind, "unconfirmed")
     assert.equal(
@@ -357,4 +366,394 @@ test("EOF cannot turn an unterminated JSON fragment into an admitted frame", () 
   valid.end()
   assert.equal(frames.length, 1)
   assert.deepEqual(failures, ["incomplete_frame_at_seal"])
+})
+
+const captureEntry = fileURLToPath(new URL("./capture.mjs", import.meta.url))
+const manual = { skip: process.platform === "win32", timeout: 15000 }
+
+test("manual arguments accept the live command or one controlled provider", () => {
+  assert.deepEqual(parseManualArgs(["out.json"]), { kind: "live", out: "out.json" })
+  const controlled = parseManualArgs([
+    "out.json",
+    "--controlled",
+    "probe.mjs",
+    "hold-prompt",
+    "marker",
+    "workspaces",
+    "--grace",
+    "0",
+    "--confirm",
+    "0",
+    "--version-scenario",
+    "version-stall",
+    "--version-budget",
+    "3000",
+  ])
+  assert.equal(controlled.kind, "controlled")
+  assert.equal(controlled.out, "out.json")
+  assert.equal(controlled.provider, "probe.mjs")
+  assert.equal(controlled.scenario, "hold-prompt")
+  assert.deepEqual(controlled.cleanupOptions, { graceMs: 0, confirmMs: 0 })
+  assert.equal(controlled.versionScenario, "version-stall")
+  assert.equal(controlled.versionBudgetMs, 3000)
+  for (const argv of [
+    [],
+    ["--controlled"],
+    ["out.json", "--controlled", "probe.mjs", "hold-prompt", "marker"],
+    [
+      "out.json",
+      "--controlled",
+      "probe.mjs",
+      "hold-prompt",
+      "marker",
+      "workspaces",
+      "--grace",
+      "1",
+    ],
+    [
+      "out.json",
+      "--controlled",
+      "probe.mjs",
+      "hold-prompt",
+      "marker",
+      "workspaces",
+      "--grace",
+      "-1",
+      "--confirm",
+      "1",
+    ],
+    ["out.json", "--nope"],
+    ["out.json", "--controlled", "probe.mjs", "BAD", "marker", "workspaces"],
+  ])
+    assert.equal(parseManualArgs(argv).kind, "invalid", JSON.stringify(argv))
+})
+
+function manualPaths(t) {
+  const root = directory(t)
+  const workspaceParent = join(root, "workspaces")
+  mkdirSync(workspaceParent)
+  return {
+    workspaceParent,
+    marker: join(root, "marker"),
+    out: join(root, "out.json"),
+  }
+}
+function controlledArgs(paths, scenario, extra = []) {
+  return [
+    paths.out,
+    "--controlled",
+    fixture,
+    scenario,
+    paths.marker,
+    paths.workspaceParent,
+    ...extra,
+  ]
+}
+function spawnManual(args) {
+  const child = spawn(process.execPath, [captureEntry, ...args], {
+    stdio: ["ignore", "pipe", "pipe"],
+  })
+  let stdout = ""
+  let stderr = ""
+  child.stdout.setEncoding("utf8")
+  child.stderr.setEncoding("utf8")
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk
+  })
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk
+  })
+  const exited = once(child, "close").then(([code, signal]) => ({
+    code,
+    signal,
+    stdout,
+    stderr,
+  }))
+  return { child, exited }
+}
+function commandLines(needle) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "/bin/ps",
+      ["-eo", "pid=,stat=,command="],
+      { timeout: 1000, killSignal: "SIGKILL" },
+      (error, stdout) => {
+        if (error) return reject(error)
+        resolve(
+          stdout
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => {
+              if (!line.includes(needle)) return false
+              const stat = line.split(/\s+/)[1] ?? ""
+              return !stat.startsWith("Z")
+            }),
+        )
+      },
+    )
+  })
+}
+async function readMarker(path, phase) {
+  const deadline = Date.now() + 4000
+  while (Date.now() < deadline) {
+    if (existsSync(path)) {
+      try {
+        const parsed = JSON.parse(readFileSync(path, "utf8"))
+        if (parsed.phase === phase && Number.isSafeInteger(parsed.pid)) return parsed
+      } catch {
+        // A concurrent writer can be observed mid-replace.
+      }
+    }
+    await sleep(10)
+  }
+  throw new Error(`marker ${phase} was not observed`)
+}
+async function readPidFile(path) {
+  const deadline = Date.now() + 4000
+  while (Date.now() < deadline) {
+    if (existsSync(path)) {
+      const pid = Number(readFileSync(path, "utf8"))
+      if (Number.isSafeInteger(pid) && pid > 0) return pid
+    }
+    await sleep(10)
+  }
+  throw new Error("version pid was not observed")
+}
+async function runManual(t, scenario, extra = [], act) {
+  const paths = manualPaths(t)
+  const { child, exited } = spawnManual(controlledArgs(paths, scenario, extra))
+  t.after(async () => {
+    try {
+      child.kill("SIGKILL")
+    } catch {
+      // The manual command already exited.
+    }
+    try {
+      for (const line of await commandLines(paths.marker)) {
+        const pid = Number(line.split(/\s+/)[0])
+        if (!Number.isSafeInteger(pid)) continue
+        try {
+          process.kill(-pid, "SIGKILL")
+        } catch {
+          // The group leader may already be gone.
+        }
+        try {
+          process.kill(pid, "SIGKILL")
+        } catch {
+          // Already reaped.
+        }
+      }
+    } catch {
+      // Process-state failure must not hide the test result.
+    }
+  })
+  if (act) await act({ child, paths })
+  const finished = await exited
+  assert.equal(finished.signal, null)
+  assert.equal(finished.stderr, "")
+  const saved = JSON.parse(readFileSync(paths.out, "utf8"))
+  assert.doesNotMatch(JSON.stringify(saved), /SECRET_/)
+  const reported = JSON.parse(finished.stdout)
+  assert.deepEqual(
+    reported,
+    saved.outcome.kind === "completed"
+      ? {
+          ...saved.outcome,
+          nativeSessionUpdates: saved.source.nativeSessionUpdates,
+          permissionRequests: saved.source.permissionRequests,
+        }
+      : saved.outcome,
+  )
+  return { paths, finished, saved }
+}
+
+test(
+  "manual entry keeps scripted success and recording failure without a signal",
+  manual,
+  async (t) => {
+    const success = await runManual(t, "complete")
+    assert.equal(success.finished.code, 0)
+    assert.equal(success.saved.outcome.kind, "completed")
+    assert.equal(success.saved.outcome.stopReason, "end_turn")
+    assert.deepEqual(success.saved.source.probeCleanup, {
+      kind: "stopped",
+      leaderReaped: true,
+      liveGroupMembers: 0,
+    })
+    assert.deepEqual(readdirSync(success.paths.workspaceParent), [])
+    assert.deepEqual(await commandLines(success.paths.marker), [])
+    const failure = await runManual(t, "invalid-json")
+    assert.equal(failure.finished.code, 1)
+    assert.deepEqual(failure.saved.outcome, { kind: "failed", code: "invalid_frame" })
+    assert.equal(Object.hasOwn(failure.saved.outcome, "signal"), false)
+    assert.deepEqual(readdirSync(failure.paths.workspaceParent), [])
+    assert.deepEqual(await commandLines(failure.paths.marker), [])
+  },
+)
+
+test(
+  "manual SIGINT before opening records interruption and releases the provider group",
+  manual,
+  async (t) => {
+    const { paths, finished, saved } = await runManual(
+      t,
+      "hold-initialize",
+      [],
+      async ({ child, paths: manualPaths }) => {
+        await readMarker(manualPaths.marker, "started")
+        assert.equal(child.kill("SIGINT"), true)
+      },
+    )
+    assert.equal(finished.code, 1)
+    assert.deepEqual(saved.outcome, {
+      kind: "failed",
+      code: "interrupted",
+      signal: "SIGINT",
+    })
+    assert.deepEqual(saved.frames, [])
+    assert.equal(saved.admission, undefined)
+    assert.deepEqual(saved.source.probeCleanup, {
+      kind: "stopped",
+      leaderReaped: true,
+      liveGroupMembers: 0,
+    })
+    assert.deepEqual(readdirSync(paths.workspaceParent), [])
+    assert.deepEqual(await commandLines(paths.marker), [])
+    const marker = JSON.parse(readFileSync(paths.marker, "utf8"))
+    assert.ok(
+      (await state(marker.pid)) === "" || (await state(marker.pid)).startsWith("Z"),
+    )
+  },
+)
+
+test(
+  "manual SIGINT during a pending prompt keeps the first signal through a later SIGTERM",
+  manual,
+  async (t) => {
+    const run = await runManual(
+      t,
+      "hold-prompt",
+      ["--grace", "2000", "--confirm", "2000"],
+      async ({ child, paths }) => {
+        await readMarker(paths.marker, "prompt")
+        assert.equal(child.kill("SIGINT"), true)
+        await readMarker(paths.marker, "term")
+        assert.equal(child.kill("SIGTERM"), true)
+      },
+    )
+    assert.equal(run.finished.code, 1)
+    assert.deepEqual(run.saved.outcome, {
+      kind: "failed",
+      code: "interrupted",
+      signal: "SIGINT",
+    })
+    assert.deepEqual(run.saved.frames, [])
+    assert.deepEqual(run.saved.source.probeCleanup, {
+      kind: "stopped",
+      leaderReaped: true,
+      liveGroupMembers: 0,
+    })
+    assert.deepEqual(readdirSync(run.paths.workspaceParent), [])
+    assert.deepEqual(await commandLines(run.paths.marker), [])
+  },
+)
+
+test(
+  "manual SIGINT during cleanup preserves the earlier close failure and still releases the group",
+  manual,
+  async (t) => {
+    const run = await runManual(
+      t,
+      "cleanup-hold",
+      ["--grace", "2000", "--confirm", "2000"],
+      async ({ child, paths }) => {
+        await readMarker(paths.marker, "term")
+        assert.equal(child.kill("SIGINT"), true)
+      },
+    )
+    assert.equal(run.finished.code, 1)
+    assert.deepEqual(run.saved.outcome, {
+      kind: "failed",
+      code: "close_rejected",
+      rpcCode: -32000,
+    })
+    assert.equal(Object.hasOwn(run.saved.outcome, "signal"), false)
+    assert.deepEqual(run.saved.source.probeCleanup, {
+      kind: "stopped",
+      leaderReaped: true,
+      liveGroupMembers: 0,
+    })
+    assert.deepEqual(readdirSync(run.paths.workspaceParent), [])
+    assert.deepEqual(await commandLines(run.paths.marker), [])
+  },
+)
+
+test(
+  "manual interruption with unconfirmed cleanup retains the workspace and the interrupted cause",
+  manual,
+  async (t) => {
+    const run = await runManual(
+      t,
+      "hold-prompt",
+      ["--grace", "0", "--confirm", "0"],
+      async ({ child, paths }) => {
+        await readMarker(paths.marker, "prompt")
+        assert.equal(child.kill("SIGINT"), true)
+      },
+    )
+    assert.equal(run.finished.code, 1)
+    assert.deepEqual(run.saved.outcome, {
+      kind: "failed",
+      code: "interrupted",
+      signal: "SIGINT",
+      cleanupCode: "cleanup_unconfirmed",
+    })
+    assert.equal(run.saved.source.probeCleanup.kind, "unconfirmed")
+    assert.equal(readdirSync(run.paths.workspaceParent).length, 1)
+  },
+)
+
+test(
+  "manual SIGINT during version lookup interrupts after that group is cleaned",
+  manual,
+  async (t) => {
+    const run = await runManual(
+      t,
+      "complete",
+      ["--version-scenario", "version-stall", "--version-budget", "3000"],
+      async ({ child, paths }) => {
+        const versionPid = await readPidFile(`${paths.marker}.version`)
+        assert.equal(child.kill("SIGINT"), true)
+        assert.equal(child.kill("SIGTERM"), true)
+        paths.versionPid = versionPid
+      },
+    )
+    assert.equal(run.finished.code, 1)
+    assert.deepEqual(run.saved.outcome, {
+      kind: "failed",
+      code: "interrupted",
+      signal: "SIGINT",
+    })
+    assert.equal(run.saved.source.versionCleanup.kind, "stopped")
+    assert.deepEqual(run.saved.source.probeCleanup, {
+      kind: "stopped",
+      leaderReaped: true,
+      liveGroupMembers: 0,
+    })
+    assert.deepEqual(readdirSync(run.paths.workspaceParent), [])
+    assert.deepEqual(await commandLines(run.paths.marker), [])
+    assert.ok(
+      (await state(run.paths.versionPid)) === "" ||
+        (await state(run.paths.versionPid)).startsWith("Z"),
+    )
+  },
+)
+
+test("a malformed manual command exits before starting a provider", async () => {
+  const { exited } = spawnManual([])
+  const finished = await exited
+  assert.equal(finished.code, 2)
+  assert.equal(finished.signal, null)
+  assert.equal(finished.stdout, "")
+  assert.match(finished.stderr, /^capture\.mjs /)
 })
