@@ -12,7 +12,7 @@ use super::{
     scheduling::{ActiveInvocation, Scheduler},
 };
 use crate::application::agent_execution::agents::{
-    AgentError, AgentFuture, AgentInitializationError,
+    AgentError, AgentFuture, AgentInitializationError, OwnedLifetime,
 };
 use crate::application::agent_execution::caller_wake::{contain_caller_wake, CallerWaiter};
 use crate::application::agent_execution::executions::{
@@ -1797,6 +1797,58 @@ impl Agent {
     /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub fn close(&self, actor: ActionContext) -> AgentFuture<'_, CloseOutcome> {
         Box::pin(async move { self.close_scheduled(actor).await })
+    }
+
+    /// Install ownership participation once, before attachment authorization.
+    /// A second install returns [`AgentError::InvalidInput`]. Bare agents omit this.
+    pub fn install_owned_lifetime(&self, gate: Arc<dyn OwnedLifetime>) -> Result<(), AgentError> {
+        self.inner.lifecycle.install_owned_lifetime(gate)
+    }
+
+    /// End this ownership lifetime. The call seals descendant admission, stops
+    /// this attachment, and joins the descendant drain. A bare agent has no gate
+    /// and behaves as [`Self::close`]. `Agent::close` itself stays attachment-only
+    /// and does not seal children.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
+    pub fn end_owned_lifetime(&self, actor: ActionContext) -> AgentFuture<'_, CloseOutcome> {
+        Box::pin(async move {
+            let gate = self.inner.lifecycle.owned_gate();
+            let Some(gate) = gate else {
+                return self.close_scheduled(actor).await;
+            };
+            let seal = gate.seal_for_host(&actor).await;
+            let cleanup = self.close_scheduled(actor).await;
+            let descendants = gate.join_descendants().await;
+            combine_owned_close(seal, cleanup, descendants)
+        })
+    }
+}
+
+fn combine_owned_close(
+    seal: Result<(), AgentError>,
+    cleanup: Result<CloseOutcome, AgentError>,
+    descendants: Result<(), AgentError>,
+) -> Result<CloseOutcome, AgentError> {
+    let mut failure = seal.err();
+    if let Err(error) = descendants {
+        failure = Some(match failure {
+            None => error,
+            Some(first) => AgentError::MultipleOperationFailures {
+                first_error: Box::new(first),
+                subsequent_error: Box::new(error),
+            },
+        });
+    }
+    match (cleanup, failure) {
+        (Ok(outcome), None) => Ok(outcome),
+        (Ok(_), Some(error)) | (Err(error), None) => Err(error),
+        (Err(error), Some(later)) => Err(AgentError::MultipleOperationFailures {
+            first_error: Box::new(error),
+            subsequent_error: Box::new(later),
+        }),
     }
 }
 

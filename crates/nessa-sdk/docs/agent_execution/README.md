@@ -32,9 +32,11 @@ host --> Agent --> SessionManager --> SessionStorageLease
 
 Arrows show calls. Agent owns invocation and controls. Composition injects the
 provider, manager/storage, and required permission audit sink.
-Application feature modules are `agents`, `providers`, `sessions`, `hooks`,
+Application feature modules are `agents`, `subagents`, `providers`, `sessions`, `hooks`,
 `executions`, `permissions`, `commands`, and `tools`. Domain features retain their existing
-live session, execution, tool, permission, and prompt boundaries.
+live session, execution, tool, permission, and prompt boundaries, plus the subagent
+lifetime graph. Gateway spawn, product protocol, and desktop relationship views are
+not part of this SDK slice.
 
 `ExecutionEvent` and `ExecutionUpdate` are application projections saved in session
 snapshots before live publication; they are not domain events. `MessageChunk` is an immutable streamed fragment with a `MessageKind` (text or thought) and compact text storage;

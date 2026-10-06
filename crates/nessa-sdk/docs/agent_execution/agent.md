@@ -87,6 +87,15 @@ handles remain distinct causes. An application failure does not imply its handle
 were dropped. The adapter carries the cause into closure and permission audit;
 cleanup confirmation is a separate result.
 
+An agent that participates in a parent/child ownership tree installs one
+`OwnedLifetime` before attachment. `Agent::close` still stops only this
+attachment and can reopen. `Agent::end_owned_lifetime` seals descendant admission,
+stops this attachment, and joins the descendant drain. Dropping the last session
+handles selects the same owned ending. Explicit close, execution failure, session
+failure, deadline, and a dropped event consumer stay attachment-only. A second
+install is refused. The coordinator keeps the gate; the agent does not keep the
+coordinator.
+
 ## Model capabilities and provider operations
 
 `agent.capabilities()` returns the immutable effective model capabilities selected

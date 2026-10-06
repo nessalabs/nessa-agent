@@ -8,9 +8,12 @@
 //!              |-> InvocationHooks
 //! adapter -> ExecutionController -> domain session
 //! adapter -> ExecutionAudit
+//! caller -> subagents::OwnershipCoordinator -> ordinary child Agent
 //! ```
 //! Arrows show calls. Authentication stays with the host; mandatory permission
 //! audit remains separate from session snapshots and optional UI subscribers.
+//! The ownership coordinator records parent and child lifetimes. Each child
+//! Agent still schedules only its own conversation.
 
 pub mod agents;
 pub(crate) mod caller_wake;
@@ -20,4 +23,5 @@ pub mod hooks;
 pub mod permissions;
 pub mod providers;
 pub mod sessions;
+pub mod subagents;
 pub mod tools;
