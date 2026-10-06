@@ -24,7 +24,7 @@ import { attempt, CannotRun, devServerOnlySteps, recordIfLeftOut } from "./lib/c
 import { appFrame } from "./lib/apps.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { content, css, names } from "./lib/selectors.mjs"
+import { content, css, names, selectorFor } from "./lib/selectors.mjs"
 import { contentIs, paneCount, paneCountIs, settled, until } from "./lib/workspace.mjs"
 
 const meta = {
@@ -550,7 +550,7 @@ async function onSample(browser, { url, layout }) {
   }
   if (!(await row.count())) throw new CannotRun(`no session row "${names.appSession}"`)
   await row.click()
-  await need(page, css.appFrameIn("inline"), "the app's card frame", 10_000)
+  await need(page, selectorFor.appFrameIn("inline"), "the app's card frame", 10_000)
   await settled(page)
   return opened
 }
@@ -558,7 +558,7 @@ async function onSample(browser, { url, layout }) {
 /** Waits until the app in `frame` says it is `state` (`data-fixture-state`), and says what it is. */
 async function appState(frame, state, timeout = 10_000) {
   try {
-    await frame.waitForSelector(css.fixtureState(state), { timeout })
+    await frame.waitForSelector(selectorFor.fixtureState(state), { timeout })
   } catch {
     // Reported below.
   }
@@ -657,9 +657,9 @@ async function openPane(page, failures) {
   const before = await paneCount(page)
   const { app } = await appFrame(page, "inline")
   await appState(app, "live")
-  await app.click(css.fixtureControl("fullscreen"))
+  await app.click(selectorFor.fixtureControl("fullscreen"))
   await paneCountIs(page, before + 1)
-  const answer = await output(app, css.fixtureOutput("mode"))
+  const answer = await output(app, selectorFor.fixtureOutput("mode"))
   if (answer !== 'ok: {"mode":"inline"}')
     failures.push(`the card's fullscreen request was answered ${answer}, expected inline`)
   return expectLive(page, "pane", "fullscreen", failures)
@@ -684,9 +684,9 @@ const checks = {
       ([frame, want]) =>
         Math.abs(document.querySelector(frame).getBoundingClientRect().height - want) <=
         1,
-      [css.appFrameIn("inline"), height],
+      [selectorFor.appFrameIn("inline"), height],
     ).catch(() => {})
-    const drawn = await rect(await page.$(css.appFrameIn("inline")))
+    const drawn = await rect(await page.$(selectorFor.appFrameIn("inline")))
     if (Math.abs(drawn.h - height) > 1)
       failures.push(`the card's frame is ${drawn.h}px tall; the app said ${height}px`)
     return { frame: box, drawn, appHeight: height, told: told.styles, failures }
@@ -700,7 +700,7 @@ const checks = {
     const measured = await fills(
       page,
       `${css.widgetPane} ${css.widgetBody}`,
-      `${css.widgetPane} ${css.appFrameIn("pane")}`,
+      `${css.widgetPane} ${selectorFor.appFrameIn("pane")}`,
     )
     if (!measured.fit)
       failures.push(
@@ -724,7 +724,7 @@ const checks = {
     const measured = await fills(
       page,
       `${css.widgetWindow} ${css.widgetBody}`,
-      css.appFrameIn("window"),
+      selectorFor.appFrameIn("window"),
     )
     if (!measured.fit)
       failures.push(
@@ -737,15 +737,15 @@ const checks = {
     const failures = []
     const { app } = await appFrame(page, "inline")
     await appState(app, "live")
-    await app.click(css.fixtureControl("call-allowed"))
-    const allowed = await output(app, css.fixtureOutput("call"))
+    await app.click(selectorFor.fixtureControl("call-allowed"))
+    const allowed = await output(app, selectorFor.fixtureOutput("call"))
     if (
       allowed !==
       'ok: {"content":[{"type":"text","text":"Refreshed"}],"structuredContent":{"refreshed":{"times":1}}}'
     )
       failures.push(`the allowed tool was answered ${allowed}`)
-    await app.click(css.fixtureControl("call-hidden"))
-    const hidden = await output(app, css.fixtureOutput("call"), allowed)
+    await app.click(selectorFor.fixtureControl("call-hidden"))
+    const hidden = await output(app, selectorFor.fixtureOutput("call"), allowed)
     if (hidden !== `error: ${names.hiddenToolRefused}`)
       failures.push(`the hidden tool was answered ${hidden}`)
     return { allowed, hidden, failures }
@@ -759,8 +759,8 @@ const checks = {
     const before = await authors.count()
     // The person's own messages in this session carry no label.
     if (before !== 0) failures.push(`${before} labels before the app wrote anything`)
-    await app.click(css.fixtureControl("message"))
-    const sent = await output(app, css.fixtureOutput("message"))
+    await app.click(selectorFor.fixtureControl("message"))
+    const sent = await output(app, selectorFor.fixtureOutput("message"))
     if (sent !== "ok: {}") failures.push(`the message was answered ${sent}`)
     await authors
       .nth(before)
@@ -819,14 +819,14 @@ const checks = {
     )
       failures.push("the label leaves the column")
     // The sample's agent is replying now: another is refused, and adds nothing.
-    await app.click(css.fixtureControl("message"))
-    const busy = await output(app, css.fixtureOutput("message"), sent)
+    await app.click(selectorFor.fixtureControl("message"))
+    const busy = await output(app, selectorFor.fixtureOutput("message"), sent)
     if (busy !== 'ok: {"isError":true}')
       failures.push(`a message while the reply runs was answered ${busy}`)
     if ((await authors.count()) !== before + 1)
       failures.push("a refused message appeared in the transcript")
-    await app.click(css.fixtureControl("context"))
-    const context = await output(app, css.fixtureOutput("context"))
+    await app.click(selectorFor.fixtureControl("context"))
+    const context = await output(app, selectorFor.fixtureOutput("context"))
     // The sample has no model to give a context to, and says so.
     if (context !== `error: ${names.noModelForContext}`)
       failures.push(`the context was answered ${context}`)
@@ -837,8 +837,8 @@ const checks = {
     const failures = []
     const { app } = await appFrame(page, "inline")
     await appState(app, "live")
-    await app.click(css.fixtureControl("fetch"))
-    const fetched = await output(app, css.fixtureOutput("fetch"), "fetching")
+    await app.click(selectorFor.fixtureControl("fetch"))
+    const fetched = await output(app, selectorFor.fixtureOutput("fetch"), "fetching")
     if (fetched !== "blocked") failures.push(`the undeclared fetch was ${fetched}`)
     const notice = page.locator(css.appNotice, { hasText: names.blockedNotice })
     await notice
@@ -917,7 +917,7 @@ const checks = {
           const mark = await app.evaluate(
             () => (window.mcpAppsMark = String(Math.random())),
           )
-          await app.click(css.fixtureControl(control))
+          await app.click(selectorFor.fixtureControl(control))
           const line = page.locator(css.appView, { hasText: names.appLoadLine })
           await line
             .first()
@@ -935,7 +935,7 @@ const checks = {
                   window.mcpAppsMark === marked &&
                   location.href === "about:srcdoc" &&
                   document.querySelector(control) !== null,
-                [mark, css.fixtureControl(control)],
+                [mark, selectorFor.fixtureControl(control)],
               )
               .catch(() => false)) &&
             (await page.locator(css.appView).first().getAttribute("data-app-view")) ===
@@ -944,7 +944,7 @@ const checks = {
             failures.push(
               `within ${within} ms of ${control}, the host does not say "${names.appLoadLine}", and the app's document is not the one it was`,
             )
-          if (departed && (await page.$(css.appFrameIn("inline"))))
+          if (departed && (await page.$(selectorFor.appFrameIn("inline"))))
             failures.push(`after ${control}, the app's frame is still on the page`)
           if (leaked.length > 0)
             failures.push(`requests reached example.com: ${leaked.join(", ")}`)
@@ -963,7 +963,7 @@ const checks = {
     const { app } = await appFrame(page, "inline")
     await appState(app, "live")
     // Speaking as the proxy, and putting words in the host's chrome.
-    await app.click(css.fixtureControl("forge"))
+    await app.click(selectorFor.fixtureControl("forge"))
     await page.waitForTimeout(500)
     const view = await page.locator(css.appView).first().getAttribute("data-app-view")
     if (view !== "live")
@@ -988,9 +988,9 @@ const checks = {
     await until(
       page,
       (frame) => !document.querySelector(frame),
-      css.appFrameIn("pane"),
+      selectorFor.appFrameIn("pane"),
     ).catch(() => {})
-    if (await page.$(css.appFrameIn("pane")))
+    if (await page.$(selectorFor.appFrameIn("pane")))
       failures.push("the pane's frame is still on the page after its close")
     if (!proxy.isDetached() || !app.isDetached())
       failures.push("the pane's proxy or app document outlived its close")
@@ -999,7 +999,7 @@ const checks = {
     const panes = await paneCount(page)
     // The fixture answers its teardown 400ms after it is asked: until then
     // the pane stays, and the app is still on the page saying so.
-    await second.app.click(css.fixtureControl("close"))
+    await second.app.click(selectorFor.fixtureControl("close"))
     const said = await appState(second.app, "tearing-down", 2000).catch(() => ({
       state: "detached",
     }))
@@ -1037,7 +1037,7 @@ await main(meta, async ({ options, rep, url, mode }) => {
         await attempt(rep, { engine, layout, name }, async () => {
           opened = await onSample(browser, { url, layout })
           const result = await checks[name](opened.page, layout)
-          return { ...result, failures: [...result.failures, ...opened.errors] }
+          return result
         }).finally(() => opened?.close())
       }
   })

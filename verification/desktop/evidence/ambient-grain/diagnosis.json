@@ -1,0 +1,38 @@
+{
+  "environment": {
+    "platform": "macOS arm64",
+    "node": "v22.16.0",
+    "chrome": "154.0.8037.98",
+    "viewport": "1600x1000",
+    "cpuThrottle": 4,
+    "uiPin": "b0cb660d1e729cb6958181a9f8c011fcf0a759ef"
+  },
+  "source": {
+    "base": "f7f394dc",
+    "candidate": "base plus desktop grain PNG replacement and browser regression"
+  },
+  "diagnostic": {
+    "instrumented": true,
+    "svgGrain": {
+      "idleMaxMs": 83.3,
+      "dragMaxMs": 66.5,
+      "gpuRasterFlushMaxMs": 122.393
+    },
+    "grainHidden": {
+      "idleMaxMs": 17.7,
+      "dragMaxMs": 33.3,
+      "gpuRasterFlushMaxMs": 6.094
+    },
+    "driftDisabled": {
+      "idleMaxMs": 84.2,
+      "dragMaxMs": 117.4
+    },
+    "note": "Independent controlled captures diagnose the owner; these are not budget measurements or a distribution comparison."
+  },
+  "generation": {
+    "pixelDifferences": 0,
+    "width": 160,
+    "height": 160
+  },
+  "appearanceLimit": "Pixel equality verified at native160px; this does not establish pixel-identical vector rasterization across DPI or engines. CSS opacity, blending, repetition and moving light are unchanged."
+}

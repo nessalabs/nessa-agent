@@ -26,10 +26,13 @@ import { content, css, keys } from "./lib/selectors.mjs"
 import {
   contentIs,
   focusComposer,
+  lift,
   frames,
   openPanes,
   order,
   paneCount,
+  panes,
+  paneDropFailure,
   settled,
   state,
 } from "./lib/workspace.mjs"
@@ -40,6 +43,7 @@ const snapshot = async (page) => ({
     css.thinkingSlider,
   ),
   panes: await paneCount(page),
+  geometry: await panes(page),
   order: (await order(page)).join(","),
   ...(await state(page)),
   requests: await page.locator(css.overviewRequest).count(),
@@ -47,15 +51,9 @@ const snapshot = async (page) => ({
 })
 
 async function dragAcross(page, { cancel }) {
-  const handle = page.locator(css.paneDragHandle).first()
-  const box = await handle.boundingBox()
   const grid = await page.locator(css.paneGrid).first().boundingBox()
-  if (!box || !grid)
-    throw new CannotRun(
-      `no drag handle (${css.paneDragHandle}) or grid (${css.paneGrid})`,
-    )
-  await page.mouse.move(box.x + Math.min(40, box.width / 3), box.y + box.height / 2)
-  await page.mouse.down()
+  if (!grid) throw new CannotRun(`no grid (${css.paneGrid})`)
+  await lift(page, 0)
   const points = cancel
     ? [[0.9, 0.75]]
     : [
@@ -171,8 +169,7 @@ const scenarios = {
     setup: (p) => openPanes(p, 4),
     act: (p) => dragAcross(p, { cancel: false }),
     settle: 1200,
-    expect: (b, a) =>
-      a.ghost === 0 ? null : "the carried copy is still on the page after the drop",
+    expect: paneDropFailure,
   },
   "drag-cancel": {
     setup: (p) => openPanes(p, 4),
@@ -357,8 +354,9 @@ await main(meta, async ({ options, rep, url, mode }) => {
               const after = await snapshot(page)
               detail.push({
                 ...m,
+                before,
+                after,
                 did: s.expect?.(before, after) ?? null,
-                errors: opened.errors,
               })
             } finally {
               await opened.close()
@@ -381,7 +379,6 @@ await main(meta, async ({ options, rep, url, mode }) => {
             )
           for (const d of detail)
             if (d.did) failures.push(`did not do what it is named for: ${d.did}`)
-          for (const d of detail) for (const e of d.errors) failures.push(e)
           if (detail.some((d) => d.noLoaf))
             log(
               "note: no Long Animation Frame timing in this browser; attribution is empty",

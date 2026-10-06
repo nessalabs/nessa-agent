@@ -179,10 +179,13 @@ export async function stopPreview(outDir, preview) {
  * to the build and the preview: a check that talks to a ci gateway sets
  * `VITE_NESSA_STAGE=ci`, because the stage is inlined at build time and a
  * prod stage refuses that gateway's HTTP loopback address. Returns
- * `{ url, mode, close }`. A build that fails, or a preview that does not
+ * `{ url, mode, close }`. An optional `configPath` selects a verification-only
+ * build configuration, without changing the packaged application inputs.
+ * A build that fails, or a preview that does not
  * answer, removes that directory after the preview process has exited.
  */
-export async function startPreview(options, env = {}) {
+export async function startPreview(options, env = {}, configPath) {
+  const configArgs = configPath ? ["--config", configPath] : []
   const outDir = mkdtempSync(join(tmpdir(), "nessa-desktop-verify-"))
   let preview
   try {
@@ -190,7 +193,7 @@ export async function startPreview(options, env = {}) {
     const buildEnv = { ...process.env, ...env }
     const build = child(
       vite,
-      ["build", "--outDir", outDir, "--emptyOutDir"],
+      ["build", ...configArgs, "--outDir", outDir, "--emptyOutDir"],
       options,
       buildEnv,
     )
@@ -202,6 +205,7 @@ export async function startPreview(options, env = {}) {
       vite,
       [
         "preview",
+        ...configArgs,
         "--outDir",
         outDir,
         "--host",

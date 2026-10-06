@@ -49,6 +49,8 @@ it("covers a quiet server with the line and STARTUP_GATEWAY, and logs the cause"
   expect(host.querySelector("[data-nessa-startup-code]")?.textContent).toBe(
     "STARTUP_GATEWAY",
   )
+  expect(host.querySelector("[data-nessa-startup-mark]")).toBeNull()
+  expect(host.innerHTML).not.toContain("nessa-avatar")
   expect(host.textContent).not.toContain("not answering")
   const logged = vi
     .mocked(console.error)

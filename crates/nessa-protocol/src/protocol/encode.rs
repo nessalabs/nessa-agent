@@ -1,7 +1,7 @@
 use super::frames::{OutgoingMessage, ResponseFrame};
 use super::generated_types::{HealthResult, RuntimeStatus};
 
-pub const MAX_PAYLOAD_BYTES: i64 = 65_536;
+pub use crate::product::generated::MAX_PAYLOAD_BYTES;
 
 /// Successful `server.health` RPC reply.
 pub fn health_check_message(

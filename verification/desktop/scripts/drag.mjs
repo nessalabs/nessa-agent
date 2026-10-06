@@ -1519,13 +1519,7 @@ await main(meta, async ({ options, rep, url, mode }) => {
                   shots: options.shots,
                   tag: `${engine}-${layout}-${width}x${height}`,
                 })
-                return {
-                  ...result,
-                  failures: [
-                    ...(result.failures ?? []),
-                    ...pages.flatMap((o) => o.errors),
-                  ],
-                }
+                return result
               } finally {
                 for (const opened of pages) await opened.close()
               }

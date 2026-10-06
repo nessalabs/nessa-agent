@@ -11,6 +11,8 @@ import { mkdirSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { parseArgs } from "node:util"
 
+import { applyLines } from "./page-lines.mjs"
+
 /** Options every check takes. */
 export const commonOptions = {
   help: { type: "boolean", short: "h", default: false },
@@ -243,7 +245,8 @@ export function report(check, options) {
     results,
     /** Adds a result; `failures` are the assertion messages that did not hold. */
     add(result) {
-      const entry = { ok: (result.failures ?? []).length === 0, failures: [], ...result }
+      const lined = applyLines(result)
+      const entry = { ok: (lined.failures ?? []).length === 0, failures: [], ...lined }
       entry.ok = entry.failures.length === 0 && !entry.error && !entry.skipped
       results.push(entry)
       const tag = entry.skipped

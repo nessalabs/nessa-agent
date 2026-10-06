@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { existsSync, readFileSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { embedLoadFallback } from "./load-fallback.mjs"
 
@@ -50,16 +50,14 @@ describe("embedded load fallback", () => {
     },
   )
 
-  it("shows the agent's avatar and only the word Loading, as a status", () => {
+  it("shows only the word Loading, as a status, and no avatar", () => {
     const { message } = load("")
     expect(message.getAttribute("role")).toBe("status")
     expect(message.textContent?.trim()).toBe("Loading")
-    const avatar = message.querySelector<HTMLImageElement>("img[data-nessa-load-mark]")
-    expect(avatar?.getAttribute("alt")).toBe("")
-    // The one stored avatar, not a copy of it.
-    const src = avatar?.getAttribute("src") ?? ""
-    expect(src).toBe("/src-tauri/icons/nessa-avatar.svg")
-    expect(existsSync(src.slice(1))).toBe(true)
+    expect(message.querySelector("img, svg, [data-nessa-load-mark]")).toBeNull()
+    expect(document.documentElement.innerHTML).not.toContain("nessa-avatar")
+    expect(document.documentElement.innerHTML).not.toContain("nessa-load-breathe")
+    expect(document.documentElement.innerHTML).not.toContain("nessa-load-drift")
   })
 
   it("keeps the panel's message in a bottom-right box the window size replaces", () => {
@@ -130,10 +128,8 @@ describe("a page the dev server did not serve", () => {
     expect(screen?.textContent).toContain("STARTUP_MODULE")
     expect(screen?.textContent).not.toContain("did not serve")
     expect(screen?.textContent).not.toContain("/src/main.tsx")
-    const mark = screen?.querySelector("[data-nessa-startup-mark]")
-    expect(mark?.tagName.toLowerCase()).toBe("span")
-    expect(mark?.querySelector("svg")).toBeInstanceOf(SVGElement)
-    expect(mark?.innerHTML ?? "").not.toContain('filter="url(')
+    expect(screen?.querySelector("[data-nessa-startup-mark], img")).toBeNull()
+    expect(screen?.innerHTML ?? "").not.toContain("nessa-avatar")
     expect(screen?.querySelector("[aria-label=Restart]")).toBeInstanceOf(
       HTMLButtonElement,
     )

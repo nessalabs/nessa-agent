@@ -38,6 +38,12 @@ production build at 4× CPU throttling.
   onto the interaction. A zero phase start means that phase did not run, so
   the diagnostic is absent rather than a negative duration.
   _Check:_ `lib/perf.test.mjs` (`long animation frame clock`).
+- [ ] **The ambient grain is a baked image, not a runtime noise filter** (#370).
+  Its 160×160 PNG tile repeats with 0.06 opacity and overlay blending; keeping
+  the texture in `ui/ambient-grain.png` avoids SVG turbulence in the GPU raster
+  path (`src/desktop/styles.css`, `.desktop-grain`).
+  _Check:_ `smoke.mjs` (`ambient-grain`), both engines/layouts; `perf-budget.mjs`
+  checks the unchanged frame budget.
 - [ ] **The measurement works.** The calibration busy loop slows by roughly
   the throttle rate, and a 120 ms frame of known cost is measured and attributed.
   _Check:_ the `calibration` result of `perf-budget.mjs`; if it fails, no
@@ -768,12 +774,9 @@ The panel's webview is a stage larger than its window, pinned to the window's
 bottom right (`src/panel/adapters/panel-frame.ts`); before the frontend
 mounts, `index.html` shows the fallback on that stage.
 
-- [ ] **The painted avatar and "Loading" sit inside the visible window; their
-  layout boxes are centred in it once the host reports its size**, on the default frame, a short configured
-  height, and a narrow panel; with the size pending or refused they stay inside the bottom-right 320 × 320 and still say "Loading". When the frontend script is not served (the panel with no host, and setup), the calm screen replaces Loading: the flat avatar, "Nessa couldn’t start", the code `STARTUP_MODULE`, and Restart and Quit as circular icon actions. The page URL and the script path stay in the console, not on the screen. The avatar stays inside the same box. Setup centres that stack; the panel starts it at the window's top left. The avatar has no halo. Nothing
-  paints over the line, the page does not scroll, and nothing animates with
-  reduced motion. The breathing avatar, while it is still Loading, stays centred on its layout box; its
-  full-size and minimum-size paint are both checked. _Check:_ `load-fallback.mjs` (runs the real frontend against
+- [ ] **"Loading" sits inside the visible window and is centred in it once the host reports its size**, on the default frame, a short configured
+  height, and a narrow panel; with the size pending or refused it stays inside the bottom-right 320 × 320 and still says "Loading". The screen is a dark field and that word. It does not paint the avatar, a glow, or any image, and nothing on it animates. When the frontend script is not served (the panel with no host, and setup), the calm screen replaces Loading: "Nessa couldn’t start", the code `STARTUP_MODULE`, and Restart and Quit as circular icon actions, still with no avatar. The page URL and the script path stay in the console, not on the screen. Setup centres that stack; the panel starts it at the window's top left. Nothing
+  paints over the line, and the page does not scroll. _Check:_ `load-fallback.mjs` (runs the real frontend against
   a fake host whose startup never answers and which fakes `panel_size`).
 
 ## The window's gateway
@@ -789,7 +792,7 @@ says why where the conversations would be.
   and no gateway listening each show "Nessa couldn’t start", the code
   `STARTUP_GATEWAY` from `src/host/startup-refusals.json`, and Restart and
   Quit as icon actions. The log sentences (started without the local server,
-  still starting, not answering) stay off the screen. The mark has no halo.
+  still starting, not answering) stay off the screen. The avatar mark is absent.
   While the gateway is not ready the host refuses the endpoint and the
   credential is never asked for. Signed out, the status sits inside the chat
   area and the window, Try Again is at least 24px tall with nothing over it,
@@ -922,9 +925,10 @@ says why where the conversations would be.
   (`renders` in `mcp-apps-gateway.mjs` for `/mcp-resources`; the conversation
   loading at all for `/browser/check`).
   Harmless lines of either kind are kept in the JSON as `harmless` by
-  `smoke.mjs`, `mcp-apps-gateway.mjs`, `gateway-window.mjs` and
-  `scripted-scenarios.mjs`; the other scripts that open a page do not keep
-  them yet (#494). Vite's
+  `lib/page-lines.mjs`, which every `openPage` watches once `run.mjs` has
+  bound the check's reporter (`verification/desktop/page-lines.md`). A
+  step's result takes the lines so far; close reports what is left as
+  `console`. A script does not splice the arrays. Vite's
   `[vite] connecting…` / HMR messages are logs, not errors. A reload caused
   by another edit landing on the dev server mid-run is not a finding —
   re-run.
@@ -994,3 +998,18 @@ views, and two retained locals superseded by another refusal. Both surfaces read
 `src/provider-authentication/model/recovery.ts`: observed execution identity,
 including accepted pending inputs, owns recovery rather than array-tail position
 or clocks.
+
+
+## Active message synchronization (#532)
+
+- [ ] Ready active text reaches the desktop DOM plus two animation frames within
+  600 ms in Chromium and WebKit, in both layouts. A held summary list and another
+  conversation's held read do not delay delivery. One background read per
+  conversation, at most four active reads per second, one-second summaries and
+  no idle transcript reads. `message-sync.mjs` measures these contracts over the
+  production source, store and window with controlled gateway replies. See the
+  [ordering table](../../docs/reviews/startup-latency.md#desktop-transcript-delivery-experiment-532).
+  Three fresh-page runs report delivery median/max and frame attribution. Chromium
+  uses calibrated 4x CPU throttling and checks the 50 ms frame budget through
+  `lib/perf.mjs`; WebKit delivery is reported separately without CPU throttling.
+  DOM plus frame opportunities do not measure transport, provider startup or compositor paint.

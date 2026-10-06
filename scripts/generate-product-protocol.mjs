@@ -177,13 +177,9 @@ const sdkSource = readFileSync(
   resolve(root, "crates/nessa-sdk/src/infrastructure/session_storage/record_source.rs"),
   "utf8",
 )
-const ordinaryWire = readFileSync(
-  resolve(root, "crates/nessa-protocol/src/protocol/encode.rs"),
-  "utf8",
-)
-const maxOrdinaryResponseBytes = Number(
-  ordinaryWire.match(/MAX_PAYLOAD_BYTES: i64 = ([0-9_]+);/)?.[1].replaceAll("_", ""),
-)
+const maxOrdinaryResponseBytes = schema["x-frameBytes"]?.maxPayloadBytes
+if (!Number.isSafeInteger(maxOrdinaryResponseBytes))
+  throw new Error("x-frameBytes.maxPayloadBytes is the request frame maximum")
 const pieceKiB = Number(sdkFrames.match(/MAX_PIECE_BYTES: usize = (\d+) \* 1024;/)?.[1])
 const pieceHeader = Number(sdkFrames.match(/PIECE_HEADER_BYTES: usize = (\d+);/)?.[1])
 if (
@@ -565,6 +561,7 @@ for (const name of [
 ]) {
   rs += `/// Published bound from the product schema.\npub const ${snake(name).toUpperCase()}: usize = ${bounds[name]};\n`
 }
+rs += `/// Published request-frame maximum from the product schema, in bytes.\npub const MAX_PAYLOAD_BYTES: i64 = ${maxOrdinaryResponseBytes};\n`
 // An app's message past it is refused at the wire, before anything is
 // recorded; and the conversation's own input bound is never larger, which the
 // gateway's configuration holds to it — so it sits with the contract.

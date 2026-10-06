@@ -1,0 +1,150 @@
+{
+  "command": "node scripts/cargo-test-parallel.mjs --concurrency 2 -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk",
+  "records": [
+    {
+      "target": "nessa-local-storage retained_directory",
+      "passed": 27,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "nessa-auth cedar_flow",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "nessa-auth pairing_domain",
+      "passed": 37,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "nessa-local-storage nessa_local_storage",
+      "passed": 26,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "nessa-sdk domain",
+      "passed": 173,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "nessa-auth nessa_auth",
+      "passed": 136,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "nessa-protocol nessa_protocol",
+      "passed": 106,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "nessa-client-core nessa_client_core",
+      "passed": 130,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "nessa-sdk application",
+      "passed": 320,
+      "failed": 0,
+      "ignored": 4
+    },
+    {
+      "target": "nessa-server nessa",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "nessa-server credential_registry_refusal",
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "nessa-server mcp_relay",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "nessa-server native_enrollment",
+      "passed": 80,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "nessa-sdk infrastructure",
+      "passed": 65,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "target": "nessa-server nessa_server",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "nessa-server nessa_server",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "nessa-sdk nessa_sdk",
+      "passed": 894,
+      "failed": 0,
+      "ignored": 13
+    },
+    {
+      "target": "nessa-server nessa_server",
+      "passed": 1886,
+      "failed": 0,
+      "ignored": 9
+    },
+    {
+      "target": "doctests",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "doctests",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "doctests",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "doctests",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "doctests",
+      "passed": 38,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "doctests",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "note": "Reported records include nested subprocess probes; do not treat their sum as unique tests."
+}

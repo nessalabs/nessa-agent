@@ -159,3 +159,51 @@ describe("long animation frame clock", () => {
     assert.equal(measured.slow[0].loaf.styleAndLayout, 53)
   })
 })
+
+it("attributes a sampled frame to work that began before the sample origin", () => {
+  const entry = {
+    start: 9_980,
+    duration: 150,
+    blocking: 70,
+    renderStart: 10_000,
+    styleAndLayoutStart: 10_120,
+    scripts: [script],
+  }
+  const measured = measurementFrom(
+    raw([[10_133, 133]], [entry], [{ start: 9_990, duration: 130 }]),
+    10_000,
+  )
+  assert.equal(measured.maxFrame, 133)
+  assert.equal(measured.over, 1)
+  assert.equal(measured.slow[0].loaf.duration, 150)
+  assert.equal(measured.slow[0].longTask, 130)
+  assert.equal(measured.slow[0].loaf.styleAndLayout, 10)
+})
+
+it("retains attribution in the pre-origin part of the first sampled gap", () => {
+  const entry = {
+    start: 9_920,
+    duration: 70,
+    blocking: 10,
+    renderStart: 9_970,
+    styleAndLayoutStart: 9_980,
+    scripts: [script],
+  }
+  const older = { ...entry, start: 9_850 }
+  const measured = measurementFrom(
+    raw(
+      [[10_133, 153]],
+      [older, entry],
+      [
+        { start: 9_800, duration: 50 },
+        { start: 9_925, duration: 60 },
+      ],
+    ),
+    10_000,
+  )
+  assert.equal(measured.maxFrame, 153)
+  assert.equal(measured.over, 1)
+  assert.equal(measured.slow[0].loaf.duration, 70)
+  assert.equal(measured.slow[0].loaf.styleAndLayout, 10)
+  assert.equal(measured.slow[0].longTask, 60)
+})

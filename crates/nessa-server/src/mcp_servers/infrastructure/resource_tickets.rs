@@ -22,7 +22,8 @@
 //!   (`TicketRedeemed`) and awaits it before it serves the bytes;
 //! - every unredeemed end of an active ticket through [`TicketEvents`]
 //!   (`TicketEnded`, by its cause and who caused it), which composition
-//!   points at [`audit_ticket_ends`];
+//!   points at [`audit_ticket_ends`], which shares
+//!   [`crate::conversation::application::audit_records`] with context drops;
 //! - a pending ticket's end by the conversation service, after its issue,
 //!   from what [`ResourceTickets::activate`] answers.
 //!
@@ -133,22 +134,20 @@ impl TicketEvents for UnboundedSender<TicketEvent> {
 /// its call, never the ticket, and the next is tried: the held bytes are
 /// already let go of, and the log is all that is left to say it.
 pub async fn audit_ticket_ends(
-    mut events: UnboundedReceiver<TicketEvent>,
+    events: UnboundedReceiver<TicketEvent>,
     audit: Arc<dyn McpAppAudit>,
-    mut stop: oneshot::Receiver<()>,
+    stop: oneshot::Receiver<()>,
 ) {
-    loop {
-        // Ends first: stopping is taken only once none is waiting, so every
-        // end the conversations' ends already sent is recorded before it.
-        tokio::select! {
-            biased;
-            event = events.recv() => match event {
-                Some(event) => record_end(audit.as_ref(), event).await,
-                None => return,
-            },
-            _ = &mut stop => return,
+    // Ends first, inside `audit_records`: stopping is taken only once none
+    // is waiting, so every end the conversations' ends already sent is
+    // recorded before it.
+    crate::conversation::application::audit_records(events, stop, move |event| {
+        let audit = Arc::clone(&audit);
+        async move {
+            record_end(audit.as_ref(), event).await;
         }
-    }
+    })
+    .await;
 }
 
 async fn record_end(audit: &dyn McpAppAudit, event: TicketEvent) {

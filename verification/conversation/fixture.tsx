@@ -74,9 +74,11 @@ function view(
               permissionId: "committed-review",
               toolId: "tool",
               toolName: "Read",
+              origin: { kind: "harness" },
+              ask: "tool",
               title: "Read committed source",
               argumentsJson: '{"path":"src/main.rs"}',
-              options: [{ id: "allow", label: "Allow once" }],
+              options: [{ id: "allow", label: "Allow once", effect: "allow" }],
             },
           ]
         : [],

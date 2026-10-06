@@ -29,6 +29,7 @@ verification/
       attachments-races/    real panel with controlled attachment host and scenario gateway effects
       onboarding-readiness/ real setup with stalled HTTP response and retry cases
       provider-sign-in/     real transcript with typed auth refusal and controlled login launch
+      message-sync/         real window over controlled active and stalled gateway reads
       app-review/           real window over a fake gateway whose app's call asks for a review
     scripts/
       provider-sign-in.mjs compact login recovery geometry, keyboard launch and replacement
@@ -49,16 +50,19 @@ verification/
       focus.mjs             where the caret lands after each pane and dialog change
       responsive.mjs        approval card, composer controls and thinking control, column titles, Settings widths and Integrations narrow, a pane's home
       widgets.mjs           widget hosts: a card, its pane, the window, Escape's order, focus, drag over the window
+      message-sync.mjs      active DOM delivery, stalled list/read independence and idle cost
       app-review.mjs        an MCP App's review: read while the app's call waits, drawn and answered, the card and the overview row naming the app (dev server)
       mcp-apps.mjs          MCP Apps: each place, tools/call allowed and refused, CSP, isolation, escapes, forgery, departures and departures-back (dev server: imports the host's own builder), teardown
       mcp-apps-gateway.mjs  MCP Apps over a real gateway (#384): the test MCP server's app, its reviews, refusals and release; with `--scripted`, also an app's message and context update, and no model key (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in, or `--scripted` for none)
       mcp-servers-gateway.mjs Settings › Integrations over a real gateway (#391): add, inspect, focus, toggle, rename, narrow, conflict, remove, reconnect, non-admin, and the chart's app from a server added there (starts its own gateway and dev server; done-when needs the agent signed in)
       lib/
-        selectors.mjs       every selector, key chord, storage key and known-harmless message
+        selectors.mjs       cloneable CSS selectors, selector builders, key chords, storage keys and known-harmless messages
+        selectors.test.mjs   the CSS table crosses browser evaluation as plain data (#441)
         cli.mjs             options, stderr diagnostics, JSON result, exit status
         server.mjs          reuse/start the dev server (warmed before the first page, a reused one too), or build + preview production
         browser.mjs         launch Chromium/WebKit, seed preferences, collect errors
         workspace.mjs       open panes, read pane rects and focus, lift a pane, rect containment, a model rule or value read in the page
+        workspace.test.mjs  a measured drop must change pane order and remove its carried copy (#370)
         safe-area.mjs       the per-frame safe-area sampler
         perf.mjs            rAF gaps, Long Animation Frames, long tasks, throttling, calibration
         perf.test.mjs       the frame budget's unrounded decision, and the LoAF sample clock (#369)

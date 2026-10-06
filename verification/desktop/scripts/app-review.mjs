@@ -397,7 +397,7 @@ const checks = {
           settled: answered.settled,
           ...said,
         },
-        failures: [...failures, ...opened.errors],
+        failures,
       }
     } finally {
       await opened.close()
@@ -491,7 +491,6 @@ const checks = {
           }
         }
       } finally {
-        failures.push(...opened.errors)
         await opened.close()
       }
     }
@@ -502,8 +501,7 @@ const checks = {
     const opened = await onConversation(browser, url, layout)
     const { page } = opened
     try {
-      if (!(await asked(page, appReview.tool)))
-        return { failures: [notDrawn, ...opened.errors] }
+      if (!(await asked(page, appReview.tool))) return { failures: [notDrawn] }
       const failures = []
       const waiting = await snapshot(page)
       // Command is Meta on a Mac and Control elsewhere (`commandKey`).
@@ -531,7 +529,7 @@ const checks = {
           ),
         )
       }
-      return { measured: { rowName: name }, failures: [...failures, ...opened.errors] }
+      return { measured: { rowName: name }, failures }
     } finally {
       await opened.close()
     }

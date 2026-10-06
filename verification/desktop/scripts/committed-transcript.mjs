@@ -176,9 +176,7 @@ await main(
               },
             )
           }
-          await attempt(rep, { engine, width, name: "console" }, async () => ({
-            failures: opened.errors,
-          }))
+          await attempt(rep, { engine, width, name: "console" }, async () => ({}))
         } finally {
           await opened.close()
         }

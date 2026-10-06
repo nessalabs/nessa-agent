@@ -1,0 +1,172 @@
+{
+  "source": {
+    "kind": "local-developer-http-server",
+    "capturedAt": "2026-10-06T06:01:26.072Z",
+    "recoveredFrom": "b93383c3d",
+    "protocolVersion": "2025-06-18",
+    "transport": "streamable-http-json",
+    "sessionIds": "omitted",
+    "serverSha256": "ad8132312ad93c18f2444f485987d7e1400fbb4373ea9292685773f6ed7fd9d8",
+    "transportSha256": "ccdc1511691f5ee055d5681e8b2bf9d05750cf7e4c30c812090b7cb54bdc2b5d",
+    "probeSha256": "892610acb6ce62ed63ae1abc50c2e5519ad69966f9e02538fb3bb23c9b3de6e3"
+  },
+  "frames": [
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "protocolVersion": "2025-06-18",
+          "capabilities": {},
+          "clientInfo": {
+            "name": "contract-probe",
+            "version": "1"
+          }
+        }
+      },
+      "status": 200,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "protocolVersion": "2025-06-18",
+          "capabilities": {
+            "tools": {},
+            "resources": {}
+          },
+          "serverInfo": {
+            "name": "nessa-test",
+            "version": "1.0.0"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "ping"
+      },
+      "status": 200,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {}
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+          "name": "show_chart",
+          "arguments": {}
+        }
+      },
+      "status": 200,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "Chart of two rows."
+            }
+          ],
+          "structuredContent": {
+            "series": [
+              {
+                "name": "alpha",
+                "value": 10
+              },
+              {
+                "name": "beta",
+                "value": 20
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+          "name": "always_fails",
+          "arguments": {}
+        }
+      },
+      "status": 200,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "This tool always fails, on purpose."
+            }
+          ],
+          "isError": true
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "resources/read",
+        "params": {
+          "uri": "ui://nessa-test/chart.html"
+        }
+      },
+      "status": 200,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "contents": [
+            {
+              "uri": "ui://nessa-test/chart.html",
+              "mimeType": "text/html;profile=mcp-app",
+              "text": "<!doctype html><html><body><p id=chart>chart for nessa-test</p></body></html>",
+              "_meta": {
+                "ui": {
+                  "csp": {
+                    "connectDomains": [],
+                    "resourceDomains": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": {
+          "name": "constructor",
+          "arguments": {}
+        }
+      },
+      "status": 200,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "error": {
+          "code": -32602,
+          "message": "Unknown tool: constructor"
+        }
+      }
+    }
+  ]
+}

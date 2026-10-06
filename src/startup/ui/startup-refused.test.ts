@@ -30,6 +30,8 @@ it("shows the calm screen, logs the reason, and restarts or quits from the icons
   expect(container.querySelector("details")).toBeNull()
   expect(container.textContent).toContain("Nessa couldn’t start")
   expect(container.textContent).toContain("STARTUP_HOST")
+  expect(container.querySelector("[data-nessa-startup-mark]")).toBeNull()
+  expect(container.innerHTML).not.toContain("nessa-avatar")
   expect(container.textContent).not.toContain("local storage")
   expect(container.textContent).not.toContain("Try again")
   const logged = vi

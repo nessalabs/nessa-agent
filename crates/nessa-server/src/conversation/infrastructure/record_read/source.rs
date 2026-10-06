@@ -19,10 +19,35 @@ use std::sync::{
 };
 #[cfg(test)]
 use std::sync::{Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
 #[cfg(test)]
 use tokio::sync::Notify;
+
+/// A cold-read budget that cannot be a deadline.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidReadWorkBudget;
+
+impl std::fmt::Display for InvalidReadWorkBudget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "read work budget must be positive and representable as a deadline"
+        )
+    }
+}
+
+impl std::error::Error for InvalidReadWorkBudget {}
+
+/// The deadline rule `OperationalLimits` uses for this budget. Product is not
+/// imported here, so the source checks the duration it is given itself.
+fn accept_read_work_budget(work_budget: Duration) -> Result<Duration, InvalidReadWorkBudget> {
+    if work_budget.is_zero() || Instant::now().checked_add(work_budget).is_none() {
+        Err(InvalidReadWorkBudget)
+    } else {
+        Ok(work_budget)
+    }
+}
 
 /// One physical SDK source per read; no Agent or writer lease is opened.
 pub struct NessaRecordReadSource {
@@ -88,6 +113,18 @@ impl NessaRecordReadSource {
             #[cfg(test)]
             between_steps: None,
         }
+    }
+
+    /// How long this source's cold reads may look. Composition sets it from
+    /// the gateway's operational limits; tests keep [`Self::new`]'s default.
+    /// A zero budget, or one that cannot be a deadline, is refused: a zero
+    /// sleep would win every cold read before discovery moved.
+    pub fn with_work_budget(
+        mut self,
+        work_budget: Duration,
+    ) -> Result<Self, InvalidReadWorkBudget> {
+        self.work_budget = accept_read_work_budget(work_budget)?;
+        Ok(self)
     }
 
     #[cfg(test)]
@@ -185,7 +222,13 @@ impl RecordReadSource for NessaRecordReadSource {
                 () = tokio::time::sleep(self.work_budget) => {
                     // The worker stops at its next step boundary.
                     stop.store(true, Ordering::SeqCst);
-                    work.await
+                    let finished = work.await;
+                    // The budget won, and the read's own answer is that the
+                    // source is still preparing. A worker failure is not this limit.
+                    if matches!(finished, Ok(Err(RecordReadError::SourcePreparing))) {
+                        crate::core::limit_log::note_limit("record.read_work_budget");
+                    }
+                    finished
                 }
             };
             finished.map_err(worker_error)?
@@ -211,6 +254,51 @@ fn worker_error(error: ReadWorkerError) -> RecordReadError {
 
 fn session_id(admitted: &ReceiverReadScope) -> Result<SessionId, RecordReadError> {
     Ok(conversation_session(&admitted.conversation_id))
+}
+
+#[cfg(test)]
+mod work_budget {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use nessa_sdk::infrastructure::session_storage::RecordStorage;
+    use nessa_sync::replication::domain::Id;
+    use tokio::runtime::Handle;
+
+    use super::{accept_read_work_budget, NessaRecordReadSource};
+
+    #[test]
+    fn a_budget_that_cannot_be_a_deadline_is_refused() {
+        assert!(accept_read_work_budget(Duration::ZERO).is_err());
+        assert!(accept_read_work_budget(Duration::MAX).is_err());
+        assert_eq!(
+            accept_read_work_budget(Duration::from_millis(200)).unwrap(),
+            Duration::from_millis(200)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_builder_refuses_a_budget_that_cannot_be_a_deadline() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
+        let zero = NessaRecordReadSource::new(
+            storage.clone(),
+            Id::new("origin").unwrap(),
+            Handle::current(),
+        );
+        let unbounded = NessaRecordReadSource::new(
+            storage.clone(),
+            Id::new("origin").unwrap(),
+            Handle::current(),
+        );
+        let accepted =
+            NessaRecordReadSource::new(storage, Id::new("origin").unwrap(), Handle::current());
+        assert!(zero.with_work_budget(Duration::ZERO).is_err());
+        assert!(unbounded.with_work_budget(Duration::MAX).is_err());
+        assert!(accepted
+            .with_work_budget(Duration::from_millis(200))
+            .is_ok());
+    }
 }
 
 #[cfg(test)]

@@ -116,25 +116,34 @@ export function flyPane(
 function play(root: HTMLElement, from: Rects): Animation[] {
   const flying: Animation[] = []
   const shifted = new Map<HTMLElement, number>()
-  const ease = motionToken(root, "--desktop-ease") ?? "linear"
-  const duration = durationToken(root, "--desktop-slow")
-  const flight = durationToken(root, "--desktop-flight")
   // Where everything landed, read before anything starts: a slide begun first
   // would be read back into the place of what it carries, and every write
   // between two reads lays the page out again.
   const landed = [
     ...root.querySelectorAll<HTMLElement>('[data-flip="slide"][data-flip-id]'),
   ].map((element) => ({ element, after: element.getBoundingClientRect() }))
-  const panes = [
-    ...root.querySelectorAll<HTMLElement>('[data-flip="pane"][data-flip-id]'),
-  ].map((pane): Landed => ({
-    pane,
-    to: pane.getBoundingClientRect(),
-    children: Array.from(pane.children, (child) => ({
-      element: child as HTMLElement,
-      top: (child as HTMLElement).offsetTop,
-    })),
-  }))
+  const panes: { landed: Landed; before: DOMRect }[] = []
+  for (const pane of root.querySelectorAll<HTMLElement>(
+    '[data-flip="pane"][data-flip-id]',
+  )) {
+    const to = pane.getBoundingClientRect()
+    const before = from.panes.get(pane.dataset.flipId ?? "")
+    // A settled drop has already previewed where these panes land. Its
+    // stationary contents need no counter-scale offsets (flip.test.tsx).
+    if (!before || !moved(before, to)) continue
+    panes.push({
+      before,
+      landed: {
+        pane,
+        to,
+        children: Array.from(pane.children, (child) => ({
+          element: child as HTMLElement,
+          top: (child as HTMLElement).offsetTop,
+        })),
+      },
+    })
+  }
+  const slides: { element: HTMLElement; own: number }[] = []
   landed.forEach(({ element, after }) => {
     const before = from.slides.get(element.dataset.flipId ?? "")
     // Only what is on screen slides; a column folding away has its own transition.
@@ -145,6 +154,15 @@ function play(root: HTMLElement, from: Rects): Animation[] {
     shifted.set(element, dx)
     const own = dx - carried
     if (Math.abs(own) < 0.5) return
+    slides.push({ element, own })
+  })
+  // A settled preview can leave nothing to animate. Resolving root styles
+  // then does work for no flight (flip.test.tsx holds this no-flight path).
+  if (slides.length === 0 && panes.length === 0) return flying
+  const ease = motionToken(root, "--desktop-ease") ?? "linear"
+  const duration = durationToken(root, "--desktop-slow")
+  const flight = durationToken(root, "--desktop-flight")
+  slides.forEach(({ element, own }) => {
     flying.push(
       element.animate([{ transform: `translateX(${own}px)` }, { transform: "none" }], {
         duration,
@@ -153,10 +171,8 @@ function play(root: HTMLElement, from: Rects): Animation[] {
       }),
     )
   })
-  panes.forEach((landedPane) => {
-    const before = from.panes.get(landedPane.pane.dataset.flipId ?? "")
-    if (before && moved(before, landedPane.to))
-      flying.push(...flyPane(landedPane, before, flight))
+  panes.forEach(({ landed, before }) => {
+    flying.push(...flyPane(landed, before, flight))
   })
   return flying
 }

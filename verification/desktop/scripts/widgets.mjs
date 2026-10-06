@@ -707,8 +707,7 @@ await main(meta, async ({ options, rep, url, mode }) => {
         await attempt(rep, { engine, layout, name }, async () => {
           opened = await onSample(browser, { url, layout, ...size })
           const result = await checks[name](opened.page, layout, size)
-          const errors = opened.errors
-          return { ...result, failures: [...result.failures, ...errors] }
+          return result
         }).finally(() => opened?.close())
       }
   })

@@ -1,0 +1,1398 @@
+{
+  "check": "committed-transcript",
+  "ok": true,
+  "started": "2026-10-06T08:06:08.746Z",
+  "finished": "2026-10-06T08:06:15.808Z",
+  "target": {
+    "url": "http://127.0.0.1:15432/desktop.html",
+    "mode": "given"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "complete:true",
+      "notices": 0,
+      "enabled": 2,
+      "bounds": {
+        "width": 312,
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "partial:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 312,
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "stale:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 312,
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "unknown:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 312,
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "not_loaded:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 312,
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "complete_empty:true",
+      "notices": 0,
+      "enabled": 0,
+      "bounds": {
+        "width": 312,
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "complete:false",
+      "notices": 0,
+      "enabled": 0,
+      "bounds": {
+        "width": 312,
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "complete:true",
+      "notices": 0,
+      "enabled": 2,
+      "bounds": {
+        "width": 312,
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "questions:false",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "",
+      "bounds": {
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "questions:true",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "Conversation needs attention\nSome pending interactions exceed this display limit. Use Stop to cancel them.",
+      "bounds": {
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "questions:false",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "",
+      "bounds": {
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "tab-history:not_loaded:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "tab-history:partial:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "tab-history:stale:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "tab-history:unknown:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "tab-history:complete:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "tab-history:complete_empty:false",
+      "saved": 0,
+      "closes": 1,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "tab-history:complete_empty:true",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "complete:true",
+      "notices": 0,
+      "enabled": 2,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "partial:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "stale:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "unknown:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "not_loaded:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "complete_empty:true",
+      "notices": 0,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "complete:false",
+      "notices": 0,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "complete:true",
+      "notices": 0,
+      "enabled": 2,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "questions:false",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "",
+      "bounds": {
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "questions:true",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "Conversation needs attention\nSome pending interactions exceed this display limit. Use Stop to cancel them.",
+      "bounds": {
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "questions:false",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "",
+      "bounds": {
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "tab-history:not_loaded:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "tab-history:partial:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "tab-history:stale:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "tab-history:unknown:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "tab-history:complete:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "tab-history:complete_empty:false",
+      "saved": 0,
+      "closes": 1,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "tab-history:complete_empty:true",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 600,
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "complete:true",
+      "notices": 0,
+      "enabled": 2,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "partial:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "stale:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "unknown:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "not_loaded:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "complete_empty:true",
+      "notices": 0,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "complete:false",
+      "notices": 0,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "complete:true",
+      "notices": 0,
+      "enabled": 2,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "questions:false",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "",
+      "bounds": {
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "questions:true",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "Conversation needs attention\nSome pending interactions exceed this display limit. Use Stop to cancel them.",
+      "bounds": {
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "questions:false",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "",
+      "bounds": {
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "tab-history:not_loaded:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "tab-history:partial:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "tab-history:stale:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "tab-history:unknown:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "tab-history:complete:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "tab-history:complete_empty:false",
+      "saved": 0,
+      "closes": 1,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "tab-history:complete_empty:true",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 1440,
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "complete:true",
+      "notices": 0,
+      "enabled": 2,
+      "bounds": {
+        "width": 312,
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "partial:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 312,
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "stale:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 312,
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "unknown:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 312,
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "not_loaded:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 312,
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "complete_empty:true",
+      "notices": 0,
+      "enabled": 0,
+      "bounds": {
+        "width": 312,
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "complete:false",
+      "notices": 0,
+      "enabled": 0,
+      "bounds": {
+        "width": 312,
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "complete:true",
+      "notices": 0,
+      "enabled": 2,
+      "bounds": {
+        "width": 312,
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "questions:false",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "",
+      "bounds": {
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "questions:true",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "Conversation needs attention\nSome pending interactions exceed this display limit. Use Stop to cancel them.",
+      "bounds": {
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "questions:false",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "",
+      "bounds": {
+        "scrollWidth": 312,
+        "clientWidth": 312
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "tab-history:not_loaded:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "tab-history:partial:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "tab-history:stale:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "tab-history:unknown:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "tab-history:complete:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "tab-history:complete_empty:false",
+      "saved": 0,
+      "closes": 1,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "tab-history:complete_empty:true",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "complete:true",
+      "notices": 0,
+      "enabled": 2,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "partial:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "stale:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "unknown:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "not_loaded:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "complete_empty:true",
+      "notices": 0,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "complete:false",
+      "notices": 0,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "complete:true",
+      "notices": 0,
+      "enabled": 2,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "questions:false",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "",
+      "bounds": {
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "questions:true",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "Conversation needs attention\nSome pending interactions exceed this display limit. Use Stop to cancel them.",
+      "bounds": {
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "questions:false",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "",
+      "bounds": {
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "tab-history:not_loaded:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "tab-history:partial:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "tab-history:stale:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "tab-history:unknown:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "tab-history:complete:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "tab-history:complete_empty:false",
+      "saved": 0,
+      "closes": 1,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "tab-history:complete_empty:true",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 600,
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "complete:true",
+      "notices": 0,
+      "enabled": 2,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "partial:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "stale:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "unknown:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "not_loaded:true",
+      "notices": 1,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "complete_empty:true",
+      "notices": 0,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "complete:false",
+      "notices": 0,
+      "enabled": 0,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "complete:true",
+      "notices": 0,
+      "enabled": 2,
+      "bounds": {
+        "width": 552,
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "questions:false",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "",
+      "bounds": {
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "questions:true",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "Conversation needs attention\nSome pending interactions exceed this display limit. Use Stop to cancel them.",
+      "bounds": {
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "questions:false",
+      "count": 3,
+      "selected": [false, true, false],
+      "notice": "",
+      "bounds": {
+        "scrollWidth": 552,
+        "clientWidth": 552
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "tab-history:not_loaded:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "tab-history:partial:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "tab-history:stale:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "tab-history:unknown:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "tab-history:complete:false",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "tab-history:complete_empty:false",
+      "saved": 0,
+      "closes": 1,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "tab-history:complete_empty:true",
+      "saved": 1,
+      "closes": 0,
+      "tabClosed": true
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 1440,
+      "name": "console"
+    }
+  ]
+}

@@ -8,6 +8,10 @@ test("the embedded document shows a loading fallback until the frontend replaces
 
   assert.match(document, /data-nessa-load-fallback/)
   assert.match(document, /data-nessa-load-title>Loading</)
+  assert.doesNotMatch(
+    document,
+    /data-nessa-load-mark|data-nessa-startup-mark|nessa-avatar/,
+  )
 })
 
 test("only an embedded debug host automatically reveals the completed panel", () => {

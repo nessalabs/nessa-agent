@@ -402,6 +402,7 @@ await main(
           opened = await openPage(browser, {
             url: `${origin}/desktop.html`,
             layout,
+            lines: { engine, layout },
             initScripts: [
               [gatewayHost, { endpoint: stack.endpoint, credential: stack.credential }],
             ],
@@ -451,11 +452,7 @@ await main(
               layout,
               ms: Date.now() - at,
               seen: result.seen,
-              failures: [
-                ...(result.failures ?? []),
-                ...(result.cannotRun ? [] : opened.errors.splice(0)),
-              ],
-              harmless: result.cannotRun ? [] : opened.harmless.splice(0),
+              failures: result.failures,
               ...(result.error
                 ? { error: result.error, cannotRun: Boolean(result.cannotRun) }
                 : {}),
@@ -463,16 +460,6 @@ await main(
             if (!entry.ok)
               stopped = `${name} ${entry.cannotRun ? "could not run" : "did not hold"}`
           }
-          const late = opened.errors.splice(0)
-          const lateHarmless = opened.harmless.splice(0)
-          if (late.length > 0 || lateHarmless.length > 0)
-            rep.add({
-              name: "console",
-              engine,
-              layout,
-              failures: late,
-              harmless: lateHarmless,
-            })
         } finally {
           await opened.close()
           log(`${engine} ${layout}: ${Date.now() - started} ms`)

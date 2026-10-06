@@ -1,166 +1,1049 @@
-# 329. A conversation's subagents are a vertical of their own, each read as a conversation
+# 329. Subagents use ordinary Agents with parent ownership
 
 ## Purpose
 
-A conversation can put other agents to work — an experiment's swarm is one
-case ([333](333-experiments.md)), a fan-out of reviewers or researchers is
-another. This record settles what the desktop window knows of those
-subagents, where it reads them from, and how a person sees them: in a panel of
-the conversation's own, each subagent's work read as a conversation is. It
-knows no experiment.
+A conversation can delegate work to other agents. Each child uses the ordinary SDK
+`Agent`, has its own conversation and history, and records which parent created
+it. Parent ownership adds approval-policy inheritance, child discovery, result
+delivery and recursive closure.
+
+The desktop groups these children under their parent through one subagents
+vertical. Experiments can consume that vertical without owning a second agent
+runtime or transcript renderer.
 
 - **Date:** 2026-09-30
-- **Status:** proposed
+- **Runtime direction recorded:** 2026-10-05
+- **Status:** proposed implementation design. The parent-ownership, recursive
+  closure and default approval-inheritance decisions below were specified by the
+  product owner. Implementation recommendations remain proposed until their
+  slices land.
+- **Tracking:** #329; existing desktop slices #330–#332; experiment adapter #337.
 
-## Context
+## Decisions
 
-The prototype (`exp-prototype` @ `5bfaa225`, `src/desktop/subagents/`) showed
-the shape people wanted: the conversation's subagents as an avatar stack in
-its pane header, a panel listing every one — its avatar, its name with the
-tags it was spun up with beside it, what it is doing now, a tagline — and one
-subagent opening as an ordinary conversation, with a composer. Its only source
-was an experiment's swarm read as subagents, which is why this vertical is
-settled on its own before either consumer builds on it.
+1. **A subagent is an ordinary Agent with a parent relationship.** It uses the
+   existing provider, scheduling, permission, storage and cleanup contracts. The
+   relationship belongs to a running conversation, not to a reusable agent
+   definition, display name or selected workspace pane.
+2. **Closing a parent closes its descendants.** The owning coordinator fences
+   child creation, requests recursive cleanup and joins completion. Children may
+   work concurrently and across parent turns while the parent remains open.
+   There is no detach operation that lets children outlive their parent.
+3. **Children inherit the parent's effective approval policy by default.**
+   Creation asks the existing configuration owner for that policy. Child approval
+   answers and audit use the ordinary Agent permission machinery.
+4. **Presentation and execution are separate.** A child is a real conversation
+   even when the workspace groups it beneath its parent instead of listing it
+   as an independent root. Its transcript uses the ordinary conversation view.
+5. **Each behavior has one owner.** Agent schedules an individual conversation;
+   the ownership coordinator coordinates relationships and tree cleanup. The
+   gateway authenticates and authorizes access. The desktop consumes projections
+   and submits commands.
 
-What binds:
+## Current foundation
 
-- **Independent of experiments.** Any conversation may have subagents. The
-  subagents vertical imports no experiment; the experiments vertical depends
-  on this one (326, *Boundaries*, held by `desktop-verticals.mjs`).
-- **Nothing can deliver a message to a subagent yet.** The gateway does not
-  report a conversation's subagents, and an experiment's harness takes no
-  messages for its agents. The window has in-memory samples, and must not
-  look as if it could do what it cannot.
-- **Sending has one design in the window** (238's outbox: a window-minted
-  message id, `sent`, `refused`, `unknown`, Send Again and Discard, a message
-  taken once per id). Writing to a subagent would be a second user of it, and
-  two review rounds of this record found that doing so well means extracting
-  that design from the workspace's state first — work worth doing against a
-  source that can deliver, not a sample.
+The implemented [Agent guide](../../../crates/nessa-sdk/docs/agent_execution/agent.md)
+and [permission guide](../../../crates/nessa-sdk/docs/agent_execution/permissions.md)
+describe the current single-conversation contract. Agent clones share one
+scheduler and provider context. The session manager retains an exclusive storage
+lease. Confirmed physical cleanup and acknowledged audit delivery are separate
+facts. Durable creation receipts, queued submissions, steering and permission
+answers already exist.
 
-## Decision
+The gateway's `ConversationService` resolves one shared Agent for each authorized
+conversation. Metadata owns the principal, organization, provider selection,
+model and approval mode. Approval-mode changes are serialized with turn
+admission. `conversation_session` is the one mapping from product
+`ConversationId` to SDK `SessionId`.
 
-`src/desktop/subagents/` owns the model, the port, the panel, and the session
-accessory. It depends on the workspace's barrel for the conversation it draws —
-transcript messages and views, the clock, the time labels — which the barrel
-exports for it (#330, #331); never the other way. Counts and plurals ("6
-agents", "1 case") are the desktop's, one pure module in `src/desktop/model/`
-that this vertical and experiments both use.
+The desktop widget host, id encoder and transcript views exist. The subagents
+vertical and live parent-child integration are not implemented. The earlier
+prototype (`exp-prototype` at `5bfaa225`) is a visual reference; implementation
+follows the owning modules on current `main`.
 
-**A subagent** is its identity (`id`, below), a `name`, the `seed` its generated
-avatar is painted from (the same wherever it appears), the `tags` it was spun up
-with (each an id, a name, a series hue `1 | 2 | 3 | 4 | 5` and a glyph path —
-all data, none keyed on a known list), a `state`, a one-sentence `headline`,
-`since`, the `work` it is on with its progress when known, the `model` it runs
-on when its source knows it (shown when present, nothing drawn otherwise), and
-its `conversation`: the workspace's transcript messages and live activity line.
-**States** are the few a person reads differently:
+The ownership contracts below are proposed. Existing single-Agent durability
+alone does not implement them.
 
-| State | Means | Shown as |
+## Ownership and module boundaries
+
+```text
+authenticated client / Nessa tool adapter
+                    |
+                    v
+gateway conversation use cases -- access, owner metadata, product mapping
+                    |
+                    v
+SDK ownership coordinator -- child creation, relationships, tree close, recovery
+                    |
+             +------+------+
+             v             v
+       parent Agent    child Agent -- its own scheduler, session and provider
+                           |
+                           v
+                  ordinary session records
+
+desktop SubagentSource <-- gateway relationship/read projection
+desktop transcript    <-- ordinary ConversationView for the selected child
+```
+
+Arrows are commands or reads. The coordinator composes ordinary Agents; it does
+not execute another model loop or schedule their individual turns.
+
+| Owner | Responsibility | Proposed location |
 | --- | --- | --- |
-| `working` | doing a piece of work now; `work` says what | Working, with its progress when known |
-| `planning` | between pieces of work, choosing the next | Planning |
-| `stuck` | its line of work stalled; it is working out why | Stuck |
-| `idle` | nothing left for it to do | Idle |
+| SDK domain | Parent binding, lifetime identity, legal relationship/close transitions and bounded tree rules | `crates/nessa-sdk/src/domain/agent_execution/subagents/` |
+| SDK application | Spawn supervision, ownership persistence, admission ordering, recursive close and recovery through ports | `crates/nessa-sdk/src/application/agent_execution/subagents/` |
+| SDK infrastructure | Ownership records and leases using the shared SQLite runtime | Feature child under `crates/nessa-sdk/src/infrastructure/session_storage/` |
+| Agent lifecycle | Individual invocation, controls and provider cleanup; common stop transition used by tree closure | Existing `application/agent_execution/agents/` |
+| Gateway conversation | Current access, metadata, configuration selection and product mapping of SDK relationships | Existing `crates/nessa-server/src/conversation/` layers |
+| Product protocol/client | Current typed command/read shapes and generated vocabulary | `protocol/product/v1.json`, `nessa-protocol`, `packages/nessa-client` |
+| Nessa tool adapter | Model-facing delegation over authenticated gateway operations | Feature module under `crates/nessa-mcp/src/` |
+| Desktop | Joined source, selection, panel and parent-header accessory | `src/desktop/subagents/` |
 
-The order a list shows them in (working, the furthest along first, then
-planning, stuck, idle) and the counts by state are the model's.
+Add module maps with implementation and mirror feature vocabulary in tests. Domain
+code performs no clock, process or storage effects. Infrastructure owns codecs.
+Composition injects storage, clocks, factories and audit ports using the existing
+[typed dependency injection](../../design/dependency-injection.md) pattern.
 
-**Its tagline** is one line picked from its seed by a stable hash ("Quietly
-judging your regexes"). It is decoration, so a crew reads as a crew; it is
-drawn apart from the state and says nothing about it.
+### Coordinator integration with Agent
 
-**Identity.** A subagent's id is unique within its conversation by construction:
-composition joins sources (the in-memory sample and the experiments adapter
-today, the gateway's later) into one `SubagentSource` through a builder,
-`joinSubagentSources([{ key, source }, …])`, which raises a composition error on
-a repeated key before any lookup is built (a `Record` would silently keep the
-last), and the join makes every id its source's key, `:`, and the source's own
-id through the desktop's one id encoder (326). Two sources cannot produce one
-id, and each source keeps its own ids unique for a conversation — the
-experiments adapter through 333's validation of agent ids; the join drops a
-repeated id from one source when it takes in that source's update — keeping the
-first copy in the source's order — and logs it as a fault once per update, so
-reading the join on every render neither logs again nor changes which copy is
-shown. The join answers `unread` for a conversation while any source that has
-not failed has not read it; then `ready` with every readable source's subagents,
-and the keys of any that `failed`, so the panel shows what it has and says,
-under the list, that some subagents could not be read — a failed source never
-holds the others back, and a list is never shown short without saying so.
+The existing Agent lifecycle remains the authority for individual work admission.
+Today `Agent::close` cleans up a provider attachment and allows later invocation;
+automatic stop can also recover queued work. Ownership lifetime closure therefore
+needs a typed disposition at that authority, not an unconditional hook on every
+attachment stop. The proposed dispositions are `AttachmentOnly` and
+`EndOwnedLifetime`, selected before effects and retained with the stop operation.
 
-**`SubagentSource`** is the port: `forSession(sessionId)`, answering from what
-the source holds now (a view may read it on every render) `{ kind: "unread" }`
-until the source has read that conversation's subagents, then `{ kind: "ready",
-subagents, unreadable }` — `unreadable` the keys of joined sources that failed,
-empty for a single source — or `{ kind: "failed", reason }` when it cannot (a
-typed reason; the source logs the fault) — and `subscribe`. It has no `send`: a
-subagent's conversation is read, not written to, until a source can deliver.
+`AttachmentOnly` covers ordinary recoverable provider cleanup: it fences that
+attachment through the existing controller, preserves the ownership lifetime and
+children, and permits the existing confirmed cleanup/recovery path. Explicit
+owned-parent close, actual terminal lifetime failure, final owning-handle disposal,
+delete and gateway retirement select `EndOwnedLifetime`. That selection seals
+spawning and descendant work and supplies the tree drain through the same
+lifecycle authority. A concurrent lifetime-ending close upgrades lifetime
+admission to sealed even if attachment cleanup began as recoverable; it does not
+replace the attachment's earlier physical cause or lose already-observed results.
 
-**Where it is seen.** The panel is a widget (326), plugin `subagents`, whose id
-is the conversation's session id, in a pane beside the conversation or over the
-panes. Its `useWidget` answers, in this order: `off` while the preview is off;
-`missing` for a conversation the workspace does not list once it has read its
-index (removed, or never known), asked through a selector the workspace's barrel
-exports for it (#330); `unread` while the workspace has not read its index or
-the source has not read the conversation; otherwise `ready`, titled "Subagents"
-with the conversation as its `origin` — one without subagents shows an empty
-state. Which subagent it shows is this vertical's state, one per conversation
-(`sessionId → subagentId | null`); when the source's next answer no longer lists
-the selected subagent, the selection clears and the panel returns to the list,
-or to its empty state (#331 tests it). The joined id is built in one place,
-`joinedSubagentId(sourceKey, sourceId)`, which this vertical exports; each
-source declares its own key (the experiments adapter's is its own constant,
-which composition registers it under), so no other vertical rebuilds the rule.
-The vertical exports `useOpenSubagent(host)`, given the calling view's host
-callbacks and place (326 hands them to every view), and returning `(target: {
-sessionId, sourceKey, sourceId }) => void`, which sets the subagent shown and
-opens the panel through `host.openWidget` in the caller's place: from a view in
-the window, in the window; from anywhere else, in a pane beside the conversation
-— which is how an experiment's agent opens its subagent. The plugin's
-`SessionAccessory` draws the conversation's subagents as an avatar stack in its
-pane header, in the model's order (the busiest first), and nothing when there
-are none; a click opens the panel.
+Gateway approval-mode recovery currently explicitly closes and replaces its Agent.
+For the first implementation it selects `EndOwnedLifetime` and drains that tree
+before replacement. The reopened root uses the last committed policy and a new
+ownership lifetime; preserving children across this explicit retirement is outside
+this first design. A successful idle mode change that needs no retirement does
+not end the lifetime and follows the snapshot-inheritance recommendation below.
 
-**One subagent** is drawn as a conversation is — its messages and its live
-activity line through the workspace's transcript views — with no composer.
+For an Agent carrying ownership, `maybe_reopen`, immediate invocation, queued
+admission and attachment authorization consult this typed lifetime disposition.
+After `EndOwnedLifetime`, an existing clone cannot admit work against the sealed
+identity just because physical cleanup finished. A root may acquire a new lifetime
+through an explicit host-authorized reopen at the ownership coordinator; a closed
+child cannot renew its sealed relationship. Bare Agents without owned relationships
+keep their current close/reopen behavior. Register this participation once during
+construction so SDK and gateway paths share the decision instead of relying on
+caller discipline.
 
-**The preview.** Subagents are offered only when their preview is on under
-Settings › Advanced › Experimental. The switch is a window preference
-(`src/desktop/adapters/window-preferences.ts`, as the greeting's is) and its
-entry is the settings catalogue's, the one owner of what Settings names; this
-vertical reads the preference through its hook and owns neither. Off, no
-accessory; an open panel answers `off` (326); a consumer's link to a subagent is
-not offered. The in-memory sample serves the sample workspace's conversations.
+The tree domain owns attached relationships and creation reservations. It does
+not keep another independently writable copy of the parent's execution state.
+Reservation and parent closure share one admission ordering. A closing ancestor
+excludes new work anywhere below it; child command admission consults that owner
+and acquires the ordinary child work permit in the same short ordered decision.
+There is no check-then-enqueue gap. The implementing SDK slice establishes one
+tree-admission scope for these decisions: acquire it before an individual
+lifecycle permit and release it before awaiting effects or acquiring a semantic
+writer lease. No individual lifecycle lock waits for tree admission. Gateway mode
+admission precedes tree admission when selecting policy. Child commands and
+ancestor close use that same scope, including restored Agents and existing
+clones; a gateway-only precheck cannot enforce this contract.
 
-## Alternatives considered
+Avoid strong reference cycles: the participant must not retain its parent in a
+way that prevents the parent's lifetime from ending. Use the existing lifecycle
+owner and non-owning upward notifications. The coordinator retains child cleanup
+owners until settlement, independently of UI subscribers or waiting callers.
 
-- **Messaging subagents now.** The prototype's composer. Against a sample it
-  would only pretend to deliver, the experiment's harness has nowhere to put
-  a message, and doing it honestly means sharing 238's outbox first; it waits
-  for a source that can deliver.
-- **Subagents as sessions in the workspace.** Each a hidden session with its
-  own pane. It lost because a session carries retention, drafts, approvals and
-  a place in the list and the overview, none of which a subagent has, and
-  because the conversation a person opened is the parent.
-- **A subagent view inside each consumer.** The experiment drawing its agents'
-  conversations. The next consumer would draw them again, and the two would
-  disagree about state and order.
-- **A free status string.** A person reads stuck differently from planning,
-  and a free string cannot be ordered.
-- **Taglines from the model.** Cost and noise for decoration.
+### Authoritative data and integration seams
 
-## Consequences
+These are the contracts the implementation must expose, not a second scheduler.
+Type names other than `AgentLifetimeId` and the stop variants remain choices for
+their owning slice. Publish one SDK contract and map it at the gateway boundary.
 
-- Any source of subagents appears in one panel, with one order, read the way a
-  conversation is.
-- The sample is visible only under the preview; nothing ships that looks live
-  and is not, or looks writable and is not.
-- Remaining: the gateway's `SubagentSource`, when the gateway reports a
-  conversation's subagents; then writing to a subagent — `send` with a message
-  id taken once, on 238's outbox extracted into pure functions both the
-  workspace and this vertical use — decided in its own record; choosing a
-  subagent's model, once a source can.
-- Work: #330 (the model, taglines, the port and the join, the sample, the
-  preview, the time labels added to the workspace's `model/time-labels.ts`,
-  the module map in `docs/codebase-structure.md`), #331 (the panel,
-  `subagents.mjs`), #332 (the session accessory). Part of #325.
+| Fact or seam | Authority and required content |
+| --- | --- |
+| Ownership binding | SDK immutable child/parent lifetime and session identities, spawn request binding, typed verified origin and selected configuration/provenance; the ownership store alone writes this graph. |
+| Lifetime admission | SDK tree transition owner supplies the ancestor fence; `SessionLifecycle` issues individual work permits and owns the typed stop selection. Construction registers participation before attachment authorization. |
+| Spawn progress | Ownership operation retains reservation and references to ordinary creation/attachment/submission receipts. Those receipt owners remain authoritative for their milestones; no copied provider readiness or queue state. |
+| Child factory port | SDK application consumes a prepare-only factory returning an ordinary Agent or the ordinary initialization failure with retained cleanup ownership. Gateway composition supplies provider/configuration, metadata and session mapping; attachment is authorized only after ownership acknowledgement. |
+| Ownership storage port | SDK application requests acknowledged binding, progress, close intent and settlement writes under a bounded writer lease, plus bounded reads. SQLite implements it on the shared record runtime; custom adapters face the same restoration validation. |
+| Close outcome | Existing individual cleanup reports retain attachment cause, physical release and audit outcome. The tree owner adds lifetime cause/initiator, target obligations and aggregate settlement without relabelling those reports. |
+| Product identity/configuration | Gateway metadata and `conversation_session` own access, recorded provider/model/approval selection and `ConversationId` to `SessionId` mapping. Root/child lifetime identity comes from the SDK publication. |
+| Result/read projection | Ordinary child history owns task outcome; relationship reads reference it. Foreground tool response and optional asynchronous report retain their distinct delivery owners. Desktop ids and activity are projections. |
+
+A restored child requires the matching parent lifetime and its own admitted
+configuration binding before its lifecycle grants a permit. A factory result and
+every later effect carry their original session/lifetime/operation/attempt correlation. A result
+cannot supply missing authority needed to validate itself.
+
+## Identities and durable relationships
+
+A child receives a fresh `ConversationId` and corresponding SDK `SessionId`. Its
+provider context, execution ids, queue, reviews and history belong to that child.
+Construction uses the ordinary factory for a new session. Sharing the parent's
+Agent inner state or session id would merge scheduling and permission authority.
+
+The immutable binding records:
+
+- Child SDK session and child lifetime identity.
+- Parent SDK session and owning lifetime identity.
+- Originating parent execution and tool identity when created by a tool.
+- Stable spawn request identity and immutable request binding.
+- Effective child configuration and inherited-policy provenance at admission.
+
+Reuse existing identity types where their meaning matches. `AgentLifetimeId` is
+the proposed additional identity for distinct openings of one saved conversation.
+Mint it when ownership begins; retain it across recovery of that lifetime. A
+completed close seals it. Reopening the same conversation starts a new lifetime
+and does not adopt the old lifetime's children. Provider attachment generations
+and turn ids are separate identities.
+
+Roots also have a lifetime record so restoration can prove that a child's named
+parent lifetime exists. The SDK ownership store owns the relationship. Product
+metadata and desktop sources consume its publication, rather than writing another
+parent graph. Lookup indexes are derived atomically from these bindings.
+
+Reparenting is outside this design. Nested spawning attaches a fresh child to the
+actual invoking child. Restoration validates matching owner lifetimes, unique
+request bindings, tree bounds, absence of self-parenting and absence of cycles.
+Invalid ownership refuses dispatch without rewriting retained history. Names,
+avatars and tags are attributes, not cleanup or execution identities.
+
+### Ownership state machine
+
+The proposed lifetime states are `Open`, `Closing` and `Closed`. Physical cleanup
+and evidence delivery are retained per target alongside that state; a single
+boolean cannot represent both. The tree transition owner enforces this table,
+while ordinary Agent controllers continue to enforce their own execution states.
+
+| State | Event | Next state and effect |
+| --- | --- | --- |
+| Open | Admitted spawn | Open; retain one reservation under its stable request binding |
+| Open | Close from caller, terminal lifetime failure or final owner disposal | Closing; seal admission and retain the first cause before asynchronous effects |
+| Closing | Constructor returns a child | Closing; attach it to the drain, without dispatch permission |
+| Closing | A target reports cleanup/evidence | Closing; apply only correlated results and retain unresolved obligations |
+| Closing | All parent/descendant resources released and required evidence acknowledged | Closed; publish the aggregate receipt |
+| Closing | Waiter leaves, deadline passes, or one target fails | Closing; retain supervision and return an incomplete result when observed |
+| Closing or Closed | Another close | Join/read the original operation; preserve its cause and prior evidence |
+| Closed | Request to reopen the saved conversation | No transition on this lifetime; create a new root lifetime through ordinary host admission |
+
+Spawn progress retains the reservation, prepared child, tree attachment and
+initial-submission reference. These are relationship facts, not another provider
+attachment state machine. Existing creation/attachment/submission receipts supply
+their authoritative progress. Every reservation ends in an attached child or a
+settled failure; uncertain startup retains its reservation and cleanup ownership.
+
+## Statechart design contract
+
+Apply the [statechart authoring guide](../../state/authoring.md) to four linked
+owners: an Agent ownership lifetime, a spawn operation, approval selection and a
+child-result delivery. The relationship graph connects instances. It does not
+make every child a nested state of its parent's execution machine.
+
+These charts are proposed specifications. The existing Agent still owns each
+conversation's execution/attachment states; the ownership coordinator consumes
+those facts and their correlated outcomes. Transition tables below are the
+regression source, and the diagrams summarize their composition.
+
+### Ownership lifetime and concurrent cleanup
+
+`Open` can contain different parent activities without repeating closure rules.
+One enclosing close transition seals admission regardless of activity. Children
+have their own linked Agent charts and can remain working while the parent is
+idle. Starting/attachment detail stays in the existing Agent owner rather than
+being copied into the tree domain.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Open
+    state Open {
+        [*] --> ParentIdle
+        ParentIdle --> ParentBusy: parent input admitted
+        ParentBusy --> ParentIdle: parent execution settled
+    }
+    Open --> Closing: close lifetime / seal tree admission and retain cause
+    state Closing {
+        state ParentCleanup {
+            [*] --> ParentPending
+            ParentPending --> ParentReleased: correlated cleanup confirmed
+        }
+        --
+        state DescendantCleanup {
+            [*] --> DescendantsPending
+            DescendantsPending --> DescendantsReleased: all reservations and children drained
+        }
+        --
+        state EvidenceSettlement {
+            [*] --> EvidencePending
+            EvidencePending --> EvidenceAcknowledged: all required closure evidence acknowledged
+        }
+    }
+    Closing --> Closed: settle [parent released and descendants released and evidence acknowledged]
+    Closed --> [*]
+```
+
+`--` denotes separately evolving facts, not separate threads. The aggregate
+checks its settlement guard after each relevant outcome and when entering
+Closing, including an empty child set. Required final evidence depends on the
+cleanup results it describes; progress is concurrent but completion order must
+respect that dependency. An uncertain cleanup/audit leaves its region pending
+with a retained typed failure. It is not a successful final state.
+
+Repeated close is handled internally by joining the original owner, not an
+external self-transition that restarts cleanup. A late constructor is handled by
+the descendant drain with no dispatch authority. Reopening is a new chart
+instance/lifetime, not a transition from Closed back to Open on this identity.
+
+### Spawn operation
+
+```mermaid
+stateDiagram-v2
+    [*] --> Checking
+    Checking --> Refused: access, parent, policy or room refused
+    Checking --> Admitted: reserve and acknowledge immutable binding
+    state Admitted {
+        [*] --> Reserved
+        Reserved --> Prepared: child prepared with owned startup evidence
+        Prepared --> Attached: ownership attachment acknowledged
+        Attached --> TaskAdmitted: original submission receipt acknowledged
+    }
+    Admitted --> Draining: ancestor close or startup failure / stop dispatch
+    Admitted --> Unconfirmed: uncertain publication or interrupted original attempt
+    Unconfirmed --> TaskAdmitted: lookup confirms original child and submission
+    Unconfirmed --> Draining: closing lifetime or retained failed attempt
+    Draining --> Ended: physical ownership settled and required evidence acknowledged
+    TaskAdmitted --> [*]
+    Refused --> [*]
+    Ended --> [*]
+```
+
+Completion of this spawn chart means its admission operation settled, not that
+its child's task finished. Creation and submission receipts remain separate.
+An unchanged retry finds the same binding; it does not re-enter Checking to pick
+another policy. Unconfirmed has no automatic edge that repeats provider dispatch.
+Actual creation progress may confirm only a partial milestone; lookup updates
+those authoritative receipts without synthesizing TaskAdmitted.
+
+### Approval selection
+
+```mermaid
+stateDiagram-v2
+    [*] --> Inheriting
+    Inheriting --> Selected: parent admission [committed effective policy] / retain provenance
+    Inheriting --> Refused: parent mode pending, access refused or parent closing
+    Selected --> Compatible: child binding accepts exact selected policy
+    Selected --> Refused: inherited policy unsupported
+    Compatible --> [*]
+    Refused --> [*]
+```
+
+This is one selection operation. Its snapshot recommendation is defined in
+[approval inheritance](#approval-inheritance). Parent policy and child selection
+share admission ordering; a selected snapshot is immutable while normal policy
+owners continue to enforce applicable live access constraints. An automatic
+approval is still a normal child's permission decision with its own attribution.
+
+### Result delivery
+
+The asynchronous report path has its own operation chart. Foreground tool replies
+continue through their existing tool-response owner; this chart does not replace
+that owner's wire-delivery or retry semantics.
+
+```mermaid
+stateDiagram-v2
+    [*] --> ResultRetained
+    ResultRetained --> Submitting: parent lifetime open / use stable report request id
+    ResultRetained --> Suppressed: parent lifetime closing or closed
+    Submitting --> Submitted: parent submission receipt acknowledged
+    Submitting --> Unconfirmed: response lost or write outcome uncertain
+    Unconfirmed --> Submitted: lookup confirms the same report request
+    Unconfirmed --> Suppressed: no report admitted and parent lifetime closed
+    Submitted --> [*]
+    Suppressed --> [*]
+```
+
+Submitted means admitted into ordinary parent scheduling, not model consumption.
+If lookup confirms a report was admitted before closure, retain that fact and its
+normal cancellation/result receipt even if the parent has since closed. Closure
+cannot relabel accepted work as never sent. No report creates a new ownership
+lifetime or reopens a sealed parent.
+
+### Event selection and effect supervision
+
+| Owner | Event and ordering contract | Refusal, deferral and effect contract |
+| --- | --- | --- |
+| Ownership lifetime | Serialize spawn reservation, child attachment and lifetime close under one admission authority. Existing Agent mode/turn admission supplies its own coherent facts. | An ancestor fence refuses new work. Close seals admission before effects; repeated closes join the first cause. |
+| Spawn | Stable request binding selects one original attempt. A closing lifetime takes every already-owned reservation into its drain, including a same-poll constructor success. | False access/policy/capacity guards return typed refusals. Uncertain saved progress stays owned for lookup/reconciliation, with no blind dispatch retry. |
+| Approval selection | Read one committed effective selection under parent mode ordering; correlate the selection with its spawn/lifetime. | Pending/uncertain mode refuses this spawn rather than queuing behind an unbounded policy update. Unsupported binding refuses before attachment. |
+| Result delivery | Parent report admission races closure at the normal submission owner; the receipt decides whether work was accepted. | Close suppresses a not-yet-admitted report. An uncertain prior admission must be looked up before deciding suppression or retry. |
+
+Complete a local state decision before admitting another event to that owner.
+The decision returns correlated effect requests; storage, provider, audit and
+child-cleanup effects run through ports outside that critical section and return
+outcomes tagged with lifetime/operation/attempt identity. Keep their supervisors
+alive after caller loss. This does not claim one atomic transaction across
+ownership storage, semantic storage, audit and provider processes.
+
+Do not infer a universal priority from nesting. For this design, ancestor closure
+wins future admission once its fence is selected; already-admitted decisions and
+already-observed results retain their established meaning. Same-poll readiness
+and both arrival orders belong in S5/S8 and C3/C7/C12. Stale outcomes cannot
+advance a new lifetime. Retain their original owner/evidence; conflicting outcomes
+for the same attempt are typed failures, not silently ignored updates.
+
+No unbounded deferred event queue is introduced. Spawn/refused operations return
+immediately; ordinary child submissions use the existing bounded scheduler.
+Supervised uncertain effects and close drains have explicit ownership/bounds and
+remain distinguishable from deferred user input. Pure domain types enforce legal
+configurations; application owners perform effects and acknowledgement.
+
+## Approval inheritance
+
+### Selection at creation
+
+Creation obtains the parent's committed effective approval configuration under
+the same admission ordering used for parent mode changes. This includes the
+binding's actual approval mode and permission-offer policy supplied to the child
+adapter. Existing host rules, where implemented, remain evaluated by their owner
+and scope. This design adds no separate rule engine.
+
+**Recommended first implementation:** capture that configuration at child
+admission, record its provenance and apply it through the child's ordinary
+provider factory. New children use the parent's current committed configuration.
+A pending or uncertain parent mode change refuses spawning until its owner settles
+it. An idempotent retry retains the originally selected policy.
+
+This recommendation provides default inheritance at creation. It does not claim
+live propagation to existing children. A parent mode change leaves existing
+children at their recorded modes; the interface shows those actual modes. A
+future tree-wide policy-change command needs its own ordering table for busy
+children, concurrent spawning and partial application.
+
+Inheritance copies configuration, not previous answers. Allow Once belongs to
+its original review. A stored rule applies to a child only when its existing
+owner says the scope covers that child. Parent credentials, permission handles
+and request-specific grants are not duplicated as child authority.
+
+### Overrides and provider support
+
+The first model-facing spawn command exposes no approval override. An explicit
+host-authorized override can be added through the same policy/configuration
+owner. Do not invent a strictness ordering over provider mode names or infer
+policy equivalence from labels.
+
+A provider that cannot implement the inherited mode or offer policy returns a
+typed unsupported-policy outcome before attachment. There is no silent substitute.
+Provider/model selection passes normal capability and readiness validation; it
+does not grant broader access.
+
+### Reviews and attribution
+
+Child permission requests use the existing Agent controller and audit port. Their
+session, execution, tool and permission identities remain the child's. The gateway
+adds parent context to the read projection so the person can identify the
+requesting delegation. The answering actor remains the verified person or
+policy actor; the parent agent does not supply human consent.
+
+Parent closure invokes each child's normal review-cancellation path. Preserve
+both the child target and root closure cause/initiator. Answers already admitted
+before closure follow the ordinary sealed-control drain. Resolved reviews are
+not relabelled cancelled. Cancellation evidence does not prove that a tool effect
+was rolled back or a provider process terminated.
+
+## Configuration and context handoff
+
+Default provider, model, committed approval configuration and workspace come from
+the parent. An explicit supported model/provider selection is resolved through
+the normal catalog. A different model can keep inherited approval behavior when
+its binding supports that policy.
+
+Build the delegated prompt through the existing immutable prompt representation.
+Supply the task, applicable instructions and bounded explicit context references.
+The first implementation begins an independent child history. Whole-history
+handoff, selected-context handoff and provider-native fork are distinct
+capabilities; cloning an opaque provider context is not assumed.
+
+Use normal MCP composition for each child. Tools/apps use that child's upstream
+sessions, relay grant and SDK identity. A parent does not lend its relay token or
+app mount to a child. Composition owns executable launch configuration; the model
+cannot select arbitrary launch commands through spawn.
+
+Acquire image holds for the child through the existing authorized attachment
+owner before admitting their references. Copying a reference alone creates no
+hold. Non-image filesystem paths continue to follow the current local file-link
+contract; a named path does not grant permission to read it.
+
+## Spawn sequence and retries
+
+Provide one SDK-owned spawn operation, consumed by the gateway after host access
+admission. The request names the parent lifetime, verified origin, stable request id,
+delegated prompt/context, and optional supported model/provider choice. The model
+cannot supply a parent credential: the host resolves the parent from its verified
+invocation binding.
+
+Use a typed origin: a parent execution, with the observed tool identity when
+available, or an explicit host command with verified caller attribution. An idle
+parent can receive a host-authorized spawn; it does not need a fabricated running
+execution. For model-originated calls, composition/relay supplies trusted session
+binding and the gateway validates execution correlation. Model-provided parent,
+execution or tool fields cannot establish that correlation. If a binding cannot
+provide the necessary trusted correlation, refuse model-originated spawning until
+the adapter supplies it. The current shell MCP adapter does not implement that
+delegation context; adding its propagation is part of the tool slice.
+
+1. Check current access and the parent lifetime/execution, then resolve supported
+   configuration through its existing owner.
+2. Reserve creation capacity under parent admission. Closure and reservation
+   have one winner. Select committed effective policy in that same ordering.
+3. Persist the immutable spawn binding and reserved child identity; acknowledge
+   required audit intent before a provider can be dispatched.
+4. Create child metadata and prepare an ordinary Agent using current creation
+   and attachment contracts. The reservation owns provisional startup, including
+   failed constructors with uncertain resource cleanup.
+5. Attach the prepared child to its parent before first provider dispatch. If
+   closure won meanwhile, hand the child to the closing owner instead.
+6. Submit the initial task through the ordinary durable submission operation with
+   an id bound to the spawn request. Retain creation and task receipts separately.
+7. Publish progress after the corresponding storage acknowledgement. Return
+   identities and receipts that distinguish preparation, attachment and task
+   admission from task completion.
+
+```mermaid
+sequenceDiagram
+    participant T as Parent tool adapter
+    participant G as Gateway conversation service
+    participant O as SDK ownership coordinator
+    participant S as Ownership and command storage
+    participant C as Child Agent
+    T->>G: spawn under invoking parent, request id, task
+    G->>G: verify access and resolve supported configuration
+    G->>O: reserve under parent admission and policy ordering
+    O->>S: save binding and reserved child identity
+    O->>C: prepare ordinary Agent with inherited policy
+    O->>S: save attachment to parent lifetime
+    O->>C: authorize attachment and submit initial task
+    C-->>O: creation and submission receipts
+    O->>S: save acknowledged progress
+    O-->>G: child identity and current receipts
+    G-->>T: child available or typed unconfirmed/failure state
+```
+
+The sequence is proposed. Extend the consuming creation composition deliberately:
+current durable creation does not attach a child atomically to its parent. Calling
+`create_command` and recording a parent afterward leaves an unowned-child window.
+The child factory must not dispatch before the binding is acknowledged.
+
+A repeated request with the same immutable binding finds the same child and
+receipts. Changing the task, configuration or parent lifetime under that id is a
+conflict. Retries preserve the first policy selection and child identity, even
+if the parent policy changed after admission.
+
+Lost responses do not prove failed creation. Retain unconfirmed progress until
+lookup/reconciliation supplies evidence. Follow the current creation contract:
+an interrupted provider attempt is not automatically repeated because its response
+was lost. Caller disappearance does not submit another task. A retained initial
+submission is recovered by its existing identity.
+
+## Controls and result delivery
+
+Expose thin operations for spawn, list/status, read, send/steer, wait and close.
+Their exact product/tool names belong to the implementing slice. Sends use the
+ordinary submission contract; steering uses the supported native operation or
+existing boundary steering. Wait observes a child submission receipt and grants
+no additional execution authority.
+
+The first delegation slice can ship spawn, read/wait and explicit child close.
+Messaging and proactive reports follow once those foundations pass their tables.
+The first desktop slice can remain read-only without creating a special execution
+runtime for children.
+
+Result delivery retains the child session, exact submission and terminal result
+reference. Foreground delegation returns through the originating parent tool call.
+A later answer may enter the parent's normal follow-up queue only while the named
+parent lifetime remains open. Its durable delivery id is bound to the stable child
+result; reconnect/recovery does not create another independent report.
+
+A late answer after parent closure stays in child history. It does not reopen the
+parent or create a new parent turn. A child failure is visible to its parent but
+does not automatically close siblings.
+
+Provider-native subagents are a separate observation capability. Treat them as
+controllable children only when the adapter establishes identity, inherited policy
+and recursive closure semantics. A tool title or nested output is insufficient.
+The first runtime creates Nessa-owned child Agents through composition.
+
+## Parent lifetime and closure
+
+### What closure means
+
+The decision applies to the actual parent Agent lifetime. Explicit conversation
+close, terminal failure that selects `EndOwnedLifetime`, final owning-handle
+disposal, deletion, approval-mode recovery retirement and gateway retirement
+enter the common ownership-close path. Their typed disposition is selected at
+the existing lifecycle authority as defined above.
+
+Turn completion, ordinary idle state and exact-turn Stop do not end the lifetime.
+Children may finish work across parent turns. Closing a pane/tab/socket currently
+detaches a view; it does not close the Agent. Archive changes catalogue visibility.
+A recoverable stop classified `AttachmentOnly` does not close the ownership
+lifetime or its children when the normal Agent remains eligible for recovery.
+This differs from the explicit approval-mode recovery retirement defined above.
+
+### Common close sequence
+
+1. The normal Agent close owner seals parent admission and, in the same ordering,
+   fences child creation and new descendant work. Retain the first cause and
+   initiator for this lifetime.
+2. Persist closing intent and its ownership scope. Include reserved/prepared
+   children; a live-only snapshot would miss an in-flight constructor.
+3. Stop the parent's active work and request each child's ordinary close. Each
+   child recursively seals and closes its descendants. Parent cleanup proceeds
+   alongside descendant cleanup, so a parent waiting for child output cannot
+   deadlock the drain.
+4. Join constructors and admitted controls through their existing supervisors.
+   A child produced after the fence is closed before dispatch. A failed
+   reservation is released after its physical ownership is settled.
+5. Retain each child's physical cleanup, review/queue settlement and audit result.
+   Failure on one child does not suppress cleanup attempts for the rest.
+6. Report aggregate success only after parent and descendants confirm cleanup
+   and required evidence acknowledgement. Partial failures retain closing
+   ownership and a repeatable cleanup path.
+
+```mermaid
+sequenceDiagram
+    participant W as Authorized caller
+    participant P as Parent Agent close owner
+    participant O as Ownership coordinator
+    participant S as Ownership storage and audit
+    participant C as Child Agent close owner
+    participant D as Descendant Agent close owner
+    W->>P: close parent with verified attribution
+    P->>O: seal tree admission and retain cause
+    O->>S: record close intent
+    par parent cleanup
+        P->>P: settle admitted controls and stop provider
+    and descendant cleanup
+        O->>C: close under parent lifetime cause
+        C->>D: close owned descendants
+        D-->>C: cleanup and evidence outcomes
+        C-->>O: cleanup and evidence outcomes
+    end
+    O->>S: record aggregate outcome
+    O-->>P: drained or retained incomplete result
+    P-->>W: confirmed close or typed incomplete close
+```
+
+The sequence is proposed. Carry one absolute physical-cleanup deadline through
+the subtree rather than granting a full new timeout at every depth. Mandatory
+audit delivery retains its own documented bounded attempts; an earlier timeout
+must not silently consume later children's evidence attempts.
+
+If the response deadline expires, expose incomplete closure while the supervisor
+continues draining. Dropping a waiter does not abandon cleanup. Confirmed physical
+termination may release its capacity despite unacknowledged audit; audit failure
+still prevents an audited-success response. Unconfirmed physical cleanup retains
+provider/storage ownership and accounted capacity under the ordinary Agent
+contract.
+
+A direct child close closes only its subtree. Repeated parent close joins the
+existing drain without overwriting causes or duplicating decisions. Closure
+results distinguish stopped resources from saved/acknowledged evidence.
+
+### History, reopening and deletion
+
+Close ends execution and releases live resources; it does not delete history.
+Closed children remain readable under current access policy, but cannot be opened
+for work under their sealed parent lifetime. Reopening the parent begins a new
+lifetime with an empty active child set. Older children remain historical
+relationships; new children receive new identities.
+
+Parent deletion first runs the same tree fence/cleanup. Once cleanup permits
+erasure, finish descendant deletions through current tombstone, provider-session
+eraser, attachment and audit owners. Persist recoverable tree-deletion intent,
+finish children before completing parent erasure, and retain audit records.
+Tree deletion is a host-authorized scope, not an authority inferred merely from
+receiving a parent id.
+
+## Persistence and recovery
+
+Use the shared record database and injected storage/lease machinery. Add bounded
+ownership records for bindings, spawn progress, close intent and cleanup
+settlement. Child content remains in its ordinary semantic stream. Ownership
+records refer to sessions and receipts; they do not copy transcripts or entire
+snapshots on each update.
+
+An ownership lease serializes competing relationship writers. Agent retains each
+semantic writer lease. Specify lock acquisition before implementation: make short
+admission decisions, perform provider effects outside the in-memory admission
+critical section, then apply correlated results. Avoid a semantic-lease holder
+waiting for a tree lease while the tree owner waits for that semantic lease.
+Publication across stores uses retained progress and reconciliation, rather than
+claiming an atomic transaction across unrelated stores.
+
+Validate retained ownership before allowing child dispatch on startup:
+
+- An acknowledged child of an open parent lifetime can become eligible for normal
+  recovery after fresh host access checks. Eligibility does not authorize replay
+  of an interrupted provider effect.
+- A closing parent resumes draining; its children do not restore into runnable
+  admission.
+- A sealed parent leaves its children closed, including after that saved parent
+  is reopened under a new lifetime.
+- A reserved child with missing creation outcome stays unconfirmed until retained
+  creation/resource evidence settles it. The same request does not mint a
+  replacement child.
+- Missing, corrupt, foreign or contradictory parent evidence fences child
+  dispatch and reports a typed failure without erasing prior evidence.
+
+A process crash is interruption, not proof of completed parent closure. Orderly
+gateway shutdown records closure and joins the tree drain through its existing
+shutdown report before storage stops. If storage/audit failure prevented saving
+close intent, recovery reports that gap rather than treating process disappearance
+as durable closure. Already-required physical cleanup proceeds despite a failed
+intent/evidence write and is reported as unacknowledged.
+
+## Audit and failure outcomes
+
+The ownership application submits immutable records to an injected mandatory
+audit port. Each consequential record identifies the parent lifetime, child
+target, spawn/close operation, prior and resulting meaning, lifecycle cause and
+known initiator. Record child creation/configuration selection, attachment,
+refusal, closure intent and physical/evidence outcomes. Normal child permission
+and execution records remain owned by their existing audit path; reference them
+instead of emitting competing decisions.
+
+Explicit commands carry host-verified attribution. Cascaded child closure retains
+the root command's initiator and cause without inventing a fresh human action at
+each level. Automatic lifetime failure/disposal records a runtime cause. Preserve
+the first close decision through repeated draining; an independently observed
+provider failure remains additional evidence, not a replacement cause.
+
+Keep exact sensitive evidence in controlled audit/session storage where required.
+General diagnostics contain identities, bounded typed causes and counts, not raw
+prompts, tool arguments, credentials or tokens. Semantic persistence, audit
+acknowledgement and UI publication have distinct receipts. Event-queue loss cannot
+suppress mandatory audit. A failed audit prevents audited success but still
+permits required resource cleanup.
+
+Expose typed outcomes for parent closing/closed, request conflict, current access
+refusal, unsupported policy/provider, capacity/tree bound, startup failure,
+unconfirmed creation, storage/audit failure and incomplete cleanup. Retain compound
+startup/provider/cleanup/audit errors rather than selecting one by string parsing.
+The owning domain/application publishes this vocabulary; product generation and
+UI mappings consume it without reimplementing the decision.
+
+## Access and capacity
+
+Derive child organization and conversation ownership from verified parent
+metadata and invoking binding. Spawn/read/answer/control requests still pass
+current authentication and authorization. An SDK parent relationship is not a
+credential. Credential revocation follows current admission behavior and does
+not remove the resource owner's ability to perform required cleanup.
+
+Each child consumes existing global live-conversation capacity. Count creating,
+starting and physically unconfirmed closing children. Reject a spawn with no
+room instead of waiting while the parent occupies the slots its children need.
+Reserve before startup; two racing spawns cannot spend the same remaining slot.
+
+Publish finite direct-child and depth limits, retained request limits and child
+read-page bounds in the implementing runtime slice. Their precise defaults remain
+an implementation choice. Prompt/context/report byte limits consume existing
+input and wire owners. Publish new limits once through configuration/generated
+values; tests cover the exact bound and one past it. Tool and desktop adapters
+must not maintain independent constants for the same rule.
+
+Status reads paginate historical children and summarize live state without
+opening providers. Close/control admission remains available under ordinary
+request saturation. Subscriber lifetime and backpressure do not own capacity or
+delay cleanup. Physical capacity accounting and retained historical relationships
+have separate lifetimes.
+
+## Desktop implementation
+
+`src/desktop/subagents/` owns model, port, panel and session accessory. It imports
+workspace transcript exports and the widget contract. Workspace imports no
+subagents; experiments imports this vertical's barrel. The existing
+`desktop-verticals.mjs` architecture check holds that direction.
+
+### Model and joined source
+
+Retain the existing visual fields: identity, name, avatar seed, tags as data,
+headline, activity, time, optional model and measured progress when available.
+Tag hue is `1 | 2 | 3 | 4 | 5`. Stable seed-derived taglines are decoration and
+say nothing about runtime status.
+
+The visual list order remains `working`, `planning`, `stuck`, `idle`, with
+measured progress ordering working children when present. A live adapter shows
+planning/stuck only from supported facts; silence is not evidence for either.
+Keep starting/open/closing/closed lifecycle and incomplete operations separate
+from activity, so a closed child is not shown merely as idle. Terminal outcomes
+come from the normal conversation projection.
+
+`SubagentSource.forSession` answers `unread`, `ready(subagents, unreadable)` or
+`failed(reason)` and supports subscription. The gateway adapter combines the
+parent's relationship read with ordinary child views. Samples exist in labelled
+sample mode and do not fill missing gateway data.
+
+`joinSubagentSources([{ key, source }, ...])` rejects repeated keys before building
+lookup state. `joinedSubagentId` uses the existing id encoder for presentation ids;
+canonical child conversation/session ids remain distinct and are used for commands.
+A display id never becomes execution authority.
+
+Stay unread while any non-failed source is unread. Once those sources are ready,
+show readable children with failed-source keys named beneath the list. Drop a
+repeated id from one source during update admission, retain its first copy and
+log once per update. Repeated reads neither choose again nor log again. Share
+counts/plurals in desktop pure modules and extend workspace-owned time labels
+rather than creating another formatter.
+
+### Panel and parent header
+
+The native `subagents` widget is keyed by parent conversation. Preserve the host
+answer order: preview off, missing parent after index read, unread index/source,
+then ready. Use shared EmptyState when there are no children, and honest notices
+for incomplete reads or cleanup failures.
+
+Rows show avatar, name/tags, optional model, headline, supported activity and
+progress. Selecting a child reads its ordinary transcript. Selection belongs to
+each parent, clears if the child leaves the source, and uses Breadcrumb/Escape
+to return to the list. Follow new transcript content only while the person has
+not scrolled away.
+
+The plugin's SessionAccessory uses AvatarStack in the parent header and opens
+the panel beside the parent. Draw nothing for no children or preview off. Other
+consumers use `useOpenSubagent(host)` with parent/source identifiers; they do not
+import private panel selection state.
+
+The first UI slice can remain read-only. When real child messaging is added,
+reuse the workspace's stable message-id and sent/refused/unknown/retry/discard
+behavior. Extract shared pure behavior when both consumers need it. Offer a
+composer only when the live source publishes that child's writable capability.
+Closing a child view detaches it. Closing the child Agent is a separate command
+that communicates its subtree effect.
+
+Keep the preview under Settings > Advanced > Experimental as a window preference
+owned by the settings catalogue/preferences layer. It controls whether the view
+is offered, not whether the backend executes or closes children. Preview-off
+cannot disable required cleanup.
+
+## Portable fixtures and live boundary evidence
+
+The capture/replay tooling is
+[`scripts/subagent-contracts/`](../../../scripts/subagent-contracts/README.md).
+Its checked-in Codex ACP fixture records a direct local-provider probe in an
+empty workspace: `spawnAgent`, `wait` and `closeAgent` are ordinary ACP tool
+updates carrying collaboration sender/receiver identities and agent states.
+The probe observed no dedicated native subagent lifecycle update. Its selected
+parent mode is read-only; it received no permission requests. This does not
+establish inheritance of a child's approval policy.
+
+The direct probe is separate from the current Nessa binding, which restricts
+native subagent tools. A provider's reported completed child and an ACP parent
+close reply are protocol observations, not proof of recursive Nessa closure or
+OS process termination. Preserve that distinction when mapping future adapter
+capabilities. The fixture manifest records versions, prompt/scenario, source
+hashes, identifier normalization and the excluded account/credential/path data.
+
+Cloud entry points require Node and no provider installation or credentials:
+
+```sh
+node scripts/subagent-contracts/verify.mjs
+node --test scripts/subagent-contracts/*.test.mjs
+```
+
+The replay checks correspondence between recorded tool input, collaboration
+metadata, sender/receiver ids and returned agent states, including contradictory
+and valid neighboring fixtures. These checks define the observed ACP boundary;
+they do not implement the proposed ownership machine. Runtime slices add their
+domain/storage tests and signed-out gateway scenarios from the tables below.
+Live capture remains a separate, opt-in command documented beside the fixture.
+
+| Evidence input | Consuming regression and limit |
+| --- | --- |
+| Retained `codex-native.json` tool updates | Fixture replay validates sender/receiver/state agreement. If native-child observation is later implemented, feed these frames through its actual ACP decoder and projection; no current slice turns them into owned children. |
+| Contradictory and valid neighboring fixture inputs | Keep decoder/identity rejection and positive counterparts at that provider boundary. These inputs do not substitute for ownership-store corruption tests (R5). |
+| Scripted ordinary provider and public Agent commands | S1–S13, C1–C18 and R1–R6 require deterministic admission, failure and recovery tests using the new contracts and ordinary receipts. Scripted ACP processes additionally prove actual descendant process-group release for C1/C4/C5/C13. |
+| Exact child open configuration and its own review | Gateway/provider-boundary tests establish S8–S10 and C2/C3/C17, including mode/offer mapping, snapshot provenance and ordinary child audit. The live fixture's zero reviews establishes none of these. |
+| Real gateway, signed out of model providers | Extend the existing scripted desktop scenarios for the relationship source, child transcript/review and recursive close (R7–R10). Samples only establish the sample UI path. |
+
+## State tables and regression evidence
+
+Each row is a proposed behavioral contract and needs a regression before that
+behavior ships. Case names below describe required tests, not tests already
+implemented.
+
+### Creation and approval
+
+| Row | State or ordering | Required result | Regression case |
+| --- | --- | --- | --- |
+| S1 | Open parent, supported configuration and room | One identity reserved/bound before dispatch; initial task admitted once | Spawn with inherited configuration |
+| S2 | Identical retry, including lost response | Existing child and original receipts | Retry after attachment/submission |
+| S3 | Same id with changed task/configuration/lifetime | Conflict; original binding retained | Conflicting retry neighbors |
+| S4 | Close wins before reservation | Refused; no child provider | Close before spawn admission |
+| S5 | Reservation wins; close during factory | Reservation joins drain; late child cannot dispatch | Gated factory and simultaneous close |
+| S6 | Startup fails with resources held | Startup cause retained with cleanup owner/capacity | Uncertain constructor cleanup |
+| S7 | Waiter/socket disappears after admission | Supervisor retains attempt; retry finds same child | Drop during save/startup |
+| S8 | Parent mode change races spawn | One committed policy or explicit pending/uncertain refusal | Both orders and same-poll readiness |
+| S9 | Parent approved another review once | Child receives its own review | Request scope is not inherited consent |
+| S10 | Child binding cannot honor inherited policy | Refused before attachment | Unsupported same/cross-provider policy |
+| S11 | Two spawns share last slot; tree bound reached | Only fitting admission; no lost reservations | Exact bound and one past it |
+| S12 | Foreign parent, execution or organization | Refused before effects | Cross-owner invocation forgery |
+| S13 | Binding save or intent audit rejects/fails ambiguously | No unowned dispatch; uncertain write retained | Rejection and uncertain-save failpoints |
+
+### Closure and controls
+
+| Row | State or ordering | Required result | Regression case |
+| --- | --- | --- | --- |
+| C1 | Parent with siblings and grandchild closes | Whole tree sealed; all cleanup attempted/joined | Recursive close across depth |
+| C2 | Child waiting for review during parent close | Exact child target and root cause/initiator retained | Child cancellation audit |
+| C3 | Answer before/after close or both ready | Normal sealed-control ordering; decision not rewritten | Answer/close matrix |
+| C4 | One cleanup fails, another succeeds | Continue attempts and retain all typed failures | Mixed subtree cleanup |
+| C5 | Process terminated; audit rejects | Physical accounting reflects release; audited close fails | Cleanup/audit cross-product |
+| C6 | Close deadline/waiter ends | Drain remains owned; incomplete result observable | Drop/timeout through gateway |
+| C7 | Repeated/competing close | Join one drain; retain first cause | Duplicate/second-caller close |
+| C8 | Child closed directly | Child subtree ends; parent/siblings stay open | Targeted child close |
+| C9 | Turn ends, Stop, view closes or archive | No ownership close inferred | View/turn/lifetime distinction |
+| C10 | Terminal lifetime failure/final owner disposal | Same tree drain as explicit close | Automatic exit coverage |
+| C11 | Descendant send/spawn after ancestor fence | Refused before scheduler admission | Ancestor close versus nested control |
+| C12 | Result ready before close or arriving after it | Result retained; no parent reopening/late new turn | Both orders and simultaneous readiness |
+| C13 | Delete/shutdown during spawn/close | Same retained drain; erasure/storage stop ordered after cleanup | Deletion/shutdown integration |
+| C14 | Close intent cannot be saved/audited | Required physical cleanup still attempted; failure/gap retained | Storage/audit failure during tree close |
+| C15 | Recoverable provider failure with a working child | AttachmentOnly cleanup/recovery preserves lifetime and child; no duplicate owner | Recoverable stop followed by queued restoration |
+| C16 | Explicit owned close followed by invoke/enqueue/attachment on an existing clone | Sealed identity refuses; only host-authorized root reopen mints a new lifetime | Clone admission after confirmed cleanup |
+| C17 | Gateway approval-mode recovery retires the root | EndOwnedLifetime drains descendants, then replacement starts a new root at last committed mode | Mode-recovery retirement and uncertain cleanup |
+| C18 | Lifetime-ending close joins recoverable attachment stop | Seal lifetime once, preserve earlier attachment cause/result, drain children | Stop disposition upgrade and simultaneous readiness |
+
+### Recovery and presentation
+
+| Row | Retained state or ordering | Required result | Regression case |
+| --- | --- | --- | --- |
+| R1 | Crash after binding, before creation outcome | Same reservation; no replacement or blind provider retry | Spawn boundary failpoints |
+| R2 | Crash after task acceptance, before response | Original submission found; no duplicate task | Creation/submission receipt recovery |
+| R3 | Crash during closure | Closing intent resumes drain; no child dispatch | Restart at every close boundary |
+| R4 | Closed parent reopened | New lifetime; old children closed/readable | No adoption on reopen |
+| R5 | Cyclic/missing/foreign/conflicting graph | Dispatch refused; history preserved | Adversarial restoration |
+| R6 | Result-report response lost/recovered | Same parent submission or explicit unconfirmed state | Report identity/retry |
+| R7 | One source fails, another ready | Readable children plus incomplete-source notice | Partial source failure |
+| R8 | Selected child removed/closed | Correct selection and truthful transcript/outcome | Panel terminal projection |
+| R9 | Child review displayed/answered, parent closes | Child attribution correct; stale answer refused | Gateway-backed review/close UI |
+| R10 | Duplicate source keys/ids or encoded separators | Keys refused; updates deduplicated; real command id preserved | Join and command mapping |
+
+Use barriers, injected failures and clocks to force races. Cross-check parent/child
+identity, policy provenance, receipts, causes and physical/audit outcomes together
+in live and restored histories. A fake close that always succeeds cannot prove
+resource ownership. At least one real-process test proves child provider groups
+end on parent closure; extend it for every shipped binding's promised behavior.
+
+Unit/integration evidence covers domain transitions, application orchestration,
+SQLite reload, current authorization, generated wire/client mapping and capacity.
+Desktop checks belong under `verification/desktop/`. Extend the planned
+`subagents.mjs` for panel/header, Escape, focus, narrow/short layouts and scrolling.
+Add gateway-backed scripted scenarios for creation, reviews and recursive close.
+Run Chromium and WebKit and publish measured geometry/focus/error counts and the
+scripted verdict. Sample checks prove presentation; real gateway scenarios prove
+runtime integration.
+
+## Implementation sequence
+
+Keep #329 as the decision owner. Update #330–#332 when implementation starts:
+their earlier sample/read-only acceptance cases remain useful, but they are not
+the complete runtime feature. File runtime slices under #329 before creating
+branches. Do not silently widen #330 into a backend implementation.
+
+Each row is an implementation handoff with an owned diff and an observable exit.
+The row references below allocate the existing behavioral tables; they do not
+create another checklist or weaken a later integration test of the same rule.
+
+| Slice and prerequisites | Source owners | Required behavior and exit evidence |
+| --- | --- | --- |
+| A. Ownership values and storage; first | Proposed SDK domain/application `agent_execution/subagents/`; feature child of `infrastructure/session_storage/`; matching layer tests | Immutable identities, graph validation, bounded reservations and acknowledged progress/close records. Test the storage/graph aspects of S3/S11/S13 and R1–R5 at the pure domain and real SQLite reload boundary, including custom storage input; B supplies their end-to-end operation cases. Select/publish finite defaults and accounting here. Inert infrastructure: no product/tool spawn is exposed. |
+| B. Agent participation and owned spawn/close; after A | Existing SDK `agents/lifecycle.rs`, `agent.rs`, `coordination.rs`, attachment and scheduling owners; new subagents application factory/supervisor | Install the admission scope and typed `AttachmentOnly`/`EndOwnedLifetime` selection before work can start. Compose ordinary Agents and retain initialization failures; cover S1–S7/S11/S13, C1–C12/C14–C16/C18 and R1–R5 through public APIs. Enumerate automatic stop paths at this head and test their typed classification. Disposal hands its drain to an independent supervisor without retaining a strong parent cycle. Exit includes sibling/grandchild cleanup, clone refusal, recoverable attachment reopening, both result orders, real-process cleanup and SQLite restart. |
+| C. Gateway ownership, policy and retirement; after B | `conversation/application/service.rs` and feature use cases beside `service/creation.rs`/`mutation.rs`; metadata, attachments and audit adapters; `composition/agent.rs` and `root.rs` | Host-authorized spawn/read/close over the SDK publication; exact configuration selection and product identity mapping. S8–S10/S12/S13 and C2/C3/C6/C13/C14/C17 at the real service/storage boundary; rerun SDK admission races through this consumer. Root/child direct close, deletion and shutdown share the drain. Mode recovery drains the retired tree before a new root at the last committed mode. Exit includes empty-child compatibility and current access/revocation with no model credentials. |
+| D. Product protocol and client; after C's contract | `protocol/product/v1.json`, existing product generator and `nessa-protocol` DTOs; server `product/`; `packages/nessa-client` application/presentation/validation | Publish the single relationship/command/outcome contract and map it without a second parent graph or scheduler. Round-trip compound receipts, lifetime/policy provenance and physical/audit outcomes; reject foreign identities, malformed values and stale control targets. Generated checks and real authenticated socket tests cover S2/S3/S12, C3/C6/C16 and R2/R4/R5. No version bump or legacy path. |
+| E. Nessa delegation tools; after D | Feature-first module in `crates/nessa-mcp/src/`; gateway MCP relay/invocation-binding composition; matching tool/relay tests | Propagate trusted execution/tool correlation, then expose spawn, read/status/wait and child close. Refuse model-originated spawn when correlation is unavailable. Scripted ACP → MCP → gateway → ordinary child → foreground tool result exercises S1/S2/S5/S12 and C1/C2/C6/C12. Exit includes caller loss and parent close while waiting, with no blind replay. Provider-native observation/control stays excluded. |
+| F. Read-only desktop; samples can start earlier, live source after D | #330 model/source/join/settings preview; #331 widget/panel/ordinary transcript; #332 parent accessory; `src/desktop/subagents/`, desktop composition and `verification/desktop/` | R7–R10, readable closed history and actual inherited modes. Real commands retain canonical ids. Extend the signed-out scripted runner and checklist for parent/child selection, review attribution and cascade outcomes in both engines; samples stay labelled. A read-only live view completes this UI milestone without a child composer. |
+| G. Messaging, asynchronous reports and experiment adapter; after E/F | Ordinary SDK/gateway submission owners; client commands; shared desktop outbox behavior; #337 source through the subagents barrel | Enable send/steer only from writable capability; R6 and C11/C12 cover report identity, uncertain admission and suppression without reopening. Experiment code consumes the source and ordinary commands. This extension is outside the first runtime milestone and does not block A–F. |
+
+Separate structural extraction from behavior where the existing owner needs it.
+A–B may be split further, but no runnable child is published until B's creation
+fence and cleanup ownership are present. D can author its schema/tests against
+C's settled contract; live routing waits for C. Sample F work can proceed against
+its port, while its live adapter waits for D. This dependency order allows useful
+cloud work without shipping an unowned-child window.
+
+### Cloud checks and supported environments
+
+Portable fixture inspection runs on bare Node 24, without `node_modules`, provider
+installation or account credentials. Rust ownership/storage and gateway contract
+tests run with the repository's Rust toolchain on Linux, macOS and Windows using
+controlled providers. Physical subprocess/ACP cascade and the Nessa MCP tool
+milestone initially target Linux and macOS; `check-mcp.mjs` explicitly skips
+Windows native supervision. A portable test pass is not a Windows tool-support
+claim. Chromium and WebKit checks require installed Playwright browsers and the
+repository frontend dependencies; Linux cloud workers use a display/virtual
+display as required by the runner. Native macOS WKWebView and live account-bound
+provider checks remain separate evidence, with exclusions recorded on the slice.
+
+Run from the checkout root. The fixture commands above are independent of the
+runtime; the commands below are current entry points for the corresponding
+slices, not claims that their proposed subagent cases exist yet:
+
+```sh
+# A/B: lint before tests; documentation links and domain coverage remain gates.
+cargo fmt --all -- --check
+cargo clippy -p nessa-sdk --all-targets -- -D warnings
+cargo test -p nessa-sdk
+node scripts/check-sdk-docs.mjs
+bash scripts/check-sdk-domain-coverage.sh
+
+# C/D: CI package selection also checks unified dependency features.
+cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk --all-targets -- -D warnings
+node scripts/cargo-test-parallel.mjs --concurrency 2 -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk
+pnpm protocol:check
+pnpm client:typecheck
+pnpm client:test
+
+# E: Linux/macOS process boundary. F and wire/client changes use frontend checks.
+node scripts/check-mcp.mjs
+pnpm frontend:check
+pnpm test:e2e:scripted -- --mode prod --evidence /tmp/subagents-scripted
+```
+
+The coverage command needs `cargo-llvm-cov`/LLVM tools as in the existing CI job;
+the pnpm commands need the locked dependencies and configured UI checkout. Add
+the new deterministic cases to these owning suites and the subagent scenario to
+the existing scripted aggregate. A command that skips its required environment
+is reported as unverified. Do not require cloud workers to run live capture or
+install signed-in provider harnesses to validate the runtime contract.
+
+Each slice handoff records its base/head, owned paths, table rows with actual test
+names, commands/environment/results and remaining capability exclusions. The
+review uses the canonical [local gate](../../../CODING_STANDARDS.md#local-code-review-gate).
+Update SDK guides/module maps and product/desktop maps as their implementations
+land. The plan PR itself changes no runtime authority and advertises no new live
+capability.
+
+## Completion and scope limits
+
+The first working runtime milestone is a parent that starts ordinary children
+under its effective approval configuration, exposes real histories/outcomes and
+closes the complete owned tree. Durable retries and recovery preserve ownership.
+It completes A–F: a trusted tool can create and observe a child, the live read-only
+desktop shows its ordinary history and reviews, and parent close drains siblings,
+grandchildren and in-flight constructors. The state-table tests assigned to those
+slices, reload/failure cases and gateway-backed evidence accompany the desktop
+cases. Every shipped binding declares exact inherited-mode support and proves
+physical tree cleanup; an unsupported binding returns the typed refusal.
+
+Detached children, reparenting, live tree-wide policy changes, copied approval
+grants, opaque provider-context cloning and universal control of provider-native
+subagents are outside the first implementation. Numerical defaults for new tree
+limits are selected and published by the runtime slice.
+
+A sample panel is a valid UI slice; it does not complete runtime subagents. This
+proposed design and named regression cases are not implementation evidence.

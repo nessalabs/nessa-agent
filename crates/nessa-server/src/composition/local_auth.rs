@@ -253,6 +253,7 @@ pub(super) async fn product_state(
     // and that answer belongs in what setup is told. Nothing else between here
     // and its use depends on the order.
     let packaged_agents = bundle.is_some();
+    let limits = settings.limits()?;
     let (conversations, agent_probe, warm_ups, mcp) = match (&settings.agents, receivers) {
         (Some(agents), Some(receivers)) => {
             let mut built = conversations(
@@ -262,6 +263,7 @@ pub(super) async fn product_state(
                 agent_credentials.clone(),
                 packaged_agents,
                 record_origin.clone(),
+                limits.read_work_budget(),
             )
             .await?;
             (
@@ -311,6 +313,7 @@ pub(super) async fn product_state(
     )
     .with_admin(admin)
     .with_settings(settings.session()?)
+    .with_limits(limits)
     .with_browser_sessions(Arc::new({
         let path = directory.join("browser-sessions.jsonl");
         PersistentSessions::open(&path, SystemClock.unix_seconds())
@@ -463,6 +466,7 @@ async fn conversations(
     _credentials: Arc<dyn AgentCredentialSource>,
     _packaged_agents: bool,
     _record_origin: RecordId,
+    _read_work_budget: std::time::Duration,
 ) -> Result<BuiltConversations, RunError> {
     Err(RunError::Agent(
         "ACP agents require Unix process supervision".into(),
@@ -765,6 +769,7 @@ async fn conversations(
     credentials: Arc<dyn AgentCredentialSource>,
     packaged_agents: bool,
     record_origin: RecordId,
+    read_work_budget: std::time::Duration,
 ) -> Result<BuiltConversations, RunError> {
     let mut warm_ups = Vec::new();
     // The gateway holds the one connection to each MCP server (ADR 344), so
@@ -944,11 +949,11 @@ async fn conversations(
         .map_err(|error| RunError::Agent(error.to_string()))?;
     let record_watches = Arc::new(NessaRecordWatches::new(storage.clone()));
     let catalogue_watches: Arc<dyn WatchCatalogue> = metadata.clone();
-    let record_reader = Arc::new(NessaRecordReadSource::new(
-        storage.clone(),
-        record_origin.clone(),
-        Handle::current(),
-    ));
+    let record_reader = Arc::new(
+        NessaRecordReadSource::new(storage.clone(), record_origin.clone(), Handle::current())
+            .with_work_budget(read_work_budget)
+            .map_err(|error| RunError::RuntimeConfig(error.to_string()))?,
+    );
     let catalogue_reader = Arc::new(NessaCatalogueReadSource::new(
         metadata.clone(),
         record_origin,
