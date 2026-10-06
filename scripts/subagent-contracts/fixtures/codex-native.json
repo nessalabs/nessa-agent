@@ -1,0 +1,319 @@
+{
+  "source": {
+    "kind": "live-provider-acp",
+    "capturedAt": "2026-10-06T05:59:12.086Z",
+    "adapter": "@agentclientprotocol/codex-acp@1.12.0",
+    "adapterSha256": "f45a64dc3a994556ebdb688dc8d59b86945a9b2f940a3e3e545739dd265a7cc5",
+    "lockSha256": "e3bf37b4b3b373ec6d45cd23d564f0df271ebe8411d1cba75abefe073bb4f141",
+    "probeSha256": "b1dfad7fff004271b3c7ed801e96b67f30eab0a5c59506fea8c2da4794e3efe8",
+    "model": "gpt-5.6-luna",
+    "platform": "darwin/arm64",
+    "declaredClientCapabilities": {
+      "subagents": {},
+      "fs": {
+        "readTextFile": false,
+        "writeTextFile": false
+      },
+      "terminal": false
+    },
+    "agentInfo": {
+      "name": "@agentclientprotocol/codex-acp",
+      "title": "Codex",
+      "version": "1.12.0"
+    },
+    "sessionCapabilities": {
+      "resume": {},
+      "list": {},
+      "close": {},
+      "delete": {},
+      "fork": {},
+      "additionalDirectories": {},
+      "subagents": {}
+    },
+    "initialMode": "read-only",
+    "modeConfig": {
+      "id": "mode",
+      "name": "Mode",
+      "description": "Approval and sandboxing preset for the session",
+      "category": "mode",
+      "type": "select",
+      "currentValue": "read-only",
+      "options": [
+        {
+          "value": "read-only",
+          "name": "Ask for approval",
+          "description": "Always ask to edit external files and use the internet",
+          "_meta": {
+            "kind": "standard"
+          }
+        },
+        {
+          "value": "agent",
+          "name": "Approve for me",
+          "description": "Only ask for actions detected as potentially unsafe",
+          "_meta": {
+            "kind": "auto_review"
+          }
+        },
+        {
+          "value": "agent-full-access",
+          "name": "Full access",
+          "description": "Unrestricted access to the internet and any file on your computer",
+          "_meta": {
+            "kind": "full_access"
+          }
+        }
+      ]
+    },
+    "prompt": "Use your native subagent capability to spawn one child agent. Tell the child to reply with exactly CHILD_DONE without tools, files, network, or commands. Wait for the child to finish, close it if a close operation is available, then reply exactly PARENT_DONE. Do not perform any other actions.",
+    "parentClose": {
+      "kind": "rpc_response",
+      "result": {}
+    },
+    "permissionRequests": 0,
+    "nativeSessionUpdates": 0,
+    "providerVersion": "codex-cli 0.154.0"
+  },
+  "outcome": {
+    "kind": "completed",
+    "parent": "identity-1",
+    "child": "identity-3",
+    "tools": ["spawnAgent", "wait", "closeAgent"],
+    "activeCalls": 0,
+    "stopReason": "end_turn"
+  },
+  "frames": [
+    {
+      "direction": "from-agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "identity-1",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "identity-2",
+            "kind": "other",
+            "title": "spawnAgent",
+            "status": "in_progress",
+            "rawInput": {
+              "prompt": "<delegated task omitted>",
+              "senderThreadId": "identity-1",
+              "receiverThreadIds": [],
+              "agentsStates": {},
+              "model": "<provider model omitted>",
+              "reasoningEffort": "<provider effort omitted>",
+              "status": "inProgress"
+            },
+            "_meta": {
+              "codex": {
+                "collaboration": {
+                  "tool": "spawnAgent",
+                  "senderThreadId": "identity-1",
+                  "receiverThreadIds": []
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "from-agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "identity-1",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "identity-2",
+            "title": "spawnAgent",
+            "status": "completed",
+            "rawInput": {
+              "prompt": "<delegated task omitted>",
+              "senderThreadId": "identity-1",
+              "receiverThreadIds": ["identity-3"],
+              "agentsStates": {
+                "identity-3": {
+                  "status": "pendingInit",
+                  "message": null
+                }
+              },
+              "model": "<provider model omitted>",
+              "reasoningEffort": "<provider effort omitted>",
+              "status": "completed"
+            },
+            "_meta": {
+              "codex": {
+                "collaboration": {
+                  "tool": "spawnAgent",
+                  "senderThreadId": "identity-1",
+                  "receiverThreadIds": ["identity-3"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "from-agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "identity-1",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "identity-4",
+            "kind": "other",
+            "title": "wait",
+            "status": "in_progress",
+            "rawInput": {
+              "prompt": null,
+              "senderThreadId": "identity-1",
+              "receiverThreadIds": ["identity-3"],
+              "agentsStates": {},
+              "model": null,
+              "reasoningEffort": null,
+              "status": "inProgress"
+            },
+            "_meta": {
+              "codex": {
+                "collaboration": {
+                  "tool": "wait",
+                  "senderThreadId": "identity-1",
+                  "receiverThreadIds": ["identity-3"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "from-agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "identity-1",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "identity-4",
+            "title": "wait",
+            "status": "completed",
+            "rawInput": {
+              "prompt": null,
+              "senderThreadId": "identity-1",
+              "receiverThreadIds": ["identity-3"],
+              "agentsStates": {
+                "identity-3": {
+                  "status": "completed",
+                  "message": "CHILD_DONE"
+                }
+              },
+              "model": null,
+              "reasoningEffort": null,
+              "status": "completed"
+            },
+            "_meta": {
+              "codex": {
+                "collaboration": {
+                  "tool": "wait",
+                  "senderThreadId": "identity-1",
+                  "receiverThreadIds": ["identity-3"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "from-agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "identity-1",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "identity-5",
+            "kind": "other",
+            "title": "closeAgent",
+            "status": "in_progress",
+            "rawInput": {
+              "prompt": null,
+              "senderThreadId": "identity-1",
+              "receiverThreadIds": ["identity-3"],
+              "agentsStates": {},
+              "model": null,
+              "reasoningEffort": null,
+              "status": "inProgress"
+            },
+            "_meta": {
+              "codex": {
+                "collaboration": {
+                  "tool": "closeAgent",
+                  "senderThreadId": "identity-1",
+                  "receiverThreadIds": ["identity-3"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "from-agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "identity-1",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "identity-5",
+            "title": "closeAgent",
+            "status": "completed",
+            "rawInput": {
+              "prompt": null,
+              "senderThreadId": "identity-1",
+              "receiverThreadIds": ["identity-3"],
+              "agentsStates": {
+                "identity-3": {
+                  "status": "completed",
+                  "message": "CHILD_DONE"
+                }
+              },
+              "model": null,
+              "reasoningEffort": null,
+              "status": "completed"
+            },
+            "_meta": {
+              "codex": {
+                "collaboration": {
+                  "tool": "closeAgent",
+                  "senderThreadId": "identity-1",
+                  "receiverThreadIds": ["identity-3"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "from-agent",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "stopReason": "end_turn"
+        }
+      }
+    }
+  ]
+}
