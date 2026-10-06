@@ -122,6 +122,11 @@ describe("seeded workspace", () => {
     const long = built.transcripts.get("load-00000")
     expect(again.transcripts.get("load-00000")).toEqual(long)
     expect(long?.messages).toHaveLength(8)
+    const newest = built.index.sessions[0]
+    expect(long?.messages.at(-1)?.at).toBe(newest?.updatedAt)
+    expect(long?.messages[0]?.at).toBe((newest?.updatedAt ?? 0) - 7 * 60_000)
+    expect(newest?.startedAt).toBeLessThanOrEqual(long?.messages[0]?.at ?? 0)
+    expect((long?.messages.at(-1)?.at ?? 0) <= asked.now).toBe(true)
     const longPart = long?.messages
       .flatMap((message) => message.parts)
       .find((part) => part.kind === "text" && part.text.length === 4_000)
@@ -158,6 +163,21 @@ describe("seeded workspace", () => {
     expect((await source.index()).sessions).toHaveLength(10_000)
     expect((await source.transcript("load-00000")).messages).toHaveLength(8)
     source.dispose()
+  })
+
+  it("ends a long transcript at updatedAt and starts the session no later than the first message", () => {
+    const built = seededWorkspace(
+      spec({ sessions: 1, longTranscripts: 1, messages: 80, messageCharacters: 40 }),
+    )
+    const session = built.index.sessions[0]
+    const messages = built.transcripts.get("load-00000")?.messages
+    expect(messages).toHaveLength(80)
+    expect(session?.updatedAt).toBe(now)
+    expect(messages?.at(-1)?.at).toBe(session?.updatedAt)
+    expect(messages?.[0]?.at).toBe(now - 79 * 60_000)
+    expect(session?.startedAt).toBe(messages?.[0]?.at)
+    for (let index = 1; index < (messages?.length ?? 0); index += 1)
+      expect((messages?.[index]?.at ?? 0) - (messages?.[index - 1]?.at ?? 0)).toBe(60_000)
   })
 
   it("stores a plain part at the length the spec asked for", () => {

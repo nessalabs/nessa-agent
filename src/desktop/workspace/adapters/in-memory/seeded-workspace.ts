@@ -242,21 +242,23 @@ function messagesFor(
   count: number,
   characters: number,
 ): readonly Message[] {
-  const openingMessage = userMessage(`${sessionId}-1`, at, text)
-  if (count <= 1) return [openingMessage]
-  const rest: Message[] = []
-  for (let index = 1; index < count; index += 1) {
+  const messages: Message[] = []
+  for (let index = 0; index < count; index += 1) {
     const id = `${sessionId}-${index + 1}`
-    const when = at + index * minute
+    const when = at - (count - 1 - index) * minute
+    if (index === 0) {
+      messages.push(userMessage(id, when, text))
+      continue
+    }
     const last = index === count - 1
     const body = last ? longText(characters) : fillerLine
-    rest.push(
+    messages.push(
       index % 2 === 1
         ? agentTurn(id, when, [{ kind: "text", text: body }])
         : userMessage(id, when, body),
     )
   }
-  return [openingMessage, ...rest]
+  return messages
 }
 
 function transcriptUtf8Bytes(transcript: Transcript): number {
@@ -419,7 +421,6 @@ export function seededWorkspace(
   for (let index = 0; index < spec.sessions; index += 1) {
     const built = sessionAt(index, cursor, spec, model)
     cursor = built.cursor
-    sessions.push(built.session)
     const long = index < spec.longTranscripts
     const transcript = transcriptFor(
       built.session,
@@ -427,7 +428,13 @@ export function seededWorkspace(
       long ? spec.messages : 1,
       long ? spec.messageCharacters : 0,
     )
-    transcripts.set(built.session.id, transcript)
+    const firstAt = transcript.messages[0]?.at
+    const session =
+      firstAt !== undefined && firstAt < built.session.startedAt
+        ? { ...built.session, startedAt: firstAt }
+        : built.session
+    sessions.push(session)
+    transcripts.set(session.id, transcript)
     if (long) longTranscripts.push(transcript)
   }
   const kept = consistentIndex({
