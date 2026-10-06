@@ -86,11 +86,6 @@ const isJsonArgument = (text: string): boolean => {
   }
 }
 
-/**
- * A tool name and a JSON argument: the name through `shownName`, the
- * argument through `shownJson`. Anything else: each bidi control as its
- * `\u` escape, in place.
- */
 export function shownCommand(command: string): string {
   const space = command.indexOf(" ")
   if (space > 0) {

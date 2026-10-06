@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 
 import { bidiControls } from "../../../src/desktop/workspace/ui/transcript/bidi-controls.mjs"
-import { attempt, CannotRun, resultOfThrown } from "./lib/cli.mjs"
+import { attempt, CannotRun, log, resultOfThrown } from "./lib/cli.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { content, css, keys, names } from "./lib/selectors.mjs"
@@ -66,7 +66,7 @@ await main(meta, async ({ options, rep, url }) => {
       const base = { engine, layout }
       let opened
       try {
-        opened = await openPage(browser, { url, layout })
+        opened = await openPage(browser, { url, layout, lines: { engine, layout } })
       } catch (error) {
         rep.add(resultOfThrown({ ...base, name: "command" }, error))
         continue
@@ -97,7 +97,7 @@ await main(meta, async ({ options, rep, url }) => {
             .screenshot({
               path: join(options.shots, `card-${engine}-${layout}.png`),
             })
-            .catch(() => {})
+            .catch((error) => log(`screenshot card: ${error.message}`))
         }
 
         await page.keyboard.press(keys.overview)
@@ -157,19 +157,16 @@ await main(meta, async ({ options, rep, url }) => {
             .screenshot({
               path: join(options.shots, `peek-${engine}-${layout}.png`),
             })
-            .catch(() => {})
+            .catch((error) => log(`screenshot peek: ${error.message}`))
           await row
             .first()
             .screenshot({
               path: join(options.shots, `row-${engine}-${layout}.png`),
             })
-            .catch(() => {})
+            .catch((error) => log(`screenshot row: ${error.message}`))
         }
         await opened.settleRequests()
-        return {
-          failures: [...failures, ...opened.errors.splice(0)],
-          harmless: opened.harmless.splice(0),
-        }
+        return { failures }
       })
       await opened.close()
     }

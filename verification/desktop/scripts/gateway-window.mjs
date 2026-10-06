@@ -58,7 +58,7 @@ import {
 } from "./lib/gateway-view.mjs"
 import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
-import { css } from "./lib/selectors.mjs"
+import { css, selectorFor } from "./lib/selectors.mjs"
 import { inside, settled } from "./lib/workspace.mjs"
 
 const APP_TOOL = "review_rows"
@@ -459,10 +459,13 @@ const checks = {
     await row.click()
     await settled(page)
     const drawn = await page
-      .waitForSelector(css.appFrameIn("inline"), { timeout: 30_000, state: "attached" })
+      .waitForSelector(selectorFor.appFrameIn("inline"), {
+        timeout: 30_000,
+        state: "attached",
+      })
       .then(() => true)
       .catch(() => false)
-    const frames = drawn ? (await page.$$(css.appFrameIn("inline"))).length : 0
+    const frames = drawn ? (await page.$$(selectorFor.appFrameIn("inline"))).length : 0
     const once = oneMount(frames)
     if (once) failures.push(once)
     if (!drawn) return { seen: { frames }, failures }
@@ -481,7 +484,7 @@ const checks = {
     }
     const { app } = framed
     await app
-      .waitForSelector(css.reviewState("live"), { timeout: 20_000 })
+      .waitForSelector(selectorFor.reviewState("live"), { timeout: 20_000 })
       .catch(() => {})
     const seen = await app.evaluate(() => ({
       state: document.body.getAttribute("data-review-state"),
@@ -571,7 +574,7 @@ await main(
               mkdirSync(options.shots, { recursive: true })
               const surface =
                 name === "apps"
-                  ? opened.page.locator(css.appFrameIn("inline")).first()
+                  ? opened.page.locator(selectorFor.appFrameIn("inline")).first()
                   : opened.page
               await surface
                 .screenshot({
