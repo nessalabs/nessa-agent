@@ -262,9 +262,13 @@ test("the writer refuses text that is not plain JSON with a sentence", () => {
   )
 })
 
-/** A copy of the writer, its table and tsconfig.json in a fresh directory whose name has a space. */
-function scratchCheckout() {
-  const root = mkdtempSync(join(tmpdir(), "nessa ui paths "))
+/**
+ * A copy of the writer, its table and tsconfig.json in a fresh directory whose
+ * name has a space. `parent` is kept as given, so a symlink in it stays in the
+ * path the test holds.
+ */
+function scratchCheckout(parent = tmpdir()) {
+  const root = mkdtempSync(join(parent, "nessa ui paths "))
   const here = (name) => fileURLToPath(new URL(name, import.meta.url))
   cpSync(here("./nessa-ui-paths.mjs"), join(root, "scripts", "nessa-ui-paths.mjs"))
   cpSync(
@@ -278,6 +282,35 @@ function scratchCheckout() {
       cwd: tmpdir(),
     })
   return { root, tsconfig: join(root, "tsconfig.json"), run }
+}
+
+/**
+ * Two parents for a scratch checkout. One path is already canonical. The other
+ * reaches its directory through a symlink, which is how macOS spells
+ * `tmpdir()` (`/var` → `/private/var`). Linux CI has no such symlink, so the
+ * test builds one. Removing a parent removes the checkout made under it.
+ */
+function scratchParents() {
+  const canonical = realpathSync(mkdtempSync(join(tmpdir(), "nessa-ui-canon-")))
+  const real = realpathSync(mkdtempSync(join(tmpdir(), "nessa-ui-real-")))
+  const linkParent = mkdtempSync(join(tmpdir(), "nessa-ui-alias-"))
+  const link = join(linkParent, "var")
+  symlinkSync(real, link)
+  return [
+    {
+      kind: "canonical",
+      directory: canonical,
+      remove: () => rmSync(canonical, { recursive: true, force: true }),
+    },
+    {
+      kind: "aliased",
+      directory: link,
+      remove: () => {
+        rmSync(linkParent, { recursive: true, force: true })
+        rmSync(real, { recursive: true, force: true })
+      },
+    },
+  ]
 }
 
 test("the writer, run anywhere, repairs a drifted tsconfig.json and touches a current one not at all", () => {
@@ -301,24 +334,30 @@ test("the writer, run anywhere, repairs a drifted tsconfig.json and touches a cu
 })
 
 test("pnpm ui:paths, refused, says why in one line naming the file, exits 1, and leaves it as it was", () => {
-  const { root, tsconfig, run } = scratchCheckout()
+  const parents = scratchParents()
   try {
-    const text = "{ // a comment\n}\n"
-    writeFileSync(tsconfig, text)
-    const refused = run()
-    assert.equal(refused.status, 1)
-    const line = refused.stderr.trim()
-    assert.equal(line.split("\n").length, 1, refused.stderr)
-    const reason = ": tsconfig.json is not plain JSON"
-    assert.ok(line.includes(reason), refused.stderr)
-    const named = line.slice(0, line.indexOf(reason))
-    // macOS reports the real path (`/private/var/...`) for a file the test
-    // created under `tmpdir()` (`/var/...`, a symlink). The file named is the
-    // file written.
-    assert.equal(realpathSync(named), realpathSync(tsconfig), refused.stderr)
-    assert.equal(readFileSync(tsconfig, "utf8"), text)
+    for (const parent of parents) {
+      const { tsconfig, run } = scratchCheckout(parent.directory)
+      const text = "{ // a comment\n}\n"
+      writeFileSync(tsconfig, text)
+      const refused = run()
+      assert.equal(refused.status, 1, parent.kind)
+      const line = refused.stderr.trim()
+      assert.equal(line.split("\n").length, 1, refused.stderr)
+      const reason = ": tsconfig.json is not plain JSON"
+      assert.ok(line.includes(reason), refused.stderr)
+      const named = line.slice(0, line.indexOf(reason))
+      // The checkout path and the path in the message can be two spellings
+      // of one file. The message is the writer's; the comparison is by file.
+      assert.equal(
+        realpathSync(named),
+        realpathSync(tsconfig),
+        `${parent.kind}\n${refused.stderr}`,
+      )
+      assert.equal(readFileSync(tsconfig, "utf8"), text, parent.kind)
+    }
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    for (const parent of parents) parent.remove()
   }
 })
 
