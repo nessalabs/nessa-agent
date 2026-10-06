@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  rmdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -128,13 +129,33 @@ test("a named coverage target is kept and is not the workspace target", () => {
   }
 })
 
+/** Remove `directory` when it is empty. A directory that has gained a file stays. */
+function removeIfEmpty(directory) {
+  try {
+    rmdirSync(directory)
+  } catch {
+    // missing, not a directory, or not empty
+  }
+}
+
+test("a directory this test created is removed only while it is empty", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "coverage-empty-"))
+  const artifact = path.join(directory, "artifact")
+  writeFileSync(artifact, "x")
+  removeIfEmpty(directory)
+  assert.equal(spawnSync("test", ["-f", artifact]).status, 0)
+  rmSync(artifact)
+  removeIfEmpty(directory)
+  assert.equal(spawnSync("test", ["!", "-e", directory]).status, 0)
+})
+
 test("the workspace target directory is refused before cargo runs", () => {
-  const existed = spawnSync("test", ["-d", workspaceTarget]).status === 0
   const marker = path.join(tmpdir(), `coverage-marker-${process.pid}-refuse`)
   rmSync(marker, { force: true })
   const cargo = fakeCargo(marker)
   const linkParent = mkdtempSync(path.join(tmpdir(), "coverage-workspace-alias-"))
   const alias = path.join(linkParent, "target")
+  let createdByTest = false
   try {
     const spelled = runCoverage(cargo, workspaceTarget)
     assert.equal(spelled.status, 1)
@@ -142,9 +163,10 @@ test("the workspace target directory is refused before cargo runs", () => {
     assert.equal(spawnSync("test", ["!", "-e", marker]).status, 0)
 
     // A dangling symlink is not a directory, so the alias is created only once
-    // the workspace target exists. The script then refuses that same directory.
+    // the workspace target exists. Only this empty directory is ours to remove.
     if (spawnSync("test", ["-d", workspaceTarget]).status !== 0) {
       mkdirSync(workspaceTarget)
+      createdByTest = true
     }
     symlinkSync(workspaceTarget, alias)
     rmSync(marker, { force: true })
@@ -155,7 +177,7 @@ test("the workspace target directory is refused before cargo runs", () => {
     assert.equal(spawnSync("test", ["-d", workspaceTarget]).status, 0)
   } finally {
     rmSync(linkParent, { recursive: true, force: true })
-    if (!existed) rmSync(workspaceTarget, { recursive: true, force: true })
+    if (createdByTest) removeIfEmpty(workspaceTarget)
     rmSync(cargo.directory, { recursive: true, force: true })
     rmSync(marker, { force: true })
   }
