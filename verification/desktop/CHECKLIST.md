@@ -15,6 +15,20 @@ desktop surface_ and the workspace section).
 Every scripted item runs in **Chromium and WebKit** unless it says otherwise.
 The app ships in WKWebView; Chrome alone is not evidence.
 
+## Seeded workspace load
+
+Opt-in. Not part of `run-all`. The contract is
+[UI workspace load](../../docs/design/ui-workspace-load.md).
+
+- [ ] **Rendered count matches the generated count** on the Agents overview
+  after Show All, on the columns session list for the opening channel, and
+  on the sidebar branch after Show all. The collapsed branch is short of
+  that channel. The page does not call `conversation.list`.
+  _Check:_ `workspace-load.mjs` (defaults: `--mode prod`, the dry run of
+  10,000 sessions). Chromium records split and drag frames through
+  `lib/perf.mjs` at 4× after calibration. A frame over 50 ms is a finding,
+  not a failure of this check. WebKit runs the journeys without that throttle.
+
 ## Performance budget
 
 _ADR 238 › Context_: "Calm means no dropped frames" — no frame over 50 ms, in a

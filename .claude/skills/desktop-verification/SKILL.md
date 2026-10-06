@@ -32,6 +32,7 @@ This skill is how to use them; it restates neither.
 | the same, once the window does read a gateway: its handshake, the conversation list, a transcript, a turn made elsewhere (needs the agent signed in on this machine, or `--scripted` for none; not in `run-all.mjs`) | `gateway-window.mjs` |
 | UI, gateway, ACP, or MCP behavior, signed out: a permission, a failed turn, a cancel, in Chromium and WebKit, with one verdict and an evidence directory | `pnpm test:e2e:scripted` (`scripted-e2e.mjs`; `--mode prod` for a production build) |
 | motion, FLIP, rendering, selectors, anything on the budget's list, or a perf claim | `perf-budget.mjs` (production build) |
+| a seeded large workspace (opt-in; not in `run-all.mjs`) | `workspace-load.mjs` |
 | a UI branch before hand-off | `run-all.mjs` (the functional checks above, not `gateway-window.mjs` or `pnpm test:e2e:scripted`; gateway-window needs a signed-in agent unless `--scripted`, and runs on its own) |
 
 Then walk the CHECKLIST groups the change touches and do their manual items.

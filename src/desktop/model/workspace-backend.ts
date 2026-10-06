@@ -15,10 +15,16 @@ import type { HostKind } from "../../host/features"
  *   the gateway until it does again.
  * - `sample`: any other browser page — the in-memory sample, which is what
  *   the verification fixtures open.
+ * - `seeded`: a browser page whose query names a seeded run (`?seeded`),
+ *   the in-memory measurement workspace. `?gateway` wins, so that page is
+ *   never a seeded run.
  */
-export type WorkspaceBackend = "host" | "browser" | "sample"
+export type WorkspaceBackend = "host" | "browser" | "sample" | "seeded"
 
 export function workspaceBackend(host: HostKind, search: string): WorkspaceBackend {
   if (host !== "browser") return "host"
-  return new URLSearchParams(search).has("gateway") ? "browser" : "sample"
+  const params = new URLSearchParams(search)
+  if (params.has("gateway")) return "browser"
+  if (params.has("seeded")) return "seeded"
+  return "sample"
 }

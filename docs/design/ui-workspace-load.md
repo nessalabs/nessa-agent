@@ -1,12 +1,16 @@
 # UI workspace load (#590)
 
-Status: investigation and a seeded builder. No browser load run is claimed.
-Proposed journeys below are not implemented. This document does not change
+Status: investigation, a seeded builder, and an opt-in browser measurement
+(`verification/desktop/scripts/workspace-load.mjs`, #595). That script is not
+part of `run-all`. It does not call `conversation.list`. Frame numbers from a
+run live on the pull request that recorded them. This document does not change
 the frame budget, the list bound, or the scope of #370 or #583.
 
 The builder is `seededWorkspace` in
-`src/desktop/workspace/adapters/in-memory/seeded-workspace.ts`. The window
-still boots `sampleWorkspace`. Nothing in this change writes a fixture file.
+`src/desktop/workspace/adapters/in-memory/seeded-workspace.ts`. The sample boot
+is unchanged. A browser page whose query names a seeded run
+(`seededWorkspaceSpec`) boots that builder through `src/desktop/seeded-window.ts`.
+Nothing in this change writes a fixture file.
 
 ## What load coverage exists
 
@@ -15,10 +19,11 @@ still boots `sampleWorkspace`. Nothing in this change writes a fixture file.
 | `verification/desktop/scripts/perf-budget.mjs` | Production desktop, sample workspace, calibrated 4× CPU. Chromium only: CDP throttling and Long Animation Frames. The interactions and the 50 ms unrounded-frame bound are the performance section of `verification/desktop/CHECKLIST.md`. | The sample index: 10 sessions in `starredSamples` and 18 in `labsSamples`. | Script JSON on stdout. #370 and #583 quote drag rows from their own runs. |
 | `verification/desktop/scripts/message-sync.mjs` | Production desktop delivery of ready gateway text (#532). Included in `run-all`. Chromium is throttled; WebKit is measured without that throttle. | 30 active and 15 held-list/read samples per row, not a large catalogue. | `docs/reviews/startup-latency.md` and `verification/desktop/evidence/message-sync/`. |
 | `verification/desktop/scripts/run-all.mjs` | Functional browser checks plus `perf-budget`. Several checks start a disposable gateway (`gateway-window.mjs`, `scripted-scenarios.mjs`, `scripted-e2e.mjs`). | One conversation or a short scripted scenario. | Each check's JSON. |
+| `verification/desktop/scripts/workspace-load.mjs` | Production preview of a seeded in-memory workspace. Chromium frames use the same 50 ms budget, calibration, and 4× throttle as `perf-budget.mjs`. WebKit runs the journeys without that throttle. Opt-in: not in `run-all`. | The dry run: seed 590, 10,000 sessions, one long transcript. Pass is the rendered count on the overview after Show All, the columns session list, and the sidebar after Show all. | Script JSON. Screenshots under `verification/desktop/evidence/workspace-load/`. |
 | `inMemorySource` | The `WorkspaceSource` port with the sample index, used by verification and previews. | The sample index above. | `src/desktop/workspace/adapters/in-memory/in-memory-source.test.ts`. |
 | Gateway unit tests | `conversation.list` at `MAX_LISTED_CONVERSATIONS`, catalogue pages at `MAX_CATALOGUE_ENTRIES`. | The bound, not 10,000. | `crates/nessa-server/tests/conversation/listing.rs`, catalogue tests. |
 
-No desktop script builds or renders 10,000 chats. `message-sync` is a delivery-timing check. A passing frame budget on the sample workspace is not a large-workspace result.
+`workspace-load.mjs` is the seeded measurement. It is not a gateway run. `message-sync` is a delivery-timing check. A passing frame budget on the sample workspace is not a large-workspace result.
 
 GitHub workflows in this repository set `node-version: 24`. Desktop evidence on #583 records Node 26.8.1 for that run. A later load run has to print `process.version`, the browser, and the UI revision it actually used. This investigation did not launch a browser.
 
@@ -89,7 +94,7 @@ sequenceDiagram
     participant Mem as inMemorySource
     participant UI as Desktop window
     participant GW as Disposable gateway
-    Note over Gen,UI: Implemented builder, not a browser run
+    Note over Gen,UI: Seeded page, workspace-load.mjs, no conversation.list
     Gen->>Mem: index and transcripts for one seed
     Mem->>UI: WorkspaceSource, no conversation.list
     Note over GW,UI: Proposed, not implemented
@@ -110,9 +115,9 @@ The dry run is `src/desktop/workspace/adapters/in-memory/seeded-workspace.test.t
 
 That test proves the UI seam can hold the dataset. It does not prove a frame time, a DOM size, or a gateway round trip.
 
-## Proposed journeys
+## Journeys
 
-Not implemented. A later run generates with an explicit seed at the start, records the seed, `seeded-workspace`, the git commit, counts, byte sizes, `process.version`, the browser, and the UI revision, and deletes disposable gateway state afterward. It does not check in the dataset.
+`workspace-load.mjs` generates with an explicit seed at the start and records the seed, `seeded-workspace`, the git commit, counts, byte sizes, `process.version`, the browser, and the UI revision (`import.meta.url` on the seeded page). It does not check in the dataset and it does not start a gateway. The gateway half of the diagram above is still #596.
 
 | Journey | Surface that can show the count | Notes |
 | --- | --- | --- |
@@ -132,7 +137,7 @@ Production preview, both layouts the frame budget already uses, Chromium and Web
 
 ## Gaps
 
-- No browser measurement of 10,000 rows, of a long transcript, or of drag on that workspace.
+- The seeded browser measurement is `workspace-load.mjs`. A recorded run's frame numbers are on the pull request that executed it. They are not copied here.
 - No insert of 10,000 gateway conversations, and no timed catalogue walk.
 - The desktop cannot observe 10,000 summaries through `conversation.list`.
 - A UI transcript longer than 24 messages or 8192-byte parts is a renderer fixture. It is not what `conversation.read` returns.
@@ -143,5 +148,5 @@ Production preview, both layouts the frame budget already uses, Chromium and Web
 
 Filed separately from #590. They do not change #370 or #583.
 
-- #595 measures the desktop UI on the seeded fixture. The script stays opt-in, outside the default `run-all` time. Pass means the rendered count matches the seed on the surface under test. Performance findings from that run are further issues. The fixture is not described as a gateway 10,000-chat test.
+- #595 measures the desktop UI on the seeded workspace. `workspace-load.mjs` stays opt-in, outside the default `run-all` time. Pass means the rendered count matches the generated count on the surface under test. Performance findings from a run are further issues. The run is not a gateway 10,000-chat test.
 - #596 makes the desktop index observe every owned summary. The pass condition is a stored count above 500 where the UI's observed count equals the stored count. Raising `MAX_LISTED_CONVERSATIONS` and still rendering a truncated list is not that result. Listing must not open a provider per row. The live slot cap still bounds how many conversations are open at once.

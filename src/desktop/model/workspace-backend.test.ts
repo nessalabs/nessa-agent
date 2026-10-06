@@ -15,3 +15,12 @@ it("a browser preview reads the gateway only when its address asks (C2, C3)", ()
   expect(workspaceBackend("browser", "?gateways")).toBe("sample")
   expect(workspaceBackend("browser", "?theme=gateway")).toBe("sample")
 })
+
+it("a browser page with ?seeded is the seeded workspace, and ?gateway wins (C4)", () => {
+  expect(workspaceBackend("browser", "?seeded=590")).toBe("seeded")
+  expect(workspaceBackend("browser", "?seeded=590&now=1")).toBe("seeded")
+  expect(workspaceBackend("browser", "?gateway&seeded=590")).toBe("browser")
+  expect(workspaceBackend("browser", "?seeded=590&gateway=1")).toBe("browser")
+  expect(workspaceBackend("browser", "?theme=seeded")).toBe("sample")
+  expect(workspaceBackend("macos", "?seeded=590")).toBe("host")
+})

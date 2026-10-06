@@ -1,8 +1,9 @@
 /**
- * A workspace built during a run for a large-list measurement (#590).
+ * A workspace built during a run for a large-list measurement (#590, #595).
  *
- * The window boots `sampleWorkspace`. This builder is not called from there.
- * It returns the same index and transcript shape `inMemorySource` already
+ * The sample boot does not call this builder. A browser page whose query
+ * names a seeded run does (`seededWorkspaceSpec`, `seeded-window.ts`). It
+ * returns the same index and transcript shape `inMemorySource` already
  * accepts, with titles cut by `titleFrom`. Session ids are load-fixture ids,
  * not gateway conversation UUIDs. The builder does not call the gateway's
  * title, preview, list, or view owners, and it does not write a fixture file.
@@ -93,6 +94,11 @@ export interface SeededWorkspaceReport {
     readonly needsYou: number
   }
   readonly largestChannelSessions: number
+  /** Sessions stored on each channel id, counted from the kept index. */
+  readonly channelSessions: Readonly<Record<string, number>>
+  /** The channel the window opens: the first section's first channel. */
+  readonly openingChannelId: string
+  readonly openingChannelName: string
 }
 
 /**
@@ -404,23 +410,26 @@ function lastSaid(transcript: Transcript): string {
 
 function reportFor(
   spec: SeededWorkspaceSpec,
-  sessions: readonly SessionSummary[],
+  index: WorkspaceIndex,
   longTranscripts: readonly Transcript[],
 ): SeededWorkspaceReport {
   const utf8 = new TextEncoder()
   const statusCounts = { idle: 0, running: 0, needsYou: 0 }
-  const channelCounts = new Map<string, number>()
+  const channelSessions: Record<string, number> = {}
+  for (const channel of index.channels) channelSessions[channel.id] = 0
   let maxTitleCharacters = 0
   let maxPreviewUtf8Bytes = 0
-  for (const session of sessions) {
+  for (const session of index.sessions) {
     if (session.status === "needs-you") statusCounts.needsYou += 1
     else statusCounts[session.status] += 1
-    channelCounts.set(session.channelId, (channelCounts.get(session.channelId) ?? 0) + 1)
+    if (Object.hasOwn(channelSessions, session.channelId))
+      channelSessions[session.channelId] += 1
     if (session.title.length > maxTitleCharacters)
       maxTitleCharacters = session.title.length
     const previewBytes = utf8.encode(session.preview).byteLength
     if (previewBytes > maxPreviewUtf8Bytes) maxPreviewUtf8Bytes = previewBytes
   }
+  const opening = openingChannel(index)
   let longPlainTextCharacters = 0
   let longTranscriptUtf8Bytes = 0
   for (const transcript of longTranscripts) {
@@ -434,8 +443,8 @@ function reportFor(
     algorithm: "mulberry32",
     seed: spec.seed,
     now: spec.now,
-    sessions: sessions.length,
-    channels: channels.length,
+    sessions: index.sessions.length,
+    channels: index.channels.length,
     longTranscripts: longTranscripts.length,
     messages: longTranscripts[0]?.messages.length ?? 0,
     maxTitleCharacters,
@@ -443,8 +452,20 @@ function reportFor(
     longPlainTextCharacters,
     longTranscriptUtf8Bytes,
     statusCounts,
-    largestChannelSessions: Math.max(0, ...channelCounts.values()),
+    largestChannelSessions: Math.max(0, ...Object.values(channelSessions)),
+    channelSessions,
+    openingChannelId: opening.id,
+    openingChannelName: opening.name,
   }
+}
+
+/** The channel a fresh window opens: the first section's first channel. */
+function openingChannel(index: WorkspaceIndex): { id: string; name: string } {
+  const sectionId = index.sections[0]?.id
+  const channel =
+    index.channels.find((each) => each.sectionId === sectionId) ?? index.channels[0]
+  if (!channel) refuse("catalogue")
+  return { id: channel.id, name: channel.name }
 }
 
 /** Build a workspace for `spec`. The same spec returns the same sessions. */
@@ -493,8 +514,39 @@ export function seededWorkspace(
     contradictions: kept.contradictions,
     report: reportFor(
       spec,
-      kept.index.sessions,
+      kept.index,
       longTranscripts.filter((transcript) => keptIds.has(transcript.sessionId)),
     ),
   }
+}
+
+const decimal = /^(0|[1-9][0-9]*)$/
+
+/** A whole decimal from the query. The ranges belong to `accepted`. */
+function decimalField(raw: string | null, reason: SeededWorkspaceReason): number {
+  if (raw === null || !decimal.test(raw)) refuse(reason)
+  const value = Number(raw)
+  if (!Number.isSafeInteger(value)) refuse(reason)
+  return value
+}
+
+/**
+ * The seeded run a page query asks for. No `seeded` key means this page is
+ * not a seeded run. A present key with a missing or non-decimal field
+ * refuses that field. The same spec `seededWorkspace` accepts.
+ */
+export function seededWorkspaceSpec(search: string): SeededWorkspaceSpec | null {
+  const query = search.startsWith("?") ? search.slice(1) : search
+  const params = new URLSearchParams(query)
+  if (!params.has("seeded")) return null
+  const spec: SeededWorkspaceSpec = {
+    seed: decimalField(params.get("seeded"), "seed"),
+    now: decimalField(params.get("now"), "now"),
+    sessions: decimalField(params.get("sessions"), "sessions"),
+    longTranscripts: decimalField(params.get("longTranscripts"), "longTranscripts"),
+    messages: decimalField(params.get("messages"), "messages"),
+    messageCharacters: decimalField(params.get("messageCharacters"), "messageCharacters"),
+  }
+  accepted(spec)
+  return spec
 }
