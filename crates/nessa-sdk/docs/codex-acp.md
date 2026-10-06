@@ -86,6 +86,22 @@ same code the Claude binding runs on. What differs is behind `AcpProfile`:
   this guide does not claim otherwise.
 - Nessa's own instructions reach Codex through `CODEX_CONFIG`'s `instructions`,
   not through the ACP session request, because that is where Codex reads them.
+- **User-configured hooks and the legacy notify command are requested off, and
+  that request is not treated as proof.** `CODEX_CONFIG` is JSON the pinned
+  adapter forwards as the `thread/start` config override: `features.hooks` is
+  `false` and `notify` is `[]`, on every launch including one that also carries
+  instructions. On the pinned loader that override sits above ordinary user and
+  project layers and below legacy managed configuration and MDM, so those later
+  layers can turn either setting back on. ACP exposes no effective hooks or
+  notify value and discards hook events, so their absence is not attestation.
+  Provider builtin cleanup is a separate lifecycle path and is not disabled to
+  make the request look complete. A negotiated session therefore reports native
+  hook suppression as unsupported. The binding does not claim Nessa owns Codex's
+  hook boundary, and it does not refuse startup: the harness has no stronger
+  switch, and refusing every session would drop the binding the request is
+  meant to constrain. Establishing effective suppression before work, including
+  against that legacy managed layer, remains the contract in
+  [ADR 0014](../../../docs/adr/todo/0014-nessa-owned-policy-hooks.md).
 
 `AcpConfig.environment` carries `CODEX_HOME` as this agent's noncredential
 context selector; `credential_environment` carries `CODEX_API_KEY` and
@@ -158,8 +174,11 @@ this client advertises none, a configuration notification arriving while the
 session is still being configured, a permission request carrying its facts in
 `_meta.codex` and both answers to it, an approval no audit sink could record, a
 resumed session being configured again before it is used, the steering extension
-being declined although the adapter offers it, and the instructions reaching the
-provider through its own configuration rather than the session request.
+being declined although the adapter offers it, the instructions reaching the
+provider through its own configuration rather than the session request, and the
+hook request (`features.hooks` false, `notify` empty) being present in
+`CODEX_CONFIG` while the negotiated session reports native hook suppression as
+unsupported.
 Resource-link content is covered by the wire-mapping unit tests rather than
 through a subprocess.
 

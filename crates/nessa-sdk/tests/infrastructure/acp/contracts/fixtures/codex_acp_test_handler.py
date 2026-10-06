@@ -20,6 +20,12 @@ if mode == "instructions":
     assert config["instructions"] == "Core instructions.\nPlugin instructions."
 else:
     assert "instructions" not in config
+# Session override the pinned adapter forwards into thread/start. User hooks
+# and the legacy notify command are requested off. Seeing the request here is
+# not the effective configuration: managed layers can restore either setting,
+# and the binding reports native hook suppression as unsupported for that.
+assert config["features"] == {"hooks": False}
+assert config["notify"] == []
 
 (root / "pid").write_text(str(os.getpid()))
 selected = "codex-default"

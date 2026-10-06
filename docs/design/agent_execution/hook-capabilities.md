@@ -164,11 +164,16 @@ not suppression. An isolated `CODEX_HOME` would relocate authentication and
 persisted sessions without removing system/MDM configuration precedence; it is
 not a demonstrated fix. Under ADR 0014, the minimal enforceable contract requires
 suppression established before startup/restoration effects, including with zero
-Nessa hooks. The current binding cannot satisfy that contract in the legacy
-managed-policy scenario. Its suppression capability remains unknown, and required
-startup must be refused until effective suppression can be established; adding
-the request alone cannot close [#147](https://github.com/nessalabs/nessa-agent/issues/147).
-No startup refusal or attestation mechanism is claimed implemented here.
+Nessa hooks. The baseline binding cannot satisfy that contract in the legacy
+managed-policy scenario. Its suppression capability was unknown, and this survey
+requires startup to be refused until effective suppression can be established;
+adding the request alone cannot close [#147](https://github.com/nessalabs/nessa-agent/issues/147).
+No startup refusal or attestation mechanism is claimed implemented in this
+survey. The sentences above describe that 2026-09-22 baseline. The binding's
+later request and its unsupported report are the contract in
+[the Codex guide](../../../crates/nessa-sdk/docs/codex-acp.md#supported-native-profile);
+they do not change the evidence recorded here, and they do not establish the
+effective setting against the legacy managed layer.
 
 ### Opencode
 
