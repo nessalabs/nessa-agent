@@ -11,8 +11,10 @@ desktop verification browser, result and selector owners; Chromium and WebKit
 measure notice counts, enabled control counts and horizontal overflow. The fixture
 is served by the development server and is not included in product assets.
 The standard `run-all.mjs` default development mode runs it through the shared
-server URL. Explicit fixture-serving URLs are supported; a product-only preview
-without the fixture reports could-not-run.
+server URL. `run-all --mode prod` leaves this check out and names it
+"not run: dev server only"; that is not "could not run". Explicit fixture-serving
+URLs are supported; a product-only preview without the fixture, run on its own,
+reports could-not-run.
 
 The production question and notification components also render one retained ask
 with three real sibling fields while the interaction display-limit notice appears

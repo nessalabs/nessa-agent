@@ -8,6 +8,7 @@ const approval: Approval = {
   reason: "Runs the tests.",
   origin: { kind: "agent" },
   options: [],
+  ask: "tool",
 }
 
 describe("requestOf", () => {

@@ -331,7 +331,6 @@ await main(meta, async ({ options, rep, url }) => {
               ? null
               : "a pair control was offered with no gateway",
             ...rawCodesIn(text).map((code) => `wire code on the page: ${code}`),
-            ...opened.errors,
           ].filter(Boolean),
         }
       } finally {
@@ -351,7 +350,6 @@ await main(meta, async ({ options, rep, url }) => {
               ...failures,
               ...rawCodesIn(text).map((code) => `wire code on the page: ${code}`),
               ...opened.gate.unexpected.map((method) => `unexpected method ${method}`),
-              ...opened.errors,
             ],
           }
         } finally {

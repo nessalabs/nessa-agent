@@ -233,8 +233,26 @@ export async function startPreview(options, env = {}) {
  * Resolves the page to test. Returns `{ url, mode, close }`; `close` stops
  * anything this call started and leaves a reused server running.
  */
+/**
+ * The mode a check's body should see. `--url` skips starting a server. An
+ * explicit `--mode dev|prod` beside it still names which page that url is,
+ * so a production run can leave dev-server steps out. Without an explicit
+ * mode, the url is `given`.
+ */
+export function pageMode(options) {
+  if (!options.url) return options.mode
+  if (
+    typeof options.given === "function" &&
+    options.given("mode") &&
+    (options.mode === "dev" || options.mode === "prod")
+  )
+    return options.mode
+  return "given"
+}
+
 export async function target(options) {
-  if (options.url) return { url: options.url, mode: "given", close: async () => {} }
+  if (options.url)
+    return { url: options.url, mode: pageMode(options), close: async () => {} }
 
   if (options.mode === "dev") {
     if (await answers(devUrl)) {

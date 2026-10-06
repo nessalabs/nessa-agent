@@ -893,7 +893,10 @@ fn stop_crash_child() {
         let marker = root.join("stop-attempted.pending");
         std::fs::write(&marker, b"1").unwrap();
         std::fs::rename(marker, root.join("stop-attempted")).unwrap();
-        drop(release_cancel);
+        // Hold the cancel until this process is killed. Releasing the gate
+        // lets the attempt settle before the signal arrives, and the parent
+        // then sees a finished stop.
+        let _held_cancel = release_cancel;
         std::future::pending::<()>().await;
     });
 }

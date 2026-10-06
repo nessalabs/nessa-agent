@@ -5,9 +5,9 @@ use super::view::{
     ConversationCapabilities, ConversationLifecycle, ConversationLifecyclePhase,
     ConversationMcpTool, ConversationMessage, ConversationMessageApp, ConversationMessageStatus,
     ConversationPart, ConversationPending, ConversationPendingMode, ConversationPermission,
-    ConversationPermissionOption, ConversationPermissionOptionEffect, ConversationPermissionOrigin,
-    ConversationQuestion, ConversationTool, ConversationTranscriptState, ConversationView,
-    MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationPermissionAsk, ConversationPermissionOption, ConversationPermissionOptionEffect,
+    ConversationPermissionOrigin, ConversationQuestion, ConversationTool,
+    ConversationTranscriptState, ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -717,6 +717,7 @@ impl Projection {
             tool_name: input.name.clone(),
             arguments_json: input.arguments_json.clone(),
             origin: ConversationPermissionOrigin::Harness,
+            ask: ConversationPermissionAsk::Tool,
             options: options
                 .choices()
                 .iter()

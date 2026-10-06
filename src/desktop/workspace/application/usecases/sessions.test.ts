@@ -315,6 +315,7 @@ describe("what the person changes", () => {
       reason: "Runs tests.",
       origin: { kind: "agent" } as const,
       options: [],
+      ask: "tool" as const,
     }
     const state = transcriptLoaded(loaded(), {
       transcript: { ...emptyTranscript("b"), revision: 1, approval },
@@ -369,6 +370,7 @@ describe("what the person changes", () => {
       reason: "Runs tests.",
       origin: { kind: "agent" } as const,
       options: [],
+      ask: "tool" as const,
     }
     const state = transcriptLoaded(openSession(loaded(), { sessionId: "b" }), {
       transcript: { ...emptyTranscript("b"), revision: 1, approval },

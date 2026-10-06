@@ -2,7 +2,8 @@
 //! source owns admission/lifecycle; operation owns SDK source execution/drop.
 mod operation;
 mod source;
-pub use source::NessaRecordReadSource;
+pub(crate) use operation::{DISCOVERY_STEPS_PER_READ, READ_WORK_BUDGET};
+pub use source::{InvalidReadWorkBudget, NessaRecordReadSource};
 
 #[cfg(test)]
 pub(crate) use source::TestReadGate;

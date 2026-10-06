@@ -7,7 +7,13 @@ import { answering } from "../../application/workspace-state"
 import { agentName, agentOf, type ModelRef } from "../../model/workspace-index"
 import type { Approval } from "../../model/transcript"
 import { failureCopy } from "../failure-copy"
-import { ApprovalActions, ApprovalCommand, approvalHead } from "./approval-request"
+import {
+  ApprovalActions,
+  ApprovalCommand,
+  approvalHead,
+  approvalReason,
+} from "./approval-request"
+import { Saying } from "./said"
 
 /**
  * The one warm thing on the page: a command the agent — or an MCP App, which
@@ -35,15 +41,21 @@ export const ApprovalCard = memo(function ApprovalCard({
       role="group"
       aria-label="Approval needed"
       data-origin={approval.origin.kind}
+      data-ask={approval.ask}
     >
       <div className="workspace-approval-head">
         <DesktopIcon name="needsYou" />
         <span className="workspace-approval-head-words">
-          {approvalHead(approval.origin, agentName(agentOf(model)))}
+          <Saying said={approvalHead(approval, agentName(agentOf(model)))} />
         </span>
       </div>
-      <ApprovalCommand command={approval.command} />
-      <p className="workspace-approval-reason">{approval.reason}</p>
+      <ApprovalCommand
+        command={approval.command}
+        name={approval.origin.kind === "app" ? approval.origin.tool : undefined}
+      />
+      <p className="workspace-approval-reason">
+        <Saying said={approvalReason(approval)} />
+      </p>
       {answer?.failure ? (
         <p className="workspace-approval-failure" role="status">
           {failureCopy(answer.failure)}
