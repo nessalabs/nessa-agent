@@ -13,6 +13,7 @@ describe("shownName", () => {
     expect(shownName("evil\u202Egnp.exe")).toBe("evil\uFFFDgnp.exe")
     expect(shownName("a\u2069\u202Eb")).toBe("a\uFFFD\uFFFDb")
     expect(shownName("x\u200Ey\u200Fz\u061C")).toBe("x\uFFFDy\uFFFDz\uFFFD")
+    expect(shownName("a\u2028b\u2029")).toBe("a\uFFFDb\uFFFD")
     expect(shownName("cargo")).toBe("cargo")
   })
 })
@@ -41,6 +42,16 @@ describe("shownJson", () => {
 
   it("replaces a bidi control outside a string, which is not a value", () => {
     expect(shownJson("[\u202E]")).toBe("[\uFFFD]")
+  })
+
+  it("escapes a line or paragraph separator inside a string", () => {
+    const value = "line\u2028next\u2029end"
+    const json = JSON.stringify({ to: value })
+    const shown = shownJson(json)
+    expect(shown).not.toMatch(bidiControls)
+    expect(shown).toContain("\\u2028")
+    expect(shown).toContain("\\u2029")
+    expect(JSON.parse(shown)).toEqual({ to: value })
   })
 })
 

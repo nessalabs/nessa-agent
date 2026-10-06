@@ -176,7 +176,7 @@ export const labsSamples: readonly SampleSession[] = [
     now: "Waiting to send, so the address can be read in the order it runs",
     approval: {
       id: "command-order-ask",
-      command: `send ${JSON.stringify({ to: "\u202Emoc.live@bob\u202C" })}`,
+      command: `send ${JSON.stringify({ to: "\u2028\u202Emoc.live@bob\u202C\u2029" })}`,
       reason: "Sends the note to the address in the argument.",
       origin: { kind: "agent" },
       options: sampleApprovalOptions,

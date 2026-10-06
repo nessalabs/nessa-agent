@@ -12,7 +12,8 @@
  * runs on over the words that follow; an override (U+202E, RLO) shows
  * `evil`, RLO, `gnp.exe` as `evilexe.png`. So every bidi control a name
  * carries — the embeddings and overrides (U+202A–U+202E), the isolates
- * (U+2066–U+2069), and the marks (U+200E, U+200F, U+061C) — is shown as
+ * (U+2066–U+2069), the marks (U+200E, U+200F, U+061C), and the line and
+ * paragraph separators (U+2028, U+2029) — is shown as
  * U+FFFD, the replacement character, before the name is isolated
  * (`shownName`): seen, and doing nothing. A sentence that repeats those names
  * (`naming`) isolates each of them the same way, and leaves every other word.
@@ -37,8 +38,9 @@ const unicodeEscape = (char: string): string => {
 }
 
 /**
- * JSON as it is shown. A bidi control inside a string becomes its `\u`
- * escape. One outside a string — not a value, and not valid JSON — becomes
+ * JSON as it is shown. A bidi control, or a line or paragraph separator,
+ * inside a string becomes its `\u` escape. One outside a string — not a
+ * value, and not valid JSON — becomes
  * U+FFFD, so an escape there is not left for a reader to take as syntax.
  * `JSON.parse` of the result equals `JSON.parse` of `json` when `json` parses
  * (`said.test.ts`).

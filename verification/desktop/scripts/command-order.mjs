@@ -10,7 +10,7 @@ import { content, css, keys, names } from "./lib/selectors.mjs"
 import { contentIs } from "./lib/workspace.mjs"
 
 const tool = "send "
-const argument = "\u202Emoc.live@bob\u202C"
+const argument = "\u2028\u202Emoc.live@bob\u202C\u2029"
 const expected = { to: argument }
 
 const meta = {
@@ -97,6 +97,10 @@ function commandFailures(where, text) {
   if (escapeAt === -1 || addressAt < escapeAt)
     failures.push(
       `${where} does not show the address after its override: ${JSON.stringify(text)}`,
+    )
+  if (!text.includes("\\u2028") || !text.includes("\\u2029"))
+    failures.push(
+      `${where} does not show the line separators: ${JSON.stringify(text)}`,
     )
   if (text.startsWith(tool)) {
     const shown = text.slice(tool.length)
