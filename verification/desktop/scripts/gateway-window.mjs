@@ -397,6 +397,7 @@ await main(
           opened = await openPage(browser, {
             url: `${origin}/desktop.html`,
             layout,
+            lines: { engine, layout },
             initScripts: [[gatewayHost, { endpoint, credential: stack.credential }]],
             // The window drawn; what it lists, or says, is the steps' to judge.
             beforeLoad: (context) =>
@@ -461,14 +462,6 @@ await main(
               layout,
               ms: Date.now() - at,
               ...result,
-              // A step that could not run keeps none of the page's lines,
-              // errors or harmless: both go to the late "console" result,
-              // which reports the two together.
-              failures: [
-                ...(result.failures ?? []),
-                ...(result.cannotRun ? [] : opened.errors.splice(0)),
-              ],
-              harmless: result.cannotRun ? [] : opened.harmless.splice(0),
             })
             if (!entry.ok)
               stopped = `${name} ${entry.cannotRun ? "could not run" : "did not hold"}`
@@ -485,17 +478,6 @@ await main(
               failures: handshakeFailures(seen, stack),
             })
           }
-          // What the page said after the last step, before it closes.
-          const late = opened.errors.splice(0)
-          const lateHarmless = opened.harmless.splice(0)
-          if (late.length > 0 || lateHarmless.length > 0)
-            rep.add({
-              name: "console",
-              engine,
-              layout,
-              failures: late,
-              harmless: lateHarmless,
-            })
         } finally {
           await opened.close()
           log(`${engine} ${layout}: ${Date.now() - started} ms`)

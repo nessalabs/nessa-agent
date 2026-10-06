@@ -17,10 +17,10 @@ use tokio::runtime::Handle;
 /// `source_preparing`. Each call is one bounded SDK step. Bounds and
 /// orderings: "Steps per admitted read" in
 /// `docs/design/bounded-terminal-discovery.md`.
-pub(super) const DISCOVERY_STEPS_PER_READ: usize = 128;
+pub(crate) const DISCOVERY_STEPS_PER_READ: usize = 128;
 /// How long one admitted read keeps making discovery calls while it holds a
 /// global read permit and its socket's record slot (row S5).
-pub(super) const READ_WORK_BUDGET: Duration = Duration::from_millis(200);
+pub(crate) const READ_WORK_BUDGET: Duration = Duration::from_millis(200);
 
 /// One physical operation and when its discovery calls must stop.
 pub(super) struct ReadWork {
@@ -77,13 +77,20 @@ fn discover<T>(
     stopped: &dyn Fn() -> bool,
     mut call: impl FnMut() -> Result<RecordReadStatus<T>, SourceError>,
 ) -> Result<T, RecordReadError> {
+    let mut exhausted = true;
     for step in 0..steps {
         if step > 0 && stopped() {
+            exhausted = false;
             break;
         }
         if let RecordReadStatus::Ready(value) = call().map_err(source_error)? {
             return Ok(value);
         }
+    }
+    // The step loop ended because it ran out, not because the read was asked
+    // to stop. Stopping at the budget is the caller's to name.
+    if exhausted {
+        crate::core::limit_log::note_limit("record.discovery_steps");
     }
     Err(RecordReadError::SourcePreparing)
 }

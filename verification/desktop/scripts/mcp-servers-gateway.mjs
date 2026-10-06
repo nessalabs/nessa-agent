@@ -316,10 +316,6 @@ async function conversingCredential(client) {
  */
 const loadAbort = /^requestfailed: \S+\/browser\/check net::ERR_ABORTED\s*$/
 
-function setAsideLoadAbort(errors) {
-  errors.splice(0, Infinity, ...errors.filter((each) => !loadAbort.test(each)))
-}
-
 /**
  * The page's socket to the gateway (`/browser/session`), routed through the
  * script: each mcpServers request sent on it counted (`sent`), and `drop()`
@@ -397,7 +393,7 @@ async function signedIn(browser, stack, token, layout) {
   }
   await page.goto(`${stack.url}?gateway`, { waitUntil: "domcontentloaded" })
   await need(page, css.anyReady, "the desktop window", 30_000)
-  setAsideLoadAbort(opened.errors)
+  opened.noteHarmless(loadAbort)
   return { ...opened, sent: sockets.sent, drop: sockets.drop }
 }
 
@@ -1868,6 +1864,14 @@ await main(
             cannotRun: error instanceof CannotRun,
             error: error.message.split("\n")[0],
           })
+          for (const name of walk)
+            rep.add({
+              name,
+              engine,
+              layout,
+              cannotRun: true,
+              error: "not run: the page did not open",
+            })
           return
         }
         const context = { opened, browser, layout }
@@ -1901,7 +1905,6 @@ await main(
               layout,
               ms: Date.now() - at,
               ...result,
-              failures: [...(result.failures ?? []), ...opened.errors.splice(0)],
             })
             if (options.shots)
               await opened.page.screenshot({
@@ -1948,16 +1951,13 @@ await main(
             (each) => each.conversationId === conversationId,
           )?.title
           if (!title) throw new CannotRun("the conversation has no title to find it by")
-          // Reloaded to show the new conversation. Of what the reload
-          // reports, only Chromium's aborted `/browser/check` is set aside,
-          // as `signedIn` sets aside its load's; every other error is kept.
-          const beforeReload = opened.errors.splice(0)
+          // Reloaded to show the new conversation. Chromium's aborted
+          // `/browser/check` matches the pattern signedIn already noted, so
+          // it is reported as harmless; every other error stays a failure.
           await opened.page.goto(`${stack.url}?gateway`, {
             waitUntil: "domcontentloaded",
           })
           await need(opened.page, css.anyReady, "the desktop window", 30_000)
-          setAsideLoadAbort(opened.errors)
-          opened.errors.unshift(...beforeReload)
         }
         if (!title) throw new CannotRun("not run: the conversation was not made")
         const drawn = await chartDrawn(opened.page, title)
@@ -1967,7 +1967,7 @@ await main(
           layout,
           ms: Date.now() - at,
           seen: { ...seen, ...drawn.seen },
-          failures: [...setup, ...drawn.failures, ...opened.errors.splice(0)],
+          failures: [...setup, ...drawn.failures],
         })
         if (options.shots)
           await opened.page.screenshot({

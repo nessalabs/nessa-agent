@@ -59,7 +59,8 @@ pub use record_scope::{exact_record_scope, record_scope_from_identity};
 mod catalogue_read;
 mod record_read;
 pub use catalogue_read::NessaCatalogueReadSource;
-pub use record_read::NessaRecordReadSource;
+pub use record_read::{InvalidReadWorkBudget, NessaRecordReadSource};
+pub(crate) use record_read::{DISCOVERY_STEPS_PER_READ, READ_WORK_BUDGET};
 pub use store::LocalConversationStore;
 
 mod catalogue_source;

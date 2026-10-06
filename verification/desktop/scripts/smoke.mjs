@@ -240,8 +240,6 @@ await main(meta, async ({ options, rep, url }) => {
       rep.add({
         ...base,
         name: "console",
-        failures: opened.errors,
-        harmless: opened.harmless,
       })
       await opened.close()
     }

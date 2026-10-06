@@ -229,7 +229,20 @@ function refuseCredential(socket) {
 
 async function measure(page) {
   return page.evaluate(
-    ([empty, text, retry, chat, rows, sample, screen, line, code, restart, quit]) => {
+    ([
+      empty,
+      text,
+      retry,
+      chat,
+      rows,
+      sample,
+      screen,
+      line,
+      code,
+      restart,
+      quit,
+      mark,
+    ]) => {
       const rect = (element) => {
         const r = element.getBoundingClientRect()
         return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
@@ -249,7 +262,6 @@ async function measure(page) {
             ?.closest("button") === element
         )
       }
-      const mark = document.querySelector("[data-nessa-startup-mark]")
       return {
         text: document.querySelector(text)?.textContent ?? null,
         line: document.querySelector(line)?.textContent?.trim() ?? null,
@@ -259,7 +271,7 @@ async function measure(page) {
         quit: quitButton ? rect(quitButton) : null,
         restartOnTop: onTop(restartButton),
         quitOnTop: onTop(quitButton),
-        halo: mark ? getComputedStyle(mark).boxShadow : null,
+        markPresent: Boolean(document.querySelector(mark)),
         status: status ? rect(status) : null,
         button: button ? rect(button) : null,
         buttonOnTop: button
@@ -291,6 +303,7 @@ async function measure(page) {
       css.startupCode,
       css.startupRestart,
       css.startupQuit,
+      css.startupMark,
     ],
   )
 }
@@ -358,7 +371,7 @@ function checkCalm(scenario, m) {
       if (!onTop) failures.push(`something paints over ${name}`)
     }
   }
-  if (m.halo && m.halo !== "none") failures.push(`the mark has a halo (${m.halo})`)
+  if (m.markPresent) failures.push("the avatar mark is on the startup screen")
   if (m.rows !== 0) failures.push(`${m.rows} session rows listed`)
   if (m.sample !== 0) failures.push("the sample plugin is drawn")
   if (!(m.asked.load_gateway_endpoint >= 1))
@@ -383,10 +396,10 @@ It reads the poller's wait from the gateway source in the page, so it needs
   async ({ options, rep, url }) => {
     const origin = new URL(url).origin
     await withEngines(options, rep, async (engine, browser) => {
-      for (const scenario of scenarios)
-        await attempt(rep, { name: scenario.name, engine, width: 1440 }, async () => {
-          let opened
-          try {
+      for (const scenario of scenarios) {
+        let opened
+        try {
+          await attempt(rep, { name: scenario.name, engine, width: 1440 }, async () => {
             opened = await openPage(browser, {
               url: `${origin}/desktop.html`,
               initScripts: [[gatewayHost, scenario]],
@@ -399,6 +412,8 @@ It reads the poller's wait from the gateway source in the page, so it needs
                 await context.routeWebSocket(`${fakeGateway}/**`, refuseCredential)
               },
             })
+            if (scenario.endpoint === noGateway)
+              opened.noteHarmless(/WebSocket connection to '.+\/session' failed/)
             const { page, context } = opened
             const timing = cadenceOf(
               await modelValue(page, modules.gatewaySource, "defaultGatewayTiming"),
@@ -439,13 +454,6 @@ It reads the poller's wait from the gateway source in the page, so it needs
                 )
             }
             if (scenario.calm) {
-              const refused = `WebSocket connection to '${noGateway}/session' failed`
-              failures.push(
-                ...opened.errors.filter(
-                  (error) =>
-                    !(scenario.endpoint === noGateway && error.includes(refused)),
-                ),
-              )
               return {
                 failures,
                 measured: { timing, first, asksInQuiet, asksByRecovered },
@@ -562,12 +570,6 @@ It reads the poller's wait from the gateway source in the page, so it needs
             failures.push(
               ...check(scenario, again).map((failure) => `after Try Again: ${failure}`),
             )
-            const refused = `WebSocket connection to '${noGateway}/session' failed`
-            failures.push(
-              ...opened.errors.filter(
-                (error) => !(scenario.endpoint === noGateway && error.includes(refused)),
-              ),
-            )
             return {
               failures,
               measured: {
@@ -579,12 +581,13 @@ It reads the poller's wait from the gateway source in the page, so it needs
                 tryAgain,
               },
             }
-          } finally {
-            // The body's result or error is the one reported: a close that
-            // fails is swallowed, so it cannot take its place.
-            await opened?.close().catch(() => {})
-          }
-        })
+          })
+        } finally {
+          // After the step's result has taken the page's lines. A close that
+          // fails is swallowed, so it cannot take the step's place.
+          await opened?.close().catch(() => {})
+        }
+      }
     })
   },
 )

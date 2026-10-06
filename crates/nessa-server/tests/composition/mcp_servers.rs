@@ -1567,6 +1567,46 @@ async fn a_composed_gateways_apps_drops_are_written_to_its_audit_before_it_exits
         },
     };
     dropped.context_dropped(drop.clone());
+    // A ticket issued, made redeemable, then released: both recorders write
+    // to this audit. A pending release would wait for activate; this one is
+    // already active, so the end is the recorder's.
+    let app = McpAppRef {
+        execution_id: "e-ticket".into(),
+        tool_id: "t-ticket".into(),
+        instance_id: "i-ticket".into(),
+    };
+    let held = crate::conversation::application::HeldResource {
+        record: McpAppAuditRecord {
+            conversation_id: drop.conversation_id.clone(),
+            organization_id: OrganizationId::new("org").unwrap(),
+            call_id: "call-ticket".into(),
+            request_id: "read-ticket".into(),
+            app: app.clone(),
+            ask: McpAppAsk::ReadResource {
+                server: "mcptest".into(),
+                uri: "ui://mcptest/chart.html".into(),
+            },
+            initiator: McpAppInitiator::System,
+            phase: McpAppAuditPhase::Admitted,
+        },
+        bytes: std::sync::Arc::from(&b"chart"[..]),
+    };
+    let ticket = crate::conversation::application::ResourceTickets::issue(
+        composed.resource_tickets.as_ref(),
+        held,
+    )
+    .expect("issued");
+    crate::conversation::application::ResourceTickets::activate(
+        composed.resource_tickets.as_ref(),
+        &ticket,
+    )
+    .expect("activated");
+    crate::conversation::application::ResourceTickets::release_app(
+        composed.resource_tickets.as_ref(),
+        &drop.conversation_id,
+        &app,
+        &McpAppInitiator::System,
+    );
     super::finish_recorders(
         [
             composed.ticket_recorder.take(),
@@ -1577,7 +1617,16 @@ async fn a_composed_gateways_apps_drops_are_written_to_its_audit_before_it_exits
         super::RECORDERS_FINISH,
     )
     .await;
-    assert_eq!(*audit.0.lock().unwrap(), [drop]);
+    let records = audit.0.lock().unwrap().clone();
+    assert_eq!(records.len(), 2, "{records:?}");
+    assert!(records.contains(&drop));
+    assert!(records.iter().any(|record| matches!(
+        record.phase,
+        McpAppAuditPhase::TicketEnded {
+            cause: crate::conversation::application::TicketEnd::AppReleased,
+            ..
+        }
+    )));
 }
 
 #[tokio::test(start_paused = true)]

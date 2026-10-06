@@ -486,15 +486,11 @@ async function openConversation(browser, stack, layout) {
     await settled(opened.page)
     return { ...opened, reviewsBefore, conversationOpen }
   } catch (error) {
-    // No step will report the page's lines, so the error carries them, and
-    // the page is closed rather than left open until the browser closes.
+    // Size reports can still move a full-body abort. Close then reports
+    // whatever lines remain; the open result does not take them, and the
+    // steps not started are "not run".
     await opened.settleRequests()
-    const lines = [
-      ...opened.errors.splice(0),
-      ...opened.harmless.splice(0).map((line) => `harmless: ${line}`),
-    ]
     await opened.close().catch(() => {})
-    if (lines.length > 0) error.message += `\n  the page's lines: ${lines.join("; ")}`
     throw error
   }
 }
@@ -503,8 +499,7 @@ async function openConversation(browser, stack, layout) {
  * Signs `context` in from a page of its own on the sample page, which it
  * closes: the window's page then records only its own lines. This script
  * reports them on each step's result, errors as failures and the rest as
- * `harmless`, and in the error when opening the conversation throws; lines
- * that arrive after the last step are not reported yet (#494). Returns the
+ * `harmless`. Close reports a line that arrives after the last step. Returns the
  * app's reviews pending then: whatever a previous engine's page left, not
  * yet withdrawn, is not this page's (R4). Read before the window loads: it opens the conversation
  * on load, so the app can mount, and its first call open a review, at any
@@ -822,13 +817,20 @@ await main(
         try {
           opened = await openConversation(browser, stack, layout)
         } catch (error) {
-          // `resultOfThrown` owns the fault's stack (#475). The page lines
-          // `openConversation` appended stay on `detail`; the result keeps
-          // the first line.
+          // `resultOfThrown` owns the fault's stack (#475). Close already
+          // reported the page's lines; this result keeps the error's first line.
           rep.add({
             ...resultOfThrown({ name: "open", engine, layout }, error),
             detail: String(error?.message ?? error),
           })
+          for (const name of only)
+            rep.add({
+              name,
+              engine,
+              layout,
+              cannotRun: true,
+              error: "not run: the page did not open",
+            })
           continue
         }
         let stopped = null
@@ -858,8 +860,6 @@ await main(
               result = { failures: [], error: error.message.split("\n")[0] }
             }
             await opened.settleRequests()
-            const pageFailures = opened.errors.splice(0)
-            const pageHarmless = opened.harmless.splice(0)
             // A fully read `/mcp-resources` can still be reported aborted
             // with no size. Once this step has seen the pane mount live, and
             // the inline mount stayed live, that same-origin line is the
@@ -869,14 +869,10 @@ await main(
               result.seen?.paneLive === true &&
               result.seen?.inlineState === "live"
             ) {
-              const kept = []
-              for (const line of pageFailures) {
-                if (liveMountResourceAbort(line, opened.page.url()))
-                  pageHarmless.push(`${line} (mount went live, #473)`)
-                else kept.push(line)
-              }
-              pageFailures.length = 0
-              pageFailures.push(...kept)
+              opened.reclassifyHeld(
+                (line) => liveMountResourceAbort(line, opened.page.url()),
+                (line) => `${line} (mount went live, #473)`,
+              )
             }
             const entry = rep.add({
               name,
@@ -884,8 +880,6 @@ await main(
               layout,
               ms: Date.now() - at,
               ...result,
-              failures: [...(result.failures ?? []), ...pageFailures],
-              harmless: pageHarmless,
             })
             // A refused call leaves nothing waiting, so the steps after
             // `hidden` begin from the same page whatever it saw.
