@@ -247,7 +247,6 @@ lands in Needs you.`,
             )
             if (seen.unexpected.length > 0)
               failures.push(`unexpected calls: ${seen.unexpected.join(", ")}`)
-            failures.push(...opened.errors)
             return {
               failures,
               measured: { reads: seen.reads, note: note.text, peek: said },

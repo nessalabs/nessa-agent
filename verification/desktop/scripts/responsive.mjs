@@ -1852,7 +1852,7 @@ await main(meta, async ({ options, rep, url }) => {
           })
           try {
             const result = await check({ page: opened.page, engine, layout, options })
-            return { ...result, failures: [...(result.failures ?? []), ...opened.errors] }
+            return result
           } finally {
             await opened.close()
           }

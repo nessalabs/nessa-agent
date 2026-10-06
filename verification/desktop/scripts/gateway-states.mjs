@@ -383,10 +383,10 @@ It reads the poller's wait from the gateway source in the page, so it needs
   async ({ options, rep, url }) => {
     const origin = new URL(url).origin
     await withEngines(options, rep, async (engine, browser) => {
-      for (const scenario of scenarios)
-        await attempt(rep, { name: scenario.name, engine, width: 1440 }, async () => {
-          let opened
-          try {
+      for (const scenario of scenarios) {
+        let opened
+        try {
+          await attempt(rep, { name: scenario.name, engine, width: 1440 }, async () => {
             opened = await openPage(browser, {
               url: `${origin}/desktop.html`,
               initScripts: [[gatewayHost, scenario]],
@@ -399,6 +399,8 @@ It reads the poller's wait from the gateway source in the page, so it needs
                 await context.routeWebSocket(`${fakeGateway}/**`, refuseCredential)
               },
             })
+            if (scenario.endpoint === noGateway)
+              opened.noteHarmless(/WebSocket connection to '.+\/session' failed/)
             const { page, context } = opened
             const timing = cadenceOf(
               await modelValue(page, modules.gatewaySource, "defaultGatewayTiming"),
@@ -439,13 +441,6 @@ It reads the poller's wait from the gateway source in the page, so it needs
                 )
             }
             if (scenario.calm) {
-              const refused = `WebSocket connection to '${noGateway}/session' failed`
-              failures.push(
-                ...opened.errors.filter(
-                  (error) =>
-                    !(scenario.endpoint === noGateway && error.includes(refused)),
-                ),
-              )
               return {
                 failures,
                 measured: { timing, first, asksInQuiet, asksByRecovered },
@@ -562,12 +557,6 @@ It reads the poller's wait from the gateway source in the page, so it needs
             failures.push(
               ...check(scenario, again).map((failure) => `after Try Again: ${failure}`),
             )
-            const refused = `WebSocket connection to '${noGateway}/session' failed`
-            failures.push(
-              ...opened.errors.filter(
-                (error) => !(scenario.endpoint === noGateway && error.includes(refused)),
-              ),
-            )
             return {
               failures,
               measured: {
@@ -579,12 +568,13 @@ It reads the poller's wait from the gateway source in the page, so it needs
                 tryAgain,
               },
             }
-          } finally {
-            // The body's result or error is the one reported: a close that
-            // fails is swallowed, so it cannot take its place.
-            await opened?.close().catch(() => {})
-          }
-        })
+          })
+        } finally {
+          // After the step's result has taken the page's lines. A close that
+          // fails is swallowed, so it cannot take the step's place.
+          await opened?.close().catch(() => {})
+        }
+      }
     })
   },
 )

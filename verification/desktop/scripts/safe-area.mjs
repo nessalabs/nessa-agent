@@ -278,9 +278,9 @@ await main(meta, async ({ options, rep, url }) => {
                 await page.reload({ waitUntil: "domcontentloaded" })
                 await need(page, css.anyReady, "the desktop page", 30_000)
                 await settled(page)
+                opened.noteHeldHarmless()
               }
               held.fresh = false
-              const errorsBefore = opened.errors.length
               const sampler = safeArea(page)
               await sampler.take()
               const skipped = await scenario({ page, watch: sampler.watch, layout, size })
@@ -289,7 +289,6 @@ await main(meta, async ({ options, rep, url }) => {
               const frames = await sampler.frames()
               const failures = summarize(bad)
               if (frames === 0) failures.push("no frames were sampled")
-              failures.push(...opened.errors.slice(errorsBefore))
               return { frames, violations: bad.length, failures }
             },
           )

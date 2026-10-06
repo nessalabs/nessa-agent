@@ -486,14 +486,9 @@ async function openConversation(browser, stack, layout) {
     await settled(opened.page)
     return { ...opened, reviewsBefore, conversationOpen }
   } catch (error) {
-    // No step will report the page's lines, so the error carries them, and
-    // the page is closed rather than left open until the browser closes.
-    const lines = [
-      ...opened.errors.splice(0),
-      ...opened.harmless.splice(0).map((line) => `harmless: ${line}`),
-    ]
+    // Close reports the page's lines, then the caller records that the
+    // conversation did not open and which steps were not run.
     await opened.close().catch(() => {})
-    if (lines.length > 0) error.message += `\n  the page's lines: ${lines.join("; ")}`
     throw error
   }
 }
@@ -502,8 +497,7 @@ async function openConversation(browser, stack, layout) {
  * Signs `context` in from a page of its own on the sample page, which it
  * closes: the window's page then records only its own lines. This script
  * reports them on each step's result, errors as failures and the rest as
- * `harmless`, and in the error when opening the conversation throws; lines
- * that arrive after the last step are not reported yet (#494). Returns the
+ * `harmless`. Close reports a line that arrives after the last step. Returns the
  * app's reviews pending then: whatever a previous engine's page left, not
  * yet withdrawn, is not this page's (R4). Read before the window loads: it opens the conversation
  * on load, so the app can mount, and its first call open a review, at any
@@ -819,6 +813,14 @@ await main(
             error: error.message.split("\n")[0],
             detail: error.message,
           })
+          for (const name of only)
+            rep.add({
+              name,
+              engine,
+              layout,
+              cannotRun: true,
+              error: "not run: the page did not open",
+            })
           continue
         }
         let stopped = null
@@ -853,8 +855,6 @@ await main(
               layout,
               ms: Date.now() - at,
               ...result,
-              failures: [...(result.failures ?? []), ...opened.errors.splice(0)],
-              harmless: opened.harmless.splice(0),
             })
             // A refused call leaves nothing waiting, so the steps after
             // `hidden` begin from the same page whatever it saw.

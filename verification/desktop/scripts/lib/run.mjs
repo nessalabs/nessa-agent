@@ -9,11 +9,13 @@
  * at the end whatever happened.
  */
 import { cli, report, resultOfThrown } from "./cli.mjs"
+import { bindReporter } from "./page-lines.mjs"
 import { target } from "./server.mjs"
 
 export async function main(meta, body, resolve = target) {
   const options = cli(meta)
   const rep = report(meta.name, options)
+  bindReporter(rep)
   let page
   let status
   try {

@@ -934,7 +934,7 @@ await main(meta, async ({ options, rep, url }) => {
         await attempt(rep, { engine, layout, name }, async () => {
           opened = await onSample(browser, { url, layout })
           const result = await checks[name](opened.page, layout)
-          return { ...result, failures: [...result.failures, ...opened.errors] }
+          return result
         }).finally(() => opened?.close())
       }
   })

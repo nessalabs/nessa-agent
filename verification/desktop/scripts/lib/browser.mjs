@@ -8,6 +8,12 @@
 import { chromium, webkit } from "playwright"
 
 import { CannotRun } from "./cli.mjs"
+import {
+  attachLines,
+  reportDetached,
+  reporterBound,
+  watchLines,
+} from "./page-lines.mjs"
 import { harmlessConsole, css, storage } from "./selectors.mjs"
 
 const engines = { chromium, webkit }
@@ -109,33 +115,47 @@ export async function openPage(browser, o) {
     await context.close().catch(() => {})
     throw error
   }
-  const errors = []
-  const harmless = []
+  const lines = watchLines()
   page.on("pageerror", (error) => {
-    errors.push(`pageerror: ${error.message.split("\n")[0]}`)
+    lines.keep(`pageerror: ${error.message.split("\n")[0]}`, false)
   })
   page.on("console", (message) => {
     if (message.type() !== "error") return
     const text = message.text()
     const url = message.location()?.url ?? ""
     const entry = `console.error: ${text.slice(0, 300)}${url ? ` (${url})` : ""}`
-    if (harmlessConsole.some((h) => h.text.test(text) && h.url.test(url)))
-      harmless.push(entry)
-    else errors.push(entry)
+    lines.keep(
+      entry,
+      harmlessConsole.some((h) => h.text.test(text) && h.url.test(url)),
+    )
   })
-  page.on("requestfailed", (request) =>
-    recordFailedRequest(request, page.url(), { errors, harmless }),
-  )
+  page.on("requestfailed", (request) => {
+    const bucket = { errors: [], harmless: [] }
+    recordFailedRequest(request, page.url(), bucket)
+    for (const line of bucket.harmless) lines.keep(line, true)
+    for (const line of bucket.errors) lines.keep(line, false)
+  })
+  const abandon = async (message, includeErrors) => {
+    await context.close().catch(() => {})
+    if (reporterBound()) {
+      reportDetached(o.lines ?? {}, lines.errors, lines.harmless)
+      throw new CannotRun(message)
+    }
+    const extra =
+      includeErrors && lines.errors.length
+        ? `\n  page errors: ${lines.errors.join("; ")}`
+        : ""
+    throw new CannotRun(message + extra)
+  }
   try {
     await page.goto(o.url, { waitUntil: "domcontentloaded" })
     await page.waitForSelector(o.readySelector ?? css.anyReady, {
       timeout: o.readyTimeout ?? 30_000,
     })
   } catch (error) {
-    await context.close().catch(() => {})
-    throw new CannotRun(
-      `the desktop page did not render ${o.readySelector ?? css.anyReady} at ${o.url}: ${error.message.split("\n")[0]}` +
-        (errors.length ? `\n  page errors: ${errors.join("; ")}` : ""),
+    await abandon(
+      `the desktop page did not render ${o.readySelector ?? css.anyReady} at ${o.url}: ${error.message.split("\n")[0]}`,
+      true,
     )
   }
   // Ready once its fonts are in and its opening motion has run: a condition,
@@ -155,12 +175,22 @@ export async function openPage(browser, o) {
       { timeout: o.readyTimeout ?? 30_000, polling: "raf" },
     )
   } catch (error) {
-    await context.close().catch(() => {})
-    throw new CannotRun(
+    await abandon(
       `the desktop page never settled at ${o.url}: ${error.message.split("\n")[0]}`,
+      false,
     )
   }
-  return { context, page, errors, harmless, close: () => context.close() }
+  const opened = {
+    context,
+    page,
+    errors: lines.errors,
+    harmless: lines.harmless,
+    noteHarmless: (pattern) => lines.noteHarmless(pattern),
+    noteHeldHarmless: () => lines.noteHeldHarmless(),
+    close: () => context.close(),
+  }
+  attachLines(opened, o.lines ?? {})
+  return opened
 }
 
 /**
