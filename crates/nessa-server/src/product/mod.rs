@@ -27,13 +27,17 @@
 mod attachment;
 pub(crate) mod catalogue_read;
 mod change_watch;
+mod operational_limits;
 pub(crate) mod passive_read;
 pub(crate) mod record_read;
 mod socket;
 mod state;
 pub(crate) mod wire;
 
+pub(crate) use operational_limits::ConfiguredLimits;
+pub use operational_limits::{InvalidOperationalLimits, OperationalLimits};
 pub use socket::handle_socket;
+pub(crate) use socket::{RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 pub use state::{InvalidSessionSettings, ProductDependencies, ProductRouteState, SessionSettings};
 
 mod conversation;

@@ -37,8 +37,9 @@ use nessa_protocol::product::generated::wire_shape_product_session_ready;
 use nessa_protocol::product::generated::{
     CredentialIssueParams, CredentialListParams, CredentialListResult, CredentialRevokeParams,
     CredentialRevokeResult, ExistingCredentialResult, IssuedCredentialResult, ProductSessionReady,
-    SessionAuthenticateParams, SessionChallenge, SessionTermination, MAX_RECORD_RESPONSE_BYTES,
-    PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS, PRODUCT_VERSION,
+    SessionAuthenticateParams, SessionChallenge, SessionTermination,
+    MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD,
+    PRODUCT_READY_METHODS, PRODUCT_VERSION,
 };
 use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
 use nessa_protocol::product_contract::generated::SessionCloseReason;
@@ -226,7 +227,11 @@ where
     if !supports_product_version(params.min_version, params.max_version) {
         return Err((frame.id, "protocol_incompatible"));
     }
-    if params.nonce != nonce || params.client.id.is_empty() || params.client.id.len() > 256 {
+    if params.nonce != nonce || params.client.id.is_empty() {
+        return Err((frame.id, "unauthorized"));
+    }
+    if params.client.id.len() > MAX_PRODUCT_CLIENT_ID_CHARACTERS {
+        note_limit("product.max_client_id_characters");
         return Err((frame.id, "unauthorized"));
     }
     if let Some(id) = &state.browser_session_id {
@@ -319,13 +324,12 @@ fn credential_admin_code(error: CredentialAdminError) -> &'static str {
     }
 }
 
-/// How many MCP App calls one socket has running at once; past that each is
-/// refused `temporarily_unavailable` (`protocol/README.md`).
-const APP_CALLS_PER_SOCKET: usize = 4;
-/// How many of those one mount may hold. One less than the lane, so that
-/// mount's waiting reviews leave a slot another app can take
-/// (`one_mount_cannot_fill_the_app_lane`).
-const APP_CALLS_PER_MOUNT: usize = APP_CALLS_PER_SOCKET - 1;
+/// One record frame in flight on a socket. Fixed: the lane below is this wide.
+pub(crate) const RECORD_SLOT: usize = 1;
+/// One record response queued on a socket.
+pub(crate) const RECORD_LANE: usize = 1;
+/// One refusal queued while the writer is inside another frame.
+pub(crate) const REFUSAL_LANE: usize = 1;
 
 /// The mount a socket's app call belongs to: the conversation and the host's
 /// `McpAppReference`. The lane's cap is per mount
@@ -366,13 +370,16 @@ impl Drop for AppMountGuard {
 /// lane slot.
 struct MountCap;
 
-/// Reserve one of `app`'s mount's [`APP_CALLS_PER_MOUNT`] places, when the
-/// frame names a mount. A frame that does not is not counted: an empty
-/// `mcp.callTool` still meets the lane at [`APP_CALLS_PER_SOCKET`] and is
-/// named `socket.app_calls` (`a_full_socket_slot_set_names_that_limit`).
+/// Reserve one of `app`'s mount's `cap` places, when the frame names a mount.
+/// A frame that does not is not counted: an empty `mcp.callTool` still meets
+/// the socket lane and is named `socket.app_calls`
+/// (`a_full_socket_slot_set_names_that_limit`). `cap` is one less than that
+/// lane, so a mount cannot take the last slot
+/// (`one_mount_cannot_fill_the_app_lane`).
 fn reserve_app_mount(
     mounts: &Arc<Mutex<HashMap<AppMountKey, usize>>>,
     frame: &RequestFrame,
+    cap: usize,
 ) -> Result<Option<AppMountGuard>, MountCap> {
     let Some(key) = app_mount_key(&frame.params) else {
         return Ok(None);
@@ -381,7 +388,7 @@ fn reserve_app_mount(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let count = counts.get(&key).copied().unwrap_or(0);
-    if count >= APP_CALLS_PER_MOUNT {
+    if count >= cap {
         return Err(MountCap);
     }
     counts.insert(key.clone(), count + 1);
@@ -739,12 +746,13 @@ where
 {
     let (sink, mut incoming) = socket.split();
     let mut watches = ConnectionWatches::new(&state);
-    let (control_send, control_receive) = mpsc::channel(4);
-    let (refusal_send, refusal_receive) = mpsc::channel(1);
+    let limits = state.limits;
+    let (control_send, control_receive) = mpsc::channel(limits.control_lane());
+    let (refusal_send, refusal_receive) = mpsc::channel(REFUSAL_LANE);
     // Room for every ordinary slot's response and every app call's, which
     // share it: a full queue closes the socket.
-    let (ordinary_send, ordinary_receive) = mpsc::channel(16 + APP_CALLS_PER_SOCKET);
-    let (record_send, record_receive) = mpsc::channel(1);
+    let (ordinary_send, ordinary_receive) = mpsc::channel(limits.ordinary_lane());
+    let (record_send, record_receive) = mpsc::channel(RECORD_LANE);
     let mut writer = tokio::spawn(write_authenticated(
         sink,
         control_receive,
@@ -754,10 +762,10 @@ where
         state.settings.write_timeout(),
         watches.deliveries.clone(),
     ));
-    let control_slots = Arc::new(Semaphore::new(4));
-    let ordinary_slots = Arc::new(Semaphore::new(16));
-    let record_slots = Arc::new(Semaphore::new(1));
-    let app_slots = Arc::new(Semaphore::new(APP_CALLS_PER_SOCKET));
+    let control_slots = Arc::new(Semaphore::new(limits.control_slots()));
+    let ordinary_slots = Arc::new(Semaphore::new(limits.ordinary_slots()));
+    let record_slots = Arc::new(Semaphore::new(RECORD_SLOT));
+    let app_slots = Arc::new(Semaphore::new(limits.app_calls_per_socket()));
     let app_mounts = Arc::new(Mutex::new(HashMap::new()));
     // An app call still running when the socket goes is cancelled: its
     // review, if it is waiting on one, is withdrawn rather than left standing
@@ -1002,7 +1010,7 @@ where
         // taking one, so the last slot stays available to another mount
         // (`one_mount_cannot_fill_the_app_lane`).
         let mount_guard = if app {
-            match reserve_app_mount(&app_mounts, &frame) {
+            match reserve_app_mount(&app_mounts, &frame, limits.app_calls_per_mount()) {
                 Ok(guard) => guard,
                 Err(MountCap) => {
                     // The refusal lane holds one frame. Parking this refusal,

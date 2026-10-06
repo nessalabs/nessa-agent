@@ -90,6 +90,13 @@ impl NessaRecordReadSource {
         }
     }
 
+    /// How long this source's cold reads may look. Composition sets it from
+    /// the gateway's operational limits; tests keep [`Self::new`]'s default.
+    pub fn with_work_budget(mut self, work_budget: Duration) -> Self {
+        self.work_budget = work_budget;
+        self
+    }
+
     #[cfg(test)]
     pub(crate) fn held_for_host_shutdown(
         storage: Arc<RecordStorage>,
@@ -185,7 +192,13 @@ impl RecordReadSource for NessaRecordReadSource {
                 () = tokio::time::sleep(self.work_budget) => {
                     // The worker stops at its next step boundary.
                     stop.store(true, Ordering::SeqCst);
-                    work.await
+                    let finished = work.await;
+                    // The budget won, and the read's own answer is that the
+                    // source is still preparing. A worker failure is not this limit.
+                    if matches!(finished, Ok(Err(RecordReadError::SourcePreparing))) {
+                        crate::core::limit_log::note_limit("record.read_work_budget");
+                    }
+                    finished
                 }
             };
             finished.map_err(worker_error)?

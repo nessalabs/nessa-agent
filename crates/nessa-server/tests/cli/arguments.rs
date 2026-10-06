@@ -107,6 +107,15 @@ fn install_agent_wants_exactly_one_agent() {
 }
 
 #[test]
+fn limits_prints_json_and_takes_nothing_else() {
+    assert_eq!(parse(&args(&["limits"])), Ok(Command::Limits));
+    assert_eq!(parse(&args(&["limits", "--json"])), Ok(Command::Limits));
+    let extra = parse(&args(&["limits", "extra"])).expect_err("extra");
+    assert!(extra.contains("only --json"), "{extra}");
+    assert!(crate::cli::entrypoint::HELP.contains("nessa limits"));
+}
+
+#[test]
 fn the_help_text_mentions_installing_an_agent() {
     // The command exists to be discovered by someone reading `nessa --help`.
     assert!(crate::cli::entrypoint::HELP.contains("install-agent"));

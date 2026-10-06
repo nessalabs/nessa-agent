@@ -1,3 +1,4 @@
+use super::operational_limits::OperationalLimits;
 use super::{change_watch::WatchOwners, WatchTaskFault};
 use crate::agent_install::application::AgentInstallations;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
@@ -7,6 +8,7 @@ use crate::conversation::application::{
     ReceiverAuthority, RecordReadSource, WatchCatalogue, WatchNamespaces, WatchRecords,
 };
 use crate::conversation::infrastructure::UuidWatchNamespaces;
+pub(crate) use crate::core::limit_log::note_limit;
 use crate::device_pairing::infrastructure::PairingOwnerCommands;
 use crate::mcp_servers::{
     application::McpServerSettings, entrypoint::http::ResourceRoute,
@@ -30,52 +32,6 @@ use std::{
 };
 use tokio::sync::Semaphore;
 
-/// Name the operational limit a refusal or a silent close hit.
-/// The wire response and close code stay what they were.
-///
-/// This is not `tracing::warn!`. That macro puts every limit on one callsite,
-/// and the first thread to record it — a test with no subscriber — disables
-/// the callsite for the process. A later test then sees an empty log
-/// (`one_mount_cannot_fill_the_app_lane` beside a lane that is already full).
-/// Dispatch asks the subscriber that is current on this thread.
-pub(crate) fn note_limit(limit: &'static str) {
-    static CALLSITE: tracing::callsite::DefaultCallsite =
-        tracing::callsite::DefaultCallsite::new(&META);
-    static META: tracing::Metadata<'static> = tracing::Metadata::new(
-        "product session hit an operational limit",
-        "nessa_server::product::state",
-        tracing::Level::WARN,
-        Some(file!()),
-        Some(line!()),
-        Some(module_path!()),
-        tracing::field::FieldSet::new(
-            &["message", "limit"],
-            tracing::callsite::Identifier(&CALLSITE),
-        ),
-        tracing::metadata::Kind::EVENT,
-    );
-
-    tracing::dispatcher::get_default(|dispatch| {
-        if !dispatch.enabled(&META) {
-            return;
-        }
-        let fields = META.fields();
-        let message_field = fields
-            .field("message")
-            .expect("message is one of the limit event's fields");
-        let limit_field = fields
-            .field("limit")
-            .expect("limit is one of the limit event's fields");
-        let message = "product session hit an operational limit";
-        let values = [
-            (&message_field, Some(&message as &dyn tracing::field::Value)),
-            (&limit_field, Some(&limit as &dyn tracing::field::Value)),
-        ];
-        let values = fields.value_set(&values);
-        dispatch.event(&tracing::Event::new(&META, &values));
-    });
-}
-
 /// Dependencies and trusted gateway selectors for the product route.
 ///
 /// This state is constructed only in composition.
@@ -87,8 +43,8 @@ pub struct ProductRouteState {
     pub(crate) browser_session_origin: Option<String>,
     pub(crate) requests: Arc<Semaphore>,
     pub(crate) controls: Arc<Semaphore>,
-    /// Four physical record reads or pending record replies globally, kept
-    /// separate from command and control admission.
+    /// Physical record reads or pending record replies, kept separate from
+    /// command and control admission. How many is [`OperationalLimits`].
     pub(crate) record_reads: Arc<Semaphore>,
     pub(super) change_watches: Arc<WatchOwners>,
     pub(crate) record_watches: Option<Arc<dyn WatchRecords>>,
@@ -108,6 +64,9 @@ pub struct ProductRouteState {
     /// conversation service.
     pub(crate) deletions: Arc<Semaphore>,
     pub(crate) settings: SessionSettings,
+    /// Admission counts and the cold-read budget. The semaphores above are
+    /// built from it; a socket reads its slot sizes from it too.
+    pub(crate) limits: OperationalLimits,
     pub(crate) gateway: Resource,
     pub(crate) audience: AudienceId,
     pub(crate) verifier: Arc<dyn CredentialVerifier>,
@@ -225,15 +184,17 @@ impl ProductRouteState {
         audience: AudienceId,
         dependencies: ProductDependencies,
     ) -> Self {
+        let limits = OperationalLimits::default();
         Self {
             browser_sessions: None,
             browser_session_id: None,
             browser_session_origin: None,
             browser_http_allowed: false,
             settings: SessionSettings::default(),
-            requests: Arc::new(Semaphore::new(128)),
-            controls: Arc::new(Semaphore::new(32)),
-            record_reads: Arc::new(Semaphore::new(4)),
+            limits,
+            requests: Arc::new(Semaphore::new(limits.requests())),
+            controls: Arc::new(Semaphore::new(limits.controls())),
+            record_reads: Arc::new(Semaphore::new(limits.record_reads())),
             change_watches: Arc::new(WatchOwners::new(
                 MAX_GLOBAL_CHANGE_WATCHES,
                 MAX_PRINCIPAL_CHANGE_WATCHES,
@@ -241,8 +202,8 @@ impl ProductRouteState {
             record_watches: None,
             catalogue_watches: None,
             watch_namespaces: Arc::new(UuidWatchNamespaces),
-            upload_begins: Arc::new(Semaphore::new(16)),
-            deletions: Arc::new(Semaphore::new(8)),
+            upload_begins: Arc::new(Semaphore::new(limits.upload_begins())),
+            deletions: Arc::new(Semaphore::new(limits.deletions())),
             gateway: Resource::new(gateway_organization_id, gateway_id),
             audience,
             verifier: dependencies.verifier,
@@ -276,6 +237,18 @@ impl ProductRouteState {
 
     pub fn with_settings(mut self, settings: SessionSettings) -> Self {
         self.settings = settings;
+        self
+    }
+
+    /// Replace the gateway admission semaphores and the limits a socket reads.
+    /// Called once, from composition, before anything is served.
+    pub fn with_limits(mut self, limits: OperationalLimits) -> Self {
+        self.requests = Arc::new(Semaphore::new(limits.requests()));
+        self.controls = Arc::new(Semaphore::new(limits.controls()));
+        self.record_reads = Arc::new(Semaphore::new(limits.record_reads()));
+        self.upload_begins = Arc::new(Semaphore::new(limits.upload_begins()));
+        self.deletions = Arc::new(Semaphore::new(limits.deletions()));
+        self.limits = limits;
         self
     }
 
