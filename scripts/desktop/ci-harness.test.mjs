@@ -379,7 +379,7 @@ test("the frontend job owns top-level script and verification-script tests, and 
 
   assert.equal(
     root.scripts["scripts:test"],
-    "node --test scripts/*.test.mjs scripts/mcp-test-server/*.test.mjs",
+    "node --test scripts/*.test.mjs scripts/mcp-test-server/*.test.mjs scripts/subagent-contracts/*.test.mjs",
   )
   assert.ok(root.scripts["frontend:check"].includes("pnpm scripts:test"))
   // Every verification-script test under verification/desktop/scripts/lib,
