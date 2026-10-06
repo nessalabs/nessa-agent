@@ -40,7 +40,7 @@ import type {
   ApprovalOption,
   ApprovalOrigin,
 } from "../../model/transcript"
-import { named, naming, shownName, type Said } from "./said"
+import { named, naming, shownCommand, shownName, type Said } from "./said"
 import "./approval-card.css"
 
 /**
@@ -84,7 +84,8 @@ export function approvalHead(
  * whole, as the row has no card to show it in; a message as the card's head
  * says it (`overview.test.tsx` O3 and D19). An app's tool command is the
  * app's own words, its tool's name among them, and is isolated as a name is
- * (`said.tsx`, E2-1 on #390).
+ * (`said.tsx`, E2-1 on #390). An agent's command is that command as shown
+ * (`shownCommand`), so a control in it cannot reorder the row's name (#553).
  */
 export function approvalRequest(
   approval: Pick<Approval, "origin" | "ask" | "command">,
@@ -94,7 +95,7 @@ export function approvalRequest(
   if (approval.ask === "message") return approvalHead(approval, agent)
   return approval.origin.kind === "app"
     ? [...asker, " wants to run ", named(approval.command)]
-    : [...asker, ` wants to run ${approval.command}`]
+    : [...asker, ` wants to run ${shownCommand(approval.command)}`]
 }
 
 /**
@@ -141,7 +142,8 @@ function commandWords(text: string, key: string) {
 }
 
 /**
- * The command, broken only between its words. An app's tool name, when
+ * The command, broken only between its words. An agent's command is shown
+ * in order (`shownCommand`), inside one `<bdi>`. An app's tool name, when
  * `name` is that tool and the command begins with it, is isolated as a name
  * is; the words after it — a message, as it will be sent — are left as they
  * are (`approval-request.test.tsx`, E2-1).
@@ -158,7 +160,7 @@ export function ApprovalCommand({
     name && name.length > 0 && (command === name || command.startsWith(`${name} `))
       ? name
       : undefined
-  const rest = lead === undefined ? command : command.slice(lead.length)
+  const rest = lead === undefined ? shownCommand(command) : command.slice(lead.length)
   const block = useRef<HTMLPreElement>(null)
   // Where a word is wider than the card, the block scrolls and fades the edge it cuts.
   useLayoutEffect(() => {
@@ -204,8 +206,14 @@ export function ApprovalCommand({
       <span className="workspace-approval-prompt" aria-hidden="true">
         ${" "}
       </span>
-      {lead === undefined ? null : <bdi>{commandWords(shownName(lead), "name-")}</bdi>}
-      {commandWords(rest, "word-")}
+      {lead === undefined ? (
+        <bdi>{commandWords(rest, "word-")}</bdi>
+      ) : (
+        <>
+          <bdi>{commandWords(shownName(lead), "name-")}</bdi>
+          {commandWords(rest, "word-")}
+        </>
+      )}
     </pre>
   )
 }

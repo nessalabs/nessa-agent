@@ -28,7 +28,7 @@ import {
   approvalReason,
   approvalRequest,
 } from "../transcript/approval-request"
-import { named, Saying, shownName, spoken } from "../transcript/said"
+import { named, Saying, shownCommand, shownName, spoken } from "../transcript/said"
 import { overviewKeys } from "./overview-keys"
 import { SessionPeek } from "./session-peek"
 import { answeredLabels, type OnAnswer, type Settling } from "./settling"
@@ -89,6 +89,8 @@ export const RequestRow = memo(function RequestRow({
   const now = useNow(30_000)
   if (!summary) return null
   const agent = agentName(agentOf(summary.model))
+  const agentCommand =
+    approval && approval.origin.kind !== "app" ? shownCommand(approval.command) : ""
   const answerable = approval !== null && !settling && !answering(answer, approval.id)
   const refused = settling ? undefined : answer?.failure
   const unreadable = request.kind === "unreadable" ? request.reason : null
@@ -192,6 +194,7 @@ export const RequestRow = memo(function RequestRow({
           </span>
           {approval ? (
             // An app's command is the app's own words: shown as a name is (E2-1).
+            // An agent's is the command as it runs, controls visible (#553).
             approval.origin.kind === "app" ? (
               <code
                 className="agents-request-command agents-truncate"
@@ -202,9 +205,9 @@ export const RequestRow = memo(function RequestRow({
             ) : (
               <code
                 className="agents-request-command agents-truncate"
-                title={approval.command}
+                title={agentCommand}
               >
-                {approval.command}
+                <bdi>{agentCommand}</bdi>
               </code>
             )
           ) : null}

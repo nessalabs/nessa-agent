@@ -43,6 +43,7 @@ const functional = [
   "mcp-apps",
   "app-review",
   "message-sync",
+  "command-order",
 ]
 
 const options = cli({
