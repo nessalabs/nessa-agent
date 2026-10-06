@@ -1,0 +1,20 @@
+{
+  "check": "drag",
+  "ok": false,
+  "started": "2026-10-06T07:55:06.048Z",
+  "finished": "2026-10-06T07:55:10.904Z",
+  "target": {
+    "url": "http://127.0.0.1:15432/desktop.html",
+    "mode": "given"
+  },
+  "results": [
+    {
+      "ok": false,
+      "failures": ["a release before any preview dropped: 1,2,4 → 1,6,2,4"],
+      "name": "flick",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1440x900"
+    }
+  ]
+}

@@ -248,3 +248,160 @@ At the end of the investigation, no production source, timeout, scheduling polic
 Unverified: cold installed gateway startup, first-execution OS scanning, precise CPU-versus-I/O contribution, p95/p99, direct UI paint/first-token latency, other providers/platforms, and the exact internal phase of the original timeout. Approval is requested only before implementing any of the proposals above, as explicitly required by the task.
 
 </details>
+
+
+## Desktop transcript delivery experiment (#532)
+
+Base: current origin/main `1fc01f0fe43acd710d62ab7f272526718e01a545`,
+observed October 5, 2026 (Vancouver). Initial measurements used `a6ccd3959`;
+the gateway-source implementation is byte-identical between those base commits. This experiment changes desktop delivery,
+not provider startup, durable admission, permissions or audit ordering.
+
+The summary timer rests one second between list rounds. Active transcript reads
+have an independent 250 ms timer. A single background admission set and minimum
+start spacing apply to both timers; the existing read adapter owns foreground
+serialization, removal/relisting and call-deadline fences. A subscription
+generation fences both summary and transcript answers. Source disposal fences
+late work through the existing injected clock and read lifecycle.
+
+| Row | Ordering | Intended behavior | Regression |
+| --- | --- | --- | --- |
+| F1 | Ready active text and a read eligible at the next tick | Read on that active tick, without a list | F1 |
+| F2 | Summary and unrelated read stay pending | Independent conversation updates | F2/F7 |
+| F7 | Several ticks pass a held read | One admitted background read, no burst when it answers | F2/F7 |
+| F3 | Unsubscribe/resubscribe before answer | Earlier answer discarded; new generation reads | F3 |
+| F4 | Active read fails | Next successful summary emits resync | F4 |
+| F5 | Send against idle transcript; then turn rests | Invalidate on send, read fast, stop at rest | F5 |
+| F6 | Dispose before answer | Discard answer and stop both scheduling timers | F6 |
+| F8 | Send invalidation read crosses a subscription change or failure | Retain invalidation until a live successful read | F8 |
+| F9 | Summary answer crosses subscription change | Discard prior generation's list | F9 |
+| F10 | Foreground index/read activates a cached idle conversation | Applied state starts active scheduling | F10 (index/transcript) |
+| F11 | Summary answers between active ticks | Shared minimum read-start spacing prevents an extra request | F11 |
+| F12 | Background admission waits behind a foreground read | Actual transport dispatch restarts minimum spacing; admission is not dispatch | F12 |
+| R9/S3c | Removal/relisting overtakes old read/gone answer | Existing bounded retry reads the relisted conversation | Existing R9/S3c |
+
+For unblocked regular-phase polling, nominal wait falls from up to 1,000 ms
+to up to 250 ms: up to 750 ms less, with transport/mapping/browser scheduling
+added. This is not an unconditional 250 ms maximum: a background read queued
+behind foreground work can dispatch between timer ticks. The next tick may
+skip to preserve spacing (F12: dispatch at 900 ms, then 1,250 ms), adding tick
+quantization. An ordinary asynchronous dispatch can also fall after its timer
+tick and move eligibility past the next tick. Blocked requests still depend on their deadlines or completion. For N watched
+active conversations, up to 4N reads/second replaces about N reads/second:
+up to 3N extra requests/second (180N/minute). Slow reads are single-flight;
+idle views read only when the list changes or a send invalidates them. Payload
+bytes and gateway CPU depend on transcript length; request counts alone do not
+establish production cost. Summary frequency is unchanged and list deadlines
+still bound slow rounds.
+
+### Evidence and limits
+
+Twenty deterministic publication phases measured ready-view-to-source delivery:
+
+| Measurement | Original source | Experiment |
+| --- | --- | --- |
+| Minimum / median / maximum polling wait | 764 / 893 / 999 ms | 14 / 143 / 249 ms |
+| Reads for one active conversation over ten seconds | 10 | 40 |
+| Summary lists over ten seconds | 10 | 10 |
+
+Every paired sample improved by 750 ms. These phases deliberately fall in the
+first 250 ms after a whole-second boundary, so they demonstrate the maximum
+polling-wait reduction, not a random arrival distribution or a production average.
+The experiment source was temporarily replaced with the exact original source; nine
+new regressions failed, including the measurement's 250 ms limit. Restoring the
+source made all tests pass. Separate mutations of single-flight, subscription
+generation, send invalidation, failure/cancellation invalidation, idle pacing minimum read spacing and actual-dispatch spacing each made their targeted tests fail. F10's foreground
+index/transcript tests and F12's queued-background dispatch test failed before
+their review corrections and passed after.
+
+Raw samples and request counts are in
+[deterministic.json](../../verification/desktop/evidence/message-sync/deterministic.json).
+Reproduce with `pnpm exec vitest run
+src/desktop/workspace/adapters/gateway/gateway-source.test.ts -t M1`; temporarily
+restore this file from the base commit for the original measurement, confirm the
+source changed, then restore the experiment and rerun. Do not mutate a shared
+verification tree while another check is running.
+
+### Local production browser evidence
+
+The initial cloud sandbox could not launch its browsers or build the gateway.
+Verification was moved to macOS (Mac17,3, arm64, macOS 26.6, 24 GiB RAM), then
+synchronized with main `70d1a9823`. Main already contains the selector boundary
+repair (#441), first-frame attribution repair (#582), and stop-test readiness
+repair (#577); the experiment reuses those owners.
+
+`message-sync.mjs --channel bundled --headed --runs 3` passes in both layouts
+and engines. Each row has 30 active and 15 held-list/read samples across three
+fresh pages. Chromium uses calibrated 4x CPU throttling; WebKit is unthrottled
+and is not presented as equivalent calibrated CPU evidence.
+
+| Engine / layout | Active median / max ms | Held median / max ms | Frame max / median run-max ms | Frames over 50 ms |
+| --- | --- | --- | --- | --- |
+| chromium / columns | 238.3 / 507.2 | 174.7 / 456.0 | 17.7 / 17.7 | 0 |
+| chromium / sidebar | 181.7 / 489.9 | 174.9 / 458.3 | 17.7 / 17.7 | 0 |
+| webkit / columns | 166.0 / 482.0 | 144.0 / 277.0 | 20.0 / 20.0 | 0 |
+| webkit / sidebar | 172.0 / 350.0 | 101.0 / 222.0 | 20.0 / 19.0 | 0 |
+
+The busy-loop calibration measured 15 to 62 ms at 4x (ratio 4.12). A known-cost
+120 ms calibration frame measured 116.7 ms and was attributed by LoAF; both
+shared calibration checks held. Delivery measures ready controlled-gateway text
+through DOM replacement and two frame opportunities, not physical compositor
+paint, transport, provider startup, or production-server CPU/payload cost.
+
+[Raw current samples](../../verification/desktop/evidence/message-sync/browser-delivery.json)
+include request counts, idle checks, frame attribution, and timeout diagnostics.
+[Chromium held-list screenshot](../../verification/desktop/evidence/message-sync/browser-shots/chromium-columns-held-list-transcript.jpg)
+and [WebKit held-list screenshot](../../verification/desktop/evidence/message-sync/browser-shots/webkit-columns-held-list-transcript.jpg)
+show the changed surface; the evidence folder has both layouts and active/held/idle states.
+
+The source-only browser revert used the exact original source from `1fc01f0f`.
+Both engines failed the 600 ms contract and failed delivery while the list was
+held. Restoring the experiment byte-for-byte passed both engines. The
+[probe summary](../../verification/desktop/evidence/message-sync/browser-probe-summary.json)
+records source hashes and exit codes; [original samples](../../verification/desktop/evidence/message-sync/browser-revert.json)
+and [restored samples](../../verification/desktop/evidence/message-sync/browser-restored.json)
+preserve the result.
+
+One pre-main calibrated attempt had one two-second timeout among 60 Chromium
+active samples. It is preserved in [initial-calibrated-run.json](../../verification/desktop/evidence/message-sync/initial-calibrated-run.json).
+Five direct-reader diagnostic runs (50 active plus 25 held samples) did not
+reproduce it; neither did the final synchronized-main run. The cause of that
+initial timeout is not established, and passing finite repeats is not a global
+visibility guarantee. A separate chained-reader diagnostic is historical only:
+it introduced another promise step and is not equivalent evidence for the
+original reader timing.
+
+The broad sample-workspace frame sweep is a different workload and does not
+instantiate `gatewaySource`. Its streaming scenario passed both layouts, but
+split/drag/overview findings are tracked independently in [#588](https://github.com/nessalabs/nessa-agent/issues/588).
+Its failures are retained as [raw evidence](../../verification/desktop/evidence/message-sync/perf-budget.json),
+not described as a passing full frame-budget sweep. The dedicated production
+fixture above provides performance evidence for the behavior #532 changes.
+
+The signed-out scripted gateway suite passed all three checks in Chromium and
+WebKit on the synchronized tree; its [summary](../../verification/desktop/evidence/message-sync/scripted-gateway/pr-summary.md)
+and per-check JSON are committed beside the measurements. The full frontend
+gate passed 273 files / 3,676 tests. The CI package selection across storage,
+auth, server, protocol, client-core and SDK, including doctests, passed; the
+[recorded result list](../../verification/desktop/evidence/message-sync/rust-ci-selection.json)
+includes nested subprocess probes and is not summed as unique tests. The PR
+records the final functional sweep and CI at its pushed head. No live provider
+or native WKWebView test is substituted for those browser results.
+
+Review round 1 found the missing scheduling handoff after foreground state
+application (F10). It is fixed at `applyList`/`applyRead`, with both entry paths
+covered. Round 2 found that admission spacing was not dispatch spacing when a background
+read waited behind a foreground read, and that the default application build did
+not include the fixture. The scheduling design was revisited: background admission
+owns one slot while queued; the existing read owner marks actual transport dispatch
+through an internal callback, which restarts the same pacing deadline. There is no
+second read queue or new lifecycle flag. This separates reservation from execution
+without inferring either from a response. F12 enforces the ordering. A verification-only
+Vite configuration adds the production fixture through the shared preview owner.
+Round 3 reported no additional adapter correctness defects. The remaining
+performance-evidence ownership finding is addressed by reusing `lib/perf.mjs`
+for calibration, throttling, statistics and frame attribution, and the current
+page-line owner for errors. Fresh local review found no findings in the sampler,
+fixture, timing eligibility, and shared-owner integration. Merge still requires
+the final relevant checks and CI on the pushed head; the broader sample-renderer
+findings retain their separate disposition in #588.

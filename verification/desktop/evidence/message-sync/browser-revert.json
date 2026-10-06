@@ -1,0 +1,700 @@
+{
+  "check": "message-sync",
+  "ok": false,
+  "started": "2026-10-06T06:30:25.613Z",
+  "finished": "2026-10-06T06:31:29.497Z",
+  "target": {
+    "url": "http://127.0.0.1:53944/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "calibration",
+      "engine": "chromium",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 15,
+        "throttledMs": 64,
+        "ratio": 4.2,
+        "ok": true
+      },
+      "calibrationFrame": {
+        "cost": 120,
+        "measuredMs": 116.70000000000005,
+        "attributed": true,
+        "ok": true
+      }
+    },
+    {
+      "ok": false,
+      "failures": [
+        "active: delivery exceeded 600 ms: [759.5999999940395,921.2999999970198,853.3999999985099,776.2000000029802,956.5,884.3999999985099,824.8999999985099,988.6000000014901,915.3999999985099,842.2000000029802]",
+        "held: delivery exceeded 600 ms: [null,null,null,null,null]",
+        "held conversation admitted 0 reads, expected one"
+      ],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "columns",
+      "run": 1,
+      "measured": {
+        "timeoutDiagnostics": [
+          {
+            "marker": "held-0",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 12094.19999999553,
+              "lastFastRequest": {
+                "at": 11084.19999999553,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "after": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 14094.59999999404,
+              "lastFastRequest": {
+                "at": 11084.19999999553,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "rendered": ["Synchronize this message", "active-9"],
+            "elapsedMs": 2000.7000000029802
+          },
+          {
+            "marker": "held-1",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 14169.29999999702,
+              "lastFastRequest": {
+                "at": 11084.19999999553,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "after": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 16170.09999999404,
+              "lastFastRequest": {
+                "at": 11084.19999999553,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "rendered": ["Synchronize this message", "active-9"],
+            "elapsedMs": 2000.6999999955297
+          },
+          {
+            "marker": "held-2",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 16317.89999999851,
+              "lastFastRequest": {
+                "at": 11084.19999999553,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "after": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 18318.19999999553,
+              "lastFastRequest": {
+                "at": 11084.19999999553,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "rendered": ["Synchronize this message", "active-9"],
+            "elapsedMs": 2000.2999999970198
+          },
+          {
+            "marker": "held-3",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 18539.5,
+              "lastFastRequest": {
+                "at": 11084.19999999553,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "after": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 20539.89999999851,
+              "lastFastRequest": {
+                "at": 11084.19999999553,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "rendered": ["Synchronize this message", "active-9"],
+            "elapsedMs": 2000.5
+          },
+          {
+            "marker": "held-4",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 20582.69999999553,
+              "lastFastRequest": {
+                "at": 11084.19999999553,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "after": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 22583.5,
+              "lastFastRequest": {
+                "at": 11084.19999999553,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "rendered": ["Synchronize this message", "active-9"],
+            "elapsedMs": 2000.8000000044703
+          }
+        ],
+        "activeMs": [
+          759.5999999940395, 921.2999999970198, 853.3999999985099, 776.2000000029802,
+          956.5, 884.3999999985099, 824.8999999985099, 988.6000000014901,
+          915.3999999985099, 842.2000000029802
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 884.3999999985099,
+          "maxMs": 988.6000000014901
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": null,
+          "maxMs": null
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "maxFrame": 17.700000000000728,
+          "over": 0,
+          "frames": 593,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "maxFrame": 17.700000000000728,
+          "over": 0,
+          "frames": 635,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [null, null, null, null, null],
+        "before": {
+          "lists": 2,
+          "reads": 4,
+          "fastReads": 2,
+          "slowReads": 2,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 1332.5,
+          "lastFastRequest": {
+            "at": 1056.7999999970198,
+            "revision": "1",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 12,
+          "reads": 24,
+          "fastReads": 12,
+          "slowReads": 12,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 11227.69999999553,
+          "lastFastRequest": {
+            "at": 11084.19999999553,
+            "revision": "11",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "lists": 13,
+          "reads": 24,
+          "fastReads": 12,
+          "slowReads": 12,
+          "heldLists": 1,
+          "heldReads": 0,
+          "now": 22703.69999999553,
+          "lastFastRequest": {
+            "at": 11084.19999999553,
+            "revision": "11",
+            "text": "active-9"
+          }
+        },
+        "idle": {
+          "lists": 15,
+          "reads": 26,
+          "fastReads": 13,
+          "slowReads": 13,
+          "heldLists": 1,
+          "heldReads": 0,
+          "now": 24726.39999999851,
+          "lastFastRequest": {
+            "at": 22714.59999999404,
+            "revision": "17",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "lists": 17,
+          "reads": 26,
+          "fastReads": 13,
+          "slowReads": 13,
+          "heldLists": 1,
+          "heldReads": 0,
+          "now": 26726.5,
+          "lastFastRequest": {
+            "at": 22714.59999999404,
+            "revision": "17",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": false,
+      "failures": [
+        "active: delivery exceeded 600 ms: [736,941,850,778,955,883,810,986,932,842]",
+        "held: delivery exceeded 600 ms: [null,null,null,null,null]",
+        "held conversation admitted 0 reads, expected one"
+      ],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "columns",
+      "run": 1,
+      "measured": {
+        "timeoutDiagnostics": [
+          {
+            "marker": "held-0",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 12121,
+              "lastFastRequest": {
+                "at": 11105,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "after": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 14122,
+              "lastFastRequest": {
+                "at": 11105,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "rendered": ["Synchronize this message", "active-9"],
+            "elapsedMs": 2001
+          },
+          {
+            "marker": "held-1",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 14198,
+              "lastFastRequest": {
+                "at": 11105,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "after": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 16198,
+              "lastFastRequest": {
+                "at": 11105,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "rendered": ["Synchronize this message", "active-9"],
+            "elapsedMs": 2000
+          },
+          {
+            "marker": "held-2",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 16346,
+              "lastFastRequest": {
+                "at": 11105,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "after": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 18348,
+              "lastFastRequest": {
+                "at": 11105,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "rendered": ["Synchronize this message", "active-9"],
+            "elapsedMs": 2001
+          },
+          {
+            "marker": "held-3",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 18569,
+              "lastFastRequest": {
+                "at": 11105,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "after": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 20570,
+              "lastFastRequest": {
+                "at": 11105,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "rendered": ["Synchronize this message", "active-9"],
+            "elapsedMs": 2001
+          },
+          {
+            "marker": "held-4",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 20614,
+              "lastFastRequest": {
+                "at": 11105,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "after": {
+              "lists": 13,
+              "reads": 24,
+              "fastReads": 12,
+              "slowReads": 12,
+              "heldLists": 1,
+              "heldReads": 0,
+              "now": 22615,
+              "lastFastRequest": {
+                "at": 11105,
+                "revision": "11",
+                "text": "active-9"
+              }
+            },
+            "rendered": ["Synchronize this message", "active-9"],
+            "elapsedMs": 2001
+          }
+        ],
+        "activeMs": [736, 941, 850, 778, 955, 883, 810, 986, 932, 842],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 883,
+          "maxMs": 986
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": null,
+          "maxMs": null
+        },
+        "throttle": 1,
+        "activeFrames": {
+          "maxFrame": 46,
+          "over": 0,
+          "frames": 592,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "maxFrame": 19,
+          "over": 0,
+          "frames": 636,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [null, null, null, null, null],
+        "before": {
+          "lists": 2,
+          "reads": 4,
+          "fastReads": 2,
+          "slowReads": 2,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 1361,
+          "lastFastRequest": {
+            "at": 1083,
+            "revision": "1",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 12,
+          "reads": 24,
+          "fastReads": 12,
+          "slowReads": 12,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 11249,
+          "lastFastRequest": {
+            "at": 11105,
+            "revision": "11",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "lists": 13,
+          "reads": 24,
+          "fastReads": 12,
+          "slowReads": 12,
+          "heldLists": 1,
+          "heldReads": 0,
+          "now": 22739,
+          "lastFastRequest": {
+            "at": 11105,
+            "revision": "11",
+            "text": "active-9"
+          }
+        },
+        "idle": {
+          "lists": 15,
+          "reads": 26,
+          "fastReads": 13,
+          "slowReads": 13,
+          "heldLists": 1,
+          "heldReads": 0,
+          "now": 24752,
+          "lastFastRequest": {
+            "at": 22743,
+            "revision": "17",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "lists": 17,
+          "reads": 26,
+          "fastReads": 13,
+          "slowReads": 13,
+          "heldLists": 1,
+          "heldReads": 0,
+          "now": 26750,
+          "lastFastRequest": {
+            "at": 22743,
+            "revision": "17",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery-statistics",
+      "summaries": [
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "run": 1,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 884.3999999985099,
+            "maxMs": 988.6000000014901
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": null,
+            "maxMs": null
+          },
+          "frameMaxMs": 17.700000000000728,
+          "activeMs": [
+            759.5999999940395, 921.2999999970198, 853.3999999985099, 776.2000000029802,
+            956.5, 884.3999999985099, 824.8999999985099, 988.6000000014901,
+            915.3999999985099, 842.2000000029802
+          ],
+          "heldMs": [null, null, null, null, null],
+          "over50": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "columns",
+          "run": 1,
+          "throttle": 1,
+          "active": {
+            "samples": 10,
+            "medianMs": 883,
+            "maxMs": 986
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": null,
+            "maxMs": null
+          },
+          "frameMaxMs": 46,
+          "activeMs": [736, 941, 850, 778, 955, 883, 810, 986, 932, 842],
+          "heldMs": [null, null, null, null, null],
+          "over50": 0
+        }
+      ],
+      "aggregates": [
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "runs": 1,
+          "active": {
+            "samples": 10,
+            "medianMs": 884.3999999985099,
+            "maxMs": 988.6000000014901
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": null,
+            "maxMs": null
+          },
+          "frameMaxMs": 17.700000000000728,
+          "frameRunMedianMs": 17.700000000000728,
+          "over50": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "columns",
+          "runs": 1,
+          "active": {
+            "samples": 10,
+            "medianMs": 883,
+            "maxMs": 986
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": null,
+            "maxMs": null
+          },
+          "frameMaxMs": 46,
+          "frameRunMedianMs": 46,
+          "over50": 0
+        }
+      ]
+    }
+  ]
+}

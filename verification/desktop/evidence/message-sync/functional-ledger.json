@@ -1,0 +1,88 @@
+{
+  "head": "03a46184",
+  "source_note": "Raw sweep and corrected fixture rerun are kept separately; this is not a claim that the entire sweep passes.",
+  "checks": [
+    {
+      "check": "smoke",
+      "status": "held",
+      "held": "28/28",
+      "seconds": 15
+    },
+    {
+      "check": "focus",
+      "status": "held",
+      "held": "64/64",
+      "seconds": 273
+    },
+    {
+      "check": "drag",
+      "status": "FAILED",
+      "held": "147/148",
+      "seconds": 649,
+      "disposition": "Independent sample-workspace flick release, reproduced3/3, #592"
+    },
+    {
+      "check": "responsive",
+      "status": "held",
+      "held": "28/28",
+      "seconds": 180
+    },
+    {
+      "check": "safe-area",
+      "status": "held",
+      "held": "90/90",
+      "seconds": 82
+    },
+    {
+      "check": "committed-transcript",
+      "status": "held after fixture repair",
+      "held": "114/114",
+      "seconds": 487,
+      "evidence": "committed-transcript.json",
+      "original_evidence": "functional-sweep.json"
+    },
+    {
+      "check": "load-fallback",
+      "status": "held",
+      "held": "16/16",
+      "seconds": 7
+    },
+    {
+      "check": "gateway-states",
+      "status": "held",
+      "held": "14/14",
+      "seconds": 39
+    },
+    {
+      "check": "conversation-unread",
+      "status": "held",
+      "held": "4/4",
+      "seconds": 6
+    },
+    {
+      "check": "linked-devices",
+      "status": "held",
+      "held": "14/14",
+      "seconds": 21
+    },
+    {
+      "check": "widgets",
+      "status": "held",
+      "held": "48/48",
+      "seconds": 127
+    },
+    {
+      "check": "mcp-apps",
+      "status": "FAILED",
+      "held": "74/76",
+      "seconds": 436,
+      "disposition": "First-load hold precondition absent in current Chromium, #593"
+    },
+    {
+      "check": "app-review",
+      "status": "held",
+      "held": "32/32",
+      "seconds": 225
+    }
+  ]
+}

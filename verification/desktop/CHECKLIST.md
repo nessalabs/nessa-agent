@@ -991,3 +991,18 @@ views, and two retained locals superseded by another refusal. Both surfaces read
 `src/provider-authentication/model/recovery.ts`: observed execution identity,
 including accepted pending inputs, owns recovery rather than array-tail position
 or clocks.
+
+
+## Active message synchronization (#532)
+
+- [ ] Ready active text reaches the desktop DOM plus two animation frames within
+  600 ms in Chromium and WebKit, in both layouts. A held summary list and another
+  conversation's held read do not delay delivery. One background read per
+  conversation, at most four active reads per second, one-second summaries and
+  no idle transcript reads. `message-sync.mjs` measures these contracts over the
+  production source, store and window with controlled gateway replies. See the
+  [ordering table](../../docs/reviews/startup-latency.md#desktop-transcript-delivery-experiment-532).
+  Three fresh-page runs report delivery median/max and frame attribution. Chromium
+  uses calibrated 4x CPU throttling and checks the 50 ms frame budget through
+  `lib/perf.mjs`; WebKit delivery is reported separately without CPU throttling.
+  DOM plus frame opportunities do not measure transport, provider startup or compositor paint.

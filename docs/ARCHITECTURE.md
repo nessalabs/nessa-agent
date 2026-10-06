@@ -304,8 +304,8 @@ not reading the session, which stays unread.
   nothing shows the session, and a read of the index again reads every
   conversation on screen again, setting aside a read asked before it; `hooks.ts`,
   the typed hooks; and `selectors.ts`, narrow per pane and per row. `adapters/gateway/` is the
-  port over the gateway's conversations: a serial poller of `conversation.list`
-  and `conversation.read`, with revisions it mints and the views read into the
+  port over the gateway's conversations: one-second summary polling and independent
+  250 ms active transcript polling, with serialized reads per conversation, with revisions it mints and the views read into the
   workspace's types (`gateway-views.ts`). `adapters/in-memory/` is the
   only home of the sample index and the scripted, streamed replies,
   on timers it owns and cancels. `adapters/store/split-panes-source.ts` is

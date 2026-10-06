@@ -637,3 +637,10 @@ export const providerSignIn = {
   button: ".provider-sign-in button",
   failure: ".provider-sign-in [role=status]",
 }
+
+/** Controlled gateway replies under the production desktop source/store (#532). */
+export const messageSync = {
+  page: "verification/desktop/fixtures/message-sync/index.html",
+  title: "Nessa: message synchronization",
+  session: "Message synchronization",
+}
