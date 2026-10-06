@@ -12,7 +12,9 @@ await main(
     defaults: { engine: "chromium,webkit" },
   },
   async ({ options, rep, url, mode }) => {
-    if (mode === "prod")
+    // An explicit --url is the fixture server the caller named, even beside
+    // --mode prod. run-all does not spawn this check under prod.
+    if (mode === "prod" && !options.given("url"))
       throw new CannotRun(
         "the production-component fixture requires a Vite development server or an explicitly supplied fixture-serving URL",
       )

@@ -141,6 +141,8 @@ ends each step once its motion has, not after a fixed wait.
   something could not run (the server did not start, a browser is missing,
   what a step needs to begin was not on the page, an option or `--only` name
   the check does not have). `run-all` sums its checks by the same rule.
+  `--mode prod` leaves out checks that need the dev server and names them
+  "not run: dev server only"; those rows are not "could not run".
 - **the scripts' own tests**: `pnpm verify:desktop:test` (no browser). CI
   runs them in the frontend job, through `pnpm frontend:check`.
 
