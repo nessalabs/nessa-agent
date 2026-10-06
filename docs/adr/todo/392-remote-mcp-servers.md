@@ -433,7 +433,7 @@ sequenceDiagram
         O->>S: store replacement and record required outcome
         O-->>C: publish n+1, each eligible rejected call may retry once
     else revoke or definition change won
-        O->>O: retain rejected late outcome; do not publish or retry
+        O->>O: retain rejected late outcome, do not publish or retry
     end
 ```
 
@@ -610,8 +610,8 @@ old parallel reader or advertising a gateway transport from fixture tests.
 | T1 modern HTTP + remote definition, after T0 | SDK MCP HTTP codec/descriptor; gateway `mcp_servers/domain/{configured_server,stand_in}.rs`, `application/{settings,ports}.rs`, `infrastructure/{stored_servers,live_set,inspector,relay,grants}.rs`, `composition/mcp_servers.rs`, product schema/generator/client mapping. Add async reqwest adapter with owned stream/drain, remote UUID/config publication, no-auth connections and factual 401/store-required outcomes | C1/C3–C11, U1/U2 no-token cases and A1; actual SDK/gateway calls against loopback fixture, old stdio/env/revision/live/restoration regressions |
 | T2 scoped legacy HTTP+SSE, after T1 | Same SDK HTTP owner and gateway adapter; bounded endpoint/message decoding, same-origin endpoint policy and only the agreed initial POST fallback statuses | C2/C4/C6–C11 in legacy mode; non-fallback auth/5xx/malformed neighbors |
 | A0 authorization domain + substitutes, after T1 identities | New gateway `mcp_authorization/{domain,application,contracts}` and matching tests; pure generation/attempt/fence decisions, private-record/audit/HTTP/clock/entropy ports and deterministic TLS server/store fixtures. Domain emits effects rather than accessing SDK internals or keychain | A1–A10 domain/ordering cases, including scopes and uncertain publication; no claim of completed network or product rows |
-| A1 consent + private store integration, after A0 | `mcp_authorization/{application,infrastructure,entrypoint}`, gateway composition and generated product/client `mcpServers.authorize/revoke` mappings. Add protected-resource/OIDC discovery, S256/dynamic registration, loopback callback, durable fence/secret records and macOS private writer; wire manage authority and ready-token port into MCP. Include revoke/cleanup for pending consent and Ready before exposing authorization | A1–A4/A8–A10 through public product route and real deterministic TLS listener without concurrent refresh; unavailable store/platform, callback restart, basic revoke, discovery/scope and audit neighbors |
-| A2 refresh/revoke + definition handoff, after A1 | Same per-server owner, token request seam and current settings/live-set/relay-grant close owners; extend the existing revoke owner to single-flight refresh and concurrent generation races, retained candidates, definition fencing, secret deletion, remote observation and evidence settlement | A5–A10, C5/C8/C11 and U2 with tokens; rotating/lost replies, every effect/ack restart point, late write/revoke races, failed drain/deletion/audit |
+| A1 consent + private store integration, after A0 | `mcp_authorization/{application,infrastructure,entrypoint}`, gateway composition and generated product/client `mcpServers.authorize/revoke` mappings. Add protected-resource/OIDC discovery, S256/dynamic registration, loopback callback, durable fence/secret records and macOS private writer; wire manage authority and ready-token port into MCP. Include basic URL-change/removal fencing and retained session/credential cleanup through settings publication, plus revoke/cleanup for pending consent and Ready, before exposing ready-token dispatch | A1–A4/A8–A10 and token-backed U1/U2 through public product routes and real deterministic TLS listener without concurrent refresh; ready-token URL edit/removal, unavailable store/platform, callback restart, basic revoke, discovery/scope and audit neighbors |
+| A2 refresh/revoke + definition handoff, after A1 | Same per-server owner, token request seam and current settings/live-set/relay-grant close owners; extend the existing revoke owner to single-flight refresh and concurrent generation races, retained candidates, refresh-specific definition-handoff races, secret deletion, remote observation and evidence settlement | A5–A10, C5/C8/C11 and U2 with tokens; rotating/lost replies, every effect/ack restart point, late write/revoke races, failed drain/deletion/audit |
 | U desktop/apps, after T2+A2 | `src/desktop/settings/{model,adapters,ui}`, desktop dependency factory, existing `src/host`/`src-tauri/src/links.rs` native URL seam; gateway/SDK MCP app resource/CSP and current review/ticket owners; generated client API consumption | U1–U5, browser gateway scripts in Chromium/WebKit, narrow layout/focus/pending/failure evidence and one owner-run real remote app check |
 
 Each slice updates the relevant chart/table when tests reveal another ordering,
@@ -644,8 +644,8 @@ is visible until that evidence exists, and does not block cloud coding.
 
 Each implementation PR names #392 and the rows it completes. SDK/public API,
 module maps, generated contracts and guides change with the owning implementation.
-The design receives one Astra medium review round; implementation follows the
-canonical bounded code-review loop on its actual diff.
+Review requirements remain in the canonical coding standards; implementation
+reviews apply them to the actual diff and its declared environment.
 
 ## Alternatives and remaining decisions
 
