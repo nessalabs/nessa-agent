@@ -32,7 +32,8 @@ export const css = {
   workspace: "[data-workspace]", // carries data-content (see `content`)
   anyReady: "[data-pane-key], [data-surface]",
 
-  // The load fallback in index.html, before the frontend mounts
+  // The load fallback in index.html, before the frontend mounts.
+  // loadMark and startupMark must match nothing: the screens do not paint the avatar.
   loadMessage: "[data-nessa-load-message]",
   loadMark: "[data-nessa-load-mark]",
   loadTitle: "[data-nessa-load-title]",
@@ -98,16 +99,9 @@ export const css = {
 
   // MCP Apps (ADR 344, #349) and the fixture app the sample workspace registers (src/desktop/widgets/app/fixture/)
   appFrame: "[data-app-frame]", // an app's sandbox proxy frame; its value is the place it is drawn in
-  appFrameIn: (place) => `[data-app-frame="${place}"]`, // the app's frame in one place: inline, pane, window
   appView: "[data-app-view]", // an app's view; its value is the view's lifecycle
   appNotice: ".widget-app-notice", // class: a notice above a running app
-  fixtureControl: (name) => `[data-fixture="${name}"]`, // a control inside the fixture app's own document
-  fixtureState: (state) => `body[data-fixture-state="${state}"]`, // the fixture app saying where it is
-  fixtureOutput: (name) => `#${name}`, // what the fixture app heard back: call, fetch, mode
   // The test MCP server's review app (scripts/mcp-test-server/server.mjs), as a real server serves it
-  reviewControl: (name) => `[data-review="${name}"]`, // a control inside the review app: delete, fullscreen
-  reviewState: (state) => `body[data-review-state="${state}"]`, // the review app saying where it is
-  reviewOutput: (name) => `#${name}`, // what the review app heard back: result, first, hidden-no-ui, hidden-with-ui, again
   chartApp: "#chart", // the test server's chart app: what it draws, "chart for <server>"
 
   // Quick switcher (⌘K, ⌘\\)
@@ -129,6 +123,11 @@ export const css = {
   approvalWord: ".workspace-approval-word", // class
   approvalHead: ".workspace-approval-head", // class: who asks, and what
   approvalHeadWords: ".workspace-approval-head-words", // class: the head's words, without its icon
+  approvalCommand: ".workspace-approval-command", // class: what is asked, whole: a command, or an app's tool and its message
+
+  // A message of the person's that an MCP App wrote (#390)
+  messageAuthor: ".workspace-message-author", // class: which app wrote it, above its bubble
+  bubble: ".workspace-bubble", // class: a message of the person's
 
   // Agents overview (always offered: the sidebar's entry and ⌘0)
   overviewEntry: ".workspace-sidebar .agents-overview-entry", // class: the sidebar's "Agents"
@@ -196,19 +195,15 @@ export const css = {
   linkedOff: '[data-linked="off"]',
   linkedRefused: '[data-linked="refused"]',
   linkedPending: '[data-linked="pending"]',
-  linkedAction: (action) => `[data-linked-action="${action}"]`,
   linkedNotice: "[data-linked-notice]",
   pairingCode: '[data-slot="pairing-code"]',
   signalOrb: '[data-slot="signal-orb"]',
   qrOrb: '[data-slot="qr-orb"]',
   fingerprint: '[data-slot="key-fingerprint"]',
   mcpServers: "[data-mcp-servers]", // the tab; its value: loading | listed | not-configured | failed | too-large | not-admin
-  mcpServersIn: (phase) => `[data-mcp-servers="${phase}"]`,
   mcpRow: "[data-mcp-server]", // a server's row; its value is the server's name
-  mcpRowNamed: (name) => `[data-mcp-server="${name}"]`,
   mcpStoredRow: "[data-mcp-server]:not([data-managed])",
   mcpAnyGroup: "[data-mcp-group]", // any name stored more than once
-  mcpGroupNamed: (name) => `[data-mcp-group="${name}"]`, // a name stored more than once: its read-only rows and one action (G3)
   mcpShared: "[data-mcp-shared]", // a group's "N servers share this name…"
   mcpSharedRow: "[data-mcp-shared-row]", // one read-only server of a group
   mcpManagedRow: "[data-mcp-server][data-managed]",
@@ -221,24 +216,17 @@ export const css = {
   mcpConfirm: "[data-mcp-confirm]", // a row's "Remove …?"
   mcpForm: "[data-mcp-form]", // the add or edit form; its value is the stored name edited, empty while adding
   mcpVariable: "[data-mcp-variable]", // a variable's row in the form
-  mcpVariableNamed: (name) => `[data-mcp-variable="${name}"]`, // a stored variable's row, by its name
   mcpVariableAdded: "[data-mcp-variable-key]", // a variable's row whose name is typed in the form
   mcpSecret: "[data-mcp-secret]", // a variable's value: a password field, uncontrolled
   mcpSecretHeld: "[data-mcp-secret-held]", // a value pasted with line breaks, held and not drawn (S4)
   mcpPasted: "[data-mcp-pasted]", // its "Pasted value: N lines"
   mcpArgument: "[data-mcp-argument]", // an argument's row in the form; its value is its place
-  mcpField: (field) => `[data-mcp-field="${field}"]`, // a form field by name: command
   mcpValuesNeeded: "[data-mcp-values-needed]", // why Save waits on stored values, empty until it does
   mcpProblem: "[data-mcp-problem]", // a field's problem region, empty until a refusal; its value is the field
-  mcpProblemFor: (field) => `[data-mcp-problem="${field}"]`, // a field's problem region by field: form for the form's own
-  mcpAction: (action) => `[data-mcp-action="${action}"]`, // a tab's control by what it does: add | edit | inspect | remove | removeFirst | cancel | confirm | close | removeByName (the name field) | clear-value | trim-value | keep-value
   mcpInspection: "[data-mcp-inspection]", // the inspection panel; its value: running | done | failed
-  mcpInspectionIn: (phase) => `[data-mcp-inspection="${phase}"]`,
   mcpInspectionHeading: "[data-mcp-inspection] h2", // the inspection's heading, where focus lands
   mcpInspectionStatus: "[data-mcp-inspection-status]", // what the inspection says of how it ended
   mcpAnyTool: "[data-mcp-tool]", // any inspected tool
-  mcpTool: (name) => `[data-mcp-tool="${name}"]`, // an inspected tool
-  mcpBadge: (badge) => `[data-badge="${badge}"]`, // a tool's badge: read-only | destructive | ui
   mcpCut: "[data-mcp-cut]",
   mcpSwitch: '[role="switch"]',
 
@@ -257,6 +245,28 @@ export const css = {
 
   // Picture band atop conversation panes (decorative, aria-hidden)
   pictureBand: "[data-sliver]",
+}
+
+/** Parameterized selectors, built before passing their strings to the page. */
+export const selectorFor = {
+  appFrameIn: (place) => `[data-app-frame="${place}"]`, // the app's frame in one place: inline, pane, window
+  fixtureControl: (name) => `[data-fixture="${name}"]`, // a control inside the fixture app's own document
+  fixtureState: (state) => `body[data-fixture-state="${state}"]`, // the fixture app saying where it is
+  fixtureOutput: (name) => `#${name}`, // what the fixture app heard back: call, fetch, mode, message, context
+  reviewControl: (name) => `[data-review="${name}"]`, // a control inside the review app: delete, fullscreen
+  reviewState: (state) => `body[data-review-state="${state}"]`, // the review app saying where it is
+  reviewOutput: (name) => `#${name}`, // what the review app heard back: result, first, hidden-no-ui, hidden-with-ui, again
+  linkedAction: (action) => `[data-linked-action="${action}"]`,
+  mcpServersIn: (phase) => `[data-mcp-servers="${phase}"]`,
+  mcpRowNamed: (name) => `[data-mcp-server="${name}"]`,
+  mcpGroupNamed: (name) => `[data-mcp-group="${name}"]`, // a name stored more than once: its read-only rows and one action (G3)
+  mcpVariableNamed: (name) => `[data-mcp-variable="${name}"]`, // a stored variable's row, by its name
+  mcpField: (field) => `[data-mcp-field="${field}"]`, // a form field by name: command
+  mcpProblemFor: (field) => `[data-mcp-problem="${field}"]`, // a field's problem region by field: form for the form's own
+  mcpAction: (action) => `[data-mcp-action="${action}"]`, // a tab's control by what it does: add | edit | inspect | remove | removeFirst | cancel | confirm | close | removeByName (the name field) | clear-value | trim-value | keep-value
+  mcpInspectionIn: (phase) => `[data-mcp-inspection="${phase}"]`,
+  mcpTool: (name) => `[data-mcp-tool="${name}"]`, // an inspected tool
+  mcpBadge: (badge) => `[data-badge="${badge}"]`, // a tool's badge: read-only | destructive | ui
 }
 
 /**
@@ -374,6 +384,10 @@ export const names = {
   agentsEntry: "Agents",
   /** An app's review card's head: the app by its server, and the tool it asked to run (`approvalHead`). */
   appAsks: (server, tool) => `The ${server} app wants to run ${tool}`,
+  /** An app's message's review card's head and overview row: what it asks (`approvalHead`, #390). */
+  appAsksToMessage: (server) => `The ${server} app wants to send a message as you`,
+  /** The label above a message an app wrote (`messageAuthor`, #390). */
+  sentBy: (tool, server) => `Sent by ${tool}, from ${server}`,
   /** A pane's "…" menu: the header picture's two choices (issue #320). */
   chooseHeaderPicture: "Choose Header Picture…",
   useNightScene: "Use Night Scene",
@@ -458,6 +472,13 @@ export const names = {
   appSession: "An MCP App, in its sandbox",
   /** What the fixture server refuses its hidden tool with (`fixture-plugin.ts`). */
   hiddenToolRefused: "fixture_secret is not available to apps",
+  /** The fixture app's server and its tool, as a message it wrote names them (`fixture-plugin.ts`). */
+  fixtureServer: "nessa-fixture",
+  fixtureTool: "show_fixture",
+  /** The message the fixture app sends (`fixture-app.ts`). */
+  fixtureMessage: "Plot May next to April",
+  /** What the sample answers a context: it has no model (`noModelForContext`). */
+  noModelForContext: "The sample has no model to give context to",
   /**
    * What an app is told of a refused call to a real server through the
    * gateway (`widgets/app/adapters/gateway/mcp-app-server.ts`), by why.
@@ -557,9 +578,10 @@ export const readinessVerification = {
 /**
  * The app-review fixture (`fixtures/app-review/`, #436): the window over a
  * fake gateway whose one conversation holds an MCP App's call, which asks for
- * a review when the page calls a tool (`__appReview.call`). The longest
- * tool's name is the page's (`__appReview.longestTool`), from the client's
- * own bound.
+ * a review when the page calls a tool (`__appReview.call`), or sends a
+ * message (`__appReview.message`, #390). The longest tool's name and message
+ * are the page's (`__appReview.longestTool`, `.longestMessage`,
+ * `.longestWord`), from the client's own bounds.
  */
 export const appReview = {
   page: "verification/desktop/fixtures/app-review/index.html",
@@ -567,9 +589,42 @@ export const appReview = {
   sessionId: "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
   /** The card's head: the app by its server, and the tool it named. */
   head: (tool) => names.appAsks("mcptest", tool),
-  /** The overview row's accessible name: the title, then the app asking. */
-  row: (tool) => `Clean up the stale rows. ${names.appAsks("mcptest", tool)} {}.`,
+  /**
+   * The overview row's accessible name: the title, then the app asking, its
+   * server and its command each isolated between FSI and PDI (`spoken` in
+   * `said.tsx`, #390).
+   */
+  row: (tool) =>
+    `Clean up the stale rows. ${names.appAsks("\u2068mcptest\u2069", `\u2068${tool} {}\u2069`)}.`,
   tool: "app_delete_row",
+  /** The app's own tool and server, as its message's review and label name them (#390). */
+  appTool: "show_rows",
+  server: "mcptest",
+  /** What the app sends. */
+  message: "Plot May next to April",
+  /** A message's review card's head (#390). */
+  messageHead: names.appAsksToMessage("mcptest"),
+  /** A message's overview row's accessible name. */
+  messageRow: `Clean up the stale rows. ${names.appAsksToMessage("\u2068mcptest\u2069")}.`,
+  /**
+   * Names carrying bidi controls (E2-1 on #390) — a stray PDI then an
+   * embedding, and an override — and each as the window shows it, every
+   * control as U+FFFD (`shownName` in `said.tsx`).
+   */
+  bidiNames: [
+    {
+      server: "a\u2069\u202Eb",
+      tool: "c\u2069\u2069\u202Bd",
+      shownServer: "a\uFFFD\uFFFDb",
+      shownTool: "c\uFFFD\uFFFD\uFFFDd",
+    },
+    {
+      server: "evil\u202Egnp.exe",
+      tool: "show_rows",
+      shownServer: "evil\uFFFDgnp.exe",
+      shownTool: "show_rows",
+    },
+  ],
   /** The fixture page's title, by which the script knows it is served. */
   title: "Nessa: an app's review",
 }

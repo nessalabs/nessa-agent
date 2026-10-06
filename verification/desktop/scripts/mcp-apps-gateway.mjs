@@ -66,7 +66,7 @@ import {
 import { agentTurn, startGatewayStack, waitFor } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
-import { css, names, offeredLabel } from "./lib/selectors.mjs"
+import { css, names, offeredLabel, selectorFor } from "./lib/selectors.mjs"
 import {
   paneCount,
   paneCountIs,
@@ -245,7 +245,7 @@ async function appReviews(client, conversationId) {
 
 /** What an output of the review app says, once it says anything but `pending`. */
 async function output(frame, id, timeout = 10_000) {
-  const selector = css.reviewOutput(id)
+  const selector = selectorFor.reviewOutput(id)
   await frame
     .waitForFunction(
       (selector) => {
@@ -265,7 +265,7 @@ async function output(frame, id, timeout = 10_000) {
 const said = (frame, id) =>
   frame.evaluate(
     (selector) => document.querySelector(selector)?.textContent ?? "",
-    css.reviewOutput(id),
+    selectorFor.reviewOutput(id),
   )
 
 /** The keys of the app's reviews pending now: a baseline taken before an action. */
@@ -333,7 +333,7 @@ const reviewGone = (stack, review, ms) =>
  * or 0 when the app has not received the pointer by `appReviewUnstartedMs`.
  */
 async function pointerOnto(page, frame, control) {
-  const selector = css.reviewControl(control)
+  const selector = selectorFor.reviewControl(control)
   await frame.evaluate((selector) => {
     const button = document.querySelector(selector)
     window.__nessaPointerEntered = false
@@ -486,15 +486,11 @@ async function openConversation(browser, stack, layout) {
     await settled(opened.page)
     return { ...opened, reviewsBefore, conversationOpen }
   } catch (error) {
-    // No step will report the page's lines, so the error carries them, and
-    // the page is closed rather than left open until the browser closes.
+    // Size reports can still move a full-body abort. Close then reports
+    // whatever lines remain; the open result does not take them, and the
+    // steps not started are "not run".
     await opened.settleRequests()
-    const lines = [
-      ...opened.errors.splice(0),
-      ...opened.harmless.splice(0).map((line) => `harmless: ${line}`),
-    ]
     await opened.close().catch(() => {})
-    if (lines.length > 0) error.message += `\n  the page's lines: ${lines.join("; ")}`
     throw error
   }
 }
@@ -503,8 +499,7 @@ async function openConversation(browser, stack, layout) {
  * Signs `context` in from a page of its own on the sample page, which it
  * closes: the window's page then records only its own lines. This script
  * reports them on each step's result, errors as failures and the rest as
- * `harmless`, and in the error when opening the conversation throws; lines
- * that arrive after the last step are not reported yet (#494). Returns the
+ * `harmless`. Close reports a line that arrives after the last step. Returns the
  * app's reviews pending then: whatever a previous engine's page left, not
  * yet withdrawn, is not this page's (R4). Read before the window loads: it opens the conversation
  * on load, so the app can mount, and its first call open a review, at any
@@ -551,7 +546,10 @@ async function windowOpened(page, stack, baseline, ms = 20_000) {
   const until = Date.now() + ms
   const left = () => Math.max(until - Date.now(), 1)
   const framed = await page
-    .waitForSelector(css.appFrameIn("inline"), { timeout: left(), state: "attached" })
+    .waitForSelector(selectorFor.appFrameIn("inline"), {
+      timeout: left(),
+      state: "attached",
+    })
     .then(() => true)
     .catch(() => false)
   if (!framed) return (await page.$(css.appView)) !== null
@@ -560,7 +558,7 @@ async function windowOpened(page, stack, baseline, ms = 20_000) {
     () => null,
   )
   const live = await app
-    ?.waitForSelector(css.reviewState("live"), { timeout: left() })
+    ?.waitForSelector(selectorFor.reviewState("live"), { timeout: left() })
     .then(() => true)
     .catch(() => false)
   if (live) await reviewOpened(stack, baseline, left())
@@ -578,7 +576,10 @@ const checks = {
     // The app's frame is drawn once its resource is read and fetched: a
     // view that never gets there has failed, and says how in its lifecycle.
     const drawn = await page
-      .waitForSelector(css.appFrameIn("inline"), { timeout: 30_000, state: "attached" })
+      .waitForSelector(selectorFor.appFrameIn("inline"), {
+        timeout: 30_000,
+        state: "attached",
+      })
       .then(() => true)
       .catch(() => false)
     if (!drawn) {
@@ -594,14 +595,14 @@ const checks = {
     }
     const { proxy, app } = await appFrame(page, "inline", 30_000)
     await app
-      .waitForSelector(css.reviewState("live"), { timeout: 20_000 })
+      .waitForSelector(selectorFor.reviewState("live"), { timeout: 20_000 })
       .catch(() => {})
     // The session has one review_rows call: it is one step of the
     // transcript, every inline frame is its mount, and only one may be, or a
     // later step's review may be another's.
     await settled(page)
     const cards = await page.locator(css.transcriptStep, { hasText: APP_TOOL }).count()
-    const frames = (await page.$$(css.appFrameIn("inline"))).length
+    const frames = (await page.$$(selectorFor.appFrameIn("inline"))).length
     const drawnOnce = [oneCard(cards), oneMount(frames)].filter(Boolean)
     if (drawnOnce.length > 0) {
       if (shot) await page.screenshot({ path: shot })
@@ -679,7 +680,7 @@ const checks = {
     // A review left pending (the mount's own, when allow did not run) would
     // hold the window's card ahead of this step's.
     const baseline = await settleEarlier(page, stack, failures)
-    await app.click(css.reviewControl("delete"))
+    await app.click(selectorFor.reviewControl("delete"))
     const before = await said(app, "again")
     if (before !== "pending")
       failures.push(
@@ -698,13 +699,13 @@ const checks = {
     const failures = []
     const inline = await appFrame(page, "inline")
     const panes = await paneCount(page)
-    await inline.app.click(css.reviewControl("fullscreen"))
+    await inline.app.click(selectorFor.reviewControl("fullscreen"))
     await paneCountIs(page, panes + 1)
     const pane = await appFrame(page, "pane", 20_000)
     // The mount going live is what lets a later, unsized `/mcp-resources`
     // abort be treated as delivered (#473). A timeout leaves it a failure.
     const paneLive = await pane.app
-      .waitForSelector(css.reviewState("live"), { timeout: 20_000 })
+      .waitForSelector(selectorFor.reviewState("live"), { timeout: 20_000 })
       .then(() => true)
       .catch(() => false)
     const paneMode = await pane.app.evaluate(() =>
@@ -722,7 +723,7 @@ const checks = {
       return { seen: { paneMode, pointerMoves }, failures }
     }
     try {
-      await pane.app.click(css.reviewControl("delete"))
+      await pane.app.click(selectorFor.reviewControl("delete"))
     } catch (error) {
       failures.push(
         `the pane's delete click did not land: ${error.message.split("\n")[0]}`,
@@ -760,10 +761,10 @@ const checks = {
     await until(
       page,
       (frame) => !document.querySelector(frame),
-      css.appFrameIn("pane"),
+      selectorFor.appFrameIn("pane"),
       5000,
     )
-    if (await page.$(css.appFrameIn("pane")))
+    if (await page.$(selectorFor.appFrameIn("pane")))
       failures.push("the pane's app frame is still on the page after its close")
     const withdrawn = await reviewGone(stack, waiting, 15_000)
     const withdrawnAt = Date.now()
@@ -816,13 +817,20 @@ await main(
         try {
           opened = await openConversation(browser, stack, layout)
         } catch (error) {
-          // `resultOfThrown` owns the fault's stack (#475). The page lines
-          // `openConversation` appended stay on `detail`; the result keeps
-          // the first line.
+          // `resultOfThrown` owns the fault's stack (#475). Close already
+          // reported the page's lines; this result keeps the error's first line.
           rep.add({
             ...resultOfThrown({ name: "open", engine, layout }, error),
             detail: String(error?.message ?? error),
           })
+          for (const name of only)
+            rep.add({
+              name,
+              engine,
+              layout,
+              cannotRun: true,
+              error: "not run: the page did not open",
+            })
           continue
         }
         let stopped = null
@@ -852,8 +860,6 @@ await main(
               result = { failures: [], error: error.message.split("\n")[0] }
             }
             await opened.settleRequests()
-            const pageFailures = opened.errors.splice(0)
-            const pageHarmless = opened.harmless.splice(0)
             // A fully read `/mcp-resources` can still be reported aborted
             // with no size. Once this step has seen the pane mount live, and
             // the inline mount stayed live, that same-origin line is the
@@ -863,14 +869,10 @@ await main(
               result.seen?.paneLive === true &&
               result.seen?.inlineState === "live"
             ) {
-              const kept = []
-              for (const line of pageFailures) {
-                if (liveMountResourceAbort(line, opened.page.url()))
-                  pageHarmless.push(`${line} (mount went live, #473)`)
-                else kept.push(line)
-              }
-              pageFailures.length = 0
-              pageFailures.push(...kept)
+              opened.reclassifyHeld(
+                (line) => liveMountResourceAbort(line, opened.page.url()),
+                (line) => `${line} (mount went live, #473)`,
+              )
             }
             const entry = rep.add({
               name,
@@ -878,8 +880,6 @@ await main(
               layout,
               ms: Date.now() - at,
               ...result,
-              failures: [...(result.failures ?? []), ...pageFailures],
-              harmless: pageHarmless,
             })
             // A refused call leaves nothing waiting, so the steps after
             // `hidden` begin from the same page whatever it saw.

@@ -96,10 +96,12 @@
 //! (`service.rs`, `submit_as`), which decides under the submission lock
 //! whether it may go and which held contexts it carries.
 mod app_reviews;
+mod audit_records;
 mod change_watch;
 /// The room an app's review takes of a view, which the schema states too.
 #[cfg(test)]
 pub(crate) use app_reviews::MAX_APP_REVIEW_BYTES;
+pub(crate) use audit_records::audit_records;
 pub use change_watch::{WatchNamespaces, WatchRecords};
 mod catalogue;
 pub(crate) mod catalogue_watch;

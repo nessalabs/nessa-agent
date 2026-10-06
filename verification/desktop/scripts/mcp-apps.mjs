@@ -4,7 +4,9 @@
  * registers (`src/desktop/widgets/app/fixture/`): it renders inline, in a pane
  * (its own fullscreen request) and in the window, each place told its
  * display mode and given its tool call; `tools/call` is answered for an
- * allowed tool and refused for a hidden one; a request to an origin its CSP
+ * allowed tool and refused for a hidden one; `ui/message` lands in the
+ * transcript labelled with the app that wrote it, and a context is refused
+ * as the sample has no model (#390); a request to an origin its CSP
  * does not declare is blocked, and the host says so; the app runs on an
  * opaque origin that reaches neither the window nor storage; it cannot leave
  * its frame for a page without its policy, nor speak as the proxy; the
@@ -22,7 +24,7 @@ import { attempt, CannotRun, devServerOnlySteps, recordIfLeftOut } from "./lib/c
 import { appFrame } from "./lib/apps.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { content, css, names } from "./lib/selectors.mjs"
+import { content, css, names, selectorFor } from "./lib/selectors.mjs"
 import { contentIs, paneCount, paneCountIs, settled, until } from "./lib/workspace.mjs"
 
 const meta = {
@@ -42,6 +44,15 @@ Checks, per engine and layout (--only <names> to pick):
   window       the pane's Open in Window shows the app in the window, live,
                told fullscreen, filling it
   tools-call   tools/call answered for the allowed tool, refused for the hidden one
+  message      ui/message answered {} and landing in the transcript as one message
+               of the person's with the app's words, labelled "Sent by
+               show_fixture, from nessa-fixture" — wrapped, not cut, so with no
+               title; each name in a <bdi>; data-message-app server/tool —
+               above its bubble, over the
+               bubble's right edge (within 6 px), inside the column, and no label
+               on the person's own; another while the sample's reply runs is
+               isError and adds nothing; ui/update-model-context is refused, the
+               sample having no model to give it to (#390)
   csp          a fetch to an undeclared origin is blocked, and the host's notice
                names it
   isolation    the app's origin is opaque: no parent document, no storage; the
@@ -539,7 +550,7 @@ async function onSample(browser, { url, layout }) {
   }
   if (!(await row.count())) throw new CannotRun(`no session row "${names.appSession}"`)
   await row.click()
-  await need(page, css.appFrameIn("inline"), "the app's card frame", 10_000)
+  await need(page, selectorFor.appFrameIn("inline"), "the app's card frame", 10_000)
   await settled(page)
   return opened
 }
@@ -547,7 +558,7 @@ async function onSample(browser, { url, layout }) {
 /** Waits until the app in `frame` says it is `state` (`data-fixture-state`), and says what it is. */
 async function appState(frame, state, timeout = 10_000) {
   try {
-    await frame.waitForSelector(css.fixtureState(state), { timeout })
+    await frame.waitForSelector(selectorFor.fixtureState(state), { timeout })
   } catch {
     // Reported below.
   }
@@ -646,9 +657,9 @@ async function openPane(page, failures) {
   const before = await paneCount(page)
   const { app } = await appFrame(page, "inline")
   await appState(app, "live")
-  await app.click(css.fixtureControl("fullscreen"))
+  await app.click(selectorFor.fixtureControl("fullscreen"))
   await paneCountIs(page, before + 1)
-  const answer = await output(app, css.fixtureOutput("mode"))
+  const answer = await output(app, selectorFor.fixtureOutput("mode"))
   if (answer !== 'ok: {"mode":"inline"}')
     failures.push(`the card's fullscreen request was answered ${answer}, expected inline`)
   return expectLive(page, "pane", "fullscreen", failures)
@@ -673,9 +684,9 @@ const checks = {
       ([frame, want]) =>
         Math.abs(document.querySelector(frame).getBoundingClientRect().height - want) <=
         1,
-      [css.appFrameIn("inline"), height],
+      [selectorFor.appFrameIn("inline"), height],
     ).catch(() => {})
-    const drawn = await rect(await page.$(css.appFrameIn("inline")))
+    const drawn = await rect(await page.$(selectorFor.appFrameIn("inline")))
     if (Math.abs(drawn.h - height) > 1)
       failures.push(`the card's frame is ${drawn.h}px tall; the app said ${height}px`)
     return { frame: box, drawn, appHeight: height, told: told.styles, failures }
@@ -689,7 +700,7 @@ const checks = {
     const measured = await fills(
       page,
       `${css.widgetPane} ${css.widgetBody}`,
-      `${css.widgetPane} ${css.appFrameIn("pane")}`,
+      `${css.widgetPane} ${selectorFor.appFrameIn("pane")}`,
     )
     if (!measured.fit)
       failures.push(
@@ -713,7 +724,7 @@ const checks = {
     const measured = await fills(
       page,
       `${css.widgetWindow} ${css.widgetBody}`,
-      css.appFrameIn("window"),
+      selectorFor.appFrameIn("window"),
     )
     if (!measured.fit)
       failures.push(
@@ -726,26 +737,108 @@ const checks = {
     const failures = []
     const { app } = await appFrame(page, "inline")
     await appState(app, "live")
-    await app.click(css.fixtureControl("call-allowed"))
-    const allowed = await output(app, css.fixtureOutput("call"))
+    await app.click(selectorFor.fixtureControl("call-allowed"))
+    const allowed = await output(app, selectorFor.fixtureOutput("call"))
     if (
       allowed !==
       'ok: {"content":[{"type":"text","text":"Refreshed"}],"structuredContent":{"refreshed":{"times":1}}}'
     )
       failures.push(`the allowed tool was answered ${allowed}`)
-    await app.click(css.fixtureControl("call-hidden"))
-    const hidden = await output(app, css.fixtureOutput("call"), allowed)
+    await app.click(selectorFor.fixtureControl("call-hidden"))
+    const hidden = await output(app, selectorFor.fixtureOutput("call"), allowed)
     if (hidden !== `error: ${names.hiddenToolRefused}`)
       failures.push(`the hidden tool was answered ${hidden}`)
     return { allowed, hidden, failures }
+  },
+
+  message: async (page) => {
+    const failures = []
+    const { app } = await appFrame(page, "inline")
+    await appState(app, "live")
+    const authors = page.locator(css.messageAuthor)
+    const before = await authors.count()
+    // The person's own messages in this session carry no label.
+    if (before !== 0) failures.push(`${before} labels before the app wrote anything`)
+    await app.click(selectorFor.fixtureControl("message"))
+    const sent = await output(app, selectorFor.fixtureOutput("message"))
+    if (sent !== "ok: {}") failures.push(`the message was answered ${sent}`)
+    await authors
+      .nth(before)
+      .waitFor({ timeout: 5000 })
+      .catch(() => {})
+    const count = await authors.count()
+    if (count !== before + 1) {
+      failures.push(`${count - before} app labels appeared, not 1`)
+      return { sent, failures }
+    }
+    const author = authors.last()
+    const label = (await author.textContent().catch(() => null)) ?? ""
+    const expected = names.sentBy(names.fixtureTool, names.fixtureServer)
+    if (label !== expected) failures.push(`the label says "${label}", not "${expected}"`)
+    // Whole on the page, wrapped where it must be: no title repeats it.
+    const title = await author.getAttribute("title").catch(() => null)
+    if (title !== null) failures.push(`the label has a title, "${title}"`)
+    const writer = await author.getAttribute("data-message-app").catch(() => null)
+    if (writer !== `${names.fixtureServer}/${names.fixtureTool}`)
+      failures.push(`the label's data-message-app is "${writer}"`)
+    // Each name isolated from the words around it (#390, E1-8).
+    const isolated = await author
+      .evaluate((e) => [...e.querySelectorAll("bdi")].map((name) => name.textContent))
+      .catch(() => [])
+    if (
+      JSON.stringify(isolated) !==
+      JSON.stringify([names.fixtureTool, names.fixtureServer])
+    )
+      failures.push(`the label isolates ${JSON.stringify(isolated)}`)
+    const wraps = await author
+      .evaluate((e) => {
+        const style = getComputedStyle(e)
+        return style.whiteSpace !== "nowrap" && style.textOverflow !== "ellipsis"
+      })
+      .catch(() => false)
+    if (!wraps) failures.push("the label is cut to one line, not wrapped")
+    // The label sits over its own message: the person's, with the app's words.
+    const message = author.locator("xpath=..")
+    const bubble = message.locator(css.bubble)
+    const said = (await bubble.textContent().catch(() => null)) ?? ""
+    if (said !== names.fixtureMessage) failures.push(`the bubble says "${said}"`)
+    const role = await message.getAttribute("data-role").catch(() => null)
+    if (role !== "user") failures.push(`the labelled message is the ${role}'s`)
+    const labelRect = await rect(author)
+    const bubbleRect = await rect(bubble)
+    const column = await rect(message)
+    const geometry = { label: labelRect, bubble: bubbleRect, column }
+    if (labelRect.y + labelRect.h > bubbleRect.y + 0.5)
+      failures.push("the label is not above the bubble")
+    const edge = Math.abs(labelRect.x + labelRect.w - (bubbleRect.x + bubbleRect.w))
+    geometry.rightEdgeApart = edge
+    if (edge > 6) failures.push(`the label is ${edge}px off the bubble's right edge`)
+    if (
+      labelRect.x < column.x - 0.5 ||
+      labelRect.x + labelRect.w > column.x + column.w + 0.5
+    )
+      failures.push("the label leaves the column")
+    // The sample's agent is replying now: another is refused, and adds nothing.
+    await app.click(selectorFor.fixtureControl("message"))
+    const busy = await output(app, selectorFor.fixtureOutput("message"), sent)
+    if (busy !== 'ok: {"isError":true}')
+      failures.push(`a message while the reply runs was answered ${busy}`)
+    if ((await authors.count()) !== before + 1)
+      failures.push("a refused message appeared in the transcript")
+    await app.click(selectorFor.fixtureControl("context"))
+    const context = await output(app, selectorFor.fixtureOutput("context"))
+    // The sample has no model to give a context to, and says so.
+    if (context !== `error: ${names.noModelForContext}`)
+      failures.push(`the context was answered ${context}`)
+    return { sent, label, said, busy, context, geometry, failures }
   },
 
   csp: async (page) => {
     const failures = []
     const { app } = await appFrame(page, "inline")
     await appState(app, "live")
-    await app.click(css.fixtureControl("fetch"))
-    const fetched = await output(app, css.fixtureOutput("fetch"), "fetching")
+    await app.click(selectorFor.fixtureControl("fetch"))
+    const fetched = await output(app, selectorFor.fixtureOutput("fetch"), "fetching")
     if (fetched !== "blocked") failures.push(`the undeclared fetch was ${fetched}`)
     const notice = page.locator(css.appNotice, { hasText: names.blockedNotice })
     await notice
@@ -824,7 +917,7 @@ const checks = {
           const mark = await app.evaluate(
             () => (window.mcpAppsMark = String(Math.random())),
           )
-          await app.click(css.fixtureControl(control))
+          await app.click(selectorFor.fixtureControl(control))
           const line = page.locator(css.appView, { hasText: names.appLoadLine })
           await line
             .first()
@@ -842,7 +935,7 @@ const checks = {
                   window.mcpAppsMark === marked &&
                   location.href === "about:srcdoc" &&
                   document.querySelector(control) !== null,
-                [mark, css.fixtureControl(control)],
+                [mark, selectorFor.fixtureControl(control)],
               )
               .catch(() => false)) &&
             (await page.locator(css.appView).first().getAttribute("data-app-view")) ===
@@ -851,7 +944,7 @@ const checks = {
             failures.push(
               `within ${within} ms of ${control}, the host does not say "${names.appLoadLine}", and the app's document is not the one it was`,
             )
-          if (departed && (await page.$(css.appFrameIn("inline"))))
+          if (departed && (await page.$(selectorFor.appFrameIn("inline"))))
             failures.push(`after ${control}, the app's frame is still on the page`)
           if (leaked.length > 0)
             failures.push(`requests reached example.com: ${leaked.join(", ")}`)
@@ -870,7 +963,7 @@ const checks = {
     const { app } = await appFrame(page, "inline")
     await appState(app, "live")
     // Speaking as the proxy, and putting words in the host's chrome.
-    await app.click(css.fixtureControl("forge"))
+    await app.click(selectorFor.fixtureControl("forge"))
     await page.waitForTimeout(500)
     const view = await page.locator(css.appView).first().getAttribute("data-app-view")
     if (view !== "live")
@@ -895,9 +988,9 @@ const checks = {
     await until(
       page,
       (frame) => !document.querySelector(frame),
-      css.appFrameIn("pane"),
+      selectorFor.appFrameIn("pane"),
     ).catch(() => {})
-    if (await page.$(css.appFrameIn("pane")))
+    if (await page.$(selectorFor.appFrameIn("pane")))
       failures.push("the pane's frame is still on the page after its close")
     if (!proxy.isDetached() || !app.isDetached())
       failures.push("the pane's proxy or app document outlived its close")
@@ -906,7 +999,7 @@ const checks = {
     const panes = await paneCount(page)
     // The fixture answers its teardown 400ms after it is asked: until then
     // the pane stays, and the app is still on the page saying so.
-    await second.app.click(css.fixtureControl("close"))
+    await second.app.click(selectorFor.fixtureControl("close"))
     const said = await appState(second.app, "tearing-down", 2000).catch(() => ({
       state: "detached",
     }))
@@ -944,7 +1037,7 @@ await main(meta, async ({ options, rep, url, mode }) => {
         await attempt(rep, { engine, layout, name }, async () => {
           opened = await onSample(browser, { url, layout })
           const result = await checks[name](opened.page, layout)
-          return { ...result, failures: [...result.failures, ...opened.errors] }
+          return result
         }).finally(() => opened?.close())
       }
   })

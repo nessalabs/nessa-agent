@@ -1,6 +1,9 @@
 //! File loading belongs to composition; consumers receive typed settings.
 use super::agent::AgentsConfig;
-use crate::{core::RunError, product::SessionSettings};
+use crate::{
+    core::RunError,
+    product::{ConfiguredLimits, OperationalLimits, SessionSettings},
+};
 use nessa_auth::adapters::local::LocalStoreConfig;
 use serde::Deserialize;
 use std::{io::Read, net::SocketAddr, path::Path, time::Duration};
@@ -14,6 +17,8 @@ pub(super) const MAX_CONFIG_BYTES: usize = 65_536;
 pub(super) struct RuntimeConfig {
     pub registry: LocalStoreConfig,
     pub session: SessionConfig,
+    /// Tier-3 admission and the cold-read budget. Absent keeps the defaults.
+    pub limits: LimitsConfig,
     pub agents: Option<AgentsConfig>,
     /// Native device pairing; absent or `null` keeps it off (design rows S1, S2).
     pub native: Option<NativeConfig>,
@@ -34,6 +39,39 @@ pub(super) struct SessionConfig {
     write_timeout_ms: u64,
     current_state_interval_ms: u64,
 }
+/// Counts and the cold-read budget. Omitted fields stay the value object's defaults.
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct LimitsConfig {
+    requests: u64,
+    controls: u64,
+    record_reads: u64,
+    upload_begins: u64,
+    deletions: u64,
+    ordinary_slots: u64,
+    control_slots: u64,
+    app_calls_per_socket: u64,
+    read_work_budget_ms: u64,
+}
+
+impl Default for LimitsConfig {
+    fn default() -> Self {
+        let limits = OperationalLimits::default();
+        Self {
+            requests: limits.requests() as u64,
+            controls: limits.controls() as u64,
+            record_reads: limits.record_reads() as u64,
+            upload_begins: limits.upload_begins() as u64,
+            deletions: limits.deletions() as u64,
+            ordinary_slots: limits.ordinary_slots() as u64,
+            control_slots: limits.control_slots() as u64,
+            app_calls_per_socket: limits.app_calls_per_socket() as u64,
+            read_work_budget_ms: u64::try_from(limits.read_work_budget().as_millis())
+                .unwrap_or(u64::MAX),
+        }
+    }
+}
+
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
@@ -76,6 +114,7 @@ impl RuntimeConfig {
         let config: Self = serde_json::from_slice(bytes).map_err(refused)?;
         config.registry.validate().map_err(refused)?;
         config.session()?;
+        config.limits()?;
         Ok(config)
     }
 
@@ -87,6 +126,23 @@ impl RuntimeConfig {
             Duration::from_millis(self.session.write_timeout_ms),
             Duration::from_millis(self.session.current_state_interval_ms),
         )
+        .map_err(refused)
+    }
+
+    pub fn limits(&self) -> Result<OperationalLimits, RunError> {
+        // The value object owns what a usable count and budget are, so a
+        // configuration file and an embedding caller are rejected by the same rule.
+        OperationalLimits::configured(ConfiguredLimits {
+            requests: self.limits.requests,
+            controls: self.limits.controls,
+            record_reads: self.limits.record_reads,
+            upload_begins: self.limits.upload_begins,
+            deletions: self.limits.deletions,
+            ordinary_slots: self.limits.ordinary_slots,
+            control_slots: self.limits.control_slots,
+            app_calls_per_socket: self.limits.app_calls_per_socket,
+            read_work_budget: Duration::from_millis(self.limits.read_work_budget_ms),
+        })
         .map_err(refused)
     }
 }
@@ -162,6 +218,12 @@ mod tests {
         );
         assert_eq!(b.registry.max_credentials, 1000);
         assert_eq!(b.session().unwrap().write_timeout(), Duration::from_secs(5));
+        let narrowed = RuntimeConfig::parse(br#"{"limits":{"requests":2}}"#).unwrap();
+        assert_eq!(narrowed.limits().unwrap().requests(), 2);
+        assert_eq!(
+            narrowed.limits().unwrap().controls(),
+            OperationalLimits::default().controls()
+        );
     }
     /// Design row S2: refused contents are a configuration failure that a
     /// restart cannot fix, whichever section they are in.
@@ -172,6 +234,10 @@ mod tests {
             br#"{"native":{"listenAddress":"127.0.0.1"}}"#,
             br#"{"native":{"listenAddress":"127.0.0.1:1","tls":true}}"#,
             br#"{"session":{"writeTimeoutMs":0}}"#,
+            br#"{"limits":{"requests":0}}"#,
+            br#"{"limits":{"appCallsPerSocket":1}}"#,
+            br#"{"limits":{"readWorkBudgetMs":0}}"#,
+            br#"{"limits":{"unknown":1}}"#,
             b"not json",
         ] {
             assert!(matches!(
@@ -190,6 +256,8 @@ mod tests {
             br#"{"session":{"writeTimeoutMs":-1}}"#,
             br#"{"session":{"writeTimoutMs":3}}"#,
             br#"{"unknown":true}"#,
+            br#"{"limits":{"requests":0}}"#,
+            br#"{"limits":{"appCallsPerSocket":1}}"#,
             b"not json",
         ] {
             assert!(RuntimeConfig::parse(bytes).is_err());

@@ -383,6 +383,19 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   filling it. _Check:_ `mcp-apps.mjs --only inline,pane,window`.
 - [ ] **`tools/call` is answered for an allowed tool and refused for a hidden
   one**, with the gateway's reason. _Check:_ `mcp-apps.mjs --only tools-call`.
+- [ ] **An app's message lands in its conversation as the person's, saying
+  which app wrote it** (#390, rows D1, D4, D17 of the desktop's table in
+  [`docs/design/mcp-app-calls.md`](../../docs/design/mcp-app-calls.md#an-app-in-its-conversation-the-desktop-390)):
+  `ui/message` is answered `{}`, and the transcript gains exactly one message
+  of the person's with the app's words, labelled "Sent by show_fixture, from
+  nessa-fixture" — wrapped, never cut, so with no `title`; each name in its
+  own `<bdi>`; `data-message-app` `server/tool` — above its bubble, over the
+  bubble's right edge (within 6 px) and inside the column; the person's own
+  messages carry none; another while the sample's reply runs is refused
+  (`isError: true`) and adds nothing; `ui/update-model-context` is refused
+  "The sample has no model to give context to" (gate 7). The gateway's own
+  path is `app-messages.test.ts`, `bridge.test.ts` and `app-review.mjs
+  --only message`. _Check:_ `mcp-apps.mjs --only message`.
 - [ ] **A request to an origin the app did not declare is blocked by its CSP,
   and the host says so** above the app. _Check:_ `mcp-apps.mjs --only csp`.
 - [ ] **The app is on an opaque origin**: no parent or top document, no
@@ -465,10 +478,42 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   stop. At the same widths as the card above, with the tool's name short and
   as one word as long as the gateway allows (`maxMcpNameBytes`), the head
   stays inside the card; its row in the Agents overview is named "<title>. The
-  <server> app wants to run <tool> <arguments>.". _#436_ (`appCall` in
+  <server> app wants to run <tool> <arguments>.", the server and the command
+  each between FSI and PDI. _#436_ (`appCall` in
   `gateway-source.ts`, the `callTool` routing in `dependencies.ts`;
   `approvalHead` and `approvalAsker` in `approval-request.tsx`).
   _Check:_ `app-review.mjs --shots <dir>`.
+- [ ] **An app's message is reviewed as a message, and lands labelled** (#390,
+  rows D9, D17, D18, D19), in the same fixture: a context the app gives is
+  taken at once, draws no card and starts no read; the app's message is read
+  each round until its review is drawn, its head "The <server> app wants to
+  send a message as you" (`data-ask="message"`, `data-origin="app"`) and its
+  command the app's tool and `{"text":…}`, the message whole; Allow Once sends
+  one answer, Allow for that review, the app is answered ok, the message lands
+  labelled "Sent by <tool>, from <server>" over its bubble's right edge
+  (within 6 px), and the reads stop; a second message denied is refused and
+  lands nothing. With a message as long as the gateway takes
+  (`maxMcpMessageBytes`), of words and of one unbroken word, at 280, 340,
+  420, 600 and 900 px, the head stays inside the card, the card does not
+  overflow, and Allow Once stays reachable (scrolled to, it is what the page
+  hits at its centre). The overview row is named "<title>. The <server> app
+  wants to send a message as you.", the server's name between FSI and PDI,
+  and its tooltips say "Don’t send it" and "Send it once". The label, with
+  the app's names short and each as long as the gateway allows, is whole in
+  a message column of 280–900 px and in an 800×480 window: no ellipsis, no
+  title, no glyph outside it nor past its column, wrapped onto more lines at
+  280 px, each name in its own `<bdi>`. With names carrying bidi controls —
+  a stray PDI then an embedding (`a`, PDI, RLO, `b` and `c`, PDI, PDI, RLE,
+  `d`), and an override (`evil`, RLO, `gnp.exe`) — the card's head, the
+  gateway's title on the card (each name in its own `<bdi>`), the command's
+  tool name (the message's words after it kept), the overview row's
+  accessible name and its command, and the landed label show each control
+  as U+FFFD, each name isolated, and every character drawn in reading order
+  (`shownName` in `said.tsx`, E2-1). (`ask` from the gateway's
+  `ReviewAsk`; `approvalHead` and `approvalRequest` in
+  `approval-request.tsx`; the `sendMessage` routing in `dependencies.ts`.)
+  The real gateway's message path in a browser is #550.
+  _Check:_ `app-review.mjs --only message,message-card,message-overview,message-label,message-bidi --shots <dir>`.
 - [ ] **The model is shown once, in the composer** — not in the pane header
   or the transcript heading. _Check:_ manual (and in shots from `responsive.mjs`).
 - [ ] **Composer controls never overlap**, down to the compact form.
@@ -722,12 +767,9 @@ The panel's webview is a stage larger than its window, pinned to the window's
 bottom right (`src/panel/adapters/panel-frame.ts`); before the frontend
 mounts, `index.html` shows the fallback on that stage.
 
-- [ ] **The painted avatar and "Loading" sit inside the visible window; their
-  layout boxes are centred in it once the host reports its size**, on the default frame, a short configured
-  height, and a narrow panel; with the size pending or refused they stay inside the bottom-right 320 × 320 and still say "Loading". When the frontend script is not served (the panel with no host, and setup), the calm screen replaces Loading: the flat avatar, "Nessa couldn’t start", the code `STARTUP_MODULE`, and Restart and Quit as circular icon actions. The page URL and the script path stay in the console, not on the screen. The avatar stays inside the same box. Setup centres that stack; the panel starts it at the window's top left. The avatar has no halo. Nothing
-  paints over the line, the page does not scroll, and nothing animates with
-  reduced motion. The breathing avatar, while it is still Loading, stays centred on its layout box; its
-  full-size and minimum-size paint are both checked. _Check:_ `load-fallback.mjs` (runs the real frontend against
+- [ ] **"Loading" sits inside the visible window and is centred in it once the host reports its size**, on the default frame, a short configured
+  height, and a narrow panel; with the size pending or refused it stays inside the bottom-right 320 × 320 and still says "Loading". The screen is a dark field and that word. It does not paint the avatar, a glow, or any image, and nothing on it animates. When the frontend script is not served (the panel with no host, and setup), the calm screen replaces Loading: "Nessa couldn’t start", the code `STARTUP_MODULE`, and Restart and Quit as circular icon actions, still with no avatar. The page URL and the script path stay in the console, not on the screen. Setup centres that stack; the panel starts it at the window's top left. Nothing
+  paints over the line, and the page does not scroll. _Check:_ `load-fallback.mjs` (runs the real frontend against
   a fake host whose startup never answers and which fakes `panel_size`).
 
 ## The window's gateway
@@ -743,7 +785,7 @@ says why where the conversations would be.
   and no gateway listening each show "Nessa couldn’t start", the code
   `STARTUP_GATEWAY` from `src/host/startup-refusals.json`, and Restart and
   Quit as icon actions. The log sentences (started without the local server,
-  still starting, not answering) stay off the screen. The mark has no halo.
+  still starting, not answering) stay off the screen. The avatar mark is absent.
   While the gateway is not ready the host refuses the endpoint and the
   credential is never asked for. Signed out, the status sits inside the chat
   area and the window, Try Again is at least 24px tall with nothing over it,
@@ -876,9 +918,10 @@ says why where the conversations would be.
   (`renders` in `mcp-apps-gateway.mjs` for `/mcp-resources`; the conversation
   loading at all for `/browser/check`).
   Harmless lines of either kind are kept in the JSON as `harmless` by
-  `smoke.mjs`, `mcp-apps-gateway.mjs`, `gateway-window.mjs` and
-  `scripted-scenarios.mjs`; the other scripts that open a page do not keep
-  them yet (#494). Vite's
+  `lib/page-lines.mjs`, which every `openPage` watches once `run.mjs` has
+  bound the check's reporter (`verification/desktop/page-lines.md`). A
+  step's result takes the lines so far; close reports what is left as
+  `console`. A script does not splice the arrays. Vite's
   `[vite] connecting…` / HMR messages are logs, not errors. A reload caused
   by another edit landing on the dev server mid-run is not a finding —
   re-run.

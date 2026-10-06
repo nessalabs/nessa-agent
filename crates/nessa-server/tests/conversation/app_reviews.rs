@@ -123,8 +123,11 @@ async fn a_review_is_shown_with_its_app_origin_and_ends_as_answered() {
     assert_eq!(shown[0].tool_id, "t1");
     assert_eq!(shown[0].permission_id, waiting.permission_id);
     assert_eq!(shown[0].arguments_json, "{\"id\":1}");
-    // The review names the tool the app asked to call, as its origin does.
+    // The review names the tool the app asked to call, as its origin does,
+    // and says it asks to run it (D19 on #390).
     assert_eq!(shown[0].tool_name, "delete_rows");
+    assert_eq!(shown[0].ask, ConversationPermissionAsk::Tool);
+    assert_eq!(serde_json::to_value(&shown[0]).unwrap()["ask"], "tool");
     assert_eq!(
         shown[0].origin,
         ConversationPermissionOrigin::App {
@@ -944,6 +947,10 @@ fn a_message_review_says_what_it_asks() {
             tool: "show".into(),
         }
     );
+    // What it asks is typed, so a surface tells it from a tool's review
+    // without reading its title (D19 on #390).
+    assert_eq!(shown[0].ask, ConversationPermissionAsk::Message);
+    assert_eq!(serde_json::to_value(&shown[0]).unwrap()["ask"], "message");
     drop(waiting);
 }
 

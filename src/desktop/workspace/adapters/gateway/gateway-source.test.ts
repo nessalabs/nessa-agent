@@ -105,6 +105,7 @@ const permission = (
   ],
   toolName: "bash",
   origin: { kind: "harness" },
+  ask: "tool",
   argumentsJson: "{}",
   ...change,
 })
@@ -2532,6 +2533,7 @@ describe("an app's review is read after its turn ended (#436)", () => {
             { id: "allow", label: "Allow", choice: "once" },
             { id: "deny", label: "Deny", choice: "deny" },
           ],
+          ask: "tool",
         },
       }),
     })

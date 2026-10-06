@@ -56,7 +56,8 @@ verification/
       mcp-apps-gateway.mjs  MCP Apps over a real gateway (#384): the test MCP server's app, its reviews, refusals and release (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in, or `--scripted` for none)
       mcp-servers-gateway.mjs Settings › Integrations over a real gateway (#391): add, inspect, focus, toggle, rename, narrow, conflict, remove, reconnect, non-admin, and the chart's app from a server added there (starts its own gateway and dev server; done-when needs the agent signed in)
       lib/
-        selectors.mjs       every selector, key chord, storage key and known-harmless message
+        selectors.mjs       cloneable CSS selectors, selector builders, key chords, storage keys and known-harmless messages
+        selectors.test.mjs   the CSS table crosses browser evaluation as plain data (#441)
         cli.mjs             options, stderr diagnostics, JSON result, exit status
         server.mjs          reuse/start the dev server (warmed before the first page, a reused one too), or build + preview production
         browser.mjs         launch Chromium/WebKit, seed preferences, collect errors

@@ -55,7 +55,7 @@ import { CannotRun, chosen, log } from "./lib/cli.mjs"
 import { admitOnce, callKey, permissionKey, setupOutcome } from "./lib/gateway-view.mjs"
 import { main } from "./lib/run.mjs"
 import { integrationsFit, openIntegrations } from "./lib/settings.mjs"
-import { css, names } from "./lib/selectors.mjs"
+import { css, names, selectorFor } from "./lib/selectors.mjs"
 import { freePort, startDevServer } from "./lib/server.mjs"
 import { settled } from "./lib/workspace.mjs"
 
@@ -316,10 +316,6 @@ async function conversingCredential(client) {
  */
 const loadAbort = /^requestfailed: \S+\/browser\/check net::ERR_ABORTED\s*$/
 
-function setAsideLoadAbort(errors) {
-  errors.splice(0, Infinity, ...errors.filter((each) => !loadAbort.test(each)))
-}
-
 /**
  * The page's socket to the gateway (`/browser/session`), routed through the
  * script: each mcpServers request sent on it counted (`sent`), and `drop()`
@@ -397,7 +393,7 @@ async function signedIn(browser, stack, token, layout) {
   }
   await page.goto(`${stack.url}?gateway`, { waitUntil: "domcontentloaded" })
   await need(page, css.anyReady, "the desktop window", 30_000)
-  setAsideLoadAbort(opened.errors)
+  opened.noteHarmless(loadAbort)
   return { ...opened, sent: sockets.sent, drop: sockets.drop }
 }
 
@@ -438,7 +434,7 @@ const pageHolds = (page, text) =>
   )
 
 const stored = (page) => page.locator(css.mcpStoredRow)
-const row = (page, name) => page.locator(css.mcpRowNamed(name))
+const row = (page, name) => page.locator(selectorFor.mcpRowNamed(name))
 const button = (scope, name) => scope.getByRole("button", { name, exact: true })
 const form = (page) => page.locator(css.mcpForm)
 
@@ -617,7 +613,7 @@ const listRefusal = (client) =>
 const checks = {
   empty: async (page) => {
     const failures = []
-    if (!(await visible(page.locator(css.mcpServersIn("listed")), 20_000)))
+    if (!(await visible(page.locator(selectorFor.mcpServersIn("listed")), 20_000)))
       failures.push(
         `the tab is ${await page.locator(css.mcpServers).getAttribute("data-mcp-servers")}, not listed`,
       )
@@ -674,7 +670,10 @@ const checks = {
     await button(row(page, SERVER), names.mcp.inspect).click()
     // The server holds its start for START_DELAY_MS: the panel is running
     // well inside that, and what rests while it runs is read then.
-    const running = await visible(page.locator(css.mcpInspectionIn("running")), 1000)
+    const running = await visible(
+      page.locator(selectorFor.mcpInspectionIn("running")),
+      1000,
+    )
     const whileRunning = running
       ? {
           inspectRests: await button(row(page, SERVER), names.mcp.inspect).isDisabled(),
@@ -683,21 +682,23 @@ const checks = {
             names.mcp.close,
           ).isDisabled(),
           stillRunning:
-            (await page.locator(css.mcpInspectionIn("running")).count()) === 1,
+            (await page.locator(selectorFor.mcpInspectionIn("running")).count()) === 1,
           ms: Date.now() - at,
         }
       : null
-    const done = await visible(page.locator(css.mcpInspectionIn("done")), 45_000)
+    const done = await visible(page.locator(selectorFor.mcpInspectionIn("done")), 45_000)
     const panel = page.locator(css.mcpInspection)
     const seen = {
       ms: Date.now() - at,
       phase: await panel.getAttribute("data-mcp-inspection"),
       whileRunning,
       chartUi: await panel
-        .locator(`${css.mcpTool(CHART_TOOL)} ${css.mcpBadge("ui")}`)
+        .locator(`${selectorFor.mcpTool(CHART_TOOL)} ${selectorFor.mcpBadge("ui")}`)
         .count(),
       destructive: await panel
-        .locator(`${css.mcpTool(DESTRUCTIVE)} ${css.mcpBadge("destructive")}`)
+        .locator(
+          `${selectorFor.mcpTool(DESTRUCTIVE)} ${selectorFor.mcpBadge("destructive")}`,
+        )
         .count(),
       cut: await panel.locator(css.mcpCut).count(),
       tools: await panel.locator(css.mcpAnyTool).count(),
@@ -768,17 +769,17 @@ const checks = {
     await page.keyboard.press("Escape")
     if (!(await gone(serverRow.locator(css.mcpConfirm), 2000))) {
       failures.push("Escape did not close the confirm")
-      await serverRow.locator(css.mcpAction("cancel")).click()
+      await serverRow.locator(selectorFor.mcpAction("cancel")).click()
       return { seen: { trail }, failures }
     }
     await expect("Escape in the confirm", "remove", SERVER)
     await button(serverRow, names.mcp.remove).click()
     await expect("Remove again", "cancel", SERVER)
-    await serverRow.locator(css.mcpAction("cancel")).click()
+    await serverRow.locator(selectorFor.mcpAction("cancel")).click()
     await expect("Cancel in the confirm", "remove", SERVER)
     await button(serverRow, names.mcp.inspect).click()
     await expect("Inspect", "inspection-heading")
-    if (!(await visible(page.locator(css.mcpInspectionIn("done")), 45_000)))
+    if (!(await visible(page.locator(selectorFor.mcpInspectionIn("done")), 45_000)))
       failures.push("the inspection did not finish")
     await button(page.locator(css.mcpInspection), names.mcp.close).click()
     await expect("Close", "inspect", SERVER)
@@ -811,11 +812,11 @@ const checks = {
         }).observe(element, { attributes: true })
         return true
       },
-      { row: css.mcpRow, inspect: css.mcpAction("inspect") },
+      { row: css.mcpRow, inspect: selectorFor.mcpAction("inspect") },
     )
     if (!found)
       throw new CannotRun(
-        `no Inspect in ${SERVER}'s row (${css.mcpRow} ${css.mcpAction("inspect")}); update lib/selectors.mjs if it moved`,
+        `no Inspect in ${SERVER}'s row (${css.mcpRow} ${selectorFor.mcpAction("inspect")}); update lib/selectors.mjs if it moved`,
       )
     await toggle.click()
     const off = await waitFor(
@@ -905,7 +906,7 @@ const checks = {
       note: await note.textContent(),
       saveEnabled: await save.isEnabled(),
     }
-    await edit.locator(css.mcpField("command")).fill(stack.relaunch)
+    await edit.locator(selectorFor.mcpField("command")).fill(stack.relaunch)
     const changed = {
       placeholder: await secret.getAttribute("placeholder"),
       note: await note.textContent(),
@@ -974,12 +975,12 @@ const checks = {
   secret: async (page, stack, context) => {
     const failures = []
     const seen = {}
-    const variableOf = (scope) => scope.locator(css.mcpVariableNamed(VARIABLE))
+    const variableOf = (scope) => scope.locator(selectorFor.mcpVariableNamed(VARIABLE))
     await button(row(page, RENAMED), names.mcp.edit).click()
     let edit = form(page)
     await need(
       page,
-      `${css.mcpForm} ${css.mcpVariableNamed(VARIABLE)}`,
+      `${css.mcpForm} ${selectorFor.mcpVariableNamed(VARIABLE)}`,
       `${VARIABLE}'s row`,
     )
     let variable = variableOf(edit)
@@ -1217,7 +1218,7 @@ const checks = {
   narrow: async (page) => {
     // The row, the form and the finished inspection all open, then measured.
     await button(row(page, RENAMED), names.mcp.inspect).click()
-    if (!(await visible(page.locator(css.mcpInspectionIn("done")), 45_000)))
+    if (!(await visible(page.locator(selectorFor.mcpInspectionIn("done")), 45_000)))
       return {
         failures: [
           `the inspection is ${await page.locator(css.mcpInspection).getAttribute("data-mcp-inspection")}, not done within 45 s: nothing measured`,
@@ -1307,17 +1308,23 @@ const checks = {
     // Inspected first, and removed while the inspection still runs (the
     // server is slow to start): the panel then says the server is gone.
     await button(row(page, RENAMED), names.mcp.inspect).click()
-    const inspecting = await visible(page.locator(css.mcpInspectionIn("running")), 1000)
+    const inspecting = await visible(
+      page.locator(selectorFor.mcpInspectionIn("running")),
+      1000,
+    )
     const before = context.opened.sent.length
     await button(row(page, RENAMED), names.mcp.remove).click()
     const asked = await row(page, RENAMED).locator(css.mcpConfirm).textContent()
     const sentOnAsk = context.opened.sent.length - before
-    await row(page, RENAMED).locator(css.mcpAction("confirm")).click()
+    await row(page, RENAMED).locator(selectorFor.mcpAction("confirm")).click()
     const removed = await gone(row(page, RENAMED))
     const empty = await visible(page.locator(css.mcpEmpty))
     const stillRunning =
-      (await page.locator(css.mcpInspectionIn("running")).count()) === 1
-    const failed = await visible(page.locator(css.mcpInspectionIn("failed")), 45_000)
+      (await page.locator(selectorFor.mcpInspectionIn("running")).count()) === 1
+    const failed = await visible(
+      page.locator(selectorFor.mcpInspectionIn("failed")),
+      45_000,
+    )
     const seen = {
       inspecting,
       stillRunningAfterRemoval: stillRunning,
@@ -1385,7 +1392,7 @@ const checks = {
     // Restored, and the connection lost and back: the list it reads answers
     // the failure, so the failure's notice goes.
     seen.droppedSecond = await context.opened.drop()
-    seen.listed = await visible(page.locator(css.mcpServersIn("listed")), 20_000)
+    seen.listed = await visible(page.locator(selectorFor.mcpServersIn("listed")), 20_000)
     await settled(page)
     seen.connection = await tab.getAttribute("data-connection")
     seen.notices = await notices.textContent()
@@ -1418,7 +1425,10 @@ const checks = {
       )
     // The window lists again on its next connection.
     seen.dropped = await context.opened.drop()
-    seen.shown = await visible(page.locator(css.mcpServersIn("too-large")), 20_000)
+    seen.shown = await visible(
+      page.locator(selectorFor.mcpServersIn("too-large")),
+      20_000,
+    )
     if (!seen.shown) {
       failures.push(
         `the tab is ${await tab.getAttribute("data-mcp-servers")}, not too-large; its notices "${await page.locator(css.mcpNotices).textContent()}"`,
@@ -1426,7 +1436,7 @@ const checks = {
       return { seen, failures }
     }
     await settled(page)
-    const field = tooLarge.locator(css.mcpAction("removeByName"))
+    const field = tooLarge.locator(selectorFor.mcpAction("removeByName"))
     seen.sentence = await tooLarge.locator("p").first().textContent()
     seen.fieldDescribedBy = await field.evaluate(
       (element) =>
@@ -1434,7 +1444,7 @@ const checks = {
         null,
     )
     seen.rows = await page.locator(css.mcpRow).count()
-    seen.add = await page.locator(css.mcpAction("add")).count()
+    seen.add = await page.locator(selectorFor.mcpAction("add")).count()
     seen.removeBeforeName = await button(tooLarge, names.mcp.remove).isEnabled()
     if (seen.sentence !== names.mcp.listTooLarge)
       failures.push(`the panel says "${seen.sentence}"`)
@@ -1449,8 +1459,8 @@ const checks = {
     await button(tooLarge, names.mcp.remove).click()
     seen.asked = await tooLarge.locator(css.mcpConfirm).textContent()
     seen.sentOnAsk = context.opened.sent.length - before
-    await tooLarge.locator(css.mcpAction("confirm")).click()
-    seen.listed = await visible(page.locator(css.mcpServersIn("listed")), 20_000)
+    await tooLarge.locator(selectorFor.mcpAction("confirm")).click()
+    seen.listed = await visible(page.locator(selectorFor.mcpServersIn("listed")), 20_000)
     await settled(page)
     seen.requests = context.opened.sent.slice(before)
     seen.listedRows = await stored(page).evaluateAll((rows) =>
@@ -1514,7 +1524,7 @@ const checks = {
       await add.getByLabel(names.mcp.command, { exact: true }).fill(process.execPath)
       await addArgument(add, argument)
       await button(add, names.mcp.save).click()
-      const problem = add.locator(css.mcpProblemFor("form"))
+      const problem = add.locator(selectorFor.mcpProblemFor("form"))
       seen.problem = await waitFor(async () => await problem.textContent(), 10_000)
       // Long enough for a list the window should not send to have gone.
       await sleep(1500)
@@ -1545,7 +1555,7 @@ const checks = {
     }
     seen.dropped = await context.opened.drop()
     seen.restored =
-      (await visible(page.locator(css.mcpServersIn("listed")), 20_000)) &&
+      (await visible(page.locator(selectorFor.mcpServersIn("listed")), 20_000)) &&
       (await visible(page.locator(css.mcpEmpty), 5000))
     await settled(page)
     if (!seen.restored) failures.push("the restored list is not shown empty")
@@ -1567,7 +1577,7 @@ const checks = {
           `the gateway lists the hand-edited file as ${JSON.stringify(seen.nodeList)}`,
         )
       seen.dropped = await context.opened.drop()
-      const group = page.locator(css.mcpGroupNamed(DUPLICATE))
+      const group = page.locator(selectorFor.mcpGroupNamed(DUPLICATE))
       seen.listed = await waitFor(
         async () =>
           (await group.count()) === 1 &&
@@ -1584,7 +1594,7 @@ const checks = {
       const action = button(group, names.mcp.removeFirst(DUPLICATE))
       // G3: one read-only group, its count said, one action.
       seen.group = {
-        rowsNamed: await page.locator(css.mcpRowNamed(DUPLICATE)).count(),
+        rowsNamed: await page.locator(selectorFor.mcpRowNamed(DUPLICATE)).count(),
         shared: await group.locator(css.mcpShared).textContent(),
         rows: await group
           .locator(css.mcpSharedRow)
@@ -1628,7 +1638,7 @@ const checks = {
       for (const left of [2, 1]) {
         const from = context.opened.sent.length
         await action.click()
-        await group.locator(css.mcpAction("confirm")).click()
+        await group.locator(selectorFor.mcpAction("confirm")).click()
         const landed = await waitFor(async () => {
           const on = await focused(page)
           return left > 1
@@ -1680,7 +1690,7 @@ const checks = {
     }
     seen.dropped = await context.opened.drop()
     seen.restored =
-      (await visible(page.locator(css.mcpServersIn("listed")), 20_000)) &&
+      (await visible(page.locator(selectorFor.mcpServersIn("listed")), 20_000)) &&
       (await visible(page.locator(css.mcpEmpty), 5000))
     await settled(page)
     if (!seen.restored) failures.push("the restored list is not shown empty")
@@ -1698,7 +1708,7 @@ const checks = {
     try {
       await openIntegrations(reader.page)
       const shown = await visible(
-        reader.page.locator(css.mcpServersIn("not-admin")),
+        reader.page.locator(selectorFor.mcpServersIn("not-admin")),
         15_000,
       )
       // Long enough for a request the tab should not send to have gone.
@@ -1798,7 +1808,10 @@ async function chartDrawn(page, title) {
   await sessionRow.click()
   await need(page, css.appView, "the app's view in the conversation", 30_000)
   const drawn = await page
-    .waitForSelector(css.appFrameIn("inline"), { timeout: 30_000, state: "attached" })
+    .waitForSelector(selectorFor.appFrameIn("inline"), {
+      timeout: 30_000,
+      state: "attached",
+    })
     .then(() => true)
     .catch(() => false)
   if (!drawn) {
@@ -1812,7 +1825,7 @@ async function chartDrawn(page, title) {
   const { app } = await appFrame(page, "inline", 30_000)
   await app.waitForSelector(css.chartApp, { timeout: 20_000 }).catch(() => {})
   await settled(page)
-  const frames = (await page.$$(css.appFrameIn("inline"))).length
+  const frames = (await page.$$(selectorFor.appFrameIn("inline"))).length
   const mounts = oneMount(frames)
   const seen = {
     frames,
@@ -1851,6 +1864,14 @@ await main(
             cannotRun: error instanceof CannotRun,
             error: error.message.split("\n")[0],
           })
+          for (const name of walk)
+            rep.add({
+              name,
+              engine,
+              layout,
+              cannotRun: true,
+              error: "not run: the page did not open",
+            })
           return
         }
         const context = { opened, browser, layout }
@@ -1884,7 +1905,6 @@ await main(
               layout,
               ms: Date.now() - at,
               ...result,
-              failures: [...(result.failures ?? []), ...opened.errors.splice(0)],
             })
             if (options.shots)
               await opened.page.screenshot({
@@ -1914,7 +1934,7 @@ await main(
         if (first) {
           first = false
           await openIntegrations(opened.page)
-          await visible(opened.page.locator(css.mcpServersIn("listed")), 20_000)
+          await visible(opened.page.locator(selectorFor.mcpServersIn("listed")), 20_000)
           await addServer(opened.page)
           if (!(await visible(row(opened.page, SERVER))))
             throw new Error(`${SERVER} was not added from the window`)
@@ -1931,16 +1951,13 @@ await main(
             (each) => each.conversationId === conversationId,
           )?.title
           if (!title) throw new CannotRun("the conversation has no title to find it by")
-          // Reloaded to show the new conversation. Of what the reload
-          // reports, only Chromium's aborted `/browser/check` is set aside,
-          // as `signedIn` sets aside its load's; every other error is kept.
-          const beforeReload = opened.errors.splice(0)
+          // Reloaded to show the new conversation. Chromium's aborted
+          // `/browser/check` matches the pattern signedIn already noted, so
+          // it is reported as harmless; every other error stays a failure.
           await opened.page.goto(`${stack.url}?gateway`, {
             waitUntil: "domcontentloaded",
           })
           await need(opened.page, css.anyReady, "the desktop window", 30_000)
-          setAsideLoadAbort(opened.errors)
-          opened.errors.unshift(...beforeReload)
         }
         if (!title) throw new CannotRun("not run: the conversation was not made")
         const drawn = await chartDrawn(opened.page, title)
@@ -1950,7 +1967,7 @@ await main(
           layout,
           ms: Date.now() - at,
           seen: { ...seen, ...drawn.seen },
-          failures: [...setup, ...drawn.failures, ...opened.errors.splice(0)],
+          failures: [...setup, ...drawn.failures],
         })
         if (options.shots)
           await opened.page.screenshot({
