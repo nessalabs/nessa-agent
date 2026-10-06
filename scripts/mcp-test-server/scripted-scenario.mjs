@@ -2,7 +2,8 @@
  * A scripted turn as ordered steps, and the state table those steps run.
  * `scripted-agent.mjs` is the process; this module is the rule, so a test
  * can run a turn without a gateway. The recorded claude and codex frames
- * are not a scenario file: with no `--scenario`, the agent replays them.
+ * are not a scenario file: with no `--scenario`, the agent's first completed
+ * prompt replays them, and a later prompt is text and no tool call.
  *
  * One prompt is one turn. A scenario's `turns` each name the prompt they
  * answer (`when`, a substring of the prompt's text) or answer any prompt

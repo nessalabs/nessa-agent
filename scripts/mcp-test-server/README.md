@@ -111,9 +111,9 @@ default 300) adjust the run.
 `scripted-agent.mjs codex|claude <tool>` is a stdio ACP agent with no model,
 which a gateway can run as that agent's runtime (an explicit `command`). It
 answers the handshake as the harness pinned in
-`crates/nessa-sdk/harnesses/<agent>-acp/package.json`, and to each prompt makes
-one real call of `<tool>`, with the recorded call's arguments, through the stand-in the gateway
-gave it for `mcptest`. As Claude, that call carries the call's id in
+`crates/nessa-sdk/harnesses/<agent>-acp/package.json`. A session's first
+completed prompt makes one real call of `<tool>`, with the recorded call's
+arguments, through the stand-in the gateway gave it for `mcptest`. As Claude, that call carries the call's id in
 `_meta["claudecode/toolUseId"]`, where Claude's harness names a forwarded call
 and the gateway's stand-in keeps its `structuredContent` for that call (the
 SDK's `CALL_ID` in `stand_in.rs`, which a test holds `scripted-frames.mjs`'s
@@ -122,7 +122,11 @@ SDK's `CALL_ID` in `stand_in.rs`, which a test holds `scripted-frames.mjs`'s
 one value taken from the harness's MCP side rather than from the recordings,
 which hold only ACP frames. It then reports
 that call in the frames the harness was recorded sending, under the same id,
-says DONE, and ends the turn. Claude, and a Codex call other than the one
+says DONE, and ends the turn. A later prompt, after that turn ended, answers
+with the text "Noted." and calls nothing, so a message an app sends has an idle
+turn to land in. A prompt after a cancelled first turn is still the recorded
+call: the session marks that call only after a turn that was not cancelled, so
+it has not completed one. Claude, and a Codex call other than the one
 Codex ran without asking, are the recorded `show_chart` call from the parser
 fixtures above, value for value, with only the call's id, its tool's name and
 the server's result written at the places that harness carries them
@@ -151,8 +155,10 @@ Claude's from the keychain). The desktop's real-gateway check runs it with
 instead of the recorded frames (`scripted-scenario.mjs`). A step emits text,
 asks a permission and follows the answer (allow once, deny once, or a
 withdrawn review), calls an MCP tool, fails the turn, waits for
-`session/cancel`, or ends it. The recorded frames stay the default, so a run
-without `--scenario` does not change. `scenarios/text-reply.json` is the
+`session/cancel`, or ends it. `--scenario` replaces that path for every prompt
+the file answers. A run without `--scenario` is the default above: the first
+completed prompt is one recorded call, and a later prompt is text and no tool
+call. `scenarios/text-reply.json` is the
 plain reply `gateway-window.mjs --scripted` uses. `scenarios/window.json` is
 the permission, failure and cancel `scripted-scenarios.mjs` drives. The
 state table is in `scripted-scenario.mjs`, and its tests are
