@@ -50,6 +50,17 @@ export interface Message {
   /** Latest published execution observed when this local message began. */
   readonly observedInput?: string | null
   readonly delivery?: Delivery
+  /**
+   * The MCP App that wrote a message of the person's on their behalf
+   * (`ui/message`, #390); absent when the person wrote it.
+   */
+  readonly app?: MessageApp
+}
+
+/** An MCP App, as a message it wrote names it: its server, and the tool whose UI it is. */
+export interface MessageApp {
+  readonly server: string
+  readonly tool: string
 }
 
 /**
@@ -76,7 +87,17 @@ export interface ApprovalOption {
   readonly choice: ApprovalChoice
 }
 
-/** A command the agent, or an MCP App, asks to run, waiting on the person's answer. */
+/**
+ * What an approval asks the person to allow: running a command or a tool,
+ * or an MCP App sending one message in the conversation as them (#390).
+ */
+export type ApprovalAsk = "tool" | "message"
+
+/**
+ * What the agent, or an MCP App, asks to do, waiting on the person's answer:
+ * run a command or a tool, or — an app — send a message as them, `command`
+ * then being the app's tool and the message's exact words.
+ */
 export interface Approval {
   readonly id: string
   readonly command: string
@@ -84,6 +105,11 @@ export interface Approval {
   readonly origin: ApprovalOrigin
   /** The answers this review offers, in the order it offers them. */
   readonly options: readonly ApprovalOption[]
+  /**
+   * The gateway's own word for what is asked, a closed set the client
+   * holds the view to (`conversation-validate.ts`, D19 on #390).
+   */
+  readonly ask: ApprovalAsk
 }
 
 /** Whether `approval` offers `choice`. A button and an answer both ask this. */

@@ -37,8 +37,8 @@ use super::mcp_apps::{
     McpAppWithdrawal,
 };
 use nessa_protocol::conversation::view::{
-    ConversationPermission, ConversationPermissionOption, ConversationPermissionOptionEffect,
-    ConversationPermissionOrigin,
+    ConversationPermission, ConversationPermissionAsk, ConversationPermissionOption,
+    ConversationPermissionOptionEffect, ConversationPermissionOrigin,
 };
 use nessa_protocol::product_contract::generated::MCP_APP_REVIEW_DEADLINE_MS;
 use nessa_sdk::domain::agent_execution::prompts::{AppModelContext, UserMessage};
@@ -86,6 +86,17 @@ pub enum ReviewAsk {
     RunTool,
     /// Sending one message in the conversation as them. Every message asks.
     SendMessage,
+}
+
+impl ReviewAsk {
+    /// What the review says it asks, in the view (`ConversationPermission.ask`):
+    /// the one place an app's review is told apart from a tool's there.
+    fn shown(self) -> ConversationPermissionAsk {
+        match self {
+            Self::RunTool => ConversationPermissionAsk::Tool,
+            Self::SendMessage => ConversationPermissionAsk::Message,
+        }
+    }
 }
 
 /// Who answered a review.
@@ -761,6 +772,7 @@ fn review_of(
             server: server.to_owned(),
             tool: tool.to_owned(),
         },
+        ask: ask.shown(),
     }
 }
 

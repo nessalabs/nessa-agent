@@ -25,7 +25,13 @@ import { agentName, agentOf, modelName, nowLine } from "../../model/workspace-in
 import { AgentTile } from "../chrome/agent-tile"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { failureCopy, readFailureCopy } from "../failure-copy"
-import { ApprovalActions, ApprovalCommand } from "../transcript/approval-request"
+import {
+  answerTips,
+  ApprovalActions,
+  ApprovalCommand,
+  approvalReason,
+} from "../transcript/approval-request"
+import { Saying } from "../transcript/said"
 import { LiveRow } from "../transcript/live-row"
 import { Message } from "../transcript/message"
 import "../transcript/transcript.css"
@@ -183,8 +189,13 @@ export const SessionPeek = memo(function SessionPeek({
 
       {approval ? (
         <section className="agents-peek-ask" aria-label="Request">
-          <p className="agents-peek-reason">{approval.reason}</p>
-          <ApprovalCommand command={approval.command} />
+          <p className="agents-peek-reason">
+            <Saying said={approvalReason(approval)} />
+          </p>
+          <ApprovalCommand
+            command={approval.command}
+            name={approval.origin.kind === "app" ? approval.origin.tool : undefined}
+          />
           {refused ? (
             <p className="agents-peek-failure" role="status">
               {failureCopy(refused)}
@@ -200,13 +211,13 @@ export const SessionPeek = memo(function SessionPeek({
               options={approval.options}
               disabled={!answerable}
               tips={{
-                deny: tooltip("Don’t run it", {
+                deny: tooltip(answerTips[approval.ask].deny, {
                   shortcut: labelOf(overviewKeys, "deny"),
                 }),
                 always: tooltip("Allow it now, and whenever it’s asked again", {
                   shortcut: labelOf(overviewKeys, "always"),
                 }),
-                once: tooltip("Run it once", {
+                once: tooltip(answerTips[approval.ask].once, {
                   shortcut: labelOf(overviewKeys, "once"),
                 }),
               }}

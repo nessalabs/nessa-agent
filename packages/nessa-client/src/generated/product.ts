@@ -513,6 +513,8 @@ export interface ConversationPermission {
   toolName: string
   /** Who asked for this review: the agent or an MCP App. */
   origin: ConversationPermissionOrigin
+  /** What the review asks the person to allow. */
+  ask: ConversationPermissionAsk
   /** Exact original JSON input reviewed by the user; never truncated. */
   argumentsJson: string
 }
@@ -883,14 +885,18 @@ export interface ConversationPart {
   /** Opaque provider message identity; only fragments with the same identity may be combined. */
   messageId?: string
 }
-/** Who asked for a review: the conversation's agent (harness), or an MCP App calling a tool of its own server (app). The agent's approval mode never applies to an app's review. */
+/** What a review asks the person to allow: running a tool (tool) — the agent's tool call, or a tool an MCP App asked to call on its own server — or an MCP App sending one message in the conversation as them (message; mcp.sendMessage, where toolName is the app's own tool and argumentsJson is {"text": …}, the message exactly as it would be sent). The agent's reviews are always tool. */
+export const ConversationPermissionAsk = { Tool: "tool", Message: "message" } as const
+export type ConversationPermissionAsk =
+  (typeof ConversationPermissionAsk)[keyof typeof ConversationPermissionAsk]
+/** Who asked for a review: the conversation's agent (harness), or an MCP App (app), asking to call a tool of its own server or to send a message as the person (ask). The agent's approval mode never applies to an app's review. */
 export const ConversationPermissionOriginKind = {
   Harness: "harness",
   App: "app",
 } as const
 export type ConversationPermissionOriginKind =
   (typeof ConversationPermissionOriginKind)[keyof typeof ConversationPermissionOriginKind]
-/** Who asked for this review. For harness, the review's executionId and toolId are the agent's tool call being reviewed. For app, they are the app's identity — the tool call whose UI it is, which has normally finished — and server and tool name the tool the app asked to call (required for app, absent for harness). A harness review is shown only while its execution runs; an app review while the app waits on it, whatever its tool call's state. Answer either kind with conversation.answer or conversation.cancel. */
+/** Who asked for this review. For harness, the review's executionId and toolId are the agent's tool call being reviewed. For app, they are the app's identity — the tool call whose UI it is, which has normally finished — and server and tool name the tool the app asked to call, or for a message (ask: message) the app's own server and tool (required for app, absent for harness). A harness review is shown only while its execution runs; an app review while the app waits on it, whatever its tool call's state. Answer either kind with conversation.answer or conversation.cancel. */
 export interface ConversationPermissionOrigin {
   /** Who asked. */
   kind: ConversationPermissionOriginKind

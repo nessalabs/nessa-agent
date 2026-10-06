@@ -12,7 +12,8 @@ import { act } from "react"
 import { createRoot } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import type { ApprovalChoice, ApprovalOption } from "../../model/transcript"
-import { ApprovalActions, ApprovalCommand } from "./approval-request"
+import { ApprovalActions, ApprovalCommand, approvalReason } from "./approval-request"
+import { spoken } from "./said"
 
 const offered: readonly ApprovalOption[] = [
   { id: "deny", label: "Deny", choice: "deny" },
@@ -29,6 +30,38 @@ beforeEach(() => {
 })
 
 afterEach(() => host.remove())
+
+it("isolates an app's names in its reason, and its tool at the start of the command, leaving the message", async () => {
+  const server = "evil\u202Egnp.exe"
+  const tool = "c\u2069\u202Bd"
+  const reason = `The ${tool} app on ${server} asks to send a message as you`
+  expect(spoken(approvalReason({ origin: { kind: "app", server, tool }, reason }))).toBe(
+    "The \u2068c\uFFFD\uFFFDd\u2069 app on \u2068evil\uFFFDgnp.exe\u2069 asks to send a message as you",
+  )
+  // A name that contains another is taken whole.
+  expect(
+    spoken(
+      approvalReason({
+        origin: { kind: "app", server: "ab", tool: "a" },
+        reason: "run ab",
+      }),
+    ),
+  ).toBe("run \u2068ab\u2069")
+  expect(
+    spoken(approvalReason({ origin: { kind: "agent" }, reason: "Runs the tests." })),
+  ).toBe("Runs the tests.")
+  const root = createRoot(host)
+  await act(async () =>
+    root.render(
+      <ApprovalCommand command={`${tool} {"text":"keep \u202E this"}`} name={tool} />,
+    ),
+  )
+  expect(host.querySelector("bdi")?.textContent).toBe("c\uFFFD\uFFFDd")
+  expect(host.querySelector(".workspace-approval-command")?.textContent).toContain(
+    '{"text":"keep \u202E this"}',
+  )
+  await act(async () => root.unmount())
+})
 
 it("keeps each word of the command whole, breaking only at its spaces", async () => {
   const root = createRoot(host)
