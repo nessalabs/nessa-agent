@@ -51,6 +51,12 @@ export function boundedFrames(onFrame, onFailure, { maxBytes = MAX_RECORD_BYTES 
       fail("frame_handler_failed")
     }
   }
+  // EOF and explicit sealing share one rule: only a newline admits a frame.
+  const complete = () => {
+    if (!failed && parts.length && Buffer.concat(parts).toString("utf8").trim())
+      fail("incomplete_frame_at_seal")
+    parts = []
+  }
   return {
     take(chunk) {
       if (failed) return
@@ -66,14 +72,8 @@ export function boundedFrames(onFrame, onFailure, { maxBytes = MAX_RECORD_BYTES 
       }
       if (start < chunk.length) parts.push(Buffer.from(chunk.subarray(start)))
     },
-    end() {
-      if (!failed && parts.length) line()
-    },
-    complete() {
-      if (!failed && parts.length && Buffer.concat(parts).toString("utf8").trim())
-        fail("incomplete_frame_at_seal")
-      parts = []
-    },
+    end: complete,
+    complete,
     stop() {
       failed = true
       parts = []

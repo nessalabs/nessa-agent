@@ -127,7 +127,8 @@ if (scenario === "ignore-term") {
     }
     if (request.method === "session/close") {
       const reply = JSON.stringify({ jsonrpc: "2.0", id: request.id, result: {} })
-      if (scenario === "close-null") process.stdout.write(`${reply}\nnull\n`)
+      if (scenario === "close-eof") process.stdout.end(reply, () => process.exit(0))
+      else if (scenario === "close-null") process.stdout.write(`${reply}\nnull\n`)
       else if (scenario === "close-partial") process.stdout.write(`${reply}\nnull`)
       else if (["close-rejected", "close-rejected-null"].includes(scenario))
         process.stdout.write(

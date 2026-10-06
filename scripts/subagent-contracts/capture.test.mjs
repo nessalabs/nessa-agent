@@ -220,6 +220,7 @@ for (const [scenario, code] of [
   ["open-before-prompt-native", "premature_activity"],
   ["terminal-trailing-native", "activity_after_terminal"],
   ["close-null", "invalid_frame"],
+  ["close-eof", "incomplete_frame_at_seal"],
   ["close-partial", "incomplete_frame_at_seal"],
   ["close-rejected", "close_rejected"],
   ["close-rejected-null", "close_rejected"],
@@ -334,3 +335,26 @@ test(
     }
   },
 )
+
+test("EOF cannot turn an unterminated JSON fragment into an admitted frame", () => {
+  const frames = []
+  const failures = []
+  const reader = boundedFrames(
+    (frame) => frames.push(frame),
+    (error) => failures.push(error.code),
+  )
+  reader.take(Buffer.from('{"jsonrpc":"2.0","id":4,'))
+  reader.take(Buffer.from('"result":{}}'))
+  reader.end()
+  reader.complete()
+  assert.deepEqual(frames, [])
+  assert.deepEqual(failures, ["incomplete_frame_at_seal"])
+  const valid = boundedFrames(
+    (frame) => frames.push(frame),
+    (error) => failures.push(error.code),
+  )
+  valid.take(Buffer.from('{"jsonrpc":"2.0","id":4,"result":{}}\n  '))
+  valid.end()
+  assert.equal(frames.length, 1)
+  assert.deepEqual(failures, ["incomplete_frame_at_seal"])
+})

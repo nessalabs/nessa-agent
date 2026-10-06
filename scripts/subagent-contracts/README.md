@@ -88,6 +88,10 @@ outside this fixture's ownership. This is local probe cleanup, not evidence for
 the proposed product cascade.
 Direct native-provider success does not establish current Nessa support; this
 probe bypasses its binding and changes no tool policy.
+Cleanup confirmation requires the capture process to survive through its cleanup
+owner. Manual SIGINT/SIGTERM currently bypass asynchronous cleanup; parent crash
+and SIGKILL have no in-process cleanup guarantee. Graceful signal handling is
+tracked in [#591](https://github.com/nessalabs/nessa-agent/issues/591).
 
 ## Capture lifecycle and ordering cases
 
@@ -120,6 +124,7 @@ This is a structural repair of the developer probe, not Nessa Agent ownership.
 | Sealed; slow version lookup or later provider output | Version may add bounded metadata; raw output is discarded and cannot reopen or invalidate the sealed recording | Late-output/stalled-version subprocess test |
 | Failed; cleanup confirms release | Retain the primary recording failure alongside cleanup; confirmed cleanup cannot turn failure into success | Close/null failure plus confirmed cleanup |
 | Failed/Sealed; cleanup unconfirmed | Retain cleanup failure independently and retain workspace ownership | Failed-close/unconfirmed-cleanup distinction |
+| Reading; stdout EOF with unterminated JSON | Refuse the buffered fragment through the same completion rule; EOF cannot admit a response without its newline | Split JSON EOF and final-close subprocess regressions |
 | Reading; invalid/null envelope or handler fault | Supervise first failure, reject active RPC, stop reading and start common cleanup | Malformed-envelope tests |
 | Reading; terminated/unterminated line exceeds wire bound | Refuse before decoding/parsing, retain `recording_limit`, close group | Oversized-line tests |
 | Inspecting sealed evidence; cancelled/errored/non-sentinel outcome | Typed unsuccessful probe; success requires `end_turn` and completed `CHILD_DONE` wait/close reports | Controlled-outcome tests |
