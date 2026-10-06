@@ -45,12 +45,23 @@ import type { JsonObject } from "../../model/json-rpc"
 
 /** What the gateway refused, in words the app is shown. */
 type Refusal =
-  "declined" | "expired" | "withdrawn" | "not-for-app" | "too-large" | "invalid"
+  | "declined"
+  | "expired"
+  | "withdrawn"
+  | "not-for-app"
+  | "too-large"
+  | "invalid"
+  | "turn-running"
 
 /** What one of the gateway's codes comes to (gate 11: every code is placed). */
 type Outcome = { readonly refused: Refusal } | "busy" | "server-gone" | "failed"
 
-const outcomes: Record<ConversationErrorCode, Outcome> = {
+/**
+ * Each of the gateway's codes, as an app is answered for it: the one table,
+ * for its calls to its server here and, through `answerFor`, for its
+ * conversation's messages and context (`app-messages.ts`, #390).
+ */
+const outcomes: Readonly<Record<ConversationErrorCode, Outcome>> = {
   [ConversationErrorCode.McpApprovalDenied]: { refused: "declined" },
   [ConversationErrorCode.McpApprovalExpired]: { refused: "expired" },
   [ConversationErrorCode.McpCancelled]: { refused: "withdrawn" },
@@ -63,6 +74,9 @@ const outcomes: Record<ConversationErrorCode, Outcome> = {
   // The gateway judged the request itself — arguments that are no JSON
   // object, a URI that is no app's — before dispatch: the app's to fix.
   [ConversationErrorCode.InvalidRequest]: { refused: "invalid" },
+  // An app's message while the agent is at work, or input waits: nothing
+  // was sent, and the app may send it again once the turn is done (M11).
+  [ConversationErrorCode.TurnRunning]: { refused: "turn-running" },
   // The server's session, or the conversation it belongs to, is gone.
   [ConversationErrorCode.McpSessionUnavailable]: "server-gone",
   [ConversationErrorCode.ConversationNotFound]: "server-gone",
@@ -81,7 +95,6 @@ const outcomes: Record<ConversationErrorCode, Outcome> = {
   [ConversationErrorCode.ApprovalModeNotApplied]: "failed",
   [ConversationErrorCode.ApprovalModeUncertain]: "failed",
   [ConversationErrorCode.ApprovalRequestConflict]: "failed",
-  [ConversationErrorCode.TurnRunning]: "failed",
   [ConversationErrorCode.ConversationsNotConfigured]: "failed",
   [ConversationErrorCode.UnknownMethod]: "failed",
   [ConversationErrorCode.ConversationCapacity]: "failed",
@@ -103,29 +116,29 @@ const outcomes: Record<ConversationErrorCode, Outcome> = {
   [ConversationErrorCode.ConversationErasureIncomplete]: "failed",
 }
 
+/** What an app asked for: its server's tool or resource, or its conversation. */
+export type Asked = "tool" | "resource" | "conversation"
+
+/** The same words, whatever the app asked for. */
+const said = (words: string): Record<Asked, string> => ({
+  tool: words,
+  resource: words,
+  conversation: words,
+})
+
 /** What an app is told for each refusal, by what it asked for. */
-const refusalWords: Record<Refusal, { tool: string; resource: string }> = {
-  declined: {
-    tool: "The person declined this action",
-    resource: "The person declined this action",
-  },
-  expired: { tool: "No one answered in time", resource: "No one answered in time" },
-  withdrawn: {
-    tool: "The request was withdrawn",
-    resource: "The request was withdrawn",
-  },
+const refusalWords: Record<Refusal, Record<Asked, string>> = {
+  declined: said("The person declined this action"),
+  expired: said("No one answered in time"),
+  withdrawn: said("The request was withdrawn"),
   "not-for-app": {
     tool: "This app may not use that tool",
     resource: "This app may not read that resource",
+    conversation: "This app may not speak in this conversation",
   },
-  "too-large": {
-    tool: "The request is larger than the gateway accepts",
-    resource: "The request is larger than the gateway accepts",
-  },
-  invalid: {
-    tool: "The gateway refused the request as invalid",
-    resource: "The gateway refused the request as invalid",
-  },
+  "too-large": said("The request is larger than the gateway accepts"),
+  invalid: said("The gateway refused the request as invalid"),
+  "turn-running": said("The conversation is busy"),
 }
 
 const failed: ServerAnswer = { kind: "failed" }
@@ -136,8 +149,12 @@ const conversationGone: ReadonlySet<ConversationErrorCode | undefined> = new Set
   ConversationErrorCode.ConversationDeleted,
 ])
 
-/** The port's answer for what a call threw: a refusal, a server gone, or a failure. */
-function answerFor(error: unknown, asked: "tool" | "resource"): ServerAnswer {
+/**
+ * The port's answer for what a call threw: a refusal, a server gone, or a
+ * failure, which is logged. Shared with the conversation's port
+ * (`app-messages.ts`), so a code means one thing to an app whatever it asked.
+ */
+export function answerFor(error: unknown, asked: Asked): ServerAnswer {
   // Too large to send at all: the client refused it, and nothing was sent.
   if (
     error instanceof NessaMcpAppError &&

@@ -369,6 +369,7 @@ describe("conversation view agreement", () => {
             toolName: "delete_rows",
             argumentsJson: "{}",
             origin,
+            ask: "tool",
             options: [{ id: "allow", label: "Allow", effect: "allow" }],
           },
         ],
@@ -425,6 +426,7 @@ describe("conversation view agreement", () => {
             toolName,
             argumentsJson: "{}",
             origin: { kind: "app", server: "charts", tool },
+            ask: "tool",
             options: [{ id: "allow", label: "Allow", effect: "allow" }],
           },
         ],
@@ -443,6 +445,61 @@ describe("conversation view agreement", () => {
       )
   })
 
+  it("D19 (#390): reads what a review asks as a closed set, and refuses a view whose review asks nothing it knows", () => {
+    const withAsk = (ask: unknown, keep = true) => {
+      const value = view()
+      Object.assign(value, {
+        permissions: [
+          {
+            executionId: "running",
+            permissionId: "permission",
+            toolId: "tool",
+            title: "The show app on charts asks to send a message as you",
+            toolName: "show",
+            argumentsJson: '{"text":"Plot May"}',
+            origin: { kind: "app", server: "charts", tool: "show" },
+            ...(keep ? { ask } : {}),
+            options: [{ id: "allow", label: "Allow", effect: "allow" }],
+          },
+        ],
+      })
+      return value
+    }
+    for (const ask of ["tool", "message"])
+      expect(conversationView(withAsk(ask), "conversation").permissions[0]!.ask).toBe(ask)
+    expect(() => conversationView(withAsk(undefined, false), "conversation")).toThrow()
+    for (const ask of [null, "", "Message", "send_message", "tool ", 1, {}])
+      expect(() => conversationView(withAsk(ask), "conversation")).toThrow()
+  })
+
+  it("D19 (#390): refuses a review the agent asked for that asks to send a message, a contradiction", () => {
+    const withOrigin = (ask: string) => {
+      const value = view()
+      Object.assign(value, {
+        permissions: [
+          {
+            executionId: "running",
+            permissionId: "permission",
+            toolId: "tool",
+            title: "Run write_file",
+            toolName: "write_file",
+            argumentsJson: "{}",
+            origin: { kind: "harness" },
+            ask,
+            options: [{ id: "allow", label: "Allow", effect: "allow" }],
+          },
+        ],
+      })
+      return value
+    }
+    expect(conversationView(withOrigin("tool"), "conversation").permissions[0]!.ask).toBe(
+      "tool",
+    )
+    expect(() => conversationView(withOrigin("message"), "conversation")).toThrow(
+      "A review the agent asked for asks to run a tool",
+    )
+  })
+
   it("reads what each permission option decides, and refuses an option that does not say", () => {
     const withOptions = (options: unknown[]) => {
       const value = view()
@@ -456,6 +513,7 @@ describe("conversation view agreement", () => {
             toolName: "write_file",
             argumentsJson: "{}",
             origin: { kind: "harness" },
+            ask: "tool",
             options,
           },
         ],
@@ -508,6 +566,7 @@ describe("conversation view agreement", () => {
           toolName: "write_file",
           argumentsJson: "{}",
           origin: { kind: "harness" },
+          ask: "tool",
           options: [{ id: "allow", label: "Allow", effect: "allow", extra: true }],
         },
       ],

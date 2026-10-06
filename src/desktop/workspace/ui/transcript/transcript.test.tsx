@@ -24,6 +24,8 @@ import {
 } from "../../model/transcript"
 import { fakeSource, settle, testStore } from "../../testing"
 import { failureCopy, readFailureCopy } from "../failure-copy"
+import { approvalHead, approvalReason } from "./approval-request"
+import { spoken } from "./said"
 import { Transcript } from "./transcript"
 
 class Observer {
@@ -88,6 +90,7 @@ const conversation: TranscriptValue = {
       { id: "always", label: "Always Allow", choice: "always" },
       { id: "once", label: "Allow Once", choice: "once" },
     ],
+    ask: "tool",
   },
 }
 
@@ -211,6 +214,133 @@ describe("a transcript", () => {
     expect(
       [...(failed?.querySelectorAll("button") ?? [])].map((b) => b.textContent),
     ).toEqual(["Send Again", "Discard"])
+  })
+
+  it("D17 (#390): says above a message of the person's which app wrote it, and nothing above their own", async () => {
+    await shown(fakeSource(), {
+      ...conversation,
+      messages: [
+        ...conversation.messages,
+        {
+          id: "m3",
+          role: "user",
+          at: 3,
+          parts: [{ kind: "text", text: "Plot May" }],
+          app: { server: "charts", tool: "show" },
+        },
+      ],
+    })
+    const authors = [...host.querySelectorAll<HTMLElement>(".workspace-message-author")]
+    // Named as the app's own view names it: its tool, from its server; once.
+    expect(authors.map((author) => author.textContent)).toEqual([
+      "Sent by show, from charts",
+    ])
+    const [author] = authors
+    // Whole on the page, wrapped where it must be: nothing repeats it in a title.
+    expect(author?.hasAttribute("title")).toBe(false)
+    expect(author?.dataset.messageApp).toBe("charts/show")
+    // Each name isolated from the words around it, and from the other.
+    expect(
+      [...(author?.querySelectorAll("bdi") ?? [])].map((name) => name.textContent),
+    ).toEqual(["show", "charts"])
+    const message = author?.closest<HTMLElement>(".workspace-message")
+    expect(message?.dataset.role).toBe("user")
+    // Plain text in reading order: the label, then the bubble it names.
+    expect(author?.nextElementSibling?.classList.contains("workspace-bubble")).toBe(true)
+    expect(message?.querySelector(".workspace-bubble")?.textContent).toBe("Plot May")
+    // The person's own messages carry none.
+    expect(host.querySelectorAll('.workspace-message[data-role="user"]').length).toBe(
+      conversation.messages.filter((each) => each.role === "user").length + 1,
+    )
+  })
+
+  it("E2-1 (#390): shows the bidi controls an app's names carry as U+FFFD, so none ends its isolation or turns its letters round", async () => {
+    // The reviewer's strings: a stray PDI then an embedding; an override.
+    const server = "a\u2069\u202Eb"
+    const tool = "c\u2069\u2069\u202Bd"
+    await shown(fakeSource(), {
+      ...conversation,
+      messages: [
+        ...conversation.messages,
+        {
+          id: "m3",
+          role: "user",
+          at: 3,
+          parts: [{ kind: "text", text: "Plot May" }],
+          app: { server, tool },
+        },
+        {
+          id: "m4",
+          role: "user",
+          at: 4,
+          parts: [{ kind: "text", text: "Open it" }],
+          app: { server: "evil\u202Egnp.exe", tool: "show" },
+        },
+      ],
+      approval: {
+        id: "app-ap",
+        command: `${tool} {"text":"keep \u202E this"}`,
+        reason: `An app asks to run ${tool} on evil\u202Egnp.exe`,
+        origin: { kind: "app", server: "evil\u202Egnp.exe", tool },
+        options: [
+          { id: "allow", label: "Allow", choice: "once" },
+          { id: "deny", label: "Deny", choice: "deny" },
+        ],
+        ask: "tool",
+      },
+    })
+    const authors = [...host.querySelectorAll<HTMLElement>(".workspace-message-author")]
+    expect(authors.map((author) => author.textContent)).toEqual([
+      "Sent by c\uFFFD\uFFFD\uFFFDd, from a\uFFFD\uFFFDb",
+      "Sent by show, from evil\uFFFDgnp.exe",
+    ])
+    expect(
+      authors.map((author) =>
+        [...author.querySelectorAll("bdi")].map((name) => name.textContent),
+      ),
+    ).toEqual([
+      ["c\uFFFD\uFFFD\uFFFDd", "a\uFFFD\uFFFDb"],
+      ["show", "evil\uFFFDgnp.exe"],
+    ])
+    // What the names are is kept as they came, for anything that reads it.
+    expect(authors[0]?.dataset.messageApp).toBe(`${server}/${tool}`)
+    const head = host.querySelector(".workspace-approval-head")
+    expect(head?.textContent).toBe(
+      "The evil\uFFFDgnp.exe app wants to run c\uFFFD\uFFFD\uFFFDd",
+    )
+    expect(
+      [...(head?.querySelectorAll("bdi") ?? [])].map((name) => name.textContent),
+    ).toEqual(["evil\uFFFDgnp.exe", "c\uFFFD\uFFFD\uFFFDd"])
+    // In plain text, each name stays between its own FSI and PDI.
+    expect(
+      spoken(
+        approvalHead({ origin: { kind: "app", server, tool }, ask: "tool" }, "Claude"),
+      ),
+    ).toBe(
+      "The \u2068a\uFFFD\uFFFDb\u2069 app wants to run \u2068c\uFFFD\uFFFD\uFFFDd\u2069",
+    )
+    // The gateway's title repeats both names; the card isolates them, and
+    // the message's own words keep the control they were sent with.
+    const reason = host.querySelector(".workspace-approval-reason")
+    expect(reason?.textContent).toBe(
+      "An app asks to run c\uFFFD\uFFFD\uFFFDd on evil\uFFFDgnp.exe",
+    )
+    expect(
+      [...(reason?.querySelectorAll("bdi") ?? [])].map((name) => name.textContent),
+    ).toEqual(["c\uFFFD\uFFFD\uFFFDd", "evil\uFFFDgnp.exe"])
+    expect(
+      spoken(
+        approvalReason({
+          origin: { kind: "app", server: "evil\u202Egnp.exe", tool },
+          reason: `An app asks to run ${tool} on evil\u202Egnp.exe`,
+        }),
+      ),
+    ).toBe(
+      "An app asks to run \u2068c\uFFFD\uFFFD\uFFFDd\u2069 on \u2068evil\uFFFDgnp.exe\u2069",
+    )
+    const command = host.querySelector(".workspace-approval-command")
+    expect(command?.querySelector("bdi")?.textContent).toBe("c\uFFFD\uFFFD\uFFFDd")
+    expect(command?.textContent).toContain('{"text":"keep \u202E this"}')
   })
 
   it("keeps messages sent while the conversation was read in place when it loads", async () => {
@@ -381,10 +511,17 @@ describe("a transcript", () => {
           { id: "allow", label: "Allow", choice: "once" },
           { id: "deny", label: "Deny", choice: "deny" },
         ],
+        ask: "tool",
       },
     })
     expect(head()).toBe("The mcptest app wants to run app_delete_row")
     expect(head()).not.toContain(agent)
+    // The names an app chose are isolated from the words around them (E1-8).
+    expect(
+      [...(host.querySelectorAll(".workspace-approval-head bdi") ?? [])].map(
+        (name) => name.textContent,
+      ),
+    ).toEqual(["mcptest", "app_delete_row"])
     expect(card()?.dataset.origin).toBe("app")
   })
 
@@ -401,6 +538,7 @@ describe("a transcript", () => {
           { id: "allow", label: "Allow", choice: "once" },
           { id: "deny", label: "Deny", choice: "deny" },
         ],
+        ask: "tool",
       },
     })
     // Deny stays at the left; the review's allow is the primary button, in the review's words.
@@ -414,6 +552,49 @@ describe("a transcript", () => {
     expect(
       source.calls.filter((call) => call[0] === "approve" || call[0] === "deny"),
     ).toEqual([["approve", "b", "app-ap", "once", "person", "allow"]])
+  })
+
+  it("D19 (#390): says what is asked — an app's message is not a tool to run — over every combination the client lets through", async () => {
+    const app = { kind: "app", server: "mcptest", tool: "show_rows" } as const
+    expect(approvalHead({ origin: app, ask: "message" }, "Claude")).toEqual([
+      "The ",
+      { name: "mcptest" },
+      " app",
+      " wants to send a message as you",
+    ])
+    expect(spoken(approvalHead({ origin: app, ask: "tool" }, "Claude"))).toBe(
+      "The \u2068mcptest\u2069 app wants to run \u2068show_rows\u2069",
+    )
+    expect(
+      spoken(approvalHead({ origin: { kind: "agent" }, ask: "tool" }, "Claude")),
+    ).toBe("Claude wants to run a command")
+    await shown(fakeSource(), {
+      ...conversation,
+      approval: {
+        id: "app-message",
+        command: 'show_rows {"text":"Plot May next to April"}',
+        reason: "The show_rows app on mcptest asks to send a message as you",
+        origin: app,
+        options: [
+          { id: "allow", label: "Allow", choice: "once" },
+          { id: "deny", label: "Deny", choice: "deny" },
+        ],
+        ask: "message",
+      },
+    })
+    const card = host.querySelector<HTMLElement>(".workspace-approval")
+    expect(card?.querySelector(".workspace-approval-head")?.textContent).toBe(
+      "The mcptest app wants to send a message as you",
+    )
+    expect(card?.querySelector(".workspace-approval-head bdi")?.textContent).toBe(
+      "mcptest",
+    )
+    expect(card?.dataset.origin).toBe("app")
+    expect(card?.dataset.ask).toBe("message")
+    // What is sent is shown whole: the app's tool and the message's words.
+    expect(card?.querySelector(".workspace-approval-command")?.textContent).toContain(
+      '{"text":"Plot May next to April"}',
+    )
   })
 
   it("asks again, saying why, when an answer does not reach the agent", async () => {

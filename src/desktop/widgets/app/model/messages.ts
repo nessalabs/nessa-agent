@@ -134,6 +134,20 @@ export const contentModalities: JsonObject = Object.fromEntries(
   Object.keys(contentReaders).map((type) => [type, {}]),
 )
 
+/**
+ * What content blocks this reads (`contentReaders`) say, as one text: each
+ * block's text, a blank line between each, and a block whose text is empty
+ * left out — so no blocks, or only empty ones, give no text. The one place a
+ * `ui/message` or a `ui/update-model-context` the host took becomes the text
+ * it sends on (#390, D-A).
+ */
+export function contentText(content: readonly JsonObject[]): string {
+  return content
+    .map((block) => field(block, "text"))
+    .filter((text): text is string => typeof text === "string" && text !== "")
+    .join("\n\n")
+}
+
 function contentBlocks(value: Json | undefined): readonly JsonObject[] | undefined {
   if (!Array.isArray(value)) return undefined
   const out: JsonObject[] = []

@@ -1180,6 +1180,10 @@
           "$ref": "#/$defs/ConversationPermissionOrigin",
           "description": "Who asked for this review: the agent or an MCP App."
         },
+        "ask": {
+          "$ref": "#/$defs/ConversationPermissionAsk",
+          "description": "What the review asks the person to allow."
+        },
         "argumentsJson": {
           "type": "string",
           "maxLength": 32768,
@@ -1195,7 +1199,8 @@
         "options",
         "toolName",
         "argumentsJson",
-        "origin"
+        "origin",
+        "ask"
       ]
     },
     "ConversationTool": {
@@ -2209,15 +2214,20 @@
       "required": ["offset", "kind", "text", "toolId", "noticeId"],
       "description": "One ordered observation fragment in a bounded execution projection; offsets may have gaps."
     },
+    "ConversationPermissionAsk": {
+      "type": "string",
+      "enum": ["tool", "message"],
+      "description": "What a review asks the person to allow: running a tool (tool) — the agent's tool call, or a tool an MCP App asked to call on its own server — or an MCP App sending one message in the conversation as them (message; mcp.sendMessage, where toolName is the app's own tool and argumentsJson is {\"text\": …}, the message exactly as it would be sent). The agent's reviews are always tool."
+    },
     "ConversationPermissionOriginKind": {
       "type": "string",
       "enum": ["harness", "app"],
-      "description": "Who asked for a review: the conversation's agent (harness), or an MCP App calling a tool of its own server (app). The agent's approval mode never applies to an app's review."
+      "description": "Who asked for a review: the conversation's agent (harness), or an MCP App (app), asking to call a tool of its own server or to send a message as the person (ask). The agent's approval mode never applies to an app's review."
     },
     "ConversationPermissionOrigin": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Who asked for this review. For harness, the review's executionId and toolId are the agent's tool call being reviewed. For app, they are the app's identity — the tool call whose UI it is, which has normally finished — and server and tool name the tool the app asked to call (required for app, absent for harness). A harness review is shown only while its execution runs; an app review while the app waits on it, whatever its tool call's state. Answer either kind with conversation.answer or conversation.cancel.",
+      "description": "Who asked for this review. For harness, the review's executionId and toolId are the agent's tool call being reviewed. For app, they are the app's identity — the tool call whose UI it is, which has normally finished — and server and tool name the tool the app asked to call, or for a message (ask: message) the app's own server and tool (required for app, absent for harness). A harness review is shown only while its execution runs; an app review while the app waits on it, whatever its tool call's state. Answer either kind with conversation.answer or conversation.cancel.",
       "properties": {
         "kind": {
           "$ref": "#/$defs/ConversationPermissionOriginKind",

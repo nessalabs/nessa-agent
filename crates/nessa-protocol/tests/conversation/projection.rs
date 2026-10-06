@@ -5,7 +5,9 @@ use crate::conversation::domain::ConversationId;
 use crate::conversation::projection::{
     bound_view, bound_view_within, clipped, Projection, MAX_TEXT, MAX_VIEW_BYTES,
 };
-use crate::conversation::view::{ConversationPermissionOptionEffect, ConversationTranscriptState};
+use crate::conversation::view::{
+    ConversationPermissionAsk, ConversationPermissionOptionEffect, ConversationTranscriptState,
+};
 use crate::conversation::{
     projection::retained_view,
     view::{
@@ -1161,6 +1163,12 @@ fn a_review_says_what_each_offered_option_decides() {
     let wire = serde_json::to_value(&view.permissions[0].options).unwrap();
     assert_eq!(wire[0]["effect"], "deny");
     assert_eq!(wire[1]["effect"], "allow");
+    // The agent's review asks a tool, and says so (D19 on #390).
+    assert_eq!(view.permissions[0].ask, ConversationPermissionAsk::Tool);
+    assert_eq!(
+        serde_json::to_value(&view.permissions[0]).unwrap()["ask"],
+        "tool"
+    );
     // The effect is the domain's decision, whatever the label or the order.
     assert_eq!(
         offered,
