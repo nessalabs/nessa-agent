@@ -126,6 +126,55 @@ describe("callFrames", () => {
     })
   }
 
+  it("codex: a call the harness ran unasked replays that recording", () => {
+    const recorded = recording("codex")
+    const frames = recorded.toolSearchTurn.frames
+    const tool = frames.find((frame) => frame.rawInput).rawInput.tool
+    assert.equal(tool, "review_rows")
+    assert.equal(frames.length, 2)
+    assert.deepEqual(
+      frames.map((frame) => [frame.sessionUpdate, frame.status]),
+      [
+        ["tool_call", "in_progress"],
+        ["tool_call_update", "completed"],
+      ],
+    )
+    assert.equal(
+      frames.some(
+        (frame) =>
+          frame.sessionUpdate === "tool_call_update" && frame.rawInput === undefined,
+      ),
+      false,
+    )
+    const replayed = callFrames("codex", recorded, {
+      id: frames[0].toolCallId,
+      tool,
+      result,
+    })
+    assert.deepEqual(replayed, frames)
+    // The result is written at the harness's places, not left copied: another
+    // text replaces the recorded one everywhere it was.
+    const rewritten = callFrames("codex", recorded, {
+      id: "call-1",
+      tool,
+      result: {
+        ...result,
+        content: [{ type: "text", text: "rewritten review" }],
+        structuredContent: { rows: [9] },
+      },
+    })
+    const text = JSON.stringify(rewritten)
+    assert.ok(text.includes("rewritten review"))
+    assert.ok(!text.includes(result.content[0].text))
+    assert.ok(!text.includes('"rows":[1,2]'))
+    assert.deepEqual(rewritten.at(-1).rawOutput.result.structuredContent, { rows: [9] })
+    for (const frame of rewritten) assert.equal(frame.toolCallId, "call-1")
+    assert.deepEqual(
+      frames.find((frame) => frame.rawInput).rawInput.arguments,
+      recordedArguments("codex", recorded),
+    )
+  })
+
   it("codex: the frames name the server and tool, and carry the server's result", () => {
     const frames = call("codex")
     assert.equal(frames[0]._meta.is_mcp_tool_call, true)
@@ -251,13 +300,27 @@ describe("callFrames", () => {
             { ...recorded, calls: { ...recorded.calls, [name]: frames } },
             {
               id: "x",
-              tool: "review_rows",
-              result,
+              tool: RECORDED_TOOL,
+              result: recordedResult(),
             },
           ),
         /has no place for show_chart's result/,
       )
     })
+
+  it("codex: an unasked recording with no place for the result is refused", () => {
+    const recorded = recording("codex")
+    const frames = recorded.toolSearchTurn.frames.map(({ rawOutput, ...frame }) => frame)
+    assert.throws(
+      () =>
+        callFrames(
+          "codex",
+          { ...recorded, toolSearchTurn: { ...recorded.toolSearchTurn, frames } },
+          { id: "x", tool: "review_rows", result },
+        ),
+      /has no place for review_rows's result/,
+    )
+  })
 
   it("ids and names are put in literally, whatever they hold", () => {
     const frames = callFrames("codex", recording("codex"), {

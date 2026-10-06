@@ -122,12 +122,16 @@ SDK's `CALL_ID` in `stand_in.rs`, which a test holds `scripted-frames.mjs`'s
 one value taken from the harness's MCP side rather than from the recordings,
 which hold only ACP frames. It then reports
 that call in the frames the harness was recorded sending, under the same id,
-says DONE, and ends the turn. The frames are the recorded
-`show_chart` call from the parser fixtures above, value for value, with only
-the call's id, its tool's name and the server's result written at the places
-that harness carries them (`scripted-frames.mjs`'s `PLACES`). The test checks
-those places against the recordings: a recording that carries the call
-anywhere else fails it. It replays only what that call can stand for: one of
+says DONE, and ends the turn. Claude, and a Codex call other than the one
+Codex ran without asking, are the recorded `show_chart` call from the parser
+fixtures above, value for value, with only the call's id, its tool's name and
+the server's result written at the places that harness carries them
+(`scripted-frames.mjs`'s `PLACES`). Codex ran `review_rows` without asking, and
+a replay of that tool is the fixture's `toolSearchTurn`: `tool_call`, then
+`tool_call_update` `completed`, with no bare `in_progress` update. The test
+checks the places against the `show_chart` recordings, and holds the unasked
+replay to `toolSearchTurn`. A recording that carries the call anywhere else
+fails the places check. It replays only what that call can stand for: one of
 the test server's tools, under a name no harness rewrites, with the recorded
 call's arguments, whose result is shaped as the recorded one is (the same
 keys, as many text blocks, a non-empty object of `structuredContent`). Anything else — a
