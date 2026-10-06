@@ -272,9 +272,11 @@ jobs:
           node-version: 24
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
-      # `frontend:check` owns the repository's top-level script tests. Two of
-      # them execute the public launch recipes, so install their real command
-      # boundary here before the aggregate runs.
+      # `frontend:check` owns the repository's top-level script tests, including
+      # `scripts/mcp-test-server` through `pnpm scripts:test` (#476). They are
+      # not run again from another job. Two of the script tests execute the
+      # public launch recipes, so install their real command boundary here
+      # before the aggregate runs.
       - uses: taiki-e/install-action@just
       - run: pnpm frontend:check
   local-auth:

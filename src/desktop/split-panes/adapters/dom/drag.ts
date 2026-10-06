@@ -158,10 +158,52 @@ const sameSize = (a: Size, b: Size) =>
  * other — which would draw the content stretched for that frame. Left to
  * start when each is ready, an engine may start them a frame apart.
  */
+/** Canceling a pending animation rejects `ready` with `AbortError`. That is letting go. */
+function readyWasCancelled(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    (error as { name?: unknown }).name === "AbortError"
+  )
+}
+
 function together(animations: readonly Animation[]) {
   const now = document.timeline?.currentTime
   if (now === null || now === undefined) return
   for (const animation of animations) animation.startTime = now
+  // WebKit can replace that start when `ready` fulfills, so a pair given one
+  // instant is drawn a frame apart (#254). Put the same instant back on any
+  // that are still running. An animation with no `ready` (the jsdom stand-in)
+  // keeps the start just set. Letting the preview go cancels a pending
+  // animation and rejects `ready`; that rejection is expected. Any other
+  // rejection is raised again so it is not swallowed.
+  const pending = animations.filter(
+    (animation) => typeof animation.ready?.then === "function",
+  )
+  if (pending.length === 0) return
+  void Promise.all(
+    pending.map((animation) =>
+      animation.ready.then(
+        () => {
+          // A preview already let go is `idle`. Setting its start again would
+          // play it. Only a pair still running needs the shared instant.
+          if (animation.playState !== "running") return
+          if (animation.startTime !== now) animation.startTime = now
+        },
+        (error: unknown) => {
+          if (readyWasCancelled(error)) return
+          throw error
+        },
+      ),
+    ),
+  ).catch((error: unknown) => {
+    const reported = error instanceof Error ? error : new Error(String(error))
+    // `reportError` is the page's uncaught-exception path, so a failure here
+    // is recorded with other page errors. Cancellation never reaches this.
+    if (typeof reportError === "function") reportError(reported)
+    else console.error(reported)
+  })
 }
 
 /** How far along its clock an animation is drawn, eased; 1 once it has ended or with none. */
