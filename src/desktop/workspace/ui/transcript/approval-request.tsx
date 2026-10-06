@@ -34,10 +34,13 @@ import {
 } from "../../../ui/menu"
 import type { TooltipAttributes } from "../../../ui/tooltip"
 import type {
+  Approval,
+  ApprovalAsk,
   ApprovalChoice,
   ApprovalOption,
   ApprovalOrigin,
 } from "../../model/transcript"
+import { named, naming, shownName, type Said } from "./said"
 import "./approval-card.css"
 
 /**
@@ -45,26 +48,77 @@ import "./approval-card.css"
  * server, so that a review an app opened is not put in the agent's mouth
  * (`transcript.test.tsx` O1/O2, `overview.test.tsx` O3, on #436). The one
  * place the asker is worded: the card's head (`approvalHead`) and the
- * overview's row both read it; each says what is asked in its own way.
+ * overview's row both read it; each says what is asked in its own way. An
+ * app's server is a name the window did not choose, isolated wherever it is
+ * shown (`said.tsx`).
  */
-export function approvalAsker(origin: ApprovalOrigin, agent: string): string {
+export function approvalAsker(origin: ApprovalOrigin, agent: string): Said {
   switch (origin.kind) {
     case "agent":
-      return agent
+      return [agent]
     case "app":
-      return `The ${origin.server} app`
+      return ["The ", named(origin.server), " app"]
   }
 }
 
-/** The card's head: who asks, and to run what — a command, or the tool an app named. */
-export function approvalHead(origin: ApprovalOrigin, agent: string): string {
+/**
+ * The card's head: who asks, and what — the agent to run a command; an app
+ * to run the tool it named, or to send a message as the person. The agent
+ * asks only to run tools: the client refuses a view that says otherwise
+ * (`conversation-validate.ts`, D19 on #390).
+ */
+export function approvalHead(
+  approval: Pick<Approval, "origin" | "ask">,
+  agent: string,
+): Said {
+  const { origin } = approval
   const asker = approvalAsker(origin, agent)
-  switch (origin.kind) {
-    case "agent":
-      return `${asker} wants to run a command`
-    case "app":
-      return `${asker} wants to run ${origin.tool}`
-  }
+  if (origin.kind === "agent") return [...asker, " wants to run a command"]
+  return approval.ask === "message"
+    ? [...asker, " wants to send a message as you"]
+    : [...asker, " wants to run ", named(origin.tool)]
+}
+
+/**
+ * What the Agents overview's row says is asked: a command or tool written out
+ * whole, as the row has no card to show it in; a message as the card's head
+ * says it (`overview.test.tsx` O3 and D19). An app's tool command is the
+ * app's own words, its tool's name among them, and is isolated as a name is
+ * (`said.tsx`, E2-1 on #390).
+ */
+export function approvalRequest(
+  approval: Pick<Approval, "origin" | "ask" | "command">,
+  agent: string,
+): Said {
+  const asker = approvalAsker(approval.origin, agent)
+  if (approval.ask === "message") return approvalHead(approval, agent)
+  return approval.origin.kind === "app"
+    ? [...asker, " wants to run ", named(approval.command)]
+    : [...asker, ` wants to run ${approval.command}`]
+}
+
+/**
+ * What Deny and Allow Once do, as their tooltips say it, by what is asked: a
+ * message is sent, not run (D19 on #390). Read by the overview's row and its
+ * peek (`overview.test.tsx` D19).
+ */
+export const answerTips: Readonly<
+  Record<ApprovalAsk, { readonly deny: string; readonly once: string }>
+> = {
+  tool: { deny: "Don’t run it", once: "Run it once" },
+  message: { deny: "Don’t send it", once: "Send it once" },
+}
+
+/**
+ * Why a review asks, as the gateway titled it. An app's title repeats the
+ * tool and the server (`app_reviews.rs`); each is isolated, and the words
+ * around them stay (`approval-request.test.tsx`, E2-1). The agent's title
+ * is its own words.
+ */
+export function approvalReason(approval: Pick<Approval, "origin" | "reason">): Said {
+  return approval.origin.kind === "app"
+    ? naming(approval.reason, [approval.origin.tool, approval.origin.server])
+    : [approval.reason]
 }
 
 /** The first word of a label, shown when the card is too narrow for the whole. */
@@ -73,8 +127,38 @@ function shortOf(label: string): string {
   return space === -1 ? label : label.slice(0, space)
 }
 
-/** The command, broken only between its words. */
-export function ApprovalCommand({ command }: { command: string }) {
+/** The command's words, spaces kept between them. */
+function commandWords(text: string, key: string) {
+  return text.split(/( +)/).map((part, index) =>
+    part.trim() === "" ? (
+      part
+    ) : (
+      <span key={`${key}${index}`} className="workspace-approval-word">
+        {part}
+      </span>
+    ),
+  )
+}
+
+/**
+ * The command, broken only between its words. An app's tool name, when
+ * `name` is that tool and the command begins with it, is isolated as a name
+ * is; the words after it — a message, as it will be sent — are left as they
+ * are (`approval-request.test.tsx`, E2-1).
+ */
+export function ApprovalCommand({
+  command,
+  name,
+}: {
+  command: string
+  /** The app's tool, when this command is that app's. */
+  name?: string
+}) {
+  const lead =
+    name && name.length > 0 && (command === name || command.startsWith(`${name} `))
+      ? name
+      : undefined
+  const rest = lead === undefined ? command : command.slice(lead.length)
   const block = useRef<HTMLPreElement>(null)
   // Where a word is wider than the card, the block scrolls and fades the edge it cuts.
   useLayoutEffect(() => {
@@ -120,15 +204,8 @@ export function ApprovalCommand({ command }: { command: string }) {
       <span className="workspace-approval-prompt" aria-hidden="true">
         ${" "}
       </span>
-      {command.split(/( +)/).map((part, index) =>
-        part.trim() === "" ? (
-          part
-        ) : (
-          <span key={index} className="workspace-approval-word">
-            {part}
-          </span>
-        ),
-      )}
+      {lead === undefined ? null : <bdi>{commandWords(shownName(lead), "name-")}</bdi>}
+      {commandWords(rest, "word-")}
     </pre>
   )
 }

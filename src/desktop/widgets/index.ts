@@ -43,7 +43,8 @@
  *   app/application/ports.ts: the server (#348), the calls, the conversation, links, downloads, timers
  *                                                    │ implemented, for a real server, by
  *                                                    ▼
- *   app/adapters/gateway/: the server over client.mcpApps, the calls from a view's tools (#384)
+ *   app/adapters/gateway/: the server over client.mcpApps, the calls from a view's tools (#384),
+ *                          the conversation's messages and model context (app-messages.ts, #390)
  * ```
  *
  * The first arrow is what draws what; the rest point the way a message
@@ -87,7 +88,7 @@ export { InlineWidget } from "./ui/inline-widget"
 export type { McpAppPorts, SandboxOrigin, Timers } from "./app/application/ports"
 export { readPageContext } from "./app/adapters/dom/page-context"
 export { platformFor, sandboxFor } from "./app/adapters/dom/sandbox-origin"
-export { fixtureAppPlugin } from "./app/fixture/fixture-plugin"
+export { fixtureAppPlugin, fixtureConversation } from "./app/fixture/fixture-plugin"
 export { gatewayApps, type GatewayApps } from "./app/adapters/gateway/gateway-apps"
 export { fixtureServer } from "./app/fixture/fixture-widgets"
 export { appPluginId } from "./app/model/app-ref"

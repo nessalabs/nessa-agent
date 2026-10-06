@@ -88,6 +88,7 @@ export const starredSamples: readonly SampleSession[] = [
       reason: "Imports a signing certificate into the release keychain.",
       origin: { kind: "agent" },
       options: sampleApprovalOptions,
+      ask: "tool",
     },
     messages: exchange(
       "The macOS job fails at codesign since yesterday. Find out why.",
@@ -205,6 +206,7 @@ export const starredSamples: readonly SampleSession[] = [
         "Uploads the signed build to Apple for notarization. This uses the release keychain profile.",
       origin: { kind: "agent" },
       options: sampleApprovalOptions,
+      ask: "tool",
     },
     messages: [["user", 14, [text("Notarize the 0.9.0 build once it is signed.")]]],
   },

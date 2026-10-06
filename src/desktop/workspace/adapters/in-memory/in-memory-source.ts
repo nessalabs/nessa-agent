@@ -17,6 +17,7 @@ import {
   emptyTranscript,
   type ApprovalChoice,
   type Message,
+  type MessageApp,
   type Part,
   type Transcript,
 } from "../../model/transcript"
@@ -81,6 +82,13 @@ export interface AuditEntry {
 }
 
 export interface InMemorySource extends WorkspaceSource {
+  /**
+   * A message of the person's, written by the MCP App `app` (`ui/message`,
+   * #390), as the gateway takes one: only while the session is idle — refused
+   * `not-waiting` while its agent is at work or waits on the person — so it
+   * never waits behind anything.
+   */
+  appMessage(sessionId: string, app: MessageApp, text: string): Promise<void>
   /** Every consequential call, in order — answers, pins, archives — refused ones included. */
   audit(): readonly AuditEntry[]
   /** Stops every scripted reply and refuses every later call; nothing is emitted afterwards. */
@@ -291,7 +299,7 @@ export function inMemorySource(
       (channel) => channel.id === (sessions.get(sessionId)?.channelId ?? starting),
     )?.name ?? ""
 
-  const accept = (message: OutgoingMessage) => {
+  const accept = (message: OutgoingMessage, app?: MessageApp) => {
     const at = schedule.now()
     const existing = sessions.get(message.sessionId)
     if ((!existing && !message.start) || archived.has(message.sessionId))
@@ -339,6 +347,7 @@ export function inMemorySource(
       role: "user",
       at,
       parts: [{ kind: "text", text: message.text }],
+      ...(app ? { app } : {}),
     }
     // An approval the message lets go is on record, with who sent it, before
     // anyone hears of it: a subscriber shown the approval gone finds its
@@ -409,6 +418,23 @@ export function inMemorySource(
       return () => listeners.delete(listener)
     },
     send: (message) => live(() => accept(message)),
+    appMessage: (sessionId, app, text) =>
+      live(() => {
+        const held = sessions.get(sessionId)
+        if (!held || archived.has(sessionId))
+          throw new WorkspaceSourceError("unknown-session")
+        if (held.status !== "idle") throw new WorkspaceSourceError("not-waiting")
+        accept(
+          {
+            sessionId,
+            initiator: "person",
+            messageId: `app-${held.revision}-${schedule.now()}`,
+            text,
+            model: held.model,
+          },
+          app,
+        )
+      }),
     approve: (
       sessionId: string,
       approvalId: string,
