@@ -772,10 +772,21 @@ async fn a_retry_of_a_message_the_stopping_owner_has_recovers_its_delivery() {
 /// mode is verified, so a send while the stop closes the agent is refused as
 /// closed — the refusal a client may send again after — and not as a mode
 /// not applied, which the agent detaching would otherwise answer.
+///
+/// The preset is applied only once the agent is idle. Attachment starts the
+/// queue runner before `Fixture::live` returns; until that runner observes an
+/// empty queue, the change is `TurnRunning` (#563).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_send_during_a_desktop_stop_in_another_mode_is_refused_as_closed() {
     let fixture = Fixture::new(DELETION_BUDGETS.stop).await;
     let live = fixture.live().await;
+    tokio::time::timeout(BOUND, async {
+        while !live.agent.idle_for_approval_change().await {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the agent is idle before the mode change");
     fixture
         .service
         .set_approval_mode(
