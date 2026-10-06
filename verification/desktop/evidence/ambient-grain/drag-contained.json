@@ -75,11 +75,7 @@
       "layout": "columns",
       "width": "1440x900",
       "zone": "Move below Retry budget for ACP reconnects",
-      "resized": [
-        "1: 354×438 at 1078,454",
-        "2: 1062×884 at 8,8",
-        "4: 354×438 at 1078,8"
-      ]
+      "resized": ["1: 354×438 at 1078,454", "2: 1062×884 at 8,8", "4: 354×438 at 1078,8"]
     },
     {
       "ok": true,
@@ -140,11 +136,7 @@
       "layout": "columns",
       "width": "1000x700",
       "zone": "Move below Retry budget for ACP reconnects",
-      "resized": [
-        "1: 302×338 at 690,354",
-        "2: 674×684 at 8,8",
-        "4: 302×338 at 690,8"
-      ]
+      "resized": ["1: 302×338 at 690,354", "2: 674×684 at 8,8", "4: 302×338 at 690,8"]
     },
     {
       "ok": true,
@@ -205,11 +197,7 @@
       "layout": "sidebar",
       "width": "1440x900",
       "zone": "Move below Retry budget for ACP reconnects",
-      "resized": [
-        "1: 354×438 at 1078,454",
-        "2: 1062×884 at 8,8",
-        "4: 354×438 at 1078,8"
-      ]
+      "resized": ["1: 354×438 at 1078,454", "2: 1062×884 at 8,8", "4: 354×438 at 1078,8"]
     },
     {
       "ok": true,
@@ -270,11 +258,7 @@
       "layout": "sidebar",
       "width": "1000x700",
       "zone": "Move below Retry budget for ACP reconnects",
-      "resized": [
-        "1: 302×338 at 690,354",
-        "2: 674×684 at 8,8",
-        "4: 302×338 at 690,8"
-      ]
+      "resized": ["1: 302×338 at 690,354", "2: 674×684 at 8,8", "4: 302×338 at 690,8"]
     },
     {
       "ok": true,
@@ -335,11 +319,7 @@
       "layout": "columns",
       "width": "1440x900",
       "zone": "Move below Retry budget for ACP reconnects",
-      "resized": [
-        "1: 354×438 at 1078,454",
-        "2: 1062×884 at 8,8",
-        "4: 354×438 at 1078,8"
-      ]
+      "resized": ["1: 354×438 at 1078,454", "2: 1062×884 at 8,8", "4: 354×438 at 1078,8"]
     },
     {
       "ok": true,
@@ -400,11 +380,7 @@
       "layout": "columns",
       "width": "1000x700",
       "zone": "Move below Retry budget for ACP reconnects",
-      "resized": [
-        "1: 302×338 at 690,354",
-        "2: 674×684 at 8,8",
-        "4: 302×338 at 690,8"
-      ]
+      "resized": ["1: 302×338 at 690,354", "2: 674×684 at 8,8", "4: 302×338 at 690,8"]
     },
     {
       "ok": true,
@@ -465,11 +441,7 @@
       "layout": "sidebar",
       "width": "1440x900",
       "zone": "Move below Retry budget for ACP reconnects",
-      "resized": [
-        "1: 354×438 at 1078,454",
-        "2: 1062×884 at 8,8",
-        "4: 354×438 at 1078,8"
-      ]
+      "resized": ["1: 354×438 at 1078,454", "2: 1062×884 at 8,8", "4: 354×438 at 1078,8"]
     },
     {
       "ok": true,
@@ -530,11 +502,7 @@
       "layout": "sidebar",
       "width": "1000x700",
       "zone": "Move below Retry budget for ACP reconnects",
-      "resized": [
-        "1: 302×338 at 690,354",
-        "2: 674×684 at 8,8",
-        "4: 302×338 at 690,8"
-      ]
+      "resized": ["1: 302×338 at 690,354", "2: 674×684 at 8,8", "4: 302×338 at 690,8"]
     }
   ]
 }

@@ -6,10 +6,7 @@
   "performance": {
     "mode": "production",
     "display": "headless",
-    "viewport": [
-      1600,
-      1000
-    ],
+    "viewport": [1600, 1000],
     "deviceScaleFactor": 2,
     "cpuThrottle": 4,
     "runsPerLayout": 5,
