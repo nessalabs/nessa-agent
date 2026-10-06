@@ -1759,6 +1759,7 @@ async fn a_lost_caller_still_logs_a_deadline() {
     });
     fixture.upload(CONVERSATION, BYTES, PDF).await;
     fixture.audit.taken_all();
+    fixture.audit.clear_durations();
     fixture.audit.stalled.store(true, Ordering::SeqCst);
     let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
     let service = fixture.service.clone();
@@ -1772,7 +1773,18 @@ async fn a_lost_caller_still_logs_a_deadline() {
     assert!(fixture.audit.attempts.load(Ordering::SeqCst) > attempts);
     caller.abort();
     let _ = caller.await;
-    tokio::time::sleep(Duration::from_secs(6)).await;
+    // Land on the deadline, then wait until the attempt is dropped. A turn
+    // that lands on it can be polled before the attempt's own timer, and
+    // then the drop has not been logged yet
+    // (`a_stalled_release_still_attempts_every_record_for_its_own_deadline`).
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    for _ in 0..32 {
+        if !fixture.audit.durations().is_empty() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(fixture.audit.durations(), vec![Duration::from_secs(5)]);
     assert!(
         captured
             .text()
