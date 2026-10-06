@@ -123,9 +123,19 @@ export async function openPage(browser, o) {
       harmless.push(entry)
     else errors.push(entry)
   })
-  page.on("requestfailed", (request) =>
-    recordFailedRequest(request, page.url(), { errors, harmless }),
-  )
+  page.on("requestfailed", (request) => {
+    const pageUrl = page.url()
+    recordFailedRequest(request, pageUrl, { errors, harmless })
+    // `sizes()` asks the browser and answers later. A step still running
+    // when it arrives can move a fully delivered abort out of `errors`
+    // (#473). One that already read the line keeps it; `mcp-apps-gateway`
+    // then accepts it only for a mount that went live.
+    const pending = typeof request.sizes === "function" ? request.sizes() : null
+    if (!pending || typeof pending.then !== "function") return
+    void pending
+      .then((sizes) => reclassifyDeliveredAbort(request, pageUrl, sizes, { errors, harmless }))
+      .catch(() => {})
+  })
   try {
     await page.goto(o.url, { waitUntil: "domcontentloaded" })
     await page.waitForSelector(o.readySelector ?? css.anyReady, {
@@ -164,26 +174,32 @@ export async function openPage(browser, o) {
 }
 
 /**
- * Records a request the page reports failed (#485, rows F1′ and F2–F4;
- * tested in `browser.test.mjs`): a line pushed to `harmless` or to
- * `errors`, or nothing for the fresh browser's `/favicon.ico`.
+ * Records a request the page reports failed (#473, #485; tested in
+ * `browser.test.mjs`): a line pushed to `harmless` or to `errors`, or
+ * nothing for the fresh browser's `/favicon.ico`.
  *
- * Harmless only when Chromium reports `net::ERR_ABORTED` for a request on the
- * page's own origin after a 2xx response arrived (F1′). Chromium reports a
- * request aborted when the page stops reading its body, through a bounded
- * reader (`/mcp-resources`) or by never reading it (`/browser/check`'s 204),
- * though the response arrived. This function knows only that it arrived:
- * whether its bytes were right is for each check's own assertions. With no
- * response (F2), a status outside 2xx (F3), or another origin, another error
- * text, or a page with no origin (F4), it is an error.
+ * `net::ERR_ABORTED` is harmless only in two cases, never for every abort:
+ *
+ * - a 200 on the page's own origin whose `content-length` was fully
+ *   delivered (`sizes().responseBodySize`). Chromium sometimes reports
+ *   that fetch as aborted after the page has read it (#473). Without
+ *   those sizes the line stays an error; a caller that can see the mount
+ *   went live may move it (`liveMountResourceAbort`).
+ * - a 204 on the page's own origin, whose body is empty and never read
+ *   (`/browser/check`, #485).
+ *
+ * With no response, a short body, a status other than those two, another
+ * origin, another error text, or a page with no origin, it is an error.
  *
  * `existingResponse()` answers synchronously, so the line is recorded within
  * the event, before a step reads `errors`. Playwright creates a failed
  * request's received response before it reports the failure
- * (`RequestDispatcher`'s constructor in playwright-core).
+ * (`RequestDispatcher`'s constructor in playwright-core). `sizes()` may
+ * answer later; `reclassifyDeliveredAbort` moves the line then.
  *
  * @param {{ url(): string, failure(): { errorText: string } | null,
- *   existingResponse(): { status(): number } | null }} request
+ *   existingResponse(): { status(): number, headers?: () => Record<string, string> } | null,
+ *   sizes?: () => { responseBodySize: number } | Promise<unknown> }} request
  * @param {string} pageUrl the page's URL when the request failed
  * @param {{ errors: string[], harmless: string[] }} into
  */
@@ -192,18 +208,80 @@ export function recordFailedRequest(request, pageUrl, { errors, harmless }) {
   if (/favicon\.ico/.test(url)) return
   const errorText = request.failure()?.errorText ?? ""
   const line = `requestfailed: ${url} ${errorText}`
-  // An opaque origin (`about:blank`, `data:`) serialises as "null": no page's own.
-  const own = originOf(pageUrl)
-  const status = request.existingResponse()?.status()
-  if (
-    errorText === "net::ERR_ABORTED" &&
-    own !== "null" &&
-    originOf(url) === own &&
-    status >= 200 &&
-    status <= 299
-  )
-    harmless.push(`${line} (aborted after a ${status} response, #485)`)
+  const kind = abortKind(request, pageUrl, errorText)
+  if (kind === "full")
+    harmless.push(`${line} (aborted after a 200 response, full body, #473)`)
+  else if (kind === "empty")
+    harmless.push(`${line} (aborted after a 204 response, #485)`)
   else errors.push(line)
+}
+
+/**
+ * Moves a recorded abort from `errors` to `harmless` once `sizes` shows the
+ * 200 body's `content-length` arrived (#473). No-op when the line was already
+ * taken or the body is short.
+ *
+ * @param {Parameters<typeof recordFailedRequest>[0]} request
+ * @param {string} pageUrl
+ * @param {{ responseBodySize?: number } | null | undefined} sizes
+ * @param {{ errors: string[], harmless: string[] }} into
+ */
+export function reclassifyDeliveredAbort(request, pageUrl, sizes, { errors, harmless }) {
+  if (!fullBody(request, sizes)) return
+  const url = request.url()
+  const errorText = request.failure()?.errorText ?? ""
+  const line = `requestfailed: ${url} ${errorText}`
+  const index = errors.indexOf(line)
+  if (index === -1) return
+  errors.splice(index, 1)
+  harmless.push(`${line} (aborted after a 200 response, full body, #473)`)
+}
+
+/**
+ * The page-wide guard could not see a body size for this `/mcp-resources`
+ * abort. A step may treat it as harmless only when the mount that fetched
+ * it went live (#473). Any other failed request stays a failure.
+ *
+ * @param {string} line
+ */
+export function liveMountResourceAbort(line) {
+  return /^requestfailed: \S+\/mcp-resources(?:[?#]\S*)? net::ERR_ABORTED$/.test(line)
+}
+
+/** @returns {"full" | "empty" | "error"} */
+function abortKind(request, pageUrl, errorText) {
+  if (errorText !== "net::ERR_ABORTED") return "error"
+  const url = request.url()
+  const own = originOf(pageUrl)
+  if (own === "null" || originOf(url) !== own) return "error"
+  const response = request.existingResponse()
+  const status = response?.status()
+  if (status === 204) return "empty"
+  if (status === 200 && fullBody(request, synchronousSizes(request))) return "full"
+  return "error"
+}
+
+function synchronousSizes(request) {
+  if (typeof request.sizes !== "function") return null
+  const sizes = request.sizes()
+  if (!sizes || typeof sizes.then === "function") {
+    // The caller asks again and waits. A rejection of this unused answer
+    // must not surface as an unhandled rejection.
+    if (sizes && typeof sizes.catch === "function") sizes.catch(() => {})
+    return null
+  }
+  return sizes
+}
+
+function fullBody(request, sizes) {
+  const response = request.existingResponse()
+  if (!response || response.status() !== 200) return false
+  const headers = typeof response.headers === "function" ? response.headers() : null
+  if (!headers || !Object.hasOwn(headers, "content-length")) return false
+  const length = Number(headers["content-length"])
+  if (!Number.isInteger(length) || length < 0) return false
+  const body = sizes?.responseBodySize
+  return typeof body === "number" && body >= length
 }
 
 /** `url`'s origin, or "null" when it has none to compare. */
@@ -221,6 +299,22 @@ export async function need(page, selector, what, timeout = 5000) {
 }
 
 /**
+ * Runs `body`, then closes `browser`. The body's error is the one reported:
+ * a close that fails is discarded, as `openPage` does when a context fails
+ * to close (#475).
+ *
+ * @param {{ close: () => Promise<unknown> }} browser
+ * @param {() => Promise<unknown>} body
+ */
+export async function runAndClose(browser, body) {
+  try {
+    return await body()
+  } finally {
+    await browser.close().catch(() => {})
+  }
+}
+
+/**
  * Opens a browser per engine, runs `body(engine, browser)`, and always
  * closes it. An engine that does not launch is reported as could-not-run.
  */
@@ -233,10 +327,6 @@ export async function withEngines(options, rep, body) {
       rep.add({ name: "launch", engine, cannotRun: true, error: error.message })
       continue
     }
-    try {
-      await body(engine, browser)
-    } finally {
-      await browser.close()
-    }
+    await runAndClose(browser, () => body(engine, browser))
   }
 }

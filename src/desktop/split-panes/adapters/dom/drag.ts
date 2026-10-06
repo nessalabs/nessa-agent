@@ -162,6 +162,22 @@ function together(animations: readonly Animation[]) {
   const now = document.timeline?.currentTime
   if (now === null || now === undefined) return
   for (const animation of animations) animation.startTime = now
+  // WebKit can replace that start when `ready` fulfills, so a pair given one
+  // instant is drawn a frame apart (#254). Put the same instant back on any
+  // that are still running. An animation with no `ready` (the jsdom stand-in)
+  // keeps the start just set.
+  const pending = animations.filter(
+    (animation) => typeof animation.ready?.then === "function",
+  )
+  if (pending.length === 0) return
+  void Promise.all(pending.map((animation) => animation.ready)).then(() => {
+    for (const animation of pending) {
+      // A preview already let go is `idle`. Setting its start again would
+      // play it. Only a pair still running needs the shared instant.
+      if (animation.playState !== "running" && animation.playState !== "pending") continue
+      if (animation.startTime !== now) animation.startTime = now
+    }
+  })
 }
 
 /** How far along its clock an animation is drawn, eased; 1 once it has ended or with none. */

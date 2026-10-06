@@ -265,6 +265,59 @@ const items = (fake: Fake) => {
   return layout ? panesOf(layout).map((pane) => pane.item) : []
 }
 
+it("puts a start WebKit moved on ready back to the instant the pair was given", async () => {
+  const held: { startTime: number | null; playState: string }[] = []
+  const release: Array<() => void> = []
+  Element.prototype.animate = function (this: Element, keyframes, timing) {
+    const asked = {
+      element: this,
+      keyframes: keyframes as Keyframe[],
+      duration: typeof timing === "object" ? timing.duration : timing,
+      cancelled: false,
+    }
+    animated.push(asked)
+    const animation = {
+      cancel() {
+        asked.cancelled = true
+      },
+      finished: Promise.resolve(),
+      id: "",
+      playState: "running",
+      startTime: null as number | null,
+      ready: null as Promise<unknown> | null,
+    }
+    animation.ready = new Promise<void>((resolve) => {
+      release.push(() => {
+        animation.startTime = 99999
+        resolve()
+      })
+    })
+    held.push(animation)
+    return animation as unknown as Animation
+  }
+  Object.defineProperty(document, "timeline", {
+    configurable: true,
+    value: { currentTime: 1234 },
+  })
+  try {
+    const fake = fakeSource(two())
+    const root = await mounted(fake)
+    await liftOntoTwo()
+    // Only the animations a pair was started together: the rest are not given a start.
+    const paired = held.filter((animation) => animation.startTime === 1234)
+    expect(paired.length).toBeGreaterThan(1)
+    for (const fulfill of release) fulfill()
+    expect(paired.every((animation) => animation.startTime === 99999)).toBe(true)
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(paired.every((animation) => animation.startTime === 1234)).toBe(true)
+    await act(async () => root.unmount())
+  } finally {
+    Reflect.deleteProperty(document, "timeline")
+  }
+})
+
 it("previews the outcome of the layout the source holds, and commits it through the source in the room the press read", async () => {
   const fake = fakeSource(two())
   const root = await mounted(fake)

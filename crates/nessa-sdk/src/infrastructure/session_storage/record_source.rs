@@ -1138,12 +1138,13 @@ mod tests {
     use std::{
         future::Future,
         io::{BufRead, BufReader, Write},
-        net::{Ipv4Addr, SocketAddrV4},
+        net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
         path::Path,
         process::{Child, Command, Stdio},
         sync::{mpsc::TryRecvError, Arc},
         task::{Context, Poll, Waker},
-        time::Duration,
+        thread,
+        time::{Duration, Instant},
     };
 
     fn opening(session: &SessionId) -> SessionChange {
@@ -3299,11 +3300,21 @@ mod tests {
                 ),
             )
             .unwrap();
-        let source = runtime
+        // The lease is the writer reservation. The records are already in the
+        // store the source reads; holding it across `serve` keeps that
+        // connection for the whole probe (#472).
+        drop(lease);
+        let mut source = runtime
             .block_on(storage.record_source(&session, id("origin")))
             .unwrap()
             .unwrap();
         let scope = source.scope(id("receiver"), id("epoch"));
+        // The first head walks every frame. Doing it before a client is
+        // waiting on the loopback read timeout keeps that read inside the
+        // client's budget on a slow debug build (#472).
+        source
+            .head(&scope)
+            .expect("authority head is readable before a client connects");
         let config = LoopbackReadConfig {
             origin: scope.origin().clone(),
             stream: scope.stream().clone(),
@@ -3314,16 +3325,56 @@ mod tests {
             allowed_receivers: vec![scope.receiver().clone()],
         };
         let server = LoopbackRecordServer::bind(0, config, move || Ok(source.clone())).unwrap();
+        let bound = SocketAddr::from(server.local_addr().unwrap());
+        // `serve` accepts on its own thread. READY is printed only after a
+        // connection to that listener succeeds, so the parent does not hand
+        // the port to a client the kernel is still refusing (#472).
+        let serving = thread::Builder::new()
+            .name("durable-authority".into())
+            .spawn(move || {
+                server.serve().expect("durable authority serve");
+            })
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while TcpStream::connect_timeout(&bound, Duration::from_millis(200)).is_err() {
+            if Instant::now() >= deadline {
+                panic!("authority never accepted a loopback connection on {bound}");
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
         // The single-threaded test harness prints its test name on the same
         // line as uncaptured child output. Put the protocol marker on its own
         // line so the parent can parse it in coverage and ordinary test runs.
         println!(
             "\nNESSA_DURABLE_READY {} {}",
-            server.local_addr().unwrap().port(),
+            bound.port(),
             scope.incarnation().as_str()
         );
         std::io::stdout().flush().unwrap();
-        server.serve().unwrap();
+        // Returning would end this process and take the server with it. A
+        // spurious unpark must not do that either (#472).
+        while !serving.is_finished() {
+            thread::park_timeout(Duration::from_secs(60));
+        }
+    }
+
+    /// Calls `attempt` again when the source reports `Unavailable`. Any other
+    /// error is returned as it is. A lost apply reply (`Uncertain`) is not
+    /// retried: that is the probe's point (#472).
+    fn retry_unavailable<T>(
+        mut attempt: impl FnMut() -> Result<T, SyncError>,
+    ) -> Result<T, SyncError> {
+        let mut delay = Duration::from_millis(20);
+        for _ in 0..6 {
+            match attempt() {
+                Err(SyncError::Source(SourceError::Unavailable)) => {
+                    thread::sleep(delay);
+                    delay = (delay * 2).min(Duration::from_millis(500));
+                }
+                other => return other,
+            }
+        }
+        Err(SyncError::Source(SourceError::Unavailable))
     }
 
     #[test]
@@ -3348,15 +3399,27 @@ mod tests {
         .unwrap();
         let mut access = MemoryAuthorizer::allowed(scope.clone());
         let mut receiver = DurableReceiver::open(Path::new(&path), scope.clone(), mode == "first");
-        let mut pass = begin_pass(&scope, &mut access, &mut client, &mut receiver).unwrap();
+        let mut pass =
+            retry_unavailable(|| begin_pass(&scope, &mut access, &mut client, &mut receiver))
+                .expect("begin_pass");
         let limits = Limits::new(2, 128 * 1024, 128 * 1024).unwrap();
         match mode.as_str() {
             "first" => assert_eq!(
-                step(&mut pass, limits, &mut access, &mut client, &mut receiver),
+                retry_unavailable(|| step(
+                    &mut pass,
+                    limits,
+                    &mut access,
+                    &mut client,
+                    &mut receiver
+                )),
                 Err(SyncError::Store(StoreError::Uncertain))
             ),
             "resume" => {
-                while !step(&mut pass, limits, &mut access, &mut client, &mut receiver).unwrap() {}
+                while !retry_unavailable(|| {
+                    step(&mut pass, limits, &mut access, &mut client, &mut receiver)
+                })
+                .expect("resume step")
+                {}
             }
             "verify" => assert!(pass.is_complete()),
             _ => panic!("invalid receiver probe mode"),

@@ -255,33 +255,72 @@ async function recordShapes(page) {
     // and its content at two moments, seeing a stretch that is not drawn
     // (#365 recorded one frame read 1.0006×1.0009, then 1.012×0.987 over
     // 1.0ms, then 1.0003×1.0004). So the chain is read until two reads in a
-    // row agree, and the agreed read is judged; it may be a moment later
-    // than the frame drawn, which matters only to a stretch that comes and
-    // goes within a frame. What this does not hide, as observed in #365 and
-    // re-run there whenever this changes: a counter-scale started a frame
-    // off still fails `copy-takes-slot-shape` in both engines. A chain that
-    // never settles in `steadyReads` reads is marked `unsteady`, and every
-    // check that judges a title fails it (`unsteadily`): never passed for
-    // being unreadable.
+    // row agree, and a read whose document clock moved during it is not an
+    // agreement: it straddled a sample. The agreed read is judged; it may be
+    // a moment later than the frame drawn, which matters only to a stretch
+    // that comes and goes within a frame. What this does not hide, as
+    // observed in #365 and re-run there whenever this changes: a counter-scale
+    // started a frame off still fails `copy-takes-slot-shape` in both engines.
+    // A chain that never settles in `steadyReads` reads is marked `unsteady`,
+    // and every check that judges a title fails it (`unsteadily`): never
+    // passed for being unreadable.
+    //
+    // `synced` is whether every running animation from the title up shares
+    // one start time. A small disagreement while they do is one frame of the
+    // box and its counter-scale sampling apart (#254). None running, or
+    // starts that differ, leaves the strict check in force.
     const steadyReads = 6
     const agree = (a, b) =>
       Math.abs(a.sx - b.sx) <= 0.002 && Math.abs(a.sy - b.sy) <= 0.002
+    const clock = () => {
+      const time = document.timeline?.currentTime
+      return typeof time === "number" ? time : null
+    }
+    const syncedStarts = (title) => {
+      const starts = []
+      for (let node = title; node; node = node.parentElement) {
+        const animations = typeof node.getAnimations === "function" ? node.getAnimations() : []
+        for (const animation of animations) {
+          if (animation.playState === "finished" || animation.playState === "idle") continue
+          if (typeof animation.startTime !== "number") return false
+          starts.push(animation.startTime)
+        }
+      }
+      return starts.length > 0 && starts.every((start) => start === starts[0])
+    }
     const drawnAt = (title) => {
       const reads = []
-      let began = performance.now()
-      let read = chain(title)
-      let readMs = performance.now() - began
-      reads.push([read.sx, read.sy, readMs])
-      while (reads.length < steadyReads) {
-        began = performance.now()
-        const next = chain(title)
-        readMs = performance.now() - began
-        reads.push([next.sx, next.sy, readMs])
-        const steady = agree(next, read)
-        read = next
-        if (steady) return { sx: read.sx, sy: read.sy, readMs, reads: reads.length }
+      const sample = () => {
+        const before = clock()
+        const began = performance.now()
+        const read = chain(title)
+        const after = clock()
+        const readMs = performance.now() - began
+        reads.push([read.sx, read.sy, readMs])
+        return { read, readMs, straddled: before !== null && before !== after }
       }
-      return { sx: read.sx, sy: read.sy, readMs, reads: reads.length, unsteady: reads }
+      let current = sample()
+      while (reads.length < steadyReads) {
+        const next = sample()
+        const steady = !current.straddled && !next.straddled && agree(next.read, current.read)
+        current = next
+        if (steady)
+          return {
+            sx: current.read.sx,
+            sy: current.read.sy,
+            readMs: current.readMs,
+            reads: reads.length,
+            synced: syncedStarts(title),
+          }
+      }
+      return {
+        sx: current.read.sx,
+        sy: current.read.sy,
+        readMs: current.readMs,
+        reads: reads.length,
+        unsteady: reads,
+        synced: syncedStarts(title),
+      }
     }
     if (!window.__verifyPointerWatched) {
       window.__verifyPointerWatched = true
@@ -392,6 +431,23 @@ function unsteadily(title, where) {
   return `${where}: ${title.of}'s title never read the same twice in a row (${JSON.stringify(title.unsteady)})`
 }
 
+/**
+ * One agreed read of about a percent, both axes within two percent of 1,
+ * while every running animation on the title shares a start time: the box
+ * and its counter-scale sampled a step apart inside the frame (#254). A
+ * start that differs, a larger stretch, or no animation to judge stays a
+ * failure — that is the counter-scale started a frame off (#365).
+ */
+function sampledApart(title) {
+  return (
+    title.synced === true &&
+    title.readMs >= 0.5 &&
+    Math.abs(title.sx - title.sy) <= 0.04 &&
+    Math.abs(title.sx - 1) <= 0.02 &&
+    Math.abs(title.sy - 1) <= 0.02
+  )
+}
+
 /** Titles drawn stretched — across and down scaled apart — or not readable, in any frame. */
 function stretched(frames, label) {
   const bad = []
@@ -399,7 +455,7 @@ function stretched(frames, label) {
   for (const f of frames)
     for (const title of f.titles)
       if (title.unsteady) unread.push(unsteadily(title, `${Math.round(f.t)}ms`))
-      else if (Math.abs(title.sx - title.sy) > 0.02)
+      else if (Math.abs(title.sx - title.sy) > 0.02 && !sampledApart(title))
         bad.push(
           `${title.of} ${title.sx.toFixed(3)}×${title.sy.toFixed(3)} at ${Math.round(f.t)}ms (read over ${title.readMs.toFixed(1)}ms), zone "${f.zone}"`,
         )

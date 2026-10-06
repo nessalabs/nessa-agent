@@ -47,8 +47,8 @@ import { setTimeout as sleep } from "node:timers/promises"
 
 import { SERVER, toolPrompt } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { appFrame, approvalGone, approvalShown, oneCard, oneMount } from "./lib/apps.mjs"
-import { openPage, withEngines } from "./lib/browser.mjs"
-import { CannotRun, chosen, log } from "./lib/cli.mjs"
+import { liveMountResourceAbort, openPage, withEngines } from "./lib/browser.mjs"
+import { CannotRun, chosen, log, resultOfThrown } from "./lib/cli.mjs"
 import {
   admitOnce,
   appPermissions,
@@ -700,9 +700,12 @@ const checks = {
     await inline.app.click(css.reviewControl("fullscreen"))
     await paneCountIs(page, panes + 1)
     const pane = await appFrame(page, "pane", 20_000)
-    await pane.app
+    // The mount going live is what lets a later, unsized `/mcp-resources`
+    // abort be treated as delivered (#473). A timeout leaves it a failure.
+    const paneLive = await pane.app
       .waitForSelector(css.reviewState("live"), { timeout: 20_000 })
-      .catch(() => {})
+      .then(() => true)
+      .catch(() => false)
     const paneMode = await pane.app.evaluate(() =>
       document.body.getAttribute("data-review-mode"),
     )
@@ -787,6 +790,7 @@ const checks = {
         cardGone,
         cardGoneAfterWithdrawnMs,
         inlineState,
+        paneLive,
       },
       failures,
     }
@@ -811,13 +815,12 @@ await main(
         try {
           opened = await openConversation(browser, stack, layout)
         } catch (error) {
+          // `resultOfThrown` owns the fault's stack (#475). The page lines
+          // `openConversation` appended stay on `detail`; the result keeps
+          // the first line.
           rep.add({
-            name: "open",
-            engine,
-            layout,
-            cannotRun: error instanceof CannotRun,
-            error: error.message.split("\n")[0],
-            detail: error.message,
+            ...resultOfThrown({ name: "open", engine, layout }, error),
+            detail: String(error?.message ?? error),
           })
           continue
         }
@@ -847,14 +850,34 @@ await main(
             } catch (error) {
               result = { failures: [], error: error.message.split("\n")[0] }
             }
+            const pageFailures = opened.errors.splice(0)
+            const pageHarmless = opened.harmless.splice(0)
+            // A fully read `/mcp-resources` can still be reported aborted
+            // before its size arrives. Once this step has seen the pane mount
+            // live, and the inline mount stayed live, that one line is the
+            // delivered fetch (#473). Every other abort stays a failure.
+            if (
+              name === "release" &&
+              result.seen?.paneLive === true &&
+              result.seen?.inlineState === "live"
+            ) {
+              const kept = []
+              for (const line of pageFailures) {
+                if (liveMountResourceAbort(line))
+                  pageHarmless.push(`${line} (mount went live, #473)`)
+                else kept.push(line)
+              }
+              pageFailures.length = 0
+              pageFailures.push(...kept)
+            }
             const entry = rep.add({
               name,
               engine,
               layout,
               ms: Date.now() - at,
               ...result,
-              failures: [...(result.failures ?? []), ...opened.errors.splice(0)],
-              harmless: opened.harmless.splice(0),
+              failures: [...(result.failures ?? []), ...pageFailures],
+              harmless: pageHarmless,
             })
             // A refused call leaves nothing waiting, so the steps after
             // `hidden` begin from the same page whatever it saw.

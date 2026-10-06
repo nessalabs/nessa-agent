@@ -86,10 +86,13 @@ jobs:
       pull-requests: read
     outputs:
       code: ${{ steps.decide.outputs.code }}
+      mcp_test_server: ${{ steps.decide.outputs.mcp_test_server }}
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: scripts/documentation-only.mjs
+          sparse-checkout: |
+            scripts/documentation-only.mjs
+            scripts/ci-paths.mjs
           sparse-checkout-cone-mode: false
           fetch-depth: 1
           filter: blob:none
@@ -103,6 +106,7 @@ jobs:
           if [ "$EVENT" != pull_request ]; then
             echo "$EVENT runs everything."
             echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "mcp_test_server=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # `--paginate` because the default page is thirty files and a
@@ -117,6 +121,15 @@ jobs:
             echo "code=false" >> "$GITHUB_OUTPUT"
           else
             echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+          # `scripts/mcp-test-server`'s tests spawn processes. They run in
+          # `gateway-contract` when a pull request touches them, the recorded
+          # fixtures, or `stand_in.rs` (#476) — not on every push's worth of
+          # rustc, and not via `pnpm scripts:test`.
+          if [ "$(node scripts/ci-paths.mjs mcp-test-server < changed.txt)" = true ]; then
+            echo "mcp_test_server=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "mcp_test_server=false" >> "$GITHUB_OUTPUT"
           fi
 
   gateway-contract:
@@ -145,6 +158,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      # The scripted MCP server's own tests. A pull request runs them when
+      # `changes` says it touched that server, its fixtures, or `stand_in.rs`.
+      # A push to `main` always runs them. Not `pnpm scripts:test`: that
+      # script is wider than this check (#476, #513).
+      - name: MCP test server
+        if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.mcp_test_server == 'true' }}
+        run: node --test scripts/mcp-test-server/*.test.mjs
       - name: Check portable Rust dependency graphs
         run: node scripts/check-runtime-dependencies.mjs --verify-fixture
       - run: cargo fmt --all -- --check
