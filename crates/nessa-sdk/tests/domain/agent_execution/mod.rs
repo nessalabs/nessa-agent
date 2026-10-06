@@ -9,6 +9,7 @@
 
 mod executions;
 mod invocation_history;
+mod ownership;
 mod permissions;
 mod prompts;
 mod provider_context;

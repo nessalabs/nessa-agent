@@ -3200,6 +3200,7 @@ dependencies = [
  "event-stream",
  "libc",
  "markdown",
+ "nessa-local-database",
  "nessa-local-storage",
  "nessa-sync",
  "percent-encoding",

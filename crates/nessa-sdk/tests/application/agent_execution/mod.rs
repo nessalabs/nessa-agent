@@ -11,4 +11,5 @@ mod hooks;
 mod permissions;
 mod providers;
 mod scheduling;
+mod subagents;
 mod support;

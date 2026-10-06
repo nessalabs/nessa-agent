@@ -12,6 +12,7 @@ data-encoding = "2.11"
 sha2 = "0.10"
 base64 = "0.22"
 nessa-local-storage = { path = "../nessa-local-storage" }
+nessa-local-database = { path = "../nessa-local-database" }
 tracing = "0.1"
 event-stream = { git = "https://github.com/nessalabs/event-stream", rev = "59624a2", default-features = false, features = ["codec", "sqlite", "retention"] }
 nessa-sync.workspace = true

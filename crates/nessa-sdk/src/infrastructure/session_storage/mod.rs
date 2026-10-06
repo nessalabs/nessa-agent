@@ -30,6 +30,7 @@
 //! RecordStorage -> transcript fold -> committed gateway view
 //! RecordStorage -> creation control stream -> principal command lease/receipts
 //! RecordStorage -> bounded committed-change watches (no read or permission)
+//! OwnershipStore -> ownership.sqlite3 snapshot rows
 //! MessageCommitClock <--------------------- Tokio monotonic clock adapter
 //! ```
 //! Arrows show calls and representation mapping. A complete outer save publishes
@@ -40,6 +41,7 @@
 mod creation;
 mod memory;
 mod message_commit_clock;
+mod ownership;
 mod paths;
 mod record;
 mod record_changes;
@@ -54,6 +56,7 @@ mod stream_fact;
 mod terminal_discovery;
 pub use memory::InMemoryStorage;
 pub use message_commit_clock::RuntimeMessageCommitClock;
+pub use ownership::SqliteOwnershipStore;
 pub use record::{RecordStorage, MAX_STORED_RECORD_BYTES};
 pub use record_source::{
     physical_record_schema, NessaRecordSource, RecordStreamIdentity,
