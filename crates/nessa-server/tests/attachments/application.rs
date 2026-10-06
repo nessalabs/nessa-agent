@@ -1713,6 +1713,21 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogCapture {
     }
 }
 
+/// Wait until `ready`. The waiter is registered before the check, and a
+/// permit from an earlier attempt is consumed so the check runs again.
+async fn after_signal(signal: &Notify, ready: impl Fn() -> bool) {
+    let notified = signal.notified();
+    tokio::pin!(notified);
+    loop {
+        notified.as_mut().enable();
+        if ready() {
+            return;
+        }
+        notified.as_mut().await;
+        notified.set(signal.notified());
+    }
+}
+
 fn error_log() -> (LogCapture, tracing::subscriber::DefaultGuard) {
     let captured = LogCapture::new();
     let subscriber = tracing_subscriber::fmt()
@@ -1764,26 +1779,21 @@ async fn a_lost_caller_still_logs_a_deadline() {
     let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
     let service = fixture.service.clone();
     let caller = tokio::spawn(async move { service.release(release_request(CONVERSATION)).await });
-    for _ in 0..32 {
-        if fixture.audit.attempts.load(Ordering::SeqCst) > attempts {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
-    assert!(fixture.audit.attempts.load(Ordering::SeqCst) > attempts);
+    after_signal(&fixture.audit.counted, || {
+        fixture.audit.attempts.load(Ordering::SeqCst) > attempts
+    })
+    .await;
     caller.abort();
     let _ = caller.await;
     // Land on the deadline, then wait until the attempt is dropped. A turn
     // that lands on it can be polled before the attempt's own timer, and
-    // then the drop has not been logged yet
+    // `yield_now` can resume this task without polling that timer
     // (`a_stalled_release_still_attempts_every_record_for_its_own_deadline`).
     tokio::time::sleep(Duration::from_secs(5)).await;
-    for _ in 0..32 {
-        if !fixture.audit.durations().is_empty() {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
+    after_signal(&fixture.audit.dropped, || {
+        !fixture.audit.durations().is_empty()
+    })
+    .await;
     assert_eq!(fixture.audit.durations(), vec![Duration::from_secs(5)]);
     assert!(
         captured
