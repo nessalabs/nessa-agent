@@ -22,7 +22,7 @@ diagramLinks: {}
 
 The desktop loads a workspace source and uses it to show sessions and summaries. Refreshing replaces those summaries while preserving valid local selections.
 
-The selected [connection mode](README.md#connection-modes) supplies either gateway data or an in-memory sample. Some preferences persist, but the complete arrangement of panes does not. Losing a local view is different from deleting a server conversation.
+The selected [connection mode](README.md#connection-modes) supplies gateway data, a seeded workspace, or an in-memory sample. Some preferences persist, but the complete arrangement of panes does not. Losing a local view is different from deleting a server conversation.
 
 ```mermaid
 stateDiagram-v2

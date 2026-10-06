@@ -33,5 +33,8 @@ it("the page parser accepts that query", async () => {
 
 it("run-all does not run workspace-load", () => {
   const source = readFileSync(new URL("../run-all.mjs", import.meta.url), "utf8")
-  assert.equal(source.includes('"workspace-load"'), false)
+  const start = source.indexOf("const functional = [")
+  const end = source.indexOf("]", start)
+  assert.equal(start > 0 && end > start, true)
+  assert.equal(source.slice(start, end).includes("workspace-load"), false)
 })

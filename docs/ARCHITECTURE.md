@@ -401,9 +401,11 @@ Hidden workspace/navigation panels are inert and resize separators are hidden.
 The right toggle exits this mode and closes the panel.
 
 The workspace layouts read the desktop store, a projection of one
-`WorkspaceSource`: the gateway's conversations (`adapters/gateway/`, #248)
-when the window is given a way to connect, and the in-memory sample
-otherwise (`model/workspace-backend.ts`). The desktop app's own window
+`WorkspaceSource`. Where that source comes from is
+`model/workspace-backend.ts`: the gateway's conversations
+(`adapters/gateway/`, #248) when the window is given a way to connect, a
+seeded in-memory workspace when a browser query names one, and the sample
+otherwise. The desktop app's own window
 connects to the local gateway under the panel's surface credential (#419):
 the host serves it the endpoint and the credential over IPC once the gateway
 the host started at launch is ready, and refuses it before then — it reads the
@@ -411,8 +413,9 @@ gateway, never starts one (`GatewayReader`, `adapters/host-gateway.ts`) — and
 after a failed connect it waits five poll rounds before it tries again, unless
 a person asks. A
 browser preview opened with `?gateway` connects over the session its origin
-signed in to. Only a browser page without `?gateway` — the verification
-fixtures — shows the sample. A window that cannot read the gateway says why
+signed in to. A browser page without `?gateway` shows the sample — which is
+what the verification fixtures open — unless its query names a seeded run.
+A window that cannot read the gateway says why
 (signed out, or no answer) rather than showing anything in its place. The
 pane arrangement is not kept between launches (the chosen
 layout is, as a stored preference).
@@ -423,7 +426,7 @@ Browser-only preview: `pnpm desktop:dev`, then open
 `http://127.0.0.1:1438/desktop.html`. The strict dedicated port fails if occupied;
 it never terminates another worktree's server. `pnpm app:build` packages the
 window with the panel. The native minimum width is 800px. In a browser the workspace's content is the
-sample unless the page is opened with `?gateway` (above), and layout persistence is not
+sample unless the page is opened with `?gateway` or names a seeded run (above), and layout persistence is not
 implemented. Restart `pnpm app` after changing the Tauri
 overlay configuration: the CLI watcher can retain the previous merged config.
 

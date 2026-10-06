@@ -89,15 +89,16 @@ budget, lib/perf.mjs). A frame over that budget is a finding on the drag
 and split rows, not a failure. WebKit does not throttle.
 
 Pass surfaces: the Agents overview after Show All, the columns session list
-for the opening channel, and the sidebar branch after Show all. The collapsed
-branch is recorded and must be short of that channel.`,
+for the channel that list is showing, and the sidebar branch after Show all
+on the channel that branch marks current. The collapsed branch is recorded
+and must be short of that channel.`,
 }
 
 function asked(options) {
   const spec = { ...seededLoadSpec }
   for (const key of Object.keys(spec)) {
     if (!options.given(key)) continue
-    spec[key] = Number(options[key])
+    spec[key] = options[key]
   }
   return spec
 }
@@ -125,12 +126,39 @@ function readSurface(page, channelId) {
   }, channelId)
 }
 
-function openingOf(report) {
-  const id = report?.openingChannelId
+function channelCounted(report, id) {
+  const sessions = report?.channelSessions
   if (typeof id !== "string" || !/^load-[a-z0-9-]+$/.test(id)) return null
-  const sessions = report.channelSessions
   if (!sessions || !Object.hasOwn(sessions, id)) return null
-  return { id, count: sessions[id], name: report.openingChannelName }
+  return { id, count: sessions[id] }
+}
+
+/** The channel whose stored name is the list's label. The window chose it. */
+function channelNamed(report, label) {
+  const names = report?.channelNames
+  if (!names || typeof label !== "string" || label === "") return null
+  for (const id of Object.keys(names)) {
+    if (!Object.hasOwn(names, id) || names[id] !== label) continue
+    return channelCounted(report, id)
+  }
+  return null
+}
+
+/** The channel the window is showing, read from that surface, then counted from the report. */
+async function shownChannel(page, report, layout) {
+  try {
+    if (layout === "columns") {
+      const list = page.locator(css.sessionList)
+      await list.waitFor({ state: "attached", timeout: countWait })
+      return channelNamed(report, (await list.getAttribute("aria-label")) ?? "")
+    }
+    const current = page.locator('[data-row="channel"][data-current]')
+    await current.first().waitFor({ state: "attached", timeout: countWait })
+    return channelCounted(report, await current.first().getAttribute("data-channel"))
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") return null
+    throw error
+  }
 }
 
 async function dragAcross(page) {
@@ -220,9 +248,9 @@ await main(meta, async ({ options, rep, url }) => {
         else {
           if (report.generator !== "seeded-workspace")
             failures.push(`generator ${report.generator}`)
-          if (report.seed !== spec.seed)
+          if (String(report.seed) !== String(spec.seed))
             failures.push(`seed ${report.seed}, asked ${spec.seed}`)
-          if (report.sessions !== spec.sessions)
+          if (String(report.sessions) !== String(spec.sessions))
             failures.push(`sessions ${report.sessions}, asked ${spec.sessions}`)
           if (!surface.uiRevision) failures.push("no UI revision")
         }
@@ -246,31 +274,43 @@ await main(meta, async ({ options, rep, url }) => {
       }
       const { page, context } = opened
       const report = identity.report
-      const opening = openingOf(report)
+      const channel =
+        want("list-count") ||
+        want("list-search") ||
+        want("list-scroll") ||
+        want("sidebar-show-all") ||
+        want("open") ||
+        want("close-reopen") ||
+        want("repeat-navigation") ||
+        want("overview") ||
+        want("overview-scroll")
+          ? await shownChannel(page, report, layout)
+          : null
 
       if (layout === "columns" && want("list-count")) {
         await attempt(rep, { ...base, name: "list-count" }, async () => {
           const failures = []
-          if (!opening) failures.push("the report named no opening channel")
+          if (!channel)
+            failures.push("the visible session list names no generated channel")
           else {
             await page.waitForFunction(
               ([selector, count]) => document.querySelectorAll(selector).length === count,
-              [css.sessionListRow, opening.count],
+              [css.sessionListRow, channel.count],
               { timeout: countWait },
             )
-            const surface = await readSurface(page, opening.id)
-            if (surface.list !== opening.count)
-              failures.push(`session list ${surface.list}, generated ${opening.count}`)
-            if (surface.listLabel !== opening.name)
-              failures.push(
-                `session list shows ${surface.listLabel}, generated ${opening.name}`,
-              )
+            const surface = await readSurface(page, channel.id)
+            if (surface.list !== channel.count)
+              failures.push(`session list ${surface.list}, generated ${channel.count}`)
           }
-          return { failures }
+          return {
+            failures,
+            channel: channel?.id ?? null,
+            generated: channel?.count ?? null,
+          }
         })
       }
 
-      if (layout === "columns" && want("list-search") && opening) {
+      if (layout === "columns" && want("list-search") && channel) {
         await attempt(rep, { ...base, name: "list-search" }, async () => {
           const field = page.locator(`${css.listSearch} input`)
           await field.fill(nothing)
@@ -282,43 +322,47 @@ await main(meta, async ({ options, rep, url }) => {
           await field.fill("")
           await page.waitForFunction(
             ([selector, count]) => document.querySelectorAll(selector).length === count,
-            [css.sessionListRow, opening.count],
+            [css.sessionListRow, channel.count],
             { timeout: countWait },
           )
           return { failures: [] }
         })
       }
 
-      if (layout === "columns" && want("list-scroll") && opening) {
+      if (layout === "columns" && want("list-scroll") && channel) {
         await attempt(rep, { ...base, name: "list-scroll" }, async () => {
           await page.locator(css.listScroll).evaluate((element) => {
             element.scrollTop = element.scrollHeight
           })
-          const surface = await readSurface(page, opening.id)
+          const surface = await readSurface(page, channel.id)
           const failures = []
-          if (surface.list !== opening.count)
+          if (surface.list !== channel.count)
             failures.push(
-              `after scroll the list has ${surface.list}, generated ${opening.count}`,
+              `after scroll the list has ${surface.list}, generated ${channel.count}`,
             )
           return { failures }
         })
       }
 
-      if (layout === "sidebar" && opening && want("sidebar-show-all")) {
+      if (layout === "sidebar" && want("sidebar-show-all")) {
         await attempt(rep, { ...base, name: "sidebar-show-all" }, async () => {
           const failures = []
-          const more = page.locator(`[data-row="more"][data-parent="${opening.id}"]`)
+          if (!channel) {
+            failures.push("the sidebar marks no generated channel current")
+            return { failures, collapsed: null, channel: null, generated: null }
+          }
+          const more = page.locator(`[data-row="more"][data-parent="${channel.id}"]`)
           const text = (await more.count()) ? (await more.first().innerText()).trim() : ""
-          const collapsed = (await readSurface(page, opening.id)).branch
+          const collapsed = (await readSurface(page, channel.id)).branch
           if (names.showAll.test(text)) {
-            if (!(collapsed < opening.count))
+            if (!(collapsed < channel.count))
               failures.push(
-                `collapsed branch rendered ${collapsed} of ${opening.count}; it is not the full channel`,
+                `collapsed branch rendered ${collapsed} of ${channel.count}; it is not the full channel`,
               )
             else await more.first().click()
-          } else if (collapsed !== opening.count)
+          } else if (collapsed !== channel.count)
             failures.push(
-              `sidebar showed ${collapsed} of ${opening.count} and offered no Show all`,
+              `sidebar showed ${collapsed} of ${channel.count} and offered no Show all`,
             )
           if (failures.length === 0) {
             await page.waitForFunction(
@@ -326,32 +370,32 @@ await main(meta, async ({ options, rep, url }) => {
                 document.querySelectorAll(
                   `[data-session-row][data-parent="${CSS.escape(id)}"]`,
                 ).length === count,
-              [opening.id, opening.count],
+              [channel.id, channel.count],
               { timeout: countWait },
             )
-            const shown = (await readSurface(page, opening.id)).branch
-            if (shown !== opening.count)
-              failures.push(`sidebar showed ${shown}, generated ${opening.count}`)
+            const shown = (await readSurface(page, channel.id)).branch
+            if (shown !== channel.count)
+              failures.push(`sidebar showed ${shown}, generated ${channel.count}`)
           }
           if (shots && engine === "chromium" && !shotChannel) {
             const head = page.locator(
-              `[data-row="channel"][data-channel="${opening.id}"]`,
+              `[data-row="channel"][data-channel="${channel.id}"]`,
             )
             if (await head.count()) {
               await head.first().screenshot({ path: join(shots, "sidebar-channel.png") })
               shotChannel = true
             }
           }
-          return { failures, collapsed, channel: opening.id, generated: opening.count }
+          return { failures, collapsed, channel: channel.id, generated: channel.count }
         })
       }
 
-      if (want("open") && opening) {
+      if (want("open") && channel) {
         await attempt(rep, { ...base, name: "open" }, async () => {
           const row =
             layout === "columns"
               ? page.locator(css.sessionListRow).nth(1)
-              : page.locator(`[data-session-row][data-parent="${opening.id}"]`).nth(1)
+              : page.locator(`[data-session-row][data-parent="${channel.id}"]`).nth(1)
           await row.click()
           await settled(page, 15_000)
           const title = await page.locator(css.conversationTitle).first().textContent()
@@ -459,14 +503,14 @@ await main(meta, async ({ options, rep, url }) => {
         })
       }
 
-      if (want("close-reopen") && opening) {
+      if (want("close-reopen") && channel) {
         await attempt(rep, { ...base, name: "close-reopen" }, async () => {
           await page.keyboard.press(keys.closePane)
           await settled(page, 15_000)
           const row =
             layout === "columns"
               ? page.locator(css.sessionListRow).first()
-              : page.locator(`[data-session-row][data-parent="${opening.id}"]`).first()
+              : page.locator(`[data-session-row][data-parent="${channel.id}"]`).first()
           await row.click()
           await settled(page, 15_000)
           const failures = []
@@ -488,7 +532,7 @@ await main(meta, async ({ options, rep, url }) => {
             await page.keyboard.press(keys.escape)
             if (!(await contentIs(page, content.panes, 30_000)))
               return { failures: ["repeat navigation did not leave the overview"] }
-            samples.push(await readSurface(page, opening?.id ?? null))
+            samples.push(await readSurface(page, channel?.id ?? null))
           }
           return {
             failures: [],
@@ -506,7 +550,7 @@ await main(meta, async ({ options, rep, url }) => {
           if (!(await contentIs(page, content.overview, 60_000)))
             failures.push("the Agents overview did not open")
           else if (report.statusCounts.idle > 0) {
-            const ongoing = (await readSurface(page, opening?.id ?? null)).overview
+            const ongoing = (await readSurface(page, channel?.id ?? null)).overview
             if (ongoing >= report.sessions)
               failures.push(
                 `ongoing overview already listed ${ongoing} of ${report.sessions}`,
@@ -525,7 +569,7 @@ await main(meta, async ({ options, rep, url }) => {
                 report.sessions,
                 { timeout: countWait },
               )
-              const shown = (await readSurface(page, opening?.id ?? null)).overview
+              const shown = (await readSurface(page, channel?.id ?? null)).overview
               if (shown !== report.sessions)
                 failures.push(`overview listed ${shown}, generated ${report.sessions}`)
               if (
@@ -542,7 +586,7 @@ await main(meta, async ({ options, rep, url }) => {
               return { failures, showAllMs: Date.now() - marked, shown }
             }
           } else {
-            const shown = (await readSurface(page, opening?.id ?? null)).overview
+            const shown = (await readSurface(page, channel?.id ?? null)).overview
             if (shown !== report.sessions)
               failures.push(`overview listed ${shown}, generated ${report.sessions}`)
           }
@@ -555,7 +599,7 @@ await main(meta, async ({ options, rep, url }) => {
           await page.locator(css.overviewScroll).evaluate((element) => {
             element.scrollTop = element.scrollHeight
           })
-          const shown = (await readSurface(page, opening?.id ?? null)).overview
+          const shown = (await readSurface(page, channel?.id ?? null)).overview
           const failures = []
           if (shown !== report.sessions)
             failures.push(

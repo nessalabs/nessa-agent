@@ -96,9 +96,8 @@ export interface SeededWorkspaceReport {
   readonly largestChannelSessions: number
   /** Sessions stored on each channel id, counted from the kept index. */
   readonly channelSessions: Readonly<Record<string, number>>
-  /** The channel the window opens: the first section's first channel. */
-  readonly openingChannelId: string
-  readonly openingChannelName: string
+  /** Each channel's name, from the kept index, keyed by that same id. */
+  readonly channelNames: Readonly<Record<string, string>>
 }
 
 /**
@@ -416,7 +415,11 @@ function reportFor(
   const utf8 = new TextEncoder()
   const statusCounts = { idle: 0, running: 0, needsYou: 0 }
   const channelSessions: Record<string, number> = {}
-  for (const channel of index.channels) channelSessions[channel.id] = 0
+  const channelNames: Record<string, string> = {}
+  for (const channel of index.channels) {
+    channelSessions[channel.id] = 0
+    channelNames[channel.id] = channel.name
+  }
   let maxTitleCharacters = 0
   let maxPreviewUtf8Bytes = 0
   for (const session of index.sessions) {
@@ -429,7 +432,6 @@ function reportFor(
     const previewBytes = utf8.encode(session.preview).byteLength
     if (previewBytes > maxPreviewUtf8Bytes) maxPreviewUtf8Bytes = previewBytes
   }
-  const opening = openingChannel(index)
   let longPlainTextCharacters = 0
   let longTranscriptUtf8Bytes = 0
   for (const transcript of longTranscripts) {
@@ -454,18 +456,8 @@ function reportFor(
     statusCounts,
     largestChannelSessions: Math.max(0, ...Object.values(channelSessions)),
     channelSessions,
-    openingChannelId: opening.id,
-    openingChannelName: opening.name,
+    channelNames,
   }
-}
-
-/** The channel a fresh window opens: the first section's first channel. */
-function openingChannel(index: WorkspaceIndex): { id: string; name: string } {
-  const sectionId = index.sections[0]?.id
-  const channel =
-    index.channels.find((each) => each.sectionId === sectionId) ?? index.channels[0]
-  if (!channel) refuse("catalogue")
-  return { id: channel.id, name: channel.name }
 }
 
 /** Build a workspace for `spec`. The same spec returns the same sessions. */

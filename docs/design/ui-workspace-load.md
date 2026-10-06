@@ -25,7 +25,7 @@ Nothing in this change writes a fixture file.
 
 `workspace-load.mjs` is the seeded measurement. It is not a gateway run. `message-sync` is a delivery-timing check. A passing frame budget on the sample workspace is not a large-workspace result.
 
-GitHub workflows in this repository set `node-version: 24`. Desktop evidence on #583 records Node 26.8.1 for that run. A later load run has to print `process.version`, the browser, and the UI revision it actually used. This investigation did not launch a browser.
+GitHub workflows in this repository set `node-version: 24`. Desktop evidence on #583 records Node 26.8.1 for that run. A load run has to print `process.version`, the browser, and the UI revision it actually used. `workspace-load.mjs` prints those for the run that executed it.
 
 ## How the desktop gets its index today
 
