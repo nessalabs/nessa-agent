@@ -173,8 +173,12 @@ export function changedSamples(samples) {
  */
 export function reviewAbsentMessage(samples, reads) {
   const last = samples.at(-1)
-  const states = [...new Set(samples.map((sample) => sample.transcriptState ?? "unknown"))]
-  const outputs = [...new Set(samples.map((sample) => sample.output).filter((output) => output))]
+  const states = [
+    ...new Set(samples.map((sample) => sample.transcriptState ?? "unknown")),
+  ]
+  const outputs = [
+    ...new Set(samples.map((sample) => sample.output).filter((output) => output)),
+  ]
   const sawPending = samples.some((sample) => sample.output === "pending")
   const kinds = [
     ...new Set(samples.flatMap((sample) => sample.permissions.map((each) => each.kind))),
@@ -226,17 +230,15 @@ export async function waitForAppReview({
     const output = pending ? await pending() : undefined
     if (output === "pending") sawPending = true
     const elapsed = now() - start
-    const decision = decideReviewWait(
-      { reviews: appPermissions(view), output },
-      baseline,
-    )
+    const decision = decideReviewWait({ reviews: appPermissions(view), output }, baseline)
     samples.push(reviewSample(view, output, elapsed))
     if (decision.kind !== "wait")
       return { ...decision, samples: changedSamples(samples), reads: samples.length }
     // No reader: the step is not watching the app's output, so only the
     // call deadline bounds the wait. A reader that has not seen pending
     // yet stops at the unstarted bound.
-    const bound = pending === undefined || sawPending ? deadlineMs : Math.min(deadlineMs, unstartedMs)
+    const bound =
+      pending === undefined || sawPending ? deadlineMs : Math.min(deadlineMs, unstartedMs)
     if (elapsed >= bound)
       return { kind: "absent", samples: changedSamples(samples), reads: samples.length }
     await sleep(Math.min(pollMs, Math.max(bound - elapsed, 0)))

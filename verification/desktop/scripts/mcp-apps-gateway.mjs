@@ -350,7 +350,10 @@ async function pointerOnto(page, frame, control) {
     // Off the control first, so a move that the proxy swallowed is followed
     // by a new one rather than a pointer that is already parked there.
     await page.mouse.move(1, 1)
-    await frame.locator(selector).hover({ timeout: 1_000 }).catch(() => {})
+    await frame
+      .locator(selector)
+      .hover({ timeout: 1_000 })
+      .catch(() => {})
     const entered = await frame
       .evaluate(() => window.__nessaPointerEntered === true)
       .catch(() => false)
@@ -681,13 +684,8 @@ const checks = {
       failures.push(
         `the second destructive call was answered before its review: "${before}"`,
       )
-    const review = await reviewAndAnswer(
-      page,
-      stack,
-      baseline,
-      "deny",
-      failures,
-      () => said(app, "again"),
+    const review = await reviewAndAnswer(page, stack, baseline, "deny", failures, () =>
+      said(app, "again"),
     )
     const answer = await output(app, "again")
     if (answer !== `error: ${names.gatewayRefused.declined}`)

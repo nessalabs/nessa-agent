@@ -338,7 +338,12 @@ describe("the app review a step waits for (#474)", () => {
 
   it("needs a deadline", async () => {
     await assert.rejects(
-      () => waitForAppReview({ read: async () => view([]), baseline: new Set(), sleep: async () => {} }),
+      () =>
+        waitForAppReview({
+          read: async () => view([]),
+          baseline: new Set(),
+          sleep: async () => {},
+        }),
       /needs a deadline/,
     )
   })
