@@ -27,7 +27,7 @@ import {
   throttle,
 } from "./lib/perf.mjs"
 import { main } from "./lib/run.mjs"
-import { content, css, keys, names } from "./lib/selectors.mjs"
+import { content, css, keys, names, zoneSaid } from "./lib/selectors.mjs"
 import { seededLoadSpec, seededSearch, withSeeded } from "./lib/seeded-load.mjs"
 import {
   contentIs,
@@ -37,7 +37,9 @@ import {
   order,
   paneCount,
   paneDropFailure,
+  recordZones,
   settled,
+  zoneSays,
 } from "./lib/workspace.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -135,6 +137,7 @@ async function dragAcross(page) {
   const grid = await page.locator(css.paneGrid).first().boundingBox()
   if (!grid) throw new CannotRun(`no grid (${css.paneGrid})`)
   await lift(page, 0)
+  let announced = false
   for (const [fx, fy] of [
     [0.9, 0.25],
     [0.75, 0.75],
@@ -146,8 +149,9 @@ async function dragAcross(page) {
     await page.mouse.move(grid.x + grid.width * fx, grid.y + grid.height * fy, {
       steps: 12,
     })
-    await page.waitForTimeout(250)
+    if (await zoneSays(page, zoneSaid.any, 2_000)) announced = true
   }
+  if (!announced) throw new Error("the drag announced no drop zone")
   await page.mouse.up()
 }
 
@@ -404,6 +408,7 @@ await main(meta, async ({ options, rep, url }) => {
       if (want("drag")) {
         await attempt(rep, { ...base, name: "drag" }, async () => {
           await openPanes(page, 4)
+          const zones = await recordZones(page)
           const orderBefore = await paneOrder(page)
           let frames = null
           if (engine === "chromium") {
@@ -427,7 +432,10 @@ await main(meta, async ({ options, rep, url }) => {
             { order: orderBefore, ghost: 0 },
             { order: orderAfter, ghost },
           )
-          const dropFailure = reason ? `${reason} (${orderBefore} → ${orderAfter})` : null
+          const said = await zones.take()
+          const dropFailure = reason
+            ? `${reason} (${orderBefore} → ${orderAfter}); zones ${JSON.stringify(said)}`
+            : null
           if (frames)
             log(
               table(
