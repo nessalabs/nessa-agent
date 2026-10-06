@@ -1,0 +1,4 @@
+{
+  "metadata": ["id", "createdAtMs", "agent", "model", "approvalMode", "summary"],
+  "summary": ["title", "preview", "updatedAtMs", "archived"]
+}

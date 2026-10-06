@@ -3200,13 +3200,14 @@ const catalogueScope: RecordScope = {
   stream: "stream",
   incarnation: "incarnation",
   schema: "schema",
-  accessEpoch: "1",
+  accessEpoch: "epoch-1",
 }
 
 interface StoredCatalogueEntry {
   readonly id: string
   readonly deleted?: boolean
   readonly body?: Record<string, unknown>
+  readonly raw?: string
 }
 
 function catalogueBody(
@@ -3239,6 +3240,13 @@ interface CatalogueFault {
   readonly head?: string
   readonly emptyHasMore?: boolean
   readonly zeroCursor?: boolean
+  readonly scope?: RecordScope
+  readonly stuck?: boolean
+  readonly inheritedPass?: boolean
+  readonly generation?: string
+  readonly descriptorRevision?: string
+  readonly entryCreation?: string
+  readonly entryRevision?: string
 }
 
 function catalogueApi(
@@ -3256,7 +3264,7 @@ function catalogueApi(
       if (fault().at === "head") throw new Error("head")
       const stored = read()
       return {
-        scope: catalogueScope,
+        scope: fault().scope ?? catalogueScope,
         head: fault().head ?? (stored.length === 0 ? "0" : String(stored.length)),
       }
     },
@@ -3266,6 +3274,26 @@ function catalogueApi(
       sizes.push(params.request.maxEntries)
       const page = manifests.length
       if (fault().at === "manifest" && fault().page === page) throw new Error("page")
+      if (fault().stuck) {
+        if (page > 3) throw new Error("spun")
+        return {
+          request: params.request,
+          entries: [{ key: { creation: "1", id: "gone" }, revision: "1", deleted: true }],
+          hasMore: true,
+        }
+      }
+      if (fault().inheritedPass) {
+        const echoed: CataloguePass = Object.create(params.request.pass)
+        Object.defineProperty(echoed, "cursor", {
+          value: params.request.pass.cursor,
+          enumerable: true,
+        })
+        return {
+          request: { ...params.request, pass: echoed },
+          entries: [],
+          hasMore: false,
+        }
+      }
       if (fault().emptyHasMore)
         return { request: params.request, entries: [], hasMore: true }
       const stored = read()
@@ -3291,12 +3319,25 @@ function catalogueApi(
       calls.push("resolve")
       if (params.maxPayloadBytes !== maxCataloguePayloadBytes) throw new Error("bound")
       const entry = read().find((item) => item.id === params.descriptor.key.id)
-      if (!entry?.body) throw new Error("missing")
+      if (!entry || (entry.raw === undefined && entry.body === undefined))
+        throw new Error("missing")
+      const asked = fault()
       return {
-        pass: params.pass,
-        descriptor: params.descriptor,
-        entry: { ...params.descriptor, deleted: false },
-        payload: new TextEncoder().encode(JSON.stringify(entry.body)),
+        pass: asked.generation
+          ? { ...params.pass, generation: asked.generation }
+          : params.pass,
+        descriptor: asked.descriptorRevision
+          ? { ...params.descriptor, revision: asked.descriptorRevision }
+          : params.descriptor,
+        entry: {
+          key: {
+            creation: asked.entryCreation ?? params.descriptor.key.creation,
+            id: params.descriptor.key.id,
+          },
+          revision: asked.entryRevision ?? params.descriptor.revision,
+          deleted: false,
+        },
+        payload: new TextEncoder().encode(entry.raw ?? JSON.stringify(entry.body)),
       }
     },
   }
@@ -3331,6 +3372,9 @@ describe("catalogue observation", () => {
     )
     expect(source.includes(String(maxCatalogueEntries))).toBe(false)
     expect(source.includes(String(maxCataloguePayloadBytes))).toBe(false)
+    expect(source.includes("const metadataKeys = [")).toBe(false)
+    expect(source.includes("const summaryKeys = [")).toBe(false)
+    expect(source.includes("catalogue-payload-keys.json")).toBe(true)
   })
 
   it("observes every owned summary when the list is truncated", async () => {
@@ -3548,6 +3592,157 @@ describe("catalogue observation", () => {
       catalogue: { receiverId: "receiver", accessEpoch: "1" },
     })
     await expect(source.index()).rejects.toBeInstanceOf(WorkspaceSourceError)
+    expect(gateway.count("list")).toBe(0)
+  })
+
+  it("rejects a repeated payload key before a collapsed value can be published", async () => {
+    const summary = (first: boolean, second: boolean) =>
+      `{"title":"t","preview":"p","updatedAtMs":2000,"archived":${first},"archived":${second}}`
+    const raws = [
+      `{"id":"other","createdAtMs":1000,"agent":null,"model":"model","approvalMode":"ask","summary":${summary(true, false)},"id":"kept"}`,
+      `{"id":"other","createdAtMs":1000,"agent":null,"model":"model","approvalMode":"ask","summary":${summary(false, true)},"id":"kept"}`,
+      `{"\\u0069d":"kept","createdAtMs":1000,"agent":null,"model":"model","approvalMode":"ask","summary":{"title":"t","preview":"p","updatedAtMs":2000,"archived":false},"id":"kept"}`,
+      `{"id":"kept","createdAtMs":1000,"agent":null,"model":"model","approvalMode":"ask","summary":{"title":"t","preview":"p","updatedAtMs":2000,"archived":false},"id":"kept"}`,
+    ]
+    for (const raw of raws) {
+      const { api } = catalogueApi(() => [{ id: "kept", raw }])
+      const gateway = fakeGateway()
+      gateway.rows.set("kept", row("kept"))
+      const { source, updates, follow } = boundSource(gateway, api)
+      follow()
+      await expect(source.index()).rejects.toBeInstanceOf(WorkspaceSourceError)
+      expect(updates.some((update) => update.kind === "session")).toBe(false)
+    }
+  })
+
+  it("rejects a head scope that is not this binding, including a zero head", async () => {
+    const stored = [
+      {
+        id: "kept",
+        body: catalogueBody("kept", { title: "Kept", preview: "p", archived: false }),
+      },
+    ]
+    const scopes: RecordScope[] = [
+      { ...catalogueScope, receiver: "other" },
+      { ...catalogueScope, accessEpoch: "epoch-9" },
+    ]
+    for (const scope of scopes) {
+      for (const head of [undefined, "0"]) {
+        const { api, calls } = catalogueApi(
+          () => stored,
+          () => ({ scope, head }),
+        )
+        const gateway = fakeGateway()
+        gateway.rows.set("kept", row("kept"))
+        const { source, updates, follow } = boundSource(gateway, api)
+        follow()
+        await expect(source.index()).rejects.toBeInstanceOf(WorkspaceSourceError)
+        expect(updates.some((update) => update.kind === "session")).toBe(false)
+        expect(gateway.count("list")).toBe(0)
+        expect(calls.filter((call) => call === "manifest")).toHaveLength(0)
+      }
+    }
+  })
+
+  it("rejects a binding epoch that is not a canonical positive decimal", async () => {
+    const api: CatalogueReadApi = {
+      async head() {
+        return { scope: { ...catalogueScope, accessEpoch: "epoch-01" }, head: "0" }
+      },
+      async manifest() {
+        throw new Error("manifest")
+      },
+      async resolve() {
+        throw new Error("resolve")
+      },
+    }
+    const gateway = fakeGateway()
+    gateway.rows.set("a", row("a"))
+    const { clock } = manualClock()
+    const source = gatewaySource({
+      connect: () => Promise.resolve({ ...gateway.client, catalogue: api }),
+      clock,
+      timing,
+      catalogue: { receiverId: "receiver", accessEpoch: "01" },
+    })
+    await expect(source.index()).rejects.toBeInstanceOf(WorkspaceSourceError)
+    expect(gateway.count("list")).toBe(0)
+  })
+
+  it("rejects a resolve that does not echo the asked pass, descriptor, or entry key", async () => {
+    const stored = [
+      {
+        id: "kept",
+        body: catalogueBody("kept", { title: "Kept", preview: "p", archived: false }),
+      },
+    ]
+    const faults: CatalogueFault[] = [
+      { generation: "2" },
+      { descriptorRevision: "9" },
+      { entryCreation: "9" },
+    ]
+    for (const fault of faults) {
+      const { api } = catalogueApi(
+        () => stored,
+        () => fault,
+      )
+      const gateway = fakeGateway()
+      gateway.rows.set("kept", row("kept"))
+      const { source, updates, follow } = boundSource(gateway, api)
+      follow()
+      await expect(source.index()).rejects.toBeInstanceOf(WorkspaceSourceError)
+      expect(updates.some((update) => update.kind === "session")).toBe(false)
+    }
+  })
+
+  it("keeps a session when the resolved entry revision is newer than the descriptor", async () => {
+    const stored = [
+      {
+        id: "kept",
+        body: catalogueBody("kept", { title: "Kept", preview: "p", archived: false }),
+      },
+    ]
+    const { api } = catalogueApi(
+      () => stored,
+      () => ({ entryRevision: "9" }),
+    )
+    const gateway = fakeGateway()
+    const { source } = boundSource(gateway, api)
+    expect((await source.index()).sessions.map((session) => session.id)).toEqual(["kept"])
+  })
+
+  it("rejects an echoed pass whose fields are inherited", async () => {
+    const stored = [
+      {
+        id: "kept",
+        body: catalogueBody("kept", { title: "Kept", preview: "p", archived: false }),
+      },
+    ]
+    const { api, calls } = catalogueApi(
+      () => stored,
+      () => ({ inheritedPass: true }),
+    )
+    const gateway = fakeGateway()
+    gateway.rows.set("kept", row("kept"))
+    const { source, updates, follow } = boundSource(gateway, api)
+    follow()
+    await expect(source.index()).rejects.toBeInstanceOf(WorkspaceSourceError)
+    expect(updates.some((update) => update.kind === "session")).toBe(false)
+    expect(calls.filter((call) => call === "resolve")).toHaveLength(0)
+  })
+
+  it("stops when the next cursor is not strictly after the cursor just sent", async () => {
+    const { api, calls } = catalogueApi(
+      () => [],
+      () => ({ stuck: true, head: "5" }),
+    )
+    const gateway = fakeGateway()
+    gateway.rows.set("kept", row("kept"))
+    const { source, updates, follow } = boundSource(gateway, api)
+    follow()
+    await expect(source.index()).rejects.toBeInstanceOf(WorkspaceSourceError)
+    expect(updates.some((update) => update.kind === "session")).toBe(false)
+    expect(calls.filter((call) => call === "manifest")).toHaveLength(2)
     expect(gateway.count("list")).toBe(0)
   })
 })

@@ -321,3 +321,4 @@ export {
   maxCatalogueEntries,
   maxCataloguePayloadBytes,
 } from "./protocol/catalogue-read-validate.js"
+export { validPositiveReadEpoch } from "./protocol/passive-read-validate.js"

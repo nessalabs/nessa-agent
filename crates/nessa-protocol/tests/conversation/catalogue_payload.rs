@@ -137,6 +137,36 @@ fn catalogue_metadata_codec_requires_one_complete_current_shape() {
     assert_eq!(decoded.summary(), None);
 }
 
+fn object_keys(value: &Value) -> Vec<String> {
+    value.as_object().unwrap().keys().cloned().collect()
+}
+
+fn published_keys(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|key| key.as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn published_catalogue_payload_keys_are_the_encoded_object_keys() {
+    let published: Value = serde_json::from_str(include_str!(
+        "../../src/conversation/catalogue-payload-keys.json"
+    ))
+    .unwrap();
+    let value = raw();
+    assert_eq!(object_keys(&value), published_keys(&published["metadata"]));
+    assert_eq!(
+        object_keys(&value["summary"]),
+        published_keys(&published["summary"])
+    );
+    let mut absent = value;
+    absent["summary"] = Value::Null;
+    assert_eq!(object_keys(&absent), published_keys(&published["metadata"]));
+}
+
 #[test]
 fn catalogue_metadata_codec_bounds_input_before_parser() {
     let bytes = encode(ENTRY, &metadata()).unwrap();

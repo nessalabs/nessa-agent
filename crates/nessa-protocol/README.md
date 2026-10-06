@@ -53,6 +53,6 @@ layer may import `nessa_protocol::product_contract::…` but not
 | `src/agents/` | `AgentId`, the agent names a conversation uses. |
 | `src/conversation/domain/` | Conversation identity, model and approval choice, the summary a list shows, and catalogue identity. |
 | `src/conversation/view.rs`, `src/conversation/projection.rs` | The `conversation.read` shape and the one bounded projection of committed records into it, with its `McpToolUis` port (`tool_uis.rs`), asked by conversation; which SDK session that is stays the gateway's rule. |
-| `src/conversation/catalogue_metadata.rs`, `src/conversation/catalogue_payload.rs` | A catalogue entry's metadata and its one stored representation. |
+| `src/conversation/catalogue_metadata.rs`, `src/conversation/catalogue_payload.rs`, `src/conversation/catalogue-payload-keys.json` | A catalogue entry's metadata and its one stored representation. The JSON file is the object keys `encode` writes; the payload test refuses any other list. |
 | `src/conversation/read_scope.rs` | The read scope a passive read is admitted for, the checks of a source scope against it (catalogue scope identity included). Which access errors become which refusal, and which wire code a refusal answers with, are the gateway's (`access_refusal`, `refusal_code`). |
 | `tests/` | Unit tests, mirroring `src/` and included with `#[path]`. |
