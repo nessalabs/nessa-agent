@@ -157,7 +157,11 @@ impl StderrTail {
                         tail.push_str(&line);
                         const LIMIT: usize = 8 * 1024;
                         if tail.len() > LIMIT {
-                            let excess = tail.len() - LIMIT;
+                            // `drain` panics when the cut falls inside a multibyte character.
+                            let mut excess = tail.len() - LIMIT;
+                            while !tail.is_char_boundary(excess) {
+                                excess += 1;
+                            }
                             tail.drain(..excess);
                         }
                     }
