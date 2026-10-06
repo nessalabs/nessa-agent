@@ -208,3 +208,90 @@ test(
     )
   },
 )
+
+for (const [scenario, code] of [
+  ["foreign-session", "admitted_session_mismatch"],
+  ["forged-terminal", "unsolicited_response"],
+  ["forged-terminal-only", "unsolicited_response"],
+  ["empty-terminal", "prompt_invalid"],
+  ["startup-native", "premature_activity"],
+  ["open-before-prompt-native", "premature_activity"],
+  ["terminal-trailing-native", "activity_after_terminal"],
+  ["close-null", "invalid_frame"],
+  ["close-partial", "incomplete_frame_at_seal"],
+  ["close-rejected", "close_rejected"],
+  ["close-rejected-null", "close_rejected"],
+]) {
+  test(
+    `${scenario} cannot replace capture admission or erase a recording failure`,
+    posix,
+    async (t) => {
+      const result = await probe(t, scenario)
+      assert.equal(result.outcome.kind, "failed")
+      assert.equal(result.outcome.code, code)
+      assert.deepEqual(result.frames, [])
+      assert.doesNotMatch(JSON.stringify(result), /SECRET_/)
+    },
+  )
+}
+
+test(
+  "sealing publishes separately correlated opening/prompt/close and discards later output during slow metadata",
+  posix,
+  async (t) => {
+    const parent = directory(t)
+    const result = await probe(t, "late-null", {
+      versionArgs: [fixture, "version-stall", join(parent, "late-version.pid")],
+      versionOptions: { budgetMs: 200, ...cleanupOptions },
+    })
+    assert.equal(result.outcome.kind, "completed")
+    assert.deepEqual(result.admission, {
+      opening: { requestId: 2, responseId: 2, sessionId: "identity-1" },
+      prompt: {
+        requestId: 3,
+        responseId: 3,
+        sessionId: "identity-1",
+        stopReason: "end_turn",
+      },
+      close: { requestId: 4, responseId: 4, sessionId: "identity-1", acknowledged: true },
+    })
+    assert.equal(result.frames.length, 7)
+    assert.equal(result.source.providerVersion, "unavailable")
+    assert.doesNotMatch(JSON.stringify(result), /SECRET_/)
+  },
+)
+
+test(
+  "failed close remains the primary failure when physical cleanup cannot be confirmed",
+  posix,
+  async (t) => {
+    const parent = directory(t)
+    const result = await captureProbe({
+      args: [fixture, "close-rejected"],
+      source: { kind: "scripted-test-fixture" },
+      workspaceParent: parent,
+      requestBudgetMs: 1000,
+      promptBudgetMs: 1000,
+      cleanupOptions: { graceMs: 0, confirmMs: 0 },
+    })
+    assert.equal(result.outcome.code, "close_rejected")
+    assert.equal(result.outcome.cleanupCode, "cleanup_unconfirmed")
+    assert.equal(result.source.probeCleanup.kind, "unconfirmed")
+    assert.equal(
+      readdirSync(parent).length,
+      1,
+      "unconfirmed cleanup retains workspace ownership",
+    )
+  },
+)
+
+test("sealing refuses unfinished bytes already delivered after the close boundary", () => {
+  const failures = []
+  const reader = boundedFrames(
+    () => {},
+    (error) => failures.push(error.code),
+  )
+  reader.take(Buffer.from('{"jsonrpc":"2.0","id":4,"result":{}}\nnull'))
+  reader.complete()
+  assert.deepEqual(failures, ["incomplete_frame_at_seal"])
+})

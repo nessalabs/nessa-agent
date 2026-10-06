@@ -44,21 +44,36 @@ if (scenario === "ignore-term") {
     process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`)
   createInterface({ input: process.stdin }).on("line", (line) => {
     const request = JSON.parse(line)
-    if (request.method === "initialize")
+    if (request.method === "initialize") {
+      if (scenario === "startup-native")
+        process.stdout.write(`${JSON.stringify(captured.frames[0].frame)}\n`)
       send(request.id, {
         agentInfo: { name: "scripted-fixture", version: "1" },
         agentCapabilities: { sessionCapabilities: { close: {} } },
       })
-    if (request.method === "session/new")
-      send(request.id, {
+    }
+    if (request.method === "session/new") {
+      const result = {
         sessionId: "identity-1",
         modes: { currentModeId: "read-only" },
         configOptions: [{ id: "mode", currentValue: "read-only" }],
-      })
+      }
+      if (scenario === "open-before-prompt-native")
+        process.stdout.write(
+          `${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n${JSON.stringify(captured.frames[0].frame)}\n`,
+        )
+      else send(request.id, result)
+    }
     if (request.method === "session/prompt") {
       for (const { frame } of captured.frames) {
         if (!frame.params) continue
         const selected = structuredClone(frame)
+        if (scenario === "foreign-session") {
+          selected.params.sessionId = "foreign-parent"
+          selected.params.update.rawInput.senderThreadId = "foreign-parent"
+          selected.params.update._meta.codex.collaboration.senderThreadId =
+            "foreign-parent"
+        }
         if (
           scenario === "child-error" &&
           selected.params.update.title === "wait" &&
@@ -67,10 +82,37 @@ if (scenario === "ignore-term") {
           selected.params.update.rawInput.agentsStates["identity-3"].status = "errored"
         process.stdout.write(`${JSON.stringify(selected)}\n`)
       }
-      send(request.id, {
-        stopReason: scenario === "cancelled" ? "cancelled" : "end_turn",
-      })
+      if (["forged-terminal", "forged-terminal-only"].includes(scenario))
+        send(999, { stopReason: "end_turn" })
+      if (scenario === "forged-terminal-only") return
+      send(
+        request.id,
+        ["forged-terminal", "empty-terminal"].includes(scenario)
+          ? {}
+          : {
+              stopReason: scenario === "cancelled" ? "cancelled" : "end_turn",
+            },
+      )
+      if (scenario === "terminal-trailing-native")
+        process.stdout.write(`${JSON.stringify(captured.frames[0].frame)}\n`)
     }
-    if (request.method === "session/close") send(request.id, {})
+    if (request.method === "session/close") {
+      const reply = JSON.stringify({ jsonrpc: "2.0", id: request.id, result: {} })
+      if (scenario === "close-null") process.stdout.write(`${reply}\nnull\n`)
+      else if (scenario === "close-partial") process.stdout.write(`${reply}\nnull`)
+      else if (["close-rejected", "close-rejected-null"].includes(scenario))
+        process.stdout.write(
+          `${JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "SECRET_DENIAL" } })}\n${scenario === "close-rejected-null" ? "null\n" : ""}`,
+        )
+      else send(request.id, {})
+      if (scenario === "late-null")
+        setTimeout(
+          () =>
+            process.stdout.write(
+              'null\n{"jsonrpc":"2.0","method":"_auth/status_update","params":{"email":"SECRET_LATE"}}\n',
+            ),
+          25,
+        )
+    }
   })
 }

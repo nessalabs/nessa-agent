@@ -10,9 +10,9 @@ This does not implement Nessa's proposed Agent parent relationship.
 | File | Owns |
 | --- | --- |
 | `capture.mjs` | Direct provider probe orchestration, source hashes, controlled-result selection and final attempt output |
-| `acp-session.mjs` | Pre-parse byte framing, ACP envelope checks, request deadlines, permission withdrawal and supervised callback failure |
+| `acp-session.mjs` | Sequential RPC/opening authority, pre-parse framing, first-failure retention and immutable record sealing |
 | `processes.mjs` | POSIX process-group cleanup independent of leader exit; bounded provider-version subprocess |
-| `evidence.mjs` | Allowlist extraction with identity replacement; checks agreement between the independently reported collaboration fields |
+| `evidence.mjs` | Sealed-only projection; normalize opening/prompt boundary with tool IDs and check their agreement |
 | `fixtures/codex-native.json` | Sanitized selected live frames, capture provenance, advertised modes and explicit result |
 | `verify.mjs` | Credential-free inspection of that retained fixture; machine-readable JSON on stdout |
 | `evidence.test.mjs` | Recorded success plus contradictory identity, state, ordering and redaction inputs |
@@ -32,6 +32,11 @@ node --test scripts/subagent-contracts/*.test.mjs
 ```
 
 The recorded native sequence is `spawnAgent → wait → closeAgent → end_turn`.
+The independently retained `admission` record names the matching opening RPC,
+its admitted session, the own prompt request/response and the own close
+request/acknowledgement. These facts are validated before normalization; native
+updates cannot supply their own parent or terminal authority. Cloud inspection
+checks the normalized frames against that separate opening/prompt boundary.
 The checker compares `params.sessionId`, `rawInput.senderThreadId` and
 `_meta.codex.collaboration.senderThreadId`; it also compares both receiver
 lists and requires each `agentsStates` entry to describe a listed receiver.
@@ -84,25 +89,45 @@ probe bypasses its binding and changes no tool policy.
 
 ## Capture lifecycle and ordering cases
 
-This table is the design for the developer probe, not for Nessa Agent ownership.
-The capture owner retains the subprocess group independently from the leader's
-stdio and exit. A controlled successful recording requires `end_turn` plus the
-completed `CHILD_DONE` child reports; advertised capability or a completed tool
-call alone is insufficient.
+The earlier collector inferred admission and terminal authority from provider
+updates. The probe now owns one sequential RPC boundary: opening supplies the
+admitted session, its own prompt request supplies terminal correlation, and its
+matching close response permits sealing. A sealed immutable snapshot is the sole
+input to sanitization; cleanup and later version metadata cannot change its facts.
+Sealing closes record ingress. It proves neither that an ACP session physically
+terminated nor that a remote child stopped. A matching close RPC error is a typed
+failed probe under this controlled-success contract, preserved independently from
+physical cleanup.
+This is a structural repair of the developer probe, not Nessa Agent ownership.
 
-| State/event or ordering | Decision/effect | Regression |
+| State/event or ordering | Owner decision/effect | Regression |
 | --- | --- | --- |
-| Starting; setup or spawn failure | Retain a typed attempt failure, close any acquired process group, remove the temporary workspace | Setup/spawn failure test |
-| Reading; null, array, malformed or invalid ACP envelope | Reject outstanding requests with `invalid_frame`, stop reading, then use the common cleanup owner; retain no raw text | Malformed-envelope subprocess test |
-| Reading; terminated or unterminated line exceeds the remaining byte budget | Refuse before concatenating/decoding/parsing the line, fail outstanding waits with `recording_limit`, then close the group | Oversized-line subprocess tests |
-| Reading; native wait/close starts | Retain sender/receiver target with the call identity; only its matching completion may settle it | Foreign wait/close start plus original-child completion tests |
-| Reading; spawn starts without a receiver | Permit the provider to supply the child's identity on completion | Recorded spawn counterpart |
-| Settling; cancelled terminal or errored/non-sentinel child outcome | Keep a typed unsuccessful probe outcome, never report controlled success | Cancelled/error/wrong-result tests |
-| Settling; controlled sequence completes | Inspect correlated evidence and perform bounded provider-version lookup | Recorded controlled success |
-| Version lookup stalls or overflows output | Terminate its separately owned process group, report version unavailable, continue ACP cleanup | Stalled version binary test |
-| Closing; leader exits before its SIGTERM-ignoring child | Retain group ownership through SIGKILL escalation and process-state confirmation | Leader-first real subprocess test |
-| Closing; leader reaped and no live group members | Record stopped cleanup and remove the workspace; zombies are not live members, descendants outside the group are outside this fixture's ownership | Cleanup success assertions |
-| Closing; termination or process-state confirmation fails | Retain typed `cleanup_unconfirmed`, do not present a successful probe | Failure outcomes and documented limit |
+| Starting; initialize/new dispatched | Retain the one active RPC identity and method; unmatched responses fail `unsolicited_response` | Unsolicited terminal subprocess test |
+| Opening; native collaboration arrives before an admitted prompt | Fail `premature_activity`; updates cannot invent admission | Startup activity subprocess test |
+| Opening; matching new response | Retain its session ID as independent opening evidence; enter Open | Valid recorded opening |
+| Open; own prompt dispatched | Bind its request ID and admitted session; enter Prompt active | Valid opening/prompt boundary checks |
+| Prompt active; native tool update | Validate the raw envelope/sender against the admitted session before normalization; retain the call's sender/receiver target | Foreign session and wait/close target tests |
+| Prompt active; unsolicited terminal response | Fail `unsolicited_response`; it cannot supply prompt completion | Forged terminal plus empty own prompt response test |
+| Prompt active; matching own prompt response | Retain that exact response and stop reason; enter Correlated terminal; empty result fails `prompt_invalid` | Valid/cancelled/empty prompt tests |
+| Correlated terminal; native activity | Fail `activity_after_terminal` | Premature/trailing activity neighbors |
+| Correlated terminal; own close dispatched | Bind the close request to the admitted session; enter Closing | Matching close evidence |
+| Closing; matching close response | Retain response; enter Close answered; rejected/invalid close stays failed | Failed close subprocess test |
+| Close answered; later invalid frame in the same chunk or unfinished line at sealing | Preserve the first recording failure; no sealed success; physical cleanup still runs | Close then null/partial-line subprocess tests |
+| Close answered; seal after current decoding finishes | Validate no failure/pending line, seal admission plus recording as immutable serialized evidence; stop recording | Valid chunk, boundary replay and sealing tests |
+| Sealed; slow version lookup or later provider output | Version may add bounded metadata; raw output is discarded and cannot reopen or invalidate the sealed recording | Late-output/stalled-version subprocess test |
+| Failed; cleanup confirms release | Retain the primary recording failure alongside cleanup; confirmed cleanup cannot turn failure into success | Close/null failure plus confirmed cleanup |
+| Failed/Sealed; cleanup unconfirmed | Retain cleanup failure independently and retain workspace ownership | Failed-close/unconfirmed-cleanup distinction |
+| Reading; invalid/null envelope or handler fault | Supervise first failure, reject active RPC, stop reading and start common cleanup | Malformed-envelope tests |
+| Reading; terminated/unterminated line exceeds wire bound | Refuse before decoding/parsing, retain `recording_limit`, close group | Oversized-line tests |
+| Inspecting sealed evidence; cancelled/errored/non-sentinel outcome | Typed unsuccessful probe; success requires `end_turn` and completed `CHILD_DONE` wait/close reports | Controlled-outcome tests |
+| Version process stalls/overflows | Bound and stop its separate group; record version unavailable | Stalled-version test |
+| Closing group; leader exits first | Retain group authority through SIGKILL and live-member confirmation | Leader-first real-process test |
+
+The sealing boundary covers complete frames and partial bytes already delivered
+in the same decoder chunk as close. A later chunk is outside the recording after
+sealing; the stream is drained without retention. The owner records the first
+failure before cleanup and never clears it. POSIX group confirmation excludes
+zombies and escaped groups, as documented below.
 
 ## Refreshing evidence locally
 
@@ -133,7 +158,11 @@ workspace is retained because external work may remain. Confirmed cleanup remove
 the workspace. Setup metadata is read before spawning, and malformed-frame/callback
 failures use this same cleanup owner.
 
-Raw frames exist only in memory and are discarded. The selector keeps only the
+Raw frames exist only in memory. After the matching close response and the rest
+of its decoder chunk are checked, the owner seals opening/prompt/close facts and
+raw frames into immutable serialized evidence. Only this snapshot can be selected;
+then raw data is discarded. Later stdout is drained without recording, including
+while bounded version metadata is fetched. The selector keeps only the
 three native collaboration tool names and the terminal stop reason. It replaces
 session/thread/tool identities consistently, removes delegated prompt text,
 model/effort values and unknown metadata, and keeps only the controlled child

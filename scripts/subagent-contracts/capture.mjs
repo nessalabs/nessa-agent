@@ -7,7 +7,7 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { startProbeSession } from "./acp-session.mjs"
 import { providerVersion } from "./processes.mjs"
-import { selectFrames, inspectFrames } from "./evidence.mjs"
+import { selectCapture, inspectCapture } from "./evidence.mjs"
 
 export const PROMPT =
   "Use your native subagent capability to spawn one child agent. Tell the child to reply with exactly CHILD_DONE without tools, files, network, or commands. Wait for the child to finish, close it if a close operation is available, then reply exactly PARENT_DONE. Do not perform any other actions."
@@ -41,6 +41,7 @@ export async function captureProbe({
   let session
   let outcome
   let frames = []
+  let admission
   try {
     workspace = mkdtempSync(join(workspaceParent, "nessa-subagent-contract-"))
     session = startProbeSession(command, args, {
@@ -58,8 +59,6 @@ export async function captureProbe({
       },
       requestBudgetMs,
     )
-    if (initialized.error)
-      throw { code: "initialize_rejected", rpcCode: initialized.error.code }
     if (
       !initialized.result?.agentInfo ||
       !initialized.result?.agentCapabilities?.sessionCapabilities
@@ -72,35 +71,25 @@ export async function captureProbe({
       { cwd: workspace, mcpServers: [] },
       requestBudgetMs,
     )
-    if (opened.error) throw { code: "session_rejected", rpcCode: opened.error.code }
-    if (
-      typeof opened.result?.sessionId !== "string" ||
-      !opened.result?.modes ||
-      !Array.isArray(opened.result.configOptions)
-    )
+    if (!opened.result?.modes || !Array.isArray(opened.result.configOptions))
       throw { code: "session_invalid" }
     source.initialMode = opened.result.modes.currentModeId
     source.modeConfig = opened.result.configOptions.find((option) => option.id === "mode")
     const sessionId = opened.result.sessionId
     source.prompt = PROMPT
-    const result = await session.request(
+    await session.request(
       "session/prompt",
       { sessionId, prompt: [{ type: "text", text: PROMPT }] },
       promptBudgetMs,
     )
-    if (result.error) throw { code: "prompt_rejected", rpcCode: result.error.code }
-    const close = await session.request("session/close", { sessionId }, requestBudgetMs)
-    source.parentClose = close.error
-      ? { kind: "rpc_error", code: close.error.code }
-      : { kind: "rpc_response", result: close.result }
-    source.permissionRequests = session.records.filter(
-      ({ frame }) => frame.method === "session/request_permission",
-    ).length
-    source.nativeSessionUpdates = session.records.filter(({ frame }) =>
-      frame.params?.update?.sessionUpdate?.startsWith("subagent"),
-    ).length
-    frames = selectFrames(session.records)
-    const verdict = inspectFrames(frames)
+    await session.request("session/close", { sessionId }, requestBudgetMs)
+    const selected = selectCapture(session.seal())
+    frames = selected.frames
+    admission = selected.admission
+    source.parentClose = { kind: "rpc_response", result: {} }
+    source.permissionRequests = selected.statistics.permissionRequests
+    source.nativeSessionUpdates = selected.statistics.nativeSessionUpdates
+    const verdict = inspectCapture(selected)
     const version = await providerVersion(versionCommand, versionArgs, versionOptions)
     source.providerVersion = version.value
     source.versionCleanup = version.cleanup
@@ -134,7 +123,7 @@ export async function captureProbe({
       }
     }
   }
-  return { source, outcome, frames }
+  return { source, outcome, ...(admission ? { admission } : {}), frames }
 }
 
 const hash = (path) => createHash("sha256").update(readFileSync(path)).digest("hex")

@@ -2,20 +2,30 @@ import { createHash } from "node:crypto"
 import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
 import { test } from "node:test"
-import { EvidenceError, inspectFrames, selectFrames } from "./evidence.mjs"
+import { EvidenceError, inspectCapture, selectCapture } from "./evidence.mjs"
 
 const fixture = JSON.parse(
   readFileSync(new URL("./fixtures/codex-native.json", import.meta.url), "utf8"),
 )
 const copy = () => structuredClone(fixture.frames)
+const inspect = (records, admission = fixture.admission) =>
+  inspectCapture({ admission, frames: records })
+const select = (records) =>
+  selectCapture(
+    Object.freeze({
+      kind: "sealed-acp-probe",
+      admissionJson: JSON.stringify(fixture.admission),
+      recordingJson: JSON.stringify(records),
+    }),
+  ).frames
 const rejects = (records, code) =>
   assert.throws(
-    () => inspectFrames(records),
+    () => inspect(records),
     (error) => error instanceof EvidenceError && error.code === code,
   )
 
 test("live native spawn, wait and close retain one parent and one child across independent wire reports", () => {
-  assert.deepEqual(inspectFrames(fixture.frames), {
+  assert.deepEqual(inspect(fixture.frames), {
     parent: "identity-1",
     child: "identity-3",
     tools: ["spawnAgent", "wait", "closeAgent"],
@@ -113,11 +123,11 @@ test("selection omits arbitrary auth, text, prompt, response and unknown metadat
   unknownTool.frame.params.update._meta.codex.collaboration.tool = "SECRET_UNKNOWN_TOOL"
   unknownTool.frame.params.update.title = "SECRET_UNKNOWN_TOOL"
   records.push(unknownTool)
-  const selected = selectFrames(records)
+  const selected = select(records)
   const text = JSON.stringify(selected)
   assert.doesNotMatch(text, /SECRET_|\/Users\//)
   assert.equal(selected.length, fixture.frames.length)
-  assert.deepEqual(inspectFrames(selected), inspectFrames(fixture.frames))
+  assert.deepEqual(inspect(selected), inspect(fixture.frames))
 })
 
 test("absent delegation, unfinished activity and inconsistent status/title are explicit failures", () => {
@@ -154,20 +164,20 @@ test("selection refuses unexpected retained wire syntax instead of leaking it", 
     const records = copy()
     records[0].frame.params.update[field] = "SECRET_UNKNOWN"
     assert.throws(
-      () => selectFrames(records),
+      () => select(records),
       (error) => error.code === "invalid_update",
     )
   }
   const status = copy()
   status[0].frame.params.update.rawInput.status = "SECRET_STATUS"
   assert.throws(
-    () => selectFrames(status),
+    () => select(status),
     (error) => error.code === "invalid_status",
   )
   const terminal = copy()
   terminal.at(-1).frame.result.stopReason = "SECRET_TERMINAL"
   assert.throws(
-    () => selectFrames(terminal),
+    () => select(terminal),
     (error) => error.code === "invalid_terminal",
   )
 })
@@ -196,13 +206,19 @@ test("wait and close retain their admitted child before a matching completion ca
   upfront[0].frame.params.update._meta.codex.collaboration.receiverThreadIds = [
     "identity-3",
   ]
-  assert.deepEqual(inspectFrames(upfront), inspectFrames(fixture.frames))
+  assert.deepEqual(inspect(upfront), inspect(fixture.frames))
 })
 
 test("cancelled parent and failed or wrong-result child reports are typed unsuccessful evidence", () => {
   const cancelled = copy()
   cancelled.at(-1).frame.result.stopReason = "cancelled"
-  rejects(cancelled, "unexpected_terminal")
+  rejects(cancelled, "terminal_correlation_mismatch")
+  const cancelledAdmission = structuredClone(fixture.admission)
+  cancelledAdmission.prompt.stopReason = "cancelled"
+  assert.throws(
+    () => inspect(cancelled, cancelledAdmission),
+    (error) => error.code === "unexpected_terminal",
+  )
   for (const index of [3, 5]) {
     const errored = copy()
     errored[index].frame.params.update.rawInput.agentsStates["identity-3"].status =
@@ -213,4 +229,30 @@ test("cancelled parent and failed or wrong-result child reports are typed unsucc
       "<omitted>"
     rejects(wrong, "child_result_mismatch")
   }
+})
+
+test("independent opening/prompt/close evidence governs all normalized frames", () => {
+  const foreign = copy()
+  for (const { frame } of foreign) {
+    if (!frame.params) continue
+    frame.params.sessionId = "foreign-parent"
+    frame.params.update.rawInput.senderThreadId = "foreign-parent"
+    frame.params.update._meta.codex.collaboration.senderThreadId = "foreign-parent"
+  }
+  rejects(foreign, "admitted_session_mismatch")
+  const inventedTerminal = copy()
+  inventedTerminal.at(-1).frame.id = 999
+  rejects(inventedTerminal, "terminal_correlation_mismatch")
+  const wrongPrompt = structuredClone(fixture.admission)
+  wrongPrompt.prompt.responseId = 999
+  assert.throws(
+    () => inspect(copy(), wrongPrompt),
+    (error) => error.code === "rpc_correlation_mismatch",
+  )
+  const wrongClose = structuredClone(fixture.admission)
+  wrongClose.close.acknowledged = false
+  assert.throws(
+    () => inspect(copy(), wrongClose),
+    (error) => error.code === "close_unconfirmed",
+  )
 })

@@ -69,6 +69,11 @@ export function boundedFrames(onFrame, onFailure, { maxBytes = MAX_RECORD_BYTES 
     end() {
       if (!failed && parts.length) line()
     },
+    complete() {
+      if (!failed && parts.length && Buffer.concat(parts).toString("utf8").trim())
+        fail("incomplete_frame_at_seal")
+      parts = []
+    },
     stop() {
       failed = true
       parts = []
@@ -76,26 +81,31 @@ export function boundedFrames(onFrame, onFailure, { maxBytes = MAX_RECORD_BYTES 
   }
 }
 
-/** One cleanup owner survives callback failure, request timeout and leader exit. */
+/** The probe owns one sequential RPC and its independently admitted session. */
 export function startProbeSession(
   command,
   args,
   { workspace, env, maxBytes = MAX_RECORD_BYTES, cleanupOptions } = {},
 ) {
   const owned = startProbeProcess(command, args, { cwd: workspace, env })
-  const pending = new Map()
   const records = []
   let recordedBytes = 0
   let failure
   let next = 1
+  let active
+  let phase = "starting"
   let reader
+  let snapshot
+  const admission = {}
   const fail = (error) => {
+    if (phase === "sealed") return
     failure ??= error
-    for (const item of pending.values()) {
-      clearTimeout(item.timer)
-      item.reject(failure)
+    phase = "failed"
+    if (active) {
+      clearTimeout(active.timer)
+      active.reject(failure)
+      active = undefined
     }
-    pending.clear()
     reader?.stop()
     owned.child.stdout.destroy()
     void stopProbeProcess(owned, cleanupOptions)
@@ -111,20 +121,89 @@ export function startProbeSession(
     return true
   }
   const send = (frame) => {
-    if (!retain("to-agent", frame)) return
-    owned.child.stdin.write(`${JSON.stringify(frame)}\n`)
+    if (retain("to-agent", frame)) owned.child.stdin.write(`${JSON.stringify(frame)}\n`)
   }
   reader = boundedFrames(
     (frame) => {
       if (!retain("from-agent", frame)) return
       if (Object.hasOwn(frame, "id") && !Object.hasOwn(frame, "method")) {
-        const item = pending.get(frame.id)
-        if (item) {
-          clearTimeout(item.timer)
-          pending.delete(frame.id)
-          item.resolve(frame)
+        if (!active || active.id !== frame.id)
+          return fail({ code: "unsolicited_response" })
+        const request = active
+        if (frame.error)
+          return fail({
+            code: {
+              initialize: "initialize_rejected",
+              "session/new": "session_rejected",
+              "session/prompt": "prompt_rejected",
+              "session/close": "close_rejected",
+            }[request.method],
+            rpcCode: frame.error.code,
+          })
+        if (request.method === "initialize") phase = "initialized"
+        else if (request.method === "session/new") {
+          if (typeof frame.result?.sessionId !== "string" || !frame.result.sessionId)
+            return fail({ code: "session_invalid" })
+          admission.opening = {
+            requestId: request.id,
+            responseId: frame.id,
+            sessionId: frame.result.sessionId,
+          }
+          phase = "open"
+        } else if (request.method === "session/prompt") {
+          if (
+            ![
+              "end_turn",
+              "cancelled",
+              "max_tokens",
+              "max_turn_requests",
+              "refusal",
+            ].includes(frame.result?.stopReason)
+          )
+            return fail({ code: "prompt_invalid" })
+          admission.prompt = {
+            requestId: request.id,
+            responseId: frame.id,
+            sessionId: request.sessionId,
+            stopReason: frame.result.stopReason,
+          }
+          phase = "terminal"
+        } else if (request.method === "session/close") {
+          if (
+            !frame.result ||
+            typeof frame.result !== "object" ||
+            Array.isArray(frame.result) ||
+            Object.keys(frame.result).length
+          )
+            return fail({ code: "close_invalid" })
+          admission.close = {
+            requestId: request.id,
+            responseId: frame.id,
+            sessionId: request.sessionId,
+            acknowledged: true,
+          }
+          phase = "close_answered"
         }
+        clearTimeout(request.timer)
+        active = undefined
+        request.resolve(frame)
+      } else if (
+        frame.method === "session/update" &&
+        frame.params?.update?._meta?.codex?.collaboration
+      ) {
+        if (phase !== "prompting")
+          return fail({
+            code: admission.prompt ? "activity_after_terminal" : "premature_activity",
+          })
+        const { sessionId, update } = frame.params
+        if (
+          sessionId !== admission.opening.sessionId ||
+          update.rawInput?.senderThreadId !== sessionId ||
+          update._meta.codex.collaboration.senderThreadId !== sessionId
+        )
+          fail({ code: "admitted_session_mismatch" })
       } else if (frame.method === "session/request_permission") {
+        if (phase !== "prompting") return fail({ code: "premature_permission" })
         send({
           jsonrpc: "2.0",
           id: frame.id,
@@ -141,17 +220,34 @@ export function startProbeSession(
   owned.child.stdin.on("error", () => fail({ code: "provider_write_failed" }))
   owned.child.on("error", () => fail({ code: "spawn_failed" }))
   owned.child.on("close", () => {
-    if (pending.size) fail({ code: "provider_exit" })
+    if (active) fail({ code: "provider_exit" })
   })
   return {
-    records,
-    child: owned.child,
     request(method, params, budget = 45_000) {
       if (failure) return Promise.reject(failure)
+      const allowed = {
+        starting: "initialize",
+        initialized: "session/new",
+        open: "session/prompt",
+        terminal: "session/close",
+      }
+      if (active || !Object.hasOwn(allowed, phase) || allowed[phase] !== method)
+        return Promise.reject({ code: "request_out_of_order" })
+      if (
+        (method === "session/prompt" || method === "session/close") &&
+        params.sessionId !== admission.opening.sessionId
+      )
+        return Promise.reject({ code: "admitted_session_mismatch" })
       const id = next++
+      phase = {
+        initialize: "starting",
+        "session/new": "opening",
+        "session/prompt": "prompting",
+        "session/close": "closing",
+      }[method]
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => fail({ code: "timeout", method }), budget)
-        pending.set(id, { resolve, reject, timer })
+        active = { id, method, sessionId: params.sessionId, resolve, reject, timer }
         try {
           send({ jsonrpc: "2.0", id, method, params })
         } catch {
@@ -159,12 +255,23 @@ export function startProbeSession(
         }
       })
     },
+    seal() {
+      if (snapshot) return snapshot
+      reader.complete()
+      if (failure) throw failure
+      if (phase !== "close_answered" || active) throw { code: "recording_not_complete" }
+      snapshot = Object.freeze({
+        kind: "sealed-acp-probe",
+        admissionJson: JSON.stringify(admission),
+        recordingJson: JSON.stringify(records),
+      })
+      phase = "sealed"
+      reader.stop()
+      records.length = 0
+      return snapshot
+    },
     async close() {
-      for (const item of pending.values()) {
-        clearTimeout(item.timer)
-        item.reject({ code: "probe_closing" })
-      }
-      pending.clear()
+      if (active) fail({ code: "probe_closing" })
       return stopProbeProcess(owned, cleanupOptions)
     },
   }

@@ -22,14 +22,17 @@ const tools = new Set(["spawnAgent", "wait", "closeAgent"])
  * Delegated prompt and child response text are deliberately omitted unless the
  * response is the controlled CHILD_DONE sentinel. No raw logs are written.
  */
-export function selectFrames(records) {
+function replaceIdentity() {
   const identities = new Map()
-  const identity = (value) => {
+  return (value) => {
     if (value === null || value === undefined) return value
     if (typeof value !== "string") throw new EvidenceError("invalid_identity")
     if (!identities.has(value)) identities.set(value, `identity-${identities.size + 1}`)
     return identities.get(value)
   }
+}
+
+function selectedFrames(records, identity, promptId) {
   const output = []
   for (const { direction, frame } of records) {
     if (direction === "from-agent" && frame.params?.update) {
@@ -103,7 +106,11 @@ export function selectFrames(records) {
           },
         },
       })
-    } else if (direction === "from-agent" && frame.result?.stopReason) {
+    } else if (
+      direction === "from-agent" &&
+      frame.id === promptId &&
+      frame.result?.stopReason
+    ) {
       if (
         !Number.isSafeInteger(frame.id) ||
         !["end_turn", "cancelled", "max_tokens", "max_turn_requests", "refusal"].includes(
@@ -124,17 +131,71 @@ export function selectFrames(records) {
   return output
 }
 
+/** Project only sealed ownership evidence, normalizing admission and updates together. */
+export function selectCapture(snapshot) {
+  if (!Object.isFrozen(snapshot) || snapshot.kind !== "sealed-acp-probe")
+    throw new EvidenceError("unsealed_capture")
+  const records = JSON.parse(snapshot.recordingJson)
+  const admission = JSON.parse(snapshot.admissionJson)
+  const identity = replaceIdentity()
+  admission.opening.sessionId = identity(admission.opening.sessionId)
+  admission.prompt.sessionId = identity(admission.prompt.sessionId)
+  admission.close.sessionId = identity(admission.close.sessionId)
+  return {
+    admission,
+    frames: selectedFrames(records, identity, admission.prompt.responseId),
+    statistics: {
+      permissionRequests: records.filter(
+        ({ frame }) => frame.method === "session/request_permission",
+      ).length,
+      nativeSessionUpdates: records.filter(({ frame }) =>
+        frame.params?.update?.sessionUpdate?.startsWith("subagent"),
+      ).length,
+    },
+  }
+}
+
+/** Check published opening/prompt/close evidence before interpreting tool updates. */
+export function inspectCapture(capture) {
+  const { opening, prompt, close } = capture.admission ?? {}
+  if (!opening || !prompt || !close) throw new EvidenceError("missing_admission")
+  for (const rpc of [opening, prompt, close]) {
+    if (
+      !Number.isSafeInteger(rpc.requestId) ||
+      rpc.requestId <= 0 ||
+      rpc.requestId !== rpc.responseId
+    )
+      throw new EvidenceError("rpc_correlation_mismatch")
+  }
+  if (!(opening.requestId < prompt.requestId && prompt.requestId < close.requestId))
+    throw new EvidenceError("rpc_order_mismatch")
+  if (
+    typeof opening.sessionId !== "string" ||
+    !opening.sessionId ||
+    prompt.sessionId !== opening.sessionId ||
+    close.sessionId !== opening.sessionId
+  )
+    throw new EvidenceError("admission_session_mismatch")
+  if (close.acknowledged !== true) throw new EvidenceError("close_unconfirmed")
+  return inspectFrames(capture.frames, capture.admission)
+}
+
 /** Validate two independently reported identity paths before summarizing a run. */
-export function inspectFrames(records) {
+function inspectFrames(records, admission) {
   const active = new Map()
   const completed = new Map()
-  let parent
+  const parent = admission.opening.sessionId
   let child
   let stopped
   for (const { direction, frame } of records) {
     if (direction !== "from-agent") throw new EvidenceError("unexpected_direction")
     if (frame.result?.stopReason) {
       if (stopped !== undefined) throw new EvidenceError("duplicate_terminal")
+      if (
+        frame.id !== admission.prompt.responseId ||
+        frame.result.stopReason !== admission.prompt.stopReason
+      )
+        throw new EvidenceError("terminal_correlation_mismatch")
       stopped = frame.result.stopReason
       continue
     }
@@ -150,8 +211,7 @@ export function inspectFrames(records) {
       JSON.stringify(meta.receiverThreadIds) !== JSON.stringify(raw.receiverThreadIds)
     )
       throw new EvidenceError("identity_mismatch")
-    if (parent === undefined) parent = sessionId
-    else if (parent !== sessionId) throw new EvidenceError("parent_mismatch")
+    if (parent !== sessionId) throw new EvidenceError("admitted_session_mismatch")
     if (update.title !== meta.tool) throw new EvidenceError("tool_mismatch")
     if (update.status === "in_progress" && raw.status !== "inProgress")
       throw new EvidenceError("status_mismatch")
