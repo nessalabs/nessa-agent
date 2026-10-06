@@ -391,6 +391,14 @@ until its slot is let go, and the next send after that opens the conversation
 again. A client treats `conversation_closed` on a send as "not sent now", not
 as the conversation being gone.
 
+The other-mode row applies its preset only once the agent is idle. Attachment
+starts the queue runner before the attachment join returns. Until that runner
+observes an empty queue, `running` stays set and a mode change is `turnRunning`
+(the approval-mode table's turn-running row, and the runner-start row of
+[scheduling](../../crates/nessa-sdk/docs/agent_execution/scheduling.md)). A send
+after the stop has marked the owner is `conversation_closed`. The other-mode
+test waits for `idle_for_approval_change` before it applies the preset (#563).
+
 The wait for the lock, the mark and the stop run on the stop's own task. The
 caller waits at most the owner's `stopMs`. Past that, it is told the owner went
 over budget (reported as a deadline), and the task carries on until the close
@@ -399,6 +407,7 @@ admission before it stops anything.
 
 | When | Stop | Message | Test |
 | --- | --- | --- | --- |
+| Attachment has joined, and the runner it started has not yet observed an empty queue | Has not begun | The other-mode case applies its preset only after the agent is idle. While `running` is still set, the mode change is the turn-running refusal | `a_send_during_a_desktop_stop_in_another_mode_is_refused_as_closed` waits for `idle_for_approval_change`; `a_mode_change_after_a_turn_is_running_is_audited_and_refused` |
 | A send arrives while a stop is closing the agent | Marked before it, its apps ended; reads answer | Refused as closed, before the mode is verified and with nothing recorded (an app's message is recorded refused `mcp_cancelled`, row M10 of `mcp-app-calls.md`); the next send after the release opens the conversation again. A retry of a message the agent already has is answered with its own delivery | `a_send_during_a_desktop_stop_is_refused_and_the_next_opens_again`, `an_owner_marked_as_stopping_is_handed_no_message`, `a_retry_of_a_message_the_stopping_owner_has_recovers_its_delivery`, `a_send_during_a_desktop_stop_in_another_mode_is_refused_as_closed` |
 | The owner changed while the stop waited for the lock | Marks and stops the owner live when it takes the lock | Settles on that owner | `a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock` |
 | Past its checks, before or in the enqueue | Waits for the lock, then marks and stops | Settles there: completed, cancelled by the close, or failed when the close cuts its turn short | `a_desktop_stop_waits_for_a_message_past_the_gateway_s_checks`, `a_desktop_stop_waits_for_a_message_waiting_in_the_enqueue` |
