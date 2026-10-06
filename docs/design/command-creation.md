@@ -92,7 +92,10 @@ refused before `Attempted`, so a later retry is not permanently interrupted.
 `Attempted` is durable before withdraw or cancel. A restored `Attempted` returns
 `Interrupted` and does not send another cancel or withdraw. The receipt stores
 the verified actor (principal, surface, request) and the stop cause is the
-settled outcome.
+settled outcome. The fixture that holds an active turn registers
+`execution_started` before it submits. The ceiling reports a hang if that
+start has not been notified; five seconds expired on Windows while the submit
+was still reaching the provider (#558).
 
 | Row | Saved state / ordering | Result and effects | Regression fixture |
 | --- | --- | --- | --- |
