@@ -441,3 +441,10 @@ export async function unofferedAnswers(root, options) {
     failures.push(`offers ${names.moreWaysToAllow}, which this review does not`)
   return failures
 }
+
+/** A measured pane drop must move it and remove the carried copy. */
+export function paneDropFailure(before, after) {
+  if (after.ghost !== 0) return "the carried copy is still on the page after the drop"
+  if (after.order === before.order) return "the drop did not change pane order"
+  return null
+}

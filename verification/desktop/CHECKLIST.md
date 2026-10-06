@@ -38,6 +38,12 @@ production build at 4× CPU throttling.
   onto the interaction. A zero phase start means that phase did not run, so
   the diagnostic is absent rather than a negative duration.
   _Check:_ `lib/perf.test.mjs` (`long animation frame clock`).
+- [ ] **The ambient grain is a baked image, not a runtime noise filter** (#370).
+  Its 160×160 PNG tile repeats with 0.06 opacity and overlay blending; keeping
+  the texture in `ui/ambient-grain.png` avoids SVG turbulence in the GPU raster
+  path (`src/desktop/styles.css`, `.desktop-grain`).
+  _Check:_ `smoke.mjs` (`ambient-grain`), both engines/layouts; `perf-budget.mjs`
+  checks the unchanged frame budget.
 - [ ] **The measurement works.** The calibration busy loop slows by roughly
   the throttle rate, and a 120 ms frame of known cost is measured and attributed.
   _Check:_ the `calibration` result of `perf-budget.mjs`; if it fails, no

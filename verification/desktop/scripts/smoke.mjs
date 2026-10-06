@@ -30,6 +30,7 @@ Usage: node verification/desktop/scripts/smoke.mjs [options]
 
 Checks, per engine and layout:
   loads            the page renders panes
+  ambient-grain    a decoded 160px PNG tile, repeated at 0.06 opacity with overlay blend
   draft-unlisted   ⌘N adds no row to the lists until something is sent
   send             a message typed in a new session appears in its transcript
   split            ⇧⌘N (new session beside) adds a pane
@@ -57,6 +58,41 @@ await main(meta, async ({ options, rep, url }) => {
       }
       const { page } = opened
       const rows = () => page.locator(css.sessionRow).count()
+
+      await attempt(rep, { ...base, name: "ambient-grain" }, async () => {
+        await need(page, css.ambientGrain, "the ambient grain")
+        const grain = await page.evaluate(async (selector) => {
+          const style = getComputedStyle(document.querySelector(selector))
+          const url = /^url\("(.*)"\)$/.exec(style.backgroundImage)?.[1]
+          if (!url) return { failures: ["grain has no image URL"] }
+          const response = await fetch(url)
+          const blob = await response.blob()
+          const image = new Image()
+          image.src = url
+          await image.decode()
+          return {
+            type: blob.type,
+            width: image.naturalWidth,
+            height: image.naturalHeight,
+            opacity: style.opacity,
+            blend: style.mixBlendMode,
+            repeat: style.backgroundRepeat,
+          }
+        }, css.ambientGrain)
+        if (grain.failures) return grain
+        const failures = []
+        if (grain.type !== "image/png")
+          failures.push(`grain type ${grain.type}, expected baked image/png (#370)`)
+        if (grain.width !== 160 || grain.height !== 160)
+          failures.push(`grain tile ${grain.width}×${grain.height}, expected 160×160`)
+        if (
+          grain.opacity !== "0.06" ||
+          grain.blend !== "overlay" ||
+          grain.repeat !== "repeat"
+        )
+          failures.push(`grain layer changed: ${JSON.stringify(grain)}`)
+        return { ...grain, failures }
+      })
 
       await attempt(rep, { ...base, name: "draft-unlisted" }, async () => {
         const before = await rows()

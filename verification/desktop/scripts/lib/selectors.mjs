@@ -28,6 +28,7 @@ export const css = {
   committedActions: "[data-committed-controls] button",
 
   // The window
+  ambientGrain: ".desktop-grain", // class: the tiled, baked noise over the ambient light
   surface: "[data-surface]",
   workspace: "[data-workspace]", // carries data-content (see `content`)
   anyReady: "[data-pane-key], [data-surface]",

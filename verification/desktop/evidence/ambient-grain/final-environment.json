@@ -1,0 +1,29 @@
+{
+  "source": "d2518743dd28996a1f2c65e9b1a5eab64101fb9f with grid containment deleted; source hashes identify the exact final measured inputs",
+  "sourceHashes": {
+    "src/desktop/split-panes/adapters/dom/flip.tsx": "7a143faaa68551e69021db1b71908e24c3c3d696",
+    "src/desktop/split-panes/ui/split-panes.css": "d4d8e203454907ededf17c7a0f46ba1148ad0f49",
+    "src/desktop/styles.css": "2cba5853bc0e2c3bd18a2a9564d6c8de98f0358b",
+    "verification/desktop/scripts/perf-budget.mjs": "4105382a616c7e34de136bbb7267d62bc487bc0f",
+    "verification/desktop/scripts/lib/workspace.mjs": "cd52b0ea73bbdad6532b5df13aa06a897dfd52fc"
+  },
+  "ui": "ab06053c4271a5831697a0a53292eab80836507a",
+  "node": "26.8.1",
+  "chromium": "154.0.8037.98",
+  "performance": {
+    "mode": "production",
+    "display": "headless",
+    "viewport": [1600, 1000],
+    "deviceScaleFactor": 2,
+    "cpuThrottle": 4,
+    "runsPerLayout": 5,
+    "budgetMs": 50
+  },
+  "gridContainment": false,
+  "decision": "Removing containment yielded the same 33.4ms maximum in both layouts. The extra layout boundary was dropped rather than credited with an unproven benefit.",
+  "limits": [
+    "Native WKWebView not run.",
+    "Earlier headed runs include failed budgets and no-op outcomes; preserved in PR history and chat evidence.",
+    "perf-after.json uses an incorrect UI revision; perf-contained.json and contained-environment.json describe a superseded contained tree. Neither is final-tree evidence."
+  ]
+}

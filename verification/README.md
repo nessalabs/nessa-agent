@@ -62,6 +62,7 @@ verification/
         server.mjs          reuse/start the dev server (warmed before the first page, a reused one too), or build + preview production
         browser.mjs         launch Chromium/WebKit, seed preferences, collect errors
         workspace.mjs       open panes, read pane rects and focus, lift a pane, rect containment, a model rule or value read in the page
+        workspace.test.mjs  a measured drop must change pane order and remove its carried copy (#370)
         safe-area.mjs       the per-frame safe-area sampler
         perf.mjs            rAF gaps, Long Animation Frames, long tasks, throttling, calibration
         perf.test.mjs       the frame budget's unrounded decision, and the LoAF sample clock (#369)
