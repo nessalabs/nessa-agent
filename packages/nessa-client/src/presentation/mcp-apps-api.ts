@@ -20,10 +20,11 @@ import {
   conversationIdPattern,
   conversationMutation,
 } from "../protocol/conversation-validate.js"
+import { wellFormedText } from "../protocol/unicode.js"
 import {
   boundedName,
   mcpAppModelContext,
-  mcpAppReferenceProblem,
+  mcpAppReference,
   mcpAppRequestProblem,
   mcpCallToolResult,
   mcpReadResourceResult,
@@ -271,7 +272,6 @@ export type McpAppsApi = {
   ) => Promise<ConversationMutationResult>
 }
 
-const utf8 = new TextEncoder()
 const callDeadline: RequestDeadline = { atLeastMs: mcpAppDeadlines.callToolMs }
 const readDeadline: RequestDeadline = { atLeastMs: mcpAppDeadlines.readResourceMs }
 
@@ -303,7 +303,11 @@ export function createMcpAppsApi(
   newId: () => string,
   timer: RequestTimer,
 ): McpAppsApi {
-  /** The checked identities every call carries, and a copy of the app the caller cannot change under it. */
+  /**
+   * The checked identities every call carries. The app, the server and the
+   * request id are each read once, from the caller's own fields, and the
+   * copy that was checked is what is sent.
+   */
   function addressed(
     conversationId: string,
     app: McpAppReference,
@@ -311,21 +315,32 @@ export function createMcpAppsApi(
   ) {
     if (!conversationIdPattern.test(conversationId))
       throw new TypeError("Conversation ID must be a canonical lowercase UUID")
-    const requestId = options.requestId ?? newId()
-    if (!requestId.trim() || utf8.encode(requestId).byteLength > 256)
-      throw new TypeError("Request ID must contain 1-256 UTF-8 bytes")
-    const problem = mcpAppReferenceProblem(app)
-    if (problem) throw new TypeError(`Invalid app: ${problem}`)
-    const { executionId, toolId, instanceId } = app
+    const reference = mcpAppReference(app)
+    if (typeof reference === "string") throw new TypeError(`Invalid app: ${reference}`)
     return {
       conversationId,
-      requestId,
-      app: Object.freeze({ executionId, toolId, instanceId }),
+      requestId: requestIdOf(options),
+      app: Object.freeze(reference),
     }
   }
-  function serverName(server: string) {
+  /** The caller's own request id, or a new one when it gave none. Read once. */
+  function requestIdOf(options: ConversationActionOptions): string {
+    const given = Object.hasOwn(options, "requestId") ? options.requestId : undefined
+    const requestId = given === undefined ? newId() : given
+    // The bound first: a text far past it is refused without being encoded or trimmed.
+    if (!boundedName(requestId, 256))
+      throw new TypeError("Request ID must contain 1-256 UTF-8 bytes")
+    if (!wellFormedText(requestId)) throw new TypeError("Request ID must be Unicode text")
+    if (!requestId.trim())
+      throw new TypeError("Request ID must contain 1-256 UTF-8 bytes")
+    return requestId
+  }
+  /** The server's name, checked once: what is returned is what is sent. */
+  function serverName(server: string): string {
     if (!boundedName(server, bounds.maxMcpNameBytes))
       throw new TypeError(`Server must contain 1-${bounds.maxMcpNameBytes} UTF-8 bytes`)
+    if (!wellFormedText(server)) throw new TypeError("Server must be Unicode text")
+    return server
   }
   async function call<T>(
     method: string,
@@ -351,7 +366,7 @@ export function createMcpAppsApi(
   return {
     async callTool(conversationId, app, server, tool, argumentsJson, options = {}) {
       const command = addressed(conversationId, app, options)
-      serverName(server)
+      const namedServer = serverName(server)
       const toolProblem =
         typeof tool === "string"
           ? mcpAppRequestProblem.tool(tool)
@@ -367,7 +382,7 @@ export function createMcpAppsApi(
         ProductMethod.McpCallTool,
         {
           ...command,
-          server,
+          server: namedServer,
           tool,
           ...(argumentsJson === undefined ? {} : { argumentsJson }),
         },
@@ -377,7 +392,7 @@ export function createMcpAppsApi(
     },
     async readResource(conversationId, app, server, uri, options = {}) {
       const command = addressed(conversationId, app, options)
-      serverName(server)
+      const namedServer = serverName(server)
       const uriProblem =
         typeof uri === "string"
           ? mcpAppRequestProblem.uri(uri)
@@ -385,31 +400,31 @@ export function createMcpAppsApi(
       if (uriProblem) throw new TypeError(uriProblem)
       return call(
         ProductMethod.McpReadResource,
-        { ...command, server, uri },
+        { ...command, server: namedServer, uri },
         (value) => mcpReadResourceResult(value, uri),
         readDeadline,
       )
     },
     async sendMessage(conversationId, app, server, text, options = {}) {
       const command = addressed(conversationId, app, options)
-      serverName(server)
+      const namedServer = serverName(server)
       const problem = mcpAppRequestProblem.message(text)
       if (problem) throw new TypeError(problem)
       return call(
         ProductMethod.McpSendMessage,
-        { ...command, server, text },
+        { ...command, server: namedServer, text },
         mcpSendMessageResult,
         callDeadline,
       )
     },
     async updateModelContext(conversationId, app, server, context, options = {}) {
       const command = addressed(conversationId, app, options)
-      serverName(server)
+      const namedServer = serverName(server)
       const parts = mcpAppModelContext(context)
       if (typeof parts === "string") throw new TypeError(parts)
       return call(
         ProductMethod.McpUpdateModelContext,
-        { ...command, server, ...parts },
+        { ...command, server: namedServer, ...parts },
         (value) => modelContextResult(value, command.requestId),
         callDeadline,
       )
