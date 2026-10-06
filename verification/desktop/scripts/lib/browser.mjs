@@ -218,8 +218,9 @@ export function recordFailedRequest(request, pageUrl, { errors, harmless }) {
 
 /**
  * Moves a recorded abort from `errors` to `harmless` once `sizes` shows the
- * 200 body's `content-length` arrived (#473). No-op when the line was already
- * taken or the body is short.
+ * 200 body's `content-length` arrived (#473), and only when `abortKind` still
+ * says that abort is the harmless one. No-op when the line was already taken,
+ * the body is short, the origin differs, or the error is not `net::ERR_ABORTED`.
  *
  * @param {Parameters<typeof recordFailedRequest>[0]} request
  * @param {string} pageUrl
@@ -227,10 +228,11 @@ export function recordFailedRequest(request, pageUrl, { errors, harmless }) {
  * @param {{ errors: string[], harmless: string[] }} into
  */
 export function reclassifyDeliveredAbort(request, pageUrl, sizes, { errors, harmless }) {
-  if (!fullBody(request, sizes)) return
-  const url = request.url()
   const errorText = request.failure()?.errorText ?? ""
-  const line = `requestfailed: ${url} ${errorText}`
+  // The late size report does not relax the abort rule. A full 200 on another
+  // origin, or a failure that is not `net::ERR_ABORTED`, stays an error.
+  if (abortKind(request, pageUrl, errorText, sizes) !== "full") return
+  const line = `requestfailed: ${request.url()} ${errorText}`
   const index = errors.indexOf(line)
   if (index === -1) return
   errors.splice(index, 1)
@@ -248,8 +250,13 @@ export function liveMountResourceAbort(line) {
   return /^requestfailed: \S+\/mcp-resources(?:[?#]\S*)? net::ERR_ABORTED$/.test(line)
 }
 
-/** @returns {"full" | "empty" | "error"} */
-function abortKind(request, pageUrl, errorText) {
+/**
+ * @param {{ responseBodySize?: number } | null | undefined} [sizes]
+ *   The body size already in hand. Omitted, the synchronous answer of
+ *   `sizes()` is used, and a promise is not a delivery.
+ * @returns {"full" | "empty" | "error"}
+ */
+function abortKind(request, pageUrl, errorText, sizes = synchronousSizes(request)) {
   if (errorText !== "net::ERR_ABORTED") return "error"
   const url = request.url()
   const own = originOf(pageUrl)
@@ -257,7 +264,7 @@ function abortKind(request, pageUrl, errorText) {
   const response = request.existingResponse()
   const status = response?.status()
   if (status === 204) return "empty"
-  if (status === 200 && fullBody(request, synchronousSizes(request))) return "full"
+  if (status === 200 && fullBody(request, sizes)) return "full"
   return "error"
 }
 

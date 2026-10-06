@@ -95,6 +95,38 @@ describe("recordFailedRequest", () => {
     assert.deepEqual(into, { errors: [], harmless: [fullBody(RESOURCE)] })
   })
 
+  it("a later size report does not excuse another origin or another error", () => {
+    const other = "http://127.0.0.1:1439/mcp-resources"
+    const cross = {
+      errors: [`requestfailed: ${other} net::ERR_ABORTED`],
+      harmless: [],
+    }
+    reclassifyDeliveredAbort(
+      request({ url: other }),
+      PAGE,
+      { responseBodySize: 4095 },
+      cross,
+    )
+    assert.deepEqual(cross, {
+      errors: [`requestfailed: ${other} net::ERR_ABORTED`],
+      harmless: [],
+    })
+    const failed = {
+      errors: [`requestfailed: ${RESOURCE} net::ERR_FAILED`],
+      harmless: [],
+    }
+    reclassifyDeliveredAbort(
+      request({ errorText: "net::ERR_FAILED" }),
+      PAGE,
+      { responseBodySize: 4095 },
+      failed,
+    )
+    assert.deepEqual(failed, {
+      errors: [`requestfailed: ${RESOURCE} net::ERR_FAILED`],
+      harmless: [],
+    })
+  })
+
   it("only an unlabelled /mcp-resources abort is the mount-went-live case", () => {
     assert.equal(liveMountResourceAbort(`requestfailed: ${RESOURCE} net::ERR_ABORTED`), true)
     assert.equal(
