@@ -143,3 +143,78 @@ it("reads where every pane landed before any flight starts, so the page lays out
   if (offsetTop) Object.defineProperty(HTMLElement.prototype, "offsetTop", offsetTop)
   await act(async () => root.unmount())
 })
+
+it("reads counter-scale offsets only for panes that move", async () => {
+  const offsetTop = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetTop")
+  const read: string[] = []
+  Object.defineProperty(HTMLElement.prototype, "offsetTop", {
+    configurable: true,
+    get(this: HTMLElement) {
+      const id = this.parentElement?.dataset.flipId
+      if (id) read.push(id)
+      return 0
+    },
+  })
+  let change = () => {}
+  function Panes() {
+    const root = useRef<HTMLDivElement>(null)
+    const [changed, setChanged] = useState(false)
+    change = () => setChanged(true)
+    return (
+      <FlipScope shape={String(changed)} root={root}>
+        <div ref={root}>
+          <article data-flip="pane" data-flip-id="still" data-left={0}>
+            <div />
+          </article>
+          <article data-flip="pane" data-flip-id="moving" data-left={changed ? 200 : 100}>
+            <div />
+          </article>
+        </div>
+      </FlipScope>
+    )
+  }
+  const root = createRoot(host)
+  try {
+    await act(async () => root.render(<Panes />))
+    read.length = 0
+    await act(async () => change())
+    expect(read).toEqual(["moving"])
+  } finally {
+    await act(async () => root.unmount())
+    if (offsetTop) Object.defineProperty(HTMLElement.prototype, "offsetTop", offsetTop)
+  }
+})
+
+it("does not resolve flight styles after a shape update that moves nothing", async () => {
+  const style = globalThis.getComputedStyle
+  let after = 0
+  globalThis.getComputedStyle = (element) => {
+    if ((element as HTMLElement).dataset.changed === "true") after++
+    return style(element)
+  }
+  let change = () => {}
+  function Panes() {
+    const root = useRef<HTMLDivElement>(null)
+    const [changed, setChanged] = useState(false)
+    change = () => setChanged(true)
+    return (
+      <FlipScope shape={String(changed)} root={root}>
+        <div ref={root} data-changed={String(changed)}>
+          <article data-flip="pane" data-flip-id="still" data-left={0}>
+            <div />
+          </article>
+        </div>
+      </FlipScope>
+    )
+  }
+  const root = createRoot(host)
+  try {
+    await act(async () => root.render(<Panes />))
+    await act(async () => change())
+    expect(after).toBe(0)
+    expect(begun).toEqual([])
+  } finally {
+    await act(async () => root.unmount())
+    globalThis.getComputedStyle = style
+  }
+})

@@ -1,0 +1,540 @@
+{
+  "check": "drag",
+  "ok": true,
+  "started": "2026-10-06T08:15:11.669Z",
+  "finished": "2026-10-06T08:19:17.178Z",
+  "target": {
+    "url": "http://127.0.0.1:61542/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:61542/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "rest-settles",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "resize-mid-drag",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "command-mid-drag",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "flick",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "reduced-motion",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "copy-takes-slot-shape",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1440x900",
+      "own": "708×884 at 8,8",
+      "below": "1424×438 at 8,454",
+      "copyTitled": 139
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "preview-panes-take-shape",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1440x900",
+      "zone": "Move below Retry budget for ACP reconnects",
+      "resized": [
+        "1: 354×438 at 1078,454",
+        "2: 1062×884 at 8,8",
+        "4: 354×438 at 1078,8"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "rest-settles",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "resize-mid-drag",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "command-mid-drag",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "flick",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "reduced-motion",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "copy-takes-slot-shape",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700",
+      "own": "488×684 at 8,8",
+      "below": "984×338 at 8,354",
+      "copyTitled": 139
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "preview-panes-take-shape",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700",
+      "zone": "Move below Retry budget for ACP reconnects",
+      "resized": [
+        "1: 302×338 at 690,354",
+        "2: 674×684 at 8,8",
+        "4: 302×338 at 690,8"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "rest-settles",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "resize-mid-drag",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "command-mid-drag",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "flick",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "reduced-motion",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "copy-takes-slot-shape",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1440x900",
+      "own": "708×884 at 8,8",
+      "below": "1424×438 at 8,454",
+      "copyTitled": 139
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "preview-panes-take-shape",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1440x900",
+      "zone": "Move below Retry budget for ACP reconnects",
+      "resized": [
+        "1: 354×438 at 1078,454",
+        "2: 1062×884 at 8,8",
+        "4: 354×438 at 1078,8"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "rest-settles",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "resize-mid-drag",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "command-mid-drag",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "flick",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "reduced-motion",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "copy-takes-slot-shape",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700",
+      "own": "488×684 at 8,8",
+      "below": "984×338 at 8,354",
+      "copyTitled": 221
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "preview-panes-take-shape",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700",
+      "zone": "Move below Retry budget for ACP reconnects",
+      "resized": [
+        "1: 302×338 at 690,354",
+        "2: 674×684 at 8,8",
+        "4: 302×338 at 690,8"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "rest-settles",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "resize-mid-drag",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "command-mid-drag",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "flick",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "reduced-motion",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "copy-takes-slot-shape",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1440x900",
+      "own": "708×884 at 8,8",
+      "below": "1424×438 at 8,454",
+      "copyTitled": 153
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "preview-panes-take-shape",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1440x900",
+      "zone": "Move below Retry budget for ACP reconnects",
+      "resized": [
+        "1: 354×438 at 1078,454",
+        "2: 1062×884 at 8,8",
+        "4: 354×438 at 1078,8"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "rest-settles",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "resize-mid-drag",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "command-mid-drag",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "flick",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "reduced-motion",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "copy-takes-slot-shape",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1000x700",
+      "own": "488×684 at 8,8",
+      "below": "984×338 at 8,354",
+      "copyTitled": 151
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "preview-panes-take-shape",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1000x700",
+      "zone": "Move below Retry budget for ACP reconnects",
+      "resized": [
+        "1: 302×338 at 690,354",
+        "2: 674×684 at 8,8",
+        "4: 302×338 at 690,8"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "rest-settles",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "resize-mid-drag",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "command-mid-drag",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "flick",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "reduced-motion",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "copy-takes-slot-shape",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1440x900",
+      "own": "708×884 at 8,8",
+      "below": "1424×438 at 8,454",
+      "copyTitled": 151
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "preview-panes-take-shape",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1440x900",
+      "zone": "Move below Retry budget for ACP reconnects",
+      "resized": [
+        "1: 354×438 at 1078,454",
+        "2: 1062×884 at 8,8",
+        "4: 354×438 at 1078,8"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "rest-settles",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "resize-mid-drag",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "command-mid-drag",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "flick",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "reduced-motion",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "copy-takes-slot-shape",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700",
+      "own": "488×684 at 8,8",
+      "below": "984×338 at 8,354",
+      "copyTitled": 92
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "preview-panes-take-shape",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700",
+      "zone": "Move below Retry budget for ACP reconnects",
+      "resized": [
+        "1: 302×338 at 690,354",
+        "2: 674×684 at 8,8",
+        "4: 302×338 at 690,8"
+      ]
+    }
+  ]
+}

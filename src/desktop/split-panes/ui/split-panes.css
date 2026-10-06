@@ -14,6 +14,7 @@
 .split-panes-grid {
   --g: var(--desktop-gutter);
   position: relative;
+  contain: layout style;
   flex: 1;
   min-width: 0;
 }

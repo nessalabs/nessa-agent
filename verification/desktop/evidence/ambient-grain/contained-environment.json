@@ -1,0 +1,23 @@
+{
+  "source": "1f0b4a9579d081562a77ed3e5e97209a1a0d942d plus accompanying lazy FLIP/grid containment/drop outcome diff",
+  "ui": "ab06053c4271a5831697a0a53292eab80836507a",
+  "node": "26.8.1",
+  "chromium": "154.0.8037.98",
+  "performance": {
+    "mode": "production",
+    "display": "headless",
+    "viewport": [
+      1600,
+      1000
+    ],
+    "deviceScaleFactor": 2,
+    "cpuThrottle": 4,
+    "runsPerLayout": 5,
+    "budgetMs": 50
+  },
+  "limits": [
+    "Native WKWebView not run.",
+    "Earlier headed runs include failed budgets and no-op outcomes; preserved in PR history and chat evidence.",
+    "The earlier perf-after.json used an incorrect UI revision and is historical, not final gate evidence."
+  ]
+}
