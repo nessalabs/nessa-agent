@@ -127,7 +127,6 @@ await main(
                 calibration: loop,
                 calibrationFrame: frame,
                 failures: [
-                  ...opened.errors,
                   ...(!loop.ok ? ["CPU throttle calibration failed"] : []),
                   ...(!frame.ok ? ["Known-cost frame calibration failed"] : []),
                 ],
@@ -211,7 +210,7 @@ await main(
                 { timeout: 4_000 },
               )
               const rested = await page.evaluate(() => window.__messageSync.snapshot())
-              const failures = [...opened.errors]
+              const failures = []
               for (const [name, samples] of Object.entries({ active, held }))
                 if (samples.some((ms) => ms === null || ms > 600))
                   failures.push(

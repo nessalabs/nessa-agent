@@ -8,4 +8,4 @@ Verdict: pass
 
 Relevant log lines:
 
-- renders chromium: requestfailed: http://127.0.0.1:49188/browser/check net::ERR_ABORTED (aborted after a 204 response, #485) (harmless)
+- console: requestfailed: http://127.0.0.1:64293/browser/check net::ERR_ABORTED (aborted after a 204 response, #485) (harmless)

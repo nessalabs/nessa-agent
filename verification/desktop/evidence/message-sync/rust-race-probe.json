@@ -1,0 +1,14 @@
+{
+  "probe": "100ms delay before empty queue runner, independent source and APFS-cloned target",
+  "test": "a_desktop_stop_waits_for_a_message_waiting_in_the_enqueue",
+  "original_fixture": {
+    "seconds": 8.006722334000003,
+    "timed_out": true
+  },
+  "fixed_fixture": {
+    "exit": 0,
+    "seconds": 1.556735708000005,
+    "timed_out": false
+  },
+  "probe_source_restored": true
+}

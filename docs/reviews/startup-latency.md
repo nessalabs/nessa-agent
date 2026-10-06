@@ -266,7 +266,7 @@ late work through the existing injected clock and read lifecycle.
 
 | Row | Ordering | Intended behavior | Regression |
 | --- | --- | --- | --- |
-| F1 | Ready active text before next tick | Read by the next 250 ms tick, without a list | F1 |
+| F1 | Ready active text and a read eligible at the next tick | Read on that active tick, without a list | F1 |
 | F2 | Summary and unrelated read stay pending | Independent conversation updates | F2/F7 |
 | F7 | Several ticks pass a held read | One admitted background read, no burst when it answers | F2/F7 |
 | F3 | Unsubscribe/resubscribe before answer | Earlier answer discarded; new generation reads | F3 |
@@ -285,7 +285,8 @@ to up to 250 ms: up to 750 ms less, with transport/mapping/browser scheduling
 added. This is not an unconditional 250 ms maximum: a background read queued
 behind foreground work can dispatch between timer ticks. The next tick may
 skip to preserve spacing (F12: dispatch at 900 ms, then 1,250 ms), adding tick
-quantization. Blocked requests still depend on their deadlines or completion. For N watched
+quantization. An ordinary asynchronous dispatch can also fall after its timer
+tick and move eligibility past the next tick. Blocked requests still depend on their deadlines or completion. For N watched
 active conversations, up to 4N reads/second replaces about N reads/second:
 up to 3N extra requests/second (180N/minute). Slow reads are single-flight;
 idle views read only when the list changes or a send invalidates them. Payload
@@ -321,26 +322,71 @@ restore this file from the base commit for the original measurement, confirm the
 source changed, then restore the experiment and rerun. Do not mutate a shared
 verification tree while another check is running.
 
-Browser verification has **not passed**. Chromium download returned an invalid
-ZIP and its executable is missing. WebKit downloaded but requires unavailable
-system libraries; `playwright install-deps chromium webkit` failed with
-`setgroups ... Operation not permitted` and exit 100. `message-sync.mjs` and
-`run-all.mjs --skip-perf --channel bundled` both report could-not-run launches.
-There are no browser timing samples or screenshots. The verification-only Vite configuration adds the fixture to the normal
-production inputs without packaging it in the application. Its production build
-and preview succeeded, and the script reached browser launch after confirming
-the fixture title. The fixture/script remain unverified in a real browser; the 600 ms delivery assertion is a target, not an
-observed result. Before adoption, run both engines/layouts and a browser revert
-probe, save the browser timing/request output and screenshots, and evaluate
-full-view payload bytes/CPU for longer conversations.
+### Local production browser evidence
 
-`pnpm test:e2e:scripted --channel bundled` reports `Verdict: could-not-run`:
-the gateway did not build because Cargo is absent. The full frontend gate also
-cannot pass: developer-tool tests need `just` and Cargo; architecture/protocol
-checks need Cargo/rustfmt. These capability failures are not waived. No provider
-startup, durable admission, audit or physical-cleanup paths were changed or
-measured. Project-board mutation is unavailable through the exposed GitHub tools
-and GitHub CLI is absent; issue tracking is updated through the connector.
+The initial cloud sandbox could not launch its browsers or build the gateway.
+Verification was moved to macOS (Mac17,3, arm64, macOS 26.6, 24 GiB RAM), then
+synchronized with main `70d1a9823`. Main already contains the selector boundary
+repair (#441), first-frame attribution repair (#582), and stop-test readiness
+repair (#577); the experiment reuses those owners.
+
+`message-sync.mjs --channel bundled --headed --runs 3` passes in both layouts
+and engines. Each row has 30 active and 15 held-list/read samples across three
+fresh pages. Chromium uses calibrated 4x CPU throttling; WebKit is unthrottled
+and is not presented as equivalent calibrated CPU evidence.
+
+| Engine / layout | Active median / max ms | Held median / max ms | Frame max / median run-max ms | Frames over 50 ms |
+| --- | --- | --- | --- | --- |
+| chromium / columns | 238.3 / 507.2 | 174.7 / 456.0 | 17.7 / 17.7 | 0 |
+| chromium / sidebar | 181.7 / 489.9 | 174.9 / 458.3 | 17.7 / 17.7 | 0 |
+| webkit / columns | 166.0 / 482.0 | 144.0 / 277.0 | 20.0 / 20.0 | 0 |
+| webkit / sidebar | 172.0 / 350.0 | 101.0 / 222.0 | 20.0 / 19.0 | 0 |
+
+The busy-loop calibration measured 15 to 62 ms at 4x (ratio 4.12). A known-cost
+120 ms calibration frame measured 116.7 ms and was attributed by LoAF; both
+shared calibration checks held. Delivery measures ready controlled-gateway text
+through DOM replacement and two frame opportunities, not physical compositor
+paint, transport, provider startup, or production-server CPU/payload cost.
+
+[Raw current samples](../../verification/desktop/evidence/message-sync/browser-delivery.json)
+include request counts, idle checks, frame attribution, and timeout diagnostics.
+[Chromium held-list screenshot](../../verification/desktop/evidence/message-sync/browser-shots/chromium-columns-held-list-transcript.jpg)
+and [WebKit held-list screenshot](../../verification/desktop/evidence/message-sync/browser-shots/webkit-columns-held-list-transcript.jpg)
+show the changed surface; the evidence folder has both layouts and active/held/idle states.
+
+The source-only browser revert used the exact original source from `1fc01f0f`.
+Both engines failed the 600 ms contract and failed delivery while the list was
+held. Restoring the experiment byte-for-byte passed both engines. The
+[probe summary](../../verification/desktop/evidence/message-sync/browser-probe-summary.json)
+records source hashes and exit codes; [original samples](../../verification/desktop/evidence/message-sync/browser-revert.json)
+and [restored samples](../../verification/desktop/evidence/message-sync/browser-restored.json)
+preserve the result.
+
+One pre-main calibrated attempt had one two-second timeout among 60 Chromium
+active samples. It is preserved in [initial-calibrated-run.json](../../verification/desktop/evidence/message-sync/initial-calibrated-run.json).
+Five direct-reader diagnostic runs (50 active plus 25 held samples) did not
+reproduce it; neither did the final synchronized-main run. The cause of that
+initial timeout is not established, and passing finite repeats is not a global
+visibility guarantee. A separate chained-reader diagnostic is historical only:
+it introduced another promise step and is not equivalent evidence for the
+original reader timing.
+
+The broad sample-workspace frame sweep is a different workload and does not
+instantiate `gatewaySource`. Its streaming scenario passed both layouts, but
+split/drag/overview findings are tracked independently in [#588](https://github.com/nessalabs/nessa-agent/issues/588).
+Its failures are retained as [raw evidence](../../verification/desktop/evidence/message-sync/perf-budget.json),
+not described as a passing full frame-budget sweep. The dedicated production
+fixture above provides performance evidence for the behavior #532 changes.
+
+The signed-out scripted gateway suite passed all three checks in Chromium and
+WebKit on the synchronized tree; its [summary](../../verification/desktop/evidence/message-sync/scripted-gateway/pr-summary.md)
+and per-check JSON are committed beside the measurements. The full frontend
+gate passed 273 files / 3,676 tests. The CI package selection across storage,
+auth, server, protocol, client-core and SDK, including doctests, passed; the
+[recorded result list](../../verification/desktop/evidence/message-sync/rust-ci-selection.json)
+includes nested subprocess probes and is not summed as unique tests. The PR
+records the final functional sweep and CI at its pushed head. No live provider
+or native WKWebView test is substituted for those browser results.
 
 Review round 1 found the missing scheduling handoff after foreground state
 application (F10). It is fixed at `applyList`/`applyRead`, with both entry paths
@@ -352,14 +398,10 @@ through an internal callback, which restarts the same pacing deadline. There is 
 second read queue or new lifecycle flag. This separates reservation from execution
 without inferring either from a response. F12 enforces the ordering. A verification-only
 Vite configuration adds the production fixture through the shared preview owner.
-Round 3 reported no additional adapter correctness defects, but its performance
-finding remains open: the production timing harness needs CPU-throttled calibrated
-runs and computed max/median statistics before it can satisfy the performance gate.
-Its raw phase samples and two frame opportunities do not provide that evidence.
-The unconditional 250 ms documentation claim was narrowed above (minor finding).
-After three rounds the remaining issue is evidence ownership, not another adapter
-state: reuse the existing performance sampler/calibration owner for Chromium,
-record WebKit's separate unthrottled delivery checks honestly, then run the browser
-revert probe, screenshots and scripted gateway evidence in a capable environment.
-The draft pull request preserves this finding and the capability failures for handoff. Merge is blocked until required browser, scripted, CI and review
-evidence pass; user authorization to merge does not waive those gates.
+Round 3 reported no additional adapter correctness defects. The remaining
+performance-evidence ownership finding is addressed by reusing `lib/perf.mjs`
+for calibration, throttling, statistics and frame attribution, and the current
+page-line owner for errors. Fresh local review found no findings in the sampler,
+fixture, timing eligibility, and shared-owner integration. Merge still requires
+the final relevant checks and CI on the pushed head; the broader sample-renderer
+findings retain their separate disposition in #588.

@@ -72,10 +72,7 @@
                 "text": "active-9"
               }
             },
-            "rendered": [
-              "Synchronize this message",
-              "active-9"
-            ],
+            "rendered": ["Synchronize this message", "active-9"],
             "elapsedMs": 2000.7000000029802
           },
           {
@@ -110,10 +107,7 @@
                 "text": "active-9"
               }
             },
-            "rendered": [
-              "Synchronize this message",
-              "active-9"
-            ],
+            "rendered": ["Synchronize this message", "active-9"],
             "elapsedMs": 2000.6999999955297
           },
           {
@@ -148,10 +142,7 @@
                 "text": "active-9"
               }
             },
-            "rendered": [
-              "Synchronize this message",
-              "active-9"
-            ],
+            "rendered": ["Synchronize this message", "active-9"],
             "elapsedMs": 2000.2999999970198
           },
           {
@@ -186,10 +177,7 @@
                 "text": "active-9"
               }
             },
-            "rendered": [
-              "Synchronize this message",
-              "active-9"
-            ],
+            "rendered": ["Synchronize this message", "active-9"],
             "elapsedMs": 2000.5
           },
           {
@@ -224,24 +212,14 @@
                 "text": "active-9"
               }
             },
-            "rendered": [
-              "Synchronize this message",
-              "active-9"
-            ],
+            "rendered": ["Synchronize this message", "active-9"],
             "elapsedMs": 2000.8000000044703
           }
         ],
         "activeMs": [
-          759.5999999940395,
-          921.2999999970198,
-          853.3999999985099,
-          776.2000000029802,
-          956.5,
-          884.3999999985099,
-          824.8999999985099,
-          988.6000000014901,
-          915.3999999985099,
-          842.2000000029802
+          759.5999999940395, 921.2999999970198, 853.3999999985099, 776.2000000029802,
+          956.5, 884.3999999985099, 824.8999999985099, 988.6000000014901,
+          915.3999999985099, 842.2000000029802
         ],
         "activeSummary": {
           "samples": 10,
@@ -268,13 +246,7 @@
           "slow": [],
           "noLoaf": false
         },
-        "heldMs": [
-          null,
-          null,
-          null,
-          null,
-          null
-        ],
+        "heldMs": [null, null, null, null, null],
         "before": {
           "lists": 2,
           "reads": 4,
@@ -392,10 +364,7 @@
                 "text": "active-9"
               }
             },
-            "rendered": [
-              "Synchronize this message",
-              "active-9"
-            ],
+            "rendered": ["Synchronize this message", "active-9"],
             "elapsedMs": 2001
           },
           {
@@ -430,10 +399,7 @@
                 "text": "active-9"
               }
             },
-            "rendered": [
-              "Synchronize this message",
-              "active-9"
-            ],
+            "rendered": ["Synchronize this message", "active-9"],
             "elapsedMs": 2000
           },
           {
@@ -468,10 +434,7 @@
                 "text": "active-9"
               }
             },
-            "rendered": [
-              "Synchronize this message",
-              "active-9"
-            ],
+            "rendered": ["Synchronize this message", "active-9"],
             "elapsedMs": 2001
           },
           {
@@ -506,10 +469,7 @@
                 "text": "active-9"
               }
             },
-            "rendered": [
-              "Synchronize this message",
-              "active-9"
-            ],
+            "rendered": ["Synchronize this message", "active-9"],
             "elapsedMs": 2001
           },
           {
@@ -544,25 +504,11 @@
                 "text": "active-9"
               }
             },
-            "rendered": [
-              "Synchronize this message",
-              "active-9"
-            ],
+            "rendered": ["Synchronize this message", "active-9"],
             "elapsedMs": 2001
           }
         ],
-        "activeMs": [
-          736,
-          941,
-          850,
-          778,
-          955,
-          883,
-          810,
-          986,
-          932,
-          842
-        ],
+        "activeMs": [736, 941, 850, 778, 955, 883, 810, 986, 932, 842],
         "activeSummary": {
           "samples": 10,
           "medianMs": 883,
@@ -588,13 +534,7 @@
           "slow": [],
           "noLoaf": false
         },
-        "heldMs": [
-          null,
-          null,
-          null,
-          null,
-          null
-        ],
+        "heldMs": [null, null, null, null, null],
         "before": {
           "lists": 2,
           "reads": 4,
@@ -689,24 +629,11 @@
           },
           "frameMaxMs": 17.700000000000728,
           "activeMs": [
-            759.5999999940395,
-            921.2999999970198,
-            853.3999999985099,
-            776.2000000029802,
-            956.5,
-            884.3999999985099,
-            824.8999999985099,
-            988.6000000014901,
-            915.3999999985099,
-            842.2000000029802
+            759.5999999940395, 921.2999999970198, 853.3999999985099, 776.2000000029802,
+            956.5, 884.3999999985099, 824.8999999985099, 988.6000000014901,
+            915.3999999985099, 842.2000000029802
           ],
-          "heldMs": [
-            null,
-            null,
-            null,
-            null,
-            null
-          ],
+          "heldMs": [null, null, null, null, null],
           "over50": 0
         },
         {
@@ -725,25 +652,8 @@
             "maxMs": null
           },
           "frameMaxMs": 46,
-          "activeMs": [
-            736,
-            941,
-            850,
-            778,
-            955,
-            883,
-            810,
-            986,
-            932,
-            842
-          ],
-          "heldMs": [
-            null,
-            null,
-            null,
-            null,
-            null
-          ],
+          "activeMs": [736, 941, 850, 778, 955, 883, 810, 986, 932, 842],
+          "heldMs": [null, null, null, null, null],
           "over50": 0
         }
       ],
