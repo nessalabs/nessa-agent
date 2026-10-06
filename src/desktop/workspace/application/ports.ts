@@ -129,14 +129,23 @@ export interface WorkspaceSource {
    * say it by then (the in-memory source always can), after it otherwise.
    * The window holds the answer as given until that conversation arrives
    * (`withTranscript` in `workspace-state.ts`).
+   * `optionId` is the option the person chose. Two options may decide the
+   * same way; the source submits this one, and refuses one the review does
+   * not offer.
    */
   approve(
     sessionId: string,
     approvalId: string,
     scope: ApprovalScope,
     initiator: Initiator,
+    optionId: string,
   ): Promise<void>
-  deny(sessionId: string, approvalId: string, initiator: Initiator): Promise<void>
+  deny(
+    sessionId: string,
+    approvalId: string,
+    initiator: Initiator,
+    optionId: string,
+  ): Promise<void>
   /**
    * Pins or unpins a session. Resolves once the session's changed summary has
    * reached subscribers: the window shows the pin from that update alone.

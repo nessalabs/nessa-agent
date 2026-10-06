@@ -5,6 +5,7 @@ import {
   models,
   ran,
   read,
+  sampleApprovalOptions,
   searched,
   text,
   type SampleSession,
@@ -86,6 +87,7 @@ export const starredSamples: readonly SampleSession[] = [
       command: "security import build/nessa-dev.p12 -k release.keychain",
       reason: "Imports a signing certificate into the release keychain.",
       origin: { kind: "agent" },
+      options: sampleApprovalOptions,
     },
     messages: exchange(
       "The macOS job fails at codesign since yesterday. Find out why.",
@@ -202,6 +204,7 @@ export const starredSamples: readonly SampleSession[] = [
       reason:
         "Uploads the signed build to Apple for notarization. This uses the release keychain profile.",
       origin: { kind: "agent" },
+      options: sampleApprovalOptions,
     },
     messages: [["user", 14, [text("Notarize the 0.9.0 build once it is signed.")]]],
   },

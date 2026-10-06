@@ -88,7 +88,6 @@ import { isSignedOut } from "../../../../session"
 import { agentForProvider } from "../../../model/composer-options"
 import {
   WorkspaceSourceError,
-  type ApprovalScope,
   type WorkspaceSource,
   type WorkspaceUpdate,
 } from "../../application/ports"
@@ -755,12 +754,22 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     return permission
   }
 
-  /** Answers a review with the option of `effect` it offers; none offered is not supported. */
-  const answer = (sessionId: string, approvalId: string, effect: "allow" | "deny") =>
+  /**
+   * Answers a review with `optionId` when that option decides `effect`.
+   * Another option of the same effect is a different answer. One the review
+   * does not offer, or that decides the other way, is not supported.
+   */
+  const answer = (
+    sessionId: string,
+    approvalId: string,
+    optionId: string,
+    effect: "allow" | "deny",
+  ) =>
     within(async (live) => {
       const permission = await waitingReview(sessionId, approvalId, live)
-      const option = permission.options.find((offered) => offered.effect === effect)
-      if (!option) throw new WorkspaceSourceError("not-supported")
+      const option = permission.options.find((offered) => offered.id === optionId)
+      if (!option || option.effect !== effect)
+        throw new WorkspaceSourceError("not-supported")
       await dispatch(live, (connected) =>
         connected.conversation.answer(
           sessionId,
@@ -864,14 +873,15 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         if (!takenOut(message.sessionId)) watched.add(message.sessionId)
         publish(message.sessionId)
       }),
-    approve: (sessionId: string, approvalId: string, scope: ApprovalScope) =>
+    approve: (sessionId, approvalId, scope, _initiator, optionId) =>
       scope === "always"
         ? // No option the gateway shows reaches past its request: the projection
           // offers no review with one (nessa-server's projection test
           // `a_review_reaching_beyond_its_request_is_not_offered`).
           Promise.reject(new WorkspaceSourceError("not-supported"))
-        : answer(sessionId, approvalId, "allow"),
-    deny: (sessionId, approvalId) => answer(sessionId, approvalId, "deny"),
+        : answer(sessionId, approvalId, optionId, "allow"),
+    deny: (sessionId, approvalId, _initiator, optionId) =>
+      answer(sessionId, approvalId, optionId, "deny"),
     // The gateway keeps no pin.
     setPinned: () => Promise.reject(new WorkspaceSourceError("not-supported")),
     archive: (sessionId) =>

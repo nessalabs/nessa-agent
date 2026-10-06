@@ -11,7 +11,14 @@ import { resolve } from "node:path"
 import { act } from "react"
 import { createRoot } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
-import { ApprovalActions, ApprovalCommand, type ApprovalChoice } from "./approval-request"
+import type { ApprovalChoice, ApprovalOption } from "../../model/transcript"
+import { ApprovalActions, ApprovalCommand } from "./approval-request"
+
+const offered: readonly ApprovalOption[] = [
+  { id: "deny", label: "Deny", choice: "deny" },
+  { id: "always", label: "Always Allow", choice: "always" },
+  { id: "once", label: "Allow Once", choice: "once" },
+]
 
 let host: HTMLDivElement
 
@@ -53,25 +60,76 @@ it("keeps each word of the command whole, breaking only at its spaces", async ()
   await act(async () => root.unmount())
 })
 
-it("offers every answer, each giving its own", async () => {
+const byName = (name: string) =>
+  [...host.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => (button.getAttribute("aria-label") ?? button.textContent) === name,
+  )
+
+it("offers every answer the review carries, each giving its own", async () => {
   const given: ApprovalChoice[] = []
   const root = createRoot(host)
   await act(async () =>
     root.render(
-      <ApprovalActions disabled={false} onAnswer={(choice) => given.push(choice)} />,
+      <ApprovalActions
+        options={offered}
+        disabled={false}
+        onAnswer={(option) => given.push(option.choice)}
+      />,
     ),
   )
-  const byName = (name: string) =>
-    [...host.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => (button.getAttribute("aria-label") ?? button.textContent) === name,
-    )
   for (const name of ["Deny", "Always Allow", "Allow Once"]) byName(name)?.click()
   expect(given).toEqual(["deny", "always", "once"])
   expect(byName("More Ways to Allow")).toBeDefined()
   await act(async () => root.unmount())
 })
 
-it("arranges the answers by the card's width, with no rule that leaves one alone on a row", () => {
+it("offers only the answers the review carries, in the review's words (#444)", async () => {
+  const given: ApprovalChoice[] = []
+  const root = createRoot(host)
+  const review: readonly ApprovalOption[] = [
+    { id: "opt-b", label: "Nope", choice: "deny" },
+    { id: "opt-a", label: "Sure", choice: "once" },
+  ]
+  await act(async () =>
+    root.render(
+      <ApprovalActions
+        options={review}
+        disabled={false}
+        onAnswer={(option) => given.push(option.choice)}
+      />,
+    ),
+  )
+  expect(byName("Always Allow")).toBeUndefined()
+  expect(byName("Allow Once")).toBeUndefined()
+  expect(byName("More Ways to Allow")).toBeUndefined()
+  expect(byName("Deny")).toBeUndefined()
+  for (const name of ["Nope", "Sure"]) byName(name)?.click()
+  expect(given).toEqual(["deny", "once"])
+  await act(async () => root.unmount())
+})
+
+it("gives the clicked option when two answers allow the same way", async () => {
+  const given: string[] = []
+  const root = createRoot(host)
+  const review: readonly ApprovalOption[] = [
+    { id: "ship", label: "Ship it", choice: "once" },
+    { id: "run", label: "Run it", choice: "once" },
+  ]
+  await act(async () =>
+    root.render(
+      <ApprovalActions
+        options={review}
+        disabled={false}
+        onAnswer={(option) => given.push(option.id)}
+      />,
+    ),
+  )
+  byName("Run it")?.click()
+  expect(given).toEqual(["run"])
+  await act(async () => root.unmount())
+})
+
+it("arranges the answers by the card's width, and wraps a long label inside its button", () => {
   // Read from the repository root: under jsdom, this module's URL is not a file's.
   const sheet = readFileSync(
     resolve("src/desktop/workspace/ui/transcript/approval-card.css"),
@@ -84,14 +142,21 @@ it("arranges the answers by the card's width, with no rule that leaves one alone
   const narrow = sheet.slice(sheet.indexOf("@container approval-answers (width < 280px)"))
   expect(narrow).toMatch(/flex-direction:\s*column/)
   expect(narrow).toMatch(/\.workspace-approval-always\s*\{\s*display:\s*none/)
-  // Nothing wraps: a wrapped row is where a button was left alone.
-  expect(sheet).not.toMatch(
-    /\.workspace-approval-(?:actions|allow)\s*\{[^}]*flex-wrap:\s*wrap/,
-  )
-  // Words are never broken; lines after the first hang clear of the `$`.
-  expect(sheet).toMatch(/\.workspace-approval-word\s*\{\s*white-space:\s*pre/)
+  // Extra options continue on the next line; a long label wraps inside its button.
+  expect(sheet).toMatch(/\.workspace-approval-actions\s*\{[^}]*flex-wrap:\s*wrap/)
+  expect(sheet).toMatch(/\.workspace-approval-allow\s*\{[^}]*flex-wrap:\s*wrap/)
+  const answers = sheet.match(
+    /\.workspace-approval-actions \.workspace-button\s*\{[^}]*\}/,
+  )?.[0]
+  expect(answers).toMatch(/max-width:\s*100%/)
+  expect(answers).toMatch(/min-width:\s*0/)
+  expect(answers).toMatch(/white-space:\s*normal/)
+  expect(answers).toMatch(/overflow-wrap:\s*anywhere/)
+  // The command's words stay whole; only an answer label may break anywhere.
+  const word = sheet.match(/\.workspace-approval-word\s*\{[^}]*\}/)?.[0]
+  expect(word).toMatch(/white-space:\s*pre/)
+  expect(word).not.toMatch(/overflow-wrap/)
   expect(sheet).toMatch(/text-indent:\s*-2ch/)
-  expect(sheet).not.toMatch(/overflow-wrap:\s*anywhere/)
 })
 
 it("takes the keyboard where a word is wider than the card, so the arrows scroll it", async () => {
@@ -138,7 +203,9 @@ it("takes the keyboard where a word is wider than the card, so the arrows scroll
 it("presses an answer once for a held key: its repeats press nothing", async () => {
   const root = createRoot(host)
   await act(async () =>
-    root.render(<ApprovalActions disabled={false} onAnswer={() => {}} />),
+    root.render(
+      <ApprovalActions options={offered} disabled={false} onAnswer={() => {}} />,
+    ),
   )
   const allow = host.querySelector<HTMLButtonElement>(".workspace-approval-once")
   if (!allow) throw new Error("no Allow Once")

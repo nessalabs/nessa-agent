@@ -425,7 +425,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   the sandbox; its calls to tools hidden from apps are refused, and it shows
   so; its destructive call waits on a review in the conversation's
   permissions, its origin the app, shown in the window, and the app shows
-  the answer to Allow Once and to Deny; closing the pane of a mount with a
+  the answer to the review's Allow and to its Deny (the card does not offer
+  Always Allow); closing the pane of a mount with a
   call waiting withdraws the review, the window's card for it goes once it is
   withdrawn, and the inline mount stays. _#349
   design, L14 and L24._ _Check:_ `mcp-apps-gateway.mjs` (needs the gateway
@@ -452,7 +453,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   calls a destructive tool, the fake opens the review only once the
   conversation has been read twice since the call (nothing in the list row
   moves), and the card is drawn within 8 s, its head "The <server> app wants
-  to run <tool>" (`data-origin="app"`); Allow Once sends one answer, Allow for
+  to run <tool>" (`data-origin="app"`); the card offers only the review's
+  Allow and Deny (no Always Allow); Allow sends one answer, Allow for
   that review, the card goes, the app's call comes back ok, and the reads
   stop. At the same widths as the card above, with the tool's name short and
   as one word as long as the gateway allows (`maxMcpNameBytes`), the head
@@ -833,9 +835,10 @@ says why where the conversations would be.
   window shows it.** _Check:_ `scripted-scenarios.mjs` (and
   `pnpm test:e2e:scripted`, which also runs `mcp-apps-gateway --scripted` and
   `gateway-window --scripted` in Chromium and WebKit). The agent runs
-  `scenarios/window.json`: streamed text, an agent approval answered Allow
-  Once, a tool step, a turn that fails after speaking, and a turn that stays
-  cancelled after the conversation is closed. The strings come from that file.
+  `scenarios/window.json`: streamed text, an agent approval answered with the
+  review's own allow option (Always Allow is not offered), a tool step, a turn
+  that fails after speaking, and a turn that stays cancelled after the
+  conversation is closed. The strings come from that file.
   `--mode prod` runs this check and `gateway-window --scripted` against a
   production preview; MCP Apps stay on the dev server. One evidence directory
   per run, and one verdict line.

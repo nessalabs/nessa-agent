@@ -36,7 +36,8 @@ import {
 } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
-import { css, names } from "./lib/selectors.mjs"
+import { css, offeredLabel } from "./lib/selectors.mjs"
+import { unofferedAnswers } from "./lib/workspace.mjs"
 
 const steps = ["permission", "allow", "fail", "cancel"]
 
@@ -67,7 +68,7 @@ Steps, per engine and layout, in order on one page (--only <names> to pick):
   permission  the turn has asked, and the open conversation shows an agent
           approval card whose reason is the scenario's title, and the text
           the scenario streamed before it asked
-  allow   Allow Once runs the scenario's tool and the rest of that branch:
+  allow   the review's allow option runs the scenario's tool and the rest of that branch:
           the window shows the scenario's "allowed" text and a step titled
           as the review was, and the gateway's turn is completed
   fail    the next turn fails after speaking: the window keeps that text,
@@ -186,6 +187,14 @@ const checks = {
     const failures = []
     if (!visible) failures.push("no agent approval card within 30 s")
     else {
+      const permission = run.view.permissions.find(
+        (each) => each.origin?.kind === "harness",
+      )
+      failures.push(
+        ...(await unofferedAnswers(card, permission?.options)).map(
+          (line) => `the approval card ${line}`,
+        ),
+      )
       const reason = fold(
         await card
           .locator(css.approvalReason)
@@ -206,13 +215,24 @@ const checks = {
   allow: async (page, stack, run) => {
     const card = page.locator(css.agentApproval)
     const failures = []
-    const button = card.getByRole("button", { name: names.allowOnce })
-    const clickable = await button
-      .waitFor({ timeout: 5_000 })
-      .then(() => true)
-      .catch(() => false)
-    if (!clickable)
-      failures.push(`no ${names.allowOnce} button on the agent approval card`)
+    const permission = run.view.permissions.find(
+      (each) => each.origin?.kind === "harness",
+    )
+    const label = offeredLabel(permission?.options, "allow")
+    failures.push(
+      ...(await unofferedAnswers(card, permission?.options)).map(
+        (line) => `the approval card ${line}`,
+      ),
+    )
+    const button = label ? card.getByRole("button", { name: label, exact: true }) : null
+    const clickable = button
+      ? await button
+          .waitFor({ timeout: 5_000 })
+          .then(() => true)
+          .catch(() => false)
+      : false
+    if (!label) failures.push("the review offers no allow")
+    else if (!clickable) failures.push(`no "${label}" button on the agent approval card`)
     else await button.click()
     if (failures.length > 0) return { failures }
     const { view, turn } = await untilTurn(

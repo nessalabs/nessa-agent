@@ -513,7 +513,7 @@ describe("a connection that could not be made says why (#419)", () => {
       error: new NessaConnectionClosedError(4001, ""),
     })
     await expect(
-      source.approve("a", approvalId(permission()), "once", "person"),
+      source.approve("a", approvalId(permission()), "once", "person", "opt-a"),
     ).rejects.toMatchObject({ reason: "signed-out" })
     expect(gateway.count("answer")).toBe(0)
     warn.mockRestore()
@@ -734,7 +734,7 @@ describe("a connection that could not be made says why (#419)", () => {
     [
       "an answer",
       (source: ReturnType<typeof started>["source"]) =>
-        source.approve("a", approvalId(permission()), "once", "person"),
+        source.approve("a", approvalId(permission()), "once", "person", "opt-a"),
     ],
     [
       "an archive",
@@ -775,7 +775,7 @@ describe("a connection that could not be made says why (#419)", () => {
       })
       return answered
     })
-    await source.approve("a", approvalId(permission()), "once", "person")
+    await source.approve("a", approvalId(permission()), "once", "person", "opt-a")
     await flush()
     expect(state.attempts).toBe(1)
     warn.mockRestore()
@@ -1120,7 +1120,7 @@ describe("writes", () => {
       gateway.views.set("a", view("a", { revision: "2", messages: [running()] }))
       return normal()
     })
-    await source.approve("a", approvalId(asked), "once", "person")
+    await source.approve("a", approvalId(asked), "once", "person", "opt-a")
     // Resolved once taken; the conversation after it follows as an update (W3c).
     await flush()
     expect(gateway.calls.find((call) => call.method === "answer")?.args).toEqual([
@@ -1135,10 +1135,27 @@ describe("writes", () => {
     })
   })
 
+  it("W3: approving one of two allow options answers that option", async () => {
+    const { gateway, source } = started()
+    const asked = permission({
+      options: [
+        { id: "first", label: "Ship", effect: "allow" },
+        { id: "second", label: "Run", effect: "allow" },
+      ],
+    })
+    gateway.views.set(
+      "a",
+      view("a", { revision: "1", messages: [running()], permissions: [asked] }),
+    )
+    await source.transcript("a")
+    await source.approve("a", approvalId(asked), "once", "person", "second")
+    expect(gateway.calls.find((call) => call.method === "answer")?.args[3]).toBe("second")
+  })
+
   it("W3: approving always is not supported, and nothing is answered", async () => {
     const { gateway, source } = started()
     await expect(
-      source.approve("a", approvalId(permission()), "always", "person"),
+      source.approve("a", approvalId(permission()), "always", "person", "opt-a"),
     ).rejects.toMatchObject({ reason: "not-supported" })
     expect(gateway.calls).toEqual([])
   })
@@ -1150,7 +1167,7 @@ describe("writes", () => {
       "a",
       view("a", { revision: "1", messages: [running()], permissions: [asked] }),
     )
-    await source.deny("a", approvalId(asked), "person")
+    await source.deny("a", approvalId(asked), "person", "opt-b")
     expect(gateway.calls.find((call) => call.method === "answer")?.args[3]).toBe("opt-b")
     const allowOnly = permission({
       permissionId: "p2",
@@ -1160,11 +1177,11 @@ describe("writes", () => {
       "a",
       view("a", { revision: "2", messages: [running()], permissions: [allowOnly] }),
     )
-    await expect(source.deny("a", approvalId(allowOnly), "person")).rejects.toMatchObject(
-      {
-        reason: "not-supported",
-      },
-    )
+    await expect(
+      source.deny("a", approvalId(allowOnly), "person", "only"),
+    ).rejects.toMatchObject({
+      reason: "not-supported",
+    })
     expect(gateway.count("answer")).toBe(1)
   })
 
@@ -1172,9 +1189,9 @@ describe("writes", () => {
     const { gateway, source } = started()
     gateway.views.set("a", view("a", { messages: [running()] }))
     await expect(
-      source.approve("a", approvalId(permission()), "once", "person"),
+      source.approve("a", approvalId(permission()), "once", "person", "opt-a"),
     ).rejects.toMatchObject({ reason: "not-waiting" })
-    await expect(source.deny("a", "not-an-id", "person")).rejects.toMatchObject({
+    await expect(source.deny("a", "not-an-id", "person", "opt-b")).rejects.toMatchObject({
       reason: "not-waiting",
     })
     expect(gateway.count("answer")).toBe(0)
@@ -1525,7 +1542,7 @@ describe("round 1's rows", () => {
     gateway.once("read", async (normal) => normal())
     gateway.once("read", () => Promise.reject(new NessaConnectionClosedError(1006, "")))
     await expect(
-      source.approve("a", approvalId(asked), "once", "person"),
+      source.approve("a", approvalId(asked), "once", "person", "opt-a"),
     ).resolves.toBeUndefined()
     expect(gateway.count("answer")).toBe(1)
     await advance(timing.pollMs)
@@ -1683,7 +1700,7 @@ describe("the structural change after round 3", () => {
     void source.transcript("a").catch(() => undefined)
     await advance(1_000)
     const approving = source
-      .approve("a", approvalId(asked), "once", "person")
+      .approve("a", approvalId(asked), "once", "person", "opt-a")
       .catch((error: unknown) => error)
     await advance(timing.callMs)
     expect(await approving).toMatchObject({ reason: "unavailable" })
@@ -1691,7 +1708,7 @@ describe("the structural change after round 3", () => {
     await flush()
     expect(gateway.count("answer")).toBe(0)
     // The person answers again, and that is the answer taken.
-    await source.deny("a", approvalId(asked), "person")
+    await source.deny("a", approvalId(asked), "person", "opt-b")
     expect(
       gateway.calls
         .filter((call) => call.method === "answer")
@@ -1785,7 +1802,7 @@ describe("the structural change after round 3", () => {
     await source.transcript("a")
     const held = deferred<unknown>()
     gateway.once("read", () => held.promise)
-    const approving = source.approve("a", approvalId(asked), "once", "person")
+    const approving = source.approve("a", approvalId(asked), "once", "person", "opt-a")
     await flush()
     gateway.rows.delete("a")
     await source.index()
@@ -1860,7 +1877,7 @@ describe("the structural change after round 3", () => {
     gateway.once("read", async (normal) => normal())
     gateway.once("read", () => new Promise(() => {}))
     await expect(
-      source.approve("a", approvalId(asked), "once", "person"),
+      source.approve("a", approvalId(asked), "once", "person", "opt-a"),
     ).resolves.toBeUndefined()
     expect(gateway.count("answer")).toBe(1)
   })
@@ -1969,7 +1986,7 @@ describe("round 5's rows", () => {
     gateway.once("read", async (normal) => normal())
     const after = deferred<unknown>()
     gateway.once("read", () => after.promise)
-    await source.approve("a", approvalId(asked), "once", "person")
+    await source.approve("a", approvalId(asked), "once", "person", "opt-a")
     await source.archive("a", "person")
     after.resolve(view("a", { revision: "2", messages: [running()] }))
     await flush()
@@ -2511,6 +2528,10 @@ describe("an app's review is read after its turn ended (#436)", () => {
           command: "app_delete_row {}",
           reason: "An app asks to run app_delete_row on mcptest",
           origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
+          options: [
+            { id: "allow", label: "Allow", choice: "once" },
+            { id: "deny", label: "Deny", choice: "deny" },
+          ],
         },
       }),
     })
@@ -2523,7 +2544,7 @@ describe("an app's review is read after its turn ended (#436)", () => {
     expect(await call).toBe("answered")
   })
 
-  it("P4: the person's answer to an app's review goes to the gateway by the option's effect, then the conversation is read", async () => {
+  it("P4: the person's answer to an app's review goes to the gateway by the option's id, then the conversation is read", async () => {
     const { gateway, source, updates, advance } = await idle()
     const answer = deferred<string>()
     void source.appCall("a", () => answer.promise)
@@ -2537,7 +2558,7 @@ describe("an app's review is read after its turn ended (#436)", () => {
       answer.resolve("allowed")
       return normal()
     })
-    await source.approve("a", approvalId(appReview), "once", "person")
+    await source.approve("a", approvalId(appReview), "once", "person", "allow")
     await flush()
     expect(gateway.calls.find((call) => call.method === "answer")?.args).toEqual([
       "a",

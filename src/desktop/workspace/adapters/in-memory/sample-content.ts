@@ -5,7 +5,17 @@
  * `sample-labs.ts`; `sample-workspace.ts` turns them into an index.
  */
 import type { ModelRef, SessionStatus } from "../../model/workspace-index"
-import type { Approval, Part } from "../../model/transcript"
+import type { Approval, ApprovalOption, Part } from "../../model/transcript"
+
+/**
+ * The answers a sample review offers. The in-memory source can honour each
+ * of them; a review that does not list one does not show it.
+ */
+export const sampleApprovalOptions: readonly ApprovalOption[] = [
+  { id: "deny", label: "Deny", choice: "deny" },
+  { id: "always", label: "Always Allow", choice: "always" },
+  { id: "once", label: "Allow Once", choice: "once" },
+]
 
 export const models = {
   opus: { provider: "anthropic", modelId: "claude-opus-5" },

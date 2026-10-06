@@ -37,9 +37,9 @@
 import { SERVER } from "./local-gateway.mjs"
 import { CLAUDE_CALL_ID } from "./scripted-frames.mjs"
 
-/** The option id the window's Allow Once selects. */
+/** The option id of this scenario's allow-once choice. The window selects it by effect. */
 export const ALLOW_ONCE = "allow-once"
-/** The option id the window's Deny selects. */
+/** The option id of this scenario's deny-once choice. The window selects it by effect. */
 export const DENY_ONCE = "deny-once"
 
 const ANSWERS = [ALLOW_ONCE, DENY_ONCE, "cancelled"]

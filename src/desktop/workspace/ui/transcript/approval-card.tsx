@@ -50,16 +50,23 @@ export const ApprovalCard = memo(function ApprovalCard({
         </p>
       ) : null}
       <ApprovalActions
+        options={approval.options}
         disabled={waiting}
-        onAnswer={(choice) =>
+        onAnswer={(option) =>
           void dispatch(
-            choice === "deny"
-              ? deny({ sessionId, approvalId: approval.id, initiator: "person" })
+            option.choice === "deny"
+              ? deny({
+                  sessionId,
+                  approvalId: approval.id,
+                  initiator: "person",
+                  optionId: option.id,
+                })
               : approve({
                   sessionId,
                   approvalId: approval.id,
-                  scope: choice,
+                  scope: option.choice,
                   initiator: "person",
+                  optionId: option.id,
                 }),
           )
         }

@@ -407,3 +407,37 @@ export const modelRule = (page, module, name, ...args) =>
 
 /** Reads a model value in the page (`fromModel`), such as a table of numbers. */
 export const modelValue = (page, module, name) => fromModel(page, module, name, null)
+
+/**
+ * Failures when `root` draws an answer `options` does not offer (#444).
+ * `options` are the review's own (`{ label }`). Each `button[data-answer]`
+ * is named by its `aria-label`, or by its text when it has none. "More Ways
+ * to Allow" is drawn only for an always answer, which a gateway review does
+ * not offer, so it is a failure here too.
+ */
+export async function unofferedAnswers(root, options) {
+  const labels = await root.locator("button[data-answer]").evaluateAll((elements) =>
+    elements.map((element) => {
+      const labelled = element.getAttribute("aria-label")
+      if (labelled) return labelled
+      return (element.textContent || "").replace(/\s+/g, " ").trim()
+    }),
+  )
+  const offered = (options ?? []).map((option) => option.label)
+  const failures = []
+  for (const label of labels) {
+    if (!offered.includes(label))
+      failures.push(`offers "${label}", which this review does not`)
+  }
+  for (const label of offered) {
+    if (!labels.includes(label))
+      failures.push(`omits "${label}", which this review offers`)
+  }
+  if (
+    (await root
+      .getByRole("button", { name: names.moreWaysToAllow, exact: true })
+      .count()) > 0
+  )
+    failures.push(`offers ${names.moreWaysToAllow}, which this review does not`)
+  return failures
+}

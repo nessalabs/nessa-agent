@@ -221,7 +221,8 @@ export function AgentsOverview({
   )
 
   const answer = useCallback<OnAnswer>(
-    (summary, approval, choice, at) => {
+    (summary, approval, option, at) => {
+      const choice = option.choice
       const { glance, settling } = latest.current
       if (settling.some((entry) => entry.sessionId === summary.id)) return
       const next = afterAnswer(
@@ -256,12 +257,18 @@ export function AgentsOverview({
       }
       const asked =
         choice === "deny"
-          ? deny({ sessionId: summary.id, approvalId: approval.id, initiator: "person" })
+          ? deny({
+              sessionId: summary.id,
+              approvalId: approval.id,
+              initiator: "person",
+              optionId: option.id,
+            })
           : approve({
               sessionId: summary.id,
               approvalId: approval.id,
               scope: choice,
               initiator: "person",
+              optionId: option.id,
             })
       void dispatch(asked).then((outcome: AnswerOutcome) => {
         // Refused, not confirmed, already on its way from a pane, or no longer
@@ -315,7 +322,7 @@ export function AgentsOverview({
     if (to !== null) focusItem(to)
   }
 
-  // ⌥ held turns every Allow into Always Allow, as it shows the other choice in a Mac menu.
+  // ⌥ held turns Allow into Always Allow where the review offers it, as ⌥ shows the other choice in a Mac menu.
   const [alt, setAlt] = useState(false)
   useEffect(() => {
     const follow = (event: KeyboardEvent) => setAlt(event.altKey)

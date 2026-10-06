@@ -571,14 +571,17 @@ export function approve({
   approvalId,
   scope = "once",
   initiator,
+  optionId,
 }: {
   sessionId: string
   approvalId: string
   scope?: ApprovalScope
   initiator: Initiator
+  /** The option the person chose. Two of one choice stay distinct by this. */
+  optionId: string
 }): WorkspaceCommand<Promise<AnswerOutcome>> {
   return answer(sessionId, approvalId, ({ workspace }) =>
-    workspace.approve(sessionId, approvalId, scope, initiator),
+    workspace.approve(sessionId, approvalId, scope, initiator, optionId),
   )
 }
 
@@ -587,13 +590,16 @@ export function deny({
   sessionId,
   approvalId,
   initiator,
+  optionId,
 }: {
   sessionId: string
   approvalId: string
   initiator: Initiator
+  /** The option the person chose. */
+  optionId: string
 }): WorkspaceCommand<Promise<AnswerOutcome>> {
   return answer(sessionId, approvalId, ({ workspace }) =>
-    workspace.deny(sessionId, approvalId, initiator),
+    workspace.deny(sessionId, approvalId, initiator, optionId),
   )
 }
 

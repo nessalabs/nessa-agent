@@ -16,8 +16,8 @@
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { appReview, css, keys, names } from "./lib/selectors.mjs"
-import { frames, settled, until } from "./lib/workspace.mjs"
+import { appReview, css, keys, offeredLabel } from "./lib/selectors.mjs"
+import { frames, settled, unofferedAnswers, until } from "./lib/workspace.mjs"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 
@@ -34,9 +34,10 @@ Checks, per engine and layout (--only <names> to pick):
              call it is read each round — the fake opens the review only once
              it has been read twice since the call — and the review is drawn
              within 8 s, its head "The mcptest app wants to run <tool>" and
-             data-origin app; Allow Once sends one answer, Allow for that
-             review, the card goes, the app's call is answered ok, and the
-             reads stop
+             data-origin app; the review's Allow sends one answer, Allow
+             for that review, the card offers only the review's options
+             (no Always Allow), the card goes, the app's call is answered
+             ok, and the reads stop
   card       at 280/340/420/600/900 px, with the tool's name short and as one
              word as long as the gateway allows, the head stays inside the
              card and the card does not overflow
@@ -127,20 +128,29 @@ const checks = {
         failures.push(
           `the head says "${said.head}", not "${appReview.head(appReview.tool)}"`,
         )
-      // P4: Allow Once answers that review with Allow; the card goes, the call is answered.
+      // P4: the review's own Allow answers that review; the card goes, the call is answered.
       let answered = waiting
       if (drawn) {
-        await page
-          .getByRole("button", { name: names.allowOnce, exact: true })
-          .first()
-          .click()
+        const card = page.locator(css.approvalCard).first()
+        const allow = offeredLabel(waiting.openOptions, "allow")
+        failures.push(
+          ...(await unofferedAnswers(card, waiting.openOptions)).map(
+            (line) => `the card ${line}`,
+          ),
+        )
+        if (!allow) failures.push("the review offers no allow")
+        else if (
+          (await card.getByRole("button", { name: allow, exact: true }).count()) === 0
+        )
+          failures.push(`no "${allow}" button on the card`)
+        else await card.getByRole("button", { name: allow, exact: true }).click()
         const gone = await until(
           page,
           (sel) => document.querySelector(sel) === null,
           css.approvalCard,
           5_000,
         )
-        if (!gone) failures.push("the card is still drawn 5 s after Allow Once")
+        if (!gone) failures.push(`the card is still drawn 5 s after ${allow ?? "allow"}`)
         answered = await snapshot(page)
         const expected = [[appReview.sessionId, "run", waiting.openReview, "allow"]]
         if (JSON.stringify(answered.answers) !== JSON.stringify(expected))
@@ -249,6 +259,44 @@ const checks = {
               })
           }
         }
+        // A provider label may be 2,048 characters. It wraps inside the button
+        // and stays inside the card; a 64-option harness is more than this check.
+        if (!long) {
+          const bounded = await page.evaluate((sel) => {
+            const element = document.querySelector(sel.card)
+            const button = element?.querySelector("button[data-answer]")
+            if (!element || !button) return null
+            button.textContent = "x".repeat(2048)
+            const style = getComputedStyle(button)
+            const buttonBox = button.getBoundingClientRect()
+            const cardBox = element.getBoundingClientRect()
+            return {
+              wraps: style.whiteSpace !== "nowrap",
+              inside:
+                buttonBox.right <= cardBox.right + 1 &&
+                element.scrollWidth <= element.clientWidth + 1,
+            }
+          }, card)
+          if (!bounded) failures.push("the card has no answer button to bound")
+          else {
+            if (!bounded.wraps)
+              failures.push("an answer button does not wrap a long label")
+            if (!bounded.inside)
+              failures.push("a 2048-character label overflows the card")
+          }
+          if (options.shots) {
+            mkdirSync(options.shots, { recursive: true })
+            await page
+              .locator(css.approvalCard)
+              .first()
+              .screenshot({
+                path: join(
+                  options.shots,
+                  `app-review-${engine}-${layout}-long-label.png`,
+                ),
+              })
+          }
+        }
       } finally {
         failures.push(...opened.errors)
         await opened.close()
@@ -264,7 +312,10 @@ const checks = {
       if (!(await asked(page, appReview.tool)))
         return { failures: [notDrawn, ...opened.errors] }
       const failures = []
-      await page.keyboard.press(keys.overview)
+      const waiting = await snapshot(page)
+      // Command is Meta on a Mac and Control elsewhere (`commandKey`).
+      const mac = await page.evaluate(() => /Mac/.test(navigator.userAgent))
+      await page.keyboard.press(mac ? keys.overview : "Control+Digit0")
       await need(page, css.overview, "the Agents overview")
       const name = await page
         .locator(`${css.overviewItem}[data-overview-item="${appReview.sessionId}"]`)
@@ -275,6 +326,18 @@ const checks = {
         failures.push(
           `the overview row is named "${name}", not "${appReview.row(appReview.tool)}"`,
         )
+      const row = page
+        .locator(`${css.overviewItem}[data-overview-item="${appReview.sessionId}"]`)
+        .first()
+      if ((await row.count()) > 0) {
+        if ((await row.getAttribute("data-offers-always")) !== null)
+          failures.push("the overview row offers always, which this review does not")
+        failures.push(
+          ...(await unofferedAnswers(row, waiting.openOptions)).map(
+            (line) => `the overview row ${line}`,
+          ),
+        )
+      }
       return { measured: { rowName: name }, failures: [...failures, ...opened.errors] }
     } finally {
       await opened.close()

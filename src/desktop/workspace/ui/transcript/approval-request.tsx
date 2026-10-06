@@ -1,15 +1,22 @@
 /**
  * An approval's command and its answers, drawn once for every card that asks
  * — the pane's (`approval-card.tsx`) and the Agents overview's peek — and
- * fitted to the card's width by container queries (`approval-card.css`), so
- * no button is ever left alone on a row:
+ * fitted to the card's width by container queries (`approval-card.css`).
+ * A label wraps inside its button, and options that do not fit the row
+ * continue on the next, so a long or numerous review stays inside the card.
+ *
+ * The buttons are the review's options (`Approval.options`), each in the
+ * review's own words. Deny stays at the left; what allows sits at the right.
+ * When the review also offers always, the width arranges those two:
  *
  * | the answers' width | arrangement                                              |
  * | ------------------ | -------------------------------------------------------- |
  * | 380px or more      | Deny at the left; Always Allow and Allow Once at the right |
- * | 280–380px          | one row at the right; "Always Allow" says "Always"        |
+ * | 280–380px          | one row at the right; "Always Allow" says its first word  |
  * | under 280px        | Allow Once across the width, Always Allow in its menu;    |
  * |                    | Deny, quiet, across the width beneath                     |
+ *
+ * A review that does not offer always has no such button and no menu.
  *
  * The command breaks only between its words — never inside one, so
  * `--simulate` stays whole — each line after the first hanging under the
@@ -26,7 +33,11 @@ import {
   MenuItem,
 } from "../../../ui/menu"
 import type { TooltipAttributes } from "../../../ui/tooltip"
-import type { ApprovalOrigin } from "../../model/transcript"
+import type {
+  ApprovalChoice,
+  ApprovalOption,
+  ApprovalOrigin,
+} from "../../model/transcript"
 import "./approval-card.css"
 
 /**
@@ -56,8 +67,11 @@ export function approvalHead(origin: ApprovalOrigin, agent: string): string {
   }
 }
 
-/** An answer to an approval, as its buttons give it. */
-export type ApprovalChoice = "deny" | "always" | "once"
+/** The first word of a label, shown when the card is too narrow for the whole. */
+function shortOf(label: string): string {
+  const space = label.indexOf(" ")
+  return space === -1 ? label : label.slice(0, space)
+}
 
 /** The command, broken only between its words. */
 export function ApprovalCommand({ command }: { command: string }) {
@@ -119,18 +133,26 @@ export function ApprovalCommand({ command }: { command: string }) {
   )
 }
 
-/** The answers, arranged for the width they have. */
+/** The answers the review offers, arranged for the width they have. */
 export function ApprovalActions({
+  options,
   disabled,
   onAnswer,
   tips = {},
 }: {
+  /** The review's answers. Each is a button; an answer it does not list is not drawn. */
+  options: readonly ApprovalOption[]
   disabled: boolean
   /** `at`: when the answer was made (the event's `timeStamp`, on `performance.now()`'s clock). */
-  onAnswer: (choice: ApprovalChoice, at: number) => void
+  onAnswer: (option: ApprovalOption, at: number) => void
   /** Each answer's tooltip, where the card offers one (its shortcut, say). */
   tips?: Partial<Record<ApprovalChoice, TooltipAttributes>>
 }) {
+  const denies = options.filter((option) => option.choice === "deny")
+  const always = options.filter((option) => option.choice === "always")
+  const once = options.filter((option) => option.choice === "once")
+  const answer = (option: ApprovalOption) => (event: { timeStamp: number }) =>
+    onAnswer(option, event.timeStamp)
   return (
     <div
       className="workspace-approval-answers"
@@ -142,60 +164,78 @@ export function ApprovalActions({
       }}
     >
       <div className="workspace-approval-actions">
-        <button
-          type="button"
-          className="workspace-button workspace-approval-deny"
-          disabled={disabled}
-          {...tips.deny}
-          onClick={(event) => onAnswer("deny", event.timeStamp)}
-        >
-          Deny
-        </button>
-        <div className="workspace-approval-allow">
+        {denies.map((option) => (
           <button
+            key={option.id}
             type="button"
-            className="workspace-button workspace-approval-always"
-            aria-label="Always Allow"
+            className="workspace-button workspace-approval-deny"
+            data-answer={option.choice}
             disabled={disabled}
-            {...tips.always}
-            onClick={(event) => onAnswer("always", event.timeStamp)}
+            {...tips.deny}
+            onClick={answer(option)}
           >
-            <span className="workspace-approval-long" aria-hidden="true">
-              Always Allow
-            </span>
-            <span className="workspace-approval-short" aria-hidden="true">
-              Always
-            </span>
+            {option.label}
           </button>
-          <button
-            type="button"
-            className="workspace-button workspace-approval-once"
-            data-primary
-            disabled={disabled}
-            {...tips.once}
-            onClick={(event) => onAnswer("once", event.timeStamp)}
-          >
-            Allow Once
-          </button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
+        ))}
+        {always.length > 0 || once.length > 0 ? (
+          <div className="workspace-approval-allow">
+            {always.map((option) => (
               <button
+                key={option.id}
                 type="button"
-                className="workspace-button workspace-approval-more"
-                data-primary
-                aria-label="More Ways to Allow"
+                className="workspace-button workspace-approval-always"
+                aria-label={option.label}
+                data-answer={option.choice}
                 disabled={disabled}
+                {...tips.always}
+                onClick={answer(option)}
               >
-                <DesktopIcon name="chevronDown" />
+                <span className="workspace-approval-long" aria-hidden="true">
+                  {option.label}
+                </span>
+                <span className="workspace-approval-short" aria-hidden="true">
+                  {shortOf(option.label)}
+                </span>
               </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <MenuItem onSelect={(event) => onAnswer("always", event.timeStamp)}>
-                Always Allow
-              </MenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+            ))}
+            {once.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                className="workspace-button workspace-approval-once"
+                data-answer={option.choice}
+                data-primary
+                disabled={disabled}
+                {...tips.once}
+                onClick={answer(option)}
+              >
+                {option.label}
+              </button>
+            ))}
+            {always.length > 0 ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="workspace-button workspace-approval-more"
+                    data-primary
+                    aria-label="More Ways to Allow"
+                    disabled={disabled}
+                  >
+                    <DesktopIcon name="chevronDown" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {always.map((option) => (
+                    <MenuItem key={option.id} onSelect={answer(option)}>
+                      {option.label}
+                    </MenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   )
