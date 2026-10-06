@@ -91,12 +91,13 @@ impl HttpsOAuth {
         }
         let mut response = match request.send().await {
             Ok(response) => response,
-            // A timeout before a status is the call not completing.
+            // Connect and builder failures never left. A timeout after the
+            // request was written is lost: the token endpoint may have
+            // issued a token we did not retain.
             Err(error)
-                if error.is_timeout()
-                    || error.is_connect()
+                if error.is_connect()
                     || error.is_builder()
-                    || error.is_request() =>
+                    || (error.is_request() && !error.is_timeout()) =>
             {
                 return Err(OAuthCallFailure::NotSent);
             }
@@ -183,7 +184,17 @@ mod tests {
         let started = std::time::Instant::now();
         let result = client.get(&format!("http://127.0.0.1:{port}/probe")).await;
         assert!(started.elapsed() < Duration::from_secs(2));
-        assert!(matches!(result, Err(OAuthCallFailure::NotSent)));
+        assert_eq!(result, Err(OAuthCallFailure::Lost));
+    }
+
+    #[tokio::test]
+    async fn a_refused_connection_is_not_sent() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let client = HttpsOAuth::bounded(Duration::from_millis(500), 64);
+        let result = client.get(&format!("http://127.0.0.1:{port}/probe")).await;
+        assert_eq!(result, Err(OAuthCallFailure::NotSent));
     }
 
     #[tokio::test]

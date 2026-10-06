@@ -36,10 +36,10 @@ async fn one_callback(listener: TcpListener) -> Result<CallbackQuery, ()> {
     loop {
         let (mut stream, _) = listener.accept().await.map_err(|_| ())?;
         let mut bytes = vec![0; 4096];
-        let read = stream.read(&mut bytes).await.map_err(|_| ())?;
-        if read == 0 {
-            continue;
-        }
+        let read = match stream.read(&mut bytes).await {
+            Ok(0) | Err(_) => continue,
+            Ok(read) => read,
+        };
         let _ = stream.write_all(PAGE.as_bytes()).await;
         let request = String::from_utf8_lossy(&bytes[..read]);
         if let Some(query) = callback_query(&request) {

@@ -14,6 +14,7 @@ pub trait AuthClock: Send + Sync {
 /// Bytes for a PKCE verifier and a callback state. Failure is a refusal,
 /// not a guessed value.
 pub trait Entropy: Send + Sync {
+    #[allow(clippy::result_unit_err)]
     fn bytes(&self, len: usize) -> Result<Vec<u8>, ()>;
 }
 

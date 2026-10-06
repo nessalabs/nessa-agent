@@ -212,6 +212,12 @@ impl MemoryAuthorization {
     }
 }
 
+impl Default for MemoryAuthorization {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AuthClock for MemoryAuthorization {
     fn now_ms(&self) -> u64 {
         self.now.try_lock().map(|now| *now).unwrap_or(1_000)

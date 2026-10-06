@@ -382,6 +382,8 @@ pub(super) struct ManagedMcp {
 /// # Errors
 ///
 /// [`RunError::Agent`] when the audit's directory cannot be created.
+// Unix composition tests are the callers. A non-test build has none.
+#[cfg_attr(not(all(test, unix)), allow(dead_code))]
 pub(super) fn settings(
     mcp: &McpComposition,
     agents: &AgentsConfig,
@@ -408,12 +410,14 @@ pub(super) fn manage(
     )
 }
 
+#[cfg_attr(not(all(test, unix)), allow(dead_code))]
 fn gateway_namespace() -> CredentialNamespace {
     CredentialNamespace::new("gateway".into(), None).expect("gateway namespace")
 }
 
 /// [`settings`] over `files`: the real file and its lock, or — in a test —
 /// something wrapped around them.
+#[cfg_attr(not(all(test, unix)), allow(dead_code))]
 pub(super) fn settings_over(
     mcp: &McpComposition,
     agents: &AgentsConfig,

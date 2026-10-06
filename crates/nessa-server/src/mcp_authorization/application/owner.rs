@@ -17,8 +17,8 @@ use super::ports::{
     RevokeAnswer, SessionDrain, TokenMaterial,
 };
 use crate::mcp_authorization::domain::{
-    AcceptedDiscovery, Admission, Command, Deletion, Phase, Publication, RefreshActivity, Refusal,
-    RemoteObservation, ServerAuth, TokenAvailability, CONSENT_DEADLINE_MS,
+    AcceptedDiscovery, Admission, Command, Deletion, Effect, Phase, Publication, RefreshActivity,
+    Refusal, RemoteObservation, ServerAuth, TokenAvailability, CONSENT_DEADLINE_MS,
 };
 
 struct Slot {
@@ -53,6 +53,7 @@ pub struct AuthorizationOwner {
 }
 
 impl AuthorizationOwner {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         records: Arc<dyn AuthorizationRecords>,
         audit: Arc<dyn AuthorizationAudit>,
@@ -316,6 +317,7 @@ impl AuthorizationOwner {
         Some(listed(&guard.auth, self.clock.now_ms()))
     }
 
+    #[allow(clippy::result_unit_err)]
     pub async fn acknowledge_domains(&self, server: Uuid, digest: &str) -> Result<(), ()> {
         let Some(slot) = self.existing(server).await else {
             return Err(());
@@ -452,7 +454,15 @@ impl AuthorizationOwner {
                 expires_at_ms,
             }
         };
-        self.apply(slot, command).await;
+        let decision = self.apply(slot, command).await;
+        if decision
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::DeleteCandidate))
+        {
+            let _ = self.records.delete_secret(server_of(slot).await).await;
+            return AuthorizeAnswer::AuthorizationIncomplete;
+        }
         let acked = self.audit_slot(slot, "store", false).await.is_ok();
         self.apply(slot, Command::Evidence { acked }).await;
         if self.persist(slot).await.is_err() {
@@ -523,7 +533,7 @@ impl AuthorizationOwner {
     }
 
     async fn refresh(
-        &self,
+        self: &Arc<Self>,
         server: Uuid,
         rejected: bool,
     ) -> Result<Option<AdmittedToken>, AdmissionRefusal> {
@@ -532,14 +542,8 @@ impl AuthorizationOwner {
         };
         let flight = {
             let mut guard = slot.lock().await;
-            if !rejected {
-                if let Admission::Bearer { generation } = self.live_admission(&guard, server) {
-                    guard.handed = generation;
-                    drop(guard);
-                    return self.release_bearer(&slot, server, generation).await;
-                }
-            } else if guard.auth.generation > guard.handed {
-                if let Admission::Bearer { generation } = self.live_admission(&guard, server) {
+            if let Admission::Bearer { generation } = self.live_admission(&guard, server) {
+                if !rejected || generation > guard.handed {
                     guard.handed = generation;
                     drop(guard);
                     return self.release_bearer(&slot, server, generation).await;
@@ -579,10 +583,38 @@ impl AuthorizationOwner {
             self.flights.lock().await.insert(server, flight.clone());
             flight
         };
+        let owner = Arc::clone(self);
+        let driving = flight.clone();
+        let slot = slot.clone();
+        tokio::spawn(async move {
+            owner.drive_refresh(server, slot, driving).await;
+        });
+        let notified = flight.notify.notified();
+        if let Some(result) = flight.result.lock().await.clone() {
+            return result;
+        }
+        notified.await;
+        let result = flight
+            .result
+            .lock()
+            .await
+            .clone()
+            .unwrap_or(Err(AdmissionRefusal::Unauthorized));
+        result
+    }
+
+    /// Runs after the flight is published, on its own task. Dropping a waiter
+    /// does not drop the token request or leave joiners waiting.
+    async fn drive_refresh(
+        self: &Arc<Self>,
+        server: Uuid,
+        slot: Arc<Mutex<Slot>>,
+        flight: Arc<RefreshFlight>,
+    ) {
         if self.audit_slot(&slot, "refresh", true).await.is_err() {
             self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched)
                 .await;
-            return Err(AdmissionRefusal::Unauthorized);
+            return;
         }
         let (endpoint, client_id, resource, generation) = {
             let guard = slot.lock().await;
@@ -603,12 +635,12 @@ impl AuthorizationOwner {
         let Some(endpoint) = endpoint.filter(|url| discovery::https_url(url)) else {
             self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched)
                 .await;
-            return Err(AdmissionRefusal::Unauthorized);
+            return;
         };
         let Some(refresh_token) = refresh_token else {
             self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched)
                 .await;
-            return Err(AdmissionRefusal::Unauthorized);
+            return;
         };
         {
             let mut guard = slot.lock().await;
@@ -617,7 +649,7 @@ impl AuthorizationOwner {
         if self.persist(&slot).await.is_err() {
             self.finish_refresh(&slot, &flight, Command::RefreshLost)
                 .await;
-            return Err(AdmissionRefusal::Unauthorized);
+            return;
         }
         let body = discovery::form(&[
             ("grant_type", "refresh_token"),
@@ -630,12 +662,12 @@ impl AuthorizationOwner {
             Err(OAuthCallFailure::NotSent) => {
                 self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched)
                     .await;
-                return Err(AdmissionRefusal::Unauthorized);
+                return;
             }
             Err(OAuthCallFailure::Lost) => {
                 self.finish_refresh(&slot, &flight, Command::RefreshLost)
                     .await;
-                return Err(AdmissionRefusal::Unauthorized);
+                return;
             }
             Ok(response) => response,
         };
@@ -646,10 +678,9 @@ impl AuthorizationOwner {
             }
             _ => Err(AdmissionRefusal::Unauthorized),
         };
-        *flight.result.lock().await = Some(result.clone());
+        *flight.result.lock().await = Some(result);
         self.flights.lock().await.remove(&server);
         flight.notify.notify_waiters();
-        result
     }
 
     async fn finish_refresh(
@@ -1140,7 +1171,10 @@ impl crate::mcp_authorization::application::AuthorizationHandoff for Authorizati
 
 impl AuthorizationOwner {
     /// The token to send for `server`, or none when the server needs none.
-    pub async fn bearer(&self, server: Uuid) -> Result<Option<AdmittedToken>, AdmissionRefusal> {
+    pub async fn bearer(
+        self: &Arc<Self>,
+        server: Uuid,
+    ) -> Result<Option<AdmittedToken>, AdmissionRefusal> {
         let Some(slot) = self.existing(server).await else {
             return Ok(None);
         };
@@ -1167,7 +1201,7 @@ impl AuthorizationOwner {
     /// `server` answered 401 with `www_authenticate`. A token retries the
     /// refused request once.
     pub async fn rejected(
-        &self,
+        self: &Arc<Self>,
         server: Uuid,
         _www_authenticate: &str,
     ) -> Result<Option<AdmittedToken>, AdmissionRefusal> {

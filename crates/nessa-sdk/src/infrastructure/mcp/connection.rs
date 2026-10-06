@@ -426,18 +426,13 @@ fn deliver(message: &Value, shared: &Shared, outgoing: &mpsc::Sender<Vec<u8>>) -
             }
         }
         (None, Some(id)) => {
-            let Some(id) = id.as_u64() else {
-                return None;
-            };
+            let id = id.as_u64()?;
             let waiter = shared
                 .state
                 .lock()
                 .expect("connection state")
                 .pending
-                .remove(&id);
-            let Some(waiter) = waiter else {
-                return None;
-            };
+                .remove(&id)?;
             let reply = match (message.get("result"), message.get("error")) {
                 (Some(result), None) => Ok(Ok(result.clone())),
                 (None, Some(error)) if error.is_object() => Ok(Err(error.clone())),

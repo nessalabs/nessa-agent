@@ -115,6 +115,10 @@ enum Behavior {
     UnreachableCall,
     /// Legacy GET starts, then the message POST has no HTTP status.
     LegacyUnreachable,
+    /// The first `tools/list` is an SSE body that stays open after its event.
+    HoldFirstList,
+    /// The first session-bound call is 404, and recovery `initialize` is SSE.
+    ExpireSse,
 }
 
 impl Peer {
@@ -132,7 +136,8 @@ impl Peer {
     }
 
     fn seen(&self) -> Vec<Seen> {
-        self.log.lock().expect("log").requests.drain(..).collect()
+        let mut log = self.log.lock().expect("log");
+        std::mem::take(&mut log.requests)
     }
 
     fn snapshot(&self) -> Vec<Seen> {
@@ -242,6 +247,31 @@ impl Peer {
             return Ok(response(202, vec![], Vec::new()));
         }
         if method == Some("initialize") {
+            if matches!(self.behavior, Behavior::ExpireSse) {
+                let inits = self
+                    .log
+                    .lock()
+                    .expect("log")
+                    .requests
+                    .iter()
+                    .filter(|seen| {
+                        seen.method == HttpMethod::Post
+                            && json_method(&seen.body).as_deref() == Some("initialize")
+                    })
+                    .count();
+                if inits >= 2 {
+                    let payload = reply_message(&request.body, Some("initialize")).unwrap();
+                    let data = format!("data: {payload}\n\n");
+                    return Ok(response(
+                        200,
+                        vec![
+                            ("content-type".into(), "text/event-stream".into()),
+                            ("mcp-session-id".into(), "recovered".into()),
+                        ],
+                        data.into_bytes(),
+                    ));
+                }
+            }
             return Ok(self.initialize(&request));
         }
         if matches!(self.behavior, Behavior::UnreachableCall) {
@@ -250,7 +280,32 @@ impl Peer {
         if method.is_none() || !body_has_id(&request.body) {
             return Ok(response(202, vec![], Vec::new()));
         }
-        if matches!(self.behavior, Behavior::ExpireOnce | Behavior::ExpireTwice) {
+        if matches!(self.behavior, Behavior::HoldFirstList) && method == Some("tools/list") {
+            let first = self
+                .log
+                .lock()
+                .expect("log")
+                .requests
+                .iter()
+                .filter(|seen| json_method(&seen.body).as_deref() == Some("tools/list"))
+                .count()
+                == 1;
+            if first {
+                let (tx, rx) = mpsc::unbounded_channel();
+                let message = reply_message(&request.body, method).unwrap();
+                let _ = tx.send(Some(format!("data: {message}\n\n").into_bytes()));
+                self.log.lock().expect("log").legacy = Some(tx);
+                return Ok(HttpResponse {
+                    status: 200,
+                    headers: vec![("content-type".into(), "text/event-stream".into())],
+                    body: HttpBody::Stream(Box::new(ChannelChunks { rx })),
+                });
+            }
+        }
+        if matches!(
+            self.behavior,
+            Behavior::ExpireOnce | Behavior::ExpireTwice | Behavior::ExpireSse
+        ) {
             let mut log = self.log.lock().expect("log");
             let limit = if matches!(self.behavior, Behavior::ExpireTwice) {
                 2
@@ -290,7 +345,7 @@ impl Peer {
         let payload = reply_message(&request.body, Some("initialize")).unwrap();
         if matches!(self.behavior, Behavior::Oversize) {
             let mut data = vec![b'd', b'a', b't', b'a', b':', b' '];
-            data.extend(std::iter::repeat(b'x').take(MAX_FRAME_BYTES));
+            data.extend(std::iter::repeat_n(b'x', MAX_FRAME_BYTES));
             data.extend(b"\n\n");
             return HttpResponse {
                 status: 200,
@@ -576,6 +631,37 @@ async fn c3_get_405_leaves_the_post_session_up() {
 }
 
 #[tokio::test]
+async fn an_open_sse_reply_does_not_block_the_next_post() {
+    let peer = Peer::new(Behavior::HoldFirstList);
+    let session = open(peer.clone()).await.unwrap();
+    session.list_tools().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), session.list_tools())
+        .await
+        .expect("the next POST was not stalled by the open SSE body")
+        .unwrap();
+    let lists = peer
+        .snapshot()
+        .into_iter()
+        .filter(|seen| json_method(&seen.body).as_deref() == Some("tools/list"))
+        .count();
+    assert_eq!(lists, 2);
+}
+
+#[tokio::test]
+async fn recovery_initialize_sse_keeps_the_new_session_id() {
+    let peer = Peer::new(Behavior::ExpireSse);
+    let session = open(peer.clone()).await.unwrap();
+    assert_eq!(
+        session.list_tools().await.unwrap_err(),
+        McpError::SessionExpired
+    );
+    session.list_tools().await.unwrap();
+    assert!(peer.snapshot().iter().any(|seen| {
+        seen.method == HttpMethod::Post && seen.session.as_deref() == Some("recovered")
+    }));
+}
+
+#[tokio::test]
 async fn c5_session_404_fails_the_call_and_does_not_replay_it() {
     let peer = Peer::new(Behavior::ExpireOnce);
     let session = open(peer.clone()).await.unwrap();
@@ -827,9 +913,9 @@ fn a_remote_url_is_https_or_loopback_http() {
 #[tokio::test]
 async fn a_loopback_fixture_connects_over_streamable_http_and_legacy_sse() {
     let json = FixtureProcess::spawn(false);
-    connect_fixture(&json.url()).await;
+    connect_fixture(json.url()).await;
     let legacy = FixtureProcess::spawn(true);
-    connect_fixture(&legacy.url()).await;
+    connect_fixture(legacy.url()).await;
 }
 
 async fn connect_fixture(url: &str) {

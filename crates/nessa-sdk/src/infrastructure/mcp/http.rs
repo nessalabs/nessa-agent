@@ -291,6 +291,16 @@ impl HttpSession {
         let content_type = response.header("content-type").map(str::to_owned);
         let session_header = response.header("mcp-session-id").map(str::to_owned);
         if sse::is_event_stream(content_type.as_deref()) {
+            // A streamed tools/call stays open while the server asks for a
+            // ping on the next POST. Reading it on the writer would stall
+            // that answer. Initialize still waits, so the session id is known
+            // before the opening returns.
+            let streamed = matches!(response.body, super::http_exchange::HttpBody::Stream(_));
+            if streamed && method != Some("initialize") {
+                let inbound = self.inbound.clone();
+                tokio::spawn(forward_open_sse(response, inbound));
+                return SendOutcome::Done;
+            }
             return self
                 .read_sse_body(response, method, id, session_header)
                 .await;
@@ -624,6 +634,42 @@ impl HttpSession {
         SendOutcome::Done
     }
 
+    /// Recovery `initialize` answered with SSE. The JSON is inside `data:`,
+    /// so the raw body is not the session record.
+    async fn note_sse_initialize(
+        &self,
+        response: HttpResponse,
+        session_header: Option<&str>,
+    ) -> Result<(), McpError> {
+        let bytes = match response.bytes(MAX_FRAME_BYTES).await {
+            Ok(bytes) => bytes,
+            Err(_) => return Err(McpError::SessionExpired),
+        };
+        let mut parser = SseParser::bounded();
+        let mut events = parser.push(&bytes).map_err(|error| match error {
+            SseError::TooLarge => McpError::TooLarge("an SSE event"),
+            SseError::Utf8 => McpError::Malformed("an SSE event is not UTF-8".into()),
+        })?;
+        if !bytes.ends_with(b"\n\n") {
+            if let Ok(more) = parser.push(b"\n\n") {
+                events.extend(more);
+            }
+        }
+        let mut noted = false;
+        for event in events {
+            if event.data.is_empty() {
+                continue;
+            }
+            self.note_response(event.data.as_bytes(), Some("initialize"), session_header)?;
+            noted = true;
+        }
+        if noted {
+            Ok(())
+        } else {
+            Err(McpError::SessionExpired)
+        }
+    }
+
     fn note_response(
         &self,
         body: &[u8],
@@ -754,18 +800,24 @@ impl HttpSession {
             return SendOutcome::End(McpError::SessionExpired);
         }
         let header = response.header("mcp-session-id").map(str::to_owned);
-        let bytes = match response.bytes(MAX_FRAME_BYTES).await {
-            Ok(bytes) => bytes,
-            Err(_) => return SendOutcome::End(McpError::SessionExpired),
-        };
+        if sse::is_event_stream(response.header("content-type")) {
+            if let Err(error) = self.note_sse_initialize(response, header.as_deref()).await {
+                return SendOutcome::End(error);
+            }
+        } else {
+            let bytes = match response.bytes(MAX_FRAME_BYTES).await {
+                Ok(bytes) => bytes,
+                Err(_) => return SendOutcome::End(McpError::SessionExpired),
+            };
+            if let Err(error) = self.note_response(&bytes, Some("initialize"), header.as_deref()) {
+                return SendOutcome::End(error);
+            }
+        }
         if self.closing.load(Ordering::SeqCst) {
             if let Some(new_id) = &header {
                 self.delete_id(new_id);
             }
             return SendOutcome::End(McpError::Closed);
-        }
-        if let Err(error) = self.note_response(&bytes, Some("initialize"), header.as_deref()) {
-            return SendOutcome::End(error);
         }
         let note = serde_json::to_vec(&json!({
             "jsonrpc": "2.0",
@@ -823,7 +875,61 @@ impl HttpSession {
 
 impl Drop for HttpSession {
     fn drop(&mut self) {
+        if tokio::runtime::Handle::try_current().is_err() {
+            self.closing.store(true, Ordering::SeqCst);
+            if let Ok(mut task) = self.get_task.lock() {
+                if let Some(task) = task.take() {
+                    task.abort();
+                }
+            }
+            let _ = self.finished.send_replace(true);
+            return;
+        }
         self.shutdown();
+    }
+}
+
+/// Read a POST's event stream off the writer task. Events become inbound
+/// JSON. A read failure ends the connection.
+async fn forward_open_sse(
+    response: HttpResponse,
+    inbound: mpsc::Sender<Result<Vec<u8>, McpError>>,
+) {
+    let mut stream = match response.body {
+        super::http_exchange::HttpBody::Stream(stream) => stream,
+        super::http_exchange::HttpBody::Buffered(_) => return,
+    };
+    let mut parser = SseParser::bounded();
+    loop {
+        let chunk = match stream.next().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => return,
+            Err(_) => {
+                let _ = inbound.send(Err(McpError::Unconfirmed)).await;
+                return;
+            }
+        };
+        let events = match parser.push(&chunk) {
+            Ok(events) => events,
+            Err(SseError::TooLarge) => {
+                let _ = inbound.send(Err(McpError::TooLarge("an SSE event"))).await;
+                return;
+            }
+            Err(SseError::Utf8) => {
+                let _ = inbound
+                    .send(Err(McpError::Malformed("an SSE event is not UTF-8".into())))
+                    .await;
+                return;
+            }
+        };
+        for event in events {
+            if event.data.is_empty() {
+                continue;
+            }
+            if inbound.send(Ok(event.data.into_bytes())).await.is_err() {
+                return;
+            }
+        }
     }
 }
 

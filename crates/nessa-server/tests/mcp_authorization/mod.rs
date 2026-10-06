@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::mcp_authorization::application::{
     AdmissionRefusal, AuthorizationOwner, AuthorizationRecords, AuthorizeAnswer, CallbackQuery,
-    OAuthCallFailure, OAuthResponse, RecordFailure, TokenMaterial,
+    OAuthCallFailure, OAuthHttp, OAuthResponse, RecordFailure, TokenMaterial,
 };
 use crate::mcp_authorization::domain::{
     AcceptedDiscovery, Admission, Command, Deletion, Phase, Publication, RefreshActivity, Refusal,
@@ -677,4 +677,215 @@ async fn two_callers_share_one_slot_so_revoke_refuses_both_bearers() {
     assert_eq!(first.await.unwrap(), Err(AdmissionRefusal::Unauthorized));
     assert_eq!(second.await.unwrap(), Err(AdmissionRefusal::Unauthorized));
     revoking.await.unwrap();
+}
+
+/// Blocks `store_secret` while `hold` is set, after counting the waiter.
+struct HoldStore {
+    inner: Arc<MemoryAuthorization>,
+    hold: AtomicBool,
+    waiting: AtomicUsize,
+}
+
+impl HoldStore {
+    fn new(inner: Arc<MemoryAuthorization>) -> Self {
+        Self {
+            inner,
+            hold: AtomicBool::new(false),
+            waiting: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl AuthorizationRecords for HoldStore {
+    async fn load(
+        &self,
+        server: Uuid,
+    ) -> Result<Option<crate::mcp_authorization::domain::ServerAuth>, RecordFailure> {
+        self.inner.load(server).await
+    }
+
+    async fn store(
+        &self,
+        auth: &crate::mcp_authorization::domain::ServerAuth,
+    ) -> Result<(), RecordFailure> {
+        self.inner.store(auth).await
+    }
+
+    async fn load_secret(&self, server: Uuid) -> Result<Option<TokenMaterial>, RecordFailure> {
+        self.inner.load_secret(server).await
+    }
+
+    async fn store_secret(
+        &self,
+        server: Uuid,
+        secret: &TokenMaterial,
+    ) -> Result<crate::mcp_authorization::domain::Publication, RecordFailure> {
+        if self.hold.load(Ordering::SeqCst) {
+            self.waiting.fetch_add(1, Ordering::SeqCst);
+            while self.hold.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        }
+        self.inner.store_secret(server, secret).await
+    }
+
+    async fn delete_secret(
+        &self,
+        server: Uuid,
+    ) -> Result<crate::mcp_authorization::domain::Deletion, RecordFailure> {
+        self.inner.delete_secret(server).await
+    }
+}
+
+/// Blocks a token-endpoint form post until released.
+struct GatedHttp {
+    inner: Arc<MemoryAuthorization>,
+    entered: AtomicUsize,
+    release: AtomicBool,
+}
+
+impl GatedHttp {
+    fn new(inner: Arc<MemoryAuthorization>) -> Self {
+        Self {
+            inner,
+            entered: AtomicUsize::new(0),
+            release: AtomicBool::new(false),
+        }
+    }
+}
+
+#[async_trait]
+impl OAuthHttp for GatedHttp {
+    async fn get(&self, url: &str) -> Result<OAuthResponse, OAuthCallFailure> {
+        self.inner.get(url).await
+    }
+
+    async fn post_form(&self, url: &str, body: &str) -> Result<OAuthResponse, OAuthCallFailure> {
+        if url.ends_with("/token") {
+            self.entered.fetch_add(1, Ordering::SeqCst);
+            while !self.release.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        }
+        self.inner.post_form(url, body).await
+    }
+
+    async fn post_json(&self, url: &str, body: &str) -> Result<OAuthResponse, OAuthCallFailure> {
+        self.inner.post_json(url, body).await
+    }
+}
+
+fn ready_with_token_endpoint() -> crate::mcp_authorization::domain::ServerAuth {
+    let mut auth = ready_token();
+    auth.token_endpoint = Some("https://as.example/token".into());
+    auth.client_id = Some("client".into());
+    auth
+}
+
+async fn seed_ready(records: &impl AuthorizationRecords, memory: &MemoryAuthorization) {
+    records.store(&ready_with_token_endpoint()).await.unwrap();
+    records
+        .store_secret(
+            server(),
+            &TokenMaterial {
+                access_token: "access".into(),
+                refresh_token: Some("refresh".into()),
+                generation: 1,
+            },
+        )
+        .await
+        .unwrap();
+    memory
+        .set_resource(server(), "https://mcp.example/mcp")
+        .await;
+}
+
+#[tokio::test]
+async fn a_token_published_after_revoke_is_deleted() {
+    let memory = Arc::new(MemoryAuthorization::new());
+    let records = Arc::new(HoldStore::new(memory.clone()));
+    seed_ready(records.as_ref(), &memory).await;
+    let owner = Arc::new(AuthorizationOwner::new(
+        records.clone(),
+        memory.clone(),
+        memory.clone(),
+        Arc::new(ScriptedCallback::pending()),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        true,
+    ));
+    assert_eq!(owner.bearer(server()).await.unwrap().unwrap().generation, 1);
+    records.hold.store(true, Ordering::SeqCst);
+    memory
+        .push_route("https://as.example/token", Ok(token_body("late")))
+        .await;
+    let refreshing = {
+        let owner = owner.clone();
+        tokio::spawn(async move { owner.rejected(server(), "Bearer").await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while records.waiting.load(Ordering::SeqCst) < 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("refresh is storing");
+    owner.revoke(server()).await;
+    records.hold.store(false, Ordering::SeqCst);
+    let _ = refreshing.await.unwrap();
+    assert!(memory.load_secret(server()).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn dropping_a_refresh_waiter_does_not_cancel_the_flight() {
+    let memory = Arc::new(MemoryAuthorization::new());
+    let http = Arc::new(GatedHttp::new(memory.clone()));
+    seed_ready(memory.as_ref(), &memory).await;
+    let owner = Arc::new(AuthorizationOwner::new(
+        memory.clone(),
+        memory.clone(),
+        http.clone(),
+        Arc::new(ScriptedCallback::pending()),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        true,
+    ));
+    assert_eq!(owner.bearer(server()).await.unwrap().unwrap().generation, 1);
+    memory
+        .push_route("https://as.example/token", Ok(token_body("kept")))
+        .await;
+    let waiter = {
+        let owner = owner.clone();
+        tokio::spawn(async move { owner.rejected(server(), "Bearer").await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while http.entered.load(Ordering::SeqCst) < 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("token post started");
+    waiter.abort();
+    http.release.store(true, Ordering::SeqCst);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if memory
+                .load_secret(server())
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|secret| secret.generation == 2)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the refresh flight finished after its waiter was dropped");
 }

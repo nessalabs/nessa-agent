@@ -770,6 +770,7 @@ pub(crate) fn conversation_root(namespace: &Path) -> std::path::PathBuf {
 }
 
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 async fn conversations(
     agents: &AgentsConfig,
     directory: &Path,

@@ -217,6 +217,7 @@ fn listed(list: ServerList) -> McpServersListResult {
 /// `list`'s answer for `request_id`, when it is at most
 /// [`MAX_PAYLOAD_BYTES`]; past that, `mcp_servers_config_too_large` with
 /// the revision, which always fits, so a remove by name can still name it.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn answered(request_id: &str, list: ServerList) -> OutgoingMessage {
     frame_list(request_id, listed(list))
 }
