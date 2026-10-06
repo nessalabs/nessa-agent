@@ -9,6 +9,7 @@ unrelated future systems.
 | [Ownership and consolidation](consolidation.md) | Implemented ownership, naming decisions, and operational boundaries |
 | [Runtime classes and sequences](runtime-classes-and-sequences.md) | Proposed conversation coordinator and durable-event design supplement to ADR 0008 |
 | [SDK runtime shape](sdk-shape.md) | Nessa server ownership and proposed conversation delivery contract |
+| [Subagent ownership](../../adr/todo/329-subagents.md) | Proposed ordinary child Agents, durable parent relationships, approval inheritance, recursive closure, recovery and desktop implementation sequence |
 | [Session and stream contracts](../session-and-stream-contracts.md) | Proposed gateway/history delivery contract, broader than the implemented execution binding |
 | [Dependency injection](../dependency-injection.md) | Current composition rules shared across repository contexts |
 | [Streaming message commit](../streaming-message-commit.md) | Implemented local message cadence, timer seam, and write orderings for #294 |
