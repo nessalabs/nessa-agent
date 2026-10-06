@@ -277,11 +277,12 @@ impl HttpSession {
             return SendOutcome::Done; // caller enters legacy; unused path
         }
         if !(200..300).contains(&status) {
-            let error = if status >= 500 {
-                McpError::Unreachable
-            } else {
-                McpError::Malformed(format!("HTTP {status}"))
-            };
+            // 5xx means the server accepted the request. Only `initialize`
+            // is still a definite miss: no session exists to have run anything.
+            if status >= 500 {
+                return server_error(method == Some("initialize"), id);
+            }
+            let error = McpError::Malformed(format!("HTTP {status}"));
             return if method == Some("initialize") {
                 SendOutcome::End(error)
             } else {
@@ -409,12 +410,7 @@ impl HttpSession {
                 body: body.to_vec(),
             })
             .await
-            .map_err(|_| {
-                // `HttpFailure` carries no status. The call did not complete,
-                // so it is unreachable on the opening request and on a later
-                // one. A body that has already started is handled above.
-                McpError::Unreachable
-            })
+            .map_err(|_| lost_exchange(body))
     }
 
     async fn enter_legacy(&self, initialize: &[u8], id: Option<u64>) -> SendOutcome {
@@ -512,8 +508,11 @@ impl HttpSession {
                             {
                                 SendOutcome::Done
                             }
+                            Ok(again) if again.status >= 500 => {
+                                server_error(body_is_initialize(body), id)
+                            }
                             Ok(_) => SendOutcome::End(McpError::Unauthorized),
-                            Err(_) => SendOutcome::End(McpError::Unreachable),
+                            Err(_) => SendOutcome::End(lost_exchange(body)),
                         }
                     }
                     Ok(None) | Err(McpError::Unauthorized) => {
@@ -522,11 +521,12 @@ impl HttpSession {
                     Err(error) => SendOutcome::End(error),
                 }
             }
+            Ok(response) if response.status >= 500 => server_error(body_is_initialize(body), id),
             Ok(_) => SendOutcome::FailCall {
                 id,
                 error: McpError::Unreachable,
             },
-            Err(_) => SendOutcome::End(McpError::Unreachable),
+            Err(_) => SendOutcome::End(lost_exchange(body)),
         }
     }
 
@@ -937,6 +937,30 @@ enum Modern {
     Response(HttpResponse),
     Accepted,
     Legacy,
+}
+
+/// HTTP 5xx. `initialize` still failed before a session existed. A later
+/// request was accepted by the server, so its effect is unconfirmed.
+fn server_error(initialize: bool, id: Option<u64>) -> SendOutcome {
+    if initialize {
+        SendOutcome::End(McpError::Unreachable)
+    } else {
+        SendOutcome::FailCall {
+            id,
+            error: McpError::Unconfirmed,
+        }
+    }
+}
+
+/// `initialize` failed before a session existed. Any other request may
+/// already have been received: headers were lost, or the header deadline
+/// fired after the bytes were sent.
+fn lost_exchange(body: &[u8]) -> McpError {
+    if body_is_initialize(body) {
+        McpError::Unreachable
+    } else {
+        McpError::Unconfirmed
+    }
 }
 
 fn body_is_initialize(body: &[u8]) -> bool {

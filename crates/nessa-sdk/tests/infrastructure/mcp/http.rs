@@ -113,6 +113,10 @@ enum Behavior {
     Legacy,
     /// A call after initialize has no HTTP status.
     UnreachableCall,
+    /// `initialize` itself has no HTTP status.
+    UnreachableOpen,
+    /// A call after initialize is HTTP 500.
+    ServerError,
     /// Legacy GET starts, then the message POST has no HTTP status.
     LegacyUnreachable,
     /// The first `tools/list` is an SSE body that stays open after its event.
@@ -246,6 +250,9 @@ impl Peer {
             }
             return Ok(response(202, vec![], Vec::new()));
         }
+        if matches!(self.behavior, Behavior::UnreachableOpen) && method == Some("initialize") {
+            return Err(HttpFailure::Unreachable);
+        }
         if method == Some("initialize") {
             if matches!(self.behavior, Behavior::ExpireSse) {
                 let inits = self
@@ -276,6 +283,13 @@ impl Peer {
         }
         if matches!(self.behavior, Behavior::UnreachableCall) {
             return Err(HttpFailure::Unreachable);
+        }
+        if matches!(self.behavior, Behavior::ServerError) {
+            return Ok(response(
+                500,
+                vec![("content-type".into(), "application/json".into())],
+                b"{}".to_vec(),
+            ));
         }
         if method.is_none() || !body_has_id(&request.body) {
             return Ok(response(202, vec![], Vec::new()));
@@ -696,11 +710,28 @@ async fn c5_a_second_404_ends_the_session() {
 }
 
 #[tokio::test]
-async fn an_inflight_exchange_with_no_status_is_unreachable() {
+async fn an_initialize_with_no_status_is_unreachable() {
+    assert_eq!(
+        must_err(open(Peer::new(Behavior::UnreachableOpen)).await),
+        McpError::Unreachable
+    );
+}
+
+#[tokio::test]
+async fn an_inflight_exchange_with_no_status_is_unconfirmed() {
     let session = open(Peer::new(Behavior::UnreachableCall)).await.unwrap();
     assert_eq!(
         session.list_tools().await.unwrap_err(),
-        McpError::Unreachable
+        McpError::Unconfirmed
+    );
+}
+
+#[tokio::test]
+async fn a_server_error_on_a_call_is_unconfirmed() {
+    let session = open(Peer::new(Behavior::ServerError)).await.unwrap();
+    assert_eq!(
+        session.list_tools().await.unwrap_err(),
+        McpError::Unconfirmed
     );
 }
 

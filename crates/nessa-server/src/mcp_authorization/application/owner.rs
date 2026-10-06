@@ -21,6 +21,14 @@ use crate::mcp_authorization::domain::{
     Refusal, RemoteObservation, ServerAuth, TokenAvailability, CONSENT_DEADLINE_MS,
 };
 
+/// What a load found. Absent is a missing record. Unavailable is a record
+/// that could not be read, and must not be treated as absent.
+enum Recalled {
+    Present(Arc<Mutex<Slot>>),
+    Absent,
+    Unavailable,
+}
+
 struct Slot {
     auth: ServerAuth,
     verifier: Option<String>,
@@ -89,7 +97,10 @@ impl AuthorizationOwner {
         if !self.writer {
             return AuthorizeAnswer::StoreUnavailable;
         }
-        let slot = self.slot(server, name, resource).await;
+        let slot = match self.slot(server, name, resource).await {
+            Ok(slot) => slot,
+            Err(RecordFailure::Unavailable) => return AuthorizeAnswer::AuthorizationIncomplete,
+        };
         let decision = {
             let mut guard = slot.lock().await;
             if guard.auth.resource != resource {
@@ -215,8 +226,10 @@ impl AuthorizationOwner {
     }
 
     pub async fn complete_callback(&self, server: Uuid, query: CallbackQuery) -> AuthorizeAnswer {
-        let Some(slot) = self.existing(server).await else {
-            return AuthorizeAnswer::DiscoveryFailed;
+        let slot = match self.existing(server).await {
+            Recalled::Present(slot) => slot,
+            Recalled::Absent => return AuthorizeAnswer::DiscoveryFailed,
+            Recalled::Unavailable => return AuthorizeAnswer::AuthorizationIncomplete,
         };
         let now = self.clock.now_ms();
         let decision = {
@@ -257,14 +270,10 @@ impl AuthorizationOwner {
     }
 
     pub async fn revoke(&self, server: Uuid) -> RevokeAnswer {
-        let Some(slot) = self.existing(server).await else {
-            return RevokeAnswer {
-                settled: true,
-                local_drained: true,
-                secret_deleted: true,
-                remote: Some(RemoteObservation::Unsupported),
-                evidence_acknowledged: true,
-            };
+        let slot = match self.existing(server).await {
+            Recalled::Present(slot) => slot,
+            Recalled::Absent => return absent_revoke(),
+            Recalled::Unavailable => return held_revoke(),
         };
         self.revoke_slot(&slot, Command::Revoke).await
     }
@@ -273,10 +282,12 @@ impl AuthorizationOwner {
     /// would be called on. A matching binding is left alone. Called at
     /// startup, before the process accepts a session, so a URL written
     /// while this process was down is not called with the previous token.
-    pub async fn revalidate(&self, remotes: &[(Uuid, String)]) {
+    pub async fn revalidate(&self, remotes: &[(Uuid, String)]) -> Result<(), FenceRefusal> {
         for (id, url) in remotes {
-            let Some(slot) = self.existing(*id).await else {
-                continue;
+            let slot = match self.existing(*id).await {
+                Recalled::Present(slot) => slot,
+                Recalled::Absent => continue,
+                Recalled::Unavailable => return Err(FenceRefusal),
             };
             let bound = slot.lock().await.auth.resource.clone();
             if bound == *url {
@@ -290,6 +301,7 @@ impl AuthorizationOwner {
                 }])
                 .await;
         }
+        Ok(())
     }
 
     pub async fn fence(&self, changes: &[BindingChange]) -> Result<(), FenceRefusal> {
@@ -300,8 +312,10 @@ impl AuthorizationOwner {
                 }
                 BindingChange::Removed { id, .. } => (*id, Command::Removed),
             };
-            let Some(slot) = self.existing(id).await else {
-                continue;
+            let slot = match self.existing(id).await {
+                Recalled::Present(slot) => slot,
+                Recalled::Absent => continue,
+                Recalled::Unavailable => return Err(FenceRefusal),
             };
             let answer = self.revoke_slot(&slot, command).await;
             if !answer.settled {
@@ -312,14 +326,27 @@ impl AuthorizationOwner {
     }
 
     pub async fn facts(&self, server: Uuid) -> Option<ListedAuthorization> {
-        let slot = self.existing(server).await?;
-        let guard = slot.lock().await;
-        Some(listed(&guard.auth, self.clock.now_ms()))
+        match self.existing(server).await {
+            Recalled::Present(slot) => {
+                let guard = slot.lock().await;
+                Some(listed(&guard.auth, self.clock.now_ms()))
+            }
+            Recalled::Absent => None,
+            Recalled::Unavailable => Some(ListedAuthorization {
+                phase: "revocation_incomplete",
+                generation: 0,
+                token_expired: false,
+                refresh_failing: false,
+                scope_required: false,
+                remote: None,
+                domains_digest: None,
+            }),
+        }
     }
 
     #[allow(clippy::result_unit_err)]
     pub async fn acknowledge_domains(&self, server: Uuid, digest: &str) -> Result<(), ()> {
-        let Some(slot) = self.existing(server).await else {
+        let Recalled::Present(slot) = self.existing(server).await else {
             return Err(());
         };
         self.apply(
@@ -537,7 +564,7 @@ impl AuthorizationOwner {
         server: Uuid,
         rejected: bool,
     ) -> Result<Option<AdmittedToken>, AdmissionRefusal> {
-        let Some(slot) = self.existing(server).await else {
+        let Recalled::Present(slot) = self.existing(server).await else {
             return Err(AdmissionRefusal::Unauthorized);
         };
         let flight = {
@@ -861,13 +888,19 @@ impl AuthorizationOwner {
             .await
     }
 
-    async fn slot(&self, server: Uuid, name: &str, resource: &str) -> Arc<Mutex<Slot>> {
+    async fn slot(
+        &self,
+        server: Uuid,
+        name: &str,
+        resource: &str,
+    ) -> Result<Arc<Mutex<Slot>>, RecordFailure> {
         let slots = self.slots.lock().await;
         if let Some(slot) = slots.get(&server) {
-            return slot.clone();
+            return Ok(slot.clone());
         }
         drop(slots);
         let auth = match self.records.load(server).await {
+            Err(failure) => return Err(failure),
             Ok(Some(mut loaded)) => {
                 let secret_present = self
                     .records
@@ -885,7 +918,7 @@ impl AuthorizationOwner {
                 loaded.name = name.to_owned();
                 loaded
             }
-            _ => ServerAuth::consent_needed(server, name, resource),
+            Ok(None) => ServerAuth::consent_needed(server, name, resource),
         };
         let token_endpoint = auth.token_endpoint.clone();
         let revocation_endpoint = auth.revocation_endpoint.clone();
@@ -899,17 +932,21 @@ impl AuthorizationOwner {
         }));
         let mut slots = self.slots.lock().await;
         if let Some(existing) = slots.get(&server) {
-            return existing.clone();
+            return Ok(existing.clone());
         }
         slots.insert(server, slot.clone());
-        slot
+        Ok(slot)
     }
 
-    async fn existing(&self, server: Uuid) -> Option<Arc<Mutex<Slot>>> {
+    async fn existing(&self, server: Uuid) -> Recalled {
         if let Some(slot) = self.slots.lock().await.get(&server).cloned() {
-            return Some(slot);
+            return Recalled::Present(slot);
         }
-        let loaded = self.records.load(server).await.ok()??;
+        let loaded = match self.records.load(server).await {
+            Ok(Some(loaded)) => loaded,
+            Ok(None) => return Recalled::Absent,
+            Err(RecordFailure::Unavailable) => return Recalled::Unavailable,
+        };
         let secret_present = self
             .records
             .load_secret(server)
@@ -935,10 +972,10 @@ impl AuthorizationOwner {
         }));
         let mut slots = self.slots.lock().await;
         if let Some(existing) = slots.get(&server) {
-            return Some(existing.clone());
+            return Recalled::Present(existing.clone());
         }
         slots.insert(server, slot.clone());
-        Some(slot)
+        Recalled::Present(slot)
     }
 
     async fn refusal_now(&self, slot: &Arc<Mutex<Slot>>) -> AuthorizeAnswer {
@@ -1008,6 +1045,28 @@ async fn client_from(slot: &Arc<Mutex<Slot>>) -> String {
 
 async fn server_of(slot: &Arc<Mutex<Slot>>) -> Uuid {
     slot.lock().await.auth.server
+}
+
+fn absent_revoke() -> RevokeAnswer {
+    RevokeAnswer {
+        settled: true,
+        local_drained: true,
+        secret_deleted: true,
+        remote: Some(RemoteObservation::Unsupported),
+        evidence_acknowledged: true,
+    }
+}
+
+/// The record could not be read, so the sealed secret and the remote
+/// revocation are both unobserved. This is not a settlement.
+fn held_revoke() -> RevokeAnswer {
+    RevokeAnswer {
+        settled: false,
+        local_drained: false,
+        secret_deleted: false,
+        remote: None,
+        evidence_acknowledged: false,
+    }
 }
 
 async fn snapshot(slot: &Arc<Mutex<Slot>>) -> RevokeAnswer {
@@ -1175,8 +1234,10 @@ impl AuthorizationOwner {
         self: &Arc<Self>,
         server: Uuid,
     ) -> Result<Option<AdmittedToken>, AdmissionRefusal> {
-        let Some(slot) = self.existing(server).await else {
-            return Ok(None);
+        let slot = match self.existing(server).await {
+            Recalled::Present(slot) => slot,
+            Recalled::Absent => return Ok(None),
+            Recalled::Unavailable => return Err(AdmissionRefusal::Unauthorized),
         };
         let admission = {
             let guard = slot.lock().await;
@@ -1210,7 +1271,7 @@ impl AuthorizationOwner {
 
     /// `server` answered 403 `insufficient_scope`. The call is not retried.
     pub async fn insufficient_scope(&self, server: Uuid, _www_authenticate: &str) {
-        if let Some(slot) = self.existing(server).await {
+        if let Recalled::Present(slot) = self.existing(server).await {
             self.apply(&slot, Command::InsufficientScope).await;
             let _ = self.persist(&slot).await;
             let _ = self.audit_slot(&slot, "scope", false).await;

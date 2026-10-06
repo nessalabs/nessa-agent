@@ -26,8 +26,9 @@ pub enum McpError {
     Timeout,
     /// The server's process ended, or its pipes closed, before an answer.
     ServerGone,
-    /// DNS, TCP, TLS, a 5xx answer, or the opening deadline passed before a
-    /// session existed. Nothing was retained.
+    /// DNS, TCP, TLS, or `initialize` failed before a session existed.
+    /// Nothing was retained. A later request that may already have been sent
+    /// is [`Self::Unconfirmed`].
     Unreachable,
     /// The server refused the call as unauthorized (HTTP 401). No token is
     /// carried in the error.
@@ -39,8 +40,9 @@ pub enum McpError {
     /// a later call may use a replacement session when the owner still admits
     /// one recovery.
     SessionExpired,
-    /// The stream ended before a pending request's result was observed. That
-    /// is not a cancellation receipt.
+    /// A request after `initialize` lost its response headers, was answered
+    /// HTTP 5xx, or its stream ended before the result was observed. The
+    /// remote may already have received it. That is not a cancellation receipt.
     Unconfirmed,
     /// Another opening already holds this upstream session id at the same MCP
     /// endpoint. This opening is refused and does not delete the other id.

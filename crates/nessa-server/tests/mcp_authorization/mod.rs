@@ -7,8 +7,9 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::mcp_authorization::application::{
-    AdmissionRefusal, AuthorizationOwner, AuthorizationRecords, AuthorizeAnswer, CallbackQuery,
-    OAuthCallFailure, OAuthHttp, OAuthResponse, RecordFailure, TokenMaterial,
+    AdmissionRefusal, AuthorizationOwner, AuthorizationRecords, AuthorizeAnswer, BindingChange,
+    CallbackQuery, FenceRefusal, OAuthCallFailure, OAuthHttp, OAuthResponse, RecordFailure,
+    TokenMaterial,
 };
 use crate::mcp_authorization::domain::{
     AcceptedDiscovery, Admission, Command, Deletion, Phase, Publication, RefreshActivity, Refusal,
@@ -888,4 +889,105 @@ async fn dropping_a_refresh_waiter_does_not_cancel_the_flight() {
     })
     .await
     .expect("the refresh flight finished after its waiter was dropped");
+}
+
+#[tokio::test]
+async fn an_absent_authorization_revoke_is_settled() {
+    let owner = owner(Arc::new(MemoryAuthorization::new()));
+    let answer = owner.revoke(server()).await;
+    assert!(answer.settled);
+    assert!(answer.secret_deleted);
+    assert!(answer.evidence_acknowledged);
+    assert_eq!(answer.remote, Some(RemoteObservation::Unsupported));
+    assert!(owner.facts(server()).await.is_none());
+    assert!(owner.fence(&[]).await.is_ok());
+    assert!(owner
+        .revalidate(&[(server(), "https://mcp.example/mcp".into())])
+        .await
+        .is_ok());
+}
+
+#[tokio::test]
+async fn an_unreadable_authorization_is_held() {
+    let memory = Arc::new(MemoryAuthorization::new());
+    let records = Arc::new(UnreadableRecords::default());
+    let owner = Arc::new(AuthorizationOwner::new(
+        records.clone(),
+        memory.clone(),
+        memory.clone(),
+        Arc::new(ScriptedCallback::pending()),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        true,
+    ));
+    assert_eq!(
+        owner
+            .authorize(server(), "docs", "https://mcp.example/mcp")
+            .await,
+        AuthorizeAnswer::AuthorizationIncomplete
+    );
+    assert!(!records.stored.load(Ordering::SeqCst));
+    let revoked = owner.revoke(server()).await;
+    assert!(!revoked.settled);
+    assert!(!revoked.local_drained);
+    assert!(!revoked.secret_deleted);
+    assert!(revoked.remote.is_none());
+    assert!(!revoked.evidence_acknowledged);
+    assert!(!records.deleted.load(Ordering::SeqCst));
+    assert_eq!(
+        owner.facts(server()).await.map(|facts| facts.phase),
+        Some("revocation_incomplete")
+    );
+    let change = BindingChange::Removed {
+        id: server(),
+        url: "https://mcp.example/mcp".into(),
+    };
+    assert_eq!(owner.fence(&[change]).await, Err(FenceRefusal));
+    assert_eq!(
+        owner
+            .revalidate(&[(server(), "https://mcp.example/other".into())])
+            .await,
+        Err(FenceRefusal)
+    );
+    assert_eq!(
+        owner.bearer(server()).await,
+        Err(AdmissionRefusal::Unauthorized)
+    );
+}
+
+#[derive(Default)]
+struct UnreadableRecords {
+    stored: AtomicBool,
+    deleted: AtomicBool,
+}
+
+#[async_trait]
+impl AuthorizationRecords for UnreadableRecords {
+    async fn load(&self, _server: Uuid) -> Result<Option<ServerAuth>, RecordFailure> {
+        Err(RecordFailure::Unavailable)
+    }
+
+    async fn store(&self, _auth: &ServerAuth) -> Result<(), RecordFailure> {
+        self.stored.store(true, Ordering::SeqCst);
+        Err(RecordFailure::Unavailable)
+    }
+
+    async fn load_secret(&self, _server: Uuid) -> Result<Option<TokenMaterial>, RecordFailure> {
+        Err(RecordFailure::Unavailable)
+    }
+
+    async fn store_secret(
+        &self,
+        _server: Uuid,
+        _secret: &TokenMaterial,
+    ) -> Result<Publication, RecordFailure> {
+        Err(RecordFailure::Unavailable)
+    }
+
+    async fn delete_secret(&self, _server: Uuid) -> Result<Deletion, RecordFailure> {
+        self.deleted.store(true, Ordering::SeqCst);
+        Err(RecordFailure::Unavailable)
+    }
 }

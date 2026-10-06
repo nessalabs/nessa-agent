@@ -819,7 +819,15 @@ async fn conversations(
                         .into_iter()
                         .map(|remote| (remote.id(), remote.url().as_str().to_owned()))
                         .collect();
-                    managed.authorization.revalidate(&remotes).await;
+                    managed
+                        .authorization
+                        .revalidate(&remotes)
+                        .await
+                        .map_err(|_| {
+                            RunError::Agent(
+                                "remote MCP authorization could not be revalidated".into(),
+                            )
+                        })?;
                     (
                         Some(Arc::new(managed.settings)),
                         Some(managed.authorization),
