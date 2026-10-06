@@ -427,12 +427,16 @@ async fn a_desktop_stop_waits_for_a_message_waiting_in_the_enqueue() {
         let live = live.clone();
         async move { live.agent.set_approval_mode(ProviderMode::Ask).await }
     });
-    tokio::select! {
-        _ = fixture.provider.mode_started.notified() => {}
-        finished = &mut changing => {
-            panic!("the mode change returned before the provider was asked: {finished:?}");
+    tokio::time::timeout(BOUND, async {
+        tokio::select! {
+            _ = fixture.provider.mode_started.notified() => {}
+            finished = &mut changing => {
+                panic!("the mode change returned before the provider was asked: {finished:?}");
+            }
         }
-    }
+    })
+    .await
+    .expect("the mode change had not reached the provider");
     drop(live);
     let sending = fixture.send("in-enqueue", "In the enqueue", false);
     tokio::time::timeout(BOUND, async {
