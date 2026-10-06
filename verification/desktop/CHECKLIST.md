@@ -470,7 +470,7 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 
 - [ ] **An agent's command is drawn in the order it runs.** A bidi control in
   the argument (U+202A–U+202E, U+2066–U+2069, U+200E, U+200F, U+061C, and the
-  line and paragraph separators U+2028 and U+2029) is shown
+  line and paragraph separators U+0085, U+2028, and U+2029) is shown
   as its `\u` escape, so an override cannot present another address; the shown
   JSON parses to the argument that runs. A command that starts with a
   right-to-left letter keeps a left-to-right base, so the tool stays left of

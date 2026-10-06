@@ -14,6 +14,7 @@ describe("shownName", () => {
     expect(shownName("a\u2069\u202Eb")).toBe("a\uFFFD\uFFFDb")
     expect(shownName("x\u200Ey\u200Fz\u061C")).toBe("x\uFFFDy\uFFFDz\uFFFD")
     expect(shownName("a\u2028b\u2029")).toBe("a\uFFFDb\uFFFD")
+    expect(shownName("a\u0085b")).toBe("a\uFFFDb")
     expect(shownName("cargo")).toBe("cargo")
   })
 })
@@ -45,12 +46,13 @@ describe("shownJson", () => {
   })
 
   it("escapes a line or paragraph separator inside a string", () => {
-    const value = "line\u2028next\u2029end"
+    const value = "line\u2028next\u2029end\u0085"
     const json = JSON.stringify({ to: value })
     const shown = shownJson(json)
     expect(shown).not.toMatch(bidiControls)
     expect(shown).toContain("\\u2028")
     expect(shown).toContain("\\u2029")
+    expect(shown).toContain("\\u0085")
     expect(JSON.parse(shown)).toEqual({ to: value })
   })
 })

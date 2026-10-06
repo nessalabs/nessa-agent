@@ -13,7 +13,7 @@
  * `evil`, RLO, `gnp.exe` as `evilexe.png`. So every bidi control a name
  * carries — the embeddings and overrides (U+202A–U+202E), the isolates
  * (U+2066–U+2069), the marks (U+200E, U+200F, U+061C), and the line and
- * paragraph separators (U+2028, U+2029) — is shown as
+ * paragraph separators (U+0085, U+2028, U+2029) — is shown as
  * U+FFFD, the replacement character, before the name is isolated
  * (`shownName`): seen, and doing nothing. A sentence that repeats those names
  * (`naming`) isolates each of them the same way, and leaves every other word.
