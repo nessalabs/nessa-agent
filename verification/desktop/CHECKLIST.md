@@ -767,12 +767,9 @@ The panel's webview is a stage larger than its window, pinned to the window's
 bottom right (`src/panel/adapters/panel-frame.ts`); before the frontend
 mounts, `index.html` shows the fallback on that stage.
 
-- [ ] **The painted avatar and "Loading" sit inside the visible window; their
-  layout boxes are centred in it once the host reports its size**, on the default frame, a short configured
-  height, and a narrow panel; with the size pending or refused they stay inside the bottom-right 320 × 320 and still say "Loading". When the frontend script is not served (the panel with no host, and setup), the calm screen replaces Loading: the flat avatar, "Nessa couldn’t start", the code `STARTUP_MODULE`, and Restart and Quit as circular icon actions. The page URL and the script path stay in the console, not on the screen. The avatar stays inside the same box. Setup centres that stack; the panel starts it at the window's top left. The avatar has no halo. Nothing
-  paints over the line, the page does not scroll, and nothing animates with
-  reduced motion. The breathing avatar, while it is still Loading, stays centred on its layout box; its
-  full-size and minimum-size paint are both checked. _Check:_ `load-fallback.mjs` (runs the real frontend against
+- [ ] **"Loading" sits inside the visible window and is centred in it once the host reports its size**, on the default frame, a short configured
+  height, and a narrow panel; with the size pending or refused it stays inside the bottom-right 320 × 320 and still says "Loading". The screen is a dark field and that word. It does not paint the avatar, a glow, or any image, and nothing on it animates. When the frontend script is not served (the panel with no host, and setup), the calm screen replaces Loading: "Nessa couldn’t start", the code `STARTUP_MODULE`, and Restart and Quit as circular icon actions, still with no avatar. The page URL and the script path stay in the console, not on the screen. Setup centres that stack; the panel starts it at the window's top left. Nothing
+  paints over the line, and the page does not scroll. _Check:_ `load-fallback.mjs` (runs the real frontend against
   a fake host whose startup never answers and which fakes `panel_size`).
 
 ## The window's gateway
@@ -788,7 +785,7 @@ says why where the conversations would be.
   and no gateway listening each show "Nessa couldn’t start", the code
   `STARTUP_GATEWAY` from `src/host/startup-refusals.json`, and Restart and
   Quit as icon actions. The log sentences (started without the local server,
-  still starting, not answering) stay off the screen. The mark has no halo.
+  still starting, not answering) stay off the screen. The avatar mark is absent.
   While the gateway is not ready the host refuses the endpoint and the
   credential is never asked for. Signed out, the status sits inside the chat
   area and the window, Try Again is at least 24px tall with nothing over it,

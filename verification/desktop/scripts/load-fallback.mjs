@@ -12,9 +12,9 @@
  * `windowSize()` and `publishWindowSize()`. A browser scenario holds every
  * script back instead. A held-back script shows the calm screen and logs
  * the page it could not load.
- * Each other scenario checks that the avatar and "Loading" sit wholly
- * inside the visible window, centred in it once its size is known, and that
- * nothing paints over them.
+ * Each other scenario checks that "Loading" sits wholly inside the visible
+ * window, centred in it once its size is known, and that nothing paints
+ * over it. The avatar mark is absent on both screens.
  */
 import { launch } from "./lib/browser.mjs"
 import { attempt } from "./lib/cli.mjs"
@@ -90,41 +90,19 @@ function fakeHost(host) {
   }
 }
 
-async function measure(page, phase = null) {
+async function measure(page) {
   return page.evaluate(
-    async ([message, mark, startupMark, title, startupLine, phase]) => {
+    ([message, loadMark, startupMark, title, startupLine]) => {
       const messageElement = document.querySelector(message)
       const markElement =
-        document.querySelector(startupMark) ?? document.querySelector(mark)
+        document.querySelector(startupMark) ?? document.querySelector(loadMark)
       const titleElement =
         document.querySelector(startupLine) ?? document.querySelector(title)
-      const markAnimation = document
-        .getAnimations()
-        .find((animation) => animation.effect?.target === markElement)
-      const timing = markAnimation?.effect?.getTiming()
-      const phaseMilliseconds =
-        phase !== null && typeof timing?.duration === "number"
-          ? timing.delay + timing.duration * phase
-          : null
-      if (phaseMilliseconds !== null && markAnimation) {
-        markAnimation.pause()
-        await markAnimation.ready
-        markAnimation.currentTime = phaseMilliseconds
-        await new Promise(requestAnimationFrame)
-      }
-      const rect = (selector) => {
-        const r = document.querySelector(selector).getBoundingClientRect()
+      const rectOf = (element) => {
+        const r = element.getBoundingClientRect()
         return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
       }
-      const messageRect = rect(message)
-      // offset geometry belongs to the fixed grid, unaffected by breathing.
-      // Its integer rounding is below the existing one-pixel alignment bound.
-      const markLayout = {
-        left: messageRect.left + markElement.offsetLeft,
-        top: messageRect.top + markElement.offsetTop,
-        right: messageRect.left + markElement.offsetLeft + markElement.offsetWidth,
-        bottom: messageRect.top + markElement.offsetTop + markElement.offsetHeight,
-      }
+      const messageRect = rectOf(messageElement)
       const t = titleElement.getBoundingClientRect()
       const titleRect = { left: t.left, top: t.top, right: t.right, bottom: t.bottom }
       const covering = document.elementFromPoint(
@@ -135,15 +113,8 @@ async function measure(page, phase = null) {
       const actionRect = actions ? actions.getBoundingClientRect() : null
       return {
         message: messageRect,
-        markLayout,
-        markLayoutOwned: markElement.offsetParent === messageElement,
-        markAnimationPresent: Boolean(markAnimation),
-        phase,
-        phaseMilliseconds,
-        keyframeOffsets: markAnimation?.effect
-          ?.getKeyframes()
-          .map((frame) => frame.computedOffset),
-        mark: rect(markElement.matches(startupMark) ? startupMark : mark),
+        markPresent: Boolean(markElement),
+        titleLayoutOwned: titleElement.offsetParent === messageElement,
         title: titleRect,
         actions: actionRect
           ? {
@@ -153,28 +124,21 @@ async function measure(page, phase = null) {
               bottom: actionRect.bottom,
             }
           : null,
-        text: document.querySelector(message).textContent.trim(),
+        text: messageElement.textContent.trim(),
         titleOnTop: covering === titleElement || titleElement.contains(covering),
-        halo: getComputedStyle(markElement).boxShadow,
         code:
           document.querySelector("[data-nessa-startup-code]")?.textContent?.trim() ??
           null,
         restart: Boolean(document.querySelector('[aria-label="Restart"]')),
         quit: Boolean(document.querySelector('[aria-label="Quit"]')),
         animations: document.getAnimations().length,
+        images: document.images.length,
         overflow:
           document.documentElement.scrollWidth > innerWidth ||
           document.documentElement.scrollHeight > innerHeight,
       }
     },
-    [
-      css.loadMessage,
-      css.loadMark,
-      css.startupMark,
-      css.loadTitle,
-      css.startupLine,
-      phase,
-    ],
+    [css.loadMessage, css.loadMark, css.startupMark, css.loadTitle, css.startupLine],
   )
 }
 
@@ -192,11 +156,14 @@ function check(scenario, m) {
         bottom: stage.height,
       }
     : { left: 0, top: 0, right: stage.width, bottom: stage.height }
+  if (m.markPresent) failures.push("the avatar mark is on the screen")
+  if (m.images !== 0)
+    failures.push(`the screen shows ${m.images} image${m.images === 1 ? "" : "s"}`)
   const content = {
-    left: Math.min(m.mark.left, m.title.left, m.actions?.left ?? Infinity),
-    top: Math.min(m.mark.top, m.title.top, m.actions?.top ?? Infinity),
-    right: Math.max(m.mark.right, m.title.right, m.actions?.right ?? -Infinity),
-    bottom: Math.max(m.mark.bottom, m.title.bottom, m.actions?.bottom ?? -Infinity),
+    left: Math.min(m.title.left, m.actions?.left ?? Infinity),
+    top: Math.min(m.title.top, m.actions?.top ?? Infinity),
+    right: Math.max(m.title.right, m.actions?.right ?? -Infinity),
+    bottom: Math.max(m.title.bottom, m.actions?.bottom ?? -Infinity),
   }
   const inside =
     content.left >= clip.left - 0.5 &&
@@ -205,33 +172,13 @@ function check(scenario, m) {
     content.bottom <= clip.bottom + 0.5
   if (!inside)
     failures.push(
-      `avatar and title ${JSON.stringify(content)} are not inside the visible window ${JSON.stringify(clip)}`,
+      `the line ${JSON.stringify(content)} is not inside the visible window ${JSON.stringify(clip)}`,
     )
-  const layout = {
-    left: Math.min(m.markLayout.left, m.title.left, m.actions?.left ?? Infinity),
-    top: Math.min(m.markLayout.top, m.title.top, m.actions?.top ?? Infinity),
-    right: Math.max(m.markLayout.right, m.title.right, m.actions?.right ?? -Infinity),
-    bottom: Math.max(m.markLayout.bottom, m.title.bottom, m.actions?.bottom ?? -Infinity),
-  }
-  if (!m.markLayoutOwned)
-    failures.push("the fixed message grid does not own the mark's layout")
-  const markCentre = {
-    dx: (m.mark.left + m.mark.right - m.markLayout.left - m.markLayout.right) / 2,
-    dy: (m.mark.top + m.mark.bottom - m.markLayout.top - m.markLayout.bottom) / 2,
-  }
-  if (Math.abs(markCentre.dx) > 1 || Math.abs(markCentre.dy) > 1)
-    failures.push(
-      `the painted mark left its layout centre by ${markCentre.dx.toFixed(1)}, ${markCentre.dy.toFixed(1)}`,
-    )
-  if (m.phase !== null && !m.markAnimationPresent)
-    failures.push("the loading mark has no breathing animation to sample")
-  if (m.phase !== null && m.phaseMilliseconds === null)
-    failures.push("the loading mark has no numeric animation duration to sample")
-  if (m.phase !== null && !m.keyframeOffsets?.includes(m.phase))
-    failures.push(`the loading mark has no breathing keyframe at phase ${m.phase}`)
+  if (!m.titleLayoutOwned)
+    failures.push("the fixed message grid does not own the line's layout")
   if (scenario.centred) {
-    const dx = (layout.left + layout.right) / 2 - (clip.left + clip.right) / 2
-    const dy = (layout.top + layout.bottom) / 2 - (clip.top + clip.bottom) / 2
+    const dx = (content.left + content.right) / 2 - (clip.left + clip.right) / 2
+    const dy = (content.top + content.bottom) / 2 - (clip.top + clip.bottom) / 2
     if (Math.abs(dx) > 1 || Math.abs(dy) > 1)
       failures.push(
         `off centre of the visible window by ${dx.toFixed(1)}, ${dy.toFixed(1)}`,
@@ -244,19 +191,19 @@ function check(scenario, m) {
       failures.push(`code is ${JSON.stringify(m.code)}, not STARTUP_MODULE`)
     if (m.text.includes("did not serve") || m.text.includes("/src/"))
       failures.push(`the log sentence is on the screen: ${JSON.stringify(m.text)}`)
-    if (m.halo !== "none") failures.push(`the mark has a halo (${m.halo})`)
     if (!m.restart || !m.quit) failures.push("Restart or Quit is missing")
   } else if (m.text !== "Loading")
     failures.push(`says ${JSON.stringify(m.text)}, not "Loading"`)
   if (!m.titleOnTop) failures.push("something paints over the title")
   if (m.overflow) failures.push("the page scrolls")
-  return { failures, measured: { clip, content, layout, markCentre } }
+  return { failures, measured: { clip, content } }
 }
 
 await main(
   {
     name: "load-fallback",
-    summary: "the load fallback sits inside, and centred in, the visible window",
+    summary:
+      "Loading sits inside the visible window, and neither screen shows the avatar",
     defaults: { engine: "chromium,webkit" },
   },
   async ({ options, rep, url }) => {
@@ -322,7 +269,7 @@ await main(
                   })
                   const search = scenario.surface === "setup" ? "?surface=setup" : ""
                   await page.goto(`${origin}/index.html${search}`)
-                  await page.waitForSelector(`${css.loadMark}, ${css.startupMark}`)
+                  await page.waitForSelector(`${css.loadTitle}, ${css.startupLine}`)
                   if (typeof scenario.host === "object" && scenario.host)
                     await page.waitForFunction(() =>
                       document.documentElement.style.getPropertyValue(
@@ -338,41 +285,19 @@ await main(
                     )
                   else await page.waitForLoadState("networkidle")
                   await page.evaluate(() => new Promise(requestAnimationFrame))
-                  // Sample the full-size and midpoint breathing keyframes;
-                  // containment must not depend on when the page becomes ready. Only the mark's animation
-                  // is paused; other fallback animations retain their behavior.
-                  const samples = []
-                  for (const phase of motion === "reduce" || scenario.host === null
-                    ? [null]
-                    : [0, 0.5]) {
-                    const m = await measure(page, phase)
-                    samples.push({
-                      phase,
-                      milliseconds: m.phaseMilliseconds,
-                      keyframeOffsets: m.keyframeOffsets,
-                      ...check(scenario, m),
-                      animations: m.animations,
-                    })
-                  }
+                  const m = await measure(page)
                   const result = {
-                    failures: samples.flatMap((sample) =>
-                      sample.failures.map((failure) =>
-                        sample.phase === null
-                          ? failure
-                          : `at phase ${sample.phase} (${sample.milliseconds}ms): ${failure}`,
-                      ),
-                    ),
-                    measured: samples[0].measured,
-                    samples,
+                    ...check(scenario, m),
+                    animations: m.animations,
                   }
                   if (holding && held.size === 0)
                     result.failures.push("no frontend script was held back")
-                  if (!(await page.$(`${css.loadMark}, ${css.startupMark}`)))
+                  if (!(await page.$(css.loadMessage)))
                     result.failures.push("the frontend replaced the fallback")
                   result.failures.push(...errors)
-                  if (motion === "reduce" && samples[0].animations !== 0)
+                  if (m.animations !== 0)
                     result.failures.push(
-                      `${samples[0].animations} animations run with reduced motion`,
+                      `${m.animations} animations run on the load screen`,
                     )
                   return result
                 } finally {

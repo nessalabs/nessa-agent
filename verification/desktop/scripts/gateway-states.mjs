@@ -229,7 +229,20 @@ function refuseCredential(socket) {
 
 async function measure(page) {
   return page.evaluate(
-    ([empty, text, retry, chat, rows, sample, screen, line, code, restart, quit]) => {
+    ([
+      empty,
+      text,
+      retry,
+      chat,
+      rows,
+      sample,
+      screen,
+      line,
+      code,
+      restart,
+      quit,
+      mark,
+    ]) => {
       const rect = (element) => {
         const r = element.getBoundingClientRect()
         return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
@@ -249,7 +262,6 @@ async function measure(page) {
             ?.closest("button") === element
         )
       }
-      const mark = document.querySelector("[data-nessa-startup-mark]")
       return {
         text: document.querySelector(text)?.textContent ?? null,
         line: document.querySelector(line)?.textContent?.trim() ?? null,
@@ -259,7 +271,7 @@ async function measure(page) {
         quit: quitButton ? rect(quitButton) : null,
         restartOnTop: onTop(restartButton),
         quitOnTop: onTop(quitButton),
-        halo: mark ? getComputedStyle(mark).boxShadow : null,
+        markPresent: Boolean(document.querySelector(mark)),
         status: status ? rect(status) : null,
         button: button ? rect(button) : null,
         buttonOnTop: button
@@ -291,6 +303,7 @@ async function measure(page) {
       css.startupCode,
       css.startupRestart,
       css.startupQuit,
+      css.startupMark,
     ],
   )
 }
@@ -358,7 +371,7 @@ function checkCalm(scenario, m) {
       if (!onTop) failures.push(`something paints over ${name}`)
     }
   }
-  if (m.halo && m.halo !== "none") failures.push(`the mark has a halo (${m.halo})`)
+  if (m.markPresent) failures.push("the avatar mark is on the startup screen")
   if (m.rows !== 0) failures.push(`${m.rows} session rows listed`)
   if (m.sample !== 0) failures.push("the sample plugin is drawn")
   if (!(m.asked.load_gateway_endpoint >= 1))
