@@ -23,6 +23,7 @@ import {
   WidgetRegistryError,
 } from "./widgets"
 import { deferred, fakeGateway, view } from "./workspace/adapters/gateway/fake-gateway"
+import { sampleAppSession } from "./workspace"
 import { fakeSource } from "./workspace/testing"
 
 /** What a fake client holds for Settings' servers: nothing these tests ask of it. */
@@ -183,6 +184,96 @@ describe("the window's widget plugins", () => {
     }
   })
 
+  it("D18 (#390): send an app's message through the source, which reads its conversation until it is answered; a context starts no read", async () => {
+    vi.useFakeTimers()
+    try {
+      const drawn = gatewayWithApp()
+      const { workspace, widgets } = createDesktopDependencies({
+        gateway: drawn.connect,
+        apps: { sandbox: undefined, platform: "web" },
+      })
+      await workspace.transcript(conversation)
+      const stop = workspace.subscribe(() => {})
+      const plugin = widgets.plugin(appPluginId("mcptest"))
+      if (plugin?.kind !== "app") throw new Error("no app plugin")
+      const port = plugin.ports.conversation
+      if (!port) throw new Error("no conversation port")
+      const address = {
+        sessionId: conversation,
+        server: "mcptest",
+        app: { executionId: "run", toolId: "call-1", instanceId: "mount" },
+      }
+      // A context waits on nobody: while the gateway has not answered it, as
+      // after, no read is started for it, however long it takes.
+      await vi.advanceTimersByTimeAsync(3_000)
+      const atRest = drawn.reads()
+      const given = port.updateModelContext(
+        address,
+        { content: [{ type: "text", text: "Showing April" }] },
+        new AbortController().signal,
+      )
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(drawn.contexts).toEqual([
+        [conversation, address.app, "mcptest", { text: "Showing April" }],
+      ])
+      expect(drawn.reads()).toBe(atRest)
+      drawn.contexted.resolve({ requestId: "request", applied: true })
+      expect(await given).toEqual({ kind: "ok", result: {} })
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(drawn.reads()).toBe(atRest)
+      // A message waits on the person's review there: read each round until answered.
+      const sent = port.sendMessage(address, [{ type: "text", text: "Plot May" }])
+      await vi.advanceTimersByTimeAsync(3_000)
+      const whileAsked = drawn.reads()
+      expect(whileAsked).toBeGreaterThan(atRest)
+      drawn.messaged.resolve({ executionId: "turn" })
+      expect(await sent).toEqual({ kind: "ok", result: {} })
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(drawn.reads()).toBe(whileAsked)
+      stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("D-J (#390): give the fixture app a conversation beside the sample workspace, where its message lands written by it", async () => {
+    const { workspace, widgets } = createDesktopDependencies({
+      apps: { sandbox: undefined, platform: "web" },
+    })
+    const plugin = widgets.plugin(appPluginId(fixtureServer))
+    if (plugin?.kind !== "app") throw new Error("no fixture app plugin")
+    const port = plugin.ports.conversation
+    if (!port) throw new Error("no conversation port")
+    const address = {
+      sessionId: sampleAppSession,
+      server: fixtureServer,
+      app: { executionId: "e", toolId: "t", instanceId: "mount" },
+    }
+    expect(
+      await port.sendMessage(address, [{ type: "text", text: "Plot May next to April" }]),
+    ).toEqual({ kind: "ok", result: {} })
+    const transcript = await workspace.transcript(sampleAppSession)
+    expect(transcript.messages.at(-1)).toMatchObject({
+      role: "user",
+      parts: [{ kind: "text", text: "Plot May next to April" }],
+      app: { server: fixtureServer, tool: "show_fixture" },
+    })
+    // Its agent is at work now: another is refused, and adds nothing.
+    expect(
+      (await port.sendMessage(address, [{ type: "text", text: "Again" }])).kind,
+    ).toBe("refused")
+    expect((await workspace.transcript(sampleAppSession)).messages).toHaveLength(
+      transcript.messages.length,
+    )
+    // The sample has no model: a context is refused, never answered as taken.
+    expect(
+      await port.updateModelContext(address, {}, new AbortController().signal),
+    ).toEqual({
+      kind: "refused",
+      reason: "The sample has no model to give context to",
+    })
+  })
+
   it("leave the fixture app out beside a gateway, whose servers' apps it could stand in for", () => {
     const { widgets } = createDesktopDependencies({
       gateway: gatewayWithApp().connect,
@@ -222,20 +313,31 @@ function gatewayWithApp() {
     }),
   )
   const released: unknown[][] = []
-  // Each tool call waits until the test answers it.
+  const contexts: unknown[][] = []
+  // Each tool call, message and context waits until the test answers it.
   const called = deferred<unknown>()
+  const messaged = deferred<unknown>()
+  const contexted = deferred<unknown>()
   const mcpApps = {
     releaseApp: (...args: unknown[]) => {
       released.push(args)
       return Promise.resolve()
     },
     callTool: () => called.promise,
+    sendMessage: () => messaged.promise,
+    updateModelContext: (...args: unknown[]) => {
+      contexts.push(args)
+      return contexted.promise
+    },
   } as unknown as McpAppsApi
   const { client } = gateway
   let connects = 0
   return {
     released,
+    contexts,
     called,
+    messaged,
+    contexted,
     reads: () => gateway.count("read"),
     connects: () => connects,
     connect: () => {

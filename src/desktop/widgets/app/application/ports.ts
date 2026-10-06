@@ -7,8 +7,9 @@
  * declare, and its requests are refused — never answered as if done
  * (gate 7).
  *
- * A port call is given a deadline by the bridge (`deadlines.request`, or the
- * server's own `callWithin` for `tools/call`): past it the app is answered
+ * A port call is given a deadline by the bridge (`deadlines.request`, the
+ * server's own `callWithin` for `tools/call`, or the conversation's `within`
+ * for its two requests): past it the app is answered
  * that it timed out and its slot is freed, so a port that never settles
  * cannot hold the app's requests (`bridge.test.ts`, L31).
  * A port that rejects is a fault of its adapter, not an answer: the bridge
@@ -106,21 +107,62 @@ export interface McpAppCalls {
   subscribe(widgetId: string, listener: () => void): () => void
 }
 
-/** What a request to the conversation came to. */
+/** What a request to the person's browser or files came to. */
 export type Delivered = "done" | "refused"
 
-/** The conversation an app's call was made in: messages and model context. */
+/**
+ * What the conversation answered an app's request: the gateway's answer, in
+ * the server's outcomes (`ServerAnswer`, the same table for both, #390 D-B),
+ * when the client is certain of it — a refusal, a server gone or a busy lane
+ * here is one made before anything was taken; `invalid` when the request is
+ * outside the client's bounds and nothing was sent, with the client's words
+ * for why; or `uncertain` when the request may have been taken all the same
+ * (the client's `NessaMcpAppError.uncertain`), with whether the table places
+ * its code as the server gone, so the view can say so.
+ */
+export type ConversationAnswer =
+  | ServerAnswer
+  | { readonly kind: "invalid"; readonly reason: string }
+  | { readonly kind: "uncertain"; readonly serverGone: boolean }
+
+/**
+ * The conversation an app's call was made in: the person's next message,
+ * written by the app, and the context it gives the model (#390). Whether it
+ * may — the person's consent to each message, a turn already running, the
+ * bounds — is the gateway's to decide; this carries its answer. Each request
+ * names the app at the bridge's own address, never anything the app said.
+ */
 export interface McpAppConversation {
-  /** `ui/message`: a message from the person, through the app. */
-  sendMessage(sessionId: string, content: readonly JsonObject[]): Promise<Delivered>
-  /** `ui/update-model-context`: replaces what this app last gave the model. */
+  /**
+   * `ui/message`: a message of the person's, written by the app. Its blocks
+   * are what `model/messages.ts` reads: text. `ok` once it is the
+   * conversation's turn; every message waits on the person's review first.
+   */
+  sendMessage(
+    address: AppAddress,
+    content: readonly JsonObject[],
+  ): Promise<ConversationAnswer>
+  /**
+   * `ui/update-model-context`: replaces what this mount last gave the model;
+   * an update with nothing in it clears it. `ok` once it is taken and
+   * recorded. A mount's updates are sent in the order it gave them. `signal`
+   * is aborted once the bridge has answered the request — a timeout among
+   * those — or the mount is released: an update still waiting its turn then
+   * is never sent.
+   */
   updateModelContext(
-    sessionId: string,
+    address: AppAddress,
     context: {
       readonly content?: readonly JsonObject[]
       readonly structuredContent?: JsonObject
     },
-  ): Promise<Delivered>
+    signal: AbortSignal,
+  ): Promise<ConversationAnswer>
+  /**
+   * How long, in milliseconds, either request may take before the bridge
+   * gives up on it: a message waits on the person's review first.
+   */
+  readonly within: number
 }
 
 /** Opens an `http`/`https` URL in the person's browser (`ui/open-link`). */

@@ -154,7 +154,14 @@ it("picks the caret up when what held it in the pane goes away, as an answered a
         ),
     )
   await asked(
-    { id: "ap", command: "ls", reason: "look", origin: { kind: "agent" }, options: [] },
+    {
+      id: "ap",
+      command: "ls",
+      reason: "look",
+      origin: { kind: "agent" },
+      options: [],
+      ask: "tool",
+    },
     5,
   )
   host.querySelector<HTMLButtonElement>("[data-pane-key] button")?.focus()

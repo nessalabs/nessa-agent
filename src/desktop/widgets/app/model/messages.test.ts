@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest"
 import { errorCodes, readEnvelope } from "./json-rpc"
-import { readFromFrame } from "./messages"
+import { contentText, readFromFrame } from "./messages"
 
 const read = (data: unknown) => readFromFrame(readEnvelope(data))
 
@@ -351,5 +351,21 @@ describe("what the host refuses or ignores", () => {
       expect(
         read({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params }),
       ).toEqual({ kind: "ignored" })
+  })
+})
+
+describe("what an app's blocks say (#390, D-A)", () => {
+  it("D-A: is each block's text, a blank line between each, an empty block left out", () => {
+    const text = (value: string) => ({ type: "text", text: value })
+    expect(contentText([text("Plot May"), text("next to April")])).toBe(
+      "Plot May\n\nnext to April",
+    )
+    expect(contentText([text(""), text("a"), text(""), text("b"), text("")])).toBe(
+      "a\n\nb",
+    )
+    // Blank but not empty is kept as given: whether it says anything is the gateway's (M3).
+    expect(contentText([text(" "), text("\n")])).toBe(" \n\n\n")
+    expect(contentText([])).toBe("")
+    expect(contentText([text(""), text("")])).toBe("")
   })
 })

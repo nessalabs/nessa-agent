@@ -416,6 +416,8 @@ describe("tools/call", () => {
           "mcp_server_mismatch",
           "mcp_tool_not_for_app",
           "invalid_request",
+          // An app's message's (#390): one table for every request an app makes.
+          "turn_running",
         ].sort(),
       )
       expect(gone.sort()).toEqual(
