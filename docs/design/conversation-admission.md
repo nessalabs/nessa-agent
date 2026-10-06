@@ -393,11 +393,14 @@ as the conversation being gone.
 
 The other-mode row applies its preset only once the agent is idle. Attachment
 starts the queue runner before the attachment join returns. Until that runner
-observes an empty queue, `running` stays set and a mode change is `turnRunning`
-(the approval-mode table's turn-running row, and the runner-start row of
-[scheduling](../../crates/nessa-sdk/docs/agent_execution/scheduling.md)). A send
-after the stop has marked the owner is `conversation_closed`. The other-mode
-test waits for `idle_for_approval_change` before it applies the preset (#563).
+observes an empty queue, `running` stays set.
+`ConversationService::set_approval_mode` then refuses `turnRunning`.
+`Agent::set_approval_mode` returns `Busy` from `apply_approval_mode` before it
+asks the provider, so a test parked on the provider's mode-started signal does
+not wake. The other-mode test and the enqueue test wait for
+`idle_for_approval_change` first. The enqueue test fails if that call returns
+before the provider is asked (#563). A send after the stop has marked the owner
+is `conversation_closed`.
 
 The wait for the lock, the mark and the stop run on the stop's own task. The
 caller waits at most the owner's `stopMs`. Past that, it is told the owner went
@@ -407,12 +410,12 @@ admission before it stops anything.
 
 | When | Stop | Message | Test |
 | --- | --- | --- | --- |
-| Attachment has joined, and the runner it started has not yet observed an empty queue | Has not begun | The other-mode case applies its preset only after the agent is idle. While `running` is still set, the mode change is the turn-running refusal | `a_send_during_a_desktop_stop_in_another_mode_is_refused_as_closed` waits for `idle_for_approval_change`; `a_mode_change_after_a_turn_is_running_is_audited_and_refused` |
+| Attachment has joined, and the runner it started has not yet observed an empty queue | Has not begun | The other-mode case applies its preset only after the agent is idle. While `running` is still set, the service's mode change is the turn-running refusal. `Agent::set_approval_mode` returns `Busy` from `apply_approval_mode` before the provider | `a_send_during_a_desktop_stop_in_another_mode_is_refused_as_closed` and `a_desktop_stop_waits_for_a_message_waiting_in_the_enqueue` wait for `idle_for_approval_change`. The enqueue test fails if the call returns before the provider is asked. `a_mode_change_after_a_turn_is_running_is_audited_and_refused` is the turn-running refusal |
 | A send arrives while a stop is closing the agent | Marked before it, its apps ended; reads answer | Refused as closed, before the mode is verified and with nothing recorded (an app's message is recorded refused `mcp_cancelled`, row M10 of `mcp-app-calls.md`); the next send after the release opens the conversation again. A retry of a message the agent already has is answered with its own delivery | `a_send_during_a_desktop_stop_is_refused_and_the_next_opens_again`, `an_owner_marked_as_stopping_is_handed_no_message`, `a_retry_of_a_message_the_stopping_owner_has_recovers_its_delivery`, `a_send_during_a_desktop_stop_in_another_mode_is_refused_as_closed` |
 | The owner changed while the stop waited for the lock | Marks and stops the owner live when it takes the lock | Settles on that owner | `a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock` |
 | Past its checks, before or in the enqueue | Waits for the lock, then marks and stops | Settles there: completed, cancelled by the close, or failed when the close cuts its turn short | `a_desktop_stop_waits_for_a_message_past_the_gateway_s_checks`, `a_desktop_stop_waits_for_a_message_waiting_in_the_enqueue` |
 | Enqueued | Marks and stops | Settles there | `a_desktop_stop_after_the_enqueue_settles_the_message` |
-| A submission holds the lock past the budget (for example, waiting for its agent to attach) | Over budget, with nothing stopped yet; carries on, then marks and stops once the lock is free | Settles there | `a_desktop_stop_that_cannot_take_the_lock_within_its_budget_carries_on`, `the_wait_for_the_lock_and_the_stop_share_one_budget` |
+| A submission holds the lock past the budget (for example, waiting for its agent to attach) | Over budget, with nothing stopped yet; carries on, then marks and stops once the lock is free. That close stays held until the slot is released | Settles while the close is held. A send then is refused as closed. Once the slot is released, the next send opens the conversation again | `a_desktop_stop_that_cannot_take_the_lock_within_its_budget_carries_on` holds the close, refuses that send, then waits for the slot. `the_wait_for_the_lock_and_the_stop_share_one_budget` checks the shared budget only |
 | The close runs past the budget | Over budget; carries on until the close is confirmed and the slot let go | A send meanwhile is refused as closed; reads answer; afterwards the conversation opens again | `a_stop_that_runs_past_its_budget_carries_on_and_lets_the_agent_go` |
 | The close fails | The stop's error; the slot keeps the agent, marked | Refused as closed, as after a person's failed close | `a_desktop_stop_whose_close_fails_leaves_its_owner_refusing_work` |
 

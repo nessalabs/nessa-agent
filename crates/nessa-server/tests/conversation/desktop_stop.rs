@@ -182,6 +182,35 @@ impl Fixture {
         .expect("one holds the submission lock and the other waits for it");
     }
 
+    /// Poll until `Agent::idle_for_approval_change` is true (#563).
+    async fn wait_until_idle(&self, live: &LiveConversation) {
+        tokio::time::timeout(BOUND, async {
+            while !live.agent.idle_for_approval_change().await {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the agent is idle before the mode change");
+    }
+
+    /// The id is gone from the conversation map: the close released the slot.
+    async fn wait_until_slot_released(&self) {
+        tokio::time::timeout(BOUND, async {
+            while self
+                .service
+                .inner
+                .conversations
+                .lock()
+                .await
+                .contains_key(&self.id)
+            {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the stop lets the slot go once the close is confirmed");
+    }
+
     /// Wait until the stop is waiting for the submission's lock. Without that
     /// ordering the stop never waits there: it has already stopped the agent
     /// under the submission, or is stopping it, and the test goes on after a
@@ -391,13 +420,19 @@ async fn a_desktop_stop_waits_for_a_message_past_the_gateway_s_checks() {
 async fn a_desktop_stop_waits_for_a_message_waiting_in_the_enqueue() {
     let fixture = Fixture::new(DELETION_BUDGETS.stop).await;
     let live = fixture.live().await;
+    fixture.wait_until_idle(&live).await;
     let (release_mode, mode_gate) = oneshot::channel();
     *fixture.provider.mode_gate.lock().unwrap() = Some(mode_gate);
-    let changing = tokio::spawn({
+    let mut changing = tokio::spawn({
         let live = live.clone();
         async move { live.agent.set_approval_mode(ProviderMode::Ask).await }
     });
-    fixture.provider.mode_started.notified().await;
+    tokio::select! {
+        _ = fixture.provider.mode_started.notified() => {}
+        finished = &mut changing => {
+            panic!("the mode change returned before the provider was asked: {finished:?}");
+        }
+    }
     drop(live);
     let sending = fixture.send("in-enqueue", "In the enqueue", false);
     tokio::time::timeout(BOUND, async {
@@ -476,8 +511,9 @@ async fn a_desktop_stop_after_the_enqueue_settles_the_message() {
 
 /// Row 5: a submission holds the lock past the stop budget. The stop
 /// answers over budget with nothing stopped yet, and carries on: once the
-/// submission has enqueued, it marks and stops the owner, the message settles
-/// there, and the next send opens the conversation again.
+/// submission has enqueued, it marks and stops the owner. The message settles
+/// while that close is still held, and a send then is closed. After the slot
+/// is released, the next send opens the conversation again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_desktop_stop_that_cannot_take_the_lock_within_its_budget_carries_on() {
     let budget = Duration::from_millis(200);
@@ -503,6 +539,8 @@ async fn a_desktop_stop_that_cannot_take_the_lock_within_its_budget_carries_on()
         "{stopped:?}"
     );
     assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 0);
+    let (release_close, close_gate) = oneshot::channel();
+    *fixture.provider.close_gate.lock().unwrap() = Some(close_gate);
     release.send(()).unwrap();
     sending.await.unwrap().unwrap();
     tokio::time::timeout(BOUND, async {
@@ -523,6 +561,18 @@ async fn a_desktop_stop_that_cannot_take_the_lock_within_its_budget_carries_on()
         ),
         "{settled:?}"
     );
+    assert!(
+        matches!(
+            fixture
+                .send("during-close", "During the close", false)
+                .await
+                .unwrap(),
+            Err(ConversationError::Agent(AgentError::Closed))
+        ),
+        "a send before the slot is released is closed"
+    );
+    release_close.send(()).unwrap();
+    fixture.wait_until_slot_released().await;
     fixture.still_usable().await;
     assert_eq!(fixture.provider.open_calls.load(Ordering::SeqCst), 2);
     fixture.service.shutdown().await.unwrap();
@@ -664,20 +714,7 @@ async fn a_stop_that_runs_past_its_budget_carries_on_and_lets_the_agent_go() {
         Err(ConversationError::Agent(AgentError::Closed))
     ));
     release_close.send(()).unwrap();
-    tokio::time::timeout(BOUND, async {
-        while fixture
-            .service
-            .inner
-            .conversations
-            .lock()
-            .await
-            .contains_key(&fixture.id)
-        {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-    })
-    .await
-    .expect("the stop lets the slot go once the close is confirmed");
+    fixture.wait_until_slot_released().await;
     fixture.still_usable().await;
     assert_eq!(
         fixture.provider.open_calls.load(Ordering::SeqCst),
@@ -780,13 +817,7 @@ async fn a_retry_of_a_message_the_stopping_owner_has_recovers_its_delivery() {
 async fn a_send_during_a_desktop_stop_in_another_mode_is_refused_as_closed() {
     let fixture = Fixture::new(DELETION_BUDGETS.stop).await;
     let live = fixture.live().await;
-    tokio::time::timeout(BOUND, async {
-        while !live.agent.idle_for_approval_change().await {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-    })
-    .await
-    .expect("the agent is idle before the mode change");
+    fixture.wait_until_idle(&live).await;
     fixture
         .service
         .set_approval_mode(
