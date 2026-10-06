@@ -156,6 +156,8 @@ const fillerLine = "The next line repeats the same sentence."
 const codeBlock = "function load(count) {\n  return count\n}\n"
 const minute = 60_000
 const uint32 = 0xffffffff
+/** The inclusive range `Date` can format (`TimeClip` in ECMA-262). */
+const dateLimit = 8_640_000_000_000_000
 
 interface Cursor {
   readonly state: number
@@ -188,6 +190,28 @@ function accepted(spec: SeededWorkspaceSpec): void {
   if (!whole(spec.messageCharacters) || spec.messageCharacters < 0)
     refuse("messageCharacters")
   if (spec.messageCharacters > 0 && spec.messages < 2) refuse("messageCharacters")
+  if (!representableTime(spec.now) || !representableTime(earliestAt(spec))) refuse("now")
+}
+
+function representableTime(value: number): boolean {
+  return Number.isFinite(value) && Math.abs(value) <= dateLimit
+}
+
+/**
+ * The earliest instant the builder stores: the last session's start, or an
+ * earlier long transcript when its messages reach back past an hour.
+ */
+function earliestAt(spec: SeededWorkspaceSpec): number {
+  if (spec.sessions === 0) return spec.now
+  const hour = 60
+  const longLead = Math.max(hour, spec.messages - 1)
+  const lastLead = spec.longTranscripts === spec.sessions ? longLead : hour
+  let minutesBack = spec.sessions - 1 + lastLead
+  if (spec.longTranscripts > 0 && spec.longTranscripts < spec.sessions) {
+    const longBack = spec.longTranscripts - 1 + longLead
+    if (longBack > minutesBack) minutesBack = longBack
+  }
+  return spec.now - minutesBack * minute
 }
 
 /** mulberry32. The returned value is a uint32; the cursor is the next state. */

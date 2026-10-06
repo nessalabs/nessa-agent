@@ -50,6 +50,19 @@ describe("seeded workspace", () => {
         [{ seed: -1 }, "seed"],
         [{ seed: 0x1_0000_0000 }, "seed"],
         [{ now: Number.NaN }, "now"],
+        [{ now: 1e20 }, "now"],
+        [{ now: -1e20 }, "now"],
+        [{ now: -8_640_000_000_000_000 }, "now"],
+        [
+          {
+            now: -8_640_000_000_000_000 + 60 * 60_000 - 1,
+            sessions: 1,
+            longTranscripts: 0,
+            messages: 0,
+            messageCharacters: 0,
+          },
+          "now",
+        ],
         [{ sessions: -1 }, "sessions"],
         [{ sessions: 1.2 }, "sessions"],
         [{ longTranscripts: 5 }, "longTranscripts"],
@@ -61,6 +74,30 @@ describe("seeded workspace", () => {
         [{ messageCharacters: -1 }, "messageCharacters"],
       ]
     for (const [over, reason] of cases) expect(reasonOf(over)).toBe(reason)
+  })
+
+  it("formats stored times at the edge of the date range", () => {
+    const limit = 8_640_000_000_000_000
+    const built = seededWorkspace(
+      spec({
+        now: -limit + 79 * 60_000,
+        sessions: 1,
+        longTranscripts: 1,
+        messages: 80,
+        messageCharacters: 40,
+      }),
+    )
+    const session = built.index.sessions[0]
+    expect(session?.startedAt).toBe(-limit)
+    expect(session?.updatedAt).toBe(-limit + 79 * 60_000)
+    const times = [
+      session?.updatedAt,
+      session?.startedAt,
+      ...(built.transcripts.get("load-00000")?.messages.map((message) => message.at) ??
+        []),
+    ]
+    for (const at of times)
+      expect(() => new Date(at ?? Number.NaN).toISOString()).not.toThrow()
   })
 
   it("refuses an empty model catalogue", () => {

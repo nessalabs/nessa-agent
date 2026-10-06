@@ -100,7 +100,7 @@ sequenceDiagram
 
 ## The seeded builder
 
-`seededWorkspace(spec)` builds during the call. The spec carries `seed` (uint32), `now`, `sessions`, `longTranscripts`, `messages`, and `messageCharacters`. A spec that is not a whole run throws `SeededWorkspaceRefusal` with the field name: `seed`, `now`, `sessions`, `longTranscripts`, `messages`, `messageCharacters`, or `catalogue` when `defaultComposerModel` has nothing to return.
+`seededWorkspace(spec)` builds during the call. The spec carries `seed` (uint32), `now`, `sessions`, `longTranscripts`, `messages`, and `messageCharacters`. A spec that is not a whole run throws `SeededWorkspaceRefusal` with the field name: `seed`, `now`, `sessions`, `longTranscripts`, `messages`, `messageCharacters`, or `catalogue` when `defaultComposerModel` has nothing to return. `now` has to be a time `Date` can format, and so does every stored `updatedAt`, `startedAt`, and message time after the session index and the message span are subtracted. `1e20` is refused as `now`.
 
 The draw is mulberry32. The same spec returns the same titles, previews, and the long transcript. A status draw uses that uint32's residue modulo 10: 0 is `needs-you`, 1 and 2 are `running`, and 3 through 9 are `idle`. Sessions spread across four channels (`load-desktop`, `load-release`, `load-reading`, `load-home`) by index, so 10,000 sessions are 2,500 in the largest channel.
 
