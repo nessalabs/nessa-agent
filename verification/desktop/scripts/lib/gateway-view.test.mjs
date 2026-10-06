@@ -17,6 +17,7 @@ import { CannotRun } from "./cli.mjs"
 
 import {
   admitOnce,
+  appReviewUnstartedMs,
   appReviewWaitMs,
   callsOf,
   changedSamples,
@@ -301,6 +302,38 @@ describe("the app review a step waits for (#474)", () => {
     assert.match(message, /transcript stayed partial/)
     assert.match(message, /call output: pending/)
     assert.equal(changedSamples(waited.samples).length >= 1, true)
+  })
+
+  it("an output that stays empty stops at the unstarted bound, not the call deadline", async () => {
+    const time = clock()
+    const waited = await waitForAppReview({
+      ...time,
+      baseline: new Set(),
+      deadlineMs: appReviewWaitMs({ callDeadlineMs: 370_000 }),
+      pending: async () => "",
+      read: async () => view([]),
+    })
+    assert.equal(waited.kind, "absent")
+    assert.ok(waited.samples.at(-1).ms >= appReviewUnstartedMs)
+    assert.ok(waited.samples.at(-1).ms < 370_000)
+    assert.match(
+      reviewAbsentMessage(waited.samples, waited.reads),
+      /never showed pending/,
+    )
+  })
+
+  it("empty, then pending, still waits out a review that arrives after 15s", async () => {
+    const time = clock()
+    const waited = await waitForAppReview({
+      ...time,
+      baseline: new Set(),
+      deadlineMs: appReviewWaitMs({ callDeadlineMs: 370_000 }),
+      pending: async () => (time.now() >= 1_000 ? "pending" : ""),
+      read: async () => view(time.now() >= 16_000 ? [opened] : []),
+    })
+    assert.equal(waited.kind, "review")
+    assert.ok(waited.samples.at(-1).ms >= 16_000)
+    assert.ok(waited.samples.at(-1).ms < 370_000)
   })
 
   it("needs a deadline", async () => {

@@ -107,6 +107,16 @@ export const appPermissions = (view) =>
 export const appReviewWaitMs = (timing) => timing.callDeadlineMs
 
 /**
+ * How long an output may stay empty before the wait stops (#474).
+ * A call the app shows as `pending` waits `appReviewWaitMs`: that is how
+ * long the host holds the call open. An output that never becomes pending
+ * is a call that was not made, so no review of it can arrive late, and the
+ * wait ends here — the same short alignment the window's first look uses —
+ * rather than holding until the call deadline.
+ */
+export const appReviewUnstartedMs = 15_000
+
+/**
  * What one read says about the review a step is waiting for (#474, R6–R8).
  * `reviews` are the app's pending reviews; `output` is what the app shows
  * for the call, when the step is watching it.
@@ -115,10 +125,11 @@ export const appReviewWaitMs = (timing) => timing.callDeadlineMs
  * | --- | --- | --- | --- |
  * | R6 | pending, empty, or unread | listed | `{ kind: "review" }` — that review, however long admission took |
  * | R7 | anything else | not listed | `{ kind: "answered" }` — the call ended with no review to answer |
- * | R8 | pending, empty, or unread | not listed | `{ kind: "wait" }` — admission may still be in front of the review |
+ * | R8 | `pending`, or empty only while `appReviewUnstartedMs` has not passed | not listed | `{ kind: "wait" }` — admission may still be in front of the review |
  *
  * A review and an output that has left pending, in one read, is R6: the
- * review is there to answer.
+ * review is there to answer. Empty past `appReviewUnstartedMs`, with the
+ * call never shown pending, stops: there is no in-flight call to wait out.
  */
 export function decideReviewWait({ reviews, output }, baseline) {
   const review = newReview(reviews, baseline)
@@ -164,6 +175,7 @@ export function reviewAbsentMessage(samples, reads) {
   const last = samples.at(-1)
   const states = [...new Set(samples.map((sample) => sample.transcriptState ?? "unknown"))]
   const outputs = [...new Set(samples.map((sample) => sample.output).filter((output) => output))]
+  const sawPending = samples.some((sample) => sample.output === "pending")
   const kinds = [
     ...new Set(samples.flatMap((sample) => sample.permissions.map((each) => each.kind))),
   ]
@@ -175,21 +187,28 @@ export function reviewAbsentMessage(samples, reads) {
     "no review of the app's destructive call reached the conversation's permissions " +
     `in ${reads} ${reads === 1 ? "read" : "reads"} over ${last?.ms ?? 0} ms ` +
     `(never listed in this wait, not a late one; ${transcript}; ` +
-    `call output: ${outputs.join(", ") || "unread"}; ` +
+    `${
+      sawPending
+        ? `call output: ${outputs.join(", ") || "unread"}`
+        : "call output never showed pending, so no call was in flight for a review to be late"
+    }; ` +
     `permission origins seen: ${kinds.join(", ") || "none"})`
   )
 }
 
 /**
  * Polls `read` until the step's review is in the view (R6), the call's
- * output leaves pending (R7), or `deadlineMs` has passed with neither (R8).
- * `pending`, when given, reads that output. `sleep` and `now` are the
- * clock, so a test can place a review after any number of milliseconds.
+ * output leaves pending (R7), or the bound has passed with neither (R8).
+ * The bound is `deadlineMs` once the app has shown the call as pending,
+ * and `unstartedMs` until then. `pending`, when given, reads that output.
+ * `sleep` and `now` are the clock, so a test can place a review after any
+ * number of milliseconds.
  */
 export async function waitForAppReview({
   read,
   baseline,
   deadlineMs,
+  unstartedMs = appReviewUnstartedMs,
   pending,
   sleep,
   now = Date.now,
@@ -197,11 +216,15 @@ export async function waitForAppReview({
 }) {
   if (!Number.isFinite(deadlineMs) || deadlineMs < 0)
     throw new Error("waitForAppReview needs a deadline")
+  if (!Number.isFinite(unstartedMs) || unstartedMs < 0)
+    throw new Error("waitForAppReview needs an unstarted bound")
   const start = now()
   const samples = []
+  let sawPending = false
   for (;;) {
     const view = await read()
     const output = pending ? await pending() : undefined
+    if (output === "pending") sawPending = true
     const elapsed = now() - start
     const decision = decideReviewWait(
       { reviews: appPermissions(view), output },
@@ -210,9 +233,13 @@ export async function waitForAppReview({
     samples.push(reviewSample(view, output, elapsed))
     if (decision.kind !== "wait")
       return { ...decision, samples: changedSamples(samples), reads: samples.length }
-    if (elapsed >= deadlineMs)
+    // No reader: the step is not watching the app's output, so only the
+    // call deadline bounds the wait. A reader that has not seen pending
+    // yet stops at the unstarted bound.
+    const bound = pending === undefined || sawPending ? deadlineMs : Math.min(deadlineMs, unstartedMs)
+    if (elapsed >= bound)
       return { kind: "absent", samples: changedSamples(samples), reads: samples.length }
-    await sleep(Math.min(pollMs, Math.max(deadlineMs - elapsed, 0)))
+    await sleep(Math.min(pollMs, Math.max(bound - elapsed, 0)))
   }
 }
 

@@ -52,6 +52,7 @@ import { CannotRun, chosen, log } from "./lib/cli.mjs"
 import {
   admitOnce,
   appPermissions,
+  appReviewUnstartedMs,
   appReviewWaitMs,
   callKey,
   newReview,
@@ -277,7 +278,7 @@ const pendingReviews = async (stack) =>
  * the steps with the review already listed. A review that takes longer is
  * the step's own wait (`awaitReview`), which does not stop at this bound.
  */
-const reviewOpened = (stack, baseline, ms = 15_000) =>
+const reviewOpened = (stack, baseline, ms = appReviewUnstartedMs) =>
   waitFor(
     async () => newReview(await appReviews(stack.client, stack.conversationId), baseline),
     ms,
@@ -287,8 +288,9 @@ const reviewOpened = (stack, baseline, ms = 15_000) =>
  * The step's wait for the review its own call opened (#474). While the
  * app's output for that call is still pending, a review the gateway lists
  * later is that review; the call ending with none is reported as answered;
- * neither by `stack.reviewWaitMs` — the client's call deadline — is absent,
- * with what the reads saw.
+ * neither by `stack.reviewWaitMs` — the client's call deadline — is absent.
+ * An output that never becomes pending stops at `appReviewUnstartedMs`:
+ * no call is in flight, so the absence is not a late review.
  */
 const awaitReview = (stack, baseline, pending) =>
   waitForAppReview({
