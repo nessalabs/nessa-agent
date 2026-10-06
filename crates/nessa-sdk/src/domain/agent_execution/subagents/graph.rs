@@ -355,7 +355,7 @@ impl OwnershipGraph {
         let progress = spawn.row.progress.clone();
         let state = self
             .lifetime_state(&parent)
-            .ok_or(OwnershipError::ParentMissing)?;
+            .expect("a dispatchable spawn names a recorded parent");
         if state == LifetimeState::Open {
             return Ok(Dispatch::Allowed);
         }
@@ -367,7 +367,9 @@ impl OwnershipGraph {
                 | SpawnProgress::StartupFailed { .. }
         ) {
             let known = progress.known();
-            let _evidence = self.advance_spawn(request, SpawnProgress::Draining { known })?;
+            let _evidence = self
+                .advance_spawn(request, SpawnProgress::Draining { known })
+                .expect("a non-terminal spawn drains to its known milestone");
         }
         Ok(Dispatch::Drain)
     }
@@ -494,7 +496,7 @@ impl OwnershipGraph {
         }
         let parent_state = self
             .lifetime_state(parent)
-            .ok_or(OwnershipError::ParentMissing)?;
+            .expect("a dispatchable spawn names a recorded parent");
         let state = match parent_state {
             LifetimeState::Open => DeliveryState::Submitted,
             LifetimeState::Closing | LifetimeState::Closed => DeliveryState::Suppressed,
@@ -745,15 +747,15 @@ impl OwnershipGraph {
             .filter(|spawn| &spawn.row.binding.parent_lifetime == lifetime)
             .map(|spawn| spawn.row.child_lifetime.clone())
             .collect();
-        if let Some(row) = self.lifetimes.get_mut(lifetime) {
-            if row.row.state == LifetimeState::Open {
-                row.row.state = LifetimeState::Closing;
-                row.row.close_operation = Some(operation.clone());
-                row.row.cause = Some(cause.clone());
-                row.row.initiator = Some(initiator.clone());
-                row.row.cascaded_from = cascaded_from;
-            }
-        }
+        let row = self
+            .lifetimes
+            .get_mut(lifetime)
+            .expect("seal names a recorded lifetime");
+        row.row.state = LifetimeState::Closing;
+        row.row.close_operation = Some(operation.clone());
+        row.row.cause = Some(cause.clone());
+        row.row.initiator = Some(initiator.clone());
+        row.row.cascaded_from = cascaded_from;
         for child in descendants {
             let child_state = self.lifetime_state(&child);
             if child_state == Some(LifetimeState::Open) {
@@ -806,11 +808,7 @@ impl OwnershipGraph {
             return true;
         }
         let mut pending = vec![root.clone()];
-        let mut seen = BTreeSet::new();
         while let Some(current) = pending.pop() {
-            if !seen.insert(current.clone()) {
-                continue;
-            }
             for spawn in self.spawns.values() {
                 if spawn.row.binding.parent_lifetime == current {
                     if &spawn.row.child_lifetime == target {
@@ -826,11 +824,7 @@ impl OwnershipGraph {
     fn settle_if_ready(&mut self, root: &AgentLifetimeId) {
         let mut pending = vec![root.clone()];
         let mut all = Vec::new();
-        let mut seen = BTreeSet::new();
         while let Some(current) = pending.pop() {
-            if !seen.insert(current.clone()) {
-                continue;
-            }
             all.push(current.clone());
             for spawn in self.spawns.values() {
                 if spawn.row.binding.parent_lifetime == current {
@@ -853,9 +847,11 @@ impl OwnershipGraph {
         }
         for lifetime in all {
             if self.lifetime_state(&lifetime) == Some(LifetimeState::Closing) {
-                if let Some(row) = self.lifetimes.get_mut(&lifetime) {
-                    row.row.state = LifetimeState::Closed;
-                }
+                self.lifetimes
+                    .get_mut(&lifetime)
+                    .expect("settled lifetime is recorded")
+                    .row
+                    .state = LifetimeState::Closed;
             }
         }
     }

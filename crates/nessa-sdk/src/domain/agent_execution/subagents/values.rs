@@ -17,8 +17,7 @@ pub const MAX_READ_PAGE: usize = 50;
 /// Maximum UTF-8 bytes of one bounded ownership label.
 pub const MAX_LABEL_BYTES: usize = 256;
 
-fn bounded(value: impl Into<String>, field: &'static str) -> Result<Box<str>, OwnershipError> {
-    let value = value.into();
+fn bounded(value: String, field: &'static str) -> Result<Box<str>, OwnershipError> {
     if value.trim().is_empty() {
         return Err(OwnershipError::EmptyValue(field));
     }
@@ -31,8 +30,7 @@ fn bounded(value: impl Into<String>, field: &'static str) -> Result<Box<str>, Ow
     Ok(value.into_boxed_str())
 }
 
-fn portable(value: impl Into<String>, field: &'static str) -> Result<Box<str>, OwnershipError> {
-    let value = value.into();
+fn portable(value: String, field: &'static str) -> Result<Box<str>, OwnershipError> {
     if value.is_empty()
         || value.len() > 128
         || !value
@@ -44,6 +42,68 @@ fn portable(value: impl Into<String>, field: &'static str) -> Result<Box<str>, O
     Ok(value.into_boxed_str())
 }
 
+fn approval_policy(
+    mode: String,
+    offer: String,
+    revision: String,
+) -> Result<ApprovalPolicy, OwnershipError> {
+    Ok(ApprovalPolicy {
+        mode: bounded(mode, "approval mode")?,
+        offer: bounded(offer, "permission offer")?,
+        revision: bounded(revision, "approval revision")?,
+    })
+}
+
+fn model_choice(provider: String, model: String) -> Result<ModelChoice, OwnershipError> {
+    Ok(ModelChoice {
+        provider: bounded(provider, "provider")?,
+        model: bounded(model, "model")?,
+    })
+}
+
+fn host_actor(
+    principal_id: String,
+    surface_id: String,
+    request_id: String,
+) -> Result<HostActor, OwnershipError> {
+    Ok(HostActor {
+        principal_id: bounded(principal_id, "principal id")?,
+        surface_id: bounded(surface_id, "surface id")?,
+        request_id: bounded(request_id, "request id")?,
+    })
+}
+
+fn agent_lifetime(value: String) -> Result<AgentLifetimeId, OwnershipError> {
+    Ok(AgentLifetimeId(portable(value, "agent lifetime id")?))
+}
+
+fn spawn_request(value: String) -> Result<SpawnRequestId, OwnershipError> {
+    Ok(SpawnRequestId(portable(value, "spawn request id")?))
+}
+
+fn close_operation(value: String) -> Result<CloseOperationId, OwnershipError> {
+    Ok(CloseOperationId(portable(value, "close operation id")?))
+}
+
+fn report_id(value: String) -> Result<ReportId, OwnershipError> {
+    Ok(ReportId(portable(value, "report id")?))
+}
+
+fn task_receipt(value: String) -> Result<TaskReceiptId, OwnershipError> {
+    Ok(TaskReceiptId(portable(value, "task receipt id")?))
+}
+
+fn task_digest(value: String) -> Result<TaskDigest, OwnershipError> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(OwnershipError::InvalidTaskDigest);
+    }
+    Ok(TaskDigest(value.into_boxed_str()))
+}
+
 /// One opening of a saved conversation for ownership purposes.
 /// A later reopen mints another id and does not adopt the previous children.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -52,7 +112,7 @@ pub struct AgentLifetimeId(Box<str>);
 impl AgentLifetimeId {
     /// Keep a portable key. Blank, oversized, or punctuated input is refused.
     pub fn new(value: impl Into<String>) -> Result<Self, OwnershipError> {
-        Ok(Self(portable(value, "agent lifetime id")?))
+        agent_lifetime(value.into())
     }
 
     /// Borrow the key text.
@@ -68,7 +128,7 @@ pub struct SpawnRequestId(Box<str>);
 impl SpawnRequestId {
     /// Keep a portable key. Blank, oversized, or punctuated input is refused.
     pub fn new(value: impl Into<String>) -> Result<Self, OwnershipError> {
-        Ok(Self(portable(value, "spawn request id")?))
+        spawn_request(value.into())
     }
 
     /// Borrow the key text.
@@ -84,7 +144,7 @@ pub struct CloseOperationId(Box<str>);
 impl CloseOperationId {
     /// Keep a portable key. Blank, oversized, or punctuated input is refused.
     pub fn new(value: impl Into<String>) -> Result<Self, OwnershipError> {
-        Ok(Self(portable(value, "close operation id")?))
+        close_operation(value.into())
     }
 
     /// Borrow the key text.
@@ -100,7 +160,7 @@ pub struct ReportId(Box<str>);
 impl ReportId {
     /// Keep a portable key. Blank, oversized, or punctuated input is refused.
     pub fn new(value: impl Into<String>) -> Result<Self, OwnershipError> {
-        Ok(Self(portable(value, "report id")?))
+        report_id(value.into())
     }
 
     /// Borrow the key text.
@@ -116,7 +176,7 @@ pub struct TaskReceiptId(Box<str>);
 impl TaskReceiptId {
     /// Keep a portable key. Blank, oversized, or punctuated input is refused.
     pub fn new(value: impl Into<String>) -> Result<Self, OwnershipError> {
-        Ok(Self(portable(value, "task receipt id")?))
+        task_receipt(value.into())
     }
 
     /// Borrow the key text.
@@ -132,15 +192,7 @@ pub struct TaskDigest(Box<str>);
 impl TaskDigest {
     /// Accept exactly 64 lowercase hexadecimal characters.
     pub fn new(value: impl Into<String>) -> Result<Self, OwnershipError> {
-        let value = value.into();
-        if value.len() != 64
-            || !value
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-        {
-            return Err(OwnershipError::InvalidTaskDigest);
-        }
-        Ok(Self(value.into_boxed_str()))
+        task_digest(value.into())
     }
 
     /// Borrow the hex digest.
@@ -166,11 +218,7 @@ impl ApprovalPolicy {
         offer: impl Into<String>,
         revision: impl Into<String>,
     ) -> Result<Self, OwnershipError> {
-        Ok(Self {
-            mode: bounded(mode, "approval mode")?,
-            offer: bounded(offer, "permission offer")?,
-            revision: bounded(revision, "approval revision")?,
-        })
+        approval_policy(mode.into(), offer.into(), revision.into())
     }
 
     /// Effective approval mode at child admission.
@@ -234,10 +282,7 @@ impl ModelChoice {
         provider: impl Into<String>,
         model: impl Into<String>,
     ) -> Result<Self, OwnershipError> {
-        Ok(Self {
-            provider: bounded(provider, "provider")?,
-            model: bounded(model, "model")?,
-        })
+        model_choice(provider.into(), model.into())
     }
 
     /// Provider identifier.
@@ -266,11 +311,7 @@ impl HostActor {
         surface_id: impl Into<String>,
         request_id: impl Into<String>,
     ) -> Result<Self, OwnershipError> {
-        Ok(Self {
-            principal_id: bounded(principal_id, "principal id")?,
-            surface_id: bounded(surface_id, "surface id")?,
-            request_id: bounded(request_id, "request id")?,
-        })
+        host_actor(principal_id.into(), surface_id.into(), request_id.into())
     }
 
     /// Principal the host verified.

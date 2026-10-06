@@ -88,6 +88,18 @@ fn identity_and_policy_values_reject_blank_and_oversized_input() {
         SpawnRequestId::new("x".repeat(129)),
         Err(OwnershipError::InvalidIdentity(_))
     ));
+    assert!(matches!(
+        CloseOperationId::new(""),
+        Err(OwnershipError::InvalidIdentity(_))
+    ));
+    assert!(matches!(
+        ReportId::new(""),
+        Err(OwnershipError::InvalidIdentity(_))
+    ));
+    assert!(matches!(
+        TaskReceiptId::new(""),
+        Err(OwnershipError::InvalidIdentity(_))
+    ));
     assert!(CloseOperationId::new("ok-1").is_ok());
     assert!(matches!(
         TaskDigest::new("abc"),
@@ -97,9 +109,64 @@ fn identity_and_policy_values_reject_blank_and_oversized_input() {
         TaskDigest::new("A".repeat(64)),
         Err(OwnershipError::InvalidTaskDigest)
     ));
+    assert!(matches!(
+        TaskDigest::new("g".repeat(64)),
+        Err(OwnershipError::InvalidTaskDigest)
+    ));
+    assert!(AgentLifetimeId::new("a_b").is_ok());
     assert!(digest("b").as_str().len() == 64);
+    assert_eq!(life("parent").as_str(), "parent");
+    assert_eq!(spawn_id("req-1").as_str(), "req-1");
+    assert_eq!(close_id("close-1").as_str(), "close-1");
+    assert_eq!(report("rep-1").as_str(), "rep-1");
+    assert_eq!(receipt("receipt-1").as_str(), "receipt-1");
+    let admitted = SpawnProgress::TaskAdmitted {
+        receipt: receipt("receipt-1"),
+    };
+    assert_eq!(
+        admitted.known(),
+        KnownMilestone::TaskAdmitted {
+            receipt: receipt("receipt-1"),
+        }
+    );
+    assert_eq!(
+        SpawnProgress::Unconfirmed {
+            known: KnownMilestone::Reserved,
+        }
+        .known(),
+        KnownMilestone::Reserved
+    );
+    assert_eq!(
+        SpawnProgress::Draining {
+            known: KnownMilestone::Prepared,
+        }
+        .known(),
+        KnownMilestone::Prepared
+    );
+    assert_eq!(
+        SpawnProgress::StartupFailed {
+            known: KnownMilestone::Attached,
+        }
+        .known(),
+        KnownMilestone::Attached
+    );
+    assert_eq!(
+        SpawnProgress::Ended {
+            known: KnownMilestone::Reserved,
+        }
+        .known(),
+        KnownMilestone::Reserved
+    );
     assert!(matches!(
         ApprovalPolicy::new("  ", "ask", "rev"),
+        Err(OwnershipError::EmptyValue(_))
+    ));
+    assert!(matches!(
+        ApprovalPolicy::new("ok", " ", "rev"),
+        Err(OwnershipError::EmptyValue(_))
+    ));
+    assert!(matches!(
+        ApprovalPolicy::new("ok", "ask", " "),
         Err(OwnershipError::EmptyValue(_))
     ));
     assert!(matches!(
@@ -130,11 +197,23 @@ fn identity_and_policy_values_reject_blank_and_oversized_input() {
         ModelChoice::new("", "m"),
         Err(OwnershipError::EmptyValue(_))
     ));
+    assert!(matches!(
+        ModelChoice::new("provider", " "),
+        Err(OwnershipError::EmptyValue(_))
+    ));
     let choice = ModelChoice::new("codex", "gpt").unwrap();
     assert_eq!(choice.provider(), "codex");
     assert_eq!(choice.model(), "gpt");
     assert!(matches!(
         HostActor::new("p", " ", "r"),
+        Err(OwnershipError::EmptyValue(_))
+    ));
+    assert!(matches!(
+        HostActor::new("", "surface", "req"),
+        Err(OwnershipError::EmptyValue(_))
+    ));
+    assert!(matches!(
+        HostActor::new("person", "surface", " "),
         Err(OwnershipError::EmptyValue(_))
     ));
     let host = actor("req");
@@ -1074,6 +1153,48 @@ fn r5_illegal_history_stays_readable_and_refuses_dispatch() {
         }),
         Err(OwnershipError::Cycle)
     );
+    assert_eq!(
+        cyclic.advance_spawn(&spawn_id("ab"), SpawnProgress::Prepared),
+        Err(OwnershipError::Cycle)
+    );
+    assert_eq!(
+        cyclic.dispatch_after_prepare(&spawn_id("ab")),
+        Err(OwnershipError::Cycle)
+    );
+    assert_eq!(
+        cyclic.begin_close(
+            &life("a"),
+            close_id("close-a"),
+            LifetimeCause::HostClose,
+            Initiator::Runtime,
+        ),
+        Err(OwnershipError::Cycle)
+    );
+    assert_eq!(
+        cyclic.apply_report(
+            &life("a"),
+            &close_id("close-a"),
+            &life("b"),
+            PhysicalFact::Released,
+            EvidenceFact::Acknowledged,
+        ),
+        Err(OwnershipError::Cycle)
+    );
+    assert_eq!(
+        cyclic.admit_report(report("rep-a"), &life("b"), &life("a")),
+        Err(OwnershipError::Cycle)
+    );
+    assert_eq!(
+        cyclic.resolve_report(&report("rep-a"), None),
+        Err(OwnershipError::Cycle)
+    );
+
+    let mut healthy = OwnershipGraph::new();
+    root(&mut healthy, "parent");
+    assert_eq!(
+        healthy.dispatch_after_prepare(&spawn_id("missing")),
+        Err(OwnershipError::UnknownSpawn)
+    );
 
     let mut missing = OwnershipSnapshot::default();
     missing.spawns.push(SpawnRow {
@@ -1383,5 +1504,163 @@ fn second_physical_release_records_the_previous_release_as_before() {
     assert_eq!(
         graph.close_cause(&life("parent")),
         Some(&LifetimeCause::HostClose)
+    );
+}
+
+#[test]
+fn restored_settlement_stays_readable() {
+    let mut graph = OwnershipGraph::new();
+    root(&mut graph, "parent");
+    graph
+        .begin_close(
+            &life("parent"),
+            close_id("close-1"),
+            LifetimeCause::HostClose,
+            Initiator::Host(actor("close")),
+        )
+        .unwrap();
+    graph
+        .apply_report(
+            &life("parent"),
+            &close_id("close-1"),
+            &life("parent"),
+            PhysicalFact::Failed,
+            EvidenceFact::Failed,
+        )
+        .unwrap();
+    let restored = OwnershipGraph::restore(graph.snapshot());
+    assert!(restored.refusal().is_none());
+    assert_eq!(
+        restored.physical(&life("parent"), &life("parent")),
+        Some(PhysicalFact::Failed)
+    );
+}
+
+#[test]
+fn unconfirmed_spawn_returns_to_its_milestone_or_joins_a_drain() {
+    let mut graph = OwnershipGraph::new();
+    root(&mut graph, "parent");
+    admit(&mut graph, "parent", "child", "req-1");
+    graph
+        .advance_spawn(
+            &spawn_id("req-1"),
+            SpawnProgress::Unconfirmed {
+                known: KnownMilestone::Reserved,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        graph.advance_spawn(
+            &spawn_id("req-1"),
+            SpawnProgress::Draining {
+                known: KnownMilestone::Prepared,
+            },
+        ),
+        Err(OwnershipError::IllegalSpawnProgress)
+    );
+    graph
+        .advance_spawn(&spawn_id("req-1"), SpawnProgress::Reserved)
+        .unwrap();
+    graph
+        .advance_spawn(
+            &spawn_id("req-1"),
+            SpawnProgress::Unconfirmed {
+                known: KnownMilestone::Reserved,
+            },
+        )
+        .unwrap();
+    graph
+        .advance_spawn(
+            &spawn_id("req-1"),
+            SpawnProgress::Draining {
+                known: KnownMilestone::Reserved,
+            },
+        )
+        .unwrap();
+
+    admit(&mut graph, "parent", "prepared", "req-prepared");
+    graph
+        .advance_spawn(&spawn_id("req-prepared"), SpawnProgress::Prepared)
+        .unwrap();
+    graph
+        .advance_spawn(
+            &spawn_id("req-prepared"),
+            SpawnProgress::Unconfirmed {
+                known: KnownMilestone::Prepared,
+            },
+        )
+        .unwrap();
+    graph
+        .advance_spawn(&spawn_id("req-prepared"), SpawnProgress::Prepared)
+        .unwrap();
+
+    admit(&mut graph, "parent", "attached", "req-attached");
+    graph
+        .advance_spawn(&spawn_id("req-attached"), SpawnProgress::Prepared)
+        .unwrap();
+    graph
+        .advance_spawn(&spawn_id("req-attached"), SpawnProgress::Attached)
+        .unwrap();
+    graph
+        .advance_spawn(
+            &spawn_id("req-attached"),
+            SpawnProgress::Unconfirmed {
+                known: KnownMilestone::Attached,
+            },
+        )
+        .unwrap();
+    graph
+        .advance_spawn(&spawn_id("req-attached"), SpawnProgress::Attached)
+        .unwrap();
+}
+
+#[test]
+fn a_closed_child_is_omitted_when_the_parent_seals() {
+    let mut graph = OwnershipGraph::new();
+    root(&mut graph, "parent");
+    admit(&mut graph, "parent", "child", "req-child");
+    graph
+        .begin_close(
+            &life("child"),
+            close_id("close-child"),
+            LifetimeCause::HostClose,
+            Initiator::Host(actor("child")),
+        )
+        .unwrap();
+    graph
+        .apply_report(
+            &life("child"),
+            &close_id("close-child"),
+            &life("child"),
+            PhysicalFact::Released,
+            EvidenceFact::Acknowledged,
+        )
+        .unwrap();
+    let admission = graph
+        .begin_close(
+            &life("parent"),
+            close_id("close-parent"),
+            LifetimeCause::HostClose,
+            Initiator::Host(actor("parent")),
+        )
+        .unwrap();
+    assert!(!admission.targets.contains(&life("child")));
+    assert!(admission.targets.contains(&life("parent")));
+    graph
+        .apply_report(
+            &life("parent"),
+            &close_id("close-parent"),
+            &life("parent"),
+            PhysicalFact::Released,
+            EvidenceFact::Acknowledged,
+        )
+        .unwrap();
+    assert_eq!(
+        graph.lifetime_state(&life("parent")),
+        Some(LifetimeState::Closed)
+    );
+    assert_eq!(
+        graph.lifetime_state(&life("child")),
+        Some(LifetimeState::Closed)
     );
 }
