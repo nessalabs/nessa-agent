@@ -473,7 +473,6 @@ async fn conversations(
     _packaged_agents: bool,
     _record_origin: RecordId,
     _read_work_budget: std::time::Duration,
-    _namespace: CredentialNamespace,
 ) -> Result<BuiltConversations, RunError> {
     Err(RunError::Agent(
         "ACP agents require Unix process supervision".into(),

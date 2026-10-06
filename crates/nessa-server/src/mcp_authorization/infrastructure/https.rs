@@ -127,17 +127,16 @@ impl HttpsOAuth {
     }
 }
 
-/// A refused connect never left the machine. Windows does not always mark
-/// that `io::Error` as `is_connect`, so the source chain is checked too.
-/// A timeout after the request was written stays [`OAuthCallFailure::Lost`].
+/// `NotSent` is only a failure that cannot have left the machine: building
+/// the request, connecting, or a refused connect Windows did not mark
+/// `is_connect`. `is_request` does not say the bytes stayed local, so every
+/// other send error, including a timeout, is [`OAuthCallFailure::Lost`].
 fn classify_send(error: &reqwest::Error) -> OAuthCallFailure {
     if error.is_builder() || error.is_connect() || connection_refused(error) {
-        return OAuthCallFailure::NotSent;
+        OAuthCallFailure::NotSent
+    } else {
+        OAuthCallFailure::Lost
     }
-    if error.is_request() && !error.is_timeout() {
-        return OAuthCallFailure::NotSent;
-    }
-    OAuthCallFailure::Lost
 }
 
 fn connection_refused(error: &(dyn std::error::Error + 'static)) -> bool {
