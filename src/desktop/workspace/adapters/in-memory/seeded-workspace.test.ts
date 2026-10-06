@@ -55,7 +55,9 @@ describe("seeded workspace", () => {
         [{ longTranscripts: 5 }, "longTranscripts"],
         [{ longTranscripts: 0, messages: 2 }, "messages"],
         [{ messages: 0 }, "messages"],
-        [{ messages: 1, messageCharacters: 8 }, "messageCharacters"],
+        [{ messages: 1, messageCharacters: 0 }, "messages"],
+        [{ messages: 1, messageCharacters: 8 }, "messages"],
+        [{ longTranscripts: 0, messages: 0, messageCharacters: 8 }, "messageCharacters"],
         [{ messageCharacters: -1 }, "messageCharacters"],
       ]
     for (const [over, reason] of cases) expect(reasonOf(over)).toBe(reason)
@@ -101,10 +103,11 @@ describe("seeded workspace", () => {
       const held = built.transcripts.get(session.id)
       const opening = held?.messages[0]?.parts[0]
       expect(opening?.kind).toBe("text")
-      if (opening?.kind === "text") {
-        expect(session.title).toBe(titleFrom(opening.text))
-        expect(session.preview).toBe(opening.text)
-      }
+      if (opening?.kind === "text") expect(session.title).toBe(titleFrom(opening.text))
+      const last = held?.messages.at(-1)
+      let said = ""
+      if (last) for (const part of last.parts) if (part.kind === "text") said = part.text
+      expect(session.preview).toBe(said)
       if (session.title.length > maxTitle) maxTitle = session.title.length
       const previewBytes = utf8.encode(session.preview).byteLength
       if (previewBytes > maxPreview) maxPreview = previewBytes
@@ -131,8 +134,10 @@ describe("seeded workspace", () => {
       .flatMap((message) => message.parts)
       .find((part) => part.kind === "text" && part.text.length === 4_000)
     expect(longPart?.kind).toBe("text")
-    if (longPart?.kind === "text")
+    if (longPart?.kind === "text") {
       expect(utf8.encode(longPart.text).byteLength).toBe(4_000)
+      expect(newest?.preview).toBe(longPart.text)
+    }
     const marked = long?.messages
       .flatMap((message) => message.parts)
       .some((part) => part.kind === "text" && part.text.includes("**backup**"))
@@ -187,6 +192,7 @@ describe("seeded workspace", () => {
     const last = built.transcripts.get("load-00000")?.messages.at(-1)
     const tail = last?.parts.filter((part) => part.kind === "text").at(-1)
     expect(tail?.kind === "text" ? tail.text.length : 0).toBe(9_000)
+    expect(built.index.sessions[0]?.preview).toBe(tail?.kind === "text" ? tail.text : "")
     expect(built.report.longPlainTextCharacters).toBe(9_000)
   })
 
@@ -200,6 +206,7 @@ describe("seeded workspace", () => {
     const first = seededWorkspace(quietSpec)
     const other = seededWorkspace({ ...quietSpec, seed: 591 })
     expect(first.report.longPlainTextCharacters).toBe(0)
+    expect(first.index.sessions[0]?.preview).toBe("")
     expect(
       other.index.sessions.some(
         (session, index) => session.title !== first.index.sessions[index]?.title,

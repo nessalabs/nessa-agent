@@ -183,7 +183,7 @@ function accepted(spec: SeededWorkspaceSpec): void {
   )
     refuse("longTranscripts")
   if (!whole(spec.messages) || spec.messages < 0) refuse("messages")
-  if (spec.longTranscripts === 0 ? spec.messages !== 0 : spec.messages < 1)
+  if (spec.longTranscripts === 0 ? spec.messages !== 0 : spec.messages < 2)
     refuse("messages")
   if (!whole(spec.messageCharacters) || spec.messageCharacters < 0)
     refuse("messageCharacters")
@@ -353,13 +353,13 @@ function modelOf(models: readonly ComposerModel[]): ModelRef {
   return { provider: model.provider, modelId: model.modelId }
 }
 
-/** The last text part of the last message: the long plain-text part, once stored. */
-function plainTail(transcript: Transcript): number {
+/** The last text part of the last message: what the session list previews. */
+function lastSaid(transcript: Transcript): string {
   const last = transcript.messages[transcript.messages.length - 1]
-  if (!last) return 0
-  let length = 0
-  for (const part of last.parts) if (part.kind === "text") length = part.text.length
-  return length
+  if (!last) return ""
+  let text = ""
+  for (const part of last.parts) if (part.kind === "text") text = part.text
+  return text
 }
 
 function reportFor(
@@ -384,7 +384,7 @@ function reportFor(
   let longPlainTextCharacters = 0
   let longTranscriptUtf8Bytes = 0
   for (const transcript of longTranscripts) {
-    const tail = plainTail(transcript)
+    const tail = lastSaid(transcript).length
     if (tail > longPlainTextCharacters) longPlainTextCharacters = tail
     const size = transcriptUtf8Bytes(transcript)
     if (size > longTranscriptUtf8Bytes) longTranscriptUtf8Bytes = size
@@ -429,10 +429,13 @@ export function seededWorkspace(
       long ? spec.messageCharacters : 0,
     )
     const firstAt = transcript.messages[0]?.at
-    const session =
-      firstAt !== undefined && firstAt < built.session.startedAt
-        ? { ...built.session, startedAt: firstAt }
-        : built.session
+    const session = {
+      ...built.session,
+      preview: lastSaid(transcript),
+      ...(firstAt !== undefined && firstAt < built.session.startedAt
+        ? { startedAt: firstAt }
+        : {}),
+    }
     sessions.push(session)
     transcripts.set(session.id, transcript)
     if (long) longTranscripts.push(transcript)
