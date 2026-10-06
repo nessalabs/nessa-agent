@@ -116,6 +116,10 @@ pub(crate) struct RecordingAudit {
     /// How long each `record` future lived, in call order. A deadline drops
     /// the future, so this is the attempt the service actually gave it.
     durations: Mutex<Vec<Duration>>,
+    /// Signalled when an attempt has been counted, before it stalls or answers.
+    pub(crate) counted: Notify,
+    /// Signalled when an attempt's span is dropped, including a deadline.
+    pub(crate) dropped: Notify,
     /// Signalled once per acknowledged record, so a test can wait for one
     /// without guessing how long it takes.
     pub(crate) recorded: Notify,
@@ -197,6 +201,7 @@ impl Drop for AttemptSpan<'_> {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push(self.started.elapsed());
+        self.audit.dropped.notify_one();
     }
 }
 
@@ -215,6 +220,7 @@ impl AttachmentAudit for RecordingAudit {
                 started: tokio::time::Instant::now(),
             };
             let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
+            self.counted.notify_one();
             let gate = {
                 let mut gate = self.gate.lock().unwrap();
                 gate.take_if(|gate| gate.attempt == attempt)

@@ -35,6 +35,7 @@ import {
 import {
   createWidgetRegistry,
   fixtureAppPlugin,
+  fixtureConversation,
   gatewayApps,
   platformFor,
   readPageContext,
@@ -49,6 +50,7 @@ import {
   gatewaySource,
   inMemorySource,
   measureWorkspace,
+  type InMemorySource,
   rememberedFilter,
   sampleAppSession,
   sampleWidgetSession,
@@ -102,16 +104,19 @@ export function createDesktopDependencies(
   const sample = options.workspace === undefined && options.gateway === undefined
   const newId = options.newId ?? (() => crypto.randomUUID())
   const { apps, gateway } = options
+  // The sample workspace, which the fixture app speaks to (#390).
+  const samples = sample ? inMemorySource({ now, after }) : undefined
   // The fixture app only beside the sample workspace, never beside a gateway,
   // whose servers' apps it could otherwise stand in for.
-  const widgets = widgetRegistry(options.widgets, sample, apps, after)
+  const widgets = widgetRegistry(options.widgets, samples, apps, after)
   // The servers are managed on the gateway's own source's client, beside
   // its conversations; a source composition names has no client to give.
   const source =
     options.workspace === undefined && gateway
       ? gatewayWorkspace(gateway, { now, after }, widgets, apps)
       : undefined
-  const workspace = options.workspace ?? source ?? inMemorySource({ now, after })
+  const workspace =
+    options.workspace ?? source ?? samples ?? inMemorySource({ now, after })
   return {
     workspace,
     signInToProvider: options.signInToProvider,
@@ -141,8 +146,8 @@ type WindowGatewayClient = GatewayClient &
  * The gateway's workspace, and — where apps are drawn — its servers' apps:
  * told each view the source reads, their calls made on the client the source
  * holds, so an app is asked on the same connection its conversation is read,
- * and each tool call through the source's `appCall`, so its conversation is
- * read while the call waits.
+ * and each tool call and message through the source's `appCall`, so its
+ * conversation is read while either waits on the person's review.
  */
 function gatewayWorkspace(
   connect: () => Promise<WindowGatewayClient>,
@@ -164,9 +169,13 @@ function gatewayWorkspace(
         callTool: (...args) =>
           source.appCall(args[0], () => mcpApps().then((api) => api.callTool(...args))),
         readResource: (...args) => mcpApps().then((api) => api.readResource(...args)),
-        // Nothing in the window sends either yet; #390's desktop part does,
-        // and chooses how a message is routed.
-        sendMessage: (...args) => mcpApps().then((api) => api.sendMessage(...args)),
+        // Through the source too: every message waits on the person's review
+        // there (#390, D-E).
+        sendMessage: (...args) =>
+          source.appCall(args[0], () =>
+            mcpApps().then((api) => api.sendMessage(...args)),
+          ),
+        // Nothing waits on the person: no read is started for it.
         updateModelContext: (...args) =>
           mcpApps().then((api) => api.updateModelContext(...args)),
         fetchResource: (...args) => mcpApps().then((api) => api.fetchResource(...args)),
@@ -201,17 +210,18 @@ function appPorts(apps: AppsOptions, after: Timers["after"]) {
 
 function widgetRegistry(
   natives: readonly NativeWidgetPlugin[] | undefined,
-  sample: boolean,
+  samples: InMemorySource | undefined,
   apps: AppsOptions | undefined,
   after: Timers["after"],
 ): DesktopWidgetRegistry {
+  const sample = samples !== undefined
   // The sample plugin only beside the sample workspace, whose session its widgets belong to.
   const registry = createWidgetRegistry<WidgetPlugin>(
     natives ?? (sample ? [samplePlugin(sampleWidgetSession)] : []),
   )
   // And the fixture MCP App beside it; real servers' apps come through the
   // gateway (`gatewayApps`).
-  if (sample && apps)
+  if (samples && apps)
     registry.register(
       fixtureAppPlugin({
         sessionId: sampleAppSession,
@@ -219,6 +229,8 @@ function widgetRegistry(
         timers: { after },
         newId: () => crypto.randomUUID(),
         page: () => readPageContext(document, apps.platform),
+        // Its messages land in the sample workspace, written by the app.
+        conversation: fixtureConversation(samples.appMessage),
       }),
     )
   return registry

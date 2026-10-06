@@ -538,6 +538,7 @@ pub struct ConversationPermission {
     pub options: Vec<ConversationPermissionOption>,
     pub tool_name: String,
     pub origin: ConversationPermissionOrigin,
+    pub ask: ConversationPermissionAsk,
     pub arguments_json: String,
 }
 #[derive(Deserialize, Serialize)]
@@ -874,6 +875,20 @@ pub struct ConversationPart {
     pub notice_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationPermissionAsk {
+    Tool,
+    Message,
+}
+impl ConversationPermissionAsk {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tool => "tool",
+            Self::Message => "message",
+        }
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]

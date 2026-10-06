@@ -35,7 +35,7 @@ import {
   type FakeSource,
 } from "../../testing"
 import { selectOverviewOpen } from "../../adapters/store/selectors"
-import type { ApprovalOption, ApprovalOrigin } from "../../model/transcript"
+import type { ApprovalAsk, ApprovalOption, ApprovalOrigin } from "../../model/transcript"
 import type { WorkspaceIndex } from "../../model/workspace-index"
 import { failureCopy, readFailureCopy } from "../failure-copy"
 import { OverviewRow } from "../source-list/overview-row"
@@ -111,6 +111,7 @@ async function mount({
   secondAsker = { kind: "agent" },
   options = sampleAnswers,
   beforeLoad,
+  secondAsks = "tool",
 }: {
   strict?: boolean
   wrap?: (tree: ReactNode) => ReactNode
@@ -121,6 +122,8 @@ async function mount({
   options?: readonly ApprovalOption[]
   /** Runs after the source is built, before the workspace reads it. */
   beforeLoad?: (source: FakeSource) => void
+  /** What the second session's approval asks. */
+  secondAsks?: ApprovalAsk
 } = {}) {
   const source = fakeSource(index)
   for (const [sessionId, command] of [
@@ -141,6 +144,7 @@ async function mount({
           reason: `Why ${sessionId}.`,
           origin: sessionId === "second" ? secondAsker : { kind: "agent" },
           options,
+          ask: sessionId === "second" ? secondAsks : "tool",
         },
       })
   }
@@ -311,10 +315,110 @@ describe("the agents overview", () => {
       label("first"),
     )?.[1]
     expect(agent).toBeTruthy()
+    // The app's server isolated from the words around it, as on the card.
     expect(label("second")).toMatch(
-      /\. The mcptest app wants to run app_delete_row \{\}\.$/,
+      /\. The \u2068mcptest\u2069 app wants to run \u2068app_delete_row \{\}\u2069\.$/,
     )
     expect(label("second")).not.toContain(`${agent} wants`)
+  })
+
+  it("E2-1 (#390): a row shows the bidi controls an app's names carry as U+FFFD, in its words and its accessible name, each name and the app's command isolated", async () => {
+    // The reviewer's strings: a stray PDI then an embedding; an override.
+    const server = "a\u2069\u202Eb"
+    const tool = "c\u2069\u2069\u202Bd"
+    await mount({ secondAsker: { kind: "app", server, tool } })
+    await open()
+    expect(card("second")?.getAttribute("aria-label")).toMatch(
+      /\. The \u2068a\uFFFD\uFFFDb\u2069 app wants to run \u2068c\uFFFD\uFFFD\uFFFDd \{\}\u2069\.$/,
+    )
+    const command = card("second")?.querySelector<HTMLElement>(".agents-request-command")
+    expect(command?.querySelector("bdi")?.textContent).toBe("c\uFFFD\uFFFD\uFFFDd {}")
+    expect(command?.title).toBe("c\uFFFD\uFFFD\uFFFDd {}")
+  })
+
+  it("E2-1 (#390): a row for an app's message shows an override in its server's name as U+FFFD", async () => {
+    const server = "evil\u202Egnp.exe"
+    const tool = "show_rows"
+    const reason = `The ${tool} app on ${server} asks to send a message as you`
+    await mount({
+      secondAsker: { kind: "app", server, tool },
+      secondAsks: "message",
+      beforeLoad: (source) => {
+        const held = source.transcripts.get("second")
+        if (!held?.approval) return
+        source.transcripts.set("second", {
+          ...held,
+          approval: { ...held.approval, reason },
+        })
+      },
+    })
+    await open()
+    expect(card("second")?.getAttribute("aria-label")).toMatch(
+      /\. The \u2068evil\uFFFDgnp\.exe\u2069 app wants to send a message as you\.$/,
+    )
+    // The gateway's title repeats the server. Nothing in the row carries a control it brought.
+    expect(card("second")?.querySelector(".agents-request-why")?.textContent).toBe(
+      "The show_rows app on evil\uFFFDgnp.exe asks to send a message as you",
+    )
+    expect(card("second")?.textContent).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/)
+    await act(async () => card("second")?.click())
+    await act(async () => settle(10))
+    const peek = host.querySelector(".agents-inline-peek")
+    expect(peek?.querySelector(".agents-peek-reason")?.textContent).toBe(
+      "The show_rows app on evil\uFFFDgnp.exe asks to send a message as you",
+    )
+    expect(peek?.querySelector(".workspace-approval-command bdi")?.textContent).toBe(
+      "show_rows",
+    )
+  })
+
+  it("D19 (#390): a row says an app asks to send a message as the person, not to run its tool", async () => {
+    await mount({
+      secondAsker: { kind: "app", server: "mcptest", tool: "show_rows" },
+      secondAsks: "message",
+    })
+    await open()
+    expect(card("second")?.getAttribute("aria-label")).toMatch(
+      /\. The \u2068mcptest\u2069 app wants to send a message as you\.$/,
+    )
+    expect(card("first")?.getAttribute("aria-label")).toMatch(
+      / wants to run security import build\.p12\.$/,
+    )
+  })
+
+  it("D19 (#390): a message's answers say it is sent, not run, in the row and in its peek; a tool's say it is run", async () => {
+    await mount({
+      secondAsker: { kind: "app", server: "mcptest", tool: "show_rows" },
+      secondAsks: "message",
+    })
+    await open()
+    const tips = (scope: Element | null | undefined) =>
+      [...(scope?.querySelectorAll<HTMLElement>("button[data-tooltip]") ?? [])]
+        .map((each) => each.dataset.tooltip ?? "")
+        .filter((tip) => / it/.test(tip))
+    expect(tips(card("second"))).toEqual([
+      "Don’t send it",
+      "Send it once. Hold ⌥ to always allow it",
+    ])
+    expect(tips(card("first"))).toEqual([
+      "Don’t run it",
+      "Run it once. Hold ⌥ to always allow it",
+    ])
+    await act(async () => card("second")?.click())
+    await act(async () => settle(10))
+    const peek = host.querySelector(".agents-inline-peek .agents-peek-ask")
+    expect(tips(peek)).toEqual([
+      "Don’t send it",
+      "Allow it now, and whenever it’s asked again",
+      "Send it once",
+    ])
+    await act(async () => card("first")?.click())
+    await act(async () => settle(10))
+    expect(tips(host.querySelector(".agents-inline-peek .agents-peek-ask"))).toEqual([
+      "Don’t run it",
+      "Allow it now, and whenever it’s asked again",
+      "Run it once",
+    ])
   })
 
   it("answers from the keyboard as the person, and moves on to the next request", async () => {
