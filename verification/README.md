@@ -51,7 +51,7 @@ verification/
       widgets.mjs           widget hosts: a card, its pane, the window, Escape's order, focus, drag over the window
       app-review.mjs        an MCP App's review: read while the app's call waits, drawn and answered, the card and the overview row naming the app (dev server)
       mcp-apps.mjs          MCP Apps: each place, tools/call allowed and refused, CSP, isolation, escapes, forgery, departures and departures-back (dev server: imports the host's own builder), teardown
-      mcp-apps-gateway.mjs  MCP Apps over a real gateway (#384): the test MCP server's app, its reviews, refusals and release (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in, or `--scripted` for none)
+      mcp-apps-gateway.mjs  MCP Apps over a real gateway (#384): the test MCP server's app, its reviews, refusals and release; with `--scripted`, also an app's message and context update, and no model key (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in, or `--scripted` for none)
       mcp-servers-gateway.mjs Settings › Integrations over a real gateway (#391): add, inspect, focus, toggle, rename, narrow, conflict, remove, reconnect, non-admin, and the chart's app from a server added there (starts its own gateway and dev server; done-when needs the agent signed in)
       lib/
         selectors.mjs       every selector, key chord, storage key and known-harmless message
