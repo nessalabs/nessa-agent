@@ -468,6 +468,15 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 
 ## Composer and approval card
 
+- [ ] **An agent's command is drawn in the order it runs.** A bidi control in
+  the argument (U+202A–U+202E, U+2066–U+2069, U+200E, U+200F, U+061C, and the
+  line and paragraph separators U+0085, U+2028, and U+2029) is shown
+  as its `\u` escape, so an override cannot present another address; the shown
+  JSON parses to the argument that runs. A command that starts with a
+  right-to-left letter keeps a left-to-right base, so the tool stays left of
+  its argument. The same draw is the card, the overview row, and the peek
+  (`shownCommand` in `said.tsx`, `dir="ltr"` on the command's isolate). _#553._
+  _Check:_ `command-order.mjs`.
 - [ ] **The approval card arranges itself by its own width** at 280, 340,
   420, 600 and 900 px, with a short and a very long command: no word of the
   command broken, no button label wrapped, nothing overflowing.
@@ -883,9 +892,14 @@ says why where the conversations would be.
   `src-tauri/src/gateway/infrastructure/commands.rs`); WKWebView's own IPC and
   the packaged app's `tauri://localhost` origin are the live `pnpm app` run's.
 - [ ] **A gateway that answers shows its servers' MCP Apps in the main
-  window.** _By hand:_ `pnpm app` against a gateway with
-  `scripts/mcp-test-server` configured. This row is checked by hand.
-  `gateway-window.mjs` has no step for it; adding one is #574.
+  window.** The window, over the host's endpoint, draws the test server's
+  `review_rows` app inline once that turn is in the conversation: one frame,
+  live, its document the server's. _#574._ _Check:_ `gateway-window.mjs`'s
+  `apps` step (dev server; `--mode prod` leaves it out, MCP Apps need the
+  dev server's sandbox). With `--scripted` a prompt containing
+  "show the server's app" is the text-reply scenario's `review_rows` turn,
+  in that page's own conversation. The packaged app's own scheme
+  stays the live `pnpm app` run's.
 - [ ] **A scenario can ask, fail mid-turn, and wait to be cancelled, and the
   window shows it.** _Check:_ `scripted-scenarios.mjs` (and
   `pnpm test:e2e:scripted`, which also runs `mcp-apps-gateway --scripted` and

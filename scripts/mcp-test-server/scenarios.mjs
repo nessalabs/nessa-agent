@@ -8,7 +8,12 @@ import { fileURLToPath } from "node:url"
 
 const here = dirname(fileURLToPath(import.meta.url))
 
-/** A plain reply, for a check that compares the window with a text turn. */
+/**
+ * A plain reply, for a check that compares the window with a text turn,
+ * and one turn that calls `review_rows` when the prompt contains
+ * `TEXT_REPLY_APP_PROMPT`.
+ */
+export const TEXT_REPLY_APP_PROMPT = "show the server's app"
 export const TEXT_REPLY_SCENARIO = join(here, "scenarios/text-reply.json")
 
 /**

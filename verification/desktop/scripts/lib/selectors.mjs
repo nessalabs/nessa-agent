@@ -135,6 +135,7 @@ export const css = {
   overview: ".agents-overview", // class
   overviewItem: "[data-overview-item]",
   overviewRequest: ".agents-request", // class
+  overviewCommand: ".agents-request-command", // class: the command on a request row
   overviewRow: ".agents-row", // class
   overviewReplyPill: ".agents-reply-pill", // class
   overviewReplyField: "[data-reply-for] textarea", // data-reply-for is the session replied to
@@ -145,6 +146,7 @@ export const css = {
   overviewGroup: ".agents-overview-group", // class: a listed group, labelled by its h2
   overviewPeek: ".agents-overview-peek", // class: the peek beside the list, which scrolls
   peekSummary: ".agents-peek-summary", // class: what is going on, in the source's line
+  peekCommand: ".agents-peek .workspace-approval-command", // class: the command in the peek, beside the list or under the row
   peekStory: ".agents-peek-story", // class: the turn's story, top to bottom
   peekEarlier: ".agents-peek-earlier", // class: says the turn holds more above what the peek draws
   transcriptStep: ".workspace-steps li", // class: one step the agent took, in a message
@@ -447,6 +449,10 @@ export const names = {
   approvalSession: "Release build signing",
   /** Sample sessions (in-memory source) that each wait on one approval. */
   approvalSessions: ["Release build signing", "Notarize the macOS", "Reconnect storm"],
+  /** The sample session whose approval carries a bidi control in its argument (#553). */
+  commandOrderSession: "Command drawn in order",
+  /** The sample session whose tool name is right to left, so the command's base direction is tested (#553). */
+  commandBaseSession: "Command base direction",
   /** A sample session (in-memory source) waiting on an approval after a long turn, by its id (data-overview-item). */
   storySessionId: "retry-budget",
   denyOnce: "Deny",
