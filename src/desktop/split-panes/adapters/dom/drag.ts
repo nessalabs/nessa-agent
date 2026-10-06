@@ -18,9 +18,10 @@
  *   the one outcome the drop commits (`dropOutcome` of the layout the source
  *   reads), and the copy takes the placeholder's shape about the pointer
  *   (`copyShape`);
- * - **dropping**: released while a zone is shown, the source commits what is
- *   shown (`commitDrop`) in the room the press read, and the copy flies into
- *   the placeholder's rect and hands over to the real pane;
+ * - **dropping**: released while a zone is shown, the copy flies into the
+ *   placeholder's rect. The source commits what is shown (`commitDrop`) on
+ *   the next frame, in the room the press read, so that pointerup does not
+ *   also lay the new arrangement out (`drag.test.tsx`);
  * - **cancelling**: the copy flies home as the panes go back — or, when the
  *   room, the panes or the view changed under it, both go at once and the
  *   change plays as it would with no drag.
@@ -1115,15 +1116,22 @@ export function useSplitPanesDrag(
         })
     }
 
-    /** Let go with a zone shown: what is shown is committed, and the copy hands over. */
+    /** Let go with a zone shown: the copy flies, and what is shown is committed on the next frame. */
     const drop = (made: Made, what: Carried, aim: Aim) => {
       const { ghost, room, drawing } = made
-      // The drop first, in the room the preview was drawn for — nothing of
-      // the page is read — then the copy's flight and the tidying.
-      source.commitDrop({ carried: what, target: aim.target, zone: aim.zone, room })
-      // Now it snaps: the copy flies from the pointer into the place it takes.
+      // The copy flies from the pointer into the place it takes. That place
+      // was drawn while carrying; the flight does not read the page.
       const flight = drawing.landing ? flyTo(made, drawing.landing, false) : null
       tidy(made, true)
+      // The commit lays the panes out at their new sizes, and FlipScope reads
+      // that layout in the same turn (`play`). On pointerup that read shared
+      // the frame with this flight and ran past the frame budget. One frame
+      // on, the preview is still up — tidy waits two — so the commit's flight
+      // measures through it. `drag.test.tsx` holds that the commit is not in
+      // the pointerup turn.
+      requestAnimationFrame(() => {
+        source.commitDrop({ carried: what, target: aim.target, zone: aim.zone, room })
+      })
       // Whatever `FlipScope` did not measure through — a drop that changed no
       // arrangement — lets go a frame on.
       requestAnimationFrame(() =>

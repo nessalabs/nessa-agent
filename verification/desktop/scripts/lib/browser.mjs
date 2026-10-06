@@ -83,6 +83,10 @@ export async function openPage(browser, o) {
     deviceScaleFactor: o.dsf ?? 2,
     reducedMotion: o.reducedMotion,
     colorScheme: o.colorScheme,
+    // The harness's chords are ⌘ and the window is marked macOS. Chrome on
+    // Linux would otherwise treat Control as the command key.
+    userAgent:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
   })
   const prefs = {
     [storage.layout]: o.layout ?? "columns",

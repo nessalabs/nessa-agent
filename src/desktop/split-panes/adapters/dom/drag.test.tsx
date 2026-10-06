@@ -271,6 +271,9 @@ it("previews the outcome of the layout the source holds, and commits it through 
   await liftOntoTwo()
   expect(said()).toBe("Swap with Pane b")
   pointer("pointerup", 827, 400)
+  // The pointerup turn flies the copy and does not commit: the commit lays
+  // the new arrangement out, and that layout is the next frame's.
+  expect(fake.state.drops).toEqual([])
   await frames()
   expect(fake.state.drops).toEqual([
     {
@@ -311,10 +314,11 @@ it("with less motion, previews a swap at once — the other pane drawn where the
     // Dropped: the panes are laid out where the preview drew them, and the
     // preview is let go as they are — left on, it would draw them moved again.
     const preview = animated.filter(({ element: of }) => of.closest("[data-pane-key]"))
-    act(() => pointer("pointerup", 827, 400))
+    pointer("pointerup", 827, 400)
+    expect(items(fake)).toEqual(["a", "b"])
+    await frames()
     expect(items(fake)).toEqual(["b", "a"])
     expect(preview.filter(({ cancelled }) => !cancelled)).toEqual([])
-    await frames()
     await act(async () => root.unmount())
   } finally {
     delete document.documentElement.dataset.motion
