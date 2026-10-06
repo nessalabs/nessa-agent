@@ -78,10 +78,12 @@ Checks, per engine and layout (--only <names> to pick):
   message-bidi
              (#390, E2-1) with names carrying bidi controls — a stray PDI then
              an embedding, and an override (evil, RLO, gnp.exe) — the card's
-             head, the overview row's command and accessible name, and the
-             landed label show each control as U+FFFD, each name in its own
-             <bdi> (FSI…PDI in the name), and every character drawn in
-             reading order, left to right, line by line`,
+             head, the gateway's title on the card, the tool's name at the
+             start of the card's command (the message's words after it kept),
+             the overview row's command and accessible name, and the landed
+             label show each control as U+FFFD, each name in its own <bdi>
+             (FSI…PDI in the name), and every character drawn in reading
+             order, left to right, line by line`,
 }
 
 // What page.evaluate is handed: plain strings (`css` holds functions, #441).
@@ -794,6 +796,27 @@ Object.assign(checks, {
         if (JSON.stringify(headNames) !== JSON.stringify([pair.shownServer]))
           failures.push(`${tag}: the head isolates ${JSON.stringify(headNames)}`)
         ordered("head", await drawnInOrder(head))
+        const reason = page.locator(css.approvalReason).first()
+        const reasonText = ((await reason.textContent()) ?? "").trim()
+        const expectedReason = `The ${pair.shownTool} app on ${pair.shownServer} asks to send a message as you`
+        if (reasonText !== expectedReason)
+          failures.push(`${tag}: the reason says ${JSON.stringify(reasonText)}`)
+        const reasonNames = await labelNames(reason)
+        if (
+          JSON.stringify(reasonNames) !==
+          JSON.stringify([pair.shownTool, pair.shownServer])
+        )
+          failures.push(`${tag}: the reason isolates ${JSON.stringify(reasonNames)}`)
+        ordered("reason", await drawnInOrder(reason))
+        const asked = page.locator(css.approvalCommand).first()
+        const askedNames = await labelNames(asked)
+        if (JSON.stringify(askedNames) !== JSON.stringify([pair.shownTool]))
+          failures.push(`${tag}: the command isolates ${JSON.stringify(askedNames)}`)
+        const askedText = (await asked.textContent()) ?? ""
+        const message = JSON.stringify({ text: appReview.message })
+        if (!askedText.includes(message))
+          failures.push(`${tag}: the command drops the message ${JSON.stringify(message)}`)
+        ordered("command", await drawnInOrder(asked))
         await page.keyboard.press(keys.overview)
         await need(page, css.overview, "the Agents overview")
         const row = page

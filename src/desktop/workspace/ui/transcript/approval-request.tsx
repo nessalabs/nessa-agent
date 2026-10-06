@@ -40,7 +40,7 @@ import type {
   ApprovalOption,
   ApprovalOrigin,
 } from "../../model/transcript"
-import { named, type Said } from "./said"
+import { named, naming, shownName, type Said } from "./said"
 import "./approval-card.css"
 
 /**
@@ -109,14 +109,56 @@ export const answerTips: Readonly<
   message: { deny: "Don’t send it", once: "Send it once" },
 }
 
+/**
+ * Why a review asks, as the gateway titled it. An app's title repeats the
+ * tool and the server (`app_reviews.rs`); each is isolated, and the words
+ * around them stay (`approval-request.test.tsx`, E2-1). The agent's title
+ * is its own words.
+ */
+export function approvalReason(approval: Pick<Approval, "origin" | "reason">): Said {
+  return approval.origin.kind === "app"
+    ? naming(approval.reason, [approval.origin.tool, approval.origin.server])
+    : [approval.reason]
+}
+
 /** The first word of a label, shown when the card is too narrow for the whole. */
 function shortOf(label: string): string {
   const space = label.indexOf(" ")
   return space === -1 ? label : label.slice(0, space)
 }
 
-/** The command, broken only between its words. */
-export function ApprovalCommand({ command }: { command: string }) {
+/** The command's words, spaces kept between them. */
+function commandWords(text: string, key: string) {
+  return text.split(/( +)/).map((part, index) =>
+    part.trim() === "" ? (
+      part
+    ) : (
+      <span key={`${key}${index}`} className="workspace-approval-word">
+        {part}
+      </span>
+    ),
+  )
+}
+
+/**
+ * The command, broken only between its words. An app's tool name, when
+ * `name` is that tool and the command begins with it, is isolated as a name
+ * is; the words after it — a message, as it will be sent — are left as they
+ * are (`approval-request.test.tsx`, E2-1).
+ */
+export function ApprovalCommand({
+  command,
+  name,
+}: {
+  command: string
+  /** The app's tool, when this command is that app's. */
+  name?: string
+}) {
+  const lead =
+    name && name.length > 0 && (command === name || command.startsWith(`${name} `))
+      ? name
+      : undefined
+  const rest = lead === undefined ? command : command.slice(lead.length)
   const block = useRef<HTMLPreElement>(null)
   // Where a word is wider than the card, the block scrolls and fades the edge it cuts.
   useLayoutEffect(() => {
@@ -162,15 +204,8 @@ export function ApprovalCommand({ command }: { command: string }) {
       <span className="workspace-approval-prompt" aria-hidden="true">
         ${" "}
       </span>
-      {command.split(/( +)/).map((part, index) =>
-        part.trim() === "" ? (
-          part
-        ) : (
-          <span key={index} className="workspace-approval-word">
-            {part}
-          </span>
-        ),
-      )}
+      {lead === undefined ? null : <bdi>{commandWords(shownName(lead), "name-")}</bdi>}
+      {commandWords(rest, "word-")}
     </pre>
   )
 }

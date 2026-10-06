@@ -505,9 +505,11 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   280 px, each name in its own `<bdi>`. With names carrying bidi controls —
   a stray PDI then an embedding (`a`, PDI, RLO, `b` and `c`, PDI, PDI, RLE,
   `d`), and an override (`evil`, RLO, `gnp.exe`) — the card's head, the
-  overview row's accessible name and its command, and the landed label show
-  each control as U+FFFD, each name isolated, and every character drawn in
-  reading order (`shownName` in `said.tsx`, E2-1). (`ask` from the gateway's
+  gateway's title on the card (each name in its own `<bdi>`), the command's
+  tool name (the message's words after it kept), the overview row's
+  accessible name and its command, and the landed label show each control
+  as U+FFFD, each name isolated, and every character drawn in reading order
+  (`shownName` in `said.tsx`, E2-1). (`ask` from the gateway's
   `ReviewAsk`; `approvalHead` and `approvalRequest` in
   `approval-request.tsx`; the `sendMessage` routing in `dependencies.ts`.)
   The real gateway's message path in a browser is #550.

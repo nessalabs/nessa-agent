@@ -941,8 +941,10 @@ bounds — stays the gateway's and the client's to say.
   isolation nor turn its letters round: `said.tsx`, the one owner of showing
   a name, shows every bidi control in it (U+202A–U+202E, U+2066–U+2069,
   U+200E, U+200F, U+061C) as U+FFFD before isolating it, in the label, the
-  card's head and the overview row alike. `data-message-app` keeps the names
-  as they came. A waiting app message has the label and no delivery state.
+  card's head, the overview row, and the gateway's title for the review
+  (`approvalReason`: the card, the row, and the peek) alike.
+  `data-message-app` keeps the names as they came. A waiting app message
+  has the label and no delivery state.
 - **D-I. The review says what it asks.** `ConversationPermission.ask` is
   `"tool" | "message"`, owned by the gateway's `ReviewAsk` (`review_of`);
   the agent's reviews are `"tool"`. The client refuses a view whose review
@@ -955,9 +957,12 @@ bounds — stays the gateway's and the client's to say.
   its command the app's tool and `{"text": …}`. The names in the head are in
   `<bdi>`, and in the row's accessible name between FSI and PDI; an app's
   tool command, in the row's accessible name and its visible command, is
-  isolated the same way, its bidi controls shown as U+FFFD (D-H). The answers'
-  tooltips are worded by `ask` too (`answerTips`): "Don’t send it" and "Send
-  it once" for a message.
+  isolated the same way, its bidi controls shown as U+FFFD (D-H). On the
+  card and in the peek the command isolates the tool's name the same way
+  and shows the message's words after it as they will be sent. The gateway's
+  title repeats the tool and the server; `approvalReason` isolates each.
+  The answers' tooltips are worded by `ask` too (`answerTips`): "Don’t send it" and
+  "Send it once" for a message.
 - **D-J. Sample and fixtures.** The fixture app has `message` and `context`
   controls. Beside the sample workspace its conversation is
   `fixtureConversation`, which writes the message through
@@ -1075,11 +1080,13 @@ Each row has at least one test, named after it.
   no `title`, `data-message-app` `server/tool`, each name in a `<bdi>`), D19
   (the head over every combination the client lets through, its names in
   `<bdi>`), D-H's bidi controls (the reviewer's names, a stray PDI then an
-  embedding and an override, shown as U+FFFD in the label and the head).
+  embedding and an override, shown as U+FFFD in the label, the head, and
+  the gateway's title; the tool's name at the start of the command, the
+  message's words after it kept).
 - `src/desktop/workspace/ui/overview/overview.test.tsx`: D19 (the row, its
   server isolated; the row's and the peek's tooltips by `ask`), D-H's bidi
   controls (the row's accessible name and visible command, the app's command
-  isolated).
+  isolated, the gateway's title on the row and in the peek).
 - `packages/nessa-client/src/protocol/conversation-validate.test.ts`: D19
   (`ask` a closed set; missing or unknown refuses the view; the agent's
   review asking `message` refuses it).

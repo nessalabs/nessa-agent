@@ -337,16 +337,39 @@ describe("the agents overview", () => {
   })
 
   it("E2-1 (#390): a row for an app's message shows an override in its server's name as U+FFFD", async () => {
+    const server = "evil\u202Egnp.exe"
+    const tool = "show_rows"
+    const reason = `The ${tool} app on ${server} asks to send a message as you`
     await mount({
-      secondAsker: { kind: "app", server: "evil\u202Egnp.exe", tool: "show_rows" },
+      secondAsker: { kind: "app", server, tool },
       secondAsks: "message",
+      beforeLoad: (source) => {
+        const held = source.transcripts.get("second")
+        if (!held?.approval) return
+        source.transcripts.set("second", {
+          ...held,
+          approval: { ...held.approval, reason },
+        })
+      },
     })
     await open()
     expect(card("second")?.getAttribute("aria-label")).toMatch(
       /\. The \u2068evil\uFFFDgnp\.exe\u2069 app wants to send a message as you\.$/,
     )
-    // Nothing in the row carries a control the name brought with it.
+    // The gateway's title repeats the server. Nothing in the row carries a control it brought.
+    expect(card("second")?.querySelector(".agents-request-why")?.textContent).toBe(
+      "The show_rows app on evil\uFFFDgnp.exe asks to send a message as you",
+    )
     expect(card("second")?.textContent).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/)
+    await act(async () => card("second")?.click())
+    await act(async () => settle(10))
+    const peek = host.querySelector(".agents-inline-peek")
+    expect(peek?.querySelector(".agents-peek-reason")?.textContent).toBe(
+      "The show_rows app on evil\uFFFDgnp.exe asks to send a message as you",
+    )
+    expect(peek?.querySelector(".workspace-approval-command bdi")?.textContent).toBe(
+      "show_rows",
+    )
   })
 
   it("D19 (#390): a row says an app asks to send a message as the person, not to run its tool", async () => {

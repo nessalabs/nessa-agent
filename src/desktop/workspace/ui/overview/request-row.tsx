@@ -23,7 +23,11 @@ import { agentName, agentOf } from "../../model/workspace-index"
 import { AgentTile } from "../chrome/agent-tile"
 import { failureCopy, readFailureCopy } from "../failure-copy"
 import { offersChoice, optionOf } from "../../model/transcript"
-import { answerTips, approvalRequest } from "../transcript/approval-request"
+import {
+  answerTips,
+  approvalReason,
+  approvalRequest,
+} from "../transcript/approval-request"
 import { named, Saying, shownName, spoken } from "../transcript/said"
 import { overviewKeys } from "./overview-keys"
 import { SessionPeek } from "./session-peek"
@@ -181,7 +185,7 @@ export const RequestRow = memo(function RequestRow({
                 {readFailureCopy(unreadable, "conversation")}
               </span>
             ) : approval ? (
-              approval.reason
+              <Saying said={approvalReason(approval)} />
             ) : (
               summary.preview
             )}

@@ -24,7 +24,7 @@ import {
 } from "../../model/transcript"
 import { fakeSource, settle, testStore } from "../../testing"
 import { failureCopy, readFailureCopy } from "../failure-copy"
-import { approvalHead } from "./approval-request"
+import { approvalHead, approvalReason } from "./approval-request"
 import { spoken } from "./said"
 import { Transcript } from "./transcript"
 
@@ -279,8 +279,8 @@ describe("a transcript", () => {
       ],
       approval: {
         id: "app-ap",
-        command: `${tool} {}`,
-        reason: "An app asks to run a tool",
+        command: `${tool} {"text":"keep \u202E this"}`,
+        reason: `An app asks to run ${tool} on evil\u202Egnp.exe`,
         origin: { kind: "app", server: "evil\u202Egnp.exe", tool },
         options: [
           { id: "allow", label: "Allow", choice: "once" },
@@ -319,6 +319,28 @@ describe("a transcript", () => {
     ).toBe(
       "The \u2068a\uFFFD\uFFFDb\u2069 app wants to run \u2068c\uFFFD\uFFFD\uFFFDd\u2069",
     )
+    // The gateway's title repeats both names; the card isolates them, and
+    // the message's own words keep the control they were sent with.
+    const reason = host.querySelector(".workspace-approval-reason")
+    expect(reason?.textContent).toBe(
+      "An app asks to run c\uFFFD\uFFFD\uFFFDd on evil\uFFFDgnp.exe",
+    )
+    expect(
+      [...(reason?.querySelectorAll("bdi") ?? [])].map((name) => name.textContent),
+    ).toEqual(["c\uFFFD\uFFFD\uFFFDd", "evil\uFFFDgnp.exe"])
+    expect(
+      spoken(
+        approvalReason({
+          origin: { kind: "app", server: "evil\u202Egnp.exe", tool },
+          reason: `An app asks to run ${tool} on evil\u202Egnp.exe`,
+        }),
+      ),
+    ).toBe(
+      "An app asks to run \u2068c\uFFFD\uFFFD\uFFFDd\u2069 on \u2068evil\uFFFDgnp.exe\u2069",
+    )
+    const command = host.querySelector(".workspace-approval-command")
+    expect(command?.querySelector("bdi")?.textContent).toBe("c\uFFFD\uFFFD\uFFFDd")
+    expect(command?.textContent).toContain('{"text":"keep \u202E this"}')
   })
 
   it("keeps messages sent while the conversation was read in place when it loads", async () => {

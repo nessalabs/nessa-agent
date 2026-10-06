@@ -29,7 +29,9 @@ import {
   answerTips,
   ApprovalActions,
   ApprovalCommand,
+  approvalReason,
 } from "../transcript/approval-request"
+import { Saying } from "../transcript/said"
 import { LiveRow } from "../transcript/live-row"
 import { Message } from "../transcript/message"
 import "../transcript/transcript.css"
@@ -187,8 +189,13 @@ export const SessionPeek = memo(function SessionPeek({
 
       {approval ? (
         <section className="agents-peek-ask" aria-label="Request">
-          <p className="agents-peek-reason">{approval.reason}</p>
-          <ApprovalCommand command={approval.command} />
+          <p className="agents-peek-reason">
+            <Saying said={approvalReason(approval)} />
+          </p>
+          <ApprovalCommand
+            command={approval.command}
+            name={approval.origin.kind === "app" ? approval.origin.tool : undefined}
+          />
           {refused ? (
             <p className="agents-peek-failure" role="status">
               {failureCopy(refused)}
