@@ -62,6 +62,12 @@ impl CodexAcpProvider {
     /// beforehand. Configuring a binding with tools disabled is refused rather
     /// than accepted as a text-only Codex that does not exist.
     ///
+    /// Every launch also requests Codex's user-configured hooks and its legacy
+    /// notify command off (`features.hooks` false, `notify` empty). That request
+    /// does not outrank legacy managed configuration, and ACP cannot show the
+    /// effective setting, so a negotiated session reports native hook suppression
+    /// as unsupported.
+    ///
     /// # Errors
     /// Returns [`AgentError::Configuration`] for invalid process settings, a
     /// non-OpenAI model, an oversized provider model identity, or incompatible
@@ -173,12 +179,24 @@ impl CodexAcpProvider {
     /// The Codex session configuration this binding launches with.
     ///
     /// Codex reads its session configuration from its own config file and this
-    /// variable, not from the ACP session request, so the model and the
-    /// instructions are supplied here. Both are then read back and checked over
-    /// the protocol: what is set at launch is a request, and what the provider
-    /// reports is the answer.
+    /// variable, not from the ACP session request. The pinned adapter parses
+    /// `CODEX_CONFIG` as JSON and sends it as the `thread/start` config
+    /// override, which the pinned loader applies as a session layer. The model
+    /// and the instructions are supplied here and the model is read back over
+    /// the protocol. `features.hooks` and `notify` are not read back: legacy
+    /// managed configuration and MDM are applied after the session layer, and
+    /// ACP exposes no effective value, so the profile reports native hook
+    /// suppression as unsupported.
     fn session_config(&self) -> String {
-        let mut config = json!({"model": self.capabilities.model().model_id()});
+        let mut config = json!({
+            "model": self.capabilities.model().model_id(),
+            // Ordinary configured handlers stop when the feature is false.
+            // Provider builtin cleanup is a separate lifecycle path and is
+            // not disabled here. Legacy notify is constructed independently
+            // of the feature bit, so it is cleared on its own.
+            "features": {"hooks": false},
+            "notify": [],
+        });
         if let Some(prompt) = &self.system_prompt {
             config["instructions"] = json!(prompt.text().as_str());
         }

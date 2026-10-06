@@ -2,8 +2,8 @@ use super::sessions::AcpConfig;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionRequest;
 use crate::application::agent_execution::providers::{
-    ApprovalMode, PermissionDenialCapability, ProviderOperationCapabilities,
-    ProviderPermissionDeferralCapability,
+    ApprovalMode, NativeHookSuppressionCapability, PermissionDenialCapability,
+    ProviderOperationCapabilities, ProviderPermissionDeferralCapability,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::tools::ToolCallUpdate;
@@ -19,8 +19,18 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
         ProviderOperationCapabilities {
             permission_denial: PermissionDenialCapability::SupportedForOfferedPermissionReviews,
             permission_deferral: ProviderPermissionDeferralCapability::Unsupported,
+            native_hook_suppression: self.native_hook_suppression(),
             ..ProviderOperationCapabilities::default()
         }
+    }
+    /// Whether user-configured executable hooks are proven disabled.
+    ///
+    /// Unknown until this profile has a checked answer. Unsupported once it
+    /// has checked and cannot establish the effective setting. A requested
+    /// override, and an absence of hook events, are not that proof. Provider
+    /// builtin resource cleanup is outside this fact.
+    fn native_hook_suppression(&self) -> NativeHookSuppressionCapability {
+        NativeHookSuppressionCapability::Unknown
     }
     /// Profiles opt into their explicitly verified steering extension.
     fn supports_steering(&self, _initialize: &Value) -> bool {

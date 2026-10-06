@@ -15,6 +15,10 @@
 //! when an action leaves that sandbox. This module does not pretend otherwise.
 //! It pins the least permissive preset Codex offers, so that everything leaving
 //! the sandbox is answered by Nessa's permission owner, and carries everything
-//! Codex reports about the rest through as observations.
+//! Codex reports about the rest through as observations. Launch configuration
+//! requests user hooks and the legacy notify command off. The pinned loader
+//! still applies legacy managed configuration after that request, and ACP
+//! exposes no effective setting, so the profile reports native hook suppression
+//! as unsupported.
 pub mod sessions;
 pub(crate) mod tools;

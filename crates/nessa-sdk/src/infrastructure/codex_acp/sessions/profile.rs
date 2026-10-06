@@ -1,7 +1,9 @@
 use super::super::tools::wire::{self, ObservedTools};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionRequest;
-use crate::application::agent_execution::providers::{ApprovalMode, ApprovalModeChoice};
+use crate::application::agent_execution::providers::{
+    ApprovalMode, ApprovalModeChoice, NativeHookSuppressionCapability,
+};
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::tools::ToolCallUpdate;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
@@ -124,6 +126,19 @@ impl AcpProfile for CodexProfile {
     /// record says. Until then this answers false whatever the adapter offers.
     fn supports_steering(&self, _initialize: &Value) -> bool {
         false
+    }
+
+    /// The launch configuration requests `features.hooks: false` and
+    /// `notify: []`. That is a session override on the pinned loader: legacy
+    /// managed configuration and MDM are applied after it and can turn either
+    /// setting back on. ACP exposes no effective hooks or notify value, and
+    /// the adapter discards hook events, so their absence is not proof they
+    /// did not run. Provider builtin cleanup stays distinct from those
+    /// user-configured commands. The request is sent; effective suppression
+    /// is not established, and a session must not be read as Nessa owning
+    /// Codex's hook boundary.
+    fn native_hook_suppression(&self) -> NativeHookSuppressionCapability {
+        NativeHookSuppressionCapability::Unsupported
     }
 
     fn validate_initialize(&self, result: &Value) -> Result<(), AgentError> {

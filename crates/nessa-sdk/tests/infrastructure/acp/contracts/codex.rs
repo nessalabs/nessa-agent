@@ -490,6 +490,15 @@ async fn codex_steers_by_queue_although_its_adapter_offers_the_extension() {
     );
     assert!(!capabilities.native_steering());
     assert!(capabilities.session_resume());
+    // The fixture saw `features.hooks: false` and `notify: []` in `CODEX_CONFIG`
+    // before it wrote its pid. That request is a session override. Legacy
+    // managed configuration can restore either setting, and ACP exposes no
+    // effective value, so a negotiated session reports suppression as
+    // unsupported.
+    assert_eq!(
+        capabilities.native_hook_suppression(),
+        NativeHookSuppressionCapability::Unsupported
+    );
     // The fixture binding is given no image source, so this connection carries
     // none whatever the agent advertised.
     assert!(!capabilities.image_input());
