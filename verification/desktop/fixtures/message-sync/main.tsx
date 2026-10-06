@@ -65,6 +65,7 @@ gateway.rows.set(fast, row(fast, { title: "Message synchronization", running: tr
 gateway.rows.set(slow, row(slow, { title: "Slow conversation", running: true }))
 gateway.views.set(slow, view(slow))
 changed("Initial answer")
+let lastFastRequest: { at: number; revision: string; text: string } | null = null
 const client = {
   ...gateway.client,
   conversation: {
@@ -84,6 +85,20 @@ const client = {
       if (holdRead && id === slow) {
         heldReads++
         return readReply.promise
+      }
+      if (id === fast) {
+        const requested = gateway.views.get(id)!
+        lastFastRequest = {
+          at: performance.now(),
+          revision: requested.revision,
+          text: requested.messages
+            .flatMap((message) =>
+              message.parts
+                .filter((part) => part.kind === "text")
+                .map((part) => part.text),
+            )
+            .join("\n"),
+        }
       }
       return gateway.client.conversation.read(id)
     },
@@ -123,6 +138,7 @@ Object.assign(window, {
         heldLists,
         heldReads,
         now: performance.now(),
+        lastFastRequest,
       }
     },
     rest() {

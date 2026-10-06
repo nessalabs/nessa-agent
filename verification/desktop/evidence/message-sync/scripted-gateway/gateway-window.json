@@ -1,0 +1,269 @@
+{
+  "check": "gateway-window",
+  "ok": true,
+  "started": "2026-10-06T06:09:50.205Z",
+  "finished": "2026-10-06T06:10:11.090Z",
+  "target": {
+    "url": "http://127.0.0.1:49394/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "setup",
+      "seen": {
+        "title": "Webec2987: reply with exactly that word and noth"
+      },
+      "timings": {
+        "gatewayMs": 320,
+        "devServerMs": 2637,
+        "agentTurnMs": 1332
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "handshake",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2003,
+      "seen": [
+        {
+          "socket": "ws://127.0.0.1:49390/session",
+          "client": "nessa-panel",
+          "answer": {
+            "ok": true,
+            "principal": "surface:nessa-panel"
+          }
+        }
+      ],
+      "harmless": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "lists",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2039,
+      "seen": {
+        "listed": true,
+        "status": null,
+        "sample": 0,
+        "asked": {
+          "load_gateway_endpoint": 1,
+          "load_surface_credential": 1
+        }
+      },
+      "harmless": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "opens",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2091,
+      "seen": {
+        "messages": [
+          {
+            "role": "user",
+            "text": "Webec2987: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          }
+        ]
+      },
+      "harmless": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "live",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2915,
+      "seen": {
+        "before": 2,
+        "messages": [
+          {
+            "role": "user",
+            "text": "Webec2987: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          },
+          {
+            "role": "user",
+            "text": "W9b43e675: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          }
+        ],
+        "reloaded": false
+      },
+      "harmless": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "handshakes",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": [
+        {
+          "socket": "ws://127.0.0.1:49390/session",
+          "client": "nessa-panel",
+          "answer": {
+            "ok": true,
+            "principal": "surface:nessa-panel"
+          }
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "handshake",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 705,
+      "seen": [
+        {
+          "socket": "ws://127.0.0.1:49390/session",
+          "client": "nessa-panel",
+          "answer": {
+            "ok": true,
+            "principal": "surface:nessa-panel"
+          }
+        }
+      ],
+      "harmless": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "lists",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 741,
+      "seen": {
+        "listed": true,
+        "status": null,
+        "sample": 0,
+        "asked": {
+          "load_gateway_endpoint": 1,
+          "load_surface_credential": 1
+        }
+      },
+      "harmless": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "opens",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 790,
+      "seen": {
+        "messages": [
+          {
+            "role": "user",
+            "text": "Webec2987: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          },
+          {
+            "role": "user",
+            "text": "W9b43e675: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          }
+        ]
+      },
+      "harmless": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "live",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 1793,
+      "seen": {
+        "before": 4,
+        "messages": [
+          {
+            "role": "user",
+            "text": "Webec2987: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          },
+          {
+            "role": "user",
+            "text": "W9b43e675: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          },
+          {
+            "role": "user",
+            "text": "Wb8818521: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          }
+        ],
+        "reloaded": false
+      },
+      "harmless": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "handshakes",
+      "engine": "webkit",
+      "layout": "columns",
+      "seen": [
+        {
+          "socket": "ws://127.0.0.1:49390/session",
+          "client": "nessa-panel",
+          "answer": {
+            "ok": true,
+            "principal": "surface:nessa-panel"
+          }
+        }
+      ]
+    }
+  ]
+}

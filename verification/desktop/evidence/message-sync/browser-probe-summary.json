@@ -1,0 +1,9 @@
+{
+  "base": "1fc01f0fe43acd710d62ab7f272526718e01a545",
+  "fixed_head": "f97ee099a886f176ff9e06a47eb86d7de269af4a",
+  "original_sha256": "663af573fcf8cfde4d1413cdf99d75d3aa20d2e89483289c65c496150c916a23",
+  "fixed_sha256": "e7e68fc2b52c6ebdf6daee1ba60f820043ee2a1875d2a36613e0e9abde2daef2",
+  "revert_exit": 1,
+  "restored_exactly": true,
+  "restored_exit": 0
+}

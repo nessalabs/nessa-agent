@@ -1,0 +1,400 @@
+{
+  "check": "message-sync",
+  "ok": true,
+  "started": "2026-10-06T06:31:29.718Z",
+  "finished": "2026-10-06T06:32:02.929Z",
+  "target": {
+    "url": "http://127.0.0.1:54082/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "calibration",
+      "engine": "chromium",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 15,
+        "throttledMs": 61,
+        "ratio": 4.05,
+        "ok": true
+      },
+      "calibrationFrame": {
+        "cost": 120,
+        "measuredMs": 116.70000000000005,
+        "attributed": true,
+        "ok": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "columns",
+      "run": 1,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          273.79999999701977,
+          153.79999999701977,
+          100,
+          27.099999994039536,
+          474,
+          381.8999999985099,
+          59.600000001490116,
+          239.10000000149012,
+          165.10000000149012,
+          92
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 165.10000000149012,
+          "maxMs": 474
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 175.79999999701977,
+          "maxMs": 279.5
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "maxFrame": 17.700000000000273,
+          "over": 0,
+          "frames": 188,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "maxFrame": 17.700000000000728,
+          "over": 0,
+          "frames": 83,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [
+          279.5,
+          175.79999999701977,
+          100.39999999850988,
+          28.799999997019768,
+          207
+        ],
+        "before": {
+          "lists": 2,
+          "reads": 10,
+          "fastReads": 5,
+          "slowReads": 5,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 1322.2999999970198,
+          "lastFastRequest": {
+            "at": 1061.1999999955297,
+            "revision": "1",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 5,
+          "reads": 30,
+          "fastReads": 15,
+          "slowReads": 15,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 4457,
+          "lastFastRequest": {
+            "at": 4317.5,
+            "revision": "11",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "lists": 6,
+          "reads": 37,
+          "fastReads": 21,
+          "slowReads": 16,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 6457.69999999553,
+          "lastFastRequest": {
+            "at": 6320.10000000149,
+            "revision": "16",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "lists": 8,
+          "reads": 39,
+          "fastReads": 22,
+          "slowReads": 17,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 8481.60000000149,
+          "lastFastRequest": {
+            "at": 7473.5,
+            "revision": "17",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "lists": 10,
+          "reads": 39,
+          "fastReads": 22,
+          "slowReads": 17,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 10482,
+          "lastFastRequest": {
+            "at": 7473.5,
+            "revision": "17",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "columns",
+      "run": 1,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          238,
+          175,
+          102,
+          279,
+          207,
+          134,
+          61,
+          239,
+          166,
+          92
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 175,
+          "maxMs": 279
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 102,
+          "maxMs": 206
+        },
+        "throttle": 1,
+        "activeFrames": {
+          "maxFrame": 18,
+          "over": 0,
+          "frames": 171,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "maxFrame": 18,
+          "over": 0,
+          "frames": 68,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [
+          32,
+          176,
+          102,
+          28,
+          206
+        ],
+        "before": {
+          "lists": 2,
+          "reads": 12,
+          "fastReads": 6,
+          "slowReads": 6,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 1401,
+          "lastFastRequest": {
+            "at": 1360,
+            "revision": "1",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 5,
+          "reads": 34,
+          "fastReads": 17,
+          "slowReads": 17,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 4248,
+          "lastFastRequest": {
+            "at": 4123,
+            "revision": "11",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "lists": 6,
+          "reads": 43,
+          "fastReads": 25,
+          "slowReads": 18,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 6263,
+          "lastFastRequest": {
+            "at": 6140,
+            "revision": "16",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "lists": 8,
+          "reads": 45,
+          "fastReads": 26,
+          "slowReads": 19,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 8274,
+          "lastFastRequest": {
+            "at": 7268,
+            "revision": "17",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "lists": 10,
+          "reads": 45,
+          "fastReads": 26,
+          "slowReads": 19,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 10275,
+          "lastFastRequest": {
+            "at": 7268,
+            "revision": "17",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery-statistics",
+      "summaries": [
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "run": 1,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 165.10000000149012,
+            "maxMs": 474
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 175.79999999701977,
+            "maxMs": 279.5
+          },
+          "frameMaxMs": 17.700000000000728,
+          "activeMs": [
+            273.79999999701977,
+            153.79999999701977,
+            100,
+            27.099999994039536,
+            474,
+            381.8999999985099,
+            59.600000001490116,
+            239.10000000149012,
+            165.10000000149012,
+            92
+          ],
+          "heldMs": [
+            279.5,
+            175.79999999701977,
+            100.39999999850988,
+            28.799999997019768,
+            207
+          ],
+          "over50": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "columns",
+          "run": 1,
+          "throttle": 1,
+          "active": {
+            "samples": 10,
+            "medianMs": 175,
+            "maxMs": 279
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 102,
+            "maxMs": 206
+          },
+          "frameMaxMs": 18,
+          "activeMs": [
+            238,
+            175,
+            102,
+            279,
+            207,
+            134,
+            61,
+            239,
+            166,
+            92
+          ],
+          "heldMs": [
+            32,
+            176,
+            102,
+            28,
+            206
+          ],
+          "over50": 0
+        }
+      ],
+      "aggregates": [
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "runs": 1,
+          "active": {
+            "samples": 10,
+            "medianMs": 165.10000000149012,
+            "maxMs": 474
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 175.79999999701977,
+            "maxMs": 279.5
+          },
+          "frameMaxMs": 17.700000000000728,
+          "frameRunMedianMs": 17.700000000000728,
+          "over50": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "columns",
+          "runs": 1,
+          "active": {
+            "samples": 10,
+            "medianMs": 175,
+            "maxMs": 279
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 102,
+            "maxMs": 206
+          },
+          "frameMaxMs": 18,
+          "frameRunMedianMs": 18,
+          "over50": 0
+        }
+      ]
+    }
+  ]
+}

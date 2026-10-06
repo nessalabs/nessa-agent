@@ -1,0 +1,249 @@
+{
+  "check": "mcp-apps-gateway",
+  "ok": true,
+  "started": "2026-10-06T06:09:31.839Z",
+  "finished": "2026-10-06T06:09:49.878Z",
+  "target": {
+    "url": "http://127.0.0.1:49188/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "setup",
+      "seen": {
+        "title": "Use the tools of the \"mcptest\" MCP server. If th"
+      },
+      "timings": {
+        "gatewayMs": 2240,
+        "devServerMs": 1703,
+        "agentTurnMs": 1259
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "renders",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 31,
+      "seen": {
+        "state": "live",
+        "mode": "inline",
+        "heading": "Review rows (nessa-test)",
+        "origin": "null",
+        "url": "about:srcdoc",
+        "cards": 1,
+        "frames": 1,
+        "result": "{\"rows\":[1,2]}",
+        "proxyOrigin": "http://127.0.0.1:49190"
+      },
+      "harmless": [
+        "requestfailed: http://127.0.0.1:49188/browser/check net::ERR_ABORTED (aborted after a 204 response, #485)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "hidden",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 12,
+      "seen": {
+        "noUi": "error: This app may not use that tool",
+        "withUi": "error: This app may not use that tool"
+      },
+      "harmless": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "allow",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 478,
+      "seen": {
+        "before": "pending",
+        "review": {
+          "arrivedMs": 9,
+          "toolName": "app_delete_row",
+          "origin": {
+            "kind": "app",
+            "server": "mcptest",
+            "tool": "app_delete_row"
+          },
+          "argumentsJson": "{\"id\":2}",
+          "options": ["allow", "deny"],
+          "card": "The mcptest app wants to run app_delete_row $ app_delete_row {\"id\":2} An app asks to run app_delete_row on mcptest Deny Allow"
+        },
+        "answer": "ok: Deleted row 2."
+      },
+      "harmless": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "deny",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1150,
+      "seen": {
+        "before": "pending",
+        "review": {
+          "arrivedMs": 261,
+          "toolName": "app_delete_row",
+          "origin": {
+            "kind": "app",
+            "server": "mcptest",
+            "tool": "app_delete_row"
+          },
+          "argumentsJson": "{\"id\":2}",
+          "options": ["allow", "deny"],
+          "card": "The mcptest app wants to run app_delete_row $ app_delete_row {\"id\":2} An app asks to run app_delete_row on mcptest Deny Allow"
+        },
+        "answer": "error: The person declined this action"
+      },
+      "harmless": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "release",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1610,
+      "seen": {
+        "paneMode": "fullscreen",
+        "pointerMoves": 1,
+        "review": {
+          "origin": {
+            "kind": "app",
+            "server": "mcptest",
+            "tool": "app_delete_row"
+          },
+          "toolName": "app_delete_row"
+        },
+        "paneSaid": "pending",
+        "withdrawn": true,
+        "withdrawnMs": 4,
+        "cardGone": true,
+        "cardGoneAfterWithdrawnMs": 188,
+        "inlineState": "live",
+        "paneLive": true
+      },
+      "harmless": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "renders",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 9,
+      "seen": {
+        "state": "live",
+        "mode": "inline",
+        "heading": "Review rows (nessa-test)",
+        "origin": "null",
+        "url": "about:srcdoc",
+        "cards": 1,
+        "frames": 1,
+        "result": "{\"rows\":[1,2]}",
+        "proxyOrigin": "http://127.0.0.1:49190"
+      },
+      "harmless": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "hidden",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 3,
+      "seen": {
+        "noUi": "error: This app may not use that tool",
+        "withUi": "error: This app may not use that tool"
+      },
+      "harmless": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "allow",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 295,
+      "seen": {
+        "before": "pending",
+        "review": {
+          "arrivedMs": 3,
+          "toolName": "app_delete_row",
+          "origin": {
+            "kind": "app",
+            "server": "mcptest",
+            "tool": "app_delete_row"
+          },
+          "argumentsJson": "{\"id\":2}",
+          "options": ["allow", "deny"],
+          "card": "The mcptest app wants to run app_delete_row $ app_delete_row {\"id\":2} An app asks to run app_delete_row on mcptest Deny Allow"
+        },
+        "answer": "ok: Deleted row 2."
+      },
+      "harmless": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "deny",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 897,
+      "seen": {
+        "before": "pending",
+        "review": {
+          "arrivedMs": 258,
+          "toolName": "app_delete_row",
+          "origin": {
+            "kind": "app",
+            "server": "mcptest",
+            "tool": "app_delete_row"
+          },
+          "argumentsJson": "{\"id\":2}",
+          "options": ["allow", "deny"],
+          "card": "The mcptest app wants to run app_delete_row $ app_delete_row {\"id\":2} An app asks to run app_delete_row on mcptest Deny Allow"
+        },
+        "answer": "error: The person declined this action"
+      },
+      "harmless": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "release",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 844,
+      "seen": {
+        "paneMode": "fullscreen",
+        "pointerMoves": 1,
+        "review": {
+          "origin": {
+            "kind": "app",
+            "server": "mcptest",
+            "tool": "app_delete_row"
+          },
+          "toolName": "app_delete_row"
+        },
+        "paneSaid": "pending",
+        "withdrawn": true,
+        "withdrawnMs": 8,
+        "cardGone": true,
+        "cardGoneAfterWithdrawnMs": 178,
+        "inlineState": "live",
+        "paneLive": true
+      },
+      "harmless": []
+    }
+  ]
+}

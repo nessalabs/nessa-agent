@@ -959,4 +959,7 @@ or clocks.
   no idle transcript reads. `message-sync.mjs` measures these contracts over the
   production source, store and window with controlled gateway replies. See the
   [ordering table](../../docs/reviews/startup-latency.md#desktop-transcript-delivery-experiment-532).
+  Three fresh-page runs report delivery median/max and frame attribution. Chromium
+  uses calibrated 4x CPU throttling and checks the 50 ms frame budget through
+  `lib/perf.mjs`; WebKit delivery is reported separately without CPU throttling.
   DOM plus frame opportunities do not measure transport, provider startup or compositor paint.
