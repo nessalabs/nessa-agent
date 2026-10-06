@@ -4,6 +4,7 @@ import { titleFrom } from "../../model/transcript"
 import { contradicts } from "../../model/workspace-index"
 import { inMemorySource, type Schedule } from "./in-memory-source"
 import {
+  maxMessageCharacters,
   seededWorkspace,
   SeededWorkspaceRefusal,
   type SeededWorkspaceSpec,
@@ -72,6 +73,8 @@ describe("seeded workspace", () => {
         [{ messages: 1, messageCharacters: 8 }, "messages"],
         [{ longTranscripts: 0, messages: 0, messageCharacters: 8 }, "messageCharacters"],
         [{ messageCharacters: -1 }, "messageCharacters"],
+        [{ messageCharacters: 1e20 }, "messageCharacters"],
+        [{ messageCharacters: maxMessageCharacters + 1 }, "messageCharacters"],
       ]
     for (const [over, reason] of cases) expect(reasonOf(over)).toBe(reason)
   })

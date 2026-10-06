@@ -164,6 +164,12 @@ const minute = 60_000
 const uint32 = 0xffffffff
 /** The inclusive range `Date` can format (`TimeClip` in ECMA-262). */
 const dateLimit = 8_640_000_000_000_000
+/**
+ * The longest plain part this builder will allocate. Above this,
+ * `String.repeat` throws `RangeError` instead of `SeededWorkspaceRefusal`.
+ * This is not the gateway's 8192-byte send bound.
+ */
+export const maxMessageCharacters = 1_048_576
 
 interface Cursor {
   readonly state: number
@@ -193,7 +199,11 @@ function accepted(spec: SeededWorkspaceSpec): void {
   if (!whole(spec.messages) || spec.messages < 0) refuse("messages")
   if (spec.longTranscripts === 0 ? spec.messages !== 0 : spec.messages < 2)
     refuse("messages")
-  if (!whole(spec.messageCharacters) || spec.messageCharacters < 0)
+  if (
+    !whole(spec.messageCharacters) ||
+    spec.messageCharacters < 0 ||
+    spec.messageCharacters > maxMessageCharacters
+  )
     refuse("messageCharacters")
   if (spec.messageCharacters > 0 && spec.messages < 2) refuse("messageCharacters")
   if (!representableTime(spec.now) || !representableTime(earliestAt(spec))) refuse("now")
