@@ -951,7 +951,8 @@ async fn conversations(
     let catalogue_watches: Arc<dyn WatchCatalogue> = metadata.clone();
     let record_reader = Arc::new(
         NessaRecordReadSource::new(storage.clone(), record_origin.clone(), Handle::current())
-            .with_work_budget(read_work_budget),
+            .with_work_budget(read_work_budget)
+            .map_err(|error| RunError::RuntimeConfig(error.to_string()))?,
     );
     let catalogue_reader = Arc::new(NessaCatalogueReadSource::new(
         metadata.clone(),

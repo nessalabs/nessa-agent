@@ -182,7 +182,7 @@ export function agentTranscript(
           /* exact plain text */
         }
       }
-      // The gateway gives a tool call one part (nessa-server tests/conversation/tool_parts.rs),
+      // The gateway gives a tool call one part (nessa-protocol tests/conversation/tool_parts.rs),
       // so its start, and its result once it has one, are told here.
       push(
         `${callId}:start`,

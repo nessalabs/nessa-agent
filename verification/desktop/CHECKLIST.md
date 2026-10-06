@@ -166,6 +166,12 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
 - _Harmless, and not a failure:_ a single read of a title's transforms in
   WebKit that mixes two moments. How the two stretch checks read a title is
   `recordShapes`' (`drag.mjs`), and why, with the runs and probes, is #365.
+  Also harmless: one agreed read of about a percent (both axes within two
+  percent of 1, and the two scales within four percent of each other) while
+  every running animation on that title shares one start time. That is the
+  box and its counter-scale sampled a step apart inside the frame (#254).
+  A read whose animations started apart, a larger stretch, or a title with
+  no running animation still fails, in both engines.
 - [ ] **A zone the fit rule refuses offers nothing; a session already on
   screen offers "Go to Pane".** _Check:_ manual (drag a session from the list
   onto four panes; drag an on-screen session).
@@ -829,8 +835,8 @@ says why where the conversations would be.
   the packaged app's `tauri://localhost` origin are the live `pnpm app` run's.
 - [ ] **A gateway that answers shows its servers' MCP Apps in the main
   window.** _By hand:_ `pnpm app` against a gateway with
-  `scripts/mcp-test-server` configured; scripted in `gateway-window.mjs` once
-  #436 lands.
+  `scripts/mcp-test-server` configured. This row is checked by hand.
+  `gateway-window.mjs` has no step for it; adding one is #574.
 - [ ] **A scenario can ask, fail mid-turn, and wait to be cancelled, and the
   window shows it.** _Check:_ `scripted-scenarios.mjs` (and
   `pnpm test:e2e:scripted`, which also runs `mcp-apps-gateway --scripted` and
@@ -852,17 +858,23 @@ says why where the conversations would be.
 - _Harmless:_ the first page in a fresh browser asks for `/favicon.ico` and
   gets a 404 (matched by source URL in `lib/selectors.mjs`,
   `harmlessConsole`). Chromium reports a request as failed with
-  `net::ERR_ABORTED` when the page stops reading a body that did arrive: the
-  client's bounded read of `/mcp-resources`, or the 204 of the window's
-  sign-in check `/browser/check`, whose body is never read (#485). One rule,
-  not a list of URLs: `net::ERR_ABORTED` exactly, on the page's own origin,
-  after a 2xx response, is labelled harmless, "aborted after a <status>
-  response" (`lib/browser.mjs`, `recordFailedRequest`, rows F1′ and F2–F4).
-  With no response, a status outside 2xx, another origin, another error, or
-  a page with no origin, it stays a failure. The rule knows only that a
-  response arrived: whether its bytes were right is each check's own
-  assertions' to judge (`renders` in `mcp-apps-gateway.mjs` for
-  `/mcp-resources`; the conversation loading at all for `/browser/check`).
+  `net::ERR_ABORTED` in two cases, and `ERR_ABORTED` is not ignored as a
+  class (`lib/browser.mjs`, `recordFailedRequest`):
+  - a 200 on the page's own origin whose `content-length` was fully
+    delivered (`sizes().responseBodySize`). The client's read of
+    `/mcp-resources` is the one that shows this (#473). The gateway waits
+    for a size report already in flight before it reads the line. Until
+    that size is known the line stays an error. Its release step may move
+    an unlabelled same-origin `/mcp-resources` abort to harmless only when
+    that pane's mount went live and the inline mount stayed live. A
+    cross-origin abort stays a failure.
+  - a 204 on the page's own origin, whose body is empty and never read:
+    the window's sign-in check `/browser/check` (#485).
+  With no response, a short body, any other status, another origin, another
+  error, or a page with no origin, it stays a failure (rows F1′ and F2–F4).
+  Whether the bytes were right is each check's own assertions' to judge
+  (`renders` in `mcp-apps-gateway.mjs` for `/mcp-resources`; the conversation
+  loading at all for `/browser/check`).
   Harmless lines of either kind are kept in the JSON as `harmless` by
   `lib/page-lines.mjs`, which every `openPage` watches once `run.mjs` has
   bound the check's reporter (`verification/desktop/page-lines.md`). A

@@ -13,8 +13,11 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import {
+  checksUnder,
   chosen,
   cli,
+  DEV_SERVER_ONLY,
+  devServerOnlyChecks,
   log,
   overallStatus,
   table,
@@ -58,12 +61,17 @@ Usage: node verification/desktop/scripts/run-all.mjs [options]
   --runs <n>       Passed to perf-budget.
 
 --url / --mode apply to the functional checks; perf-budget always measures a
-production build unless --url is given. --engine and --layout, when given,
-are passed to every check; otherwise each uses its own default. Each
-check's JSON is collected into one document on stdout (or --out).
+production build unless --url is given. --mode prod leaves out the checks
+that need the dev server (${devServerOnlyChecks.join(", ")}) and names them
+"${DEV_SERVER_ONLY}". That is not "could not run". Steps inside drag,
+widgets, and mcp-apps that read the dev server's modules are left out the
+same way. --engine and --layout, when given, are passed to every check;
+otherwise each uses its own default. Each check's JSON is collected into
+one document on stdout (or --out).
 
-Exit: 0 every check held; 1 any check failed (whatever else could not run);
-2 nothing failed but a check could not run.`,
+Exit: 0 every check that ran held; 1 any check failed (whatever else could
+not run or was left out); 2 nothing failed but a check that ran could not
+run, or nothing ran.`,
 })
 
 const passThrough = () => {
@@ -122,29 +130,45 @@ try {
   log(`run-all: ${error.message}`)
   process.exit(2)
 }
+const scheduled = checksUnder(options.mode, checks)
+const leftOutSet = new Set(scheduled.leftOut)
 const dir = mkdtempSync(join(tmpdir(), "nessa-desktop-verify-all-"))
 const summary = []
 const documents = {}
 let page
 try {
-  if (checks.some((c) => functional.includes(c))) {
+  if (scheduled.run.some((c) => functional.includes(c))) {
     try {
       page = await target(options)
     } catch (error) {
-      // No page to test: every functional check could not run; perf builds its own.
+      // No page to test. Each functional check is recorded in the loop below,
+      // in check order, so a left-out row stays where that check sits.
+      // perf-budget builds its own page.
       log(`run-all: could not start the page: ${error.message}`)
-      for (const check of checks.filter((c) => functional.includes(c)))
-        summary.push({ check, status: "COULD NOT RUN", held: "0/0", seconds: 0 })
     }
   }
   for (const check of checks) {
-    if (functional.includes(check) && !page) continue
+    if (leftOutSet.has(check)) {
+      log(`\n=== ${check}`)
+      log(`${check}: ${DEV_SERVER_ONLY}`)
+      summary.push({ check, status: DEV_SERVER_ONLY, held: "—", seconds: 0 })
+      continue
+    }
+    if (functional.includes(check) && !page) {
+      summary.push({ check, status: "COULD NOT RUN", held: "0/0", seconds: 0 })
+      continue
+    }
     const out = join(dir, `${check}.json`)
     const args = [...passThrough(), "--out", out]
     if (check === "perf-budget") {
       if (options.url) args.push("--url", options.url)
       if (options.runs) args.push("--runs", options.runs)
-    } else args.push("--url", page.url)
+    } else {
+      args.push("--url", page.url)
+      // The shared page is already started. The child must still hear prod,
+      // or a step that needs the dev server's modules reports could-not-run.
+      if (page.mode === "dev" || page.mode === "prod") args.push("--mode", page.mode)
+    }
     log(`\n=== ${check}`)
     verbose(options, `node ${check}.mjs ${args.join(" ")}`)
     const { code, seconds } = await run(check, args)
@@ -156,10 +180,11 @@ try {
     }
     documents[check] = document
     const results = document?.results ?? []
+    const counted = results.filter((r) => !r.skipped)
     summary.push({
       check,
       status: verdictOf(code),
-      held: `${results.filter((r) => r.ok).length}/${results.length}`,
+      held: `${counted.filter((r) => r.ok).length}/${counted.length}`,
       seconds,
     })
   }
@@ -170,11 +195,16 @@ try {
 
 log(`\n${table(summary, ["check", "status", "held", "seconds"])}`)
 for (const [check, document] of Object.entries(documents))
-  for (const r of document?.results ?? [])
+  for (const r of document?.results ?? []) {
+    if (r.skipped) {
+      log(`  ${check} › ${r.name}: ${r.skipped}`)
+      continue
+    }
     if (!r.ok)
       log(
         `  ${check} › ${r.name} [${[r.engine, r.layout, r.width].filter(Boolean).join(" ")}]: ${r.error ?? r.failures.join("; ")}`,
       )
+  }
 
 const status = overallStatus(summary.map((s) => s.status))
 const document = {

@@ -113,17 +113,67 @@ export function cli(meta) {
 }
 
 /**
+ * A production run leaves a dev-server check out with this status. It is not
+ * "could not run": the production page was never going to host it.
+ */
+export const DEV_SERVER_ONLY = "not run: dev server only"
+
+/**
+ * Functional checks that need a page only the dev server serves. `run-all
+ * --mode prod` leaves them out (`checksUnder`) instead of running them.
+ */
+export const devServerOnlyChecks = [
+  "committed-transcript",
+  "app-review",
+  "gateway-states",
+]
+
+/**
+ * Steps, inside a check that otherwise runs on a production preview, that
+ * read the dev server's source modules.
+ */
+export const devServerOnlySteps = {
+  drag: ["boundary-jitter"],
+  widgets: ["off-missing"],
+  "mcp-apps": ["departures", "departures-back"],
+}
+
+/**
+ * The checks a run spawns, and the ones a production run leaves out.
+ * Left-out checks stay in the report and are not could-not-run.
+ */
+export function checksUnder(mode, checks, devOnly = devServerOnlyChecks) {
+  if (mode !== "prod") return { run: [...checks], leftOut: [] }
+  return {
+    run: checks.filter((check) => !devOnly.includes(check)),
+    leftOut: checks.filter((check) => devOnly.includes(check)),
+  }
+}
+
+/**
+ * Records `name` as left out of a production run and reports whether it did.
+ * `devOnly` is that check's own list (`devServerOnlySteps`).
+ */
+export function recordIfLeftOut(rep, mode, name, devOnly, fields) {
+  if (mode !== "prod" || !devOnly.includes(name)) return false
+  rep.add({ ...fields, name, skipped: DEV_SERVER_ONLY, failures: [] })
+  return true
+}
+
+/**
  * The exit status a set of results earns: `1` when any contract broke — a
  * failure, or an error that was not "could not run" — whatever else could
  * not run; else `2` when anything could not run, or nothing ran at all; else
- * `0`. A product failure is never reported as "could not run".
+ * `0`. A product failure is never reported as "could not run". A result with
+ * `skipped` set did not run and counts as neither.
  */
 export function statusOf(results) {
-  const broke = results.some(
+  const counted = results.filter((result) => !result.skipped)
+  const broke = counted.some(
     (r) => !r.cannotRun && ((r.failures ?? []).length > 0 || Boolean(r.error)),
   )
   if (broke) return 1
-  if (results.length === 0 || results.some((r) => r.cannotRun)) return 2
+  if (counted.length === 0 || counted.some((r) => r.cannotRun)) return 2
   return 0
 }
 
@@ -136,10 +186,14 @@ export function verdictOf(code) {
   return code === 0 ? "held" : code === 2 ? "COULD NOT RUN" : "FAILED"
 }
 
-/** `run-all`'s exit status from its checks' verdicts, by the same rule as `statusOf`. */
+/**
+ * `run-all`'s exit status from its checks' verdicts, by the same rule as `statusOf`.
+ * `DEV_SERVER_ONLY` is a check the production run left out, not one that could not run.
+ */
 export function overallStatus(verdicts) {
-  if (verdicts.some((v) => v === "FAILED")) return 1
-  if (verdicts.length === 0 || verdicts.some((v) => v === "COULD NOT RUN")) return 2
+  const counted = verdicts.filter((verdict) => verdict !== DEV_SERVER_ONLY)
+  if (counted.some((v) => v === "FAILED")) return 1
+  if (counted.length === 0 || counted.some((v) => v === "COULD NOT RUN")) return 2
   return 0
 }
 
@@ -193,17 +247,25 @@ export function report(check, options) {
     add(result) {
       const lined = applyLines(result)
       const entry = { ok: (lined.failures ?? []).length === 0, failures: [], ...lined }
-      entry.ok = entry.failures.length === 0 && !entry.error
+      entry.ok = entry.failures.length === 0 && !entry.error && !entry.skipped
       results.push(entry)
-      const tag = entry.error ? "ERROR" : entry.ok ? "ok   " : "FAIL "
+      const tag = entry.skipped
+        ? "skip "
+        : entry.error
+          ? "ERROR"
+          : entry.ok
+            ? "ok   "
+            : "FAIL "
       const where = [entry.engine, entry.layout, entry.width].filter(Boolean).join(" ")
       log(`${tag} ${entry.name}${where ? ` [${where}]` : ""}`)
       for (const failure of entry.failures) log(`        - ${failure}`)
+      if (entry.skipped) log(`        - ${entry.skipped}`)
       if (entry.error) log(`        ! ${entry.error}`)
       return entry
     },
     finish(extra = {}) {
-      const cannotRun = results.some((r) => r.cannotRun)
+      const counted = results.filter((r) => !r.skipped)
+      const cannotRun = counted.some((r) => r.cannotRun)
       const status = statusOf(results)
       const ok = status === 0
       const document = {
@@ -224,9 +286,10 @@ export function report(check, options) {
       } else {
         process.stdout.write(json)
       }
-      const passed = results.filter((r) => r.ok).length
+      const passed = counted.filter((r) => r.ok).length
+      const leftOut = results.length - counted.length
       log(
-        `${check}: ${passed}/${results.length} held${cannotRun ? " (some could not run)" : ""}`,
+        `${check}: ${passed}/${counted.length} held${leftOut ? `, ${leftOut} ${DEV_SERVER_ONLY}` : ""}${cannotRun ? " (some could not run)" : ""}`,
       )
       return status
     },

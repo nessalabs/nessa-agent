@@ -30,11 +30,15 @@
  *   fixes it, and the exit status stays 0 — a gateway with no agent is still a
  *   gateway worth starting, and blocking the dev loop would help nobody.
  */
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
+  fstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -129,8 +133,9 @@ class StoodDown extends Error {}
  * and a stand-down that exited would end the caller's run at whichever line
  * reached it — silently, and with the success status a stand-down carries.
  * `main` turns this into that status. Throwing also lets the configuration
- * lock's `finally` run, which an exit from under it skipped, leaving a lock
- * file behind for the next run to report as somebody else's.
+ * lock's `finally` run. The lock is an `flock` on `config.json.lock`, released
+ * by closing that descriptor; an exit from under it would keep the flock for
+ * as long as this process stayed up. The lock file itself is left in place.
  */
 function skip(reason, remedy) {
   say(`→ dev agent not configured: ${reason}`)
@@ -390,8 +395,8 @@ function checkExisting(existing, path, { held = false } = {}) {
  */
 function checkUnderLock(configPath) {
   const lock = lockFor(configPath)
-  if ("held" in lock) {
-    say(`→ not repairing ${configPath}: its lock is held by ${lock.held}`)
+  if ("reason" in lock) {
+    say(`→ not repairing ${configPath}: ${lock.reason}`)
     return
   }
   try {
@@ -461,83 +466,101 @@ function main() {
  * the write, which is the window a concurrent writer lives in.
  */
 /**
- * Hold the right to write this configuration, or find out who has it.
+ * Hold the right to write this configuration, or stand down without writing.
  *
  * Re-reading before the rename narrows the window between deciding and writing;
  * it does not close it. Two runs can both read, both decide to write, and the
  * second rename silently replaces the first — atomic, and still a lost update.
  * So the read, the decision and the rename happen while holding this.
  *
- * `wx` is the whole mechanism: creating the file is the acquisition, and it
- * either succeeds or it does not. What is written into it is a token — the pid
- * for a person reading it, and a uuid so the file can be recognised as *this*
- * run's rather than merely as one written by some run with this pid.
+ * The same protocol as the gateway's `OsConfigFiles::try_lock`
+ * (`docs/design/mcp-connections.md`): open `<config>.lock` (create, 0600, no
+ * follow, no block), refuse anything that is not a regular file, and take an
+ * exclusive non-blocking `flock` on that descriptor. Node has no `flock`, so
+ * Perl calls it on the descriptor this function already opened. The file stays.
+ * Deleting it would put the next writer on a new inode, which does not exclude
+ * a holder of the old one. A file left behind — empty, or still carrying a pid
+ * line from the older exclusive-create lock — is not a holder.
  *
- * A lock left behind by a killed run is reported, never taken. Taking it cannot
- * be done safely with the operations available here: between reading a pid and
- * unlinking the file, that file can become a live run's lock, and deleting it
- * would hand the same configuration to two writers at once — the exact thing
- * the lock exists to prevent. `rm` is the wrong tool for "delete this only if
- * it still says 2147483647". So a stale lock is a sentence with the command
- * that clears it, said to the person who can tell that nothing is running.
+ * A helper that cannot run is a stand-down, not a write without the lock.
+ * Closing the descriptor releases the flock. An editor saving `config.json`
+ * still takes no lock: the race left is between the read inside the lock and
+ * the rename.
  *
- * Honest about the other limit: this coordinates writers that take the lock. An
- * editor saving `config.json` underneath us takes no lock and is still a race —
- * a narrower one, between the read inside the lock and the rename, and not one
- * a file rename can settle.
+ * `reason` is the whole clause a caller prints. Only a busy flock says the
+ * lock is held; an open or helper failure names that failure.
  *
- * @returns {{ release: () => void } | { held: string }}
+ * @returns {{ release: () => void } | { reason: string }}
  */
 function lockFor(configPath) {
   const lock = `${configPath}.lock`
-  const token = `${process.pid} ${randomUUID()} ${new Date().toISOString()}\n`
+  let fd
   try {
-    writeFileSync(lock, token, { mode: 0o600, flag: "wx" })
+    fd = openSync(
+      lock,
+      constants.O_CREAT |
+        constants.O_WRONLY |
+        constants.O_NONBLOCK |
+        constants.O_NOFOLLOW,
+      0o600,
+    )
   } catch (error) {
-    if (error.code !== "EEXIST")
-      return { held: `could not lock ${lock}: ${error.message}` }
-    return { held: readHolder(lock).description }
+    return { reason: `could not lock ${lock}: ${error.message}` }
   }
-  return {
-    // Released only while it is still this run's own lock. If somebody cleared
-    // it by hand and another run took it, the file at this path is theirs, and
-    // unlinking it would leave them holding nothing.
-    release: () => {
-      try {
-        if (readFileSync(lock, "utf8") === token) unlinkSync(lock)
-      } catch {
-        // Already gone, or unreadable: nothing this run may remove.
-      }
-    },
+  try {
+    if (!fstatSync(fd).isFile()) {
+      closeQuiet(fd)
+      return { reason: `${lock} must be a regular file` }
+    }
+  } catch (error) {
+    closeQuiet(fd)
+    return { reason: `could not lock ${lock}: ${error.message}` }
   }
+  // The helper's descriptor must be a different number from ours. dup2 of
+  // an fd onto itself does not clear close-on-exec, so exec would close it
+  // and the helper would lock nothing.
+  const childFd = fd === 3 ? 4 : 3
+  const stdio = ["ignore", "ignore", "pipe"]
+  while (stdio.length <= childFd) stdio.push("ignore")
+  stdio[childFd] = fd
+  const taken = spawnSync("perl", ["-e", flockProgram(childFd)], {
+    stdio,
+    encoding: "utf8",
+    timeout: 5_000,
+  })
+  if (taken.status === 1) {
+    closeQuiet(fd)
+    return {
+      reason: "its lock is held by another writer (the gateway, or another dev loop)",
+    }
+  }
+  if (taken.error || taken.status !== 0) {
+    closeQuiet(fd)
+    const detail =
+      taken.error?.message ?? (taken.stderr?.trim() || `perl exited ${taken.status}`)
+    return { reason: `could not lock ${lock}: ${detail}` }
+  }
+  return { release: () => closeQuiet(fd) }
 }
 
-/**
- * Who holds a lock, and what to do about it.
- *
- * A live holder is somebody to leave alone. A holder that is gone is a wedged
- * lock, and the description carries the command that clears it, because this
- * run will not clear it itself — see [`lockFor`].
- */
-function readHolder(lock) {
-  const clear = `nothing is writing it, run: rm ${lock}`
-  let text = ""
+/** `flock(2)` on the inherited descriptor: 0 held, 1 busy, anything else a failure. */
+function flockProgram(childFd) {
+  return `
+use Fcntl qw(:flock);
+open(my $fh, ">&=${childFd}") or die "fdopen: $!";
+flock($fh, LOCK_EX|LOCK_NB) or do {
+  if ($!{EWOULDBLOCK} || $!{EAGAIN}) { exit 1 }
+  die "flock: $!";
+};
+exit 0;
+`
+}
+
+function closeQuiet(fd) {
   try {
-    text = readFileSync(lock, "utf8")
+    closeSync(fd)
   } catch {
-    return { description: "a lock that vanished as it was read; try again" }
-  }
-  const pid = Number(text.trim().split(/\s+/)[0])
-  if (!Number.isInteger(pid) || pid <= 0)
-    return { description: `a lock naming no process (${text.trim()}); if ${clear}` }
-  try {
-    process.kill(pid, 0)
-    return { description: `pid ${pid}, which is still running` }
-  } catch (error) {
-    // EPERM means it exists and is somebody else's, which is not stale.
-    return error.code === "EPERM"
-      ? { description: `pid ${pid}` }
-      : { description: `pid ${pid}, which is gone — if ${clear}` }
+    // Already closed.
   }
 }
 
@@ -599,8 +622,8 @@ function retireAgentKey(existing, path) {
 
 export function publish({ configPath, agents, node, mcpBinary, interrupt }) {
   const lock = lockFor(configPath)
-  if ("held" in lock) {
-    say(`→ not configuring ${configPath}: its lock is held by ${lock.held}`)
+  if ("reason" in lock) {
+    say(`→ not configuring ${configPath}: ${lock.reason}`)
     return false
   }
   try {

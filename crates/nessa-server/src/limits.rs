@@ -128,7 +128,7 @@ fn catalogue() -> &'static [Limit] {
             id: "socket.refusal_lane",
             tier: "fixed",
             owner: "product socket REFUSAL_LANE",
-            meaning: "a second refusal while one is queued waits rather than closing the socket",
+            meaning: "an app refusal waits while one is queued; a non-app refusal on a full lane closes the socket",
         },
         Limit {
             id: "socket.write_timeout",

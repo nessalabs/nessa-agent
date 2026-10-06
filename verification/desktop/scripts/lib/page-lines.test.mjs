@@ -10,7 +10,6 @@ import {
   attachLines,
   bindReporter,
   reportDetached,
-  skipLineDrain,
   watchLines,
 } from "./page-lines.mjs"
 
@@ -23,7 +22,7 @@ function page() {
     errors: lines.errors,
     harmless: lines.harmless,
     noteHarmless: (pattern) => lines.noteHarmless(pattern),
-    noteHeldHarmless: () => lines.noteHeldHarmless(),
+    reclassifyHeld: (keep, asHarmless) => lines.reclassifyHeld(keep, asHarmless),
     close: async () => {
       closed += 1
     },
@@ -73,7 +72,10 @@ test("a page's lines are reported once, on the result that follows them", async 
     cannotRun: true,
     error: "not run: the page did not open",
   })
-  assert.equal(skipped.results.every((result) => result.failures.length === 0), true)
+  assert.equal(
+    skipped.results.every((result) => result.failures.length === 0),
+    true,
+  )
   assert.deepEqual(held.errors, ["console.error: while opening"])
   await held.close()
   assert.deepEqual(skipped.results.at(-1).failures, ["console.error: while opening"])
@@ -109,6 +111,70 @@ test("a page's lines are reported once, on the result that follows them", async 
     "requestfailed: https://page/browser/check net::ERR_ABORTED",
     "requestfailed: https://page/browser/check net::ERR_ABORTED",
   ])
+
+  const live = report("page-lines-reclassify", {})
+  bindReporter(live)
+  const mount = page()
+  attachLines(mount, {})
+  mount.errors.push("requestfailed: https://page/mcp-resources net::ERR_ABORTED")
+  mount.errors.push("console.error: real")
+  mount.reclassifyHeld(
+    (line) => line.includes("/mcp-resources"),
+    (line) => `${line} (mount went live, #473)`,
+  )
+  live.add({ name: "release" })
+  assert.deepEqual(live.results[0].failures, ["console.error: real"])
+  assert.deepEqual(live.results[0].harmless, [
+    "requestfailed: https://page/mcp-resources net::ERR_ABORTED (mount went live, #473)",
+  ])
+  await mount.close()
+
+  // Two pages stay open together. The older page's result is added while the
+  // newer page is the one opened last, and each result keeps its own line.
+  const concurrent = report("page-lines-concurrent", {})
+  bindReporter(concurrent)
+  let chromiumAttached
+  const chromiumReady = new Promise((resolve) => {
+    chromiumAttached = resolve
+  })
+  let webkitAttached
+  const webkitReady = new Promise((resolve) => {
+    webkitAttached = resolve
+  })
+  let chromiumAdded
+  const chromiumDone = new Promise((resolve) => {
+    chromiumAdded = resolve
+  })
+  const chromium = (async () => {
+    const opened = page()
+    attachLines(opened, { engine: "chromium" })
+    opened.errors.push("console.error: chromium")
+    chromiumAttached()
+    await webkitReady
+    concurrent.add({ name: "chromium" })
+    chromiumAdded()
+    return opened
+  })()
+  const webkit = (async () => {
+    await chromiumReady
+    const opened = page()
+    attachLines(opened, { engine: "webkit" })
+    opened.errors.push("console.error: webkit")
+    webkitAttached()
+    await chromiumDone
+    concurrent.add({ name: "webkit" })
+    return opened
+  })()
+  const [chromiumPage, webkitPage] = await Promise.all([chromium, webkit])
+  const byName = Object.fromEntries(
+    concurrent.results.map((result) => [result.name, result]),
+  )
+  assert.deepEqual(byName.chromium.failures, ["console.error: chromium"])
+  assert.deepEqual(byName.webkit.failures, ["console.error: webkit"])
+  assert.equal(chromiumPage.errors.length, 0)
+  assert.equal(webkitPage.errors.length, 0)
+  await chromiumPage.close()
+  await webkitPage.close()
 })
 
 test("scripts do not splice a page's line arrays", () => {

@@ -18,7 +18,7 @@
  *
  * Every check runs on a fresh page, in each engine and layout.
  */
-import { attempt, CannotRun } from "./lib/cli.mjs"
+import { attempt, CannotRun, devServerOnlySteps, recordIfLeftOut } from "./lib/cli.mjs"
 import { appFrame } from "./lib/apps.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
@@ -76,7 +76,10 @@ Checks, per engine and layout (--only <names> to pick):
   forge        forged proxy messages change nothing; a forged report puts no
                words of the app's in the host's chrome
   teardown     closing the pane takes its frames off the page; the app asking to
-               go is sent ui/resource-teardown before its pane closes`,
+               go is sent ui/resource-teardown before its pane closes
+
+departures and departures-back read the dev server's modules. Under --mode prod
+those steps are not run.`,
 }
 
 /** Says hello to the host, as an app would, each time a document of its runs. */
@@ -923,13 +926,20 @@ const checks = {
   },
 }
 
-await main(meta, async ({ options, rep, url }) => {
+await main(meta, async ({ options, rep, url, mode }) => {
   const only = options.only ? options.list(options.only) : Object.keys(checks)
   for (const name of only)
     if (!Object.hasOwn(checks, name)) throw new CannotRun(`no check named ${name}`)
   await withEngines(options, rep, async (engine, browser) => {
     for (const layout of options.layouts)
       for (const name of only) {
+        if (
+          recordIfLeftOut(rep, mode, name, devServerOnlySteps["mcp-apps"], {
+            engine,
+            layout,
+          })
+        )
+          continue
         let opened
         await attempt(rep, { engine, layout, name }, async () => {
           opened = await onSample(browser, { url, layout })

@@ -308,8 +308,7 @@ const checks = {
     const opened = await onConversation(browser, url, layout)
     const { page } = opened
     try {
-      if (!(await asked(page, appReview.tool)))
-        return { failures: [notDrawn] }
+      if (!(await asked(page, appReview.tool))) return { failures: [notDrawn] }
       const failures = []
       const waiting = await snapshot(page)
       // Command is Meta on a Mac and Control elsewhere (`commandKey`).

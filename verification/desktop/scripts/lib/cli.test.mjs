@@ -6,12 +6,21 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
+import { readFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
+
 import {
   attempt,
   CannotRun,
+  checksUnder,
   chosen,
+  DEV_SERVER_ONLY,
+  devServerOnlyChecks,
+  devServerOnlySteps,
   overallStatus,
   parseOptions,
+  recordIfLeftOut,
   resultOfThrown,
   statusOf,
   UsageError,
@@ -109,6 +118,13 @@ describe("statusOf", () => {
     assert.equal(statusOf([held, couldNot]), 2)
     assert.equal(statusOf([]), 2)
   })
+
+  it("does not count a dev-server step a production run left out", () => {
+    const leftOut = { name: "boundary-jitter", failures: [], skipped: DEV_SERVER_ONLY }
+    assert.equal(statusOf([held, leftOut]), 0)
+    assert.equal(statusOf([leftOut]), 2)
+    assert.equal(statusOf([failed, leftOut]), 1)
+  })
 })
 
 describe("attempt", () => {
@@ -195,5 +211,54 @@ describe("run-all's sum", () => {
     assert.equal(overallStatus(["held", "FAILED", "COULD NOT RUN"]), 1)
     assert.equal(overallStatus(["held", "COULD NOT RUN"]), 2)
     assert.equal(overallStatus([]), 2)
+  })
+
+  it("does not count a dev-server check a production run left out", () => {
+    assert.equal(overallStatus(["held", DEV_SERVER_ONLY]), 0)
+    assert.equal(overallStatus([DEV_SERVER_ONLY]), 2)
+    assert.equal(overallStatus(["FAILED", DEV_SERVER_ONLY]), 1)
+    assert.deepEqual(devServerOnlyChecks, [
+      "committed-transcript",
+      "app-review",
+      "gateway-states",
+    ])
+    assert.deepEqual(checksUnder("prod", ["smoke", ...devServerOnlyChecks]), {
+      run: ["smoke"],
+      leftOut: [...devServerOnlyChecks],
+    })
+    assert.deepEqual(checksUnder("dev", ["smoke", "app-review"]).leftOut, [])
+  })
+
+  it("records a dev-server step as left out only under prod", () => {
+    const rep = {
+      results: [],
+      add(result) {
+        this.results.push(result)
+        return result
+      },
+    }
+    assert.equal(
+      recordIfLeftOut(rep, "prod", "boundary-jitter", devServerOnlySteps.drag, {
+        engine: "chromium",
+      }),
+      true,
+    )
+    assert.equal(rep.results[0].skipped, DEV_SERVER_ONLY)
+    assert.equal(
+      recordIfLeftOut(rep, "dev", "boundary-jitter", devServerOnlySteps.drag, {}),
+      false,
+    )
+    assert.equal(recordIfLeftOut(rep, "prod", "card", devServerOnlySteps.drag, {}), false)
+    assert.equal(rep.results.length, 1)
+    const scripts = dirname(fileURLToPath(import.meta.url))
+    for (const [file, needle] of [
+      ["../drag.mjs", "devServerOnlySteps.drag"],
+      ["../widgets.mjs", "devServerOnlySteps.widgets"],
+      ["../mcp-apps.mjs", 'devServerOnlySteps["mcp-apps"]'],
+    ])
+      assert.match(
+        readFileSync(join(scripts, file), "utf8"),
+        new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+      )
   })
 })

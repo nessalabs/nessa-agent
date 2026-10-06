@@ -20,7 +20,7 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | socket.ordinary_lane | derived | 20 | ordinary slots plus app calls per socket | a response that does not fit the ordinary lane closes the socket |
 | socket.control_lane | derived | 4 | control slots | a control response that does not fit the control lane closes the socket |
 | socket.record_lane | fixed | 1 | product socket RECORD_LANE | a second record response while one is queued closes the socket |
-| socket.refusal_lane | fixed | 1 | product socket REFUSAL_LANE | a second refusal while one is queued waits rather than closing the socket |
+| socket.refusal_lane | fixed | 1 | product socket REFUSAL_LANE | an app refusal waits while one is queued; a non-app refusal on a full lane closes the socket |
 | socket.write_timeout | configured | 5000 | config.json session.writeTimeoutMs | a write that outlasts this closes the socket |
 | socket.record_delivery_deadline | fixed | 30000 | RECORD_SEND_TIMEOUT, the schema's passive delivery budget | a record response still queued at this deadline is noted and dropped |
 | socket.watch_delivery_deadline | fixed | 30000 | RECORD_SEND_TIMEOUT, the same duration as record delivery | a watch frame still queued at this deadline is noted and dropped |

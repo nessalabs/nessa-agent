@@ -47,8 +47,8 @@ import { setTimeout as sleep } from "node:timers/promises"
 
 import { SERVER, toolPrompt } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { appFrame, approvalGone, approvalShown, oneCard, oneMount } from "./lib/apps.mjs"
-import { openPage, withEngines } from "./lib/browser.mjs"
-import { CannotRun, chosen, log } from "./lib/cli.mjs"
+import { liveMountResourceAbort, openPage, withEngines } from "./lib/browser.mjs"
+import { CannotRun, chosen, log, resultOfThrown } from "./lib/cli.mjs"
 import {
   admitOnce,
   appPermissions,
@@ -486,8 +486,10 @@ async function openConversation(browser, stack, layout) {
     await settled(opened.page)
     return { ...opened, reviewsBefore, conversationOpen }
   } catch (error) {
-    // Close reports the page's lines, then the caller records that the
-    // conversation did not open and which steps were not run.
+    // Size reports can still move a full-body abort. Close then reports
+    // whatever lines remain; the open result does not take them, and the
+    // steps not started are "not run".
+    await opened.settleRequests()
     await opened.close().catch(() => {})
     throw error
   }
@@ -694,9 +696,12 @@ const checks = {
     await inline.app.click(css.reviewControl("fullscreen"))
     await paneCountIs(page, panes + 1)
     const pane = await appFrame(page, "pane", 20_000)
-    await pane.app
+    // The mount going live is what lets a later, unsized `/mcp-resources`
+    // abort be treated as delivered (#473). A timeout leaves it a failure.
+    const paneLive = await pane.app
       .waitForSelector(css.reviewState("live"), { timeout: 20_000 })
-      .catch(() => {})
+      .then(() => true)
+      .catch(() => false)
     const paneMode = await pane.app.evaluate(() =>
       document.body.getAttribute("data-review-mode"),
     )
@@ -781,6 +786,7 @@ const checks = {
         cardGone,
         cardGoneAfterWithdrawnMs,
         inlineState,
+        paneLive,
       },
       failures,
     }
@@ -805,13 +811,11 @@ await main(
         try {
           opened = await openConversation(browser, stack, layout)
         } catch (error) {
+          // `resultOfThrown` owns the fault's stack (#475). Close already
+          // reported the page's lines; this result keeps the error's first line.
           rep.add({
-            name: "open",
-            engine,
-            layout,
-            cannotRun: error instanceof CannotRun,
-            error: error.message.split("\n")[0],
-            detail: error.message,
+            ...resultOfThrown({ name: "open", engine, layout }, error),
+            detail: String(error?.message ?? error),
           })
           for (const name of only)
             rep.add({
@@ -848,6 +852,21 @@ await main(
               )
             } catch (error) {
               result = { failures: [], error: error.message.split("\n")[0] }
+            }
+            await opened.settleRequests()
+            // A fully read `/mcp-resources` can still be reported aborted
+            // with no size. Once this step has seen the pane mount live, and
+            // the inline mount stayed live, that same-origin line is the
+            // delivered fetch (#473). Every other abort stays a failure.
+            if (
+              name === "release" &&
+              result.seen?.paneLive === true &&
+              result.seen?.inlineState === "live"
+            ) {
+              opened.reclassifyHeld(
+                (line) => liveMountResourceAbort(line, opened.page.url()),
+                (line) => `${line} (mount went live, #473)`,
+              )
             }
             const entry = rep.add({
               name,

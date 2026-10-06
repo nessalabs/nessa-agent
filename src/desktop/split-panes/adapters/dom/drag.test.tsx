@@ -265,6 +265,177 @@ const items = (fake: Fake) => {
   return layout ? panesOf(layout).map((pane) => pane.item) : []
 }
 
+it("puts a start WebKit moved on ready back to the instant the pair was given", async () => {
+  const held: { startTime: number | null; playState: string }[] = []
+  const release: Array<() => void> = []
+  Element.prototype.animate = function (this: Element, keyframes, timing) {
+    const asked = {
+      element: this,
+      keyframes: keyframes as Keyframe[],
+      duration: typeof timing === "object" ? timing.duration : timing,
+      cancelled: false,
+    }
+    animated.push(asked)
+    const animation = {
+      cancel() {
+        asked.cancelled = true
+      },
+      finished: Promise.resolve(),
+      id: "",
+      playState: "running",
+      startTime: null as number | null,
+      ready: null as Promise<unknown> | null,
+    }
+    animation.ready = new Promise<void>((resolve) => {
+      release.push(() => {
+        animation.startTime = 99999
+        resolve()
+      })
+    })
+    held.push(animation)
+    return animation as unknown as Animation
+  }
+  Object.defineProperty(document, "timeline", {
+    configurable: true,
+    value: { currentTime: 1234 },
+  })
+  try {
+    const fake = fakeSource(two())
+    const root = await mounted(fake)
+    await liftOntoTwo()
+    // Only the animations a pair was started together: the rest are not given a start.
+    const paired = held.filter((animation) => animation.startTime === 1234)
+    expect(paired.length).toBeGreaterThan(1)
+    for (const fulfill of release) fulfill()
+    expect(paired.every((animation) => animation.startTime === 99999)).toBe(true)
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(paired.every((animation) => animation.startTime === 1234)).toBe(true)
+    await act(async () => root.unmount())
+  } finally {
+    Reflect.deleteProperty(document, "timeline")
+  }
+})
+
+it("treats a cancelled preview's ready rejection as letting go", async () => {
+  const unhandled: unknown[] = []
+  const reported: unknown[] = []
+  const previous = globalThis.reportError
+  globalThis.reportError = (error: unknown) => {
+    reported.push(error)
+  }
+  const onUnhandled = (reason: unknown) => {
+    unhandled.push(reason)
+  }
+  process.on("unhandledRejection", onUnhandled)
+  const animations: { startTime: number | null; cancelReady: () => void }[] = []
+  Element.prototype.animate = function (this: Element, keyframes, timing) {
+    const asked = {
+      element: this,
+      keyframes: keyframes as Keyframe[],
+      duration: typeof timing === "object" ? timing.duration : timing,
+      cancelled: false,
+    }
+    animated.push(asked)
+    const animation = {
+      cancel() {
+        asked.cancelled = true
+      },
+      finished: Promise.resolve(),
+      id: "",
+      playState: "pending",
+      startTime: null as number | null,
+      ready: null as Promise<unknown> | null,
+      cancelReady: () => {},
+    }
+    animation.ready = new Promise<void>((_resolve, reject) => {
+      animation.cancelReady = () => {
+        animation.playState = "idle"
+        reject(new DOMException("cancelled", "AbortError"))
+      }
+    })
+    animations.push(animation)
+    return animation as unknown as Animation
+  }
+  Object.defineProperty(document, "timeline", {
+    configurable: true,
+    value: { currentTime: 1234 },
+  })
+  try {
+    const root = await mounted(fakeSource(two()))
+    await liftOntoTwo()
+    const paired = animations.filter((animation) => animation.startTime === 1234)
+    expect(paired.length).toBeGreaterThan(0)
+    await act(async () => {
+      for (const animation of paired) animation.cancelReady()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(unhandled).toEqual([])
+    expect(reported).toEqual([])
+    await act(async () => root.unmount())
+  } finally {
+    process.removeListener("unhandledRejection", onUnhandled)
+    if (previous === undefined) Reflect.deleteProperty(globalThis, "reportError")
+    else globalThis.reportError = previous
+    Reflect.deleteProperty(document, "timeline")
+  }
+})
+
+it("keeps a ready failure that is not cancellation", async () => {
+  const reported: unknown[] = []
+  const previous = globalThis.reportError
+  globalThis.reportError = (error: unknown) => {
+    reported.push(error)
+  }
+  const animations: { startTime: number | null; failReady: () => void }[] = []
+  Element.prototype.animate = function (this: Element, keyframes, timing) {
+    const asked = {
+      element: this,
+      keyframes: keyframes as Keyframe[],
+      duration: typeof timing === "object" ? timing.duration : timing,
+      cancelled: false,
+    }
+    animated.push(asked)
+    const animation = {
+      cancel() {
+        asked.cancelled = true
+      },
+      finished: Promise.resolve(),
+      id: "",
+      playState: "pending",
+      startTime: null as number | null,
+      ready: null as Promise<unknown> | null,
+      failReady: () => {},
+    }
+    animation.ready = new Promise<void>((_resolve, reject) => {
+      animation.failReady = () => reject(new Error("clock failed"))
+    })
+    animations.push(animation)
+    return animation as unknown as Animation
+  }
+  Object.defineProperty(document, "timeline", {
+    configurable: true,
+    value: { currentTime: 1234 },
+  })
+  try {
+    const root = await mounted(fakeSource(two()))
+    await liftOntoTwo()
+    const paired = animations.filter((animation) => animation.startTime === 1234)
+    expect(paired.length).toBeGreaterThan(0)
+    await act(async () => {
+      paired[0]?.failReady()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(reported.map((error) => (error as Error).message)).toContain("clock failed")
+    await act(async () => root.unmount())
+  } finally {
+    if (previous === undefined) Reflect.deleteProperty(globalThis, "reportError")
+    else globalThis.reportError = previous
+    Reflect.deleteProperty(document, "timeline")
+  }
+})
+
 it("previews the outcome of the layout the source holds, and commits it through the source in the room the press read", async () => {
   const fake = fakeSource(two())
   const root = await mounted(fake)
