@@ -165,7 +165,8 @@ fn allowed(url: &str) -> bool {
     parsed.scheme() == "http"
         && matches!(
             parsed.host_str(),
-            Some("localhost") | Some("127.0.0.1") | Some("::1")
+            // `host_str` keeps the brackets `Url` parsed from `[::1]`.
+            Some("localhost") | Some("127.0.0.1") | Some("::1") | Some("[::1]")
         )
 }
 
@@ -178,6 +179,17 @@ mod tests {
     use tokio::net::TcpListener;
 
     use crate::mcp_authorization::application::OAuthCallFailure;
+
+    #[test]
+    fn http_ipv6_loopback_is_allowed_and_other_http_is_not() {
+        assert!(allowed("http://[::1]/mcp"));
+        assert!(allowed("http://[::1]:9/mcp"));
+        assert!(allowed("http://localhost/mcp"));
+        assert!(allowed("http://127.0.0.1/mcp"));
+        assert!(allowed("https://mcp.example/mcp"));
+        assert!(!allowed("http://192.0.2.1/mcp"));
+        assert!(!allowed("http://[2001:db8::1]/mcp"));
+    }
 
     #[test]
     fn a_refused_io_error_buried_in_the_source_chain_is_refused() {

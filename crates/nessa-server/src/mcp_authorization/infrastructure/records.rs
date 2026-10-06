@@ -63,7 +63,8 @@ impl AuthorizationRecords for FileRecords {
     }
 
     async fn store(&self, auth: &ServerAuth) -> Result<(), RecordFailure> {
-        std::fs::create_dir_all(&self.directory).map_err(|_| RecordFailure::Unavailable)?;
+        nessa_local_storage::create_directory(&self.directory)
+            .map_err(|_| RecordFailure::Unavailable)?;
         let path = self.path(auth.server);
         let body =
             serde_json::to_vec_pretty(&to_json(auth)).map_err(|_| RecordFailure::Unavailable)?;
@@ -91,9 +92,9 @@ impl AuthorizationRecords for FileRecords {
 }
 
 fn write_new(path: &Path, body: &[u8]) -> Result<(), RecordFailure> {
-    let temporary = path.with_extension("json.tmp");
-    std::fs::write(&temporary, body).map_err(|_| RecordFailure::Unavailable)?;
-    std::fs::rename(&temporary, path).map_err(|_| RecordFailure::Unavailable)
+    let directory = path.parent().ok_or(RecordFailure::Unavailable)?;
+    write_private(directory, path, body)?;
+    nessa_local_storage::sync_directory(directory).map_err(|_| RecordFailure::Unavailable)
 }
 
 fn to_json(auth: &ServerAuth) -> Value {
@@ -584,10 +585,20 @@ mod tests {
         }
         let facts = ServerAuth::consent_needed(server, "docs", "https://mcp.example/mcp");
         records.store(&facts).await.unwrap();
-        let record = std::fs::read(directory.join(format!("{server}.json"))).unwrap();
+        let record_path = directory.join(format!("{server}.json"));
+        let record = std::fs::read(&record_path).unwrap();
         assert!(!record
             .windows(b"sekret-token".len())
             .any(|window| window == b"sekret-token"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&record_path)
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o077, 0, "the record is not user-only: {mode:o}");
+        }
         assert_eq!(records.delete_secret(server).await, Ok(Deletion::Deleted));
         assert_eq!(records.load_secret(server).await, Ok(None));
         let _ = std::fs::remove_dir_all(&directory);

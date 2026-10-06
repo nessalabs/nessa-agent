@@ -633,12 +633,12 @@ and capture/replay the deterministic HTTP corpus. Runtime slices then run the
 SDK/server focused suites, SDK/public doc checks, protocol regeneration checks,
 architecture checks, formatting and `-D warnings`, followed by the effective
 package selection in `.github/workflows/local-auth.yml`. Shared portable
-contracts compile on macOS/Linux/Windows; relay-backed gateway remote behavior
-uses the existing Unix capability. Non-Unix returns current not-configured
-facts instead of silently bypassing the relay. First private OAuth writes are
-macOS-only; Linux/non-macOS substitutes exercise store-unavailable behavior and
-domain transitions, with no plaintext credential fallback. Supporting another
-OS writer is a separate adapter capability.
+contracts compile on macOS, Linux, and Windows; relay-backed gateway remote
+behavior uses the existing Unix capability. Non-Unix returns current
+not-configured facts instead of silently bypassing the relay. The sealed
+private-file store is the OAuth writer on every OS. A write is unavailable
+only when that directory cannot be created. Token bytes stay in the sealed
+file.
 
 U uses the repository desktop verification skill/checklist and extends
 `verification/desktop/scripts/mcp-servers-gateway.mjs` plus app scripts against
