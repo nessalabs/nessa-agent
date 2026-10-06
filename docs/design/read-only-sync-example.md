@@ -422,7 +422,7 @@ Saved transcript output is one observation of a refreshed loaded cache owner: po
 
 | Row | Ordering | Owned result and regression |
 | --- | --- | --- |
-| P1 | No competing writer between target selection and refresh | Same loaded owner supplies generation/D/A/facts/status; `online_saved_projection_handles_competing_owner` |
+| P1 | No competing writer between target selection and refresh | Same loaded owner supplies generation/D/A/facts/status. Selection's read transaction commits before refresh, so a competing writer in that gap does not share the observer's lock. The regression is in-process and does not shell out to `sync-records` (the Windows failure of that subprocess unwrap, #426). `online_saved_projection_handles_competing_owner` |
 | P2 | Same-scope reset in that gap | Refreshed zero positions/new generation/NotLoaded together, never old progress/new fold; actual composition `online_saved_projection_handles_competing_owner` |
 | P3 | Changed-scope reset in that gap | Existing typed scope refusal; preserved durable reset state; same composition regression |
 | P4 | Deletion in that gap | Existing fence refusal, offline Deleted mapping; no live mixed projection; same composition regression |

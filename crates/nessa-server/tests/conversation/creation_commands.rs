@@ -53,6 +53,14 @@ fn caller(request: &str) -> ConversationCaller {
 fn id() -> ConversationId {
     ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap()
 }
+
+/// Hang ceiling for a creation step that is still doing durable work.
+///
+/// The wait is the provider open signal or the live slot. Five seconds
+/// expired on a loaded Windows runner while that work was still in progress
+/// (#552). A yield spin between polls kept this task runnable and crowded
+/// the publisher.
+const CREATION_HANG: Duration = Duration::from_secs(60);
 fn fixture(
     root: &Path,
     provider: Arc<ProviderFactory>,
@@ -118,24 +126,29 @@ async fn original_live(
     service: &ConversationService,
     target: &ConversationId,
 ) -> Arc<LiveConversation> {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let slot = service
-                .inner
-                .conversations
-                .lock()
-                .await
-                .get(target)
-                .cloned()
-                .unwrap();
-            if let Some(Ok(live)) = slot.value.get() {
-                break live.clone();
-            }
-            tokio::task::yield_now().await;
+    let deadline = tokio::time::Instant::now() + CREATION_HANG;
+    loop {
+        let slot = service
+            .inner
+            .conversations
+            .lock()
+            .await
+            .get(target)
+            .cloned()
+            .unwrap();
+        if let Some(Ok(live)) = slot.value.get() {
+            break live.clone();
         }
-    })
-    .await
-    .unwrap()
+        if tokio::time::Instant::now() >= deadline {
+            let slot = match slot.value.get() {
+                None => "unpublished",
+                Some(Ok(_)) => "ready",
+                Some(Err(_)) => "opening failed",
+            };
+            panic!("live conversation was not published after {CREATION_HANG:?}; slot={slot}");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 impl RuntimeReadiness for CreationReadiness {
     fn wait(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
@@ -200,9 +213,15 @@ async fn creation_waits_for_original_attachment_before_saving_ready() {
                 .await
         }
     });
-    tokio::time::timeout(Duration::from_secs(5), provider.opening.notified())
+    if tokio::time::timeout(CREATION_HANG, provider.opening.notified())
         .await
-        .unwrap();
+        .is_err()
+    {
+        panic!(
+            "provider open had not started after {CREATION_HANG:?}; create finished={}",
+            task.is_finished()
+        );
+    }
     let live = original_live(&service, &target).await;
     {
         let ordinary_waiter = live.join_attachment_owner();

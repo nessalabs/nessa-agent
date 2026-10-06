@@ -34,13 +34,15 @@ use std::{
 /// One locked statement after the runtime is already open.
 const STATEMENT_BOUND: Duration = Duration::from_secs(5);
 
-/// Cold open, then the same allowance as [`STATEMENT_BOUND`].
+/// Hang ceiling for the caller wake after the exclusive lock is dropped.
 ///
-/// The exclusive lock only keeps `ready.send` from running before the caller
-/// waker is parked. After the lock drops, the worker can still be inside
-/// `open_connection`, including that connection's five-second busy timeout.
-/// A five-second wake bound expires while that open is still running.
-const COLD_OPEN_BOUND: Duration = Duration::from_secs(10);
+/// The wait is the caller waker. `ready.send` runs only after
+/// `open_connection`, which includes that connection's five-second busy
+/// timeout and a turn on the blocking pool. A five-second bound expired
+/// while the open was still running (#548); ten seconds is only one busy
+/// timeout past that and still expires when the pool is behind the rest of
+/// this crate's storage tests (#558). Expiry still classifies the wait.
+const COLD_OPEN_BOUND: Duration = Duration::from_secs(60);
 
 /// What the first-runtime wake deadline observed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

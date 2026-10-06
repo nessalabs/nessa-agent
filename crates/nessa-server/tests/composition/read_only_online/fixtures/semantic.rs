@@ -18,7 +18,7 @@ use nessa_protocol::conversation::projection::retained_view;
 use nessa_protocol::conversation::view::ConversationView;
 use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
 use nessa_sdk::application::agent_execution::sessions::{
-    SessionStorage, SubmissionAcknowledgement,
+    SessionSnapshot, SessionStorage, SubmissionAcknowledgement,
 };
 use nessa_sdk::domain::agent_execution::executions::{
     ExecutionOutcome, InvocationStage, MessageChunk,
@@ -37,6 +37,13 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use storage::RecordingStorage;
+
+/// Hang ceiling for a producer condition that is still being saved.
+///
+/// The wait is the view or the confirmed snapshot. A yield spin inside five
+/// seconds expired on a loaded Windows runner while that save was still
+/// running, and the parent only saw the child exit (#538).
+const PRODUCER_HANG: Duration = Duration::from_secs(60);
 use tokio::io::{stdin, AsyncBufReadExt, BufReader};
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -110,20 +117,7 @@ pub(super) async fn serve(
         )
         .await
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let view = service
-                .read(id.clone(), caller("wait-permission"))
-                .await
-                .unwrap();
-            if !view.permissions.is_empty() {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    wait_for_permission(&service, &id, &caller).await;
     service
         .submit(
             id.clone(),
@@ -190,25 +184,7 @@ pub(super) async fn serve(
                     .unwrap();
                 provider.request_permission.store(0, Ordering::SeqCst);
                 release.take().unwrap().send(()).unwrap();
-                tokio::time::timeout(Duration::from_secs(5), async {
-                    loop {
-                        if producer.confirmed().is_some_and(|confirmed| {
-                            let snapshot = &confirmed.snapshot;
-                            snapshot.invocations.len() == 2
-                                && snapshot.invocations.iter().all(|item| {
-                                    item.result == Some(Ok(ExecutionOutcome::Completed))
-                                        && item.scheduling.last().is_some_and(|event| {
-                                            event.stage == InvocationStage::Settled
-                                        })
-                                })
-                        }) {
-                            break;
-                        }
-                        tokio::task::yield_now().await;
-                    }
-                })
-                .await
-                .unwrap();
+                wait_until_settled(&producer).await;
                 let terminal_view = service
                     .read(id.clone(), caller("capture-terminal"))
                     .await
@@ -251,6 +227,70 @@ pub(super) async fn serve(
         }
         println!("DONE {line}");
         io::stdout().flush().unwrap();
+    }
+}
+
+fn settled(snapshot: &SessionSnapshot) -> bool {
+    snapshot.invocations.len() == 2
+        && snapshot.invocations.iter().all(|item| {
+            item.result == Some(Ok(ExecutionOutcome::Completed))
+                && item
+                    .scheduling
+                    .last()
+                    .is_some_and(|event| event.stage == InvocationStage::Settled)
+        })
+}
+
+async fn wait_for_permission(
+    service: &ConversationService,
+    id: &ConversationId,
+    caller: &dyn Fn(&str) -> ConversationCaller,
+) {
+    let deadline = tokio::time::Instant::now() + PRODUCER_HANG;
+    loop {
+        let view = service
+            .read(id.clone(), caller("wait-permission"))
+            .await
+            .unwrap();
+        if !view.permissions.is_empty() {
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!(
+                "permission was not visible after {PRODUCER_HANG:?}; permissions={}",
+                view.permissions.len()
+            );
+        }
+        // Park so the producer can persist the permission. A yield spin keeps
+        // this task runnable and crowded that save out on a loaded runner.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+async fn wait_until_settled(producer: &RecordingStorage) {
+    let deadline = tokio::time::Instant::now() + PRODUCER_HANG;
+    loop {
+        // Subscribe before the read so a save that lands in this gap still wakes us.
+        let changed = producer.changed();
+        if producer
+            .confirmed()
+            .is_some_and(|confirmed| settled(&confirmed.snapshot))
+        {
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let summary = producer
+                .confirmed()
+                .map(|confirmed| format!("invocations={}", confirmed.snapshot.invocations.len()));
+            panic!(
+                "producer had not settled both invocations after {PRODUCER_HANG:?}: {}",
+                summary.unwrap_or_else(|| "no confirmed snapshot".to_string())
+            );
+        }
+        tokio::select! {
+            _ = changed => {}
+            _ = tokio::time::sleep_until(deadline) => {}
+        }
     }
 }
 

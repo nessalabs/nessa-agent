@@ -27,12 +27,19 @@ use std::{
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        mpsc::RecvTimeoutError,
+        Arc, Mutex,
     },
     task::{Context, Poll, Waker},
     thread,
     time::{Duration, Instant},
 };
+
+/// Hang ceiling for the child to reach the unsealed prefix.
+///
+/// The wait is that stdout line, or the child exiting. Fifteen seconds
+/// returned `Timeout` on Windows while the process was still starting (#558).
+const CHILD_PREFIX_HANG: Duration = Duration::from_secs(120);
 
 fn watch_ready(watch: &mut CommittedChangeWatch) -> ChangeWatchState {
     let mut wait = Box::pin(watch.changed());
@@ -524,22 +531,71 @@ async fn killed_child_retains_original_unpublished_unit_retry() {
         ])
         .env("NESSA_RECORD_CHILD_ROOT", &root)
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
     let output = child.stdout.take().unwrap();
+    let child_stderr = child.stderr.take().unwrap();
+    let stderr_text = Arc::new(Mutex::new(String::new()));
+    let stderr_shared = stderr_text.clone();
+    let stderr_reader = thread::spawn(move || {
+        let mut reader = BufReader::new(child_stderr);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    let mut tail = stderr_shared.lock().unwrap();
+                    tail.push_str(&line);
+                    const LIMIT: usize = 8 * 1024;
+                    if tail.len() > LIMIT {
+                        let excess = tail.len() - LIMIT;
+                        tail.drain(..excess);
+                    }
+                }
+            }
+        }
+    });
     let (send, receive) = std::sync::mpsc::channel();
-    let reader = std::thread::spawn(move || {
+    let reader = thread::spawn(move || {
         let ready = BufReader::new(output)
             .lines()
             .any(|line| line.is_ok_and(|line| line == "NESSA_UNSEALED_PREFIX_DURABLE"));
         let _ = send.send(ready);
     });
-    let ready = receive.recv_timeout(Duration::from_secs(15));
+    let started = Instant::now();
+    let ready = loop {
+        match receive.recv_timeout(Duration::from_millis(200)) {
+            Ok(ready) => break ready,
+            Err(RecvTimeoutError::Disconnected) => {
+                panic!("stdout reader ended before the unsealed prefix line")
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                if started.elapsed() >= CHILD_PREFIX_HANG {
+                    let still_running = child.try_wait().ok().flatten().is_none();
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    reader.join().unwrap();
+                    let _ = stderr_reader.join();
+                    panic!(
+                        "child did not publish the unsealed prefix within {CHILD_PREFIX_HANG:?}; still running at the bound: {still_running}; stderr: {}",
+                        stderr_text.lock().unwrap()
+                    );
+                }
+            }
+        }
+    };
     // Always reap this original child, including a failed readiness boundary.
     let killed = child.kill();
     let status = child.wait();
     reader.join().unwrap();
-    assert_eq!(ready, Ok(true));
+    let _ = stderr_reader.join();
+    assert!(
+        ready,
+        "child closed stdout before the unsealed prefix; stderr: {}",
+        stderr_text.lock().unwrap()
+    );
     killed.unwrap();
     assert!(!status.unwrap().success());
     let reopened = RecordStorage::new(&root).unwrap();

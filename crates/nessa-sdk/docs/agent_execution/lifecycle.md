@@ -307,8 +307,11 @@ Polling it again returns the retained result.
 
 The two `RecordStorage::runtime` tests hold the exclusive lock only until the
 caller waker is parked. `ready.send` is after `open_connection`, so their
-deadline includes that cold open. An expiry names the wait that is still
-active: `held_exclusive_lock_past_the_deadline_is_still_cold_open` reports
+deadline includes that cold open. The deadline is a hang ceiling for an open
+that is still running, covering the connection's busy timeout and a blocking
+pool shared with the rest of the crate's storage tests. A shorter ceiling
+expired while `open_connection` had not sent `ready` (#548, #558). An expiry
+names the wait that is still active: `held_exclusive_lock_past_the_deadline_is_still_cold_open` reports
 open that has not published `ready`,
 `stored_ready_without_the_caller_waker_is_not_cold_open` reports `ready`
 stored without that caller waker, and

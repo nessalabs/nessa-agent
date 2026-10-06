@@ -409,6 +409,7 @@ struct HeldInitializer {
     started: tokio::sync::Notify,
     release: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     calls: std::sync::atomic::AtomicUsize,
+    finished: std::sync::atomic::AtomicBool,
 }
 impl crate::application::agent_execution::commands::CreationTarget for HeldInitializer {
     type Error = std::convert::Infallible;
@@ -429,6 +430,8 @@ impl crate::application::agent_execution::commands::CreationTarget for HeldIniti
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.started.notify_one();
             self.release.lock().await.take().unwrap().await.unwrap();
+            self.finished
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         })
     }
@@ -439,6 +442,9 @@ async fn direct_sdk_caller_loss_retains_the_original_initializer_and_lease() {
     use crate::application::agent_execution::commands::{CreationCoordinator, CreationFailure};
     use std::sync::atomic::Ordering;
     use std::time::Duration;
+    /// Hang ceiling while the retained initializer is still publishing Ready.
+    /// Five seconds expired on a loaded Windows runner during that publish (#558).
+    const INITIALIZER_HANG: Duration = Duration::from_secs(60);
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("records");
     let storage = Arc::new(RecordStorage::new(&root).unwrap());
@@ -449,6 +455,7 @@ async fn direct_sdk_caller_loss_retains_the_original_initializer_and_lease() {
         started: tokio::sync::Notify::new(),
         release: Mutex::new(Some(gate)),
         calls: std::sync::atomic::AtomicUsize::new(0),
+        finished: std::sync::atomic::AtomicBool::new(false),
     });
     // This public SDK caller has no host supervisor to retain its ownership.
     let caller = tokio::spawn({
@@ -461,9 +468,15 @@ async fn direct_sdk_caller_loss_retains_the_original_initializer_and_lease() {
                 .await
         }
     });
-    tokio::time::timeout(Duration::from_secs(5), target.started.notified())
+    if tokio::time::timeout(INITIALIZER_HANG, target.started.notified())
         .await
-        .unwrap();
+        .is_err()
+    {
+        panic!(
+            "initializer had not started after {INITIALIZER_HANG:?}; calls={}",
+            target.calls.load(Ordering::SeqCst)
+        );
+    }
     caller.abort();
     assert!(caller.await.unwrap_err().is_cancelled());
     assert!(matches!(
@@ -472,19 +485,25 @@ async fn direct_sdk_caller_loss_retains_the_original_initializer_and_lease() {
     ));
     release.send(()).unwrap();
     let coordinator = CreationCoordinator::new(storage.clone());
-    let ready = tokio::time::timeout(Duration::from_secs(5), async {
+    let ready = tokio::time::timeout(INITIALIZER_HANG, async {
         loop {
             match coordinator.lookup(&original, target.as_ref()).await {
                 Ok(Some(receipt)) if receipt.stage() == CreationStage::Ready => break receipt,
                 Err(CreationFailure::Storage(CreationStorageError::Storage(
                     StorageError::Busy,
-                ))) => tokio::task::yield_now().await,
+                ))) => tokio::time::sleep(Duration::from_millis(10)).await,
                 other => panic!("original SDK initializer lost its ownership: {other:?}"),
             }
         }
     })
     .await
-    .unwrap();
+    .unwrap_or_else(|_| {
+        panic!(
+            "original initializer was not Ready after {INITIALIZER_HANG:?}; calls={} finished={}",
+            target.calls.load(Ordering::SeqCst),
+            target.finished.load(Ordering::SeqCst)
+        )
+    });
     assert_eq!(ready.binding(), &original);
     assert_eq!(target.calls.load(Ordering::SeqCst), 1);
     drop(coordinator);

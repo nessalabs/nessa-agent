@@ -11,7 +11,9 @@ use nessa_local_storage::OpenMode;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use uuid::Uuid;
 
 const GATEWAY: &str = "composition::read_only_online_tests::fixtures::gateway::gateway_child";
@@ -62,6 +64,7 @@ pub(super) struct Gateway {
     // modes print nothing after readiness.
     output: BufReader<ChildStdout>,
     control: Option<ChildStdin>,
+    stderr: StderrTail,
 }
 impl Gateway {
     pub(super) fn start(root: &Path) -> Self {
@@ -90,16 +93,14 @@ impl Gateway {
             .spawn()
             .unwrap();
         let control = child.stdin.take();
+        let mut stderr = StderrTail::spawn(child.stderr.take().unwrap());
         let mut output = BufReader::new(child.stdout.take().unwrap());
         let mut line = String::new();
         loop {
             line.clear();
             if output.read_line(&mut line).unwrap() == 0 {
-                let output = child.wait_with_output().unwrap();
-                panic!(
-                    "gateway failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
+                let status = child.wait().unwrap();
+                panic!("gateway failed ({status}): {}", stderr.finish());
             }
             if line.trim() == "ONLINE_READY" {
                 break;
@@ -109,6 +110,7 @@ impl Gateway {
             child,
             output,
             control,
+            stderr,
         }
     }
     /// Ask a live gateway to act and wait until it reports the effect done.
@@ -119,20 +121,66 @@ impl Gateway {
         let mut line = String::new();
         loop {
             line.clear();
-            assert_ne!(
-                self.output.read_line(&mut line).unwrap(),
-                0,
-                "gateway ended"
-            );
+            if self.output.read_line(&mut line).unwrap() == 0 {
+                let status = self.child.wait().unwrap();
+                panic!(
+                    "gateway ended during {action} ({status}): {}",
+                    self.stderr.finish()
+                );
+            }
             if line.trim() == format!("DONE {action}") {
                 return;
             }
         }
     }
 }
+
+/// The child's stderr, kept to a tail so a full pipe cannot stall it and a
+/// death still names the panic that closed stdout.
+struct StderrTail {
+    text: Arc<Mutex<String>>,
+    reader: Option<JoinHandle<()>>,
+}
+impl StderrTail {
+    fn spawn(stderr: ChildStderr) -> Self {
+        let text = Arc::new(Mutex::new(String::new()));
+        let shared = text.clone();
+        let reader = std::thread::spawn(move || {
+            let mut reader = BufReader::new(stderr);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        let mut tail = shared.lock().unwrap();
+                        tail.push_str(&line);
+                        const LIMIT: usize = 8 * 1024;
+                        if tail.len() > LIMIT {
+                            let excess = tail.len() - LIMIT;
+                            tail.drain(..excess);
+                        }
+                    }
+                }
+            }
+        });
+        Self {
+            text,
+            reader: Some(reader),
+        }
+    }
+
+    fn finish(&mut self) -> String {
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+        self.text.lock().unwrap().clone()
+    }
+}
 impl Drop for Gateway {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        let _ = self.stderr.finish();
     }
 }
