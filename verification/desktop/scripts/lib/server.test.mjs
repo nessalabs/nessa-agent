@@ -10,7 +10,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
 
-import { startPreview, stopPreview } from "./server.mjs"
+import { pageMode, startPreview, stopPreview } from "./server.mjs"
 
 const previewPrefix = "nessa-desktop-verify-"
 
@@ -71,4 +71,29 @@ test("a failed production build removes its directory", async () => {
     (name) => name.startsWith(previewPrefix) && !before.has(name),
   )
   assert.deepEqual(leaked, [])
+})
+
+test("an explicit --url keeps a named dev or prod mode and otherwise stays given", () => {
+  const given = (mode) => (key) => key === "mode" && mode !== undefined
+  assert.equal(
+    pageMode({ url: "http://127.0.0.1:9/desktop.html", mode: "prod" }),
+    "given",
+  )
+  assert.equal(
+    pageMode({
+      url: "http://127.0.0.1:9/desktop.html",
+      mode: "prod",
+      given: given("prod"),
+    }),
+    "prod",
+  )
+  assert.equal(
+    pageMode({
+      url: "http://127.0.0.1:9/desktop.html",
+      mode: "dev",
+      given: given("dev"),
+    }),
+    "dev",
+  )
+  assert.equal(pageMode({ mode: "prod", given: given("prod") }), "prod")
 })

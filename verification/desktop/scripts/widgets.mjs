@@ -18,7 +18,7 @@
  *
  * Every check runs on a fresh page, in each engine and layout.
  */
-import { attempt, CannotRun } from "./lib/cli.mjs"
+import { attempt, CannotRun, devServerOnlySteps, recordIfLeftOut } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { content, css, keys, modules, names } from "./lib/selectors.mjs"
@@ -72,7 +72,7 @@ Checks, per engine and layout (--only <names> to pick):
                      window, and the window's at the same size
 
 off-missing reads the hosts' words from the page's own module, so it needs
---mode dev (the default).`,
+--mode dev (the default). Under --mode prod that step is not run.`,
 }
 
 /** A fresh page on the sample session, whose conversation carries a widget of each state. */
@@ -691,13 +691,17 @@ const checks = {
 /** Each check's window size: the narrow and short one is its own. */
 const sizes = { "narrow-short": { width: 1000, height: 560 } }
 
-await main(meta, async ({ options, rep, url }) => {
+await main(meta, async ({ options, rep, url, mode }) => {
   const only = options.only ? options.list(options.only) : Object.keys(checks)
   for (const name of only)
     if (!Object.hasOwn(checks, name)) throw new CannotRun(`no check named ${name}`)
   await withEngines(options, rep, async (engine, browser) => {
     for (const layout of options.layouts)
       for (const name of only) {
+        if (
+          recordIfLeftOut(rep, mode, name, devServerOnlySteps.widgets, { engine, layout })
+        )
+          continue
         const size = sizes[name] ?? { width: 1440, height: 900 }
         let opened
         await attempt(rep, { engine, layout, name }, async () => {

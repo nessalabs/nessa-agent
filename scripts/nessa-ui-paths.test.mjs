@@ -6,6 +6,7 @@ import {
   lstatSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -306,11 +307,15 @@ test("pnpm ui:paths, refused, says why in one line naming the file, exits 1, and
     writeFileSync(tsconfig, text)
     const refused = run()
     assert.equal(refused.status, 1)
-    assert.equal(refused.stderr.trim().split("\n").length, 1, refused.stderr)
-    assert.ok(
-      refused.stderr.startsWith(`${tsconfig}: tsconfig.json is not plain JSON`),
-      refused.stderr,
-    )
+    const line = refused.stderr.trim()
+    assert.equal(line.split("\n").length, 1, refused.stderr)
+    const reason = ": tsconfig.json is not plain JSON"
+    assert.ok(line.includes(reason), refused.stderr)
+    const named = line.slice(0, line.indexOf(reason))
+    // macOS reports the real path (`/private/var/...`) for a file the test
+    // created under `tmpdir()` (`/var/...`, a symlink). The file named is the
+    // file written.
+    assert.equal(realpathSync(named), realpathSync(tsconfig), refused.stderr)
     assert.equal(readFileSync(tsconfig, "utf8"), text)
   } finally {
     rmSync(root, { recursive: true, force: true })

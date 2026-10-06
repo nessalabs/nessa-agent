@@ -632,6 +632,21 @@ Each change, in order:
    (`mcp_servers_storage_unavailable`) rather than holding a blocking thread
    in `open`
    (`a_lock_that_is_not_a_regular_file_is_refused_without_blocking`).
+   The dev script (`scripts/dev-agent-config.mjs`) takes this same lock
+   when it writes `agents`: create the file (0600, no follow, no block),
+   require a regular file, and take an exclusive non-blocking `flock` on
+   that descriptor. Node has no `flock`, so Perl calls it on the descriptor
+   the script already opened. The file is not deleted. A file left behind,
+   empty or still carrying an older pid line, is not a holder — the flock
+   is — and deleting it would split the lock onto a new inode. The script
+   stands down when the flock is held and when that helper cannot run, so
+   it does not write beside a lock it does not hold. Closing the descriptor
+   releases the flock; a killed run releases it the same way, when the
+   process closes the descriptor
+   (`an empty lock file left by the gateway is not a holder`,
+   `a flock held on the lock file makes the script stand down`,
+   `a lock that is not a regular file is refused without blocking`,
+   `a symlink lock is refused`).
 3. Read the file, checked by the runtime configuration's own parse and its
    64 KiB bound (`RuntimeConfig::parse`, `MAX_CONFIG_BYTES`); compare the
    revision; make the edit; check the result with the SDK's rules
