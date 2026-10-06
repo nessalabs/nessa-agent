@@ -325,6 +325,41 @@ const reviewGone = (stack, review, ms) =>
     ms,
   )
 
+/**
+ * Moves the pointer onto `control` until that sandboxed document receives it.
+ * A move in the moment a pane's frame becomes live lands on the proxy's
+ * iframe element and is not forwarded into the app; once the frame accepts
+ * hits, the same move lands on the button. Returns how many moves it took,
+ * or 0 when the app has not received the pointer by `appReviewUnstartedMs`.
+ */
+async function pointerOnto(page, frame, control) {
+  const selector = css.reviewControl(control)
+  await frame.evaluate((selector) => {
+    const button = document.querySelector(selector)
+    window.__nessaPointerEntered = false
+    const mark = (event) => {
+      if (event.isTrusted && event.target === button) window.__nessaPointerEntered = true
+    }
+    document.addEventListener("pointerover", mark, true)
+    document.addEventListener("pointermove", mark, true)
+  }, selector)
+  const until = Date.now() + appReviewUnstartedMs
+  let moves = 0
+  while (Date.now() < until) {
+    moves += 1
+    // Off the control first, so a move that the proxy swallowed is followed
+    // by a new one rather than a pointer that is already parked there.
+    await page.mouse.move(1, 1)
+    await frame.locator(selector).hover({ timeout: 1_000 }).catch(() => {})
+    const entered = await frame
+      .evaluate(() => window.__nessaPointerEntered === true)
+      .catch(() => false)
+    if (entered) return moves
+    await sleep(50)
+  }
+  return 0
+}
+
 /** Waits up to `ms` for `review` to be the conversation's first pending permission: the one the window shows. */
 const reviewShown = (stack, review, ms = 10_000) =>
   waitFor(async () => {
@@ -676,22 +711,27 @@ const checks = {
     if (paneMode !== "fullscreen") failures.push(`the pane's app is told ${paneMode}`)
     // The pane's own mount: its tool result arrives, and it makes no calls of its own.
     const baseline = await settleEarlier(page, stack, failures)
-    // A pointer click that does not reach the button leaves the call unmade.
-    // A click dispatched on the element would hide that, so the miss fails
-    // the step.
+    // The pane's frame accepts a hit into the app a moment after it is live.
+    // Until then a pointer event stops on the proxy's iframe. Move onto the
+    // button until the app receives it, then click once.
+    const pointerMoves = await pointerOnto(page, pane.app, "delete")
+    if (pointerMoves === 0) {
+      failures.push("the pointer never entered the pane app's delete button")
+      return { seen: { paneMode, pointerMoves }, failures }
+    }
     try {
       await pane.app.click(css.reviewControl("delete"))
     } catch (error) {
       failures.push(
         `the pane's delete click did not land: ${error.message.split("\n")[0]}`,
       )
-      return { seen: { paneMode }, failures }
+      return { seen: { paneMode, pointerMoves }, failures }
     }
     if ((await said(pane.app, "again")) === "") {
       failures.push(
         "the pane's delete click did not reach the app: its call never showed pending",
       )
-      return { seen: { paneMode }, failures }
+      return { seen: { paneMode, pointerMoves }, failures }
     }
     const waited = await awaitReview(stack, baseline, () => said(pane.app, "again"))
     if (waited.kind !== "review") {
@@ -700,7 +740,7 @@ const checks = {
           ? `the pane app's call was answered without a review: "${waited.output}"`
           : `the pane app's destructive call reached no review; ${reviewAbsentMessage(waited.samples, waited.reads)}`,
       )
-      return { seen: { paneMode }, failures }
+      return { seen: { paneMode, pointerMoves }, failures }
     }
     const waiting = waited.review
     if (!(await reviewShown(stack, waiting)))
@@ -741,6 +781,7 @@ const checks = {
     return {
       seen: {
         paneMode,
+        pointerMoves,
         review: { origin: waiting.origin, toolName: waiting.toolName },
         paneSaid,
         withdrawn: Boolean(withdrawn),
