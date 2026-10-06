@@ -3,6 +3,7 @@ import {
   type McpCallToolResult,
   type McpReadResourceResult,
   type McpRemoteErrorDetails,
+  type McpAppReference,
   type McpSendMessageResult,
   type McpUiCsp,
   type McpUiPermissions,
@@ -62,9 +63,14 @@ export const mcpAppRequestProblem = {
       : !wellFormedText(uri)
         ? "Resource URI must be Unicode text"
         : undefined,
-  /** A tool's arguments, encoded: at most `MAX_MCP_ARGUMENTS_BYTES` UTF-8 bytes of Unicode text. */
+  /**
+   * A tool's arguments, encoded: at most `MAX_MCP_ARGUMENTS_BYTES` UTF-8
+   * bytes of Unicode text. The byte bound is checked first, so a text far
+   * past it is refused without being encoded (`refuses arguments and a name
+   * far past their bound without encoding them`).
+   */
   argumentsJson: (argumentsJson: string): string | undefined =>
-    utf8.encode(argumentsJson).byteLength > MAX_MCP_ARGUMENTS_BYTES
+    !withinUtf8Bytes(argumentsJson, MAX_MCP_ARGUMENTS_BYTES)
       ? `Arguments must contain at most ${MAX_MCP_ARGUMENTS_BYTES} UTF-8 bytes`
       : !wellFormedText(argumentsJson)
         ? "Arguments must be Unicode text"
@@ -200,11 +206,13 @@ const resourceKeys = [
   "prefersBorder",
 ]
 
-/** A string of 1 to `max` UTF-8 bytes: the schema's `minLength: 1` and `x-utf8MaxBytes`. */
+/**
+ * A string of 1 to `max` UTF-8 bytes: the schema's `minLength: 1` and
+ * `x-utf8MaxBytes`. A string of more than `max` UTF-16 units is past the
+ * bound without being encoded (`withinUtf8Bytes`).
+ */
 export function boundedName(value: unknown, max: number): value is string {
-  return (
-    typeof value === "string" && value.length > 0 && utf8.encode(value).byteLength <= max
-  )
+  return typeof value === "string" && value.length > 0 && withinUtf8Bytes(value, max)
 }
 
 /** A plain object holding no field but `keys`. */
@@ -233,20 +241,44 @@ export function validResourceSize(value: unknown): value is number {
   )
 }
 
-/** Why a value is not an app reference the gateway would take, or undefined when it is. */
-export function mcpAppReferenceProblem(app: unknown): string | undefined {
+const appFields = ["executionId", "toolId", "instanceId"] as const
+
+/**
+ * An app reference as the wire carries it, or the problem in words. Each
+ * field is read once, from the object's own keys only (`Object.hasOwn`): one
+ * it would only inherit is not part of it, and what is checked is what is
+ * sent. A field must be Unicode; the byte bound is checked first, so a text
+ * far past it is refused without being encoded.
+ */
+export function mcpAppReference(app: unknown): McpAppReference | string {
   if (!app || typeof app !== "object" || Array.isArray(app))
     return "an app must be an object"
   if (
-    Object.keys(app).some((key) => !["executionId", "toolId", "instanceId"].includes(key))
+    Reflect.ownKeys(app).some(
+      (key) => !(appFields as readonly PropertyKey[]).includes(key),
+    )
   )
     return "an app has unknown fields"
-  const { executionId, toolId, instanceId } = app as Record<string, unknown>
+  const record = app as Record<string, unknown>
+  const executionId = Object.hasOwn(app, "executionId") ? record.executionId : undefined
+  const toolId = Object.hasOwn(app, "toolId") ? record.toolId : undefined
+  const instanceId = Object.hasOwn(app, "instanceId") ? record.instanceId : undefined
   if (!boundedName(executionId, 256)) return "an app's execution ID must be 1-256 bytes"
+  if (!wellFormedText(executionId)) return "an app's execution ID must be Unicode text"
   if (!boundedName(toolId, 256)) return "an app's tool call ID must be 1-256 bytes"
-  if (typeof instanceId !== "string" || !instanceIdPattern.test(instanceId))
+  if (!wellFormedText(toolId)) return "an app's tool call ID must be Unicode text"
+  if (typeof instanceId !== "string")
     return "an app's instance ID must be a canonical lowercase UUID"
-  return undefined
+  if (!wellFormedText(instanceId)) return "an app's instance ID must be Unicode text"
+  if (!instanceIdPattern.test(instanceId))
+    return "an app's instance ID must be a canonical lowercase UUID"
+  return { executionId, toolId, instanceId }
+}
+
+/** Why a value is not an app reference the gateway would take, or undefined when it is. */
+export function mcpAppReferenceProblem(app: unknown): string | undefined {
+  const read = mcpAppReference(app)
+  return typeof read === "string" ? read : undefined
 }
 
 /**

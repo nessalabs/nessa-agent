@@ -457,6 +457,7 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   design, L14 and L24._ _Check:_ `mcp-apps-gateway.mjs` (needs the gateway
   built and the agent, `--agent claude|codex`, signed in on the machine). The
   refusal of the hidden tool that declares no UI depends on #412.
+- [ ] **An app's message and context, with no model key** (#550): with `--scripted`, the review app's message control opens a review; Allow lands the message in the transcript labelled as that app's, and its context control answers success. Chromium and WebKit share the conversation and send the same text, so each engine records execution ids before the click and requires exactly one new send, and the transcript row that was not already shown. The scripted agent replays one recorded turn, then answers a later prompt with text and no tool call, so the check needs no Claude key and no user model key. _Check:_ `mcp-apps-gateway.mjs --scripted` (`message`, `context`). `messagesArrived` in `gateway-view.mjs`.
 - [ ] **One tool call is drawn once** (#418): a harness reports one call as an
   announcement and then updates under its id (Codex three frames, or two
   in the recorded `review_rows` turn; Claude four), and the window draws it as one transcript step and one inline app

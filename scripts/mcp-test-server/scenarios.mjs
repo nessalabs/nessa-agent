@@ -1,6 +1,7 @@
 /**
  * The scenario files the checks run. The recorded claude and codex frames
- * are not one of them: a scripted agent with no `--scenario` replays those.
+ * are not one of them: a scripted agent with no `--scenario` replays those
+ * on its first completed prompt, then answers a later prompt with text.
  */
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
