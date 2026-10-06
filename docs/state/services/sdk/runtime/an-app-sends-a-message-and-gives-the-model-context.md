@@ -2,7 +2,7 @@
 id: "sdk-runtime-an-app-sends-a-message-and-gives-the-model-context"
 title: "an app sends a message and gives the model context"
 kind: "operation"
-status: "mixed"
+status: "implemented"
 summary: "An app can send a message into its conversation as the person, after the person allows it, and can hold context for the model's next idle message."
 parent: "sdk-runtime"
 sources:
@@ -19,6 +19,12 @@ sources:
   - "crates/nessa-server/tests/conversation/context_drops.rs"
   - "crates/nessa-server/tests/mcp_servers/gateway.rs"
   - "packages/nessa-client/src/presentation/mcp-apps-api.test.ts"
+  - "src/desktop/widgets/app/adapters/gateway/app-messages.ts"
+  - "src/desktop/widgets/app/application/bridge.ts"
+  - "src/desktop/dependencies.ts"
+  - "src/desktop/workspace/ui/transcript/approval-request.tsx"
+  - "src/desktop/widgets/app/adapters/gateway/app-messages.test.ts"
+  - "verification/desktop/scripts/app-review.mjs"
 diagramLinks: {}
 ---
 
@@ -28,7 +34,9 @@ An app can send a message into its conversation with `mcp.sendMessage`. The mess
 
 An app can also give the model context with `mcp.updateModelContext`. The gateway holds one context per mount, and at most four mounts. Each context's text and structured content are each at most 8 KiB, past which the update is `invalid_request`, and together at most `AppModelContext::MAX_BYTES` (8 KiB), past which it is `mcp_request_too_large`. One update per conversation runs at a time, and each is recorded before it is held. The next message admitted while nothing runs or waits takes every held context and carries them as one leading text block. A queued or steered message takes none.
 
-The gateway side is implemented: it answers both methods as described here. The product client sends them as `client.mcpApps.sendMessage` and `client.mcpApps.updateModelContext`, refusing a request outside the schema's bounds before anything is sent. No desktop host calls them yet; that wiring comes later in #390.
+The gateway answers both methods as described here. The product client sends them as `client.mcpApps.sendMessage` and `client.mcpApps.updateModelContext`, refusing a request outside the schema's bounds before anything is sent.
+
+The desktop window sends them for an app's `ui/message` and `ui/update-model-context`. It joins the app's text blocks into one text, and an update with no text and no structured content clears the mount's context. One mount's updates go one at a time, in the order the app gave them; one the app was already answered for, a timeout among those, or whose mount was released, is never sent. When the client cannot say the gateway did not take a request, the app is told it failed, not refused, so it does not send again a message the agent may have. While a message waits on its review, the window reads the conversation each round, so the person sees the card. The card says the app wants to send a message as you, because the review's `ask` is `message`. Once allowed, the message shows labelled with the app that wrote it. When the app's view ends, its mount is released, which withdraws a message still in review and drops its context.
 
 ## Held context
 
@@ -53,4 +61,4 @@ stateDiagram-v2
 
 ## Further reading
 
-[Design](../../../../design/mcp-app-calls.md) · [Source](../../../../../crates/nessa-server/src/conversation/application/service/app_calls.rs) · [Related tests](../../../../../crates/nessa-server/tests/conversation/app_messages.rs)
+[Design](../../../../design/mcp-app-calls.md) · [Source](../../../../../crates/nessa-server/src/conversation/application/service/app_calls.rs) · [Related tests](../../../../../crates/nessa-server/tests/conversation/app_messages.rs) · [Desktop adapter](../../../../../src/desktop/widgets/app/adapters/gateway/app-messages.ts)

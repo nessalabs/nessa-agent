@@ -674,6 +674,7 @@ describe("approvals", () => {
         reason: "Runs tests.",
         origin: { kind: "agent" },
         options: [],
+        ask: "tool",
       },
     })
     const result = await ready(source)
@@ -847,6 +848,7 @@ describe("approvals", () => {
           reason: "Runs tests.",
           origin: { kind: "agent" },
           options: [],
+          ask: "tool",
         },
       },
     })
@@ -874,6 +876,7 @@ describe("approvals", () => {
         reason: "Runs tests.",
         origin: { kind: "agent" },
         options: [],
+        ask: "tool",
       },
     })
     const { store } = await ready(source)
@@ -904,6 +907,7 @@ describe("approvals", () => {
           reason: "Installs.",
           origin: { kind: "agent" },
           options: [],
+          ask: "tool",
         },
       },
     })
@@ -1564,6 +1568,7 @@ describe("the Agents overview answers and reads what it shows, as a pane does", 
         reason: "Runs tests.",
         origin: { kind: "agent" },
         options: [],
+        ask: "tool",
       },
     })
     return source
@@ -1845,6 +1850,7 @@ describe("the overview shows one group alone (ADR 238, the group's table)", () =
         reason: "Runs tests.",
         origin: { kind: "agent" },
         options: [],
+        ask: "tool",
       },
     })
     return source

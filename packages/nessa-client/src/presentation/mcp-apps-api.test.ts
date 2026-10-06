@@ -231,6 +231,7 @@ function viewWithAppReview(argumentsJson: string) {
         toolName: "delete_rows",
         argumentsJson,
         origin: { kind: "app", server: "charts", tool: "delete_rows" },
+        ask: "tool",
         options: [{ id: "allow", label: "Allow", effect: "allow" }],
       },
     ],

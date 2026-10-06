@@ -11,6 +11,7 @@
  * in is the adapter's best word for it (`modelFor`).
  */
 import type {
+  ConversationMessageApp,
   ConversationPermission,
   ConversationSummary,
   ConversationTool,
@@ -24,6 +25,7 @@ import type {
   ApprovalOption,
   ApprovalOrigin,
   Message,
+  MessageApp,
   Part,
   StepKind,
   Transcript,
@@ -211,6 +213,14 @@ function stepKind(kind: ConversationTool["kind"]): StepKind {
 }
 
 /**
+ * The MCP App that wrote a turn of the person's, by its server and tool, as
+ * the view names it (#390); nothing for the person's own.
+ */
+function writtenBy(app: ConversationMessageApp | undefined): { app?: MessageApp } {
+  return app ? { app: { server: app.server, tool: app.tool } } : {}
+}
+
+/**
  * A conversation view as the session's transcript, at the revision the
  * adapter minted for it. `seen` answers when the adapter first saw a message
  * — the gateway's view carries no times — and keeps answering the same.
@@ -239,6 +249,7 @@ export function transcriptFrom(
       role: "user",
       at: seen(input),
       parts: [{ kind: "text", text: turn.userText }],
+      ...writtenBy(turn.app),
     })
     const parts: Part[] = []
     // The provider message the last text part came from, while text is last.
@@ -290,6 +301,8 @@ export function transcriptFrom(
       role: "user",
       at: seen(input),
       parts: [{ kind: "text", text: waiting.text }],
+      // Waiting, it is labelled as it will be once it is a turn (D-H).
+      ...writtenBy(waiting.app),
     })
   }
   const latestTurn = view.messages.at(-1)
@@ -303,6 +316,9 @@ export function transcriptFrom(
         reason: asked.title,
         origin: approvalOrigins[asked.origin.kind](asked.origin),
         options: approvalOptions(asked),
+        // The gateway's own word for what is asked, a closed set the client
+        // holds the view to (`conversation-validate.ts`, D19 on #390).
+        ask: asked.ask,
       }
     : null
   return {
