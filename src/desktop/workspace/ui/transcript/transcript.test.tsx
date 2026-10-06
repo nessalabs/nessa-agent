@@ -282,6 +282,10 @@ describe("a transcript", () => {
         command: `${tool} {}`,
         reason: "An app asks to run a tool",
         origin: { kind: "app", server: "evil\u202Egnp.exe", tool },
+        options: [
+          { id: "allow", label: "Allow", choice: "once" },
+          { id: "deny", label: "Deny", choice: "deny" },
+        ],
         ask: "tool",
       },
     })

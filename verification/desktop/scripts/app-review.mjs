@@ -25,7 +25,7 @@
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { appReview, css, keys, offeredLabel } from "./lib/selectors.mjs"
+import { appReview, css, keys, names, offeredLabel } from "./lib/selectors.mjs"
 import { frames, settled, unofferedAnswers, until } from "./lib/workspace.mjs"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
@@ -54,15 +54,15 @@ Checks, per engine and layout (--only <names> to pick):
   message    (#390) a context is taken at once and starts no read; the app's
              message is read each round until its review is drawn, its head
              "The mcptest app wants to send a message as you", data-ask
-             message, its command the app's tool and the message; Allow Once
-             answers that review, the app's request is answered ok, and the
+             message, its command the app's tool and the message; the review's
+             Allow answers that review, the app's request is answered ok, and the
              message lands labelled "Sent by show_rows, from mcptest" over its
              bubble's right edge; the reads stop; a second message denied is
              refused and lands nothing
   message-card
              (#390) with a message as long as the gateway takes — words, then
              one unbroken word — at 280/340/420/600/900 px the head stays inside
-             the card, the card does not overflow, and Allow Once is reachable
+             the card, the card does not overflow, and its Allow is reachable
              (scrolled to, it is what the page hits at its centre)
   message-overview
              (#390) the overview row's accessible name says the app wants to
@@ -99,6 +99,14 @@ const roundsMs = 2_500
 const drawnWithinMs = 8_000
 
 const snapshot = (page) => page.evaluate(() => window.__appReview.snapshot())
+
+/** The open review's allow button, named with the review's own words (#444). */
+async function allowControl(page) {
+  const waiting = await snapshot(page)
+  const label = offeredLabel(waiting.openOptions, "allow")
+  if (!label) return null
+  return page.getByRole("button", { name: label, exact: true }).first()
+}
 
 /** The fixture's page, on the conversation, before the app has called anything. */
 async function onConversation(browser, url, layout) {
@@ -570,17 +578,16 @@ Object.assign(checks, {
       let answered = waiting
       let landed = {}
       if (drawn) {
-        await page
-          .getByRole("button", { name: names.allowOnce, exact: true })
-          .first()
-          .click()
+        const allow = await allowControl(page)
+        if (!allow) failures.push("the review offers no allow")
+        else await allow.click()
         const gone = await until(
           page,
           (sel) => document.querySelector(sel) === null,
           css.approvalCard,
           5_000,
         )
-        if (!gone) failures.push("the card is still drawn 5 s after Allow Once")
+        if (!gone) failures.push("the card is still drawn 5 s after Allow")
         const outcome = await settledAs(page)
         answered = await snapshot(page)
         const expected = [[appReview.sessionId, "run", waiting.openReview, "allow"]]
@@ -682,11 +689,13 @@ Object.assign(checks, {
         for (const width of [280, 340, 420, 600, 900]) {
           await cardWidth(page, width)
           const r = await cardFits(page)
-          // Its answers stay reachable: scrolled to, Allow Once is what the
-          // page hits at its centre.
-          const allow = page
-            .getByRole("button", { name: names.allowOnce, exact: true })
-            .first()
+          // Its answers stay reachable: scrolled to, the review's allow is
+          // what the page hits at its centre.
+          const allow = await allowControl(page)
+          if (!allow) {
+            failures.push(`${which} at ${width}px: the review offers no allow`)
+            continue
+          }
           await allow.scrollIntoViewIfNeeded().catch(() => {})
           await frames(page, 2)
           const reachable = await allow
@@ -705,7 +714,7 @@ Object.assign(checks, {
           if (r.headPastCard)
             failures.push(`${tag}: the head runs ${r.headPastCard}px past the card`)
           if (r.overflow) failures.push(`${tag}: the card overflows`)
-          if (!reachable) failures.push(`${tag}: Allow Once is not reachable`)
+          if (!reachable) failures.push(`${tag}: Allow is not reachable`)
           if (options.shots) {
             mkdirSync(options.shots, { recursive: true })
             await page
@@ -820,10 +829,12 @@ Object.assign(checks, {
           failures.push(`${tag}: ${notDrawn}`)
           continue
         }
-        await page
-          .getByRole("button", { name: names.allowOnce, exact: true })
-          .first()
-          .click()
+        const allow = await allowControl(page)
+        if (!allow) {
+          failures.push(`${tag}: the review offers no allow`)
+          continue
+        }
+        await allow.click()
         const author = page.locator(css.messageAuthor).first()
         await author.waitFor({ timeout: 5000 }).catch(() => {})
         if (!(await page.locator(css.messageAuthor).count())) {
@@ -867,10 +878,12 @@ Object.assign(checks, {
           failures.push(`${tag}: ${notDrawn}`)
           continue
         }
-        await page
-          .getByRole("button", { name: names.allowOnce, exact: true })
-          .first()
-          .click()
+        const allow = await allowControl(page)
+        if (!allow) {
+          failures.push(`${tag}: the review offers no allow`)
+          continue
+        }
+        await allow.click()
         const author = page.locator(css.messageAuthor).first()
         await author.waitFor({ timeout: 5000 }).catch(() => {})
         if (!(await page.locator(css.messageAuthor).count())) {

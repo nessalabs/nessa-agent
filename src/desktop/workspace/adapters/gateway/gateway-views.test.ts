@@ -357,6 +357,7 @@ describe("who asks for an approval (#436)", () => {
             ],
             toolName: "bash",
             origin: { kind: "harness" },
+            ask: "tool",
             argumentsJson: "{}",
           },
         ],
