@@ -25,33 +25,27 @@ describe("the desktop app's proxy", () => {
   }
 
   it("is the nessa-sandbox scheme, an http host on Windows (other)", () => {
-    expect(sandboxFor("macos", document)).toEqual(scheme)
-    expect(sandboxFor("linux", document)).toEqual(scheme)
-    expect(sandboxFor("other", document)).toEqual(windows)
+    expect(sandboxFor("macos", document, true)).toEqual(scheme)
+    expect(sandboxFor("linux", document, true)).toEqual(scheme)
+    expect(sandboxFor("other", document, true)).toEqual(windows)
   })
 
-  it("uses the scheme when convertFileSrc is installed, even if the page names a proxy", () => {
+  it("uses the scheme when the host registered it, even if the page names a proxy", () => {
     name("http://127.0.0.1:43941/proxy.html")
-    const internals = { convertFileSrc: () => "asset://local" }
-    Object.assign(globalThis, { __TAURI_INTERNALS__: internals })
-    try {
-      expect(sandboxFor("linux", document)).toEqual(scheme)
-      expect(sandboxFor("macos", document)).toEqual(scheme)
-      expect(sandboxFor("other", document)).toEqual(windows)
-    } finally {
-      delete (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
-    }
+    expect(sandboxFor("linux", document, true)).toEqual(scheme)
+    expect(sandboxFor("macos", document, true)).toEqual(scheme)
+    expect(sandboxFor("other", document, true)).toEqual(windows)
   })
 
-  it("uses the proxy the page names when convertFileSrc is not installed", () => {
+  it("uses the proxy the page names when the host registered no scheme", () => {
     name("http://127.0.0.1:43941/proxy.html")
     const named = {
       url: "http://127.0.0.1:43941/proxy.html",
       origin: "http://127.0.0.1:43941",
     }
-    expect(sandboxFor("linux", document)).toEqual(named)
-    expect(sandboxFor("macos", document)).toEqual(named)
-    expect(sandboxFor("other", document)).toEqual(named)
+    expect(sandboxFor("linux", document, false)).toEqual(named)
+    expect(sandboxFor("macos", document, false)).toEqual(named)
+    expect(sandboxFor("other", document, false)).toEqual(named)
   })
 })
 
@@ -59,7 +53,7 @@ describe("the browser build's proxy", () => {
   it("is the one the page names, on another origin than the page's", () => {
     name("http://127.0.0.1:43941/proxy.html")
     expect(document.location.origin).not.toBe("http://127.0.0.1:43941")
-    expect(sandboxFor("browser", document)).toEqual({
+    expect(sandboxFor("browser", document, false)).toEqual({
       url: "http://127.0.0.1:43941/proxy.html",
       origin: "http://127.0.0.1:43941",
     })

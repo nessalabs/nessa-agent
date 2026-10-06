@@ -51,6 +51,7 @@ export {
   onWindowResize,
   readAttachmentBytes,
   revealSetupWindow,
+  sandboxSchemeRegistered,
   setFrosted,
   startResizeFromLeftEdge,
   windowSize,

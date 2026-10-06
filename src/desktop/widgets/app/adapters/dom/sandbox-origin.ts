@@ -35,38 +35,45 @@ export const sandboxMetaName = "nessa-app-sandbox"
 export function sandboxFor(
   host: HostKind,
   document: Document,
+  schemeRegistered: boolean,
 ): SandboxOrigin | undefined {
   switch (host) {
     case "browser":
       return pageSandbox(document)
     case "other":
-      return desktopSandbox(document, {
-        url: "http://nessa-sandbox.localhost/proxy.html",
-        origin: "http://nessa-sandbox.localhost",
-      })
+      return desktopSandbox(
+        document,
+        {
+          url: "http://nessa-sandbox.localhost/proxy.html",
+          origin: "http://nessa-sandbox.localhost",
+        },
+        schemeRegistered,
+      )
     case "macos":
     case "linux":
-      return desktopSandbox(document, {
-        url: "nessa-sandbox://localhost/proxy.html",
-        origin: "nessa-sandbox://localhost",
-      })
+      return desktopSandbox(
+        document,
+        {
+          url: "nessa-sandbox://localhost/proxy.html",
+          origin: "nessa-sandbox://localhost",
+        },
+        schemeRegistered,
+      )
   }
 }
 
 /**
- * The scheme, or the proxy the page names when this page's host did not
- * install `convertFileSrc`. The real webview does. An IPC stub does not,
- * and a sandboxed frame cannot open a scheme that host did not register.
+ * The scheme the host registered, or the proxy the page names when it
+ * registered none. A sandboxed frame cannot open a scheme this host did
+ * not register.
  */
-function desktopSandbox(document: Document, scheme: SandboxOrigin): SandboxOrigin {
-  if (hostInstallsConvertFileSrc()) return scheme
+function desktopSandbox(
+  document: Document,
+  scheme: SandboxOrigin,
+  schemeRegistered: boolean,
+): SandboxOrigin {
+  if (schemeRegistered) return scheme
   return pageSandbox(document) ?? scheme
-}
-
-function hostInstallsConvertFileSrc(): boolean {
-  const internals = (globalThis as { __TAURI_INTERNALS__?: { convertFileSrc?: unknown } })
-    .__TAURI_INTERNALS__
-  return typeof internals?.convertFileSrc === "function"
 }
 
 /** The proxy the page names, if it names one this page may use. */
