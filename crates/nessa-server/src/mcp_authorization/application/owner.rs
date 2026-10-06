@@ -6,16 +6,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use nessa_sdk::infrastructure::mcp::{Bearer, McpError, RemoteAuthorization};
 use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
 use super::discovery::{self, DiscoverFailure, Discovered};
 use super::ports::{
-    AuthAuditRecord, AuthClock, AuthorizationAudit, AuthorizationRecords, AuthorizeAnswer,
-    BindingChange, CallbackQuery, ConsentCallback, Entropy, FenceRefusal, ListedAuthorization,
-    OAuthCallFailure, OAuthHttp, RecordFailure, ResourceLookup, RevokeAnswer, SessionDrain,
-    TokenMaterial,
+    AdmissionRefusal, AdmittedToken, AuthAuditRecord, AuthClock, AuthorizationAudit,
+    AuthorizationRecords, AuthorizeAnswer, BindingChange, CallbackQuery, ConsentCallback, Entropy,
+    FenceRefusal, ListedAuthorization, OAuthCallFailure, OAuthHttp, RecordFailure, ResourceLookup,
+    RevokeAnswer, SessionDrain, TokenMaterial,
 };
 use crate::mcp_authorization::domain::{
     AcceptedDiscovery, Admission, Command, Deletion, Phase, Publication, RefreshActivity, Refusal,
@@ -35,7 +34,7 @@ struct Slot {
 
 struct RefreshFlight {
     notify: Notify,
-    result: Mutex<Option<Result<Option<Bearer>, McpError>>>,
+    result: Mutex<Option<Result<Option<AdmittedToken>, AdmissionRefusal>>>,
 }
 
 /// Gateway-owned authorization for every remote server.
@@ -524,9 +523,13 @@ impl AuthorizationOwner {
         }
     }
 
-    async fn refresh(&self, server: Uuid, rejected: bool) -> Result<Option<Bearer>, McpError> {
+    async fn refresh(
+        &self,
+        server: Uuid,
+        rejected: bool,
+    ) -> Result<Option<AdmittedToken>, AdmissionRefusal> {
         let Some(slot) = self.existing(server).await else {
-            return Err(McpError::Unauthorized);
+            return Err(AdmissionRefusal::Unauthorized);
         };
         let flight = {
             let mut guard = slot.lock().await;
@@ -560,13 +563,13 @@ impl AuthorizationOwner {
                         .lock()
                         .await
                         .clone()
-                        .unwrap_or(Err(McpError::Unauthorized));
+                        .unwrap_or(Err(AdmissionRefusal::Unauthorized));
                 }
-                return Err(McpError::Unauthorized);
+                return Err(AdmissionRefusal::Unauthorized);
             }
             if decision.refusal.is_some() {
                 guard.auth = decision.auth;
-                return Err(McpError::Unauthorized);
+                return Err(AdmissionRefusal::Unauthorized);
             }
             guard.auth = decision.auth;
             let flight = Arc::new(RefreshFlight {
@@ -579,7 +582,7 @@ impl AuthorizationOwner {
         if self.audit_slot(&slot, "refresh", true).await.is_err() {
             self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched)
                 .await;
-            return Err(McpError::Unauthorized);
+            return Err(AdmissionRefusal::Unauthorized);
         }
         let (endpoint, client_id, resource, generation) = {
             let guard = slot.lock().await;
@@ -600,12 +603,12 @@ impl AuthorizationOwner {
         let Some(endpoint) = endpoint.filter(|url| discovery::https_url(url)) else {
             self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched)
                 .await;
-            return Err(McpError::Unauthorized);
+            return Err(AdmissionRefusal::Unauthorized);
         };
         let Some(refresh_token) = refresh_token else {
             self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched)
                 .await;
-            return Err(McpError::Unauthorized);
+            return Err(AdmissionRefusal::Unauthorized);
         };
         {
             let mut guard = slot.lock().await;
@@ -614,7 +617,7 @@ impl AuthorizationOwner {
         if self.persist(&slot).await.is_err() {
             self.finish_refresh(&slot, &flight, Command::RefreshLost)
                 .await;
-            return Err(McpError::Unauthorized);
+            return Err(AdmissionRefusal::Unauthorized);
         }
         let body = discovery::form(&[
             ("grant_type", "refresh_token"),
@@ -627,12 +630,12 @@ impl AuthorizationOwner {
             Err(OAuthCallFailure::NotSent) => {
                 self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched)
                     .await;
-                return Err(McpError::Unauthorized);
+                return Err(AdmissionRefusal::Unauthorized);
             }
             Err(OAuthCallFailure::Lost) => {
                 self.finish_refresh(&slot, &flight, Command::RefreshLost)
                     .await;
-                return Err(McpError::Unauthorized);
+                return Err(AdmissionRefusal::Unauthorized);
             }
             Ok(response) => response,
         };
@@ -641,7 +644,7 @@ impl AuthorizationOwner {
             AuthorizeAnswer::Ready { generation } => {
                 self.release_bearer(&slot, server, generation).await
             }
-            _ => Err(McpError::Unauthorized),
+            _ => Err(AdmissionRefusal::Unauthorized),
         };
         *flight.result.lock().await = Some(result.clone());
         self.flights.lock().await.remove(&server);
@@ -657,7 +660,7 @@ impl AuthorizationOwner {
     ) {
         self.apply(slot, command).await;
         let _ = self.persist(slot).await;
-        *flight.result.lock().await = Some(Err(McpError::Unauthorized));
+        *flight.result.lock().await = Some(Err(AdmissionRefusal::Unauthorized));
         let server = server_of(slot).await;
         self.flights.lock().await.remove(&server);
         flight.notify.notify_waiters();
@@ -682,21 +685,26 @@ impl AuthorizationOwner {
         slot: &Arc<Mutex<Slot>>,
         server: Uuid,
         generation: u64,
-    ) -> Result<Option<Bearer>, McpError> {
+    ) -> Result<Option<AdmittedToken>, AdmissionRefusal> {
         let loaded = self.records.load_secret(server).await;
         let guard = slot.lock().await;
         match self.live_admission(&guard, server) {
             Admission::Bearer {
                 generation: current,
             } if current == generation => match loaded {
-                Ok(Some(secret)) if secret.generation == generation => Ok(Some(secret.bearer())),
-                Ok(Some(_)) | Ok(None) => Err(McpError::Unauthorized),
-                Err(RecordFailure::Unavailable) => Err(McpError::Unreachable),
+                Ok(Some(secret)) if secret.generation == generation => Ok(Some(AdmittedToken {
+                    access_token: secret.access_token,
+                    generation: secret.generation,
+                })),
+                Ok(Some(_)) | Ok(None) => Err(AdmissionRefusal::Unauthorized),
+                Err(RecordFailure::Unavailable) => Err(AdmissionRefusal::Unreachable),
             },
-            Admission::Bearer { .. } => Err(McpError::Unauthorized),
-            Admission::InsufficientScope => Err(McpError::InsufficientScope),
+            Admission::Bearer { .. } => Err(AdmissionRefusal::Unauthorized),
+            Admission::InsufficientScope => Err(AdmissionRefusal::InsufficientScope),
             Admission::NoneRequired => Ok(None),
-            Admission::NeedsRefresh | Admission::Unauthorized => Err(McpError::Unauthorized),
+            Admission::NeedsRefresh | Admission::Unauthorized => {
+                Err(AdmissionRefusal::Unauthorized)
+            }
         }
     }
 
@@ -1121,9 +1129,9 @@ impl crate::mcp_authorization::application::AuthorizationHandoff for Authorizati
     }
 }
 
-#[async_trait]
-impl RemoteAuthorization for AuthorizationOwner {
-    async fn bearer(&self, server: Uuid) -> Result<Option<Bearer>, McpError> {
+impl AuthorizationOwner {
+    /// The token to send for `server`, or none when the server needs none.
+    pub async fn bearer(&self, server: Uuid) -> Result<Option<AdmittedToken>, AdmissionRefusal> {
         let Some(slot) = self.existing(server).await else {
             return Ok(None);
         };
@@ -1136,21 +1144,24 @@ impl RemoteAuthorization for AuthorizationOwner {
             Admission::Bearer { generation } => {
                 self.release_bearer(&slot, server, generation).await
             }
-            Admission::InsufficientScope => Err(McpError::InsufficientScope),
+            Admission::InsufficientScope => Err(AdmissionRefusal::InsufficientScope),
             Admission::NeedsRefresh => self.refresh(server, false).await,
-            Admission::Unauthorized => Err(McpError::Unauthorized),
+            Admission::Unauthorized => Err(AdmissionRefusal::Unauthorized),
         }
     }
 
-    async fn rejected(
+    /// `server` answered 401 with `www_authenticate`. A token retries the
+    /// refused request once.
+    pub async fn rejected(
         &self,
         server: Uuid,
         _www_authenticate: &str,
-    ) -> Result<Option<Bearer>, McpError> {
+    ) -> Result<Option<AdmittedToken>, AdmissionRefusal> {
         self.refresh(server, true).await
     }
 
-    async fn insufficient_scope(&self, server: Uuid, _www_authenticate: &str) {
+    /// `server` answered 403 `insufficient_scope`. The call is not retried.
+    pub async fn insufficient_scope(&self, server: Uuid, _www_authenticate: &str) {
         if let Some(slot) = self.existing(server).await {
             self.apply(&slot, Command::InsufficientScope).await;
             let _ = self.persist(&slot).await;

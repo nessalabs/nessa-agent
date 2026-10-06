@@ -213,7 +213,13 @@ export function mcpServersAuthorizeResult(value: unknown): McpServersAuthorizeRe
 export function mcpServersRevokeResult(value: unknown): McpServersRevokeResult {
   const item = object(
     value,
-    ["settled", "localDrained", "secretDeleted", "remoteObservation", "evidenceAcknowledged"],
+    [
+      "settled",
+      "localDrained",
+      "secretDeleted",
+      "remoteObservation",
+      "evidenceAcknowledged",
+    ],
     "revoke",
   )
   if (
@@ -227,7 +233,8 @@ export function mcpServersRevokeResult(value: unknown): McpServersRevokeResult {
     item.remoteObservation === undefined
       ? undefined
       : member(McpRemoteObservation, item.remoteObservation)
-  if (item.remoteObservation !== undefined && !remote) throw new Error("Invalid revoke result")
+  if (item.remoteObservation !== undefined && !remote)
+    throw new Error("Invalid revoke result")
   return {
     settled: item.settled,
     localDrained: item.localDrained,

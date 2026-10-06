@@ -767,7 +767,8 @@ real processes in `tests/mcp_servers/inspect.rs`) and
 `protocol/mcp-servers-validate.ts`;
 `src/mcp_authorization/` owns one remote server's consent, token
 generation, refresh and revoke (ADR 392): the domain statechart, the
-owner that fences a URL change before the live set is replaced, HTTPS
+owner that fences a URL change before the live set is replaced, the
+transport adapter that names an admitted token for the HTTP session, HTTPS
 discovery and token calls, the loopback callback, and the non-secret
 record beside the macOS keychain. `mcpServers.authorize` and
 `mcpServers.revoke` are the product methods. An app call that the remote

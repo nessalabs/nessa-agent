@@ -25,6 +25,7 @@ use crate::core::RunError;
 use crate::mcp_authorization::application::AuthorizationOwner;
 use crate::mcp_authorization::infrastructure::{
     FileAuthorizationAudit, FileRecords, HttpsOAuth, LoopbackCallback, OsEntropy, SystemAuthClock,
+    TransportAuthorization,
 };
 use crate::mcp_servers::{
     application::{McpServerSettings, Unfinished},
@@ -478,7 +479,8 @@ fn manage_over(
         Arc::new(ConfiguredResources(mcp.servers.clone())),
         writer,
     ));
-    mcp.servers.set_authorization(authorization.clone());
+    mcp.servers
+        .set_authorization(Arc::new(TransportAuthorization::new(authorization.clone())));
     Ok(Some(ManagedMcp {
         settings: McpServerSettings::new(
             Arc::new(store),

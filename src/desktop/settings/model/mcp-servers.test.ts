@@ -690,7 +690,15 @@ describe("a stored value kept only for the same launch (V1–V10)", () => {
     // Adding is no launch at all: nothing is stored to keep.
     expect(
       namesKept(
-        { name: "", command: "", args: [], env: [], enabled: true, kind: "stdio", url: "" },
+        {
+          name: "",
+          command: "",
+          args: [],
+          env: [],
+          enabled: true,
+          kind: "stdio",
+          url: "",
+        },
         undefined,
       ),
     ).toBe(true)
@@ -1887,7 +1895,10 @@ describe("remote authorization", () => {
     const asking = run(listed(listOf(remote, nessa)), { type: "authorize", name: "docs" })
     const waiting = answer(
       asking,
-      ok({ status: "pending_consent", consentUrl: "http://127.0.0.1:9/mcp-oauth/callback" }),
+      ok({
+        status: "pending_consent",
+        consentUrl: "http://127.0.0.1:9/mcp-oauth/callback",
+      }),
     )
     expect(waiting.consent).toEqual({
       name: "docs",

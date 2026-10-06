@@ -1,5 +1,5 @@
 //! What a remote session asks before it sends a bearer, and what it does when
-//! the server rejects one. The gateway's authorization owner implements this;
+//! the server rejects one. The gateway's transport adapter implements this;
 //! the SDK does not discover, store, or refresh tokens.
 //!
 //! ```text

@@ -407,7 +407,9 @@ export type McpServersEvent =
   | { readonly type: "edit"; readonly name: string }
   | {
       readonly type: "change"
-      readonly patch: Partial<Pick<ServerForm, "name" | "command" | "enabled" | "kind" | "url">>
+      readonly patch: Partial<
+        Pick<ServerForm, "name" | "command" | "enabled" | "kind" | "url">
+      >
     }
   /** A new argument, after the row keyed `after`, or last. */
   | { readonly type: "addArgument"; readonly after?: number }
@@ -914,7 +916,8 @@ export function authorizationLabel(server: ListedServer): string | undefined {
   if (!server.url || !auth) return undefined
   if (auth.phase === "revocation_incomplete" || auth.phase === "revoking")
     return sentences.revocationIncomplete
-  if (auth.scopeRequired || auth.phase === "scope_required") return sentences.scopeRequired
+  if (auth.scopeRequired || auth.phase === "scope_required")
+    return sentences.scopeRequired
   if (auth.tokenExpired) return sentences.tokenExpired
   if (auth.refreshFailing && auth.phase === "authorization_incomplete")
     return sentences.refreshFailing
@@ -1225,7 +1228,16 @@ function refilled(state: McpServersState): McpServersState {
     ...state,
     rows,
     notice,
-    form: { ...form, base: now, command, args, enabled, env, url, unconfirmed: undefined },
+    form: {
+      ...form,
+      base: now,
+      command,
+      args,
+      enabled,
+      env,
+      url,
+      unconfirmed: undefined,
+    },
   }
 }
 
@@ -1380,7 +1392,10 @@ function answeredAuth(
   return listAgain({
     ...done,
     consent: state.consent?.name === pending.name ? null : state.consent,
-    notice: said(value.settled ? sentences.revokeSettled : sentences.revokeIncomplete, "write"),
+    notice: said(
+      value.settled ? sentences.revokeSettled : sentences.revokeIncomplete,
+      "write",
+    ),
   })
 }
 

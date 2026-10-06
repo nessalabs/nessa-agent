@@ -7,7 +7,7 @@
 //!                              ├──▶ AuthorizationAudit (intent before a token effect)
 //!                              ├──▶ OAuthHttp (HTTPS metadata, token, revoke)
 //!                              ├──▶ LoopbackCallback (127.0.0.1, code never echoed)
-//!                              └──bearer──▶ HttpSession
+//!                              └──bearer──▶ TransportAuthorization ──▶ HttpSession
 //!
 //! McpServerSettings::edit ──fence──▶ AuthorizationOwner
 //!         before the new URL is in the live set

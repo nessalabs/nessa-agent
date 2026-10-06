@@ -120,6 +120,7 @@ export function createMcpServersApi(session: RpcRequester): McpServersApi {
       ),
     authorize: (params) =>
       call(ProductMethod.McpServersAuthorize, params, mcpServersAuthorizeResult),
-    revoke: (params) => call(ProductMethod.McpServersRevoke, params, mcpServersRevokeResult),
+    revoke: (params) =>
+      call(ProductMethod.McpServersRevoke, params, mcpServersRevokeResult),
   }
 }

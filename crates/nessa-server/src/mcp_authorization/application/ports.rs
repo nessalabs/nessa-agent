@@ -1,7 +1,6 @@
 //! What the authorization owner asks of the clock, the store, the audit,
 //! and the HTTPS authorization server. The domain never sees these.
 use async_trait::async_trait;
-use nessa_sdk::infrastructure::mcp::Bearer;
 use uuid::Uuid;
 
 use super::super::domain::{Deletion, Publication, RemoteObservation, ServerAuth};
@@ -55,10 +54,28 @@ impl std::fmt::Debug for TokenMaterial {
     }
 }
 
-impl TokenMaterial {
-    pub fn bearer(&self) -> Bearer {
-        Bearer::new(self.access_token.clone(), self.generation)
+/// The access token a session may send, without the refresh token.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AdmittedToken {
+    pub access_token: String,
+    pub generation: u64,
+}
+
+impl std::fmt::Debug for AdmittedToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AdmittedToken")
+            .field("generation", &self.generation)
+            .finish_non_exhaustive()
     }
+}
+
+/// Why a bearer cannot be sent. The transport adapter names these in the
+/// SDK session's error type. This enum does not carry a token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdmissionRefusal {
+    Unauthorized,
+    InsufficientScope,
+    Unreachable,
 }
 
 /// An authorization event with no secret in it.
