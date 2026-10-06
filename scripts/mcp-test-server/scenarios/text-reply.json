@@ -2,6 +2,14 @@
   "turns": [
     {
       "steps": [{ "do": "text", "chunks": ["Ready."] }, { "do": "end" }]
+    },
+    {
+      "when": "show the server's app",
+      "steps": [
+        { "do": "tool", "tool": "review_rows", "arguments": {} },
+        { "do": "text", "chunks": ["Shown."] },
+        { "do": "end" }
+      ]
     }
   ]
 }

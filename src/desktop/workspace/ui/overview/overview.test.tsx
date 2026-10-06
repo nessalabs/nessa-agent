@@ -13,6 +13,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ClockProvider } from "../../adapters/dom/clock"
+import { bidiControls } from "../transcript/bidi-controls.mjs"
 import { focusedPaneAttribute } from "../../adapters/dom/focus"
 import {
   approve,
@@ -360,7 +361,7 @@ describe("the agents overview", () => {
     expect(card("second")?.querySelector(".agents-request-why")?.textContent).toBe(
       "The show_rows app on evil\uFFFDgnp.exe asks to send a message as you",
     )
-    expect(card("second")?.textContent).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/)
+    expect(card("second")?.textContent).not.toMatch(bidiControls)
     await act(async () => card("second")?.click())
     await act(async () => settle(10))
     const peek = host.querySelector(".agents-inline-peek")
@@ -699,6 +700,39 @@ describe("the agents overview", () => {
     })
     expect(selectFocusedSessionId(store.getState())).toBe("run")
     expect(host.querySelector(".agents-overview")).toBeNull()
+  })
+
+  it("draws the command in order on the row and in the peek (#553)", async () => {
+    const argument = "\u202Emoc.live@bob\u202C"
+    const command = `send ${JSON.stringify({ to: argument })}`
+    await mount({
+      beforeLoad: (source) => {
+        const held = source.transcripts.get("first")
+        if (!held?.approval) throw new Error("no approval")
+        source.transcripts.set("first", {
+          ...held,
+          approval: { ...held.approval, command },
+        })
+      },
+    })
+    await open()
+    const row = card("first")
+    const drawn = row?.querySelector(".agents-request-command")
+    expect(drawn?.textContent).not.toMatch(bidiControls)
+    expect(drawn?.textContent?.indexOf("moc.live@bob")).toBeGreaterThan(
+      drawn?.textContent?.indexOf("\\u202e") ?? -1,
+    )
+    expect(drawn?.getAttribute("title")).toBe(drawn?.textContent)
+    expect(row?.getAttribute("aria-label")).toContain("\\u202e")
+    expect(row?.getAttribute("aria-label")).not.toMatch(bidiControls)
+    await act(async () => row?.click())
+    await act(async () => settle(10))
+    const peek = host.querySelector(".agents-inline-peek .workspace-approval-command")
+    const peekText = peek?.textContent?.replace(/^\$ /, "") ?? ""
+    expect(peekText).toBe(drawn?.textContent)
+    expect(JSON.parse(peekText.slice(peekText.indexOf(" ")))).toEqual({ to: argument })
+    expect(drawn?.querySelector("bdi")?.getAttribute("dir")).toBe("ltr")
+    expect(peek?.querySelector("bdi")?.getAttribute("dir")).toBe("ltr")
   })
 
   it("does not offer always when the review does not (#444)", async () => {

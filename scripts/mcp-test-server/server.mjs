@@ -52,7 +52,9 @@ const CHART_HTML =
  * tool result it calls, through the host's `tools/call`, the destructive tool
  * (`#first`) and both hidden tools (`#hidden-no-ui`, `#hidden-with-ui`); its
  * `delete` button calls the destructive tool again (`#again`), and its
- * `fullscreen` button asks to be shown fullscreen. Each output says
+ * `fullscreen` button asks to be shown fullscreen. Its `message` button
+ * sends `ui/message` and its `context` button sends `ui/update-model-context`;
+ * neither fires on its own. Each output says
  * `pending` until it is answered, then `ok: <the result's text>` or
  * `error: <the error's message>`. Its state and display mode are on its
  * body (`data-review-state`, `data-review-mode`), for a browser to read.
@@ -66,11 +68,15 @@ const REVIEW_HTML = `<!doctype html>
 <h1 style="font-size:14px;margin:0 0 8px">Review rows (nessa-test)</h1>
 <button data-review="delete">Delete row 2 again</button>
 <button data-review="fullscreen">Fullscreen</button>
+<button data-review="message">Send a message</button>
+<button data-review="context">Update context</button>
 <output id="result"></output>
 <output id="first"></output>
 <output id="hidden-no-ui"></output>
 <output id="hidden-with-ui"></output>
 <output id="again"></output>
+<output id="message"></output>
+<output id="context"></output>
 <script>
 (function () {
   var parentWindow = window.parent;
@@ -143,11 +149,31 @@ const REVIEW_HTML = `<!doctype html>
     reportSize();
     new ResizeObserver(reportSize).observe(body);
   });
+  function askHost(output, method, params) {
+    show(output, "pending");
+    ask(method, params).then(function (message) {
+      if (message.error) show(output, "error: " + message.error.message);
+      else if (message.result && message.result.isError) show(output, "error: isError");
+      else show(output, "ok");
+    });
+  }
   document.querySelector('[data-review="delete"]').addEventListener("click", function () {
     call("again", ${JSON.stringify(APP_CALLS.destructive)}, { id: 2 });
   });
   document.querySelector('[data-review="fullscreen"]').addEventListener("click", function () {
     ask("ui/request-display-mode", { mode: "fullscreen" });
+  });
+  document.querySelector('[data-review="message"]').addEventListener("click", function () {
+    askHost("message", "ui/message", {
+      role: "user",
+      content: [{ type: "text", text: "Please review row 2." }]
+    });
+  });
+  document.querySelector('[data-review="context"]').addEventListener("click", function () {
+    askHost("context", "ui/update-model-context", {
+      content: [{ type: "text", text: "Row 2 is selected." }],
+      structuredContent: { row: 2 }
+    });
   });
 })();
 </script>

@@ -163,6 +163,8 @@ test("the review app speaks the ui/* bridge and calls each of its tools by name"
     '"ui/notifications/size-changed"',
     '"ui/request-display-mode"',
     '"tools/call"',
+    '"ui/message"',
+    '"ui/update-model-context"',
     ...Object.values(APP_CALLS).map((name) => JSON.stringify(name)),
   ])
     assert.ok(text.includes(said), said)

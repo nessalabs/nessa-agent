@@ -29,9 +29,10 @@
  * One mount's context updates go one after another, in the order the app
  * gave them, each once the one before has answered, whatever it answered:
  * two sent at once could reach the gateway the other way round, and the one
- * recorded last stands (D15, the gateway's C8). Another mount's are not held
- * back. An update whose signal is aborted before its turn — the bridge has
- * answered it, a timeout among those, or its mount was released — is never
+ * recorded last stands (D15, the gateway's C8). Updates from another mount
+ * are not held back. An update whose signal is aborted before its turn —
+ * the bridge has answered it, a timeout among those, or its mount was
+ * released — is never
  * sent, and the next goes in its place. So the sends are bounded, not the
  * queue: an update given up on still waits its turn in the chain, but is
  * dropped there unsent, and what reaches the gateway is never more than the

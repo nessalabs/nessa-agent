@@ -446,7 +446,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("A review the agent asked for names no app tool")
     } else if (ask === ConversationPermissionAsk.Message) {
       // Only an app sends a message as the person; the agent asks to run tools.
-      throw new Error("A review the agent asked for asks to run a tool")
+      throw new Error("A review the agent asked for asks to send a message")
     }
     const permissionKey = JSON.stringify([
       permission.executionId,

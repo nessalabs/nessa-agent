@@ -4,7 +4,9 @@
  * answers and what it makes of the ended turn (A1–A6), which review is a
  * step's and when it has gone (R1–R5), and how long a step waits for that
  * review (R6–R8, #474). When each step takes its baseline is
- * the check's own, and is exercised only by running it.
+ * the check's own, and is exercised only by running it. Which send is this
+ * engine's, when an earlier engine already sent the same text, is
+ * `messagesArrived`.
  *
  * And `gateway-window.mjs`'s: what a text-only turn said, which its steps W2
  * and W3 compare the window's transcript with (#419), and the turns it cannot
@@ -22,7 +24,9 @@ import {
   callsOf,
   changedSamples,
   decideReviewWait,
+  executionIds,
   lastTurn,
+  messagesArrived,
   newReview,
   reviewAbsentMessage,
   reviewKeys,
@@ -412,5 +416,67 @@ describe("lastTurn", () => {
     for (const parts of [[], [{ kind: "text", text: " \n" }]])
       assert.throws(said(parts), CannotRun)
     assert.throws(() => lastTurn({ messages: [] }), CannotRun)
+  })
+})
+
+describe("messagesArrived", () => {
+  const text = "Please review row 2."
+  const sent = (executionId, app = { server: "mcptest", tool: "review_rows" }) => ({
+    executionId,
+    userText: text,
+    app,
+  })
+  const queued = (executionId) => ({ executionId, text })
+
+  it("a second engine's send is the executionId the first did not have", () => {
+    const first = sent("chromium")
+    const second = sent("webkit")
+    const view = { messages: [first, second], pending: [] }
+    assert.deepEqual(executionIds(view), new Set(["chromium", "webkit"]))
+    assert.deepEqual(messagesArrived(view, new Set(["chromium"]), text), [second])
+  })
+
+  it("an earlier message with the same text is not this send", () => {
+    const first = sent("chromium")
+    assert.deepEqual(
+      messagesArrived({ messages: [first], pending: [] }, new Set(["chromium"]), text),
+      [],
+    )
+  })
+
+  it("two new executionIds are both this send, so the caller cannot keep the first", () => {
+    const view = { messages: [sent("one"), sent("two")], pending: [] }
+    assert.deepEqual(messagesArrived(view, new Set(), text), [sent("one"), sent("two")])
+  })
+
+  it("a queue entry is this send, and the turn wins when both list its executionId", () => {
+    const turn = sent("new")
+    const waiting = queued("waiting")
+    assert.deepEqual(
+      messagesArrived(
+        { messages: [sent("chromium")], pending: [waiting] },
+        new Set(["chromium"]),
+        text,
+      ),
+      [waiting],
+    )
+    assert.deepEqual(
+      messagesArrived({ messages: [turn], pending: [queued("new")] }, new Set(), text),
+      [turn],
+    )
+  })
+
+  it("a new executionId saying something else is not this send", () => {
+    assert.deepEqual(
+      messagesArrived(
+        {
+          messages: [{ executionId: "other", userText: "Noted." }],
+          pending: [],
+        },
+        new Set(),
+        text,
+      ),
+      [],
+    )
   })
 })

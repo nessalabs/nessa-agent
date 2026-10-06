@@ -12,6 +12,10 @@ They are **not a CI gate** ([adding a check to CI](../CODING_STANDARDS.md#adding
 they need a browser, a server and minutes. Run them before handing off UI work,
 when reviewing it, and after anything performance-sensitive.
 
+A large-workspace measurement is specified in
+[UI workspace load](../docs/design/ui-workspace-load.md). The seeded builder
+named there is not wired into the window and is not part of `pnpm verify:desktop`.
+
 ## Layout
 
 ```
@@ -43,7 +47,8 @@ verification/
       load-fallback.mjs     the load fallback inside, and centred in, the visible panel
       gateway-states.mjs    the desktop app's window when it cannot read the gateway: says why, never the sample
       conversation-unread.mjs a listed conversation the window could not read: the transcript and the Agents peek say what (#433)
-      gateway-window.mjs    the desktop app's window over a real gateway (#419): its handshake, a conversation, a live turn (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in, or `--scripted` for the text-reply scenario and none)
+      gateway-window.mjs    the desktop app's window over a real gateway (#419, #574): its handshake, a conversation, a live turn, and the test server's MCP App inline (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in, or `--scripted` for the text-reply scenario and none; the app step needs the dev server)
+      command-order.mjs     an agent's command drawn in order, bidi controls visible (#553): the card, the overview row, and the peek
       scripted-scenarios.mjs  a scenario through the gateway and the window (#510): permission, a mid-turn failure, cancel (signed out; `--mode prod` previews a production build)
       scripted-e2e.mjs      one signed-out command: the gateway-backed checks in Chromium and WebKit, one verdict line (`pnpm test:e2e:scripted`)
       drag.mjs              pane drag: pointer path, zones, cancels, selection
@@ -53,7 +58,7 @@ verification/
       message-sync.mjs      active DOM delivery, stalled list/read independence and idle cost
       app-review.mjs        an MCP App's review: read while the app's call waits, drawn and answered, the card and the overview row naming the app (dev server)
       mcp-apps.mjs          MCP Apps: each place, tools/call allowed and refused, CSP, isolation, escapes, forgery, departures and departures-back (dev server: imports the host's own builder), teardown
-      mcp-apps-gateway.mjs  MCP Apps over a real gateway (#384): the test MCP server's app, its reviews, refusals and release (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in, or `--scripted` for none)
+      mcp-apps-gateway.mjs  MCP Apps over a real gateway (#384): the test MCP server's app, its reviews, refusals and release; with `--scripted`, also an app's message and context update, and no model key (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in, or `--scripted` for none)
       mcp-servers-gateway.mjs Settings › Integrations over a real gateway (#391): add, inspect, focus, toggle, rename, narrow, conflict, remove, reconnect, non-admin, and the chart's app from a server added there (starts its own gateway and dev server; done-when needs the agent signed in)
       lib/
         selectors.mjs       cloneable CSS selectors, selector builders, key chords, storage keys and known-harmless messages
@@ -62,6 +67,7 @@ verification/
         server.mjs          reuse/start the dev server (warmed before the first page, a reused one too), or build + preview production
         browser.mjs         launch Chromium/WebKit, seed preferences, collect errors
         workspace.mjs       open panes, read pane rects and focus, lift a pane, rect containment, a model rule or value read in the page
+        workspace.test.mjs  a measured drop must change pane order and remove its carried copy (#370)
         safe-area.mjs       the per-frame safe-area sampler
         perf.mjs            rAF gaps, Long Animation Frames, long tasks, throttling, calibration
         perf.test.mjs       the frame budget's unrounded decision, and the LoAF sample clock (#369)

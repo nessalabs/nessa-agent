@@ -85,7 +85,7 @@ const codexEnv = {
   INITIAL_AGENT_MODE: "read-only",
 }
 
-test("codex: handshake, options, one replayed call per prompt, and exit on close", async () => {
+test("codex: handshake, options, one replayed call, then an idle prompt, and exit on close", async () => {
   const agent = start("codex", codexEnv)
   const init = await agent.request("initialize", { protocolVersion: 1 })
   assert.equal(init.result.protocolVersion, 1)
@@ -145,10 +145,12 @@ test("codex: handshake, options, one replayed call per prompt, and exit on close
   )
   assert.equal(first.notes.at(-1).params.update.content.text, "DONE")
 
-  // A second prompt is a second call, under an id of its own.
+  // A later prompt, after the recorded turn ended, is text and no tool call.
   const second = await agent.request("session/prompt", { sessionId, prompt: [] })
+  assert.deepEqual(second.result, { stopReason: "end_turn" })
   const again = second.notes.map((note) => note.params.update).find((u) => u.toolCallId)
-  assert.notEqual(again.toolCallId, tools[0].toolCallId)
+  assert.equal(again, undefined)
+  assert.equal(second.notes.at(-1).params.update.content.text, "Noted.")
 
   // A cancel has nothing to stop and no answer; the agent goes on.
   agent.notify("session/cancel", { sessionId })

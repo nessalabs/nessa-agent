@@ -904,8 +904,8 @@ bounds — stays the gateway's and the client's to say.
   taken and recorded (C17).
 - **D-D. One mount's updates in order, and only while they are asked.**
   The adapter keeps a queue per `instanceId`: the next update is sent once
-  the one before has answered, whatever it answered. Another mount's are not
-  held back; messages are not queued. Each update carries the signal the
+  the one before has answered, whatever it answered. Updates from another mount
+  are not held back; messages are not queued. Each update carries the signal the
   bridge gives its request (`settle` in `bridge.ts`), aborted once the
   bridge has answered the request — a timeout among those — or the mount is
   released — the view failing among those, not only its end. An update

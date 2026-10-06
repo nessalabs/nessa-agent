@@ -31,6 +31,24 @@ export const ReplyCaret = createContext<MutableRefObject<string | null> | null>(
 const pillLines = 4
 
 /**
+ * Sets the pill's height from its draft. An empty draft is already one line
+ * (`rows={1}`), so this clears any inline height and does not read layout
+ * (`reply-pill.test.tsx`).
+ */
+export function sizeReplyPill(textarea: HTMLTextAreaElement, draft: string): void {
+  if (draft === "") {
+    textarea.style.height = ""
+    return
+  }
+  textarea.style.height = "auto"
+  const style = getComputedStyle(textarea)
+  const line = Number.parseFloat(style.lineHeight) || 18
+  const padding =
+    Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom)
+  textarea.style.height = `${Math.min(textarea.scrollHeight, line * pillLines + padding)}px`
+}
+
+/**
  * A reply to a session, written where its peek is, without opening it: one
  * line that grows to four, and the send button — the pane composer's
  * pieces, pared to a pill. Its draft is the session's own
@@ -72,12 +90,7 @@ export function ReplyPill({
   useLayoutEffect(() => {
     const textarea = field.current
     if (!textarea) return
-    textarea.style.height = "auto"
-    const style = getComputedStyle(textarea)
-    const line = Number.parseFloat(style.lineHeight) || 18
-    const padding =
-      Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom)
-    textarea.style.height = `${Math.min(textarea.scrollHeight, line * pillLines + padding)}px`
+    sizeReplyPill(textarea, draft)
   }, [draft, field])
 
   // Sent, the text goes by the workspace's own rule (`sendMessage`), as from the pane.

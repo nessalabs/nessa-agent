@@ -496,7 +496,7 @@ describe("conversation view agreement", () => {
       "tool",
     )
     expect(() => conversationView(withOrigin("message"), "conversation")).toThrow(
-      "A review the agent asked for asks to run a tool",
+      "A review the agent asked for asks to send a message",
     )
   })
 
