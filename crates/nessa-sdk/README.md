@@ -184,13 +184,17 @@ automatic session storage, hooks, invocation, and UI integration.
 - `domain/effective_capabilities/value_objects/`: immutable binding restrictions,
   capability snapshot, typed requirements, and local validation errors.
 - `domain/agent_execution/`: feature modules `sessions`, `executions`, `tools`,
-  `permissions`, and `prompts`, with DDD roles beneath each feature. Sessions own
-  live aggregate state; tools own immutable patches/snapshots and identity-bearing
-  observations; permissions own once-only decisions/cancellations; prompts own
-  attributed system instructions. Public imports name the feature explicitly.
+  `permissions`, `prompts`, and `subagents`, with DDD roles beneath each feature.
+  Sessions own live aggregate state; tools own immutable patches/snapshots and
+  identity-bearing observations; permissions own once-only decisions/cancellations;
+  prompts own attributed system instructions. `subagents` owns the parent/child
+  lifetime graph: identities, spawn progress, inherited policy selection, and
+  close evidence. It does not run a model loop. Public imports name the feature
+  explicitly.
 - `application/agent_execution/`: `agents` exposes `Agent` and its errors,
-  `providers` injected execution ports, `sessions` automatic snapshot management
-  and the streaming commit clock port,
+  `subagents` the ownership coordinator that reserves, prepares, and closes
+  ordinary child agents, `providers` injected execution ports, `sessions`
+  automatic snapshot management and the streaming commit clock port,
   `hooks` typed callbacks registered on Agent,
   `executions` the request/controller/event projections and mandatory execution audit port,
   `permissions` attribution and answer/cancellation evidence, and `tools` the original review input.
@@ -218,7 +222,8 @@ automatic session storage, hooks, invocation, and UI integration.
   and so does verification more than one provider needs — ordered session
   configuration moved up from `codex_acp/` to `acp/sessions/configuration.rs` when
   Opencode turned out to need the same two options.
-- `infrastructure/session_storage/`: in-memory test snapshots and private SQLite semantic records,
+- `infrastructure/session_storage/`: in-memory test snapshots, private SQLite semantic records,
+  and one ownership snapshot file (`ownership.sqlite3`) for the subagent graph,
   exclusive leases, bounded physical framing, unpublished units and save completion
   lineage in `save_group.rs`, explicit JSON evidence mapping,
   and the Tokio streaming commit clock adapter. `terminal_discovery.rs` owns the

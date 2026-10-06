@@ -14,6 +14,7 @@
 //!                              |-> attachment generation / active dispatch
 //!                              |-> attachment evidence ledger
 //!                              |-> shared stop -> cleanup attempts / retained lease
+//!                              |-> optional owned-lifetime seal read before admission
 //!       |-> event subscribers
 //! ```
 //! Arrows show calls. Agent drains provider events and saves evidence before
@@ -37,6 +38,7 @@ mod error_limits;
 pub(crate) use error_limits::DiagnosticTreeLimits;
 mod initialization;
 mod lifecycle;
+mod lifetime;
 mod scheduling;
 mod submissions;
 
@@ -50,6 +52,7 @@ pub use error::{
     ProviderDiagnostic,
 };
 pub use initialization::AgentInitializationError;
+pub use lifetime::{lifetime_disposition, LifetimeDisposition, OwnedLifetime};
 pub use scheduling::{
     AdmissionEvidence, AdmissionEvidenceFailure, QueueAdmission, QueueRemoval, QueueReorder,
     SteeringDelivery, SteeringEvidence,

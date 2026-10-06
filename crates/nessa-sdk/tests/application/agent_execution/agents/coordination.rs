@@ -903,3 +903,6 @@ mod confirmed_cleanup;
 
 #[path = "coordination/open_in_flight.rs"]
 mod open_in_flight;
+
+#[path = "coordination/owned_lifetime.rs"]
+mod owned_lifetime;

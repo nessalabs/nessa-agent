@@ -199,6 +199,14 @@ work does not invent a new provider process. A delayed result affects the work g
 that accepted it. Provider restoration creates a new physical generation only
 when the previous attachment has been cleaned up.
 
+When an owned lifetime is installed, the lifecycle reads its seal after the tree
+admission scope and before taking the lifecycle lock. A sealed lifetime refuses
+new attachment and queued work. `maybe_reopen` returns without taking the tree
+lock once the seal is set. Disposal (`SessionHandlesDropped`) seals before the
+lifecycle lock and keeps an earlier attachment-stop cause. The agent's own
+attachment cleanup is reported back through `note_attachment` after the stop
+completes; that report does not by itself close descendants.
+
 `CleanupReport` records physical resource status independently from audit delivery
 and an associated operation failure. `ProviderExecutionReply` distinguishes
 rejection before dispatch from settlement after the adapter accepted ownership.

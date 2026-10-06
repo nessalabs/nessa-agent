@@ -4,6 +4,7 @@
 //! Scheduling retires a queued receipt's original permit before publication.
 //! Cleanup alone does not allow a new execution while accepted work is finishing.
 pub(super) use super::attachment_evidence::CloseAttempt;
+use super::lifetime::OwnedLifetime;
 use super::{
     attachment_evidence::{
         AttachmentEvidenceCompletion, AttachmentEvidenceSlot, AttachmentEvidenceTransition,
@@ -37,7 +38,10 @@ use std::{
     future::{poll_fn, Future},
     panic::{catch_unwind, AssertUnwindSafe},
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, OnceLock,
+    },
     task::{Context, Poll},
 };
 #[cfg(test)]
@@ -171,6 +175,12 @@ pub(super) struct SessionLifecycle {
     _lease: Arc<dyn SessionStorageLease>,
     session_id: SessionId,
     audit: Arc<dyn ExecutionAudit>,
+    owned: OnceLock<OwnedSlot>,
+}
+struct OwnedSlot {
+    gate: Arc<dyn OwnedLifetime>,
+    scope: Arc<Mutex<()>>,
+    sealed: Arc<AtomicBool>,
 }
 pub(super) struct WorkPermit {
     owner: Arc<SessionLifecycle>,
@@ -307,7 +317,46 @@ impl SessionLifecycle {
             _lease: lease,
             session_id,
             audit,
+            owned: OnceLock::new(),
         })
+    }
+    pub(super) fn install_owned_lifetime(
+        &self,
+        gate: Arc<dyn OwnedLifetime>,
+    ) -> Result<(), AgentError> {
+        let slot = OwnedSlot {
+            scope: gate.admission_scope(),
+            sealed: gate.seal(),
+            gate,
+        };
+        self.owned
+            .set(slot)
+            .map_err(|_| AgentError::InvalidInput("owned lifetime is already installed".into()))
+    }
+    fn hold_tree_admission(&self) -> Result<Option<std::sync::MutexGuard<'_, ()>>, AgentError> {
+        let Some(slot) = self.owned.get() else {
+            return Ok(None);
+        };
+        let guard = slot.scope.lock().expect("tree admission");
+        if slot.sealed.load(Ordering::Acquire) {
+            return Err(AgentError::Closed);
+        }
+        Ok(Some(guard))
+    }
+    pub(super) fn owned_gate(&self) -> Option<Arc<dyn OwnedLifetime>> {
+        self.owned.get().map(|slot| Arc::clone(&slot.gate))
+    }
+    fn lifetime_sealed(&self) -> bool {
+        self.owned
+            .get()
+            .is_some_and(|slot| slot.sealed.load(Ordering::Acquire))
+    }
+    fn seal_disposal_if_requested(&self, request: &SessionCloseRequest) {
+        if matches!(request, SessionCloseRequest::SessionHandlesDropped) {
+            if let Some(slot) = self.owned.get() {
+                slot.gate.seal_for_disposal();
+            }
+        }
     }
     pub(super) fn is_closed(&self) -> bool {
         !matches!(
@@ -367,6 +416,7 @@ impl SessionLifecycle {
         self: &Arc<Self>,
         request: AttachmentRequest,
     ) -> Result<AttachmentAuthorization, AgentError> {
+        let _tree = self.hold_tree_admission()?;
         let mut state = self.state.lock().expect("session lifecycle");
         if matches!(state.work_status, WorkStatus::Open) {
             if let Some(report) = state
@@ -824,6 +874,7 @@ impl SessionLifecycle {
         phase: WorkPhase,
         control: bool,
     ) -> Result<WorkPermit, AgentError> {
+        let _tree = self.hold_tree_admission()?;
         let mut state = self.state.lock().expect("session lifecycle");
         if matches!(phase, WorkPhase::Waiting)
             && matches!(state.attachment, AttachmentState::Failed { .. })
@@ -834,7 +885,7 @@ impl SessionLifecycle {
         // negations joined: an open session takes work, and a closing one still
         // takes the waiting kind for as long as it accepts it.
         let accepted = matches!(state.work_status, WorkStatus::Open)
-            || (matches!(phase, WorkPhase::Waiting) && Self::accepts_waiting(&state));
+            || (matches!(phase, WorkPhase::Waiting) && self.accepts_waiting(&state));
         if !accepted {
             if let Some(error) = state
                 .cleanup
@@ -1314,6 +1365,7 @@ impl SessionLifecycle {
         }
     }
     pub(super) fn start_stop(self: &Arc<Self>, request: SessionCloseRequest) -> CloseAttempt {
+        self.seal_disposal_if_requested(&request);
         let mut state = self.state.lock().expect("session lifecycle");
         self.start_stop_locked(&mut state, request)
     }
@@ -1334,7 +1386,7 @@ impl SessionLifecycle {
         state: &mut State,
         request: SessionCloseRequest,
     ) -> CloseAttempt {
-        let fresh_queue_stop = Self::accepts_waiting(state)
+        let fresh_queue_stop = self.accepts_waiting(state)
             && state
                 .work
                 .values()
@@ -1637,19 +1689,38 @@ impl SessionLifecycle {
                 cleanup.with_audit(Err(audit))
             }
         };
+        if self.lifetime_sealed() {
+            if let Some(slot) = self.owned.get() {
+                slot.gate
+                    .note_attachment(
+                        cleanup.physical_outcome().is_some(),
+                        cleanup.audit().is_ok(),
+                    )
+                    .await;
+            }
+        }
         self.finalize_stop(ticket, &cleanup).await
     }
     pub(super) fn accepts_queued(&self) -> bool {
+        if self.lifetime_sealed() {
+            return false;
+        }
         let state = self.state.lock().unwrap();
-        matches!(state.work_status, WorkStatus::Open) || Self::accepts_waiting(&state)
+        matches!(state.work_status, WorkStatus::Open) || self.accepts_waiting(&state)
     }
-    fn accepts_waiting(state: &State) -> bool {
+    fn accepts_waiting(&self, state: &State) -> bool {
+        if self.lifetime_sealed() {
+            return false;
+        }
         matches!(&state.work_status, WorkStatus::Stopping(stop) if stop.finalized
             && matches!(stop.recovery, RecoveryPolicy::Automatic)
             && !matches!(stop.ticket.request, SessionCloseRequest::Explicit(_))
             && stop.ticket.result.borrow().as_ref().is_some_and(|report| report.is_confirmed() && report.audit().is_ok()))
     }
     fn maybe_reopen(&self, state: &mut State) {
+        if self.lifetime_sealed() {
+            return;
+        }
         let ready = match &state.work_status {
             WorkStatus::Stopping(stop)
                 if stop.finalized
