@@ -13,7 +13,8 @@
 //! `audit_ticket_ends`: a drop, like a ticket's end, outlives the command
 //! that caused it, so no command's future — cancellable, budgeted, or
 //! unwinding — holds its record, and no command answers for it
-//! (`docs/design/mcp-app-calls.md`, rows C15 and C15b).
+//! (`docs/design/mcp-app-calls.md`, rows C15 and C15b). The loop both
+//! recorders share is [`crate::conversation::application::audit_records`].
 use crate::conversation::application::{DroppedContexts, McpAppAudit, McpAppAuditRecord};
 use std::sync::Arc;
 use tokio::sync::{
@@ -48,22 +49,20 @@ impl DroppedContexts for UnboundedSender<McpAppAuditRecord> {
 /// call, and the next is tried: the context is already dropped, and the log
 /// is all that is left to say it (row C15b).
 pub async fn audit_context_drops(
-    mut drops: UnboundedReceiver<McpAppAuditRecord>,
+    drops: UnboundedReceiver<McpAppAuditRecord>,
     audit: Arc<dyn McpAppAudit>,
-    mut stop: oneshot::Receiver<()>,
+    stop: oneshot::Receiver<()>,
 ) {
-    loop {
-        // Drops first: stopping is taken only once none is waiting, so every
-        // drop the conversations' ends already sent is recorded before it.
-        tokio::select! {
-            biased;
-            record = drops.recv() => match record {
-                Some(record) => record_drop(audit.as_ref(), record).await,
-                None => return,
-            },
-            _ = &mut stop => return,
+    // Drops first, inside `audit_records`: stopping is taken only once none
+    // is waiting, so every drop the conversations' ends already sent is
+    // recorded before it.
+    crate::conversation::application::audit_records(drops, stop, move |record| {
+        let audit = Arc::clone(&audit);
+        async move {
+            record_drop(audit.as_ref(), record).await;
         }
-    }
+    })
+    .await;
 }
 
 async fn record_drop(audit: &dyn McpAppAudit, record: McpAppAuditRecord) {
