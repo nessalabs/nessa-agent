@@ -24,6 +24,7 @@ This skill is how to use them; it restates neither.
 | widgets: `src/desktop/widgets/`, a widget's pane or the window, Escape for the widget in front, the edge peek's Escape | `widgets.mjs` |
 | MCP Apps: `src/desktop/widgets/app/`, the sandbox proxy, `src-tauri/src/app_sandbox.rs` | `mcp-apps.mjs` |
 | an app's review: reading it while the app's call or message waits (`appCall` and `stale()` in `gateway-source.ts`, the `callTool` and `sendMessage` routing in `dependencies.ts`), and who asks, and what, on the card or in the overview (`approval-request.tsx`, `gateway-views.ts`) | `app-review.mjs` |
+| an agent's command in a review, including bidi (`said.tsx`, `ApprovalCommand`, the overview row) | `command-order.mjs` |
 | widths: approval card, composer (its thinking control too), column titles, Settings sidebar | `responsive.mjs --shots <dir>` |
 | `index.html`'s load fallback, the panel's stage and window size | `load-fallback.mjs` |
 | where the window's workspace comes from (`main.tsx`, `model/workspace-backend.ts`, `adapters/host-gateway.ts`), the gateway source's connect and reconnect wait (`workspace/adapters/gateway/gateway-source.ts`), the index's failure sentences (`readFailureCopy` for `"index"` in `workspace/ui/failure-copy.ts`), the empty workspace | `gateway-states.mjs` |

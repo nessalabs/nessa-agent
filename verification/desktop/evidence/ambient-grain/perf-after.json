@@ -1,0 +1,145 @@
+{
+  "check": "perf-budget",
+  "ok": true,
+  "started": "2026-10-06T05:36:43.472Z",
+  "finished": "2026-10-06T05:38:02.596Z",
+  "target": {
+    "url": "http://127.0.0.1:57982/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "calibration",
+      "engine": "chromium",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 23,
+        "throttledMs": 65,
+        "ratio": 2.83,
+        "ok": true
+      },
+      "calibrationFrame": {
+        "cost": 120,
+        "measuredMs": 116.60000000000014,
+        "attributed": true,
+        "ok": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "drag-drop",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 34.19999999999982,
+      "median": 34,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 33.70000000000027,
+          "over": 0,
+          "frames": 246,
+          "slow": [],
+          "noLoaf": false,
+          "did": null,
+          "errors": []
+        },
+        {
+          "maxFrame": 33.29999999999973,
+          "over": 0,
+          "frames": 244,
+          "slow": [],
+          "noLoaf": false,
+          "did": null,
+          "errors": []
+        },
+        {
+          "maxFrame": 34.19999999999982,
+          "over": 0,
+          "frames": 246,
+          "slow": [],
+          "noLoaf": false,
+          "did": null,
+          "errors": []
+        },
+        {
+          "maxFrame": 34.19999999999982,
+          "over": 0,
+          "frames": 244,
+          "slow": [],
+          "noLoaf": false,
+          "did": null,
+          "errors": []
+        },
+        {
+          "maxFrame": 34,
+          "over": 0,
+          "frames": 247,
+          "slow": [],
+          "noLoaf": false,
+          "did": null,
+          "errors": []
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "drag-drop",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 34.29999999999973,
+      "median": 34,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 34,
+          "over": 0,
+          "frames": 245,
+          "slow": [],
+          "noLoaf": false,
+          "did": null,
+          "errors": []
+        },
+        {
+          "maxFrame": 34.29999999999973,
+          "over": 0,
+          "frames": 245,
+          "slow": [],
+          "noLoaf": false,
+          "did": null,
+          "errors": []
+        },
+        {
+          "maxFrame": 34.19999999999982,
+          "over": 0,
+          "frames": 244,
+          "slow": [],
+          "noLoaf": false,
+          "did": null,
+          "errors": []
+        },
+        {
+          "maxFrame": 33.40000000000009,
+          "over": 0,
+          "frames": 243,
+          "slow": [],
+          "noLoaf": false,
+          "did": null,
+          "errors": []
+        },
+        {
+          "maxFrame": 33.40000000000009,
+          "over": 0,
+          "frames": 244,
+          "slow": [],
+          "noLoaf": false,
+          "did": null,
+          "errors": []
+        }
+      ]
+    }
+  ]
+}

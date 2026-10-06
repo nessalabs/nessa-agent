@@ -14,8 +14,10 @@ import { NessaRpcError } from "../application/rpc-error.js"
 import { conversationView } from "../protocol/conversation-validate.js"
 import { bounds, mcpAppCallTiming } from "../generated/product.js"
 import {
+  MAX_MCP_ARGUMENTS_BYTES,
   MAX_MCP_CONTEXT_BYTES,
   MAX_MCP_MESSAGE_BYTES,
+  boundedName,
   mcpAppRequestProblem,
 } from "../protocol/mcp-app-validate.js"
 import { createMcpAppsApi, mcpAppDeadlines } from "./mcp-apps-api.js"
@@ -186,6 +188,45 @@ it.each([
     expect(request).not.toHaveBeenCalled()
   },
 )
+
+it("refuses arguments and a name far past their bound without encoding them", async () => {
+  const huge = "x".repeat(MAX_MCP_ARGUMENTS_BYTES * 1024)
+  const encode = vi.spyOn(TextEncoder.prototype, "encode")
+  try {
+    expect(mcpAppRequestProblem.argumentsJson(huge)).toMatch(
+      String(MAX_MCP_ARGUMENTS_BYTES),
+    )
+    expect(boundedName(huge, 256)).toBe(false)
+    expect(encode).not.toHaveBeenCalled()
+  } finally {
+    encode.mockRestore()
+  }
+  const request = vi.fn()
+  await expect(
+    api(request).callTool(conversationId, app, "charts", "list", huge),
+  ).rejects.toBeInstanceOf(TypeError)
+  expect(request).not.toHaveBeenCalled()
+})
+
+it("refuses a request id far past its bound without encoding or trimming it", async () => {
+  const huge = "x".repeat(256 * 1024)
+  const encode = vi.spyOn(TextEncoder.prototype, "encode")
+  const trim = vi.spyOn(String.prototype, "trim")
+  const request = vi.fn()
+  try {
+    await expect(
+      api(request).callTool(conversationId, app, "charts", "list", undefined, {
+        requestId: huge,
+      }),
+    ).rejects.toThrow(new TypeError("Request ID must contain 1-256 UTF-8 bytes"))
+    expect(encode.mock.calls.some((call) => call[0] === huge)).toBe(false)
+    expect(trim.mock.instances.includes(huge)).toBe(false)
+  } finally {
+    encode.mockRestore()
+    trim.mockRestore()
+  }
+  expect(request).not.toHaveBeenCalled()
+})
 
 it("calls a tool at exactly every bound", async () => {
   const request = vi.fn(async () => ({ resultJson: "{}" }))
@@ -1412,6 +1453,170 @@ describe("an app speaking in its conversation (#390)", () => {
       )
       expect(error).toBeInstanceOf(NessaMcpAppError)
       expect(error).toMatchObject({ code, uncertain: true, cause })
+    },
+  )
+})
+
+describe("an app reference is read once, from its own fields (#547)", () => {
+  const answering = () =>
+    vi.fn<Request>(async (method, params) => {
+      if (method === "mcp.sendMessage")
+        return { executionId: "app-0123456789abcdef0123456789abcdef" }
+      if (method === "mcp.callTool") return { resultJson: "{}" }
+      if (method === "mcp.readResource") return resource
+      return { requestId: (params as { requestId: string }).requestId, applied: true }
+    })
+
+  const calls = {
+    callTool: (
+      mcp: ReturnType<typeof api>,
+      reference: typeof app,
+      server: string,
+      options?: { requestId?: string },
+    ) => mcp.callTool(conversationId, reference, server, "list", undefined, options),
+    readResource: (
+      mcp: ReturnType<typeof api>,
+      reference: typeof app,
+      server: string,
+      options?: { requestId?: string },
+    ) => mcp.readResource(conversationId, reference, server, uri, options),
+    sendMessage: (
+      mcp: ReturnType<typeof api>,
+      reference: typeof app,
+      server: string,
+      options?: { requestId?: string },
+    ) => mcp.sendMessage(conversationId, reference, server, "Hi", options),
+    updateModelContext: (
+      mcp: ReturnType<typeof api>,
+      reference: typeof app,
+      server: string,
+      options?: { requestId?: string },
+    ) => mcp.updateModelContext(conversationId, reference, server, {}, options),
+    releaseApp: (
+      mcp: ReturnType<typeof api>,
+      reference: typeof app,
+      _server: string,
+      options?: { requestId?: string },
+    ) => mcp.releaseApp(conversationId, reference, options),
+  } as const
+  const withServer = [
+    "callTool",
+    "readResource",
+    "sendMessage",
+    "updateModelContext",
+  ] as const
+  const everyMethod = [...withServer, "releaseApp"] as const
+
+  it.each(["executionId", "toolId", "instanceId"] as const)(
+    "reads %s once and sends that read",
+    async (field) => {
+      const request = answering()
+      let reads = 0
+      const reference = {
+        ...app,
+        get [field]() {
+          reads++
+          return reads === 1 ? app[field] : "x".repeat(300)
+        },
+      }
+      await calls.callTool(api(request), reference, "charts", { requestId: "once" })
+      expect(reads).toBe(1)
+      expect(request.mock.calls[0]![1]).toMatchObject({
+        app: { [field]: app[field] },
+        requestId: "once",
+      })
+    },
+  )
+
+  it("reads a request id once and sends that read", async () => {
+    const request = answering()
+    let reads = 0
+    const options = {
+      get requestId() {
+        reads++
+        return reads === 1 ? "once" : "x".repeat(300)
+      },
+    }
+    await calls.callTool(api(request), app, "charts", options)
+    expect(reads).toBe(1)
+    expect(request.mock.calls[0]![1]).toMatchObject({ requestId: "once" })
+  })
+
+  it.each(everyMethod)(
+    "%s refuses an app whose fields are only inherited, and sends nothing",
+    async (method) => {
+      const request = answering()
+      const inherited = Object.create(app) as typeof app
+      await expect(calls[method](api(request), inherited, "charts")).rejects.toThrow(
+        /Invalid app/,
+      )
+      expect(request).not.toHaveBeenCalled()
+    },
+  )
+
+  it("ignores a request id the options only inherit", async () => {
+    const request = answering()
+    const options = Object.create({ requestId: "inherited" }) as { requestId?: string }
+    await calls.callTool(api(request), app, "charts", options)
+    expect(request.mock.calls[0]![1]).toMatchObject({ requestId: "generated" })
+  })
+
+  it.each([
+    ["an app with a symbol key", { ...app, [Symbol("extra")]: "x" }],
+    [
+      "an app with a field it hides from enumeration",
+      Object.defineProperty({ ...app }, "extra", { value: "x", enumerable: false }),
+    ],
+  ])("%s is refused before asking the gateway", async (_name, reference) => {
+    const request = answering()
+    await expect(
+      calls.callTool(api(request), reference as typeof app, "charts"),
+    ).rejects.toThrow(/unknown fields/)
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [
+      "executionId",
+      { ...app, executionId: "exec\ud800" },
+      "execution ID must be Unicode",
+    ],
+    ["toolId", { ...app, toolId: "tool\ud800" }, "tool call ID must be Unicode"],
+    [
+      "instanceId",
+      { ...app, instanceId: "00000000-0000-4000-8000-0000000000a\ud800" },
+      "instance ID must be Unicode",
+    ],
+  ] as const)(
+    "refuses an app %s holding a lone surrogate before asking the gateway",
+    async (_field, reference, words) => {
+      const request = answering()
+      await expect(calls.callTool(api(request), reference, "charts")).rejects.toThrow(
+        words,
+      )
+      expect(request).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each(withServer)(
+    "%s refuses a server holding a lone surrogate before asking the gateway",
+    async (method) => {
+      const request = answering()
+      await expect(calls[method](api(request), app, "charts\ud800")).rejects.toThrow(
+        "Server must be Unicode text",
+      )
+      expect(request).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each(everyMethod)(
+    "%s refuses a request id holding a lone surrogate before asking the gateway",
+    async (method) => {
+      const request = answering()
+      await expect(
+        calls[method](api(request), app, "charts", { requestId: "call\ud800" }),
+      ).rejects.toThrow("Request ID must be Unicode text")
+      expect(request).not.toHaveBeenCalled()
     },
   )
 })

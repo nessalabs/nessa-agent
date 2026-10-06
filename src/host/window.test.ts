@@ -23,6 +23,17 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllGlobals())
 
+describe("the sandbox scheme", () => {
+  it("is registered only when the host installed convertFileSrc", async () => {
+    const { sandboxSchemeRegistered } = await import("./window")
+    expect(sandboxSchemeRegistered()).toBe(false)
+    vi.stubGlobal("window", {
+      __TAURI_INTERNALS__: { convertFileSrc: () => "asset://local" },
+    })
+    expect(sandboxSchemeRegistered()).toBe(true)
+  })
+})
+
 describe("gateway startup", () => {
   it("reads, subscribes, and retries through the native host contract", async () => {
     const startup = { revision: 3, state: "starting", step: "preparing" } as const

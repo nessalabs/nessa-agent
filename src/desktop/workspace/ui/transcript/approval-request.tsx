@@ -40,7 +40,7 @@ import type {
   ApprovalOption,
   ApprovalOrigin,
 } from "../../model/transcript"
-import { named, naming, shownName, type Said } from "./said"
+import { named, naming, shownCommand, shownName, type Said } from "./said"
 import "./approval-card.css"
 
 /**
@@ -94,7 +94,7 @@ export function approvalRequest(
   if (approval.ask === "message") return approvalHead(approval, agent)
   return approval.origin.kind === "app"
     ? [...asker, " wants to run ", named(approval.command)]
-    : [...asker, ` wants to run ${approval.command}`]
+    : [...asker, ` wants to run ${shownCommand(approval.command)}`]
 }
 
 /**
@@ -158,7 +158,7 @@ export function ApprovalCommand({
     name && name.length > 0 && (command === name || command.startsWith(`${name} `))
       ? name
       : undefined
-  const rest = lead === undefined ? command : command.slice(lead.length)
+  const rest = lead === undefined ? shownCommand(command) : command.slice(lead.length)
   const block = useRef<HTMLPreElement>(null)
   // Where a word is wider than the card, the block scrolls and fades the edge it cuts.
   useLayoutEffect(() => {
@@ -204,8 +204,14 @@ export function ApprovalCommand({
       <span className="workspace-approval-prompt" aria-hidden="true">
         ${" "}
       </span>
-      {lead === undefined ? null : <bdi>{commandWords(shownName(lead), "name-")}</bdi>}
-      {commandWords(rest, "word-")}
+      {lead === undefined ? (
+        <bdi dir="ltr">{commandWords(rest, "word-")}</bdi>
+      ) : (
+        <>
+          <bdi>{commandWords(shownName(lead), "name-")}</bdi>
+          {commandWords(rest, "word-")}
+        </>
+      )}
     </pre>
   )
 }

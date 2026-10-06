@@ -19,6 +19,24 @@ export type { GatewayStartup, HostStartup } from "../startup/application/ports"
 
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 
+/**
+ * Whether this webview's host registered the `nessa-sandbox` scheme.
+ *
+ * A real webview installs `convertFileSrc` with the rest of the host. An IPC
+ * stub that only answers commands does not, and a sandboxed frame cannot open
+ * a scheme that host did not register.
+ */
+export function sandboxSchemeRegistered(): boolean {
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return false
+  const internals = window.__TAURI_INTERNALS__
+  return (
+    typeof internals === "object" &&
+    internals !== null &&
+    "convertFileSrc" in internals &&
+    typeof internals.convertFileSrc === "function"
+  )
+}
+
 const HOST_EVENTS = {
   toggleSurface: "nessa://toggle-surface",
   summoned: "nessa://summoned",

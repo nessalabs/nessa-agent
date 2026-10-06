@@ -303,6 +303,11 @@ writing the full defaults on first launch is buying.
   import against that direction, in every form of import it reads, and the
   window's composition (`main.tsx`, `dependencies.ts`), which imports them
   all, is outside the rule.
+- The shared desktop light's fixed grain tile lives in
+  `src/desktop/ui/ambient-grain.png`, drawn by `.desktop-grain` in the desktop
+  stylesheet. It is pre-rendered to keep SVG turbulence out of runtime raster
+  work (#370); `verification/desktop/scripts/smoke.mjs` checks its image format,
+  tile size and compositing in both engines.
 - Split panes are a module of the desktop window's, not of the workspace:
   `src/desktop/split-panes/` (its map is `index.ts`) owns the pane layout, its
   sizing, drops and the drag's phases (`model/`, pure), the port a host

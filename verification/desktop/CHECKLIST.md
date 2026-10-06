@@ -38,6 +38,12 @@ production build at 4× CPU throttling.
   onto the interaction. A zero phase start means that phase did not run, so
   the diagnostic is absent rather than a negative duration.
   _Check:_ `lib/perf.test.mjs` (`long animation frame clock`).
+- [ ] **The ambient grain is a baked image, not a runtime noise filter** (#370).
+  Its 160×160 PNG tile repeats with 0.06 opacity and overlay blending; keeping
+  the texture in `ui/ambient-grain.png` avoids SVG turbulence in the GPU raster
+  path (`src/desktop/styles.css`, `.desktop-grain`).
+  _Check:_ `smoke.mjs` (`ambient-grain`), both engines/layouts; `perf-budget.mjs`
+  checks the unchanged frame budget.
 - [ ] **The measurement works.** The calibration busy loop slows by roughly
   the throttle rate, and a 120 ms frame of known cost is measured and attributed.
   _Check:_ the `calibration` result of `perf-budget.mjs`; if it fails, no
@@ -451,6 +457,7 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   design, L14 and L24._ _Check:_ `mcp-apps-gateway.mjs` (needs the gateway
   built and the agent, `--agent claude|codex`, signed in on the machine). The
   refusal of the hidden tool that declares no UI depends on #412.
+- [ ] **An app's message and context, with no model key** (#550): with `--scripted`, the review app's message control opens a review; Allow lands the message in the transcript labelled as that app's, and its context control answers success. Chromium and WebKit share the conversation and send the same text, so each engine records execution ids before the click and requires exactly one new send, and the transcript row that was not already shown. The scripted agent replays one recorded turn, then answers a later prompt with text and no tool call, so the check needs no Claude key and no user model key. _Check:_ `mcp-apps-gateway.mjs --scripted` (`message`, `context`). `messagesArrived` in `gateway-view.mjs`.
 - [ ] **One tool call is drawn once** (#418): a harness reports one call as an
   announcement and then updates under its id (Codex three frames, or two
   in the recorded `review_rows` turn; Claude four), and the window draws it as one transcript step and one inline app
@@ -461,6 +468,15 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 
 ## Composer and approval card
 
+- [ ] **An agent's command is drawn in the order it runs.** A bidi control in
+  the argument (U+202A–U+202E, U+2066–U+2069, U+200E, U+200F, U+061C, and the
+  line and paragraph separators U+0085, U+2028, and U+2029) is shown
+  as its `\u` escape, so an override cannot present another address; the shown
+  JSON parses to the argument that runs. A command that starts with a
+  right-to-left letter keeps a left-to-right base, so the tool stays left of
+  its argument. The same draw is the card, the overview row, and the peek
+  (`shownCommand` in `said.tsx`, `dir="ltr"` on the command's isolate). _#553._
+  _Check:_ `command-order.mjs`.
 - [ ] **The approval card arranges itself by its own width** at 280, 340,
   420, 600 and 900 px, with a short and a very long command: no word of the
   command broken, no button label wrapped, nothing overflowing.
@@ -882,9 +898,14 @@ says why where the conversations would be.
   `src-tauri/src/gateway/infrastructure/commands.rs`); WKWebView's own IPC and
   the packaged app's `tauri://localhost` origin are the live `pnpm app` run's.
 - [ ] **A gateway that answers shows its servers' MCP Apps in the main
-  window.** _By hand:_ `pnpm app` against a gateway with
-  `scripts/mcp-test-server` configured. This row is checked by hand.
-  `gateway-window.mjs` has no step for it; adding one is #574.
+  window.** The window, over the host's endpoint, draws the test server's
+  `review_rows` app inline once that turn is in the conversation: one frame,
+  live, its document the server's. _#574._ _Check:_ `gateway-window.mjs`'s
+  `apps` step (dev server; `--mode prod` leaves it out, MCP Apps need the
+  dev server's sandbox). With `--scripted` a prompt containing
+  "show the server's app" is the text-reply scenario's `review_rows` turn,
+  in that page's own conversation. The packaged app's own scheme
+  stays the live `pnpm app` run's.
 - [ ] **A scenario can ask, fail mid-turn, and wait to be cancelled, and the
   window shows it.** _Check:_ `scripted-scenarios.mjs` (and
   `pnpm test:e2e:scripted`, which also runs `mcp-apps-gateway --scripted` and

@@ -2,7 +2,12 @@ import type { NessaClient } from "@nessa/client"
 import * as React from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
-import { host, signInToProvider, providerLoginAvailable } from "../host"
+import {
+  host,
+  sandboxSchemeRegistered,
+  signInToProvider,
+  providerLoginAvailable,
+} from "../host"
 import { environmentFromVite } from "../env/vite"
 import { connectBrowserSession, createBrowserAuth } from "../session"
 import { StartupMounted } from "../startup/ui/mounted-signal"
@@ -66,7 +71,7 @@ const dependencies = createDesktopDependencies({
   providerLoginAvailable,
   gateway,
   apps: {
-    sandbox: sandboxFor(host.kind, document),
+    sandbox: sandboxFor(host.kind, document, sandboxSchemeRegistered()),
     platform: platformFor(host.kind),
   },
 })

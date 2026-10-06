@@ -1,6 +1,15 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -39,57 +48,137 @@ test("the domain gate keeps its serial threads and 100% thresholds", () => {
   assert.match(source, /-p nessa-sdk/)
 })
 
+const workspaceTarget = path.join(repo, "target")
+
+/** Run the coverage script with a stand-in `cargo` that records `CARGO_TARGET_DIR`. */
+function runCoverage(cargo, target) {
+  return spawnSync("bash", [script], {
+    cwd: repo,
+    env: { ...cargo.env, NESSA_SDK_COVERAGE_TARGET: target },
+    encoding: "utf8",
+  })
+}
+
+/**
+ * Two directories a coverage run can be pointed at. One path is already
+ * canonical. The other reaches its directory through a symlink, which is how
+ * macOS spells `tmpdir()` (`/var` → `/private/var`). Linux CI has no such
+ * symlink, so the test builds one.
+ */
+function coverageTargetSpellings() {
+  const canonical = realpathSync(mkdtempSync(path.join(tmpdir(), "coverage-canon-")))
+  const real = realpathSync(mkdtempSync(path.join(tmpdir(), "coverage-real-")))
+  const linkParent = mkdtempSync(path.join(tmpdir(), "coverage-alias-"))
+  const link = path.join(linkParent, "var")
+  symlinkSync(real, link)
+  const aliased = mkdtempSync(path.join(link, "coverage-target-"))
+  return {
+    targets: [
+      { kind: "canonical", directory: canonical },
+      { kind: "aliased", directory: aliased },
+    ],
+    remove() {
+      rmSync(canonical, { recursive: true, force: true })
+      rmSync(linkParent, { recursive: true, force: true })
+      rmSync(real, { recursive: true, force: true })
+    },
+  }
+}
+
 test("a local run uses a temporary target and removes only that directory", () => {
   const marker = path.join(tmpdir(), `coverage-marker-${process.pid}-temp`)
   rmSync(marker, { force: true })
   const cargo = fakeCargo(marker)
-  const result = spawnSync("bash", [script], {
-    cwd: repo,
-    env: { ...cargo.env, NESSA_SDK_COVERAGE_TARGET: "" },
-    encoding: "utf8",
-  })
-  assert.equal(result.status, 0, result.stderr)
-  const target = readFileSync(marker, "utf8").trim()
-  assert.match(target, /nessa-sdk-domain-coverage\./)
-  assert.equal(path.basename(path.dirname(target)) === "target", false)
-  assert.notEqual(target, path.join(repo, "target"))
-  assert.equal(spawnSync("test", ["!", "-e", target]).status, 0)
-  rmSync(cargo.directory, { recursive: true, force: true })
-  rmSync(marker, { force: true })
+  let target = ""
+  try {
+    const result = runCoverage(cargo, "")
+    assert.equal(result.status, 0, result.stderr)
+    target = readFileSync(marker, "utf8").trim()
+    assert.match(target, /nessa-sdk-domain-coverage\./)
+    assert.equal(path.basename(path.dirname(target)) === "target", false)
+    assert.notEqual(target, workspaceTarget)
+    assert.equal(spawnSync("test", ["!", "-e", target]).status, 0)
+  } finally {
+    if (target.includes(`${path.sep}nessa-sdk-domain-coverage.`)) {
+      rmSync(target, { recursive: true, force: true })
+    }
+    rmSync(cargo.directory, { recursive: true, force: true })
+    rmSync(marker, { force: true })
+  }
 })
 
 test("a named coverage target is kept and is not the workspace target", () => {
-  const directory = mkdtempSync(path.join(tmpdir(), "coverage-target-"))
   const marker = path.join(tmpdir(), `coverage-marker-${process.pid}-kept`)
-  const cargo = fakeCargo(marker)
-  const result = spawnSync("bash", [script], {
-    cwd: repo,
-    env: { ...cargo.env, NESSA_SDK_COVERAGE_TARGET: directory },
-    encoding: "utf8",
-  })
-  assert.equal(result.status, 0, result.stderr)
-  assert.equal(readFileSync(marker, "utf8").trim(), directory)
-  assert.equal(spawnSync("test", ["-d", directory]).status, 0)
-  rmSync(directory, { recursive: true, force: true })
-  rmSync(cargo.directory, { recursive: true, force: true })
   rmSync(marker, { force: true })
+  const cargo = fakeCargo(marker)
+  const spellings = coverageTargetSpellings()
+  try {
+    for (const { kind, directory } of spellings.targets) {
+      rmSync(marker, { force: true })
+      const result = runCoverage(cargo, directory)
+      assert.equal(result.status, 0, result.stderr)
+      const emitted = readFileSync(marker, "utf8").trim()
+      assert.equal(realpathSync(emitted), realpathSync(directory), `${kind}: ${emitted}`)
+      assert.notEqual(realpathSync(emitted), workspaceTarget, kind)
+      assert.equal(spawnSync("test", ["-d", directory]).status, 0, kind)
+    }
+  } finally {
+    spellings.remove()
+    rmSync(cargo.directory, { recursive: true, force: true })
+    rmSync(marker, { force: true })
+  }
+})
+
+/** Remove `directory` when it is empty. A directory that has gained a file stays. */
+function removeIfEmpty(directory) {
+  try {
+    rmdirSync(directory)
+  } catch {
+    // missing, not a directory, or not empty
+  }
+}
+
+test("a directory this test created is removed only while it is empty", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "coverage-empty-"))
+  const artifact = path.join(directory, "artifact")
+  writeFileSync(artifact, "x")
+  removeIfEmpty(directory)
+  assert.equal(spawnSync("test", ["-f", artifact]).status, 0)
+  rmSync(artifact)
+  removeIfEmpty(directory)
+  assert.equal(spawnSync("test", ["!", "-e", directory]).status, 0)
 })
 
 test("the workspace target directory is refused before cargo runs", () => {
-  const workspaceTarget = path.join(repo, "target")
-  const existed = spawnSync("test", ["-d", workspaceTarget]).status === 0
   const marker = path.join(tmpdir(), `coverage-marker-${process.pid}-refuse`)
   rmSync(marker, { force: true })
   const cargo = fakeCargo(marker)
-  const result = spawnSync("bash", [script], {
-    cwd: repo,
-    env: { ...cargo.env, NESSA_SDK_COVERAGE_TARGET: workspaceTarget },
-    encoding: "utf8",
-  })
-  assert.equal(result.status, 1)
-  assert.match(result.stderr, /refuses the workspace target directory/)
-  assert.equal(spawnSync("test", ["!", "-e", marker]).status, 0)
-  if (!existed) rmSync(workspaceTarget, { recursive: true, force: true })
-  rmSync(cargo.directory, { recursive: true, force: true })
-  rmSync(marker, { force: true })
+  const linkParent = mkdtempSync(path.join(tmpdir(), "coverage-workspace-alias-"))
+  const alias = path.join(linkParent, "target")
+  let createdByTest = false
+  try {
+    const spelled = runCoverage(cargo, workspaceTarget)
+    assert.equal(spelled.status, 1)
+    assert.match(spelled.stderr, /refuses the workspace target directory/)
+    assert.equal(spawnSync("test", ["!", "-e", marker]).status, 0)
+
+    // A dangling symlink is not a directory, so the alias is created only once
+    // the workspace target exists. Only this empty directory is ours to remove.
+    if (spawnSync("test", ["-d", workspaceTarget]).status !== 0) {
+      mkdirSync(workspaceTarget)
+      createdByTest = true
+    }
+    symlinkSync(workspaceTarget, alias)
+    rmSync(marker, { force: true })
+    const aliased = runCoverage(cargo, alias)
+    assert.equal(aliased.status, 1, aliased.stderr)
+    assert.match(aliased.stderr, /refuses the workspace target directory/)
+    assert.equal(spawnSync("test", ["!", "-e", marker]).status, 0)
+    assert.equal(spawnSync("test", ["-d", workspaceTarget]).status, 0)
+  } finally {
+    rmSync(linkParent, { recursive: true, force: true })
+    if (createdByTest) removeIfEmpty(workspaceTarget)
+    rmSync(cargo.directory, { recursive: true, force: true })
+    rmSync(marker, { force: true })
+  }
 })

@@ -7,13 +7,16 @@
  *   node scripted-agent.mjs codex|claude --scenario <file>
  *
  * With `<tool>`, it answers the gateway's handshake as the harness pinned
- * for `<agent>` would, and to each prompt makes one real call of the test
- * server's `<tool>`, with the recorded call's arguments, through the
+ * for `<agent>` would. A session's first prompt makes one real call of the
+ * test server's `<tool>`, with the recorded call's arguments, through the
  * stand-in the gateway gave it for `mcptest`, then reports that call in the
  * frames the harness was recorded sending (`scripted-frames.mjs`), says
- * DONE, and ends the turn. That is the default: the recorded claude and
- * codex frames, so the checks that already run it keep their behavior. The
- * desktop's real-gateway check runs it with `--scripted`
+ * DONE, and ends the turn. A later prompt, after that turn ended, answers
+ * with text and calls nothing, so a message an app sends has an idle turn
+ * to land in. A prompt after a cancelled first turn is still the recorded
+ * call: the session has not completed one. That is the default: the recorded
+ * claude and codex frames, so the checks that already run it keep their
+ * behavior. The desktop's real-gateway check runs it with `--scripted`
  * (`verification/desktop/scripts/mcp-apps-gateway.mjs`), so what reaches the
  * window is the gateway's own projection of a recorded call, every run alike.
  *
@@ -283,7 +286,7 @@ const handlers = {
       throw error
     }
     const sessionId = randomUUID()
-    sessions.set(sessionId, { values, servers, prompt: null })
+    sessions.set(sessionId, { values, servers, prompt: null, recorded: false })
     return { sessionId, configOptions: configOptions(agent, values) }
   },
 
@@ -300,13 +303,15 @@ const handlers = {
 }
 
 /**
- * The default turn: one recorded call of `tool`, then DONE. Loaded here, not
- * at startup, so a scenario run does not need the recording on disk.
+ * The default turn: the session's first completed prompt is one recorded
+ * call of `tool`, then DONE. A prompt after that is {@link idleTurn}. Loaded
+ * here, not at startup, so a scenario run does not need the recording on disk.
  */
 async function recordedTurn({ sessionId }) {
+  const session = sessionOf(sessionId)
+  if (session.recorded) return idleTurn({ sessionId })
   const recorded = recording(agent)
   const args = recordedArguments(agent, recorded)
-  const session = sessionOf(sessionId)
   const server = session.servers.get(SERVER)
   if (!server) throw new Error(`the session has no ${SERVER} server`)
   if (session.prompt) throw new Error(`session ${sessionId} is already in a prompt`)
@@ -337,6 +342,9 @@ async function recordedTurn({ sessionId }) {
   // of 32 kept results drops it or its grant goes
   // (docs/design/mcp-connections.md, Forwarded results, S9).
   if (prompt.cancelled) return { stopReason: "cancelled" }
+  // Only a turn that ended is the session's recorded call. A cancel leaves
+  // the next prompt as that call (`a cancel while the call is in flight`).
+  session.recorded = true
   const update = (frame) =>
     send({ method: "session/update", params: { sessionId, update: frame } })
   for (const frame of callFrames(agent, recorded, { id, tool, result })) update(frame)
@@ -345,6 +353,32 @@ async function recordedTurn({ sessionId }) {
     content: { type: "text", text: "DONE" },
   })
   return { stopReason: "end_turn" }
+}
+
+/**
+ * A prompt after the session's recorded turn: text, and no tool call, so the
+ * gateway can admit a message an app sends. It holds the prompt for the
+ * turn, so a second one in flight is refused.
+ */
+async function idleTurn({ sessionId }) {
+  const session = sessionOf(sessionId)
+  if (session.prompt) throw new Error(`session ${sessionId} is already in a prompt`)
+  session.prompt = { cancelled: false, waiters: [] }
+  try {
+    send({
+      method: "session/update",
+      params: {
+        sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Noted." },
+        },
+      },
+    })
+    return { stopReason: "end_turn" }
+  } finally {
+    session.prompt = null
+  }
 }
 
 /** How long a permission request waits for the gateway's answer. */

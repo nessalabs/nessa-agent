@@ -12,11 +12,13 @@
  * runs on over the words that follow; an override (U+202E, RLO) shows
  * `evil`, RLO, `gnp.exe` as `evilexe.png`. So every bidi control a name
  * carries — the embeddings and overrides (U+202A–U+202E), the isolates
- * (U+2066–U+2069), and the marks (U+200E, U+200F, U+061C) — is shown as
+ * (U+2066–U+2069), the marks (U+200E, U+200F, U+061C), and the line and
+ * paragraph separators (U+0085, U+2028, U+2029) — is shown as
  * U+FFFD, the replacement character, before the name is isolated
  * (`shownName`): seen, and doing nothing. A sentence that repeats those names
  * (`naming`) isolates each of them the same way, and leaves every other word.
  */
+import { bidiControls } from "./bidi-controls.mjs"
 
 /** A sentence: its words, and the names in it that someone else chose. */
 export type Said = readonly (string | { readonly name: string })[]
@@ -24,10 +26,77 @@ export type Said = readonly (string | { readonly name: string })[]
 /** A name in a sentence, to be isolated wherever it is shown. */
 export const named = (name: string) => ({ name })
 
-const bidiControls = /[\u202A-\u202E\u2066-\u2069\u200E\u200F\u061C]/g
+const isBidi = (char: string): boolean => bidiControls.test(char)
 
 /** A name as it is shown: each bidi control it carries replaced by U+FFFD. */
-export const shownName = (name: string) => name.replace(bidiControls, "\uFFFD")
+export const shownName = (name: string): string =>
+  [...name].map((char) => (isBidi(char) ? "\uFFFD" : char)).join("")
+
+const unicodeEscape = (char: string): string => {
+  const code = char.codePointAt(0) ?? 0
+  return `\\u${code.toString(16).padStart(4, "0")}`
+}
+
+/**
+ * JSON as it is shown. A bidi control, or a line or paragraph separator,
+ * inside a string becomes its `\u` escape. One outside a string — not a
+ * value, and not valid JSON — becomes
+ * U+FFFD, so an escape there is not left for a reader to take as syntax.
+ * `JSON.parse` of the result equals `JSON.parse` of `json` when `json` parses
+ * (`said.test.ts`).
+ */
+export function shownJson(json: string): string {
+  let out = ""
+  let inString = false
+  let escaped = false
+  for (const char of json) {
+    if (inString) {
+      if (escaped) {
+        escaped = false
+        out += char
+        continue
+      }
+      if (char === "\\") {
+        escaped = true
+        out += char
+        continue
+      }
+      if (char === '"') {
+        inString = false
+        out += char
+        continue
+      }
+      out += isBidi(char) ? unicodeEscape(char) : char
+      continue
+    }
+    if (char === '"') {
+      inString = true
+      out += char
+      continue
+    }
+    out += isBidi(char) ? "\uFFFD" : char
+  }
+  return out
+}
+
+const isJsonArgument = (text: string): boolean => {
+  try {
+    const value = JSON.parse(text) as unknown
+    return value !== null && typeof value === "object"
+  } catch {
+    return false
+  }
+}
+
+export function shownCommand(command: string): string {
+  const space = command.indexOf(" ")
+  if (space > 0) {
+    const name = command.slice(0, space)
+    const rest = command.slice(space + 1)
+    if (isJsonArgument(rest)) return `${shownName(name)} ${shownJson(rest)}`
+  }
+  return [...command].map((char) => (isBidi(char) ? unicodeEscape(char) : char)).join("")
+}
 
 /**
  * A sentence that repeats names someone else chose, each isolated wherever

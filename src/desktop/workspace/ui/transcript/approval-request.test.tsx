@@ -13,6 +13,7 @@ import { createRoot } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import type { ApprovalChoice, ApprovalOption } from "../../model/transcript"
 import { ApprovalActions, ApprovalCommand, approvalReason } from "./approval-request"
+import { bidiControls } from "./bidi-controls.mjs"
 import { spoken } from "./said"
 
 const offered: readonly ApprovalOption[] = [
@@ -256,5 +257,33 @@ it("presses an answer once for a held key: its repeats press nothing", async () 
   // The first press presses it, as the browser does; each repeat is stopped.
   expect(key(false)).toBe(false)
   expect(key(true)).toBe(true)
+  await act(async () => root.unmount())
+})
+
+it("draws an agent's command in order, with a bidi control visible (#553)", async () => {
+  const argument = "\u202Emoc.live@bob\u202C"
+  const command = `send ${JSON.stringify({ to: argument })}`
+  const root = createRoot(host)
+  await act(async () => root.render(<ApprovalCommand command={command} />))
+  const block = host.querySelector(".workspace-approval-command")
+  const shown = block?.textContent?.replace(/^\$ /, "") ?? ""
+  expect(shown).not.toMatch(bidiControls)
+  expect(shown.indexOf("moc.live@bob")).toBeGreaterThan(shown.indexOf("\\u202e"))
+  expect(block?.querySelector("bdi")?.getAttribute("dir")).toBe("ltr")
+  expect(JSON.parse(shown.slice(shown.indexOf(" ")))).toEqual({ to: argument })
+  await act(async () => root.unmount())
+})
+
+it("keeps an RTL tool left of its argument (#553)", async () => {
+  const toolName = "\u05E9\u05DC\u05D5\u05DD"
+  const command = `${toolName} ${JSON.stringify({ to: "bob@example.com" })}`
+  const root = createRoot(host)
+  await act(async () => root.render(<ApprovalCommand command={command} />))
+  const block = host.querySelector(".workspace-approval-command")
+  const shown = block?.textContent?.replace(/^\$ /, "") ?? ""
+  const isolate = block?.querySelector("bdi")
+  expect(isolate?.getAttribute("dir")).toBe("ltr")
+  expect(shown.startsWith(`${toolName} `)).toBe(true)
+  expect(JSON.parse(shown.slice(toolName.length + 1))).toEqual({ to: "bob@example.com" })
   await act(async () => root.unmount())
 })
