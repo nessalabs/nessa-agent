@@ -136,7 +136,9 @@ impl AcpProfile for CodexProfile {
     /// did not run. Provider builtin cleanup stays distinct from those
     /// user-configured commands. The request is sent; effective suppression
     /// is not established, and a session must not be read as Nessa owning
-    /// Codex's hook boundary.
+    /// Codex's hook boundary. The open and a later restoration still complete.
+    /// `codex_startup_and_restoration_continue_when_native_hook_suppression_is_unsupported`
+    /// is that check.
     fn native_hook_suppression(&self) -> NativeHookSuppressionCapability {
         NativeHookSuppressionCapability::Unsupported
     }

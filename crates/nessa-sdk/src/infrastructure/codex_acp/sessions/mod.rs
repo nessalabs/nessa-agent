@@ -10,7 +10,8 @@
 //! ACP responsibilities, not provider-specific lifecycle implementations.
 //! `CodexAcpProvider` puts `features.hooks: false` and `notify: []` in the
 //! launch configuration. The profile reports native hook suppression as
-//! unsupported because that request is not the effective setting.
+//! unsupported because that request is not the effective setting. Startup
+//! and restoration still complete.
 //! `deletion` says what a successful `session/delete` means for Codex: the
 //! adapter archives the thread, which is not erasing it.
 mod binding;

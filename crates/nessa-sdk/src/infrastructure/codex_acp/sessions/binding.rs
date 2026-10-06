@@ -66,7 +66,7 @@ impl CodexAcpProvider {
     /// notify command off (`features.hooks` false, `notify` empty). That request
     /// does not outrank legacy managed configuration, and ACP cannot show the
     /// effective setting, so a negotiated session reports native hook suppression
-    /// as unsupported.
+    /// as unsupported. The open still completes, and so does restoration.
     ///
     /// # Errors
     /// Returns [`AgentError::Configuration`] for invalid process settings, a

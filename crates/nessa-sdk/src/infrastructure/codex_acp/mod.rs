@@ -19,6 +19,6 @@
 //! requests user hooks and the legacy notify command off. The pinned loader
 //! still applies legacy managed configuration after that request, and ACP
 //! exposes no effective setting, so the profile reports native hook suppression
-//! as unsupported.
+//! as unsupported. The session still starts.
 pub mod sessions;
 pub(crate) mod tools;

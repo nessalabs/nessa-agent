@@ -89,13 +89,17 @@ subprocess boundary alone is not a sandbox. User-configured native executable
 hooks stay disabled, including hooks supplied through project, managed, or plugin
 configuration and legacy notification commands. Provider-owned builtin resource
 cleanup is a separate lifecycle responsibility and must not be disabled to claim
-suppression. Inability to establish suppression refuses the affected binding's
-startup or restoration before work, including when no Nessa hook is configured.
-A requested override and an absence of hook events do not establish the effective
-setting. This is a required future contract, not a claim that every current
-adapter already enforces suppression. The pinned Codex binding cannot attest the
-effective setting against higher-precedence legacy managed configuration; that
-scenario remains unsupported until an enforceable boundary exists.
+suppression. Inability to establish suppression is reported on the session and
+does not refuse that binding's startup or restoration, including when no Nessa
+hook is configured. A requested override and an absence of hook events do not
+establish the effective setting and are not reported as supported. The pinned
+Codex binding asks for `features.hooks: false` and an empty `notify` list, then
+reports native hook suppression as unsupported: legacy managed configuration and
+MDM are applied after that request, and ACP cannot show the effective value.
+The session still starts and can be restored. A later boundary that proves the
+effective setting may report supported. It does not add a startup refusal whose
+only cause is the missing proof. Activating a Nessa policy that requires proven
+suppression is a separate decision and still refuses that activation.
 
 Every consequential verdict retains session/invocation/tool or permission target,
 before/after meaning, bounded reason, and the exact rule ID, immutable revision,
@@ -134,6 +138,12 @@ results, concurrent controls, restoration and audit-sink failure under the
 Context tests pause observation consumption before permission arrival and cross
 restoration, stale generations, and native steering; no allow precedes the exact
 causal prefix. Include valid complete prefixes and oversized single events.
-Suppression tests cover failure both with and without configured Nessa hooks.
+Nessa-owned hook failures — spawn, timeout, malformed output, panic, and an
+unsupported verdict — stay fail-closed once that runtime exists, with and
+without other configured hooks. With no Nessa hook configured, an unproven
+native-suppression fact is not one of those failures. The Codex contract
+`codex_startup_and_restoration_continue_when_native_hook_suppression_is_unsupported`
+opens a session, runs a prompt, restores, and runs again while the negotiated
+fact stays unsupported.
 A Nessa-owned BYOK harness and invented equivalents for provider-only concepts
 remain outside this decision.

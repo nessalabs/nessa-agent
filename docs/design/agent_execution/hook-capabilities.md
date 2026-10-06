@@ -162,15 +162,19 @@ ACP exposes no effective hooks/notify attestation, and its discarded hook events
 cannot prove their absence. Nessa's profile verification checks model and mode,
 not suppression. An isolated `CODEX_HOME` would relocate authentication and
 persisted sessions without removing system/MDM configuration precedence; it is
-not a demonstrated fix. Under ADR 0014, the minimal enforceable contract requires
-suppression established before startup/restoration effects, including with zero
-Nessa hooks. The baseline binding cannot satisfy that contract in the legacy
-managed-policy scenario. Its suppression capability was unknown, and this survey
-requires startup to be refused until effective suppression can be established;
-adding the request alone cannot close [#147](https://github.com/nessalabs/nessa-agent/issues/147).
-No startup refusal or attestation mechanism is claimed implemented in this
-survey. The sentences above describe that 2026-09-22 baseline. The binding's
-later request and its unsupported report are the contract in
+not a demonstrated fix. On 2026-09-22 the proposed decision required suppression
+to be established before startup, and this survey said startup should be refused
+until that proof existed. That refusal is not the current decision.
+[ADR 0014](../../adr/todo/0014-nessa-owned-policy-hooks.md) reports unproven
+suppression and continues startup and restoration, including with zero Nessa
+hooks. The baseline binding cannot prove the effective setting in the legacy
+managed-policy scenario. Its suppression capability was unknown. Adding the
+request alone does not make it supported, and it does not close
+[#147](https://github.com/nessalabs/nessa-agent/issues/147) by claiming proof.
+No attestation mechanism is claimed implemented in this survey. The sentences
+above, through the isolated-`CODEX_HOME` limit, describe that 2026-09-22
+baseline. The binding's later request, its unsupported report, and the open
+that still completes are the contract in
 [the Codex guide](../../../crates/nessa-sdk/docs/codex-acp.md#supported-native-profile);
 they do not change the evidence recorded here, and they do not establish the
 effective setting against the legacy managed layer.
@@ -358,7 +362,7 @@ closed as not planned and deferred; it is not part of this implementation plan.
 
 | Capability | Baseline answer | Activation requirement |
 | --- | --- | --- |
-| Native executable-hook suppression | Claude requests suppression; Codex baseline omits it and has an unresolved managed-policy precedence gap; Opencode uses PURE with separate containment gaps | Establish effective suppression before startup/restoration, even with zero Nessa hooks; preserve provider builtin cleanup. |
+| Native executable-hook suppression | Claude requests suppression; Codex baseline omits it and has an unresolved managed-policy precedence gap; Opencode uses PURE with separate containment gaps | Report unproven suppression and continue startup and restoration, including with zero Nessa hooks. Do not report supported without effective proof. Preserve provider builtin cleanup. |
 | Pre-tool denial | Conditional ACP review path, not universal coverage | Prove the requested tool set cannot execute before Nessa's decision. |
 | Policy end-turn | Not implemented | Same target across direct/queued/steered work; late provider result and reusable session verified. |
 | Policy session close | Existing attributed close primitive, configured policy integration absent | Rule cause retained through all cleanup/audit paths. |
