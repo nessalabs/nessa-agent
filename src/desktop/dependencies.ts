@@ -148,6 +148,9 @@ type WindowGatewayClient = GatewayClient &
  * holds, so an app is asked on the same connection its conversation is read,
  * and each tool call and message through the source's `appCall`, so its
  * conversation is read while either waits on the person's review.
+ * No catalogue binding is passed: the panel credential is not a paired
+ * receiver, and this composition does not invent one. The index stays on
+ * `conversation.list` until a caller supplies `{ receiverId, accessEpoch }`.
  */
 function gatewayWorkspace(
   connect: () => Promise<WindowGatewayClient>,

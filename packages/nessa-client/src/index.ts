@@ -317,3 +317,7 @@ export type {
   ConversationCatalogueResolveResult,
 } from "./generated/product.js"
 export { CatalogueReadErrorCode } from "./generated/product.js"
+export {
+  maxCatalogueEntries,
+  maxCataloguePayloadBytes,
+} from "./protocol/catalogue-read-validate.js"

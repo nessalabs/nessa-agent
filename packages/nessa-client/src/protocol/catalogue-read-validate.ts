@@ -96,6 +96,29 @@ export function checkedCatalogueShape<T>(
   return value as T
 }
 
+function publishedMaximum(
+  name: keyof typeof catalogueWireSchemas,
+  property: string,
+): number {
+  const shape = shapes[name]
+  const maximum = shape?.properties?.[property]?.maximum
+  if (typeof maximum !== "number")
+    throw new TypeError(`catalogue schema has no maximum for ${name}.${property}`)
+  return maximum
+}
+
+/** Manifest page size, from `CatalogueManifestRequest.maxEntries`. */
+export const maxCatalogueEntries = publishedMaximum(
+  "CatalogueManifestRequest",
+  "maxEntries",
+)
+
+/** Resolved payload ceiling, from `ConversationCatalogueResolveParams.maxPayloadBytes`. */
+export const maxCataloguePayloadBytes = publishedMaximum(
+  "ConversationCatalogueResolveParams",
+  "maxPayloadBytes",
+)
+
 export function catalogueHead(value: unknown): ConversationCatalogueHeadResult {
   return checkedCatalogueShape(value, "ConversationCatalogueHeadResult")
 }

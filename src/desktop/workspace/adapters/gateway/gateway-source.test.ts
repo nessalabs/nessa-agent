@@ -4,14 +4,22 @@
  * table on #248 (row ids in the test names): connection (C), reads (R), the
  * stream (S), writes (W) and refusals (F).
  */
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import {
+  maxCatalogueEntries,
+  maxCataloguePayloadBytes,
   NessaConnectionClosedError,
   NessaCredentialUnavailableError,
   RetryableConnectError,
   NessaConversationControlError,
   NessaConversationMutationError,
   NessaRpcError,
+  type CatalogueDescriptor,
+  type CataloguePass,
+  type CatalogueReadApi,
   type ConversationPermission,
+  type RecordScope,
 } from "@nessa/client"
 import { describe, expect, it, vi } from "vitest"
 import { HostRefusalError } from "../../../../host/startup-refusals"
@@ -3184,4 +3192,362 @@ it("F12: a background read queued behind foreground work paces from dispatch (#5
   expect(gateway.count("read")).toBe(4)
   expect(starts.at(-1)! - starts.at(-2)!).toBeGreaterThanOrEqual(250)
   source.dispose()
+})
+
+const catalogueScope: RecordScope = {
+  receiver: "receiver",
+  origin: "origin",
+  stream: "stream",
+  incarnation: "incarnation",
+  schema: "schema",
+  accessEpoch: "1",
+}
+
+interface StoredCatalogueEntry {
+  readonly id: string
+  readonly deleted?: boolean
+  readonly body?: Record<string, unknown>
+}
+
+function catalogueBody(
+  id: string,
+  summary: { title: string | null; preview: string | null; archived: boolean } | null,
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    id,
+    createdAtMs: 1_000,
+    agent: null,
+    model: "model",
+    approvalMode: "ask",
+    summary:
+      summary === null
+        ? null
+        : {
+            title: summary.title,
+            preview: summary.preview,
+            updatedAtMs: 2_000,
+            archived: summary.archived,
+          },
+    ...extra,
+  }
+}
+
+interface CatalogueFault {
+  readonly at?: "head" | "manifest"
+  readonly page?: number
+  readonly head?: string
+  readonly emptyHasMore?: boolean
+  readonly zeroCursor?: boolean
+}
+
+function catalogueApi(
+  read: () => readonly StoredCatalogueEntry[],
+  fault: () => CatalogueFault = () => ({}),
+) {
+  const calls: string[] = []
+  const manifests: CataloguePass[] = []
+  const sizes: number[] = []
+  const api: CatalogueReadApi = {
+    async head(params) {
+      calls.push("head")
+      if (params.receiverId !== "receiver" || params.accessEpoch !== "1")
+        throw new Error("binding")
+      if (fault().at === "head") throw new Error("head")
+      const stored = read()
+      return {
+        scope: catalogueScope,
+        head: fault().head ?? (stored.length === 0 ? "0" : String(stored.length)),
+      }
+    },
+    async manifest(params) {
+      calls.push("manifest")
+      manifests.push(params.request.pass)
+      sizes.push(params.request.maxEntries)
+      const page = manifests.length
+      if (fault().at === "manifest" && fault().page === page) throw new Error("page")
+      if (fault().emptyHasMore)
+        return { request: params.request, entries: [], hasMore: true }
+      const stored = read()
+      const cursor = params.request.pass.cursor?.id
+      const start =
+        cursor === undefined ? 0 : stored.findIndex((entry) => entry.id === cursor) + 1
+      const slice = stored.slice(start, start + params.request.maxEntries)
+      const entries: CatalogueDescriptor[] = slice.map((entry, index) => ({
+        key: {
+          creation: fault().zeroCursor ? "0" : String(start + index + 1),
+          id: entry.id,
+        },
+        revision: "1",
+        deleted: entry.deleted === true,
+      }))
+      return {
+        request: params.request,
+        entries,
+        hasMore: fault().zeroCursor || start + params.request.maxEntries < stored.length,
+      }
+    },
+    async resolve(params) {
+      calls.push("resolve")
+      if (params.maxPayloadBytes !== maxCataloguePayloadBytes) throw new Error("bound")
+      const entry = read().find((item) => item.id === params.descriptor.key.id)
+      if (!entry?.body) throw new Error("missing")
+      return {
+        pass: params.pass,
+        descriptor: params.descriptor,
+        entry: { ...params.descriptor, deleted: false },
+        payload: new TextEncoder().encode(JSON.stringify(entry.body)),
+      }
+    },
+  }
+  return { api, calls, manifests, sizes }
+}
+
+function boundSource(gateway: FakeGateway, catalogue: CatalogueReadApi) {
+  const { clock, advance } = manualClock()
+  const source = gatewaySource({
+    connect: () => Promise.resolve({ ...gateway.client, catalogue }),
+    clock,
+    timing,
+    catalogue: { receiverId: "receiver", accessEpoch: "1" },
+  })
+  const updates: WorkspaceUpdate[] = []
+  return {
+    source,
+    updates,
+    advance,
+    follow: () => source.subscribe((update) => updates.push(update)),
+  }
+}
+
+describe("catalogue observation", () => {
+  it("does not restate the published catalogue maxima", () => {
+    const source = readFileSync(
+      join(
+        process.cwd(),
+        "src/desktop/workspace/adapters/gateway/catalogue-membership.ts",
+      ),
+      "utf8",
+    )
+    expect(source.includes(String(maxCatalogueEntries))).toBe(false)
+    expect(source.includes(String(maxCataloguePayloadBytes))).toBe(false)
+  })
+
+  it("observes every owned summary when the list is truncated", async () => {
+    const storedCount = maxCatalogueEntries + 245
+    expect(storedCount).toBeGreaterThan(500)
+    const stored = Array.from({ length: storedCount }, (_, index) => {
+      const id = `owned-${index}`
+      return {
+        id,
+        body: catalogueBody(id, {
+          title: `T ${index}`,
+          preview: "said",
+          archived: false,
+        }),
+      }
+    })
+    const { api, calls, manifests, sizes } = catalogueApi(() => stored)
+    const gateway = fakeGateway()
+    const omitted = stored[storedCount - 1].id
+    for (const entry of stored.slice(0, 500))
+      gateway.rows.set(entry.id, row(entry.id, { running: entry.id === stored[0].id }))
+    gateway.complete = false
+    const { source } = boundSource(gateway, api)
+    const index = await source.index()
+    expect(index.sessions).toHaveLength(storedCount)
+    expect(index.sessions.map((session) => session.id)).toContain(omitted)
+    expect(index.sessions.find((session) => session.id === stored[0].id)?.status).toBe(
+      "running",
+    )
+    expect(index.sessions.find((session) => session.id === omitted)?.status).toBe("idle")
+    expect(gateway.count("read")).toBe(0)
+    expect(gateway.count("create")).toBe(0)
+    expect(calls.filter((call) => call === "manifest")).toHaveLength(
+      Math.ceil(storedCount / maxCatalogueEntries),
+    )
+    expect(sizes.every((size) => size === maxCatalogueEntries)).toBe(true)
+    expect(manifests[0]).toMatchObject({
+      generation: "1",
+      completed: "0",
+      boundary: String(storedCount),
+    })
+    expect(manifests[0].cursor).toBeUndefined()
+    expect(manifests[1].cursor).toEqual({
+      creation: String(maxCatalogueEntries),
+      id: stored[maxCatalogueEntries - 1].id,
+    })
+    expect(calls.filter((call) => call === "resolve")).toHaveLength(storedCount)
+    gateway.views.set(omitted, view(omitted))
+    await source.transcript(omitted)
+    expect(gateway.count("read")).toBe(1)
+    expect(gateway.count("create")).toBe(0)
+  })
+
+  it("leaves out a deleted descriptor, an archived summary, and a summary that is absent", async () => {
+    const stored = [
+      {
+        id: "kept",
+        body: catalogueBody("kept", { title: "Kept", preview: "p", archived: false }),
+      },
+      {
+        id: "old",
+        body: catalogueBody("old", { title: "Old", preview: "p", archived: true }),
+      },
+      { id: "blank", body: catalogueBody("blank", null) },
+      { id: "gone", deleted: true },
+    ]
+    const { api, calls } = catalogueApi(() => stored)
+    const gateway = fakeGateway()
+    gateway.complete = false
+    const { source } = boundSource(gateway, api)
+    const index = await source.index()
+    expect(index.sessions.map((session) => session.id)).toEqual(["kept"])
+    expect(calls.filter((call) => call === "resolve")).toHaveLength(3)
+    expect(gateway.count("read")).toBe(0)
+  })
+
+  it("does not publish a page when the walk fails, and keeps the previous sessions", async () => {
+    let stored = [
+      {
+        id: "kept",
+        body: catalogueBody("kept", { title: "Kept", preview: "p", archived: false }),
+      },
+    ]
+    let fault: CatalogueFault = {}
+    const { api, calls } = catalogueApi(
+      () => stored,
+      () => fault,
+    )
+    const gateway = fakeGateway()
+    gateway.rows.set("kept", row("kept"))
+    const { source, updates, follow } = boundSource(gateway, api)
+    follow()
+    expect((await source.index()).sessions.map((session) => session.id)).toEqual(["kept"])
+    stored = Array.from({ length: maxCatalogueEntries + 1 }, (_, index) => {
+      const id = `new-${index}`
+      return {
+        id,
+        body: catalogueBody(id, { title: id, preview: "p", archived: false }),
+      }
+    })
+    fault = {
+      at: "manifest",
+      page: calls.filter((call) => call === "manifest").length + 2,
+    }
+    updates.length = 0
+    await expect(source.index()).rejects.toBeInstanceOf(WorkspaceSourceError)
+    expect(updates.some((update) => update.kind === "session-removed")).toBe(false)
+    expect(
+      updates.some(
+        (update) => update.kind === "session" && update.session.id.startsWith("new-"),
+      ),
+    ).toBe(false)
+  })
+
+  it("rejects an unreadable payload, an empty page that claims more, and a zero creation cursor", async () => {
+    const kept = {
+      id: "kept",
+      body: catalogueBody("kept", { title: "Kept", preview: "p", archived: false }),
+    }
+    const cases: { stored: StoredCatalogueEntry[]; fault: CatalogueFault }[] = [
+      {
+        stored: [
+          {
+            id: "kept",
+            body: catalogueBody("other", { title: "X", preview: "p", archived: false }),
+          },
+        ],
+        fault: {},
+      },
+      {
+        stored: [
+          {
+            ...kept,
+            body: catalogueBody(
+              "kept",
+              { title: "Kept", preview: "p", archived: false },
+              { extra: true },
+            ),
+          },
+        ],
+        fault: {},
+      },
+      { stored: [kept, kept], fault: { emptyHasMore: true } },
+      {
+        stored: [
+          kept,
+          {
+            id: "other",
+            body: catalogueBody("other", {
+              title: "Other",
+              preview: "p",
+              archived: false,
+            }),
+          },
+        ],
+        fault: { zeroCursor: true },
+      },
+    ]
+    for (const next of cases) {
+      const { api } = catalogueApi(
+        () => next.stored,
+        () => next.fault,
+      )
+      const gateway = fakeGateway()
+      gateway.rows.set("kept", row("kept"))
+      const { source, updates, follow } = boundSource(gateway, api)
+      follow()
+      await expect(source.index()).rejects.toBeInstanceOf(WorkspaceSourceError)
+      expect(updates.some((update) => update.kind === "session")).toBe(false)
+    }
+  })
+
+  it("uses the list when the catalogue head is zero and does not walk", async () => {
+    const { api, calls } = catalogueApi(
+      () => [],
+      () => ({ head: "0" }),
+    )
+    const gateway = fakeGateway()
+    gateway.rows.set("a", row("a"))
+    const { source } = boundSource(gateway, api)
+    expect((await source.index()).sessions.map((session) => session.id)).toEqual(["a"])
+    expect(calls).toEqual(["head"])
+    expect(gateway.count("list")).toBe(1)
+  })
+
+  it("stays on the list when no binding is supplied, even if the client can read a catalogue", async () => {
+    const { api, calls } = catalogueApi(() => [
+      {
+        id: "hidden",
+        body: catalogueBody("hidden", { title: "Hidden", preview: "p", archived: false }),
+      },
+    ])
+    const gateway = fakeGateway()
+    gateway.rows.set("a", row("a"))
+    gateway.complete = false
+    const { clock } = manualClock()
+    const source = gatewaySource({
+      connect: () => Promise.resolve({ ...gateway.client, catalogue: api }),
+      clock,
+      timing,
+    })
+    expect((await source.index()).sessions.map((session) => session.id)).toEqual(["a"])
+    expect(calls).toEqual([])
+    expect(gateway.count("list")).toBe(1)
+  })
+
+  it("rejects the index when a binding is set and the client has no catalogue", async () => {
+    const gateway = fakeGateway()
+    gateway.rows.set("a", row("a"))
+    const { clock } = manualClock()
+    const source = gatewaySource({
+      connect: () => Promise.resolve(gateway.client),
+      clock,
+      timing,
+      catalogue: { receiverId: "receiver", accessEpoch: "1" },
+    })
+    await expect(source.index()).rejects.toBeInstanceOf(WorkspaceSourceError)
+    expect(gateway.count("list")).toBe(0)
+  })
 })

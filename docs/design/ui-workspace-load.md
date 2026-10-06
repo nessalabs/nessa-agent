@@ -24,7 +24,7 @@ GitHub workflows in this repository set `node-version: 24`. Desktop evidence on 
 
 ## How the desktop gets its index today
 
-Observed path. The workspace gateway source polls `conversation.list`. It does not call `conversation.catalogueManifest`.
+Observed path when composition supplies no catalogue binding. The workspace gateway source polls `conversation.list`. It does not call `conversation.catalogueManifest`. The bound path is [Catalogue observation](#catalogue-observation-596).
 
 ```mermaid
 sequenceDiagram
@@ -46,6 +46,22 @@ sequenceDiagram
 
 An incomplete list of 500, rendered as 500 rows, is a failed 10,000-chat test.
 
+## Catalogue observation (#596)
+
+`MAX_LISTED_CONVERSATIONS` stays 500. `ConversationLimits.max_conversations` stays 32. `conversation.read` still opens a live slot. The panel credential is not a paired receiver, and composition does not invent one. `gatewaySource` takes an optional binding `{ receiverId, accessEpoch }`. Without it, the list path above is unchanged, including when `complete` is false.
+
+With a binding, and a client that exposes catalogue reads, one index read does the following and publishes only after the last step. A failure rejects `index`, sets the source gap, and leaves the previous sessions in place.
+
+| Step | Holds | Does not hold |
+| --- | --- | --- |
+| Head `"0"` | The walk is skipped. The list is applied as above. | No manifest and no resolve. |
+| Head is any other decimal | Manifest pages use the published `maxEntries`. Each non-deleted descriptor is resolved at the published payload maximum. The next cursor is the previous page's last key. The pass uses generation `"1"`, completed `"0"`, and boundary equal to that head. | A cursor whose creation is `"0"`, or whose creation is past the head, is not sent. The read rejects. |
+| Membership | A non-deleted payload whose object has a non-null, unarchived summary. Keys are the codec's own. Title and preview are stored as given. | A deleted descriptor, a null summary, or `archived: true` is not a session. An unknown key, a missing key, or an id other than the descriptor's rejects the read. An empty page while `hasMore` is true rejects the read. |
+| List overlay | After the walk succeeds, `conversation.list` runs. `running` is that row's value when the row names the id, and idle when it does not. One `applyList` then runs with `complete: true`. | A list row the catalogue did not admit is not added. `complete: false` does not drop a catalogue session. Nothing is published before both calls succeed. |
+| Providers | The walk and the list do not call `conversation.read` or `conversation.create`. | A later transcript read still calls `conversation.read`. |
+
+The page and payload maxima are `maxCatalogueEntries` and `maxCataloguePayloadBytes` in `@nessa/client`, read from `catalogueWireSchemas`. The desktop does not restate 256 or 1 MiB.
+
 ## Gateway bounds that a 10,000-chat run has to respect
 
 Numbers below are the owners' published values. This change does not alter them.
@@ -53,7 +69,7 @@ Numbers below are the owners' published values. This change does not alter them.
 | Bound | Value | Owner | What it means here |
 | --- | --- | --- | --- |
 | Listed conversations | 500 | `MAX_LISTED_CONVERSATIONS` in `crates/nessa-server/src/conversation/application/service.rs`. Wire `ConversationListResult.conversations.maxItems` is 500. `complete` is false when the bound left rows out. | The desktop index seam cannot receive 10,000 summaries in one list. |
-| Catalogue page | 256 entries | `MAX_CATALOGUE_ENTRIES` in sync-engine `f2a05ef24fcff66df9d55e508539cec718e2d805` (`src/replication/catalogue/domain.rs`). Nessa consumes that constant; it does not restate it. | A client that walks manifest pages can address every stored row. The desktop workspace source does not. |
+| Catalogue page | 256 entries | `MAX_CATALOGUE_ENTRIES` in sync-engine `f2a05ef24fcff66df9d55e508539cec718e2d805` (`src/replication/catalogue/domain.rs`). `@nessa/client` publishes that maximum from `catalogueWireSchemas` as `maxCatalogueEntries`. | With a receiver binding, the desktop index walks pages at that published maximum. Without a binding, it does not. |
 | Catalogue payload | 1 MiB | `MAX_CATALOGUE_PAYLOAD_BYTES` in that same sync-engine file. An oversized resolved value is `OversizedEntry` and does not advance the cursor (`docs/design/conversation-catalogue.md`). | One summary is far under this. This investigation did not time a 10,000-entry walk. Resolve is one descriptor at a time, so a full walk is one resolve per conversation plus the manifest pages. |
 | Live conversation slots | 32 | `ConversationLimits::default.max_conversations` in `service.rs`. `create` and `read` take a slot (`read` calls `resolve`). When `close` succeeds, `release_live_slot` removes that slot. A close that fails leaves it. | Opening every chat and leaving it open stops at this cap. Listing does not open providers (`list` documents that). This investigation did not open a 33rd conversation or cycle create and close. |
 | User message | 8192 UTF-8 bytes | `ConversationLimits::default.max_input_bytes`, `conversation.send` `x-utf8MaxBytes`, projection `MAX_TEXT`. | A longer "very long message" cannot be submitted on this seam. |
@@ -134,7 +150,7 @@ Production preview, both layouts the frame budget already uses, Chromium and Web
 
 - No browser measurement of 10,000 rows, of a long transcript, or of drag on that workspace.
 - No insert of 10,000 gateway conversations, and no timed catalogue walk.
-- The desktop cannot observe 10,000 summaries through `conversation.list`.
+- The desktop cannot observe 10,000 summaries through `conversation.list`. With a receiver binding it can observe a stored count above that list bound; the panel has no such binding, so a gateway-backed browser run of every summary is still blocked.
 - A UI transcript longer than 24 messages or 8192-byte parts is a renderer fixture. It is not what `conversation.read` returns.
 - List and transcript virtualization are unmeasured. They are not proposed as the fix.
 - Native WKWebView is not this investigation.
@@ -144,4 +160,4 @@ Production preview, both layouts the frame budget already uses, Chromium and Web
 Filed separately from #590. They do not change #370 or #583.
 
 - #595 measures the desktop UI on the seeded fixture. The script stays opt-in, outside the default `run-all` time. Pass means the rendered count matches the seed on the surface under test. Performance findings from that run are further issues. The fixture is not described as a gateway 10,000-chat test.
-- #596 makes the desktop index observe every owned summary. The pass condition is a stored count above 500 where the UI's observed count equals the stored count. Raising `MAX_LISTED_CONVERSATIONS` and still rendering a truncated list is not that result. Listing must not open a provider per row. The live slot cap still bounds how many conversations are open at once.
+- #596 makes the desktop index observe every owned summary when a receiver binding is supplied. The pass condition is a stored count above 500 where the observed count equals the stored count. Raising `MAX_LISTED_CONVERSATIONS` and still rendering a truncated list is not that result. Listing must not open a provider per row. The live slot cap still bounds how many conversations are open at once. The panel is not given a binding here.

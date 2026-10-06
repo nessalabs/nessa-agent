@@ -7,7 +7,8 @@
  *
  * - **No push stream.** The gateway sends no conversation events, so the
  *   stream is a poller, running while anyone listens: `conversation.list`
- *   for summaries; independent `conversation.read` calls for conversations the window
+ *   for summaries, or a catalogue walk when a receiver binding is supplied
+ *   (`catalogue-membership.ts`, #596); independent `conversation.read` calls for conversations the window
  *   has read (`transcript`) that runs, waits on the person, has an app's
  *   call unanswered (`appCall`, #436), or changed since.
  * - **Revisions are minted here.** The gateway's view revision is opaque and
@@ -77,6 +78,7 @@ import {
   NessaConversationMutationError,
   NessaRpcError,
   NessaSessionUnavailableError,
+  type CatalogueReadApi,
   type ConnectionState,
   type ConversationApi,
   type ConversationListResult,
@@ -104,6 +106,7 @@ import {
   summaryFrom,
   transcriptFrom,
 } from "./gateway-views"
+import { catalogueObservation, type CatalogueBinding } from "./catalogue-membership"
 
 /** What the adapter asks of a gateway client: its conversations, and how its connection stands. */
 export interface GatewayClient {
@@ -111,6 +114,8 @@ export interface GatewayClient {
     ConversationApi,
     "list" | "read" | "create" | "send" | "answer" | "archive"
   >
+  /** Present when this connection can read the caller's catalogue. Unused without a binding. */
+  readonly catalogue?: CatalogueReadApi
   readonly connectionState: ConnectionState
   onConnectionStateChange(handler: (state: ConnectionState) => void): () => void
   close(): void
@@ -223,6 +228,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   readonly timing?: GatewayTiming
   /** Told each view applied and each conversation deleted: the window's MCP Apps. */
   readonly apps?: GatewayViewObserver
+  /**
+   * When set, the index observes the catalogue for this receiver instead of
+   * treating one list as the whole set. Absent, the list path is unchanged.
+   * The panel composition does not set it: that credential is not a receiver.
+   */
+  readonly catalogue?: CatalogueBinding
 }): GatewaySource<C> {
   const { clock } = options
   const timing = options.timing ?? defaultGatewayTiming
@@ -543,11 +554,25 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const list = (who: Caller, caller: () => boolean = always): Promise<void> => {
     const { turn, settled } = inTurn(listing, async () => {
       if (!caller()) throw new WorkspaceSourceError("unavailable")
-      const result = await within(async () => (await client(who)).conversation.list(), {
-        subject: "index",
-      })
+      const observed = await within(
+        async () => {
+          const connected = await client(who)
+          const binding = options.catalogue
+          if (!binding)
+            return { kind: "list" as const, result: await connected.conversation.list() }
+          if (!connected.catalogue) throw new WorkspaceSourceError("unavailable")
+          return catalogueObservation(connected.catalogue, binding, () =>
+            connected.conversation.list(),
+          )
+        },
+        { subject: "index" },
+      )
       if (!caller()) throw new WorkspaceSourceError("unavailable")
-      applyList(result)
+      applyList(
+        observed.kind === "list"
+          ? observed.result
+          : { conversations: [...observed.summaries], complete: true },
+      )
     })
     listing = settled
     return turn
