@@ -1,7 +1,8 @@
 /**
  * What the workspace's tests share: a small index, a source whose
  * every answer the test decides — success, a typed refusal, or silence until
- * released — and a real desktop store around it. Only tests import this.
+ * released — a real desktop store around it, and animation frames a test
+ * runs itself. Only tests import this.
  */
 import { makeDesktopStore } from "../store"
 import type {
@@ -262,4 +263,69 @@ export function testStore(
 /** Lets every settled promise run its continuations. */
 export async function settle(times = 5): Promise<void> {
   for (let index = 0; index < times; index++) await Promise.resolve()
+}
+
+/**
+ * Animation frames a test runs itself.
+ *
+ * jsdom fires `requestAnimationFrame` from a `setInterval` of one frame, and
+ * a callback that asks for the next frame waits out another interval counted
+ * from when the first returned. A wall-clock wait started beside that chain
+ * can end between the two when the event loop is busy, so a caret that lands
+ * on the second frame is not there yet — and a frame left queued by an
+ * earlier test can still land in the next one. Installed, a frame runs only
+ * when `runFrame` says so.
+ */
+export function controlledAnimationFrames(): {
+  pending: () => number
+  /** Runs the callbacks queued now, not the frame they themselves ask for. */
+  runFrame: () => void
+  restore: () => void
+} {
+  const queued = new Map<number, FrameRequestCallback>()
+  let next = 1
+  const request = window.requestAnimationFrame
+  const cancel = window.cancelAnimationFrame
+  window.requestAnimationFrame = (callback) => {
+    const id = next++
+    queued.set(id, callback)
+    return id
+  }
+  window.cancelAnimationFrame = (id) => {
+    queued.delete(id)
+  }
+  return {
+    pending: () => queued.size,
+    runFrame() {
+      // A callback can cancel one queued beside it; that one does not run.
+      for (const id of [...queued.keys()]) {
+        const callback = queued.get(id)
+        if (callback === undefined) continue
+        queued.delete(id)
+        callback(performance.now())
+      }
+    },
+    restore() {
+      queued.clear()
+      window.requestAnimationFrame = request
+      window.cancelAnimationFrame = cancel
+    },
+  }
+}
+
+export type AnimationFrames = ReturnType<typeof controlledAnimationFrames>
+
+/**
+ * Runs up to `count` frames already asked for, and the frames those ask for,
+ * each inside `act`. Eight covers the caret's chain (`settle`, then
+ * `focusInFront`) with the same room the old wall-clock wait had, and stops
+ * short of a frame that reschedules itself for as long as something is open.
+ */
+export async function flushAnimationFrames(
+  frames: AnimationFrames,
+  act: (callback: () => void) => unknown,
+  count = 8,
+): Promise<void> {
+  for (let step = 0; step < count && frames.pending() > 0; step++)
+    await act(() => frames.runFrame())
 }

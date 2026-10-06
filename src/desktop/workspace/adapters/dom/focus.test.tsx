@@ -22,7 +22,13 @@ import { workspaceActions } from "../store/slice"
 import { selectFocusedPaneKey, selectShownSessionIds } from "../store/selectors"
 import { panesOf } from "../../../split-panes/model/pane-layout"
 import { emptyTranscript, type Transcript } from "../../model/transcript"
-import { settle, testStore } from "../../testing"
+import {
+  controlledAnimationFrames,
+  flushAnimationFrames,
+  settle,
+  testStore,
+  type AnimationFrames,
+} from "../../testing"
 import { focusedPaneAttribute, useFocusFollowsPane } from "./focus"
 
 /** Panes as the page draws them, each with a composer, and a list beside them. */
@@ -68,9 +74,11 @@ function Page() {
 
 let root: Root
 let host: HTMLDivElement
+let animation: AnimationFrames
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  animation = controlledAnimationFrames()
   host = document.createElement("div")
   document.body.append(host)
   root = createRoot(host)
@@ -79,9 +87,11 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
+  animation.restore()
 })
 
-const frames = () => act(async () => new Promise((resolve) => setTimeout(resolve, 60)))
+/** The frames the caret's landing asked for, run because the test says so. */
+const frames = () => flushAnimationFrames(animation, act)
 const caretIn = () => document.activeElement?.getAttribute("aria-label")
 
 async function page() {
