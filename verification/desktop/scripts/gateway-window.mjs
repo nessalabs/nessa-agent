@@ -40,7 +40,7 @@ import {
   TEXT_REPLY_SCENARIO,
 } from "../../../scripts/mcp-test-server/scenarios.mjs"
 import { appFrame, oneMount } from "./lib/apps.mjs"
-import { openPage, withEngines } from "./lib/browser.mjs"
+import { liveMountResourceAbort, openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log, resultOfThrown } from "./lib/cli.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
 import {
@@ -466,7 +466,6 @@ const checks = {
     const once = oneMount(frames)
     if (once) failures.push(once)
     if (!drawn) return { seen: { frames }, failures }
-    // The frame is attached, so a missing document is the window failing to draw the app.
     let framed
     try {
       framed = await appFrame(page, "inline", 30_000)
@@ -582,6 +581,17 @@ await main(
                   ),
                 })
                 .catch((error) => log(`screenshot ${name}: ${error.message}`))
+            }
+            await opened.settleRequests()
+            // A fully read `/mcp-resources` can still be reported aborted
+            // with no size. Once this step has seen the inline mount live,
+            // that same-origin line is the delivered fetch (#473). Every
+            // other abort stays a failure.
+            if (name === "apps" && result.seen?.state === "live") {
+              opened.reclassifyHeld(
+                (line) => liveMountResourceAbort(line, opened.page.url()),
+                (line) => `${line} (mount went live, #473)`,
+              )
             }
             const entry = rep.add({
               name,

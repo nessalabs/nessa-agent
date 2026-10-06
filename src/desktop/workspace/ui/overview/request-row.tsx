@@ -193,8 +193,6 @@ export const RequestRow = memo(function RequestRow({
             )}
           </span>
           {approval ? (
-            // An app's command is the app's own words: shown as a name is (E2-1).
-            // An agent's is the command as it runs, controls visible (#553).
             approval.origin.kind === "app" ? (
               <code
                 className="agents-request-command agents-truncate"

@@ -1,13 +1,4 @@
 #!/usr/bin/env node
-/**
- * An agent's command is drawn in order (#553). The sample session
- * "Command drawn in order" asks to run `send` with an argument whose address
- * is wrapped in bidi overrides, so a raw draw shows `bob@evil.com`. The card,
- * the overview row, and the peek show the address in the order it runs, the
- * controls as `\u` escapes, and the argument still parses to what runs.
- *
- * Chromium and WebKit, columns and sidebar.
- */
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 
@@ -20,6 +11,7 @@ import { contentIs } from "./lib/workspace.mjs"
 
 const tool = "send "
 const argument = "\u202Emoc.live@bob\u202C"
+const expected = { to: argument }
 
 const meta = {
   name: "command-order",
@@ -34,7 +26,6 @@ The sample session "${names.commandOrderSession}" (#553). Per engine and layout:
            shown JSON parses to the argument that runs`,
 }
 
-/** Failures in a drawn command. Empty when it says what runs. */
 function commandFailures(where, text) {
   const failures = []
   if (!text.startsWith(tool))
@@ -48,19 +39,23 @@ function commandFailures(where, text) {
     failures.push(
       `${where} does not show the address after its override: ${JSON.stringify(text)}`,
     )
-  const jsonAt = text.indexOf("{")
-  if (jsonAt === -1) {
-    failures.push(`${where} draws no JSON argument`)
-    return failures
-  }
-  try {
-    const parsed = JSON.parse(text.slice(jsonAt))
-    if (parsed?.to !== argument)
-      failures.push(
-        `${where} parses to ${JSON.stringify(parsed?.to)}, not the argument that runs`,
-      )
-  } catch (error) {
-    failures.push(`${where} JSON does not parse: ${error.message}`)
+  if (text.startsWith(tool)) {
+    const shown = text.slice(tool.length)
+    try {
+      const parsed = JSON.parse(shown)
+      const keys =
+        parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+          ? Object.keys(parsed)
+          : []
+      const same =
+        keys.length === 1 && Object.hasOwn(parsed, "to") && parsed.to === argument
+      if (!same)
+        failures.push(
+          `${where} parses to ${JSON.stringify(parsed)}, not ${JSON.stringify(expected)}`,
+        )
+    } catch (error) {
+      failures.push(`${where} JSON does not parse: ${error.message}`)
+    }
   }
   return failures
 }
@@ -170,6 +165,7 @@ await main(meta, async ({ options, rep, url }) => {
             })
             .catch(() => {})
         }
+        await opened.settleRequests()
         return {
           failures: [...failures, ...opened.errors.splice(0)],
           harmless: opened.harmless.splice(0),

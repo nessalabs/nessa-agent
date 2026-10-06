@@ -84,8 +84,7 @@ export function approvalHead(
  * whole, as the row has no card to show it in; a message as the card's head
  * says it (`overview.test.tsx` O3 and D19). An app's tool command is the
  * app's own words, its tool's name among them, and is isolated as a name is
- * (`said.tsx`, E2-1 on #390). An agent's command is that command as shown
- * (`shownCommand`), so a control in it cannot reorder the row's name (#553).
+ * (`said.tsx`, E2-1 on #390).
  */
 export function approvalRequest(
   approval: Pick<Approval, "origin" | "ask" | "command">,
@@ -142,8 +141,7 @@ function commandWords(text: string, key: string) {
 }
 
 /**
- * The command, broken only between its words. An agent's command is shown
- * in order (`shownCommand`), inside one `<bdi>`. An app's tool name, when
+ * The command, broken only between its words. An app's tool name, when
  * `name` is that tool and the command begins with it, is isolated as a name
  * is; the words after it — a message, as it will be sent — are left as they
  * are (`approval-request.test.tsx`, E2-1).

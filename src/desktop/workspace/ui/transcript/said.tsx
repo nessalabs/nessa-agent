@@ -16,10 +16,6 @@
  * U+FFFD, the replacement character, before the name is isolated
  * (`shownName`): seen, and doing nothing. A sentence that repeats those names
  * (`naming`) isolates each of them the same way, and leaves every other word.
- *
- * An agent's command is a different draw (`shownCommand`): a tool name and a
- * JSON argument keep the name readable and escape those controls inside
- * strings, so the shown JSON parses to the argument that runs (#553).
  */
 import { bidiControls } from "./bidi-controls.mjs"
 

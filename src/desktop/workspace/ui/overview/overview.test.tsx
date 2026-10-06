@@ -361,7 +361,7 @@ describe("the agents overview", () => {
     expect(card("second")?.querySelector(".agents-request-why")?.textContent).toBe(
       "The show_rows app on evil\uFFFDgnp.exe asks to send a message as you",
     )
-    expect(card("second")?.textContent).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/)
+    expect(card("second")?.textContent).not.toMatch(bidiControls)
     await act(async () => card("second")?.click())
     await act(async () => settle(10))
     const peek = host.querySelector(".agents-inline-peek")
