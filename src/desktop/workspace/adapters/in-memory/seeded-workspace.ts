@@ -515,29 +515,47 @@ export function seededWorkspace(
 const decimal = /^(0|[1-9][0-9]*)$/
 
 /** A whole decimal from the query. The ranges belong to `accepted`. */
-function decimalField(raw: string | null, reason: SeededWorkspaceReason): number {
-  if (raw === null || !decimal.test(raw)) refuse(reason)
+function decimalField(raw: string, reason: SeededWorkspaceReason): number {
+  if (!decimal.test(raw)) refuse(reason)
   const value = Number(raw)
   if (!Number.isSafeInteger(value)) refuse(reason)
   return value
 }
 
+/** The one value of a seeded-run field. Missing and repeated values refuse that field. */
+function onlyValue(
+  params: URLSearchParams,
+  name: string,
+  reason: SeededWorkspaceReason,
+): string {
+  const values = params.getAll(name)
+  if (values.length !== 1) refuse(reason)
+  return values[0]
+}
+
 /**
- * The seeded run a page query asks for. No `seeded` key means this page is
- * not a seeded run. A present key with a missing or non-decimal field
- * refuses that field. The same spec `seededWorkspace` accepts.
+ * The seeded run a page query asks for. The search string is read the same
+ * way as `workspaceBackend`: `URLSearchParams` strips one leading `?`.
+ * No `seeded` key means this page is not a seeded run. A seeded run whose
+ * field is missing, repeated, or not a whole decimal refuses that field.
+ * The same spec `seededWorkspace` accepts.
  */
 export function seededWorkspaceSpec(search: string): SeededWorkspaceSpec | null {
-  const query = search.startsWith("?") ? search.slice(1) : search
-  const params = new URLSearchParams(query)
-  if (!params.has("seeded")) return null
+  const params = new URLSearchParams(search)
+  if (params.getAll("seeded").length === 0) return null
   const spec: SeededWorkspaceSpec = {
-    seed: decimalField(params.get("seeded"), "seed"),
-    now: decimalField(params.get("now"), "now"),
-    sessions: decimalField(params.get("sessions"), "sessions"),
-    longTranscripts: decimalField(params.get("longTranscripts"), "longTranscripts"),
-    messages: decimalField(params.get("messages"), "messages"),
-    messageCharacters: decimalField(params.get("messageCharacters"), "messageCharacters"),
+    seed: decimalField(onlyValue(params, "seeded", "seed"), "seed"),
+    now: decimalField(onlyValue(params, "now", "now"), "now"),
+    sessions: decimalField(onlyValue(params, "sessions", "sessions"), "sessions"),
+    longTranscripts: decimalField(
+      onlyValue(params, "longTranscripts", "longTranscripts"),
+      "longTranscripts",
+    ),
+    messages: decimalField(onlyValue(params, "messages", "messages"), "messages"),
+    messageCharacters: decimalField(
+      onlyValue(params, "messageCharacters", "messageCharacters"),
+      "messageCharacters",
+    ),
   }
   accepted(spec)
   return spec

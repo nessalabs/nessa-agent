@@ -22,5 +22,11 @@ it("a browser page with ?seeded is the seeded workspace, and ?gateway wins (C4)"
   expect(workspaceBackend("browser", "?gateway&seeded=590")).toBe("browser")
   expect(workspaceBackend("browser", "?seeded=590&gateway=1")).toBe("browser")
   expect(workspaceBackend("browser", "?theme=seeded")).toBe("sample")
+  expect(
+    workspaceBackend(
+      "browser",
+      "??seeded=590&now=1700000000000&sessions=0&longTranscripts=0&messages=0&messageCharacters=0",
+    ),
+  ).toBe("sample")
   expect(workspaceBackend("macos", "?seeded=590")).toBe("host")
 })

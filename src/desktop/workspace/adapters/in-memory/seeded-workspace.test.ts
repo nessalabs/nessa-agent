@@ -300,5 +300,25 @@ describe("seeded workspace", () => {
         "?seeded=590&now=1700000000000&sessions=1&longTranscripts=2&messages=2&messageCharacters=1",
       ),
     ).toBe("longTranscripts")
+    const repeated =
+      "&now=1700000000000&sessions=0&longTranscripts=0&messages=0&messageCharacters=0"
+    expect(refused(`?seeded=01&seeded=590${repeated}`)).toBe("seed")
+    expect(refused(`?seeded=590&seeded=01${repeated}`)).toBe("seed")
+    expect(refused(`?seeded=590&seeded=590${repeated}`)).toBe("seed")
+    expect(
+      refused(
+        "?seeded=590&now=1700000000000&sessions=10000&sessions=1&longTranscripts=1&messages=8&messageCharacters=4000",
+      ),
+    ).toBe("sessions")
+    expect(
+      refused(
+        "?seeded=590&now=1700000000000&sessions=1&sessions=10000&longTranscripts=1&messages=8&messageCharacters=4000",
+      ),
+    ).toBe("sessions")
+    expect(
+      seededWorkspaceSpec(
+        "??seeded=590&now=1700000000000&sessions=0&longTranscripts=0&messages=0&messageCharacters=0",
+      ),
+    ).toBeNull()
   })
 })
