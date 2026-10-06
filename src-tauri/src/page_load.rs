@@ -179,29 +179,8 @@ fn plain(status: StatusCode, body: &'static str) -> Response<Cow<'static, [u8]>>
     response
 }
 
-/// The loading avatar with its blur and grain left off. The same strip as
-/// `src/host/startup-mark.mjs`.
-fn avatar_mark() -> String {
-    let marked = include_str!("../icons/nessa-avatar.svg");
-    let mut rest = marked;
-    let needle = " filter=\"url(#";
-    let mut out = String::with_capacity(rest.len());
-    while let Some(start) = rest.find(needle) {
-        out.push_str(&rest[..start]);
-        let after = &rest[start + needle.len()..];
-        let Some(end) = after.find('"') else {
-            out.push_str(rest);
-            return out;
-        };
-        rest = &after[end + 1..];
-    }
-    out.push_str(rest);
-    out
-}
-
 fn document() -> String {
     let face = include_str!("../../src/host/startup-face.html")
-        .replace("{{MARK}}", &avatar_mark())
         .replace("{{LINE}}", &escape(&host_refusal::line()))
         .replace(
             "{{CODE}}",
@@ -300,14 +279,12 @@ mod tests {
         assert!(!body.contains("&lt;script&gt;"));
         assert!(body.contains("default-src 'none'"));
         assert!(body.contains("STARTUP_PAGE"), "{body}");
-        assert!(body.contains("data-nessa-startup-mark"), "{body}");
+        assert!(!body.contains("data-nessa-startup-mark"), "{body}");
+        assert!(!body.contains("data-nessa-load-mark"), "{body}");
+        assert!(!body.contains("nessa-avatar"), "{body}");
         assert!(!body.contains("filter=\"url("), "{body}");
         assert!(body.contains("aria-label=\"Restart\""), "{body}");
         assert!(body.contains("aria-label=\"Quit\""), "{body}");
         assert!(!body.contains("not serving"), "{body}");
-        assert!(
-            !body.contains("/src-tauri/icons/nessa-avatar.svg"),
-            "{body}"
-        );
     }
 }

@@ -32,7 +32,8 @@ export const css = {
   workspace: "[data-workspace]", // carries data-content (see `content`)
   anyReady: "[data-pane-key], [data-surface]",
 
-  // The load fallback in index.html, before the frontend mounts
+  // The load fallback in index.html, before the frontend mounts.
+  // loadMark and startupMark must match nothing: the screens do not paint the avatar.
   loadMessage: "[data-nessa-load-message]",
   loadMark: "[data-nessa-load-mark]",
   loadTitle: "[data-nessa-load-title]",
