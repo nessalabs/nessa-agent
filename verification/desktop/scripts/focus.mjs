@@ -818,7 +818,7 @@ await main(meta, async ({ options, rep, url }) => {
             await settled(page, 5000)
             await frames(page, 3)
             const s = await state(page)
-            const failures = [...opened.errors]
+            const failures = []
             if (!(await paneCount(page))) failures.push("no panes after the burst")
             if (!s.focusedPane) failures.push("no focused pane after the burst")
             return { after: s, failures }

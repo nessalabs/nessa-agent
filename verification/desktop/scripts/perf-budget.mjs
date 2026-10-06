@@ -358,7 +358,6 @@ await main(meta, async ({ options, rep, url, mode }) => {
               detail.push({
                 ...m,
                 did: s.expect?.(before, after) ?? null,
-                errors: opened.errors,
               })
             } finally {
               await opened.close()
@@ -381,7 +380,6 @@ await main(meta, async ({ options, rep, url, mode }) => {
             )
           for (const d of detail)
             if (d.did) failures.push(`did not do what it is named for: ${d.did}`)
-          for (const d of detail) for (const e of d.errors) failures.push(e)
           if (detail.some((d) => d.noLoaf))
             log(
               "note: no Long Animation Frame timing in this browser; attribution is empty",

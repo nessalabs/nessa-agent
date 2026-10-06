@@ -8,6 +8,7 @@
 import { chromium, webkit } from "playwright"
 
 import { CannotRun } from "./cli.mjs"
+import { attachLines, reportDetached, reporterBound, watchLines } from "./page-lines.mjs"
 import { harmlessConsole, css, storage } from "./selectors.mjs"
 
 const engines = { chromium, webkit }
@@ -109,50 +110,67 @@ export async function openPage(browser, o) {
     await context.close().catch(() => {})
     throw error
   }
-  const errors = []
-  const harmless = []
+  const lines = watchLines()
   page.on("pageerror", (error) => {
-    errors.push(`pageerror: ${error.message.split("\n")[0]}`)
+    lines.keep(`pageerror: ${error.message.split("\n")[0]}`, false)
   })
   page.on("console", (message) => {
     if (message.type() !== "error") return
     const text = message.text()
     const url = message.location()?.url ?? ""
     const entry = `console.error: ${text.slice(0, 300)}${url ? ` (${url})` : ""}`
-    if (harmlessConsole.some((h) => h.text.test(text) && h.url.test(url)))
-      harmless.push(entry)
-    else errors.push(entry)
+    lines.keep(
+      entry,
+      harmlessConsole.some((h) => h.text.test(text) && h.url.test(url)),
+    )
   })
   const sizeReports = []
   page.on("requestfailed", (request) => {
     const pageUrl = page.url()
-    recordFailedRequest(request, pageUrl, { errors, harmless })
+    const bucket = { errors: [], harmless: [] }
+    recordFailedRequest(request, pageUrl, bucket)
+    for (const line of bucket.harmless) lines.keep(line, true)
+    for (const line of bucket.errors) lines.keep(line, false)
     // `sizes()` asks the browser and answers later. The caller awaits
-    // `settleRequests` before it reads `errors`, so a full body can still
-    // leave `errors` (#473). A report that never arrives leaves the line.
+    // `settleRequests` before a result takes `errors`, so a full body can
+    // still leave `errors` (#473). A report that never arrives leaves the line.
     const pending = typeof request.sizes === "function" ? request.sizes() : null
     if (!pending || typeof pending.then !== "function") return
     // Kept as a report, not a bare promise: a size that arrives after the
     // step stopped waiting must not move a later line with the same text.
     sizeReports.push(
       enqueueSizeReport(pending, (sizes) =>
-        reclassifyDeliveredAbort(request, pageUrl, sizes, { errors, harmless }),
+        reclassifyDeliveredAbort(request, pageUrl, sizes, {
+          errors: lines.errors,
+          harmless: lines.harmless,
+        }),
       ),
     )
   })
+  const abandon = async (message, includeErrors) => {
+    // A size report can still move a full-body abort before the lines are
+    // reported. Closing first would drop that report.
+    await settleSizeReports(sizeReports)
+    await context.close().catch(() => {})
+    if (reporterBound()) {
+      reportDetached(o.lines ?? {}, lines.errors, lines.harmless)
+      throw new CannotRun(message)
+    }
+    const extra =
+      includeErrors && lines.errors.length
+        ? `\n  page errors: ${lines.errors.join("; ")}`
+        : ""
+    throw new CannotRun(message + extra)
+  }
   try {
     await page.goto(o.url, { waitUntil: "domcontentloaded" })
     await page.waitForSelector(o.readySelector ?? css.anyReady, {
       timeout: o.readyTimeout ?? 30_000,
     })
   } catch (error) {
-    // A size report can still move a full-body abort out of `errors` before
-    // this failure names them. Closing first would drop that report.
-    await settleSizeReports(sizeReports)
-    await context.close().catch(() => {})
-    throw new CannotRun(
-      `the desktop page did not render ${o.readySelector ?? css.anyReady} at ${o.url}: ${error.message.split("\n")[0]}` +
-        (errors.length ? `\n  page errors: ${errors.join("; ")}` : ""),
+    await abandon(
+      `the desktop page did not render ${o.readySelector ?? css.anyReady} at ${o.url}: ${error.message.split("\n")[0]}`,
+      true,
     )
   }
   // Ready once its fonts are in and its opening motion has run: a condition,
@@ -172,19 +190,23 @@ export async function openPage(browser, o) {
       { timeout: o.readyTimeout ?? 30_000, polling: "raf" },
     )
   } catch (error) {
-    await context.close().catch(() => {})
-    throw new CannotRun(
+    await abandon(
       `the desktop page never settled at ${o.url}: ${error.message.split("\n")[0]}`,
+      false,
     )
   }
-  return {
+  const opened = {
     context,
     page,
-    errors,
-    harmless,
+    errors: lines.errors,
+    harmless: lines.harmless,
+    noteHarmless: (pattern) => lines.noteHarmless(pattern),
+    reclassifyHeld: (keep, asHarmless) => lines.reclassifyHeld(keep, asHarmless),
     close: () => context.close(),
     settleRequests: () => settleSizeReports(sizeReports),
   }
+  attachLines(opened, o.lines ?? {})
+  return opened
 }
 
 /**

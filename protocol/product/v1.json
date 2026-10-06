@@ -33,6 +33,9 @@
     "recordTargets": 1,
     "catalogueTargets": 1
   },
+  "x-frameBytes": {
+    "maxPayloadBytes": 65536
+  },
   "$defs": {
     "SessionChallenge": {
       "type": "object",

@@ -116,6 +116,9 @@ const scenarios = {
   },
 }
 
+/** The signed-in poll Chromium aborts when a worker reloads its page. */
+const reloadAbort = /^requestfailed: \S+\/browser\/check net::ERR_ABORTED\s*$/
+
 const meta = {
   name: "safe-area",
   summary: "nothing is painted under the window controls, in any frame",
@@ -265,6 +268,7 @@ await main(meta, async ({ options, rep, url }) => {
                 await held?.opened.close()
                 held = null
                 held = { key: keyOf(unit), opened: await pageFor(unit), fresh: true }
+                held.opened.noteHarmless(reloadAbort)
               }
               const { opened } = held
               const { page } = opened
@@ -280,7 +284,6 @@ await main(meta, async ({ options, rep, url }) => {
                 await settled(page)
               }
               held.fresh = false
-              const errorsBefore = opened.errors.length
               const sampler = safeArea(page)
               await sampler.take()
               const skipped = await scenario({ page, watch: sampler.watch, layout, size })
@@ -289,7 +292,6 @@ await main(meta, async ({ options, rep, url }) => {
               const frames = await sampler.frames()
               const failures = summarize(bad)
               if (frames === 0) failures.push("no frames were sampled")
-              failures.push(...opened.errors.slice(errorsBefore))
               return { frames, violations: bad.length, failures }
             },
           )

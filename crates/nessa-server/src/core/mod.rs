@@ -34,6 +34,7 @@ mod ending;
 mod error;
 mod exit_code;
 pub mod launch;
+pub(crate) mod limit_log;
 #[cfg(unix)]
 mod log_file;
 pub mod logging;

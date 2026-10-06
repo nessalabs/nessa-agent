@@ -1750,6 +1750,8 @@ pub const MAX_RECORD_RESPONSE_BYTES: usize = 131072;
 pub const MAX_MCP_CONTEXT_BYTES: usize = 8192;
 /// Published bound from the product schema.
 pub const MIN_MCP_MESSAGE_CHARACTERS: usize = 1;
+/// Published request-frame maximum from the product schema, in bytes.
+pub const MAX_PAYLOAD_BYTES: i64 = 65536;
 /// Published passive read timing from the product schema, in milliseconds.
 pub const PASSIVE_READ_TIMEOUT_MS: u64 = 10000;
 /// Published passive read timing from the product schema, in milliseconds.

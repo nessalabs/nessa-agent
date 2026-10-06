@@ -921,9 +921,10 @@ says why where the conversations would be.
   (`renders` in `mcp-apps-gateway.mjs` for `/mcp-resources`; the conversation
   loading at all for `/browser/check`).
   Harmless lines of either kind are kept in the JSON as `harmless` by
-  `smoke.mjs`, `mcp-apps-gateway.mjs`, `gateway-window.mjs` and
-  `scripted-scenarios.mjs`; the other scripts that open a page do not keep
-  them yet (#494). Vite's
+  `lib/page-lines.mjs`, which every `openPage` watches once `run.mjs` has
+  bound the check's reporter (`verification/desktop/page-lines.md`). A
+  step's result takes the lines so far; close reports what is left as
+  `console`. A script does not splice the arrays. Vite's
   `[vite] connecting…` / HMR messages are logs, not errors. A reload caused
   by another edit landing on the dev server mid-run is not a finding —
   re-run.
