@@ -137,6 +137,7 @@ describe("seeded workspace", () => {
     const counts = { idle: 0, running: 0, needsYou: 0 }
     for (const session of built.index.sessions) {
       titles.push(session.title)
+      expect(built.transcripts.has(session.id)).toBe(true)
       const held = built.transcripts.get(session.id)
       const opening = held?.messages[0]?.parts[0]
       expect(opening?.kind).toBe("text")

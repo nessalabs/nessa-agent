@@ -95,7 +95,13 @@ export interface SeededWorkspaceReport {
   readonly largestChannelSessions: number
 }
 
-/** The index, every transcript, and the sizes of what was built. */
+/**
+ * The index `consistentIndex` kept, the transcripts stored for it, and the
+ * measured sizes. The dry run "builds ten thousand summaries through the
+ * index keeper and the in-memory source" in `seeded-workspace.test.ts` reads
+ * a transcript for every kept session id. `ReadonlyMap` does not enforce that
+ * pairing.
+ */
 export interface SeededWorkspace {
   readonly index: WorkspaceIndex
   readonly transcripts: ReadonlyMap<string, Transcript>
