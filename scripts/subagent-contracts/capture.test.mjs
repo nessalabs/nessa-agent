@@ -724,6 +724,9 @@ test(
       async ({ child, paths }) => {
         const versionPid = await readPidFile(`${paths.marker}.version`)
         assert.equal(child.kill("SIGINT"), true)
+        // Let the first signal latch before the second is sent. Two different
+        // pending signals have no delivery order.
+        await sleep(50)
         assert.equal(child.kill("SIGTERM"), true)
         paths.versionPid = versionPid
       },
