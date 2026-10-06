@@ -862,10 +862,12 @@ says why where the conversations would be.
   class (`lib/browser.mjs`, `recordFailedRequest`):
   - a 200 on the page's own origin whose `content-length` was fully
     delivered (`sizes().responseBodySize`). The client's read of
-    `/mcp-resources` is the one that shows this (#473). Until that size is
-    known the line stays an error. `mcp-apps-gateway`'s release step may
-    move an unlabelled `/mcp-resources` abort to harmless only when that
-    pane's mount went live and the inline mount stayed live.
+    `/mcp-resources` is the one that shows this (#473). The gateway waits
+    for a size report already in flight before it reads the line. Until
+    that size is known the line stays an error. Its release step may move
+    an unlabelled same-origin `/mcp-resources` abort to harmless only when
+    that pane's mount went live and the inline mount stayed live. A
+    cross-origin abort stays a failure.
   - a 204 on the page's own origin, whose body is empty and never read:
     the window's sign-in check `/browser/check` (#485).
   With no response, a short body, any other status, another origin, another

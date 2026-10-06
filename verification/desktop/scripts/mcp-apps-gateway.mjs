@@ -488,6 +488,7 @@ async function openConversation(browser, stack, layout) {
   } catch (error) {
     // No step will report the page's lines, so the error carries them, and
     // the page is closed rather than left open until the browser closes.
+    await opened.settleRequests()
     const lines = [
       ...opened.errors.splice(0),
       ...opened.harmless.splice(0).map((line) => `harmless: ${line}`),
@@ -850,11 +851,12 @@ await main(
             } catch (error) {
               result = { failures: [], error: error.message.split("\n")[0] }
             }
+            await opened.settleRequests()
             const pageFailures = opened.errors.splice(0)
             const pageHarmless = opened.harmless.splice(0)
             // A fully read `/mcp-resources` can still be reported aborted
-            // before its size arrives. Once this step has seen the pane mount
-            // live, and the inline mount stayed live, that one line is the
+            // with no size. Once this step has seen the pane mount live, and
+            // the inline mount stayed live, that same-origin line is the
             // delivered fetch (#473). Every other abort stays a failure.
             if (
               name === "release" &&
@@ -863,7 +865,7 @@ await main(
             ) {
               const kept = []
               for (const line of pageFailures) {
-                if (liveMountResourceAbort(line))
+                if (liveMountResourceAbort(line, opened.page.url()))
                   pageHarmless.push(`${line} (mount went live, #473)`)
                 else kept.push(line)
               }

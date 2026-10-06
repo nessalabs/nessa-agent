@@ -11,6 +11,7 @@ import {
   reclassifyDeliveredAbort,
   recordFailedRequest,
   runAndClose,
+  settleSizeReports,
 } from "./browser.mjs"
 
 const PAGE = "http://127.0.0.1:1438/desktop.html?gateway"
@@ -127,18 +128,26 @@ describe("recordFailedRequest", () => {
     })
   })
 
-  it("only an unlabelled /mcp-resources abort is the mount-went-live case", () => {
-    assert.equal(liveMountResourceAbort(`requestfailed: ${RESOURCE} net::ERR_ABORTED`), true)
+  it("only an unlabelled same-origin /mcp-resources abort is the mount-went-live case", () => {
+    assert.equal(liveMountResourceAbort(`requestfailed: ${RESOURCE} net::ERR_ABORTED`, PAGE), true)
     assert.equal(
-      liveMountResourceAbort(`requestfailed: ${RESOURCE}?x=1 net::ERR_ABORTED`),
+      liveMountResourceAbort(`requestfailed: ${RESOURCE}?x=1 net::ERR_ABORTED`, PAGE),
       true,
     )
-    assert.equal(liveMountResourceAbort(fullBody(RESOURCE)), false)
-    assert.equal(liveMountResourceAbort(`requestfailed: ${CHECK} net::ERR_ABORTED`), false)
     assert.equal(
-      liveMountResourceAbort(`requestfailed: ${RESOURCE} net::ERR_FAILED`),
+      liveMountResourceAbort(
+        `requestfailed: http://127.0.0.1:1439/mcp-resources net::ERR_ABORTED`,
+        PAGE,
+      ),
       false,
     )
+    assert.equal(liveMountResourceAbort(fullBody(RESOURCE), PAGE), false)
+    assert.equal(liveMountResourceAbort(`requestfailed: ${CHECK} net::ERR_ABORTED`, PAGE), false)
+    assert.equal(
+      liveMountResourceAbort(`requestfailed: ${RESOURCE} net::ERR_FAILED`, PAGE),
+      false,
+    )
+    assert.equal(liveMountResourceAbort(`requestfailed: ${RESOURCE} net::ERR_ABORTED`, ""), false)
   })
 
   it("F1′: the window's /browser/check, aborted after a 204 (its body never read), is harmless only", () => {
@@ -210,6 +219,56 @@ describe("recordFailedRequest", () => {
         { errors: [], harmless: [] },
       )
     }
+  })
+})
+
+describe("settleSizeReports", () => {
+  it("lets a full-body report leave errors before the caller reads them", async () => {
+    const into = {
+      errors: [`requestfailed: ${RESOURCE} net::ERR_ABORTED`],
+      harmless: [],
+    }
+    let report
+    const pending = [
+      new Promise((resolve) => {
+        report = resolve
+      }).then((sizes) => reclassifyDeliveredAbort(request(), PAGE, sizes, into)),
+    ]
+    const waiting = settleSizeReports(pending)
+    assert.deepEqual(into.harmless, [])
+    report({ responseBodySize: 4095 })
+    await waiting
+    assert.deepEqual(into, { errors: [], harmless: [fullBody(RESOURCE)] })
+  })
+
+  it("leaves the line an error when the size report does not arrive", async () => {
+    const into = {
+      errors: [`requestfailed: ${RESOURCE} net::ERR_ABORTED`],
+      harmless: [],
+    }
+    const pending = [new Promise(() => {})]
+    await settleSizeReports(pending, 30)
+    assert.deepEqual(into, {
+      errors: [`requestfailed: ${RESOURCE} net::ERR_ABORTED`],
+      harmless: [],
+    })
+  })
+
+  it("leaves the line an error when the body is short", async () => {
+    const into = {
+      errors: [`requestfailed: ${RESOURCE} net::ERR_ABORTED`],
+      harmless: [],
+    }
+    const pending = [
+      Promise.resolve({ responseBodySize: 100 }).then((sizes) =>
+        reclassifyDeliveredAbort(request({ responseBodySize: 100 }), PAGE, sizes, into),
+      ),
+    ]
+    await settleSizeReports(pending)
+    assert.deepEqual(into, {
+      errors: [`requestfailed: ${RESOURCE} net::ERR_ABORTED`],
+      harmless: [],
+    })
   })
 })
 

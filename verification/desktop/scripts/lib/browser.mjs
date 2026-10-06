@@ -123,18 +123,19 @@ export async function openPage(browser, o) {
       harmless.push(entry)
     else errors.push(entry)
   })
+  const sizeReports = []
   page.on("requestfailed", (request) => {
     const pageUrl = page.url()
     recordFailedRequest(request, pageUrl, { errors, harmless })
-    // `sizes()` asks the browser and answers later. A step still running
-    // when it arrives can move a fully delivered abort out of `errors`
-    // (#473). One that already read the line keeps it; `mcp-apps-gateway`
-    // then accepts it only for a mount that went live.
+    // `sizes()` asks the browser and answers later. The caller awaits
+    // `settleRequests` before it reads `errors`, so a full body can still
+    // leave `errors` (#473). A report that never arrives leaves the line.
     const pending = typeof request.sizes === "function" ? request.sizes() : null
     if (!pending || typeof pending.then !== "function") return
-    void pending
+    const settled = pending
       .then((sizes) => reclassifyDeliveredAbort(request, pageUrl, sizes, { errors, harmless }))
       .catch(() => {})
+    sizeReports.push(settled)
   })
   try {
     await page.goto(o.url, { waitUntil: "domcontentloaded" })
@@ -170,7 +171,33 @@ export async function openPage(browser, o) {
       `the desktop page never settled at ${o.url}: ${error.message.split("\n")[0]}`,
     )
   }
-  return { context, page, errors, harmless, close: () => context.close() }
+  return {
+    context,
+    page,
+    errors,
+    harmless,
+    close: () => context.close(),
+    settleRequests: () => settleSizeReports(sizeReports),
+  }
+}
+
+/**
+ * Waits for size reports already asked of the browser, so a caller can read
+ * `errors` after a full body has been moved out. A report still pending when
+ * `timeoutMs` elapses stays an error (#473).
+ *
+ * @param {Promise<unknown>[]} pending
+ * @param {number} [timeoutMs]
+ */
+export async function settleSizeReports(pending, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs
+  while (pending.length > 0 && Date.now() < deadline) {
+    const batch = pending.splice(0)
+    await Promise.race([
+      Promise.all(batch),
+      new Promise((resolve) => setTimeout(resolve, Math.max(0, deadline - Date.now()))),
+    ])
+  }
 }
 
 /**
@@ -242,12 +269,17 @@ export function reclassifyDeliveredAbort(request, pageUrl, sizes, { errors, harm
 /**
  * The page-wide guard could not see a body size for this `/mcp-resources`
  * abort. A step may treat it as harmless only when the mount that fetched
- * it went live (#473). Any other failed request stays a failure.
+ * it went live, and the request is on the page's own origin (#473). A
+ * cross-origin abort stays a failure.
  *
  * @param {string} line
+ * @param {string} pageUrl
  */
-export function liveMountResourceAbort(line) {
-  return /^requestfailed: \S+\/mcp-resources(?:[?#]\S*)? net::ERR_ABORTED$/.test(line)
+export function liveMountResourceAbort(line, pageUrl) {
+  const match = /^requestfailed: (\S+\/mcp-resources(?:[?#]\S*)?) net::ERR_ABORTED$/.exec(line)
+  if (!match) return false
+  const own = originOf(pageUrl)
+  return own !== "null" && originOf(match[1]) === own
 }
 
 /**
