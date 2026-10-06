@@ -60,7 +60,13 @@
  */
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
-import { attempt, CannotRun, chosen } from "./lib/cli.mjs"
+import {
+  attempt,
+  CannotRun,
+  chosen,
+  devServerOnlySteps,
+  recordIfLeftOut,
+} from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { safeArea, safeAreaInit, summarize } from "./lib/safe-area.mjs"
@@ -1459,10 +1465,12 @@ Usage: node verification/desktop/scripts/drag.mjs [options]
 
 sweep-across-zones covers follows-pointer, inside-grid, inside-window, one-way
 and no-selection in one recorded drag. Side columns are hidden first so the
-panes have the room. A check made for one layout runs only there.`,
+panes have the room. A check made for one layout runs only there.
+boundary-jitter reads the model's edgeReach from the dev server; under
+--mode prod that step is not run.`,
 }
 
-await main(meta, async ({ options, rep, url }) => {
+await main(meta, async ({ options, rep, url, mode }) => {
   const only = options.only
     ? chosen(options.only, Object.keys(checks), options.list)
     : null
@@ -1476,6 +1484,14 @@ await main(meta, async ({ options, rep, url }) => {
       for (const { width, height } of sizes)
         for (const [name, check] of Object.entries(checks)) {
           if (only && !only.includes(name)) continue
+          if (
+            recordIfLeftOut(rep, mode, name, devServerOnlySteps.drag, {
+              engine,
+              layout,
+              width: `${width}x${height}`,
+            })
+          )
+            continue
           const run = typeof check === "function" ? check : check.run
           if (check.layouts && !check.layouts.includes(layout)) continue
           if (check.sizes && !check.sizes.includes(`${width}x${height}`)) continue

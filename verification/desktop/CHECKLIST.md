@@ -835,8 +835,8 @@ says why where the conversations would be.
   the packaged app's `tauri://localhost` origin are the live `pnpm app` run's.
 - [ ] **A gateway that answers shows its servers' MCP Apps in the main
   window.** _By hand:_ `pnpm app` against a gateway with
-  `scripts/mcp-test-server` configured; scripted in `gateway-window.mjs` once
-  #436 lands.
+  `scripts/mcp-test-server` configured. This row is checked by hand.
+  `gateway-window.mjs` has no step for it; adding one is #574.
 - [ ] **A scenario can ask, fail mid-turn, and wait to be cancelled, and the
   window shows it.** _Check:_ `scripted-scenarios.mjs` (and
   `pnpm test:e2e:scripted`, which also runs `mcp-apps-gateway --scripted` and
