@@ -3,7 +3,10 @@ use std::{
     collections::VecDeque,
     future::Future,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
     task::{Context, Wake, Waker},
 };
 use tokio::sync::oneshot;
@@ -317,6 +320,89 @@ async fn panicking_cleanup_waiter_does_not_stop_later_cleanup() {
     .expect("a later cleanup still finishes")
     .unwrap();
     let _ = tokio::time::timeout(Duration::from_secs(5), cleanup).await;
+}
+
+struct ScriptedGroupKill {
+    steps: Mutex<VecDeque<Result<GroupSignal, AgentError>>>,
+    calls: AtomicUsize,
+}
+
+impl ScriptedGroupKill {
+    fn new(steps: Vec<Result<GroupSignal, AgentError>>) -> Self {
+        Self {
+            steps: Mutex::new(VecDeque::from(steps)),
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    fn kill(&self, group: u32, signal: i32) -> Result<GroupSignal, AgentError> {
+        assert_eq!(group, 4242);
+        assert_eq!(signal, libc::SIGTERM);
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.steps
+            .lock()
+            .expect("scripted group kill")
+            .pop_front()
+            .expect("kill was asked after the script ended")
+    }
+}
+
+fn kill_script(script: &ScriptedGroupKill) -> Result<GroupSignal, AgentError> {
+    let verdict = kill_group(4242, libc::SIGTERM, |group, signal| {
+        script.kill(group, signal)
+    })?;
+    assert!(
+        script.steps.lock().expect("scripted group kill").is_empty(),
+        "the retry stopped before the scripted verdict"
+    );
+    Ok(verdict)
+}
+
+/// The injected signal is what is retried. One interrupt is asked again, a
+/// refusal or an unreadable result is asked once, and sixteen interrupts are
+/// the bound.
+#[test]
+fn an_interrupted_group_kill_retries_then_returns_the_verdict() {
+    let interrupted_then_gone =
+        ScriptedGroupKill::new(vec![Ok(GroupSignal::Interrupted), Ok(GroupSignal::Empty)]);
+    assert_eq!(
+        kill_script(&interrupted_then_gone).unwrap(),
+        GroupSignal::Empty
+    );
+    assert_eq!(interrupted_then_gone.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        signal_verdict(GroupSignal::Empty),
+        SignalDelivery::NotDelivered
+    );
+
+    let interrupted_then_reached =
+        ScriptedGroupKill::new(vec![Ok(GroupSignal::Interrupted), Ok(GroupSignal::Reached)]);
+    assert_eq!(
+        kill_script(&interrupted_then_reached).unwrap(),
+        GroupSignal::Reached
+    );
+    assert_eq!(interrupted_then_reached.calls.load(Ordering::SeqCst), 2);
+
+    let refused = ScriptedGroupKill::new(vec![Ok(GroupSignal::Refused)]);
+    assert_eq!(kill_script(&refused).unwrap(), GroupSignal::Refused);
+    assert_eq!(refused.calls.load(Ordering::SeqCst), 1);
+
+    let unreadable = ScriptedGroupKill::new(vec![Err(AgentError::CleanupUncertain)]);
+    assert_eq!(
+        kill_group(4242, libc::SIGTERM, |group, signal| {
+            unreadable.kill(group, signal)
+        }),
+        Err(AgentError::CleanupUncertain)
+    );
+    assert_eq!(unreadable.calls.load(Ordering::SeqCst), 1);
+
+    let exhausted = ScriptedGroupKill::new(vec![Ok(GroupSignal::Interrupted); 16]);
+    assert_eq!(kill_script(&exhausted).unwrap(), GroupSignal::Interrupted);
+    assert_eq!(exhausted.calls.load(Ordering::SeqCst), 16);
+    assert_eq!(
+        signal_verdict(GroupSignal::Interrupted),
+        SignalDelivery::NotDelivered
+    );
 }
 
 #[test]

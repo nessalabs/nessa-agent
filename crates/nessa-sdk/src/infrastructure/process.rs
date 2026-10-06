@@ -467,27 +467,39 @@ fn watch_scope(waited: Result<(), io::Error>, group_gone: Result<bool, AgentErro
 /// interrupts `kill`. Past this bound the call is still not a verdict.
 #[cfg(unix)]
 const SIGNAL_INTERRUPT_RETRIES: u32 = 16;
+/// Asks `kill` again only for `EINTR`. `kill` is the process-group signal:
+/// the process passes [`libc_group_kill`], and a test passes a substitute
+/// that returns the scripted verdicts.
 #[cfg(unix)]
-fn kill_group(group: u32, signal: i32) -> Result<GroupSignal, AgentError> {
+fn kill_group(
+    group: u32,
+    signal: i32,
+    kill: impl Fn(u32, i32) -> Result<GroupSignal, AgentError>,
+) -> Result<GroupSignal, AgentError> {
     for _ in 0..SIGNAL_INTERRUPT_RETRIES {
-        // The group ID is assigned by the OS to this child's new process group.
-        let result = unsafe { libc::kill(-(group as i32), signal) };
-        let errno = if result == 0 {
-            None
-        } else {
-            io::Error::last_os_error().raw_os_error()
-        };
-        match classify_kill(result, errno)? {
+        match kill(group, signal)? {
             GroupSignal::Interrupted => continue,
-            other => return Ok(other),
+            verdict => return Ok(verdict),
         }
     }
     Ok(GroupSignal::Interrupted)
 }
+/// The real process-group `kill`. The group id is the one assigned when this
+/// child was spawned with `process_group(0)`.
+#[cfg(unix)]
+fn libc_group_kill(group: u32, signal: i32) -> Result<GroupSignal, AgentError> {
+    let result = unsafe { libc::kill(-(group as i32), signal) };
+    let errno = if result == 0 {
+        None
+    } else {
+        io::Error::last_os_error().raw_os_error()
+    };
+    classify_kill(result, errno)
+}
 #[cfg(unix)]
 fn signal_group(group: u32, force: bool) -> Result<SignalDelivery, AgentError> {
     let signal = if force { libc::SIGKILL } else { libc::SIGTERM };
-    let killed = kill_group(group, signal)?;
+    let killed = kill_group(group, signal, libc_group_kill)?;
     if matches!(killed, GroupSignal::Refused | GroupSignal::Interrupted) {
         tracing::debug!(
             group,
@@ -500,7 +512,7 @@ fn signal_group(group: u32, force: bool) -> Result<SignalDelivery, AgentError> {
 }
 #[cfg(unix)]
 fn group_exists(group: u32) -> Result<bool, AgentError> {
-    match kill_group(group, 0)? {
+    match kill_group(group, 0, libc_group_kill)? {
         GroupSignal::Reached => Ok(true),
         GroupSignal::Empty => Ok(false),
         // Refused or still interrupted: not `ESRCH`. `wait_scope` keeps polling
