@@ -37,9 +37,7 @@
     },
     {
       "ok": false,
-      "failures": [
-        "longest frame 116.69999999999891 ms > 50 ms (runs: 100 117 100)"
-      ],
+      "failures": ["longest frame 116.69999999999891 ms > 50 ms (runs: 100 117 100)"],
       "name": "drag-drop",
       "engine": "chromium",
       "layout": "columns",
@@ -1254,9 +1252,7 @@
     },
     {
       "ok": false,
-      "failures": [
-        "longest frame 100 ms > 50 ms (runs: 83 100 100)"
-      ],
+      "failures": ["longest frame 100 ms > 50 ms (runs: 83 100 100)"],
       "name": "overview-open",
       "engine": "chromium",
       "layout": "columns",
@@ -1543,9 +1539,7 @@
     },
     {
       "ok": false,
-      "failures": [
-        "longest frame 133.29999999999927 ms > 50 ms (runs: 100 100 133)"
-      ],
+      "failures": ["longest frame 133.29999999999927 ms > 50 ms (runs: 100 100 133)"],
       "name": "drag-drop",
       "engine": "chromium",
       "layout": "sidebar",
@@ -3190,9 +3184,7 @@
     },
     {
       "ok": false,
-      "failures": [
-        "longest frame 116.69999999999982 ms > 50 ms (runs: 100 117 100)"
-      ],
+      "failures": ["longest frame 116.69999999999982 ms > 50 ms (runs: 100 117 100)"],
       "name": "overview-open",
       "engine": "chromium",
       "layout": "sidebar",
