@@ -12,6 +12,10 @@ They are **not a CI gate** ([adding a check to CI](../CODING_STANDARDS.md#adding
 they need a browser, a server and minutes. Run them before handing off UI work,
 when reviewing it, and after anything performance-sensitive.
 
+A large-workspace measurement is specified in
+[UI workspace load](../docs/design/ui-workspace-load.md). The seeded builder
+named there is not wired into the window and is not part of `pnpm verify:desktop`.
+
 ## Layout
 
 ```
