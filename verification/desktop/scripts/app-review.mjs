@@ -815,7 +815,9 @@ Object.assign(checks, {
         const askedText = (await asked.textContent()) ?? ""
         const message = JSON.stringify({ text: appReview.message })
         if (!askedText.includes(message))
-          failures.push(`${tag}: the command drops the message ${JSON.stringify(message)}`)
+          failures.push(
+            `${tag}: the command drops the message ${JSON.stringify(message)}`,
+          )
         ordered("command", await drawnInOrder(asked))
         await page.keyboard.press(keys.overview)
         await need(page, css.overview, "the Agents overview")
