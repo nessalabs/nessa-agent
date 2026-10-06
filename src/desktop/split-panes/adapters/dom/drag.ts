@@ -188,7 +188,7 @@ function together(animations: readonly Animation[]) {
         () => {
           // A preview already let go is `idle`. Setting its start again would
           // play it. Only a pair still running needs the shared instant.
-          if (animation.playState !== "running" && animation.playState !== "pending") return
+          if (animation.playState !== "running") return
           if (animation.startTime !== now) animation.startTime = now
         },
         (error: unknown) => {

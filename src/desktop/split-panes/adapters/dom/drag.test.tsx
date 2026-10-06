@@ -320,6 +320,11 @@ it("puts a start WebKit moved on ready back to the instant the pair was given", 
 
 it("treats a cancelled preview's ready rejection as letting go", async () => {
   const unhandled: unknown[] = []
+  const reported: unknown[] = []
+  const previous = globalThis.reportError
+  globalThis.reportError = (error: unknown) => {
+    reported.push(error)
+  }
   const onUnhandled = (reason: unknown) => {
     unhandled.push(reason)
   }
@@ -367,9 +372,12 @@ it("treats a cancelled preview's ready rejection as letting go", async () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
     expect(unhandled).toEqual([])
+    expect(reported).toEqual([])
     await act(async () => root.unmount())
   } finally {
     process.removeListener("unhandledRejection", onUnhandled)
+    if (previous === undefined) Reflect.deleteProperty(globalThis, "reportError")
+    else globalThis.reportError = previous
     Reflect.deleteProperty(document, "timeline")
   }
 })
@@ -422,7 +430,7 @@ it("keeps a ready failure that is not cancellation", async () => {
     expect(reported.map((error) => (error as Error).message)).toContain("clock failed")
     await act(async () => root.unmount())
   } finally {
-    if (previous === undefined) delete globalThis.reportError
+    if (previous === undefined) Reflect.deleteProperty(globalThis, "reportError")
     else globalThis.reportError = previous
     Reflect.deleteProperty(document, "timeline")
   }

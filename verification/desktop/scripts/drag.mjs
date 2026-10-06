@@ -279,9 +279,11 @@ async function recordShapes(page) {
     const syncedStarts = (title) => {
       const starts = []
       for (let node = title; node; node = node.parentElement) {
-        const animations = typeof node.getAnimations === "function" ? node.getAnimations() : []
+        const animations =
+          typeof node.getAnimations === "function" ? node.getAnimations() : []
         for (const animation of animations) {
-          if (animation.playState === "finished" || animation.playState === "idle") continue
+          if (animation.playState === "finished" || animation.playState === "idle")
+            continue
           if (typeof animation.startTime !== "number") return false
           starts.push(animation.startTime)
         }
@@ -302,7 +304,8 @@ async function recordShapes(page) {
       let current = sample()
       while (reads.length < steadyReads) {
         const next = sample()
-        const steady = !current.straddled && !next.straddled && agree(next.read, current.read)
+        const steady =
+          !current.straddled && !next.straddled && agree(next.read, current.read)
         current = next
         if (steady)
           return {

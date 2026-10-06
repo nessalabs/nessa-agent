@@ -132,10 +132,13 @@ export async function openPage(browser, o) {
     // leave `errors` (#473). A report that never arrives leaves the line.
     const pending = typeof request.sizes === "function" ? request.sizes() : null
     if (!pending || typeof pending.then !== "function") return
-    const settled = pending
-      .then((sizes) => reclassifyDeliveredAbort(request, pageUrl, sizes, { errors, harmless }))
-      .catch(() => {})
-    sizeReports.push(settled)
+    // Kept as a report, not a bare promise: a size that arrives after the
+    // step stopped waiting must not move a later line with the same text.
+    sizeReports.push(
+      enqueueSizeReport(pending, (sizes) =>
+        reclassifyDeliveredAbort(request, pageUrl, sizes, { errors, harmless }),
+      ),
+    )
   })
   try {
     await page.goto(o.url, { waitUntil: "domcontentloaded" })
@@ -143,6 +146,9 @@ export async function openPage(browser, o) {
       timeout: o.readyTimeout ?? 30_000,
     })
   } catch (error) {
+    // A size report can still move a full-body abort out of `errors` before
+    // this failure names them. Closing first would drop that report.
+    await settleSizeReports(sizeReports)
     await context.close().catch(() => {})
     throw new CannotRun(
       `the desktop page did not render ${o.readySelector ?? css.anyReady} at ${o.url}: ${error.message.split("\n")[0]}` +
@@ -182,21 +188,68 @@ export async function openPage(browser, o) {
 }
 
 /**
+ * Remembers one `sizes()` answer. `apply` runs only if `settleSizeReports`
+ * is still waiting for it. A report abandoned at the deadline cannot move a
+ * line recorded later (#473).
+ *
+ * @param {Promise<unknown>} sizes
+ * @param {(sizes: unknown) => void} apply
+ * @returns {{ abandoned: boolean, settled: Promise<void> }}
+ */
+export function enqueueSizeReport(sizes, apply) {
+  const report = { abandoned: false, settled: /** @type {Promise<void>} */ (null) }
+  report.settled = sizes
+    .then((value) => {
+      if (report.abandoned) return
+      apply(value)
+    })
+    .catch(() => {})
+  return report
+}
+
+/**
  * Waits for size reports already asked of the browser, so a caller can read
  * `errors` after a full body has been moved out. A report still pending when
- * `timeoutMs` elapses stays an error (#473).
+ * `timeoutMs` elapses is abandoned: it stays an error, and its later answer
+ * does not change `errors` (#473).
  *
- * @param {Promise<unknown>[]} pending
+ * @param {Array<Promise<unknown> | { abandoned?: boolean, settled: Promise<unknown> }>} pending
  * @param {number} [timeoutMs]
  */
 export async function settleSizeReports(pending, timeoutMs = 2000) {
   const deadline = Date.now() + timeoutMs
   while (pending.length > 0 && Date.now() < deadline) {
     const batch = pending.splice(0)
-    await Promise.race([
-      Promise.all(batch),
-      new Promise((resolve) => setTimeout(resolve, Math.max(0, deadline - Date.now()))),
-    ])
+    let timedOut = false
+    let timer
+    try {
+      await Promise.race([
+        Promise.all(batch.map((item) => item.settled ?? item)),
+        new Promise((resolve) => {
+          timer = setTimeout(
+            () => {
+              timedOut = true
+              resolve()
+            },
+            Math.max(0, deadline - Date.now()),
+          )
+        }),
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
+    if (timedOut) {
+      abandonSizeReports(batch)
+      abandonSizeReports(pending.splice(0))
+      return
+    }
+  }
+  if (Date.now() >= deadline) abandonSizeReports(pending.splice(0))
+}
+
+function abandonSizeReports(reports) {
+  for (const report of reports) {
+    if (report && Object.hasOwn(report, "abandoned")) report.abandoned = true
   }
 }
 
@@ -238,8 +291,7 @@ export function recordFailedRequest(request, pageUrl, { errors, harmless }) {
   const kind = abortKind(request, pageUrl, errorText)
   if (kind === "full")
     harmless.push(`${line} (aborted after a 200 response, full body, #473)`)
-  else if (kind === "empty")
-    harmless.push(`${line} (aborted after a 204 response, #485)`)
+  else if (kind === "empty") harmless.push(`${line} (aborted after a 204 response, #485)`)
   else errors.push(line)
 }
 
@@ -276,7 +328,9 @@ export function reclassifyDeliveredAbort(request, pageUrl, sizes, { errors, harm
  * @param {string} pageUrl
  */
 export function liveMountResourceAbort(line, pageUrl) {
-  const match = /^requestfailed: (\S+\/mcp-resources(?:[?#]\S*)?) net::ERR_ABORTED$/.exec(line)
+  const match = /^requestfailed: (\S+\/mcp-resources(?:[?#]\S*)?) net::ERR_ABORTED$/.exec(
+    line,
+  )
   if (!match) return false
   const own = originOf(pageUrl)
   return own !== "null" && originOf(match[1]) === own

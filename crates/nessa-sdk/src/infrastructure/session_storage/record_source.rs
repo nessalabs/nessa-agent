@@ -1138,7 +1138,7 @@ mod tests {
     use std::{
         future::Future,
         io::{BufRead, BufReader, Write},
-        net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
+        net::{Ipv4Addr, SocketAddrV4, TcpStream},
         path::Path,
         process::{Child, Command, Stdio},
         sync::{mpsc::TryRecvError, Arc},
@@ -3301,8 +3301,8 @@ mod tests {
             )
             .unwrap();
         // The lease is the writer reservation. The records are already in the
-        // store the source reads; holding it across `serve` keeps that
-        // connection for the whole probe (#472).
+        // store. Releasing it before `serve` lets the source read them;
+        // holding it made the receiver see `Unavailable` (#472).
         drop(lease);
         let mut source = runtime
             .block_on(storage.record_source(&session, id("origin")))
@@ -3325,7 +3325,7 @@ mod tests {
             allowed_receivers: vec![scope.receiver().clone()],
         };
         let server = LoopbackRecordServer::bind(0, config, move || Ok(source.clone())).unwrap();
-        let bound = SocketAddr::from(server.local_addr().unwrap());
+        let bound = server.local_addr().unwrap();
         // `serve` accepts on its own thread. READY is printed only after a
         // connection to that listener succeeds, so the parent does not hand
         // the port to a client the kernel is still refusing (#472).

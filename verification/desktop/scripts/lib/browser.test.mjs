@@ -7,6 +7,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
 import {
+  enqueueSizeReport,
   liveMountResourceAbort,
   reclassifyDeliveredAbort,
   recordFailedRequest,
@@ -37,8 +38,7 @@ const request = ({
           headers: () =>
             contentLength === null ? {} : { "content-length": String(contentLength) },
         },
-  sizes: () =>
-    sizes === undefined ? { responseBodySize } : sizes,
+  sizes: () => (sizes === undefined ? { responseBodySize } : sizes),
 })
 
 /** Where `recordFailedRequest` put the request's line. */
@@ -71,7 +71,10 @@ describe("recordFailedRequest", () => {
   })
 
   it("a 200 is an error when the body is short, or the size was not reported", () => {
-    anError(request({ responseBodySize: 4094 }), `requestfailed: ${RESOURCE} net::ERR_ABORTED`)
+    anError(
+      request({ responseBodySize: 4094 }),
+      `requestfailed: ${RESOURCE} net::ERR_ABORTED`,
+    )
     anError(
       request({ contentLength: null, responseBodySize: 4095 }),
       `requestfailed: ${RESOURCE} net::ERR_ABORTED`,
@@ -87,7 +90,12 @@ describe("recordFailedRequest", () => {
       errors: [`requestfailed: ${RESOURCE} net::ERR_ABORTED`],
       harmless: [],
     }
-    reclassifyDeliveredAbort(request({ responseBodySize: 100 }), PAGE, { responseBodySize: 100 }, into)
+    reclassifyDeliveredAbort(
+      request({ responseBodySize: 100 }),
+      PAGE,
+      { responseBodySize: 100 },
+      into,
+    )
     assert.deepEqual(into, {
       errors: [`requestfailed: ${RESOURCE} net::ERR_ABORTED`],
       harmless: [],
@@ -129,7 +137,10 @@ describe("recordFailedRequest", () => {
   })
 
   it("only an unlabelled same-origin /mcp-resources abort is the mount-went-live case", () => {
-    assert.equal(liveMountResourceAbort(`requestfailed: ${RESOURCE} net::ERR_ABORTED`, PAGE), true)
+    assert.equal(
+      liveMountResourceAbort(`requestfailed: ${RESOURCE} net::ERR_ABORTED`, PAGE),
+      true,
+    )
     assert.equal(
       liveMountResourceAbort(`requestfailed: ${RESOURCE}?x=1 net::ERR_ABORTED`, PAGE),
       true,
@@ -142,16 +153,25 @@ describe("recordFailedRequest", () => {
       false,
     )
     assert.equal(liveMountResourceAbort(fullBody(RESOURCE), PAGE), false)
-    assert.equal(liveMountResourceAbort(`requestfailed: ${CHECK} net::ERR_ABORTED`, PAGE), false)
+    assert.equal(
+      liveMountResourceAbort(`requestfailed: ${CHECK} net::ERR_ABORTED`, PAGE),
+      false,
+    )
     assert.equal(
       liveMountResourceAbort(`requestfailed: ${RESOURCE} net::ERR_FAILED`, PAGE),
       false,
     )
-    assert.equal(liveMountResourceAbort(`requestfailed: ${RESOURCE} net::ERR_ABORTED`, ""), false)
+    assert.equal(
+      liveMountResourceAbort(`requestfailed: ${RESOURCE} net::ERR_ABORTED`, ""),
+      false,
+    )
   })
 
   it("F1′: the window's /browser/check, aborted after a 204 (its body never read), is harmless only", () => {
-    harmlessOnly(request({ url: CHECK, status: 204, contentLength: null }), emptyBody(CHECK))
+    harmlessOnly(
+      request({ url: CHECK, status: 204, contentLength: null }),
+      emptyBody(CHECK),
+    )
   })
 
   it("a 2xx other than a full 200 or an empty 204 is an error", () => {
@@ -252,6 +272,29 @@ describe("settleSizeReports", () => {
       errors: [`requestfailed: ${RESOURCE} net::ERR_ABORTED`],
       harmless: [],
     })
+  })
+
+  it("a late full body does not excuse a later identical line", async () => {
+    const line = `requestfailed: ${RESOURCE} net::ERR_ABORTED`
+    const into = { errors: [line], harmless: [] }
+    let report
+    const pending = []
+    pending.push(
+      enqueueSizeReport(
+        new Promise((resolve) => {
+          report = resolve
+        }),
+        (sizes) => reclassifyDeliveredAbort(request(), PAGE, sizes, into),
+      ),
+    )
+    await settleSizeReports(pending, 30)
+    // The step already copied the first line out. A second abort of the same
+    // url is a different failure, even when the first size finally arrives.
+    into.errors.splice(0)
+    into.errors.push(line)
+    report({ responseBodySize: 4095 })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(into, { errors: [line], harmless: [] })
   })
 
   it("leaves the line an error when the body is short", async () => {
