@@ -268,20 +268,40 @@ fn render(limits: &OperationalLimits, session: &SessionSettings) -> String {
 mod tests {
     use super::*;
 
+    /// Turn CRLF into LF. A Windows checkout may do the reverse to the
+    /// committed file; the rendering, and what `UPDATE_LIMITS_DOC=1` writes,
+    /// stay LF.
+    fn lf_newlines(text: &str) -> String {
+        text.replace("\r\n", "\n")
+    }
+
     #[test]
     fn the_rendered_catalogue_matches_the_committed_document() {
         let limits = OperationalLimits::default();
         let session = SessionSettings::default();
         let rendered = render(&limits, &session);
+        assert!(
+            !rendered.contains('\r'),
+            "UPDATE_LIMITS_DOC writes this rendering, and it is LF"
+        );
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/limits.md");
         if std::env::var_os("UPDATE_LIMITS_DOC").is_some() {
             std::fs::write(path, &rendered).expect("rewrite docs/limits.md");
         }
         let committed = std::fs::read_to_string(path).unwrap_or_default();
         assert_eq!(
-            committed, rendered,
+            lf_newlines(&committed),
+            rendered,
             "docs/limits.md drifted; regenerate with UPDATE_LIMITS_DOC=1"
         );
+    }
+
+    #[test]
+    fn a_crlf_checkout_of_the_catalogue_is_not_drift() {
+        let rendered = render(&OperationalLimits::default(), &SessionSettings::default());
+        let checked_out = rendered.replace('\n', "\r\n");
+        assert_ne!(checked_out, rendered);
+        assert_eq!(lf_newlines(&checked_out), rendered);
     }
 
     #[test]
