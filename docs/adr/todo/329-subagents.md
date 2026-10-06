@@ -226,6 +226,7 @@ while ordinary Agent controllers continue to enforce their own execution states.
 | Open | Admitted spawn | Open; retain one reservation under its stable request binding |
 | Open | Close from caller, terminal lifetime failure or final owner disposal | Closing; seal admission and retain the first cause before asynchronous effects |
 | Closing | Constructor returns a child | Closing; attach it to the drain, without dispatch permission |
+| Open | Constructor returns a child whose own lifetime is already closing or closed | Parent stays Open; do not dispatch, and do not report that refusal as the parent closing. The child's own close owns cleanup |
 | Closing | A target reports cleanup/evidence | Closing; apply only correlated results and retain unresolved obligations |
 | Closing | All parent/descendant resources released and required evidence acknowledged | Closed; publish the aggregate receipt |
 | Closing | Waiter leaves, deadline passes, or one target fails | Closing; retain supervision and return an incomplete result when observed |
@@ -237,6 +238,11 @@ initial-submission reference. These are relationship facts, not another provider
 attachment state machine. Existing creation/attachment/submission receipts supply
 their authoritative progress. Every reservation ends in an attached child or a
 settled failure; uncertain startup retains its reservation and cleanup ownership.
+A rejected startup that held no cleanup owner ends the chart at `Ended` without
+a physical release and returns the live slot. The child lifetime stays open.
+A rejected publication does not prepare, returns the live slot, and keeps the
+in-memory reservation for an identical retry. An uncertain publication keeps
+the slot.
 
 ## Statechart design contract
 
@@ -312,18 +318,23 @@ stateDiagram-v2
         Prepared --> Attached: ownership attachment acknowledged
         Attached --> TaskAdmitted: original submission receipt acknowledged
     }
-    Admitted --> Draining: ancestor close or startup failure / stop dispatch
+    Admitted --> Draining: ancestor close, the child lifetime is not open, or stop dispatch
+    Admitted --> StartupFailed: rejected startup still holds a cleanup owner
+    StartupFailed --> Ended: that owner reports physical release
+    Admitted --> Ended: rejected startup held no cleanup owner
     Admitted --> Unconfirmed: uncertain publication or interrupted original attempt
     Unconfirmed --> TaskAdmitted: lookup confirms original child and submission
     Unconfirmed --> Draining: closing lifetime or retained failed attempt
-    Draining --> Ended: physical ownership settled and required evidence acknowledged
+    Draining --> Ended: dispatch was refused; physical release may still be pending
     TaskAdmitted --> [*]
     Refused --> [*]
     Ended --> [*]
 ```
 
 Completion of this spawn chart means its admission operation settled, not that
-its child's task finished. Creation and submission receipts remain separate.
+its child's task finished. Refusing dispatch records `Draining` and then `Ended`
+even when physical release is still pending; the child lifetime stays `Closing`
+until that release is confirmed. Creation and submission receipts remain separate.
 An unchanged retry finds the same binding; it does not re-enter Checking to pick
 another policy. Unconfirmed has no automatic edge that repeats provider dispatch.
 Actual creation progress may confirm only a partial milestone; lookup updates
@@ -607,7 +618,10 @@ This differs from the explicit approval-mode recovery retirement defined above.
    deadlock the drain.
 4. Join constructors and admitted controls through their existing supervisors.
    A child produced after the fence is closed before dispatch. A failed
-   reservation is released after its physical ownership is settled.
+   reservation that held a cleanup owner is released after its physical
+   ownership is settled. A rejected publication, or a rejected startup that
+   held no cleanup owner, returns the live slot without that physical release
+   and keeps the retained reservation.
 5. Retain each child's physical cleanup, review/queue settlement and audit result.
    Failure on one child does not suppress cleanup attempts for the rest.
 6. Report aggregate success only after parent and descendants confirm cleanup
@@ -683,7 +697,11 @@ admission decisions, perform provider effects outside the in-memory admission
 critical section, then apply correlated results. Avoid a semantic-lease holder
 waiting for a tree lease while the tree owner waits for that semantic lease.
 Publication across stores uses retained progress and reconciliation, rather than
-claiming an atomic transaction across unrelated stores.
+claiming an atomic transaction across unrelated stores. Within one process, each
+snapshot copy takes its revision with the copy. After a newer copy is
+acknowledged, an older copy is not written. The store still replaces one body.
+A newer write that fails does not record that acknowledgement, so an older copy
+can still be written afterward.
 
 Validate retained ownership before allowing child dispatch on startup:
 

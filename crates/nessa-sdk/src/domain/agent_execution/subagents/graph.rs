@@ -71,10 +71,13 @@ pub struct CloseAdmission {
 /// Whether a prepared child may be dispatched.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dispatch {
-    /// The parent lifetime is still open.
+    /// The parent and the child are still open.
     Allowed,
     /// The parent is sealing. Do not dispatch.
     Drain,
+    /// The child lifetime is closing or closed. Do not dispatch, and do not
+    /// report that refusal as the parent closing.
+    ChildUnavailable,
 }
 
 /// One child on a read page, oldest identity first.
@@ -351,6 +354,10 @@ impl OwnershipGraph {
     }
 
     /// After the factory returns, say whether the child may be dispatched.
+    ///
+    /// Both lifetimes must be open. A closing or closed parent returns
+    /// [`Dispatch::Drain`]. A child that is already closing or closed, while
+    /// its parent is still open, returns [`Dispatch::ChildUnavailable`].
     pub fn dispatch_after_prepare(
         &mut self,
         request: &SpawnRequestId,
@@ -361,11 +368,15 @@ impl OwnershipGraph {
             .get(request)
             .ok_or(OwnershipError::UnknownSpawn)?;
         let parent = spawn.row.binding.parent_lifetime.clone();
+        let child = spawn.row.child_lifetime.clone();
         let progress = spawn.row.progress.clone();
-        let state = self
+        let parent_state = self
             .lifetime_state(&parent)
             .expect("a dispatchable spawn names a recorded parent");
-        if state == LifetimeState::Open {
+        let child_state = self
+            .lifetime_state(&child)
+            .expect("a dispatchable spawn names a recorded child");
+        if parent_state == LifetimeState::Open && child_state == LifetimeState::Open {
             return Ok(Dispatch::Allowed);
         }
         if !matches!(
@@ -380,7 +391,10 @@ impl OwnershipGraph {
                 .advance_spawn(request, SpawnProgress::Draining { known })
                 .expect("a non-terminal spawn drains to its known milestone");
         }
-        Ok(Dispatch::Drain)
+        if parent_state != LifetimeState::Open {
+            return Ok(Dispatch::Drain);
+        }
+        Ok(Dispatch::ChildUnavailable)
     }
 
     /// Seal `lifetime` and every open descendant. A repeat joins the first cause.

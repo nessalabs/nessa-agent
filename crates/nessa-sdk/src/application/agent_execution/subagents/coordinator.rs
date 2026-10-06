@@ -1,10 +1,14 @@
 //! Supervises spawn, tree close, and recovery around [`OwnershipGraph`](crate::domain::agent_execution::subagents::OwnershipGraph).
+//!
+//! Snapshot publication copies the graph under the admission lock, then writes
+//! that copy. A copy that lost the race to a newer acknowledged copy is not
+//! written. The store still replaces one body; this fence is the coordinator's.
 #![deny(missing_docs)]
 
 use std::{
     collections::{HashMap, HashSet},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, Weak,
     },
     time::Duration,
@@ -13,7 +17,7 @@ use std::{
 use async_trait::async_trait;
 use data_encoding::HEXLOWER;
 use sha2::{Digest, Sha256};
-use tokio::sync::{watch, Notify};
+use tokio::sync::{watch, Mutex as AsyncMutex, Notify};
 use uuid::Uuid;
 
 use super::{
@@ -31,7 +35,7 @@ use crate::domain::agent_execution::{
     sessions::SessionId,
     subagents::{
         select_inherited_policy, AgentLifetimeId, ApprovalPolicy, CloseOperationId, DeliveryState,
-        EvidenceFact, HostActor, Initiator, LifetimeCause, LifetimeState, OwnershipError,
+        Dispatch, EvidenceFact, HostActor, Initiator, LifetimeCause, LifetimeState, OwnershipError,
         OwnershipEvidence, OwnershipGraph, PhysicalFact, PolicyRead, ReportId, SpawnAdmission,
         SpawnBinding, SpawnOrigin, SpawnProgress, SpawnRequestId, TaskDigest, MAX_READ_PAGE,
     },
@@ -118,6 +122,16 @@ struct Shared {
     flights: Mutex<HashMap<SpawnRequestId, SpawnFlight>>,
     drains: Mutex<HashMap<AgentLifetimeId, DrainSlot>>,
     notify: Notify,
+    /// Assigned when a snapshot is copied. A later assignment is a later graph.
+    publication_revision: AtomicU64,
+    /// Highest revision the store has acknowledged.
+    published_revision: AtomicU64,
+    /// One store write at a time, so a revision check and its write stay paired.
+    write_order: AsyncMutex<()>,
+    #[cfg(test)]
+    publish_pause: Mutex<Option<Arc<PublishPause>>>,
+    #[cfg(test)]
+    drain_exclusion: AtomicBool,
 }
 
 type SpawnFlight = watch::Sender<Option<Result<SpawnReceipt, OwnershipFailure>>>;
@@ -125,6 +139,12 @@ type SpawnFlight = watch::Sender<Option<Result<SpawnReceipt, OwnershipFailure>>>
 struct DrainSlot {
     external: Arc<AtomicBool>,
     receiver: watch::Receiver<Option<Result<(), OwnershipFailure>>>,
+}
+
+#[cfg(test)]
+struct PublishPause {
+    entered: Notify,
+    release: Notify,
 }
 
 struct LifetimeGate {
@@ -170,8 +190,25 @@ impl OwnershipCoordinator {
                 flights: Mutex::new(HashMap::new()),
                 drains: Mutex::new(HashMap::new()),
                 notify: Notify::new(),
+                publication_revision: AtomicU64::new(0),
+                published_revision: AtomicU64::new(0),
+                write_order: AsyncMutex::new(()),
+                #[cfg(test)]
+                publish_pause: Mutex::new(None),
+                #[cfg(test)]
+                drain_exclusion: AtomicBool::new(false),
             }),
         }
+    }
+
+    #[cfg(test)]
+    fn pause_next_snapshot_write(&self, pause: Arc<PublishPause>) {
+        *self.inner.publish_pause.lock().expect("publish pause") = Some(pause);
+    }
+
+    #[cfg(test)]
+    fn require_drain_exclusion(&self) {
+        self.inner.drain_exclusion.store(true, Ordering::SeqCst);
     }
 
     /// Open a root lifetime. A session that already has an open or closing root is refused.
@@ -204,6 +241,12 @@ impl OwnershipCoordinator {
     /// Reserve, prepare, and admit one child. Identical retries do not call the factory again.
     /// A caller that arrives while the attempt is running joins it. Dropping one waiter
     /// leaves the attempt running.
+    ///
+    /// A rejected audit or store publication does not prepare and returns the live
+    /// slot, while the in-memory reservation stays for an identical retry. An
+    /// uncertain publication keeps the slot. A rejected startup that held no
+    /// cleanup owner also returns the slot. A startup that held cleanup returns
+    /// the slot only after that owner reports release.
     pub async fn spawn(&self, command: SpawnCommand) -> Result<SpawnReceipt, OwnershipFailure> {
         if command.task.trim().is_empty() {
             return Err(OwnershipFailure::EmptyTask);
@@ -233,7 +276,8 @@ impl OwnershipCoordinator {
 
     /// Seal `command.lifetime` and join descendant cleanup.
     /// A second call joins the drain that is still running, or retries targets
-    /// whose physical release was not confirmed.
+    /// whose physical release was not confirmed. Overlapping calls share that
+    /// one drain; they do not close the same target twice.
     pub async fn end_lifetime(&self, command: CloseCommand) -> Result<(), OwnershipFailure> {
         let evidence = self.inner.seal_now(
             &command.lifetime,
@@ -468,8 +512,22 @@ impl Shared {
             shared: Arc::clone(self),
             id: admitted.child.clone(),
         };
-        self.publish_evidence(&admitted.evidence, Some(&command.request_id))
-            .await?;
+        if let Err(error) = self
+            .publish_evidence(&admitted.evidence, Some(&command.request_id))
+            .await
+        {
+            // Rejected means the publication did not happen, so this reservation
+            // is not a live child. The graph row stays so an identical retry
+            // still finds it and does not prepare a second child.
+            if matches!(
+                error,
+                OwnershipFailure::Audit(PortFailure::Rejected)
+                    | OwnershipFailure::Store(PortFailure::Rejected)
+            ) {
+                self.release_slot(&admitted.child);
+            }
+            return Err(error);
+        }
         self.preparing_factory(&command, admitted).await
     }
 
@@ -580,11 +638,13 @@ impl Shared {
                 .map_err(OwnershipFailure::Domain)
         })?;
         self.notify.notify_waiters();
-        if matches!(
-            dispatch,
-            crate::domain::agent_execution::subagents::Dispatch::Drain
-        ) {
-            self.close_claimed(&command.parent, &admitted.child).await;
+        if matches!(dispatch, Dispatch::Drain | Dispatch::ChildUnavailable) {
+            let root = if dispatch == Dispatch::ChildUnavailable {
+                &admitted.child
+            } else {
+                &command.parent
+            };
+            self.close_claimed(root, &admitted.child).await;
             let _ = self
                 .advance(
                     &command.request_id,
@@ -593,7 +653,12 @@ impl Shared {
                     },
                 )
                 .await;
-            return Err(OwnershipFailure::Domain(OwnershipError::ParentClosing));
+            let error = if dispatch == Dispatch::ChildUnavailable {
+                OwnershipError::ChildUnavailable
+            } else {
+                OwnershipError::ParentClosing
+            };
+            return Err(OwnershipFailure::Domain(error));
         }
         self.advance(&command.request_id, SpawnProgress::Prepared)
             .await?;
@@ -625,8 +690,16 @@ impl Shared {
     }
 
     async fn finish_startup(&self, request: &SpawnRequestId, child: &AgentLifetimeId) {
+        let owned = self
+            .resources
+            .lock()
+            .expect("child resources")
+            .contains_key(child);
         let report = self.close_claimed_local(child).await;
-        if report.physical == PhysicalFact::Released {
+        // No cleanup owner means startup held nothing physical. `StartupFailed`
+        // would still say that cleanup is owned, so the chart ends and the live
+        // slot goes back. A real owner keeps the slot until release is confirmed.
+        if report.physical == PhysicalFact::Released || !owned {
             self.release_slot(child);
             let _ = self
                 .advance(
@@ -721,8 +794,7 @@ impl Shared {
         });
         if let Some(evidence) = evidence {
             let _ = self.audit.record(&evidence).await;
-            let snapshot = self.with_graph(|graph| graph.snapshot());
-            let _ = self.store.write(&snapshot).await;
+            let _ = self.commit_snapshot().await;
         }
     }
 
@@ -785,8 +857,7 @@ impl Shared {
                 return Err(OwnershipFailure::Audit(PortFailure::Uncertain));
             }
         }
-        let snapshot = self.with_graph(|graph| graph.snapshot());
-        match self.store.write(&snapshot).await {
+        match self.commit_snapshot().await {
             Ok(()) => Ok(()),
             Err(PortFailure::Rejected) => Err(OwnershipFailure::Store(PortFailure::Rejected)),
             Err(PortFailure::Uncertain) => {
@@ -795,6 +866,38 @@ impl Shared {
                 }
                 Err(OwnershipFailure::Store(PortFailure::Uncertain))
             }
+        }
+    }
+
+    /// Copy the graph and write it unless a newer copy is already acknowledged.
+    ///
+    /// The revision is taken with the copy, under the admission lock. Callers
+    /// that lose the race return success: the newer copy includes this graph
+    /// unless a later transition removed rows. The store is not asked to keep
+    /// history; it still replaces the one retained body.
+    async fn commit_snapshot(&self) -> Result<(), PortFailure> {
+        let (revision, snapshot) = self.with_graph(|graph| {
+            let revision = self.publication_revision.fetch_add(1, Ordering::AcqRel) + 1;
+            (revision, graph.snapshot())
+        });
+        #[cfg(test)]
+        self.pause_before_publish().await;
+        let _order = self.write_order.lock().await;
+        if revision < self.published_revision.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.store.write(&snapshot).await?;
+        self.published_revision
+            .fetch_max(revision, Ordering::Release);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    async fn pause_before_publish(&self) {
+        let pause = self.publish_pause.lock().expect("publish pause").take();
+        if let Some(pause) = pause {
+            pause.entered.notify_one();
+            pause.release.notified().await;
         }
     }
 
@@ -812,8 +915,7 @@ impl Shared {
         });
         if let Some(evidence) = evidence {
             let _ = self.audit.record(&evidence).await;
-            let snapshot = self.with_graph(|graph| graph.snapshot());
-            let _ = self.store.write(&snapshot).await;
+            let _ = self.commit_snapshot().await;
         }
     }
 
@@ -821,8 +923,7 @@ impl Shared {
     /// Close intent and an interrupted cascade stay durable across that rejection.
     async fn persist_evidence(&self, evidence: &OwnershipEvidence) -> Result<(), OwnershipFailure> {
         let audit = self.audit.record(evidence).await;
-        let snapshot = self.with_graph(|graph| graph.snapshot());
-        let stored = self.store.write(&snapshot).await;
+        let stored = self.commit_snapshot().await;
         match (audit, stored) {
             (Ok(()), Ok(())) => Ok(()),
             (Err(failure), _) => Err(OwnershipFailure::Audit(failure)),
@@ -855,30 +956,43 @@ impl Shared {
     }
 
     fn start_drain(self: &Arc<Self>, root: AgentLifetimeId, external: bool) {
-        {
-            let drains = self.drains.lock().expect("close drains");
-            if let Some(slot) = drains.get(&root) {
-                if slot.receiver.borrow().is_none() {
-                    if external {
-                        slot.external.store(true, Ordering::Release);
-                    }
-                    return;
+        // Closing is decided before the drains lock. Nothing holds the tree
+        // scope and then takes `drains`, so holding `drains` across the later
+        // graph read cannot cycle. The running-slot check and the insert share
+        // one guard: two closes cannot both pass the check and start two drains.
+        if !self.with_graph(|graph| graph.lifetime_state(&root) == Some(LifetimeState::Closing)) {
+            return;
+        }
+        let mut drains = self.drains.lock().expect("close drains");
+        if let Some(slot) = drains.get(&root) {
+            if slot.receiver.borrow().is_none() {
+                if external {
+                    slot.external.store(true, Ordering::Release);
                 }
+                return;
             }
         }
         if !self.with_graph(|graph| graph.lifetime_state(&root) == Some(LifetimeState::Closing)) {
             return;
         }
         self.unclaim_unreleased(&root);
+        #[cfg(test)]
+        if self.drain_exclusion.load(Ordering::SeqCst) {
+            assert!(
+                self.drains.try_lock().is_err(),
+                "start_drain must hold the drains lock from the running check through insert"
+            );
+        }
         let external_flag = Arc::new(AtomicBool::new(external));
         let (sender, receiver) = watch::channel(None);
-        self.drains.lock().expect("close drains").insert(
+        drains.insert(
             root.clone(),
             DrainSlot {
                 external: Arc::clone(&external_flag),
                 receiver,
             },
         );
+        drop(drains);
         let shared = Arc::clone(self);
         tokio::spawn(async move {
             let result = shared.drive_drain(root, external_flag).await;
@@ -1246,8 +1360,7 @@ impl OwnedLifetime for LifetimeGate {
         });
         if let Some(evidence) = recorded {
             let _ = shared.audit.record(&evidence).await;
-            let snapshot = shared.with_graph(|graph| graph.snapshot());
-            let _ = shared.store.write(&snapshot).await;
+            let _ = shared.commit_snapshot().await;
         }
         if released {
             shared.release_slot(&self.lifetime);
@@ -1427,5 +1540,244 @@ mod process_cleanup {
             .unwrap();
         assert!(process.released.load(AtomicOrdering::SeqCst));
         assert_ne!(unsafe { libc::kill(process.pid, 0) }, 0);
+    }
+}
+
+#[cfg(test)]
+mod lifetime_races {
+    use super::{
+        CloseCommand, OwnershipCoordinator, OwnershipDependencies, PublishPause, SpawnCommand,
+    };
+    use crate::application::agent_execution::subagents::{
+        ChildFactory, ChildResources, InitialSubmit, LiveCapacity, MemoryOwnershipStore,
+        OwnershipAudit, OwnershipStore, PortFailure, PrepareFailure, PrepareRequest, PreparedChild,
+        ResourceReport,
+    };
+    use crate::domain::agent_execution::sessions::SessionId;
+    use crate::domain::agent_execution::subagents::{
+        AgentLifetimeId, ApprovalPolicy, EvidenceFact, HostActor, Initiator, LifetimeCause,
+        LifetimeState, OwnershipEvidence, PhysicalFact, PolicyRead, SpawnOrigin, SpawnRequestId,
+        TaskReceiptId,
+    };
+    use async_trait::async_trait;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use tokio::sync::Notify;
+
+    struct AcceptAudit;
+
+    #[async_trait]
+    impl OwnershipAudit for AcceptAudit {
+        async fn record(&self, _evidence: &OwnershipEvidence) -> Result<(), PortFailure> {
+            Ok(())
+        }
+    }
+
+    struct Released;
+
+    #[async_trait]
+    impl ChildResources for Released {
+        async fn close(&self, _cause: &LifetimeCause, _initiator: &Initiator) -> ResourceReport {
+            ResourceReport {
+                physical: PhysicalFact::Released,
+                evidence: EvidenceFact::Acknowledged,
+            }
+        }
+    }
+
+    struct Holding {
+        closes: AtomicUsize,
+        hold: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl ChildResources for Holding {
+        async fn close(&self, _cause: &LifetimeCause, _initiator: &Initiator) -> ResourceReport {
+            self.closes.fetch_add(1, Ordering::SeqCst);
+            self.hold.notified().await;
+            ResourceReport {
+                physical: PhysicalFact::Released,
+                evidence: EvidenceFact::Acknowledged,
+            }
+        }
+    }
+
+    struct OnceFactory {
+        resources: Arc<Holding>,
+    }
+
+    #[async_trait]
+    impl ChildFactory for OnceFactory {
+        async fn prepare(&self, _request: PrepareRequest) -> Result<PreparedChild, PrepareFailure> {
+            Ok(PreparedChild {
+                resources: Arc::clone(&self.resources) as Arc<dyn ChildResources>,
+                submit: Arc::new(OnceSubmit),
+            })
+        }
+    }
+
+    struct OnceSubmit;
+
+    #[async_trait]
+    impl InitialSubmit for OnceSubmit {
+        async fn submit(
+            &self,
+            _task: &str,
+            _request: &SpawnRequestId,
+        ) -> Result<TaskReceiptId, PortFailure> {
+            Ok(TaskReceiptId::new("receipt").expect("receipt"))
+        }
+    }
+
+    fn command(parent: AgentLifetimeId) -> SpawnCommand {
+        SpawnCommand {
+            parent,
+            request_id: SpawnRequestId::new("child").unwrap(),
+            task: "draft".to_owned(),
+            policy: PolicyRead::Committed(
+                ApprovalPolicy::new("read-only", "ask", "rev-1").unwrap(),
+            ),
+            child_supports_policy: true,
+            model: None,
+            origin: SpawnOrigin::Host(HostActor::new("person", "desktop", "spawn").unwrap()),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_older_snapshot_does_not_replace_a_newer_seal() {
+        let store = Arc::new(MemoryOwnershipStore::new());
+        let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+            store: Arc::clone(&store)
+                as Arc<dyn crate::application::agent_execution::subagents::OwnershipStore>,
+            audit: Arc::new(AcceptAudit),
+            factory: Arc::new(OnceFactory {
+                resources: Arc::new(Holding {
+                    closes: AtomicUsize::new(0),
+                    hold: Arc::new(Notify::new()),
+                }),
+            }),
+            room: Arc::new(LiveCapacity::new(4)),
+        });
+        let pause = Arc::new(PublishPause {
+            entered: Notify::new(),
+            release: Notify::new(),
+        });
+        coordinator.pause_next_snapshot_write(Arc::clone(&pause));
+        let opening = {
+            let coordinator = coordinator.clone();
+            tokio::spawn(async move {
+                coordinator
+                    .open_root(
+                        SessionId::new("root-session").unwrap(),
+                        Initiator::Host(HostActor::new("person", "desktop", "open").unwrap()),
+                    )
+                    .await
+            })
+        };
+        pause.entered.notified().await;
+        let root = coordinator
+            .inner
+            .with_graph(|graph| graph.snapshot().lifetimes[0].lifetime_id.clone());
+        coordinator.bind_resources(root.clone(), Arc::new(Released));
+        coordinator
+            .end_lifetime(CloseCommand {
+                lifetime: root.clone(),
+                cause: LifetimeCause::HostClose,
+                initiator: Initiator::Host(HostActor::new("person", "desktop", "close").unwrap()),
+                external_attachment: false,
+                timeout: None,
+            })
+            .await
+            .unwrap();
+        pause.release.notify_one();
+        opening.await.unwrap().unwrap();
+        let stored = store.read().await.unwrap();
+        let row = stored
+            .lifetimes
+            .iter()
+            .find(|row| row.lifetime_id == root)
+            .expect("root row");
+        assert_eq!(row.state, LifetimeState::Closed);
+        assert_eq!(row.cause, Some(LifetimeCause::HostClose));
+    }
+
+    #[tokio::test]
+    async fn overlapping_closes_share_one_drain() {
+        let hold = Arc::new(Notify::new());
+        let resources = Arc::new(Holding {
+            closes: AtomicUsize::new(0),
+            hold: Arc::clone(&hold),
+        });
+        let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+            store: Arc::new(MemoryOwnershipStore::new()),
+            audit: Arc::new(AcceptAudit),
+            factory: Arc::new(OnceFactory {
+                resources: Arc::clone(&resources),
+            }),
+            room: Arc::new(LiveCapacity::new(4)),
+        });
+        coordinator.require_drain_exclusion();
+        let root = coordinator
+            .open_root(SessionId::new("root-session").unwrap(), Initiator::Runtime)
+            .await
+            .unwrap();
+        coordinator.bind_resources(root.clone(), Arc::new(Released));
+        coordinator.spawn(command(root.clone())).await.unwrap();
+        let first = {
+            let coordinator = coordinator.clone();
+            let root = root.clone();
+            tokio::spawn(async move {
+                coordinator
+                    .end_lifetime(CloseCommand {
+                        lifetime: root,
+                        cause: LifetimeCause::HostClose,
+                        initiator: Initiator::Host(
+                            HostActor::new("person", "desktop", "first").unwrap(),
+                        ),
+                        external_attachment: false,
+                        timeout: None,
+                    })
+                    .await
+            })
+        };
+        let second = {
+            let coordinator = coordinator.clone();
+            let root = root.clone();
+            tokio::spawn(async move {
+                coordinator
+                    .end_lifetime(CloseCommand {
+                        lifetime: root,
+                        cause: LifetimeCause::Deletion,
+                        initiator: Initiator::Host(
+                            HostActor::new("person", "desktop", "second").unwrap(),
+                        ),
+                        external_attachment: false,
+                        timeout: None,
+                    })
+                    .await
+            })
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while resources.closes.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("child close started");
+        assert_eq!(resources.closes.load(Ordering::SeqCst), 1);
+        hold.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(5), first)
+            .await
+            .expect("first close")
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), second)
+            .await
+            .expect("second close")
+            .unwrap()
+            .unwrap();
+        assert_eq!(resources.closes.load(Ordering::SeqCst), 1);
     }
 }

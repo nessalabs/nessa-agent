@@ -240,6 +240,7 @@ fn every_ownership_error_formats_as_text_and_has_no_source() {
         OwnershipError::ParentMissing,
         OwnershipError::ParentClosing,
         OwnershipError::ParentClosed,
+        OwnershipError::ChildUnavailable,
         OwnershipError::RequestConflict,
         OwnershipError::UnsupportedPolicy,
         OwnershipError::PolicyPending,
@@ -383,6 +384,96 @@ fn s5_reservation_joins_the_drain_and_cannot_dispatch() {
         graph.spawn_progress(&spawn_id("req-1")),
         Some(SpawnProgress::Draining { .. })
     ));
+}
+
+#[test]
+fn dispatch_after_prepare_refuses_a_child_that_is_not_open() {
+    let mut closing = OwnershipGraph::new();
+    root(&mut closing, "parent");
+    admit(&mut closing, "parent", "child", "req-1");
+    closing
+        .begin_close(
+            &life("child"),
+            close_id("close-child"),
+            LifetimeCause::HostClose,
+            Initiator::Host(actor("close-child")),
+        )
+        .unwrap();
+    assert_eq!(
+        closing.lifetime_state(&life("parent")),
+        Some(LifetimeState::Open)
+    );
+    assert_eq!(
+        closing.dispatch_after_prepare(&spawn_id("req-1")).unwrap(),
+        Dispatch::ChildUnavailable
+    );
+    assert!(matches!(
+        closing.spawn_progress(&spawn_id("req-1")),
+        Some(SpawnProgress::Draining { .. })
+    ));
+
+    let mut admitted = OwnershipGraph::new();
+    root(&mut admitted, "parent");
+    admit(&mut admitted, "parent", "child", "req-1");
+    admitted
+        .advance_spawn(&spawn_id("req-1"), SpawnProgress::Prepared)
+        .unwrap();
+    admitted
+        .advance_spawn(&spawn_id("req-1"), SpawnProgress::Attached)
+        .unwrap();
+    admitted
+        .advance_spawn(
+            &spawn_id("req-1"),
+            SpawnProgress::TaskAdmitted {
+                receipt: receipt("task-1"),
+            },
+        )
+        .unwrap();
+    admitted
+        .begin_close(
+            &life("child"),
+            close_id("close-admitted"),
+            LifetimeCause::HostClose,
+            Initiator::Host(actor("close-admitted")),
+        )
+        .unwrap();
+    assert_eq!(
+        admitted.dispatch_after_prepare(&spawn_id("req-1")).unwrap(),
+        Dispatch::ChildUnavailable
+    );
+    assert!(matches!(
+        admitted.spawn_progress(&spawn_id("req-1")),
+        Some(SpawnProgress::TaskAdmitted { .. })
+    ));
+
+    let mut closed = OwnershipGraph::new();
+    root(&mut closed, "parent");
+    admit(&mut closed, "parent", "child", "req-1");
+    closed
+        .begin_close(
+            &life("child"),
+            close_id("close-closed"),
+            LifetimeCause::HostClose,
+            Initiator::Host(actor("close-closed")),
+        )
+        .unwrap();
+    closed
+        .apply_report(
+            &life("child"),
+            &close_id("close-closed"),
+            &life("child"),
+            PhysicalFact::Released,
+            EvidenceFact::Acknowledged,
+        )
+        .unwrap();
+    assert_eq!(
+        closed.lifetime_state(&life("child")),
+        Some(LifetimeState::Closed)
+    );
+    assert_eq!(
+        closed.dispatch_after_prepare(&spawn_id("req-1")).unwrap(),
+        Dispatch::ChildUnavailable
+    );
 }
 
 #[test]

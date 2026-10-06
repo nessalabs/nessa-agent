@@ -25,6 +25,8 @@ pub enum OwnershipError {
     ParentClosing,
     /// The parent lifetime is sealed. A new lifetime is a different identity.
     ParentClosed,
+    /// The child lifetime is closing or closed, so its initial task is not dispatched.
+    ChildUnavailable,
     /// This spawn request id already names a different binding.
     RequestConflict,
     /// The child binding cannot honor the selected approval policy.
@@ -79,6 +81,7 @@ impl fmt::Display for OwnershipError {
             Self::ParentMissing => output.write_str("parent lifetime is missing"),
             Self::ParentClosing => output.write_str("parent lifetime is closing"),
             Self::ParentClosed => output.write_str("parent lifetime is closed"),
+            Self::ChildUnavailable => output.write_str("child lifetime is not open"),
             Self::RequestConflict => output.write_str("spawn request conflicts with its binding"),
             Self::UnsupportedPolicy => output.write_str("inherited approval policy is unsupported"),
             Self::PolicyPending => output.write_str("parent approval mode is pending"),

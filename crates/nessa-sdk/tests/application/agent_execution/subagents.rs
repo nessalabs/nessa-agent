@@ -98,6 +98,7 @@ struct ScriptFactory {
     children: Mutex<Vec<Arc<ScriptResources>>>,
     hold_next: Mutex<Option<Arc<Notify>>>,
     submit_result: Mutex<Result<TaskReceiptId, PortFailure>>,
+    last_child: Mutex<Option<AgentLifetimeId>>,
 }
 
 impl ScriptFactory {
@@ -112,6 +113,7 @@ impl ScriptFactory {
             children: Mutex::new(Vec::new()),
             hold_next: Mutex::new(None),
             submit_result: Mutex::new(Ok(TaskReceiptId::new("receipt-1").unwrap())),
+            last_child: Mutex::new(None),
         })
     }
 
@@ -126,8 +128,9 @@ impl ScriptFactory {
 
 #[async_trait]
 impl ChildFactory for ScriptFactory {
-    async fn prepare(&self, _request: PrepareRequest) -> Result<PreparedChild, PrepareFailure> {
+    async fn prepare(&self, request: PrepareRequest) -> Result<PreparedChild, PrepareFailure> {
         self.prepares.fetch_add(1, Ordering::SeqCst);
+        *self.last_child.lock().expect("child") = Some(request.child.clone());
         self.entered.notify_one();
         let release = self.release.lock().expect("factory").clone();
         if let Some(release) = release {
@@ -168,6 +171,7 @@ struct World {
     coordinator: OwnershipCoordinator,
     factory: Arc<ScriptFactory>,
     audit: Arc<ScriptAudit>,
+    store: Arc<MemoryOwnershipStore>,
 }
 
 impl World {
@@ -186,6 +190,7 @@ impl World {
             coordinator,
             factory,
             audit,
+            store,
         }
     }
 
@@ -446,6 +451,37 @@ async fn s6_startup_failure_keeps_the_cleanup_owner() {
 }
 
 #[tokio::test]
+async fn rejected_startup_without_cleanup_returns_the_live_slot() {
+    let world = World::new(1);
+    let root = world.root().await;
+    *world.factory.fail.lock().expect("factory") = Some(PrepareFailure {
+        failure: PortFailure::Rejected,
+        cleanup: None,
+    });
+    let rejected = world
+        .coordinator
+        .spawn(world.command(&root, "req-1", "draft the note"))
+        .await;
+    assert!(matches!(
+        rejected,
+        Err(OwnershipFailure::Startup(PortFailure::Rejected))
+    ));
+    assert!(matches!(
+        world
+            .coordinator
+            .spawn_progress(&SpawnRequestId::new("req-1").unwrap()),
+        Some(SpawnProgress::Ended { .. })
+    ));
+    world
+        .coordinator
+        .spawn(world.command(&root, "req-2", "another note"))
+        .await
+        .expect("the live slot is free after a startup that held nothing");
+    assert_eq!(world.factory.prepares(), 2);
+    assert_eq!(world.factory.submits(), 1);
+}
+
+#[tokio::test]
 async fn s7_dropped_waiter_keeps_the_attempt() {
     let world = World::new(8);
     let root = world.root().await;
@@ -626,6 +662,144 @@ async fn s13_rejected_and_uncertain_publication_does_not_prepare() {
             .coordinator
             .spawn_progress(&SpawnRequestId::new("req-uncertain").unwrap()),
         Some(SpawnProgress::Unconfirmed { .. })
+    ));
+}
+
+#[tokio::test]
+async fn rejected_reservation_publication_returns_the_live_slot() {
+    let world = World::new(1);
+    let root = world.root().await;
+    world.audit.fail_next(PortFailure::Rejected);
+    let rejected = world
+        .coordinator
+        .spawn(world.command(&root, "req-reject", "draft"))
+        .await;
+    assert!(matches!(
+        rejected,
+        Err(OwnershipFailure::Audit(PortFailure::Rejected))
+    ));
+    let retained = world
+        .coordinator
+        .spawn(world.command(&root, "req-reject", "draft"))
+        .await
+        .unwrap();
+    assert!(matches!(retained.progress, SpawnProgress::Reserved));
+    assert_eq!(world.factory.prepares(), 0);
+    world
+        .coordinator
+        .spawn(world.command(&root, "req-other", "other"))
+        .await
+        .expect("a rejected publication does not keep the live slot");
+
+    let world = World::new(1);
+    let root = world.root().await;
+    world.store.fail_next_write(PortFailure::Rejected);
+    let rejected = world
+        .coordinator
+        .spawn(world.command(&root, "req-store", "draft"))
+        .await;
+    assert!(matches!(
+        rejected,
+        Err(OwnershipFailure::Store(PortFailure::Rejected))
+    ));
+    let retained = world
+        .coordinator
+        .spawn(world.command(&root, "req-store", "draft"))
+        .await
+        .unwrap();
+    assert!(matches!(retained.progress, SpawnProgress::Reserved));
+    assert_eq!(world.factory.prepares(), 0);
+    world
+        .coordinator
+        .spawn(world.command(&root, "req-after-store", "other"))
+        .await
+        .expect("a rejected store publication does not keep the live slot");
+}
+
+#[tokio::test]
+async fn uncertain_reservation_publication_keeps_the_live_slot() {
+    let world = World::new(1);
+    let root = world.root().await;
+    world.audit.fail_next(PortFailure::Uncertain);
+    let uncertain = world
+        .coordinator
+        .spawn(world.command(&root, "req-uncertain", "draft"))
+        .await;
+    assert!(matches!(
+        uncertain,
+        Err(OwnershipFailure::Audit(PortFailure::Uncertain))
+    ));
+    let blocked = world
+        .coordinator
+        .spawn(world.command(&root, "req-other", "other"))
+        .await;
+    assert!(matches!(
+        blocked,
+        Err(OwnershipFailure::Domain(OwnershipError::NoRoom))
+    ));
+}
+
+#[tokio::test]
+async fn direct_child_close_during_prepare_does_not_submit() {
+    let world = World::new(8);
+    let root = world.root().await;
+    let release = Arc::new(Notify::new());
+    *world.factory.release.lock().expect("factory") = Some(Arc::clone(&release));
+    let coordinator = world.coordinator.clone();
+    let command = world.command(&root, "req-1", "draft the note");
+    let spawning = tokio::spawn(async move { coordinator.spawn(command).await });
+    world.factory.entered.notified().await;
+    let child = world
+        .factory
+        .last_child
+        .lock()
+        .expect("child")
+        .clone()
+        .expect("prepare saw the child");
+    let coordinator = world.coordinator.clone();
+    let watched = child.clone();
+    let closing = tokio::spawn(async move {
+        coordinator
+            .end_lifetime(CloseCommand {
+                lifetime: child,
+                cause: LifetimeCause::HostClose,
+                initiator: Initiator::Host(actor("close-child")),
+                external_attachment: false,
+                timeout: None,
+            })
+            .await
+    });
+    while world.coordinator.lifetime_state(&watched) != Some(LifetimeState::Closing) {
+        tokio::task::yield_now().await;
+    }
+    release.notify_one();
+    let spawned = spawning.await.unwrap();
+    assert!(matches!(
+        spawned,
+        Err(OwnershipFailure::Domain(OwnershipError::ChildUnavailable))
+    ));
+    closing.await.unwrap().unwrap();
+    assert_eq!(world.factory.prepares(), 1);
+    assert_eq!(world.factory.submits(), 0);
+    assert_eq!(
+        world.factory.children.lock().expect("children")[0]
+            .closes
+            .load(Ordering::SeqCst),
+        1
+    );
+    assert_eq!(
+        world.coordinator.lifetime_state(&root),
+        Some(LifetimeState::Open)
+    );
+    assert_eq!(
+        world.coordinator.lifetime_state(&watched),
+        Some(LifetimeState::Closed)
+    );
+    assert!(matches!(
+        world
+            .coordinator
+            .spawn_progress(&SpawnRequestId::new("req-1").unwrap()),
+        Some(SpawnProgress::Ended { .. })
     ));
 }
 
@@ -1237,6 +1411,7 @@ fn resumed(store: Arc<MemoryOwnershipStore>) -> World {
         coordinator,
         factory,
         audit,
+        store,
     }
 }
 
