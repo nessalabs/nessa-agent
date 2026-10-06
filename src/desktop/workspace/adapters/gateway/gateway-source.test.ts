@@ -25,7 +25,7 @@ import { approvalId } from "./gateway-views"
 import { deferred, fakeGateway, row, view, type FakeGateway } from "./fake-gateway"
 import { gatewaySource, refusalOf, type GatewayClock } from "./gateway-source"
 
-const timing = { callMs: 5_000, pollMs: 100, reconnectRounds: 5 }
+const timing = { callMs: 5_000, pollMs: 100, activePollMs: 100, reconnectRounds: 5 }
 const model = { provider: "anthropic", modelId: "claude-opus-5" }
 
 /** A clock and timers the test moves by hand. */
@@ -2826,4 +2826,360 @@ describe("an app's review is read after its turn ended (#436)", () => {
     await advance(timing.pollMs * 3)
     expect(readsOf("a")).toBe(before + 1)
   })
+})
+
+describe("independent active transcript polling (#532)", () => {
+  function fast() {
+    const gateway = fakeGateway()
+    const { clock, advance } = manualClock()
+    const source = gatewaySource({
+      connect: () => Promise.resolve(gateway.client),
+      clock,
+      timing: { ...timing, pollMs: 1_000, activePollMs: 250 },
+    })
+    const updates: WorkspaceUpdate[] = []
+    const follow = () => source.subscribe((update) => updates.push(update))
+    const busy = async (id: string) => {
+      gateway.rows.set(id, row(id, { running: true }))
+      gateway.views.set(id, view(id, { messages: [running()] }))
+      await source.transcript(id)
+    }
+    return { gateway, source, advance, updates, follow, busy }
+  }
+  it("F1: reads active text at 250 ms without another list", async () => {
+    const { gateway, source, advance, updates, follow, busy } = fast()
+    await busy("a")
+    await source.index()
+    follow()
+    updates.length = 0
+    gateway.views.set("a", view("a", { revision: "r2", messages: [running()] }))
+    await advance(249)
+    expect(updates).toEqual([])
+    await advance(1)
+    expect(updates).toContainEqual({
+      kind: "transcript",
+      transcript: expect.objectContaining({ revision: 2 }),
+    })
+    expect(gateway.count("list")).toBe(1)
+    source.dispose()
+  })
+  it("F2/F7: a held list and read do not block another conversation or queue bursts", async () => {
+    const { gateway, source, advance, updates, follow, busy } = fast()
+    await busy("slow")
+    await busy("fast")
+    await source.index()
+    follow()
+    const list = deferred<unknown>(),
+      slow = deferred<unknown>()
+    gateway.once("list", () => list.promise)
+    gateway.once("read", () => slow.promise)
+    await advance(1_000)
+    updates.length = 0
+    gateway.views.set("fast", view("fast", { revision: "r2", messages: [running()] }))
+    await advance(250)
+    expect(updates).toContainEqual({
+      kind: "transcript",
+      transcript: expect.objectContaining({ sessionId: "fast", revision: 2 }),
+    })
+    const slowReads = () =>
+      gateway.calls.filter((c) => c.method === "read" && c.args[0] === "slow").length
+    expect(slowReads()).toBe(2)
+    slow.resolve(view("slow", { revision: "r2", messages: [running()] }))
+    await flush()
+    expect(slowReads()).toBe(2)
+    await advance(250)
+    expect(slowReads()).toBe(3)
+    source.dispose()
+    list.resolve({ conversations: [], complete: false })
+    await flush()
+  })
+  it("F3: resubscription discards an earlier answer", async () => {
+    const { gateway, source, advance, updates, follow, busy } = fast()
+    await busy("a")
+    const stop = follow(),
+      pending = deferred<unknown>()
+    gateway.once("read", () => pending.promise)
+    await advance(250)
+    stop()
+    follow()
+    updates.length = 0
+    pending.resolve(view("a", { revision: "old" }))
+    await flush()
+    expect(updates).toEqual([])
+    gateway.views.set("a", view("a", { revision: "fresh", messages: [running()] }))
+    await advance(250)
+    expect(updates).toContainEqual({
+      kind: "transcript",
+      transcript: expect.objectContaining({ revision: 2 }),
+    })
+    source.dispose()
+  })
+  it("F4: active failure resyncs on the next successful summary", async () => {
+    const { gateway, source, advance, updates, follow, busy } = fast()
+    await busy("a")
+    await source.index()
+    follow()
+    updates.length = 0
+    gateway.once("read", () => Promise.reject(rpcCode("temporarily_unavailable")))
+    await advance(250)
+    expect(kinds(updates)).not.toContain("resync")
+    await advance(750)
+    expect(kinds(updates).filter((k) => k === "resync")).toHaveLength(1)
+    source.dispose()
+  })
+  it("F5: send invalidates idle text; settled transcripts stop reading", async () => {
+    const { gateway, source, advance, follow } = fast()
+    gateway.rows.set("a", row("a"))
+    gateway.views.set("a", view("a"))
+    await source.index()
+    await source.transcript("a")
+    follow()
+    await source.send({
+      sessionId: "a",
+      messageId: "m",
+      text: "hello",
+      model,
+      initiator: "person",
+    })
+    gateway.views.set("a", view("a", { revision: "r2", messages: [running()] }))
+    await advance(250)
+    expect(gateway.count("read")).toBe(2)
+    gateway.views.set("a", view("a", { revision: "r3" }))
+    await advance(250)
+    const reads = gateway.count("read")
+    await advance(2_000)
+    expect(gateway.count("read")).toBe(reads)
+    source.dispose()
+  })
+  it("F6: dispose fences a pending answer and both timers", async () => {
+    const { gateway, source, advance, updates, follow, busy } = fast()
+    await busy("a")
+    follow()
+    const pending = deferred<unknown>()
+    gateway.once("read", () => pending.promise)
+    await advance(250)
+    source.dispose()
+    const reads = gateway.count("read"),
+      said = updates.length
+    pending.resolve(view("a", { revision: "late" }))
+    await advance(2_000)
+    expect(gateway.count("read")).toBe(reads)
+    expect(updates).toHaveLength(said)
+  })
+})
+
+describe("subscription and invalidation orderings (#532)", () => {
+  it("F8: an idle send remains invalidated across a lost subscription answer", async () => {
+    const { gateway, source, follow, advance, updates } = started()
+    gateway.rows.set("a", row("a"))
+    gateway.views.set("a", view("a"))
+    await source.index()
+    await source.transcript("a")
+    const stop = follow()
+    await source.send({
+      sessionId: "a",
+      messageId: "m",
+      text: "hello",
+      model,
+      initiator: "person",
+    })
+    const pending = deferred<unknown>()
+    gateway.once("read", () => pending.promise)
+    await advance(100)
+    stop()
+    follow()
+    updates.length = 0
+    pending.resolve(view("a", { revision: "old" }))
+    await flush()
+    expect(updates).toEqual([])
+    gateway.views.set("a", view("a", { revision: "new" }))
+    await advance(100)
+    expect(updates).toContainEqual({
+      kind: "transcript",
+      transcript: expect.objectContaining({ revision: 2 }),
+    })
+    source.dispose()
+  })
+  it("F8 (failure): a failed invalidated idle read retries without a list change", async () => {
+    const gateway = fakeGateway(),
+      { clock, advance } = manualClock()
+    const source = gatewaySource({
+      connect: () => Promise.resolve(gateway.client),
+      clock,
+      timing: { ...timing, pollMs: 1_000, activePollMs: 250 },
+    })
+    gateway.rows.set("a", row("a"))
+    gateway.views.set("a", view("a"))
+    await source.index()
+    await source.transcript("a")
+    source.subscribe(() => {})
+    await source.send({
+      sessionId: "a",
+      messageId: "m",
+      text: "hello",
+      model,
+      initiator: "person",
+    })
+    gateway.once("read", () => Promise.reject(rpcCode("temporarily_unavailable")))
+    await advance(250)
+    expect(gateway.count("read")).toBe(2)
+    await advance(250)
+    expect(gateway.count("read")).toBe(3)
+    expect(gateway.count("list")).toBe(1)
+    source.dispose()
+  })
+  it("F9: an earlier subscription's list cannot remove the current session", async () => {
+    const { gateway, source, follow, advance, updates } = started()
+    gateway.rows.set("a", row("a"))
+    await source.index()
+    const stop = follow(),
+      pending = deferred<unknown>()
+    gateway.once("list", () => pending.promise)
+    await advance(100)
+    stop()
+    follow()
+    updates.length = 0
+    pending.resolve({ conversations: [], complete: true })
+    await flush()
+    expect(updates).toEqual([])
+    expect((await source.index()).sessions.map((s) => s.id)).toEqual(["a"])
+    source.dispose()
+  })
+})
+
+it("M1: records reproducible polling wait and request cost (#532)", async () => {
+  const gateway = fakeGateway(),
+    { clock, advance } = manualClock()
+  const source = gatewaySource({
+    connect: () => Promise.resolve(gateway.client),
+    clock,
+    timing: { ...timing, pollMs: 1_000, activePollMs: 250 },
+  })
+  gateway.rows.set("a", row("a", { running: true }))
+  gateway.views.set("a", view("a", { messages: [running()] }))
+  await source.transcript("a")
+  await source.index()
+  const delivery = { received: false }
+  source.subscribe((update) => {
+    if (update.kind === "transcript") delivery.received = true
+  })
+  const samples: number[] = []
+  // Each phase is measured from a whole-second polling boundary in both versions.
+  for (let i = 0; i < 20; i++) {
+    await advance(2_000 - (clock.now() % 1_000))
+    await advance(1 + ((i * 47) % 249))
+    gateway.views.set("a", view("a", { revision: `sample-${i}`, messages: [running()] }))
+    delivery.received = false
+    const start = clock.now()
+    for (let ms = 0; ms < 1_100 && !delivery.received; ms++) await advance(1)
+    samples.push(clock.now() - start)
+  }
+  const before = { reads: gateway.count("read"), lists: gateway.count("list") }
+  await advance(10_000)
+  const cost = {
+    reads: gateway.count("read") - before.reads,
+    lists: gateway.count("list") - before.lists,
+  }
+  console.log(
+    "532_MEASUREMENT",
+    JSON.stringify({ samplesMs: samples, tenSecondCost: cost }),
+  )
+  source.dispose()
+  expect(Math.max(...samples)).toBeLessThanOrEqual(250)
+  expect(cost).toEqual({ reads: 40, lists: 10 })
+})
+
+describe("foreground activation (#532)", () => {
+  for (const entry of ["index", "transcript"] as const) {
+    it(`F10 (${entry}): applying active state arms polling from an idle cache`, async () => {
+      const gateway = fakeGateway(),
+        { clock, advance } = manualClock()
+      const source = gatewaySource({
+        connect: () => Promise.resolve(gateway.client),
+        clock,
+        timing: { ...timing, pollMs: 1_000, activePollMs: 250 },
+      })
+      gateway.rows.set("a", row("a"))
+      gateway.views.set("a", view("a"))
+      await source.index()
+      await source.transcript("a")
+      source.subscribe(() => {})
+      gateway.views.set("a", view("a", { revision: "running", messages: [running()] }))
+      if (entry === "index") {
+        gateway.rows.set("a", row("a", { running: true }))
+        await source.index()
+      } else await source.transcript("a")
+      const before = gateway.count("read")
+      await advance(250)
+      expect(gateway.count("read")).toBe(before + 1)
+      source.dispose()
+    })
+  }
+})
+
+it("F11: summary and active timers share minimum background read spacing (#532)", async () => {
+  const gateway = fakeGateway(),
+    { clock, advance } = manualClock()
+  const source = gatewaySource({
+    connect: () => Promise.resolve(gateway.client),
+    clock,
+    timing: { ...timing, pollMs: 1_000, activePollMs: 250 },
+  })
+  gateway.rows.set("a", row("a", { running: true }))
+  gateway.views.set("a", view("a", { messages: [running()] }))
+  await source.index()
+  await source.transcript("a")
+  source.subscribe(() => {})
+  const pending = deferred<unknown>()
+  gateway.once("list", () => pending.promise)
+  await advance(1_000)
+  expect(gateway.count("read")).toBe(5)
+  await advance(125)
+  pending.resolve({ conversations: [...gateway.rows.values()], complete: true })
+  await flush()
+  expect(gateway.count("read")).toBe(5)
+  await advance(125)
+  expect(gateway.count("read")).toBe(6)
+  source.dispose()
+})
+
+it("F12: a background read queued behind foreground work paces from dispatch (#532)", async () => {
+  const gateway = fakeGateway(),
+    { clock, advance } = manualClock()
+  const starts: number[] = []
+  const client = {
+    ...gateway.client,
+    conversation: {
+      ...gateway.client.conversation,
+      read: (id: string) => {
+        starts.push(clock.now())
+        return gateway.client.conversation.read(id)
+      },
+    },
+  }
+  const source = gatewaySource({
+    connect: () => Promise.resolve(client),
+    clock,
+    timing: { ...timing, pollMs: 1_000, activePollMs: 250 },
+  })
+  gateway.rows.set("a", row("a", { running: true }))
+  gateway.views.set("a", view("a", { messages: [running()] }))
+  await source.index()
+  await source.transcript("a")
+  source.subscribe(() => {})
+  const pending = deferred<unknown>()
+  gateway.once("read", () => pending.promise)
+  const foreground = source.transcript("a")
+  await advance(900)
+  expect(gateway.count("read")).toBe(2)
+  pending.resolve(view("a", { messages: [running()] }))
+  await foreground
+  await flush()
+  expect(gateway.count("read")).toBe(3)
+  await advance(100)
+  expect(gateway.count("read")).toBe(3)
+  await advance(250)
+  expect(gateway.count("read")).toBe(4)
+  expect(starts.at(-1)! - starts.at(-2)!).toBeGreaterThanOrEqual(250)
+  source.dispose()
 })

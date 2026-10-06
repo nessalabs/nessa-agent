@@ -7,7 +7,7 @@
  *
  * - **No push stream.** The gateway sends no conversation events, so the
  *   stream is a poller, running while anyone listens: `conversation.list`
- *   for summaries, then `conversation.read` for each conversation the window
+ *   for summaries; independent `conversation.read` calls for conversations the window
  *   has read (`transcript`) that runs, waits on the person, has an app's
  *   call unanswered (`appCall`, #436), or changed since.
  * - **Revisions are minted here.** The gateway's view revision is opaque and
@@ -153,8 +153,10 @@ const callerRules: Record<
 export interface GatewayTiming {
   /** How long any call may take before it settles as `unavailable`. */
   readonly callMs: number
-  /** How long the poller rests between rounds. */
+  /** How long the summary poller rests between rounds. */
   readonly pollMs: number
+  /** Minimum time between background reads of an active conversation. */
+  readonly activePollMs: number
   /**
    * How many poll rounds pass after a failed connect before the poller, or
    * an MCP App, connects again (S10, #419). Rounds, not a time: the clock
@@ -171,6 +173,7 @@ export interface GatewayTiming {
 export const defaultGatewayTiming: GatewayTiming = {
   callMs: 35_000,
   pollMs: 1_000,
+  activePollMs: 250,
   reconnectRounds: 5,
 }
 
@@ -249,6 +252,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   // Each conversation's app calls not yet answered (`appCall`): while there
   // is one, the conversation is read each round (#436, P2–P7).
   const appCalls = new Map<string, number>()
+  // Sends invalidate an idle view before the summary list changes.
+  const refresh = new Set<string>()
 
   // Nothing is said after `dispose`, which lets every listener go and admits no new one.
   const emit = (update: WorkspaceUpdate) => {
@@ -504,6 +509,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     removals.set(sessionId, (removals.get(sessionId) ?? 0) + 1)
     rows.delete(sessionId)
     watched.delete(sessionId)
+    refresh.delete(sessionId)
+    nextRead.delete(sessionId)
     // Its last read goes with it: listed again, nothing it said then speaks for it.
     reads.delete(sessionId)
     emit({ kind: "session-removed", sessionId, revision })
@@ -524,6 +531,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     if (result.complete)
       for (const sessionId of summaries.keys())
         if (!takenOut(sessionId) && !listed.has(sessionId)) remove(sessionId)
+    scheduleActive()
   }
 
   /**
@@ -571,6 +579,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const held = reads.get(sessionId)
     if (held && held.view.revision === view.revision) {
       reads.set(sessionId, { ...held, against })
+      scheduleActive()
       return held.transcript
     }
     const revision = (transcriptCounts.get(sessionId) ?? 0) + 1
@@ -581,6 +590,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     emit({ kind: "transcript", transcript })
     // The summary follows what the read says: an approval waiting, the model it runs on.
     publish(sessionId)
+    scheduleActive()
     return transcript
   }
 
@@ -607,6 +617,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     sessionId: string,
     who: Caller,
     caller: () => boolean = always,
+    onStarted: () => void = noop,
   ): Promise<Transcript> => {
     const { turn, settled } = inTurn(
       reading.get(sessionId) ?? Promise.resolve(),
@@ -631,13 +642,17 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           let deleted = false
           try {
             view = await within(
-              async () =>
-                (await client(who)).conversation
-                  .read(sessionId)
-                  .catch((error: unknown) => {
-                    deleted = deletedConversation(error)
-                    throw error
-                  }),
+              async (live) => {
+                const connected = await client(who)
+                if (!live() || !caller()) throw new WorkspaceSourceError("unavailable")
+                // Admission may have waited behind a foreground read (F12).
+                // The read owner names actual dispatch for background pacing.
+                onStarted()
+                return connected.conversation.read(sessionId).catch((error: unknown) => {
+                  deleted = deletedConversation(error)
+                  throw error
+                })
+              },
               { subject: "conversation", sessionId },
             )
           } catch (error) {
@@ -673,51 +688,84 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     return turn
   }
 
+  const active = (sessionId: string): boolean => {
+    const last = reads.get(sessionId)
+    return Boolean(
+      !last ||
+      refresh.has(sessionId) ||
+      rows.get(sessionId)?.running ||
+      last.transcript.approval ||
+      last.transcript.activity ||
+      appCalls.has(sessionId),
+    )
+  }
+
   /** Whether a read conversation should be read again this round. */
   const stale = (sessionId: string): boolean => {
     const last = reads.get(sessionId)
     const row = rows.get(sessionId)
     if (!last) return true
-    const live = Boolean(
-      last.transcript.approval || last.transcript.activity || appCalls.has(sessionId),
-    )
+    const live = active(sessionId)
     // Not listed — just begun, or past an incomplete list: read while it is live (S7).
     if (!row) return live
-    if (row.running || live) return true
+    if (live) return true
     return (
       last.against?.updatedAtMs !== row.updatedAtMs ||
       last.against.running !== row.running
     )
   }
 
-  // The poller: one round at a time, while anyone listens.
+  // Summary rounds retain the connect/reconnect pacing. Background read admission
+  // is shared with the active timer; neither timer waits for a transcript (F2).
   let cancelPoll: (() => void) | undefined
+  let cancelActive: (() => void) | undefined
   let polling = false
+  let following = 0
+  const background = new Set<string>()
+  const nextRead = new Map<string, number>()
+  const followingNow = () => {
+    const generation = following
+    return () => !disposed && listeners.size > 0 && following === generation
+  }
+  const pollRead = (sessionId: string) => {
+    if (background.has(sessionId) || clock.now() < (nextRead.get(sessionId) ?? 0)) return
+    const live = followingNow()
+    background.add(sessionId)
+    nextRead.set(sessionId, clock.now() + timing.activePollMs)
+    // Preserve invalidation on failure; a send during this read remains unread.
+    const invalidated = refresh.delete(sessionId)
+    void read(sessionId, "held", live, () => {
+      nextRead.set(sessionId, clock.now() + timing.activePollMs)
+    })
+      .catch((error: unknown) => {
+        if (!live()) {
+          if (invalidated && !takenOut(sessionId)) refresh.add(sessionId)
+          return
+        }
+        if (gone(error) || refusedForGood(error)) watched.delete(sessionId)
+        else {
+          if (invalidated && !takenOut(sessionId)) refresh.add(sessionId)
+          gap = true
+        }
+      })
+      .finally(() => {
+        background.delete(sessionId)
+        scheduleActive()
+      })
+  }
   const round = async () => {
     polling = true
+    const live = followingNow()
     try {
-      // While the source waits out a failed connect, the list is refused
-      // without asking anything, and the round ends (S10, `client`).
-      await list("poller")
+      await list("poller", live)
+      if (!live()) return
       if (gap) resync()
-      for (const sessionId of [...watched]) {
-        if (disposed || listeners.size === 0) break
-        // One taken out since the round began is refused by `read` itself (R8, S9).
-        if (!stale(sessionId)) continue
-        try {
-          // On the list's client only: a client closed meanwhile refuses the
-          // rest of the round, which the next round's list reads again (S15).
-          await read(sessionId, "held")
-        } catch (error) {
-          // A conversation the gateway no longer holds, or will not read for
-          // this window, is not watched — Try Again watches it again; any
-          // other failure is a gap the next list resyncs (R11).
-          if (gone(error) || refusedForGood(error)) watched.delete(sessionId)
-          else gap = true
-        }
+      for (const sessionId of watched) {
+        if (stale(sessionId)) pollRead(sessionId)
       }
+      scheduleActive()
     } catch {
-      gap = true
+      if (live()) gap = true
     } finally {
       polling = false
       schedule()
@@ -730,9 +778,24 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       void round()
     })
   }
+  const scheduleActive = () => {
+    if (disposed || listeners.size === 0 || cancelActive || ![...watched].some(active))
+      return
+    cancelActive = clock.after(timing.activePollMs, () => {
+      cancelActive = undefined
+      for (const sessionId of watched) {
+        if (active(sessionId)) pollRead(sessionId)
+      }
+      scheduleActive()
+    })
+  }
   const stopPolling = () => {
     cancelPoll?.()
     cancelPoll = undefined
+    cancelActive?.()
+    cancelActive = undefined
+    nextRead.clear()
+    following++
   }
 
   const waitingReview = async (
@@ -811,6 +874,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         // a read that fails is mended by the poller's next one — unless it is
         // gone: one taken out is refused and not followed (R3, R8).
         if (!takenOut(sessionId)) watched.add(sessionId)
+        scheduleActive()
         try {
           return await read(sessionId, "person", live)
         } catch (error) {
@@ -822,6 +886,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       if (disposed) return noop
       listeners.add(listener)
       schedule()
+      scheduleActive()
       return () => {
         listeners.delete(listener)
         if (listeners.size === 0) stopPolling()
@@ -870,7 +935,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           }
         })
         // Taken out while it was on its way: sent, but not followed (R8).
-        if (!takenOut(message.sessionId)) watched.add(message.sessionId)
+        if (!takenOut(message.sessionId)) {
+          watched.add(message.sessionId)
+          refresh.add(message.sessionId)
+          scheduleActive()
+        }
         publish(message.sessionId)
       }),
     approve: (sessionId, approvalId, scope, _initiator, optionId) =>
@@ -906,6 +975,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     connected: () => within(() => client("app")),
     appCall(conversationId, call) {
       appCalls.set(conversationId, (appCalls.get(conversationId) ?? 0) + 1)
+      scheduleActive()
       // However it settles — answered, refused, or not sent at all — it is no longer asked.
       return Promise.resolve()
         .then(call)

@@ -1,0 +1,31 @@
+{
+  "kind": "deterministic-injected-clock",
+  "baselineCommit": "1fc01f0fe43acd710d62ab7f272526718e01a545",
+  "initialMeasurementBase": "a6ccd39590f6aa04f118af6a283da1b8dd42c8c4",
+  "browserMeasured": false,
+  "limitations": [
+    "Controlled gateway responses and injected clock; excludes transport, browser scheduling, provider startup and payload/CPU cost."
+  ],
+  "before": {
+    "samplesMs": [
+      999, 952, 905, 858, 811, 764, 966, 919, 872, 825, 778, 980, 933, 886, 839, 792, 994,
+      947, 900, 853
+    ],
+    "tenSecondCost": {
+      "reads": 10,
+      "lists": 10
+    },
+    "medianMs": 893.0
+  },
+  "after": {
+    "samplesMs": [
+      249, 202, 155, 108, 61, 14, 216, 169, 122, 75, 28, 230, 183, 136, 89, 42, 244, 197,
+      150, 103
+    ],
+    "tenSecondCost": {
+      "reads": 40,
+      "lists": 10
+    },
+    "medianMs": 143.0
+  }
+}
