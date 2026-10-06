@@ -128,14 +128,16 @@ async fn original_live(
 ) -> Arc<LiveConversation> {
     let deadline = tokio::time::Instant::now() + CREATION_HANG;
     loop {
-        let slot = service
-            .inner
-            .conversations
-            .lock()
-            .await
-            .get(target)
-            .cloned()
-            .unwrap();
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        // The ceiling covers this lock. A stall here used to sit outside the check.
+        let locked = tokio::time::timeout(remaining, service.inner.conversations.lock()).await;
+        let Ok(guard) = locked else {
+            panic!(
+                "live conversation was not published after {CREATION_HANG:?}; slot=conversation map lock still held"
+            );
+        };
+        let slot = guard.get(target).cloned().unwrap();
+        drop(guard);
         if let Some(Ok(live)) = slot.value.get() {
             break live.clone();
         }

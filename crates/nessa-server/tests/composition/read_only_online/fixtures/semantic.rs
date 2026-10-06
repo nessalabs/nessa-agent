@@ -248,10 +248,17 @@ async fn wait_for_permission(
 ) {
     let deadline = tokio::time::Instant::now() + PRODUCER_HANG;
     loop {
-        let view = service
-            .read(id.clone(), caller("wait-permission"))
-            .await
-            .unwrap();
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        // The ceiling covers this read. A stall here used to sit outside the check.
+        let read = tokio::time::timeout(
+            remaining,
+            service.read(id.clone(), caller("wait-permission")),
+        )
+        .await;
+        let Ok(view) = read else {
+            panic!("permission was not visible after {PRODUCER_HANG:?}; read still running");
+        };
+        let view = view.unwrap();
         if !view.permissions.is_empty() {
             return;
         }
