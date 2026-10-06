@@ -205,7 +205,7 @@ export const RequestRow = memo(function RequestRow({
                 className="agents-request-command agents-truncate"
                 title={agentCommand}
               >
-                <bdi>{agentCommand}</bdi>
+                <bdi dir="ltr">{agentCommand}</bdi>
               </code>
             )
           ) : null}

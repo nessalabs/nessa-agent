@@ -471,8 +471,10 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 - [ ] **An agent's command is drawn in the order it runs.** A bidi control in
   the argument (U+202A–U+202E, U+2066–U+2069, U+200E, U+200F, U+061C) is shown
   as its `\u` escape, so an override cannot present another address; the shown
-  JSON parses to the argument that runs. The same draw is the card, the
-  overview row, and the peek (`shownCommand` in `said.tsx`). _#553._
+  JSON parses to the argument that runs. A command that starts with a
+  right-to-left letter keeps a left-to-right base, so the tool stays left of
+  its argument. The same draw is the card, the overview row, and the peek
+  (`shownCommand` in `said.tsx`, `dir="ltr"` on the command's isolate). _#553._
   _Check:_ `command-order.mjs`.
 - [ ] **The approval card arranges itself by its own width** at 280, 340,
   420, 600 and 900 px, with a short and a very long command: no word of the

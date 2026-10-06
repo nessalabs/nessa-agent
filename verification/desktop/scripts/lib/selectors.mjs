@@ -451,6 +451,8 @@ export const names = {
   approvalSessions: ["Release build signing", "Notarize the macOS", "Reconnect storm"],
   /** The sample session whose approval carries a bidi control in its argument (#553). */
   commandOrderSession: "Command drawn in order",
+  /** The sample session whose tool name is right to left, so the command's base direction is tested (#553). */
+  commandBaseSession: "Command base direction",
   /** A sample session (in-memory source) waiting on an approval after a long turn, by its id (data-overview-item). */
   storySessionId: "retry-budget",
   denyOnce: "Deny",

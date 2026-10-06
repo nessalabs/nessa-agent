@@ -731,6 +731,8 @@ describe("the agents overview", () => {
     const peekText = peek?.textContent?.replace(/^\$ /, "") ?? ""
     expect(peekText).toBe(drawn?.textContent)
     expect(JSON.parse(peekText.slice(peekText.indexOf(" ")))).toEqual({ to: argument })
+    expect(drawn?.querySelector("bdi")?.getAttribute("dir")).toBe("ltr")
+    expect(peek?.querySelector("bdi")?.getAttribute("dir")).toBe("ltr")
   })
 
   it("does not offer always when the review does not (#444)", async () => {

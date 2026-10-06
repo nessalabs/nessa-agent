@@ -205,7 +205,7 @@ export function ApprovalCommand({
         ${" "}
       </span>
       {lead === undefined ? (
-        <bdi>{commandWords(rest, "word-")}</bdi>
+        <bdi dir="ltr">{commandWords(rest, "word-")}</bdi>
       ) : (
         <>
           <bdi>{commandWords(shownName(lead), "name-")}</bdi>
