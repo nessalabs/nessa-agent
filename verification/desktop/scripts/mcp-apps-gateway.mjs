@@ -940,7 +940,7 @@ const checks = {
       failures.push(
         `before this send the transcript shows ${shownBefore} messages saying "${MESSAGE_TEXT}" and the gateway has ${copiesBefore}`,
       )
-    await app.click(css.reviewControl("message"))
+    await app.click(selectorFor.reviewControl("message"))
     const before = await said(app, "message")
     if (before !== "pending")
       failures.push(`the message was answered before its review: "${before}"`)
@@ -1012,7 +1012,7 @@ const checks = {
   context: async (page) => {
     const failures = []
     const { app } = await appFrame(page, "inline")
-    await app.click(css.reviewControl("context"))
+    await app.click(selectorFor.reviewControl("context"))
     const answer = await output(app, "context")
     if (answer !== "ok") failures.push(`the context update was answered "${answer}"`)
     return { seen: { answer }, failures }
