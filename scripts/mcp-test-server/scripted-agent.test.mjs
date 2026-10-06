@@ -14,7 +14,8 @@ import { after, test } from "node:test"
 import { fileURLToPath } from "node:url"
 
 import { exited } from "./local-gateway.mjs"
-import { CLAUDE_CALL_ID } from "./scripted-frames.mjs"
+import { callFrames, CLAUDE_CALL_ID, recording } from "./scripted-frames.mjs"
+import { TOOLS } from "./server.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const mcptest = {
@@ -132,9 +133,16 @@ test("codex: handshake, options, one replayed call per prompt, and exit on close
   const first = await agent.request("session/prompt", { sessionId, prompt: [] })
   assert.deepEqual(first.result, { stopReason: "end_turn" })
   const tools = first.notes.map((note) => note.params.update).filter((u) => u.toolCallId)
-  assert.equal(tools.length, 3)
-  assert.equal(new Set(tools.map((u) => u.toolCallId)).size, 1)
-  assert.deepEqual(tools.at(-1).rawOutput.result.structuredContent, { rows: [1, 2] })
+  // `toolSearchTurn`: the two frames Codex sends for this call, which
+  // scripted-frames.test.mjs holds to that recording.
+  assert.deepEqual(
+    tools,
+    callFrames("codex", recording("codex"), {
+      id: tools[0]?.toolCallId,
+      tool: "review_rows",
+      result: TOOLS.review_rows.call({}),
+    }),
+  )
   assert.equal(first.notes.at(-1).params.update.content.text, "DONE")
 
   // A second prompt is a second call, under an id of its own.

@@ -5,16 +5,21 @@
  * them without a gateway.
  *
  * The frames are the recording's, not this module's: the SDK's parser
- * fixtures hold each harness's live run, and a call is reported as the
- * recorded `show_chart` call was — the same frames, in the same order, each
- * value as recorded — with only the call's id, its tool's name and its result
- * written at the places that harness carries them (`PLACES`). What this
+ * fixtures hold each harness's live run, and a call is reported as one
+ * recorded call was — the same frames, in the same order, each value as
+ * recorded — with only the call's id, its tool's name and its result written
+ * at the places that harness carries them (`PLACES`). Claude, and a Codex
+ * call other than the one Codex ran without asking, copy the recorded
+ * `show_chart` call. Codex ran `review_rows` without asking; that recording
+ * (`toolSearchTurn`) is what a replay of that tool copies: `tool_call`, then
+ * `tool_call_update` `completed`, and no bare `in_progress` update. What this
  * knows of a harness is those places; the test checks them against the
- * recordings, so a recording that carries the call anywhere else fails it,
- * and replaying the recorded call reproduces the recording exactly. One
- * thing it knows comes from elsewhere: where Claude's harness names a call in
- * its `tools/call` (`CLAUDE_CALL_ID`), which the test holds to the SDK's
- * `CALL_ID`, not to the recordings.
+ * `show_chart` recordings, so a recording that carries the call anywhere else
+ * fails it, and replaying a recorded call reproduces that recording.
+ * `scripted-frames.test.mjs` holds a replay of the unasked call to
+ * `toolSearchTurn`. One thing it knows comes from elsewhere: where Claude's
+ * harness names a call in its `tools/call` (`CLAUDE_CALL_ID`), which the test
+ * holds to the SDK's `CALL_ID`, not to the recordings.
  */
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
@@ -33,7 +38,10 @@ export const AGENTS = ["codex", "claude"]
  */
 export const CLAUDE_CALL_ID = "claudecode/toolUseId"
 
-/** The recorded call every reported call is shaped as. Every call replayed takes its arguments (`recordedArguments`). */
+/**
+ * The recorded call a replay copies, except Codex's unasked call (`framesOf`).
+ * A replayed call is made with its arguments (`recordedArguments`).
+ */
 export const RECORDED_TOOL = "show_chart"
 
 /** `agent`'s recorded frames, as the SDK's parser fixtures hold them. */
@@ -239,18 +247,35 @@ export function withAt(value, [key, ...rest], to) {
 }
 
 /**
+ * The frames a replay of `tool` copies. Codex's unasked call is the one
+ * `toolSearchTurn` names (two frames, no bare status). Every other call is
+ * the recorded `show_chart` call.
+ */
+function framesOf(agent, recorded, tool) {
+  if (agent === "codex" && Object.hasOwn(recorded, "toolSearchTurn")) {
+    const frames = recorded.toolSearchTurn?.frames
+    if (
+      Array.isArray(frames) &&
+      frames.some((frame) => at(frame, ["rawInput", "tool"]) === tool)
+    )
+      return frames
+  }
+  return recordedCall(agent, recorded)
+}
+
+/**
  * The frames reporting one call of `tool`, with id `id`, which returned
- * `result` (an MCP `CallToolResult`): the recorded call's frames with this
- * call written at the places its harness carries a call (`PLACES`). Throws
- * for a call the recorded one cannot stand for (`unreplayable`), and for a
- * recording with no place for the result.
+ * `result` (an MCP `CallToolResult`): the frames `framesOf` selects, with
+ * this call written at the places its harness carries a call (`PLACES`).
+ * Throws for a call the recorded one cannot stand for (`unreplayable`), and
+ * for a recording with no place for the result.
  */
 export function callFrames(agent, recorded, { id, tool, result }) {
   const refused = unreplayable(tool, result)
   if (refused) throw new Error(`cannot replay: ${refused}`)
   const call = { id, tool, result }
   let results = 0
-  const frames = recordedCall(agent, recorded).map((frame) =>
+  const frames = framesOf(agent, recorded, tool).map((frame) =>
     PLACES[agent].reduce((each, place) => {
       const recordedValue = at(each, place.path)
       if (recordedValue === undefined) return each
@@ -259,6 +284,6 @@ export function callFrames(agent, recorded, { id, tool, result }) {
     }, frame),
   )
   if (results === 0)
-    throw new Error(`the ${agent} recording has no place for ${RECORDED_TOOL}'s result`)
+    throw new Error(`the ${agent} recording has no place for ${tool}'s result`)
   return frames
 }
