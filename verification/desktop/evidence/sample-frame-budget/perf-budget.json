@@ -1,0 +1,3437 @@
+{
+  "check": "perf-budget",
+  "ok": false,
+  "started": "2026-10-06T10:08:37.850Z",
+  "finished": "2026-10-06T10:10:15.195Z",
+  "target": {
+    "url": "http://127.0.0.1:44189/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:44189/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "calibration",
+      "engine": "chromium",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 45,
+        "throttledMs": 185,
+        "ratio": 4.07,
+        "ok": true
+      },
+      "calibrationFrame": {
+        "cost": 120,
+        "measuredMs": 133.30000000000018,
+        "attributed": true,
+        "ok": true
+      }
+    },
+    {
+      "ok": false,
+      "failures": [
+        "longest frame 116.69999999999891 ms > 50 ms (runs: 100 117 100)"
+      ],
+      "name": "drag-drop",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 116.69999999999891,
+      "median": 100,
+      "over50": 67,
+      "runs": [
+        {
+          "maxFrame": 100,
+          "over": 22,
+          "frames": 159,
+          "slow": [
+            {
+              "at": 85,
+              "frame": 83.40000000000009,
+              "longTask": null,
+              "loaf": {
+                "duration": 73,
+                "blocking": 0,
+                "styleAndLayout": 0,
+                "scripts": [
+                  {
+                    "duration": 12,
+                    "invoker": "TimerHandler:setTimeout",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BfIeMF0u.js:60901",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 235,
+              "frame": 50.09999999999991,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 352,
+              "frame": 83.30000000000018,
+              "longTask": null,
+              "loaf": {
+                "duration": 71,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            },
+            {
+              "at": 619,
+              "frame": 66.59999999999991,
+              "longTask": 58,
+              "loaf": {
+                "duration": 62,
+                "blocking": 0,
+                "styleAndLayout": 18,
+                "scripts": [
+                  {
+                    "duration": 11,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 968,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": {
+                "duration": 56,
+                "blocking": 0,
+                "styleAndLayout": 13,
+                "scripts": []
+              }
+            },
+            {
+              "at": 1452,
+              "frame": 83.30000000000018,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 1818,
+              "frame": 83.30000000000018,
+              "longTask": null,
+              "loaf": {
+                "duration": 51,
+                "blocking": 0,
+                "styleAndLayout": 13,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1952,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 2085,
+              "frame": 100,
+              "longTask": 78,
+              "loaf": {
+                "duration": 102,
+                "blocking": 12,
+                "styleAndLayout": 54,
+                "scripts": [
+                  {
+                    "duration": 7,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2768,
+              "frame": 83.30000000000018,
+              "longTask": null,
+              "loaf": {
+                "duration": 86,
+                "blocking": 0,
+                "styleAndLayout": 4,
+                "scripts": []
+              }
+            },
+            {
+              "at": 3802,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 4252,
+              "frame": 83.39999999999964,
+              "longTask": null,
+              "loaf": {
+                "duration": 82,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            },
+            {
+              "at": 4335,
+              "frame": 66.60000000000036,
+              "longTask": null,
+              "loaf": {
+                "duration": 82,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            },
+            {
+              "at": 4402,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 52,
+                "blocking": 0,
+                "styleAndLayout": 3,
+                "scripts": []
+              }
+            },
+            {
+              "at": 4485,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 4735,
+              "frame": 83.30000000000109,
+              "longTask": 56,
+              "loaf": null
+            },
+            {
+              "at": 4852,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 5052,
+              "frame": 50.100000000000364,
+              "longTask": 50,
+              "loaf": null
+            },
+            {
+              "at": 5218,
+              "frame": 83.29999999999927,
+              "longTask": null,
+              "loaf": {
+                "duration": 74,
+                "blocking": 0,
+                "styleAndLayout": 3,
+                "scripts": []
+              }
+            },
+            {
+              "at": 5718,
+              "frame": 99.89999999999964,
+              "longTask": 89,
+              "loaf": {
+                "duration": 109,
+                "blocking": 36,
+                "styleAndLayout": 6,
+                "scripts": [
+                  {
+                    "duration": 68,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BfIeMF0u.js:58511",
+                    "forcedLayout": 56
+                  },
+                  {
+                    "duration": 7,
+                    "invoker": "DOMWindow.onpointerup",
+                    "type": "event-listener",
+                    "fn": "y",
+                    "source": "desktop-BfIeMF0u.js:61369",
+                    "forcedLayout": 4
+                  }
+                ]
+              }
+            },
+            {
+              "at": 5935,
+              "frame": 83.40000000000146,
+              "longTask": null,
+              "loaf": {
+                "duration": 72,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            },
+            {
+              "at": 6268,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 63,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1289.59375,
+                "y": 258,
+                "w": 302.390625,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 705.59375,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 8,
+                "w": 302.390625,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 508,
+                "w": 302.390625,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 116.69999999999891,
+          "over": 23,
+          "frames": 151,
+          "slow": [
+            {
+              "at": 97,
+              "frame": 83.30000000000018,
+              "longTask": null,
+              "loaf": {
+                "duration": 66,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            },
+            {
+              "at": 597,
+              "frame": 83.30000000000018,
+              "longTask": 59,
+              "loaf": {
+                "duration": 63,
+                "blocking": 0,
+                "styleAndLayout": 19,
+                "scripts": [
+                  {
+                    "duration": 10,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 797,
+              "frame": 50.09999999999991,
+              "longTask": null,
+              "loaf": {
+                "duration": 52,
+                "blocking": 0,
+                "styleAndLayout": 13,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 931,
+              "frame": 83.30000000000018,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 1147,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 1280,
+              "frame": 83.40000000000055,
+              "longTask": null,
+              "loaf": {
+                "duration": 54,
+                "blocking": 0,
+                "styleAndLayout": 12,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1714,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 54,
+                "blocking": 0,
+                "styleAndLayout": 13,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1930,
+              "frame": 83.30000000000018,
+              "longTask": 67,
+              "loaf": {
+                "duration": 94,
+                "blocking": 3,
+                "styleAndLayout": 46,
+                "scripts": []
+              }
+            },
+            {
+              "at": 2230,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 64,
+                "blocking": 0,
+                "styleAndLayout": 14,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2580,
+              "frame": 83.30000000000018,
+              "longTask": null,
+              "loaf": {
+                "duration": 83,
+                "blocking": 0,
+                "styleAndLayout": 4,
+                "scripts": []
+              }
+            },
+            {
+              "at": 2914,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 50,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            },
+            {
+              "at": 3197,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3814,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3914,
+              "frame": 83.30000000000018,
+              "longTask": null,
+              "loaf": {
+                "duration": 99,
+                "blocking": 0,
+                "styleAndLayout": 11,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 3997,
+              "frame": 66.59999999999945,
+              "longTask": null,
+              "loaf": {
+                "duration": 99,
+                "blocking": 0,
+                "styleAndLayout": 11,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 4114,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 57,
+                "blocking": 0,
+                "styleAndLayout": 12,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 4597,
+              "frame": 100,
+              "longTask": 64,
+              "loaf": {
+                "duration": 82,
+                "blocking": 0,
+                "styleAndLayout": 40,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 4747,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 58,
+                "blocking": 0,
+                "styleAndLayout": 14,
+                "scripts": [
+                  {
+                    "duration": 5,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 4847,
+              "frame": 66.69999999999982,
+              "longTask": null,
+              "loaf": {
+                "duration": 63,
+                "blocking": 0,
+                "styleAndLayout": 13,
+                "scripts": [
+                  {
+                    "duration": 5,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 4947,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 5297,
+              "frame": 50.099999999998545,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 5430,
+              "frame": 116.69999999999891,
+              "longTask": 84,
+              "loaf": {
+                "duration": 101,
+                "blocking": 30,
+                "styleAndLayout": 6,
+                "scripts": [
+                  {
+                    "duration": 63,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BfIeMF0u.js:58511",
+                    "forcedLayout": 53
+                  },
+                  {
+                    "duration": 7,
+                    "invoker": "DOMWindow.onpointerup",
+                    "type": "event-listener",
+                    "fn": "y",
+                    "source": "desktop-BfIeMF0u.js:61369",
+                    "forcedLayout": 3
+                  }
+                ]
+              }
+            },
+            {
+              "at": 5747,
+              "frame": 83.29999999999927,
+              "longTask": null,
+              "loaf": {
+                "duration": 74,
+                "blocking": 0,
+                "styleAndLayout": 4,
+                "scripts": []
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1289.59375,
+                "y": 258,
+                "w": 302.390625,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 705.59375,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 8,
+                "w": 302.390625,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 508,
+                "w": 302.390625,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 100.09999999999991,
+          "over": 22,
+          "frames": 157,
+          "slow": [
+            {
+              "at": -33,
+              "frame": 50.09999999999991,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 117,
+              "frame": 100.09999999999991,
+              "longTask": null,
+              "loaf": {
+                "duration": 65,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": [
+                  {
+                    "duration": 11,
+                    "invoker": "TimerHandler:setTimeout",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BfIeMF0u.js:60901",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 633,
+              "frame": 66.80000000000018,
+              "longTask": 59,
+              "loaf": {
+                "duration": 60,
+                "blocking": 0,
+                "styleAndLayout": 19,
+                "scripts": [
+                  {
+                    "duration": 11,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 933,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 56,
+                "blocking": 0,
+                "styleAndLayout": 13,
+                "scripts": [
+                  {
+                    "duration": 8,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 983,
+              "frame": 100,
+              "longTask": 63,
+              "loaf": {
+                "duration": 62,
+                "blocking": 0,
+                "styleAndLayout": 40,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1717,
+              "frame": 83.29999999999927,
+              "longTask": null,
+              "loaf": {
+                "duration": 87,
+                "blocking": 0,
+                "styleAndLayout": 13,
+                "scripts": []
+              }
+            },
+            {
+              "at": 1883,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 2033,
+              "frame": 83.30000000000018,
+              "longTask": 66,
+              "loaf": {
+                "duration": 90,
+                "blocking": 2,
+                "styleAndLayout": 45,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2283,
+              "frame": 100,
+              "longTask": null,
+              "loaf": {
+                "duration": 61,
+                "blocking": 0,
+                "styleAndLayout": 13,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2717,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3100,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3333,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3633,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3766,
+              "frame": 83.40000000000055,
+              "longTask": null,
+              "loaf": {
+                "duration": 84,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            },
+            {
+              "at": 4183,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": {
+                "duration": 57,
+                "blocking": 0,
+                "styleAndLayout": 11,
+                "scripts": [
+                  {
+                    "duration": 5,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 4366,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 4766,
+              "frame": 50.100000000000364,
+              "longTask": 58,
+              "loaf": {
+                "duration": 87,
+                "blocking": 0,
+                "styleAndLayout": 37,
+                "scripts": [
+                  {
+                    "duration": 5,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 4933,
+              "frame": 99.89999999999964,
+              "longTask": null,
+              "loaf": {
+                "duration": 107,
+                "blocking": 0,
+                "styleAndLayout": 13,
+                "scripts": []
+              }
+            },
+            {
+              "at": 5033,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 107,
+                "blocking": 0,
+                "styleAndLayout": 13,
+                "scripts": []
+              }
+            },
+            {
+              "at": 5166,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 55,
+                "blocking": 0,
+                "styleAndLayout": 13,
+                "scripts": [
+                  {
+                    "duration": 5,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 5700,
+              "frame": 100,
+              "longTask": 87,
+              "loaf": {
+                "duration": 112,
+                "blocking": 33,
+                "styleAndLayout": 6,
+                "scripts": [
+                  {
+                    "duration": 65,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BfIeMF0u.js:58511",
+                    "forcedLayout": 54
+                  },
+                  {
+                    "duration": 7,
+                    "invoker": "DOMWindow.onpointerup",
+                    "type": "event-listener",
+                    "fn": "y",
+                    "source": "desktop-BfIeMF0u.js:61369",
+                    "forcedLayout": 3
+                  }
+                ]
+              }
+            },
+            {
+              "at": 5800,
+              "frame": 50.099999999998545,
+              "longTask": null,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1289.59375,
+                "y": 258,
+                "w": 302.390625,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 705.59375,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 8,
+                "w": 302.390625,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 508,
+                "w": 302.390625,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": false,
+      "failures": [
+        "longest frame 100 ms > 50 ms (runs: 83 100 100)"
+      ],
+      "name": "overview-open",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 100,
+      "median": 100,
+      "over50": 9,
+      "runs": [
+        {
+          "maxFrame": 83.30000000000018,
+          "over": 4,
+          "frames": 30,
+          "slow": [
+            {
+              "at": 11,
+              "frame": 83.30000000000018,
+              "longTask": 59,
+              "loaf": {
+                "duration": 109,
+                "blocking": 5,
+                "styleAndLayout": 9,
+                "scripts": [
+                  {
+                    "duration": 40,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "s",
+                    "source": "desktop-BfIeMF0u.js:173406",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 94,
+              "frame": 66.79999999999995,
+              "longTask": 59,
+              "loaf": {
+                "duration": 109,
+                "blocking": 5,
+                "styleAndLayout": 9,
+                "scripts": [
+                  {
+                    "duration": 40,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "s",
+                    "source": "desktop-BfIeMF0u.js:173406",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 244,
+              "frame": 50.09999999999991,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 327,
+              "frame": 50.00000000000023,
+              "longTask": null,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 4,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 100,
+          "over": 3,
+          "frames": 33,
+          "slow": [
+            {
+              "at": 13,
+              "frame": 100,
+              "longTask": 59,
+              "loaf": {
+                "duration": 96,
+                "blocking": 3,
+                "styleAndLayout": 10,
+                "scripts": [
+                  {
+                    "duration": 39,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "s",
+                    "source": "desktop-BfIeMF0u.js:173406",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 147,
+              "frame": 50.100000000000136,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 313,
+              "frame": 50.00000000000023,
+              "longTask": null,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 4,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 99.90000000000009,
+          "over": 2,
+          "frames": 29,
+          "slow": [
+            {
+              "at": 19,
+              "frame": 99.90000000000009,
+              "longTask": 62,
+              "loaf": {
+                "duration": 104,
+                "blocking": 6,
+                "styleAndLayout": 9,
+                "scripts": [
+                  {
+                    "duration": 41,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "s",
+                    "source": "desktop-BfIeMF0u.js:173406",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 119,
+              "frame": 66.69999999999982,
+              "longTask": null,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 4,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": false,
+      "failures": [
+        "longest frame 133.29999999999927 ms > 50 ms (runs: 100 100 133)"
+      ],
+      "name": "drag-drop",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 133.29999999999927,
+      "median": 100,
+      "over50": 108,
+      "runs": [
+        {
+          "maxFrame": 100.10000000000036,
+          "over": 37,
+          "frames": 147,
+          "slow": [
+            {
+              "at": 102,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 63,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": [
+                  {
+                    "duration": 9,
+                    "invoker": "TimerHandler:setTimeout",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BfIeMF0u.js:60901",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 185,
+              "frame": 99.90000000000009,
+              "longTask": null,
+              "loaf": {
+                "duration": 63,
+                "blocking": 0,
+                "styleAndLayout": 12,
+                "scripts": []
+              }
+            },
+            {
+              "at": 285,
+              "frame": 50.09999999999991,
+              "longTask": null,
+              "loaf": {
+                "duration": 51,
+                "blocking": 0,
+                "styleAndLayout": 3,
+                "scripts": []
+              }
+            },
+            {
+              "at": 469,
+              "frame": 50.09999999999991,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 735,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 71,
+                "blocking": 0,
+                "styleAndLayout": 21,
+                "scripts": [
+                  {
+                    "duration": 10,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 785,
+              "frame": 83.19999999999982,
+              "longTask": 62,
+              "loaf": {
+                "duration": 71,
+                "blocking": 0,
+                "styleAndLayout": 21,
+                "scripts": [
+                  {
+                    "duration": 10,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 919,
+              "frame": 66.80000000000018,
+              "longTask": 70,
+              "loaf": {
+                "duration": 70,
+                "blocking": 3,
+                "styleAndLayout": 44,
+                "scripts": [
+                  {
+                    "duration": 8,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 985,
+              "frame": 66.59999999999945,
+              "longTask": 70,
+              "loaf": {
+                "duration": 56,
+                "blocking": 0,
+                "styleAndLayout": 15,
+                "scripts": [
+                  {
+                    "duration": 7,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1202,
+              "frame": 66.69999999999982,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 1469,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": {
+                "duration": 71,
+                "blocking": 0,
+                "styleAndLayout": 15,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1585,
+              "frame": 83.30000000000018,
+              "longTask": 55,
+              "loaf": null
+            },
+            {
+              "at": 1719,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 1852,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 2052,
+              "frame": 100.09999999999945,
+              "longTask": 67,
+              "loaf": {
+                "duration": 86,
+                "blocking": 3,
+                "styleAndLayout": 45,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2202,
+              "frame": 66.69999999999982,
+              "longTask": null,
+              "loaf": {
+                "duration": 64,
+                "blocking": 0,
+                "styleAndLayout": 3,
+                "scripts": []
+              }
+            },
+            {
+              "at": 2319,
+              "frame": 66.69999999999982,
+              "longTask": null,
+              "loaf": {
+                "duration": 52,
+                "blocking": 0,
+                "styleAndLayout": 3,
+                "scripts": []
+              }
+            },
+            {
+              "at": 2735,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 64,
+                "blocking": 0,
+                "styleAndLayout": 15,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2902,
+              "frame": 66.69999999999982,
+              "longTask": null,
+              "loaf": {
+                "duration": 56,
+                "blocking": 0,
+                "styleAndLayout": 3,
+                "scripts": []
+              }
+            },
+            {
+              "at": 3168,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3418,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3618,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3918,
+              "frame": 66.69999999999982,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 4085,
+              "frame": 66.70000000000073,
+              "longTask": null,
+              "loaf": {
+                "duration": 57,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            },
+            {
+              "at": 4202,
+              "frame": 66.69999999999982,
+              "longTask": null,
+              "loaf": {
+                "duration": 54,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            },
+            {
+              "at": 4318,
+              "frame": 66.69999999999982,
+              "longTask": null,
+              "loaf": {
+                "duration": 51,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            },
+            {
+              "at": 4735,
+              "frame": 99.99999999999909,
+              "longTask": null,
+              "loaf": {
+                "duration": 80,
+                "blocking": 0,
+                "styleAndLayout": 4,
+                "scripts": []
+              }
+            },
+            {
+              "at": 4868,
+              "frame": 100,
+              "longTask": null,
+              "loaf": {
+                "duration": 90,
+                "blocking": 0,
+                "styleAndLayout": 3,
+                "scripts": []
+              }
+            },
+            {
+              "at": 5268,
+              "frame": 100,
+              "longTask": 60,
+              "loaf": {
+                "duration": 92,
+                "blocking": 0,
+                "styleAndLayout": 38,
+                "scripts": [
+                  {
+                    "duration": 5,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 5418,
+              "frame": 66.59999999999854,
+              "longTask": null,
+              "loaf": {
+                "duration": 67,
+                "blocking": 0,
+                "styleAndLayout": 13,
+                "scripts": []
+              }
+            },
+            {
+              "at": 5485,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 67,
+                "blocking": 0,
+                "styleAndLayout": 13,
+                "scripts": []
+              }
+            },
+            {
+              "at": 5535,
+              "frame": 66.70000000000073,
+              "longTask": null,
+              "loaf": {
+                "duration": 69,
+                "blocking": 0,
+                "styleAndLayout": 13,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 5652,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 5985,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 6068,
+              "frame": 100.10000000000036,
+              "longTask": 88,
+              "loaf": {
+                "duration": 119,
+                "blocking": 34,
+                "styleAndLayout": 7,
+                "scripts": [
+                  {
+                    "duration": 67,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BfIeMF0u.js:58511",
+                    "forcedLayout": 55
+                  },
+                  {
+                    "duration": 6,
+                    "invoker": "DOMWindow.onpointerup",
+                    "type": "event-listener",
+                    "fn": "y",
+                    "source": "desktop-BfIeMF0u.js:61369",
+                    "forcedLayout": 3
+                  }
+                ]
+              }
+            },
+            {
+              "at": 6418,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 6652,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 6935,
+              "frame": 83.30000000000109,
+              "longTask": null,
+              "loaf": {
+                "duration": 76,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1264,
+                "y": 258,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 984,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1264,
+                "y": 8,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1264,
+                "y": 508,
+                "w": 328,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 100,
+          "over": 38,
+          "frames": 144,
+          "slow": [
+            {
+              "at": 47,
+              "frame": 83.39999999999964,
+              "longTask": null,
+              "loaf": {
+                "duration": 94,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": [
+                  {
+                    "duration": 10,
+                    "invoker": "TimerHandler:setTimeout",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BfIeMF0u.js:60901",
+                    "forcedLayout": 0
+                  },
+                  {
+                    "duration": 9,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "o",
+                    "source": "desktop-BfIeMF0u.js:151416",
+                    "forcedLayout": 7
+                  }
+                ]
+              }
+            },
+            {
+              "at": 130,
+              "frame": 66.60000000000036,
+              "longTask": null,
+              "loaf": {
+                "duration": 94,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": [
+                  {
+                    "duration": 10,
+                    "invoker": "TimerHandler:setTimeout",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BfIeMF0u.js:60901",
+                    "forcedLayout": 0
+                  },
+                  {
+                    "duration": 9,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "o",
+                    "source": "desktop-BfIeMF0u.js:151416",
+                    "forcedLayout": 7
+                  }
+                ]
+              }
+            },
+            {
+              "at": 197,
+              "frame": 50.09999999999991,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 547,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 680,
+              "frame": 100,
+              "longTask": 61,
+              "loaf": {
+                "duration": 70,
+                "blocking": 0,
+                "styleAndLayout": 20,
+                "scripts": [
+                  {
+                    "duration": 10,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 830,
+              "frame": 99.90000000000055,
+              "longTask": 63,
+              "loaf": {
+                "duration": 71,
+                "blocking": 0,
+                "styleAndLayout": 41,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1014,
+              "frame": 100,
+              "longTask": null,
+              "loaf": {
+                "duration": 108,
+                "blocking": 0,
+                "styleAndLayout": 14,
+                "scripts": []
+              }
+            },
+            {
+              "at": 1664,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 1797,
+              "frame": 83.5,
+              "longTask": null,
+              "loaf": {
+                "duration": 90,
+                "blocking": 0,
+                "styleAndLayout": 8,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2097,
+              "frame": 83.30000000000018,
+              "longTask": 68,
+              "loaf": {
+                "duration": 88,
+                "blocking": 4,
+                "styleAndLayout": 46,
+                "scripts": []
+              }
+            },
+            {
+              "at": 2214,
+              "frame": 100,
+              "longTask": null,
+              "loaf": {
+                "duration": 72,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            },
+            {
+              "at": 2314,
+              "frame": 66.70000000000073,
+              "longTask": null,
+              "loaf": {
+                "duration": 72,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            },
+            {
+              "at": 2380,
+              "frame": 66.69999999999982,
+              "longTask": null,
+              "loaf": {
+                "duration": 51,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            },
+            {
+              "at": 2647,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 57,
+                "blocking": 0,
+                "styleAndLayout": 7,
+                "scripts": [
+                  {
+                    "duration": 5,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2797,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 62,
+                "blocking": 0,
+                "styleAndLayout": 12,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2897,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 2947,
+              "frame": 66.59999999999945,
+              "longTask": null,
+              "loaf": {
+                "duration": 50,
+                "blocking": 0,
+                "styleAndLayout": 4,
+                "scripts": []
+              }
+            },
+            {
+              "at": 3147,
+              "frame": 99.89999999999964,
+              "longTask": null,
+              "loaf": {
+                "duration": 93,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            },
+            {
+              "at": 3247,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 93,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            },
+            {
+              "at": 3447,
+              "frame": 66.69999999999982,
+              "longTask": null,
+              "loaf": {
+                "duration": 53,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            },
+            {
+              "at": 3730,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3830,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3930,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3980,
+              "frame": 66.59999999999945,
+              "longTask": null,
+              "loaf": {
+                "duration": 50,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            },
+            {
+              "at": 4447,
+              "frame": 100,
+              "longTask": null,
+              "loaf": {
+                "duration": 98,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            },
+            {
+              "at": 4564,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": {
+                "duration": 98,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            },
+            {
+              "at": 4814,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 5064,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 5264,
+              "frame": 100,
+              "longTask": 60,
+              "loaf": {
+                "duration": 89,
+                "blocking": 0,
+                "styleAndLayout": 38,
+                "scripts": [
+                  {
+                    "duration": 5,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 5414,
+              "frame": 66.70000000000073,
+              "longTask": null,
+              "loaf": {
+                "duration": 67,
+                "blocking": 0,
+                "styleAndLayout": 15,
+                "scripts": []
+              }
+            },
+            {
+              "at": 5530,
+              "frame": 66.60000000000036,
+              "longTask": null,
+              "loaf": {
+                "duration": 74,
+                "blocking": 0,
+                "styleAndLayout": 14,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 5597,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 74,
+                "blocking": 0,
+                "styleAndLayout": 14,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 6047,
+              "frame": 83.19999999999891,
+              "longTask": null,
+              "loaf": {
+                "duration": 152,
+                "blocking": 36,
+                "styleAndLayout": 6,
+                "scripts": [
+                  {
+                    "duration": 69,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BfIeMF0u.js:58511",
+                    "forcedLayout": 56
+                  },
+                  {
+                    "duration": 7,
+                    "invoker": "DOMWindow.onpointerup",
+                    "type": "event-listener",
+                    "fn": "y",
+                    "source": "desktop-BfIeMF0u.js:61369",
+                    "forcedLayout": 3
+                  }
+                ]
+              }
+            },
+            {
+              "at": 6130,
+              "frame": 100,
+              "longTask": 89,
+              "loaf": {
+                "duration": 152,
+                "blocking": 36,
+                "styleAndLayout": 6,
+                "scripts": [
+                  {
+                    "duration": 69,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BfIeMF0u.js:58511",
+                    "forcedLayout": 56
+                  },
+                  {
+                    "duration": 7,
+                    "invoker": "DOMWindow.onpointerup",
+                    "type": "event-listener",
+                    "fn": "y",
+                    "source": "desktop-BfIeMF0u.js:61369",
+                    "forcedLayout": 3
+                  }
+                ]
+              }
+            },
+            {
+              "at": 6280,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 6613,
+              "frame": 50.099999999998545,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 6897,
+              "frame": 83.29999999999927,
+              "longTask": null,
+              "loaf": {
+                "duration": 74,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            },
+            {
+              "at": 7213,
+              "frame": 50.099999999998545,
+              "longTask": null,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1264,
+                "y": 258,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 984,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1264,
+                "y": 8,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1264,
+                "y": 508,
+                "w": 328,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 133.29999999999927,
+          "over": 33,
+          "frames": 149,
+          "slow": [
+            {
+              "at": 110,
+              "frame": 83.30000000000018,
+              "longTask": null,
+              "loaf": {
+                "duration": 59,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            },
+            {
+              "at": 194,
+              "frame": 116.69999999999982,
+              "longTask": null,
+              "loaf": {
+                "duration": 60,
+                "blocking": 0,
+                "styleAndLayout": 11,
+                "scripts": []
+              }
+            },
+            {
+              "at": 794,
+              "frame": 83.39999999999964,
+              "longTask": 59,
+              "loaf": {
+                "duration": 67,
+                "blocking": 0,
+                "styleAndLayout": 20,
+                "scripts": [
+                  {
+                    "duration": 10,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 927,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 1027,
+              "frame": 83.39999999999964,
+              "longTask": null,
+              "loaf": {
+                "duration": 100,
+                "blocking": 0,
+                "styleAndLayout": 12,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1110,
+              "frame": 66.60000000000036,
+              "longTask": null,
+              "loaf": {
+                "duration": 100,
+                "blocking": 0,
+                "styleAndLayout": 12,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1177,
+              "frame": 83.30000000000018,
+              "longTask": null,
+              "loaf": {
+                "duration": 89,
+                "blocking": 0,
+                "styleAndLayout": 4,
+                "scripts": []
+              }
+            },
+            {
+              "at": 1410,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": {
+                "duration": 61,
+                "blocking": 0,
+                "styleAndLayout": 15,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1560,
+              "frame": 50.099999999999454,
+              "longTask": 77,
+              "loaf": null
+            },
+            {
+              "at": 2060,
+              "frame": 83.39999999999964,
+              "longTask": 89,
+              "loaf": null
+            },
+            {
+              "at": 2194,
+              "frame": 83.30000000000018,
+              "longTask": 67,
+              "loaf": {
+                "duration": 94,
+                "blocking": 3,
+                "styleAndLayout": 45,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2327,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 55,
+                "blocking": 0,
+                "styleAndLayout": 17,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2394,
+              "frame": 66.70000000000073,
+              "longTask": null,
+              "loaf": {
+                "duration": 64,
+                "blocking": 0,
+                "styleAndLayout": 3,
+                "scripts": []
+              }
+            },
+            {
+              "at": 2510,
+              "frame": 66.69999999999982,
+              "longTask": null,
+              "loaf": {
+                "duration": 53,
+                "blocking": 0,
+                "styleAndLayout": 3,
+                "scripts": []
+              }
+            },
+            {
+              "at": 2827,
+              "frame": 66.80000000000018,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3060,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3344,
+              "frame": 100,
+              "longTask": null,
+              "loaf": {
+                "duration": 95,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            },
+            {
+              "at": 3643,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3743,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3894,
+              "frame": 66.70000000000073,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 4010,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 4427,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 4677,
+              "frame": 83.30000000000018,
+              "longTask": null,
+              "loaf": {
+                "duration": 89,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            },
+            {
+              "at": 4943,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 5193,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 5343,
+              "frame": 100,
+              "longTask": 59,
+              "loaf": {
+                "duration": 88,
+                "blocking": 0,
+                "styleAndLayout": 39,
+                "scripts": [
+                  {
+                    "duration": 5,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 5493,
+              "frame": 66.70000000000073,
+              "longTask": null,
+              "loaf": {
+                "duration": 63,
+                "blocking": 0,
+                "styleAndLayout": 13,
+                "scripts": []
+              }
+            },
+            {
+              "at": 5610,
+              "frame": 66.70000000000073,
+              "longTask": null,
+              "loaf": {
+                "duration": 70,
+                "blocking": 0,
+                "styleAndLayout": 12,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "b",
+                    "source": "desktop-BfIeMF0u.js:51897",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 5727,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 5910,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 6127,
+              "frame": 133.29999999999927,
+              "longTask": 81,
+              "loaf": {
+                "duration": 117,
+                "blocking": 28,
+                "styleAndLayout": 6,
+                "scripts": [
+                  {
+                    "duration": 62,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BfIeMF0u.js:58511",
+                    "forcedLayout": 52
+                  },
+                  {
+                    "duration": 6,
+                    "invoker": "DOMWindow.onpointerup",
+                    "type": "event-listener",
+                    "fn": "y",
+                    "source": "desktop-BfIeMF0u.js:61369",
+                    "forcedLayout": 3
+                  }
+                ]
+              }
+            },
+            {
+              "at": 6643,
+              "frame": 50.099999999998545,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 6960,
+              "frame": 83.39999999999964,
+              "longTask": null,
+              "loaf": {
+                "duration": 77,
+                "blocking": 0,
+                "styleAndLayout": 2,
+                "scripts": []
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1264,
+                "y": 258,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 984,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1264,
+                "y": 8,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1264,
+                "y": 508,
+                "w": 328,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": false,
+      "failures": [
+        "longest frame 116.69999999999982 ms > 50 ms (runs: 100 117 100)"
+      ],
+      "name": "overview-open",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 116.69999999999982,
+      "median": 100,
+      "over50": 4,
+      "runs": [
+        {
+          "maxFrame": 100,
+          "over": 2,
+          "frames": 32,
+          "slow": [
+            {
+              "at": 5,
+              "frame": 100,
+              "longTask": 51,
+              "loaf": {
+                "duration": 108,
+                "blocking": 2,
+                "styleAndLayout": 9,
+                "scripts": [
+                  {
+                    "duration": 39,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "s",
+                    "source": "desktop-BfIeMF0u.js:173406",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 255,
+              "frame": 50.09999999999991,
+              "longTask": null,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 4,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 116.69999999999982,
+          "over": 1,
+          "frames": 29,
+          "slow": [
+            {
+              "at": 3,
+              "frame": 116.69999999999982,
+              "longTask": 53,
+              "loaf": {
+                "duration": 113,
+                "blocking": 8,
+                "styleAndLayout": 9,
+                "scripts": [
+                  {
+                    "duration": 44,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "s",
+                    "source": "desktop-BfIeMF0u.js:173406",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 4,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 100,
+          "over": 1,
+          "frames": 29,
+          "slow": [
+            {
+              "at": 11,
+              "frame": 100,
+              "longTask": 51,
+              "loaf": {
+                "duration": 105,
+                "blocking": 3,
+                "styleAndLayout": 9,
+                "scripts": [
+                  {
+                    "duration": 38,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "s",
+                    "source": "desktop-BfIeMF0u.js:173406",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 4,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    }
+  ]
+}
