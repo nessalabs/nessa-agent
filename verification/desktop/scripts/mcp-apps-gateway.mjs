@@ -43,6 +43,7 @@
 import { randomUUID } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
+import { setTimeout as sleep } from "node:timers/promises"
 
 import { SERVER, toolPrompt } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { appFrame, approvalGone, approvalShown, oneCard, oneMount } from "./lib/apps.mjs"
@@ -50,12 +51,17 @@ import { openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log } from "./lib/cli.mjs"
 import {
   admitOnce,
+  appPermissions,
+  appReviewUnstartedMs,
+  appReviewWaitMs,
   callKey,
   newReview,
   permissionKey,
+  reviewAbsentMessage,
   reviewKeys,
   setupOutcome,
   stillPending,
+  waitForAppReview,
 } from "./lib/gateway-view.mjs"
 import { agentTurn, startGatewayStack, waitFor } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
@@ -120,7 +126,10 @@ Steps, per engine and layout, in order on one page (--only <names> to pick):
             none). Its failure stops no step after it.
   allow     the app's call to the destructive tool waits on a review in the
             conversation's permissions, its origin the app, shown in the
-            window; the review's Allow there, and the app shows the server's answer
+            window; the review's Allow there, and the app shows the server's answer.
+            The step waits while that call is still pending, up to the
+            client's call deadline (#474), and reads the gateway's view
+            directly
   deny      a second call: its review, Deny in the window, and the app shows
             that the person declined
   release   in a pane of its own (the app's fullscreen request), a third call
@@ -153,7 +162,14 @@ async function startStack(options) {
     log(
       `conversation ready: ${APP_TOOL} ${turn.tool.status}, in ${stack.timings.agentTurnMs} ms`,
     )
-    return { ...stack, conversationId, title }
+    // Registered by the stack, which imported this client first.
+    const { mcpAppCallTiming } = await import("@nessa/client")
+    return {
+      ...stack,
+      conversationId,
+      title,
+      reviewWaitMs: appReviewWaitMs(mcpAppCallTiming),
+    }
   } catch (error) {
     await stack.close()
     throw error
@@ -224,7 +240,7 @@ async function appToolTurn(client, conversationId, agent) {
 /** The app's pending reviews in the conversation, as the gateway's view says. */
 async function appReviews(client, conversationId) {
   const view = await client.conversation.read(conversationId)
-  return view.permissions.filter((each) => each.origin.kind === "app")
+  return appPermissions(view)
 }
 
 /** What an output of the review app says, once it says anything but `pending`. */
@@ -256,12 +272,50 @@ const said = (frame, id) =>
 const pendingReviews = async (stack) =>
   reviewKeys(await appReviews(stack.client, stack.conversationId))
 
-/** Waits up to `ms` for an app review not in `baseline`: the one the action opened. */
-const reviewOpened = (stack, baseline, ms = 15_000) =>
+/**
+ * Waits up to `ms` for an app review not in `baseline`: the one the action
+ * opened. `windowOpened` uses the time it has left, so a fast run reaches
+ * the steps with the review already listed. A review that takes longer is
+ * the step's own wait (`awaitReview`), which does not stop at this bound.
+ */
+const reviewOpened = (stack, baseline, ms = appReviewUnstartedMs) =>
   waitFor(
     async () => newReview(await appReviews(stack.client, stack.conversationId), baseline),
     ms,
   )
+
+/**
+ * The step's wait for the review its own call opened (#474). While the
+ * app's output for that call is still pending, a review the gateway lists
+ * later is that review; the call ending with none is reported as answered;
+ * neither by `stack.reviewWaitMs` — the client's call deadline — is absent.
+ * An output that never becomes pending stops at `appReviewUnstartedMs`:
+ * no call is in flight, so the absence is not a late review.
+ */
+const awaitReview = (stack, baseline, pending) =>
+  waitForAppReview({
+    read: () => stack.client.conversation.read(stack.conversationId),
+    baseline,
+    deadlineMs: stack.reviewWaitMs,
+    pending,
+    sleep,
+  })
+
+/** Lines of the gateway log that bear on an app call, for a wait that found no review. */
+function gatewayExcerpt(stack) {
+  const text = stack.gateway?.log?.() ?? ""
+  const lines = text
+    .split("\n")
+    .filter((line) =>
+      /app_delete_row|ApprovalRequested|temporarily_unavailable|mcp_cancelled|Withdrawn|call_tool|callTool/i.test(
+        line,
+      ),
+    )
+    .slice(-20)
+  const chosen = lines.length > 0 ? lines : text.split("\n").filter(Boolean).slice(-8)
+  if (chosen.length === 0) return ""
+  return `gateway log: ${chosen.join(" | ").slice(-1500)}`
+}
 
 /** Waits up to `ms` for `review` to be pending no longer; whether it went. */
 const reviewGone = (stack, review, ms) =>
@@ -270,6 +324,44 @@ const reviewGone = (stack, review, ms) =>
       !stillPending(await appReviews(stack.client, stack.conversationId), review),
     ms,
   )
+
+/**
+ * Moves the pointer onto `control` until that sandboxed document receives it.
+ * A move in the moment a pane's frame becomes live lands on the proxy's
+ * iframe element and is not forwarded into the app; once the frame accepts
+ * hits, the same move lands on the button. Returns how many moves it took,
+ * or 0 when the app has not received the pointer by `appReviewUnstartedMs`.
+ */
+async function pointerOnto(page, frame, control) {
+  const selector = css.reviewControl(control)
+  await frame.evaluate((selector) => {
+    const button = document.querySelector(selector)
+    window.__nessaPointerEntered = false
+    const mark = (event) => {
+      if (event.isTrusted && event.target === button) window.__nessaPointerEntered = true
+    }
+    document.addEventListener("pointerover", mark, true)
+    document.addEventListener("pointermove", mark, true)
+  }, selector)
+  const until = Date.now() + appReviewUnstartedMs
+  let moves = 0
+  while (Date.now() < until) {
+    moves += 1
+    // Off the control first, so a move that the proxy swallowed is followed
+    // by a new one rather than a pointer that is already parked there.
+    await page.mouse.move(1, 1)
+    await frame
+      .locator(selector)
+      .hover({ timeout: 1_000 })
+      .catch(() => {})
+    const entered = await frame
+      .evaluate(() => window.__nessaPointerEntered === true)
+      .catch(() => false)
+    if (entered) return moves
+    await sleep(50)
+  }
+  return 0
+}
 
 /** Waits up to `ms` for `review` to be the conversation's first pending permission: the one the window shows. */
 const reviewShown = (stack, review, ms = 10_000) =>
@@ -313,17 +405,27 @@ async function settleEarlier(page, stack, failures) {
  * in the window, answers it in the window with the option of `effect`, and
  * returns what was seen. The button is that option's own label (#444).
  * `baseline` is the app's reviews pending before the call was made, so the
- * call's own is told apart from any left from before.
+ * call's own is told apart from any left from before. `pending` reads
+ * what the app shows for the call, so a call that ends with no review is
+ * told apart from one whose review has not been listed yet (#474).
  */
-async function reviewAndAnswer(page, stack, baseline, effect, failures) {
-  const review = await reviewOpened(stack, baseline)
-  if (!review) {
+async function reviewAndAnswer(page, stack, baseline, effect, failures, pending) {
+  const waited = await awaitReview(stack, baseline, pending)
+  if (waited.kind === "answered") {
     failures.push(
-      "no review of the app's destructive call reached the conversation's permissions",
+      `the call was answered without a review in the conversation's permissions: "${waited.output}"`,
     )
     return null
   }
+  if (waited.kind !== "review") {
+    failures.push(reviewAbsentMessage(waited.samples, waited.reads))
+    const excerpt = gatewayExcerpt(stack)
+    if (excerpt) failures.push(excerpt)
+    return null
+  }
+  const review = waited.review
   const seen = {
+    arrivedMs: waited.samples.at(-1)?.ms ?? null,
     toolName: review.toolName,
     origin: review.origin,
     argumentsJson: review.argumentsJson,
@@ -562,6 +664,7 @@ const checks = {
       opened.reviewsBefore,
       "allow",
       failures,
+      () => said(app, "first"),
     )
     const answer = await output(app, "first")
     if (answer !== "ok: Deleted row 2.")
@@ -581,7 +684,9 @@ const checks = {
       failures.push(
         `the second destructive call was answered before its review: "${before}"`,
       )
-    const review = await reviewAndAnswer(page, stack, baseline, "deny", failures)
+    const review = await reviewAndAnswer(page, stack, baseline, "deny", failures, () =>
+      said(app, "again"),
+    )
     const answer = await output(app, "again")
     if (answer !== `error: ${names.gatewayRefused.declined}`)
       failures.push(`after Deny the app shows "${answer}"`)
@@ -604,12 +709,38 @@ const checks = {
     if (paneMode !== "fullscreen") failures.push(`the pane's app is told ${paneMode}`)
     // The pane's own mount: its tool result arrives, and it makes no calls of its own.
     const baseline = await settleEarlier(page, stack, failures)
-    await pane.app.click(css.reviewControl("delete"))
-    const waiting = await reviewOpened(stack, baseline)
-    if (!waiting) {
-      failures.push("the pane app's destructive call reached no review")
-      return { seen: { paneMode }, failures }
+    // The pane's frame accepts a hit into the app a moment after it is live.
+    // Until then a pointer event stops on the proxy's iframe. Move onto the
+    // button until the app receives it, then click once.
+    const pointerMoves = await pointerOnto(page, pane.app, "delete")
+    if (pointerMoves === 0) {
+      failures.push("the pointer never entered the pane app's delete button")
+      return { seen: { paneMode, pointerMoves }, failures }
     }
+    try {
+      await pane.app.click(css.reviewControl("delete"))
+    } catch (error) {
+      failures.push(
+        `the pane's delete click did not land: ${error.message.split("\n")[0]}`,
+      )
+      return { seen: { paneMode, pointerMoves }, failures }
+    }
+    if ((await said(pane.app, "again")) === "") {
+      failures.push(
+        "the pane's delete click did not reach the app: its call never showed pending",
+      )
+      return { seen: { paneMode, pointerMoves }, failures }
+    }
+    const waited = await awaitReview(stack, baseline, () => said(pane.app, "again"))
+    if (waited.kind !== "review") {
+      failures.push(
+        waited.kind === "answered"
+          ? `the pane app's call was answered without a review: "${waited.output}"`
+          : `the pane app's destructive call reached no review; ${reviewAbsentMessage(waited.samples, waited.reads)}`,
+      )
+      return { seen: { paneMode, pointerMoves }, failures }
+    }
+    const waiting = waited.review
     if (!(await reviewShown(stack, waiting)))
       failures.push("the window's approval is not the review the pane's call opened")
     const card = await approvalShown(page, SERVER, DESTRUCTIVE)
@@ -648,6 +779,7 @@ const checks = {
     return {
       seen: {
         paneMode,
+        pointerMoves,
         review: { origin: waiting.origin, toolName: waiting.toolName },
         paneSaid,
         withdrawn: Boolean(withdrawn),
