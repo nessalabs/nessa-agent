@@ -283,3 +283,36 @@ export function lastTurn(view) {
       )
   return { user, reply }
 }
+
+/**
+ * Every executionId the view already lists, on a turn or still in the queue.
+ * The message step records this before it clicks, and {@link messagesArrived}
+ * treats an id in the set as an earlier engine's send.
+ */
+export function executionIds(view) {
+  const ids = new Set()
+  for (const message of view.messages) ids.add(message.executionId)
+  for (const message of view.pending) ids.add(message.executionId)
+  return ids
+}
+
+/**
+ * Sends of `text` whose executionId is not in `earlier`. A turn lists the
+ * text as `userText`; a queue entry lists it as `text`. The same executionId
+ * in both is one send, and the turn is the one kept. The words are not the
+ * identity: another engine on this conversation may already have sent them
+ * (`mcp-apps-gateway.mjs`, message).
+ */
+export function messagesArrived(view, earlier, text) {
+  const arrived = []
+  const seen = new Set()
+  const take = (message, messageText) => {
+    const id = message.executionId
+    if (messageText !== text || earlier.has(id) || seen.has(id)) return
+    seen.add(id)
+    arrived.push(message)
+  }
+  for (const message of view.messages) take(message, message.userText)
+  for (const message of view.pending) take(message, message.text)
+  return arrived
+}
