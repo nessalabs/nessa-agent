@@ -1,10 +1,14 @@
 //! Row tests for remote MCP authorization.
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
+use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::mcp_authorization::application::{
-    AuthorizationOwner, AuthorizeAnswer, CallbackQuery, OAuthCallFailure, OAuthResponse,
+    AdmissionRefusal, AuthorizationOwner, AuthorizationRecords, AuthorizeAnswer, CallbackQuery,
+    OAuthCallFailure, OAuthResponse, RecordFailure, TokenMaterial,
 };
 use crate::mcp_authorization::domain::{
     AcceptedDiscovery, Admission, Command, Deletion, Phase, Publication, RefreshActivity, Refusal,
@@ -360,4 +364,317 @@ fn server_metadata() -> OAuthResponse {
         body: r#"{"issuer":"https://as.example","authorization_endpoint":"https://as.example/authorize","token_endpoint":"https://as.example/token","registration_endpoint":"https://as.example/register","revocation_endpoint":"https://as.example/revoke","code_challenge_methods_supported":["S256"]}"#.into(),
         www_authenticate: None,
     }
+}
+
+async fn push_discovery(memory: &MemoryAuthorization) {
+    memory
+        .push_route(
+            "https://mcp.example/mcp",
+            Ok(OAuthResponse {
+                status: 401,
+                body: String::new(),
+                www_authenticate: Some(
+                    "Bearer resource_metadata=\"https://mcp.example/.well-known/oauth-protected-resource\""
+                        .into(),
+                ),
+            }),
+        )
+        .await;
+    memory
+        .push_route(
+            "https://mcp.example/.well-known/oauth-protected-resource",
+            Ok(metadata()),
+        )
+        .await;
+    memory
+        .push_route(
+            "https://as.example/.well-known/oauth-authorization-server",
+            Ok(server_metadata()),
+        )
+        .await;
+    memory
+        .push_route(
+            "https://as.example/register",
+            Ok(OAuthResponse {
+                status: 201,
+                body: r#"{"client_id":"client"}"#.into(),
+                www_authenticate: None,
+            }),
+        )
+        .await;
+}
+
+fn token_body(access: &str) -> OAuthResponse {
+    OAuthResponse {
+        status: 200,
+        body: format!(r#"{{"access_token":"{access}","refresh_token":"refresh","expires_in":60}}"#),
+        www_authenticate: None,
+    }
+}
+
+#[tokio::test]
+async fn dynamic_registration_is_posted_as_json() {
+    let memory = Arc::new(MemoryAuthorization::new());
+    push_discovery(&memory).await;
+    let owner = Arc::new(owner(memory.clone()));
+    let answer = owner
+        .authorize(server(), "docs", "https://mcp.example/mcp")
+        .await;
+    assert!(matches!(answer, AuthorizeAnswer::PendingConsent { .. }));
+    let register = memory
+        .posts()
+        .await
+        .into_iter()
+        .find(|(url, _, _)| url == "https://as.example/register")
+        .expect("registration post");
+    assert!(register.1);
+    assert!(register.2.contains("\"redirect_uris\""));
+    assert!(!register.2.contains("redirect_uris="));
+}
+
+#[tokio::test]
+async fn a_probe_other_than_401_needs_no_token() {
+    let memory = Arc::new(MemoryAuthorization::new());
+    memory
+        .push_route(
+            "https://mcp.example/mcp",
+            Ok(OAuthResponse {
+                status: 405,
+                body: String::new(),
+                www_authenticate: None,
+            }),
+        )
+        .await;
+    let owner = Arc::new(owner(memory.clone()));
+    let answer = owner
+        .authorize(server(), "docs", "https://mcp.example/mcp")
+        .await;
+    assert_eq!(answer, AuthorizeAnswer::NotRequired);
+    memory
+        .set_resource(server(), "https://mcp.example/mcp")
+        .await;
+    assert_eq!(owner.bearer(server()).await, Ok(None));
+}
+
+#[tokio::test]
+async fn a_rejected_bearer_refreshes_the_handed_generation() {
+    let memory = Arc::new(MemoryAuthorization::new());
+    push_discovery(&memory).await;
+    let owner = Arc::new(owner(memory.clone()));
+    let answer = owner
+        .authorize(server(), "docs", "https://mcp.example/mcp")
+        .await;
+    let AuthorizeAnswer::PendingConsent { consent_url, .. } = answer else {
+        panic!("expected consent, got {answer:?}");
+    };
+    let state = consent_url
+        .split("state=")
+        .nth(1)
+        .and_then(|rest| rest.split('&').next())
+        .unwrap()
+        .to_owned();
+    memory
+        .push_route("https://as.example/token", Ok(token_body("access")))
+        .await;
+    let ready = owner
+        .complete_callback(
+            server(),
+            CallbackQuery {
+                state,
+                code: Some("code".into()),
+                denied: false,
+            },
+        )
+        .await;
+    assert!(matches!(ready, AuthorizeAnswer::Ready { generation: 1 }));
+    let token_post = memory
+        .posts()
+        .await
+        .into_iter()
+        .find(|(url, _, _)| url == "https://as.example/token")
+        .expect("token post");
+    assert!(!token_post.1);
+    memory
+        .set_resource(server(), "https://mcp.example/mcp")
+        .await;
+    let handed = owner.bearer(server()).await.unwrap().unwrap();
+    assert_eq!(handed.generation, 1);
+    memory
+        .push_route("https://as.example/token", Ok(token_body("replacement")))
+        .await;
+    let refreshed = owner.rejected(server(), "Bearer").await.unwrap().unwrap();
+    assert_eq!(refreshed.generation, 2);
+    assert_eq!(refreshed.access_token, "replacement");
+}
+
+/// Holds `load` until two callers have entered it, then holds the later
+/// `load_secret` calls until the test releases them. The first two secret
+/// loads are the presence checks inside `existing`.
+struct GatedRecords {
+    inner: Arc<MemoryAuthorization>,
+    loads: AtomicUsize,
+    load_arrived: AtomicUsize,
+    load_released: AtomicBool,
+    secret_calls: AtomicUsize,
+    presence_arrived: AtomicUsize,
+    presence_released: AtomicBool,
+    release_arrived: AtomicUsize,
+    secret_released: AtomicBool,
+}
+
+impl GatedRecords {
+    fn new(inner: Arc<MemoryAuthorization>) -> Self {
+        Self {
+            inner,
+            loads: AtomicUsize::new(0),
+            load_arrived: AtomicUsize::new(0),
+            load_released: AtomicBool::new(false),
+            secret_calls: AtomicUsize::new(0),
+            presence_arrived: AtomicUsize::new(0),
+            presence_released: AtomicBool::new(false),
+            release_arrived: AtomicUsize::new(0),
+            secret_released: AtomicBool::new(false),
+        }
+    }
+}
+
+#[async_trait]
+impl AuthorizationRecords for GatedRecords {
+    async fn load(
+        &self,
+        server: Uuid,
+    ) -> Result<Option<crate::mcp_authorization::domain::ServerAuth>, RecordFailure> {
+        let ticket = self.loads.fetch_add(1, Ordering::SeqCst);
+        if ticket < 2 {
+            self.load_arrived.fetch_add(1, Ordering::SeqCst);
+            while !self.load_released.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        }
+        self.inner.load(server).await
+    }
+
+    async fn store(
+        &self,
+        auth: &crate::mcp_authorization::domain::ServerAuth,
+    ) -> Result<(), RecordFailure> {
+        self.inner.store(auth).await
+    }
+
+    async fn load_secret(&self, server: Uuid) -> Result<Option<TokenMaterial>, RecordFailure> {
+        let ticket = self.secret_calls.fetch_add(1, Ordering::SeqCst);
+        if ticket < 2 {
+            self.presence_arrived.fetch_add(1, Ordering::SeqCst);
+            while !self.presence_released.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        } else {
+            self.release_arrived.fetch_add(1, Ordering::SeqCst);
+            while !self.secret_released.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        }
+        self.inner.load_secret(server).await
+    }
+
+    async fn store_secret(
+        &self,
+        server: Uuid,
+        secret: &TokenMaterial,
+    ) -> Result<crate::mcp_authorization::domain::Publication, RecordFailure> {
+        self.inner.store_secret(server, secret).await
+    }
+
+    async fn delete_secret(
+        &self,
+        server: Uuid,
+    ) -> Result<crate::mcp_authorization::domain::Deletion, RecordFailure> {
+        self.inner.delete_secret(server).await
+    }
+}
+
+#[tokio::test]
+async fn two_callers_share_one_slot_so_revoke_refuses_both_bearers() {
+    let memory = Arc::new(MemoryAuthorization::new());
+    let records = Arc::new(GatedRecords::new(memory.clone()));
+    records.store(&ready_token()).await.unwrap();
+    records
+        .store_secret(
+            server(),
+            &TokenMaterial {
+                access_token: "access".into(),
+                refresh_token: Some("refresh".into()),
+                generation: 1,
+            },
+        )
+        .await
+        .unwrap();
+    memory
+        .set_resource(server(), "https://mcp.example/mcp")
+        .await;
+    let owner = Arc::new(AuthorizationOwner::new(
+        records.clone(),
+        memory.clone(),
+        memory.clone(),
+        Arc::new(ScriptedCallback::pending()),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        true,
+    ));
+    let first = {
+        let owner = owner.clone();
+        tokio::spawn(async move { owner.bearer(server()).await })
+    };
+    let second = {
+        let owner = owner.clone();
+        tokio::spawn(async move { owner.bearer(server()).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while records.load_arrived.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("both loads");
+    records.load_released.store(true, Ordering::SeqCst);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while records.presence_arrived.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("both presence checks");
+    records.presence_released.store(true, Ordering::SeqCst);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while records.release_arrived.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("both bearer loads");
+    let revoking = {
+        let owner = owner.clone();
+        tokio::spawn(async move { owner.revoke(server()).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if memory
+                .audits()
+                .await
+                .iter()
+                .any(|record| record.action == "revoke")
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("revoke audited");
+    records.secret_released.store(true, Ordering::SeqCst);
+    assert_eq!(first.await.unwrap(), Err(AdmissionRefusal::Unauthorized));
+    assert_eq!(second.await.unwrap(), Err(AdmissionRefusal::Unauthorized));
+    revoking.await.unwrap();
 }

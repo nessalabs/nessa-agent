@@ -549,6 +549,17 @@ impl crate::mcp_authorization::application::OAuthHttp for RefusingOAuth {
     > {
         Err(crate::mcp_authorization::application::OAuthCallFailure::NotSent)
     }
+
+    async fn post_json(
+        &self,
+        _url: &str,
+        _body: &str,
+    ) -> Result<
+        crate::mcp_authorization::application::OAuthResponse,
+        crate::mcp_authorization::application::OAuthCallFailure,
+    > {
+        Err(crate::mcp_authorization::application::OAuthCallFailure::NotSent)
+    }
 }
 
 /// The `agents` block a first write starts from: the running catalog and

@@ -12,31 +12,62 @@ use crate::mcp_authorization::application::{
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// One metadata or token document. A larger body is dropped, not stored.
+const BODY_LIMIT: usize = 1_048_576;
 
 pub struct HttpsOAuth {
     client: reqwest::Client,
+    body_limit: usize,
 }
 
 impl HttpsOAuth {
     pub fn new() -> Option<Self> {
+        Self::build(CONNECT_TIMEOUT, CALL_TIMEOUT, BODY_LIMIT)
+    }
+
+    fn build(connect: Duration, total: Duration, body_limit: usize) -> Option<Self> {
         install_tls_backend();
         reqwest::Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
+            .connect_timeout(connect)
+            .timeout(total)
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .ok()
-            .map(|client| Self { client })
+            .map(|client| Self { client, body_limit })
+    }
+
+    /// A short total timeout and a small body cap, for the loopback tests.
+    #[cfg(test)]
+    fn bounded(timeout: Duration, body_limit: usize) -> Self {
+        Self::build(timeout, timeout, body_limit).expect("oauth client")
     }
 }
 
 #[async_trait]
 impl OAuthHttp for HttpsOAuth {
     async fn get(&self, url: &str) -> Result<OAuthResponse, OAuthCallFailure> {
-        self.call(reqwest::Method::GET, url, None).await
+        self.call(reqwest::Method::GET, url, None, None).await
     }
 
     async fn post_form(&self, url: &str, body: &str) -> Result<OAuthResponse, OAuthCallFailure> {
-        self.call(reqwest::Method::POST, url, Some(body)).await
+        self.call(
+            reqwest::Method::POST,
+            url,
+            Some("application/x-www-form-urlencoded"),
+            Some(body),
+        )
+        .await
+    }
+
+    async fn post_json(&self, url: &str, body: &str) -> Result<OAuthResponse, OAuthCallFailure> {
+        self.call(
+            reqwest::Method::POST,
+            url,
+            Some("application/json"),
+            Some(body),
+        )
+        .await
     }
 }
 
@@ -45,39 +76,57 @@ impl HttpsOAuth {
         &self,
         method: reqwest::Method,
         url: &str,
+        content_type: Option<&str>,
         body: Option<&str>,
     ) -> Result<OAuthResponse, OAuthCallFailure> {
         if !allowed(url) {
             return Err(OAuthCallFailure::NotSent);
         }
         let mut request = self.client.request(method, url);
-        if body.is_some() {
-            request = request.header(
-                reqwest::header::CONTENT_TYPE,
-                "application/x-www-form-urlencoded",
-            );
-            request = request.body(body.unwrap_or("").to_owned());
+        if let Some(content_type) = content_type {
+            request = request.header(reqwest::header::CONTENT_TYPE, content_type);
         }
-        match request.send().await {
-            Ok(response) => {
-                let status = response.status().as_u16();
-                let www_authenticate = response
-                    .headers()
-                    .get(reqwest::header::WWW_AUTHENTICATE)
-                    .and_then(|value| value.to_str().ok())
-                    .map(str::to_owned);
-                let body = response.text().await.map_err(|_| OAuthCallFailure::Lost)?;
-                Ok(OAuthResponse {
-                    status,
-                    body,
-                    www_authenticate,
-                })
-            }
-            Err(error) if error.is_connect() || error.is_builder() || error.is_request() => {
-                Err(OAuthCallFailure::NotSent)
-            }
-            Err(_) => Err(OAuthCallFailure::Lost),
+        if let Some(body) = body {
+            request = request.body(body.to_owned());
         }
+        let mut response = match request.send().await {
+            Ok(response) => response,
+            // A timeout before a status is the call not completing.
+            Err(error)
+                if error.is_timeout()
+                    || error.is_connect()
+                    || error.is_builder()
+                    || error.is_request() =>
+            {
+                return Err(OAuthCallFailure::NotSent);
+            }
+            Err(_) => return Err(OAuthCallFailure::Lost),
+        };
+        let status = response.status().as_u16();
+        let www_authenticate = response
+            .headers()
+            .get(reqwest::header::WWW_AUTHENTICATE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let mut collected = Vec::new();
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    if collected.len().saturating_add(chunk.len()) > self.body_limit {
+                        return Err(OAuthCallFailure::Lost);
+                    }
+                    collected.extend_from_slice(&chunk);
+                }
+                Ok(None) => break,
+                Err(_) => return Err(OAuthCallFailure::Lost),
+            }
+        }
+        let body = String::from_utf8(collected).map_err(|_| OAuthCallFailure::Lost)?;
+        Ok(OAuthResponse {
+            status,
+            body,
+            www_authenticate,
+        })
     }
 }
 
@@ -94,4 +143,65 @@ fn allowed(url: &str) -> bool {
             parsed.host_str(),
             Some("localhost") | Some("127.0.0.1") | Some("::1")
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use crate::mcp_authorization::application::OAuthCallFailure;
+
+    async fn read_headers(stream: &mut tokio::net::TcpStream) {
+        let mut buf = Vec::new();
+        let mut tmp = [0_u8; 1024];
+        loop {
+            let read = stream.read(&mut tmp).await.unwrap();
+            if read == 0 {
+                break;
+            }
+            buf.extend_from_slice(&tmp[..read]);
+            if buf.windows(4).any(|mark| mark == b"\r\n\r\n") {
+                break;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stalled_peer_returns_within_the_call_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_headers(&mut stream).await;
+            std::future::pending::<()>().await;
+        });
+        let client = HttpsOAuth::bounded(Duration::from_millis(200), 64);
+        let started = std::time::Instant::now();
+        let result = client.get(&format!("http://127.0.0.1:{port}/probe")).await;
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(matches!(result, Err(OAuthCallFailure::NotSent)));
+    }
+
+    #[tokio::test]
+    async fn a_body_past_the_limit_is_not_kept() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_headers(&mut stream).await;
+            let body = "x".repeat(200);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        });
+        let client = HttpsOAuth::bounded(Duration::from_secs(2), 32);
+        let result = client.get(&format!("http://127.0.0.1:{port}/")).await;
+        assert_eq!(result, Err(OAuthCallFailure::Lost));
+    }
 }

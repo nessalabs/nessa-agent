@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Notify};
@@ -25,8 +26,12 @@ fn remote_at(url: &str) -> RemoteMcpServer {
 }
 
 fn servers_with(peer: Arc<Peer>) -> McpServers {
+    servers_with_auth(peer, Arc::new(NoAuth))
+}
+
+fn servers_with_auth(peer: Arc<Peer>, authorization: Arc<dyn RemoteAuthorization>) -> McpServers {
     let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new())).unwrap();
-    servers.set_remote_transport(peer.clone(), Arc::new(NoAuth));
+    servers.set_remote_transport(peer, authorization);
     servers
 }
 
@@ -35,6 +40,18 @@ struct NoAuth;
 impl RemoteAuthorization for NoAuth {
     async fn bearer(&self, _: Uuid) -> Result<Option<Bearer>, McpError> {
         Ok(None)
+    }
+    async fn rejected(&self, _: Uuid, _: &str) -> Result<Option<Bearer>, McpError> {
+        Err(McpError::Unauthorized)
+    }
+    async fn insufficient_scope(&self, _: Uuid, _: &str) {}
+}
+
+struct FixedAuth;
+#[async_trait]
+impl RemoteAuthorization for FixedAuth {
+    async fn bearer(&self, _: Uuid) -> Result<Option<Bearer>, McpError> {
+        Ok(Some(Bearer::new("sekret", 1)))
     }
     async fn rejected(&self, _: Uuid, _: &str) -> Result<Option<Bearer>, McpError> {
         Err(McpError::Unauthorized)
@@ -57,6 +74,7 @@ struct Log {
     legacy: Option<mpsc::UnboundedSender<Option<Vec<u8>>>>,
 }
 
+#[derive(Clone)]
 struct Seen {
     method: HttpMethod,
     url: String,
@@ -115,6 +133,10 @@ impl Peer {
 
     fn seen(&self) -> Vec<Seen> {
         self.log.lock().expect("log").requests.drain(..).collect()
+    }
+
+    fn snapshot(&self) -> Vec<Seen> {
+        self.log.lock().expect("log").requests.clone()
     }
 
     fn requests(&self) -> usize {
@@ -393,6 +415,54 @@ async fn open(peer: Arc<Peer>) -> Result<crate::infrastructure::mcp::McpSession,
     servers_with(peer)
         .open_remote_once(&remote_at("http://127.0.0.1/mcp"))
         .await
+}
+
+#[tokio::test]
+async fn a_session_sends_the_bearer_on_get_and_delete() {
+    let peer = Peer::new(Behavior::Json);
+    let session = servers_with_auth(peer.clone(), Arc::new(FixedAuth))
+        .open_remote_once(&remote_at("http://127.0.0.1/mcp"))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if peer
+                .snapshot()
+                .iter()
+                .any(|seen| seen.method == HttpMethod::Get)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the optional GET was sent");
+    session.close().await;
+    let seen = peer.snapshot();
+    let get = seen
+        .iter()
+        .find(|seen| seen.method == HttpMethod::Get)
+        .unwrap();
+    assert_eq!(get.authorization.as_deref(), Some("Bearer sekret"));
+    let delete = seen
+        .iter()
+        .find(|seen| seen.method == HttpMethod::Delete)
+        .unwrap();
+    assert_eq!(delete.authorization.as_deref(), Some("Bearer sekret"));
+
+    let legacy = Peer::new(Behavior::Legacy);
+    let session = servers_with_auth(legacy.clone(), Arc::new(FixedAuth))
+        .open_remote_once(&remote_at("http://127.0.0.1/mcp"))
+        .await
+        .unwrap();
+    let stream = legacy
+        .snapshot()
+        .into_iter()
+        .find(|seen| seen.method == HttpMethod::Get && seen.url.ends_with("/mcp"))
+        .unwrap();
+    assert_eq!(stream.authorization.as_deref(), Some("Bearer sekret"));
+    session.close().await;
 }
 
 #[tokio::test]

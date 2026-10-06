@@ -113,11 +113,10 @@ impl AuthorizationOwner {
         }
         let probe = self.http.get(resource).await;
         let challenge = match probe {
-            Ok(response) if (200..300).contains(&response.status) => {
-                return self.finish_no_auth(&slot).await;
-            }
             Ok(response) if response.status == 401 => response.www_authenticate,
-            Ok(_) => return self.fail_discovery(&slot, false).await,
+            // A definite answer other than 401 did not ask for a token. A
+            // streamable server often answers 405 to this GET.
+            Ok(_) => return self.finish_no_auth(&slot).await,
             Err(OAuthCallFailure::NotSent) | Err(OAuthCallFailure::Lost) => {
                 return self.fail_discovery(&slot, false).await;
             }
@@ -541,6 +540,7 @@ impl AuthorizationOwner {
                 }
             } else if guard.auth.generation > guard.handed {
                 if let Admission::Bearer { generation } = self.live_admission(&guard, server) {
+                    guard.handed = generation;
                     drop(guard);
                     return self.release_bearer(&slot, server, generation).await;
                 }
@@ -754,7 +754,7 @@ impl AuthorizationOwner {
             "client_name": "Nessa",
         })
         .to_string();
-        match self.http.post_form(endpoint, &body).await {
+        match self.http.post_json(endpoint, &body).await {
             Ok(response) if response.status == 201 || response.status == 200 => {
                 let client_id = serde_json::from_str::<serde_json::Value>(&response.body)
                     .ok()
@@ -831,10 +831,11 @@ impl AuthorizationOwner {
     }
 
     async fn slot(&self, server: Uuid, name: &str, resource: &str) -> Arc<Mutex<Slot>> {
-        let mut slots = self.slots.lock().await;
+        let slots = self.slots.lock().await;
         if let Some(slot) = slots.get(&server) {
             return slot.clone();
         }
+        drop(slots);
         let auth = match self.records.load(server).await {
             Ok(Some(mut loaded)) => {
                 let secret_present = self
@@ -865,6 +866,10 @@ impl AuthorizationOwner {
             revocation_endpoint,
             handed: 0,
         }));
+        let mut slots = self.slots.lock().await;
+        if let Some(existing) = slots.get(&server) {
+            return existing.clone();
+        }
         slots.insert(server, slot.clone());
         slot
     }
@@ -897,7 +902,11 @@ impl AuthorizationOwner {
             revocation_endpoint,
             handed: 0,
         }));
-        self.slots.lock().await.insert(server, slot.clone());
+        let mut slots = self.slots.lock().await;
+        if let Some(existing) = slots.get(&server) {
+            return Some(existing.clone());
+        }
+        slots.insert(server, slot.clone());
         Some(slot)
     }
 
@@ -1142,6 +1151,11 @@ impl AuthorizationOwner {
         match admission {
             Admission::NoneRequired => Ok(None),
             Admission::Bearer { generation } => {
+                let mut guard = slot.lock().await;
+                if generation >= guard.handed {
+                    guard.handed = generation;
+                }
+                drop(guard);
                 self.release_bearer(&slot, server, generation).await
             }
             Admission::InsufficientScope => Err(AdmissionRefusal::InsufficientScope),

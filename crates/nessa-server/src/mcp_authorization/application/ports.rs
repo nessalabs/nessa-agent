@@ -116,7 +116,10 @@ pub enum OAuthCallFailure {
 #[async_trait]
 pub trait OAuthHttp: Send + Sync {
     async fn get(&self, url: &str) -> Result<OAuthResponse, OAuthCallFailure>;
+    /// `application/x-www-form-urlencoded`, for the token and revocation endpoints.
     async fn post_form(&self, url: &str, body: &str) -> Result<OAuthResponse, OAuthCallFailure>;
+    /// `application/json`, for dynamic client registration (RFC 7591).
+    async fn post_json(&self, url: &str, body: &str) -> Result<OAuthResponse, OAuthCallFailure>;
 }
 
 /// Closes local sessions of one server name. The owner does not wait for a

@@ -43,6 +43,7 @@ pub struct MemoryAuthorization {
     secret_gate: Mutex<Gate>,
     audit_gate: Mutex<Gate>,
     routes: Mutex<Vec<(String, Result<OAuthResponse, OAuthCallFailure>)>>,
+    posts: Mutex<Vec<(String, bool, String)>>,
     drained: Mutex<Vec<String>>,
     resources: Mutex<HashMap<Uuid, String>>,
     now: Mutex<u64>,
@@ -58,6 +59,7 @@ impl MemoryAuthorization {
             secret_gate: Mutex::new(Gate::open()),
             audit_gate: Mutex::new(Gate::open()),
             routes: Mutex::new(Vec::new()),
+            posts: Mutex::new(Vec::new()),
             drained: Mutex::new(Vec::new()),
             resources: Mutex::new(HashMap::new()),
             now: Mutex::new(1_000),
@@ -77,6 +79,11 @@ impl MemoryAuthorization {
 
     pub async fn push_route(&self, url: &str, response: Result<OAuthResponse, OAuthCallFailure>) {
         self.routes.lock().await.push((url.to_owned(), response));
+    }
+
+    /// Posts the owner sent: URL, whether the body was JSON, and the body.
+    pub async fn posts(&self) -> Vec<(String, bool, String)> {
+        self.posts.lock().await.clone()
     }
 
     pub async fn set_resource(&self, server: Uuid, url: &str) {
@@ -176,12 +183,25 @@ impl OAuthHttp for MemoryAuthorization {
         self.take(url).await
     }
 
-    async fn post_form(&self, url: &str, _body: &str) -> Result<OAuthResponse, OAuthCallFailure> {
+    async fn post_form(&self, url: &str, body: &str) -> Result<OAuthResponse, OAuthCallFailure> {
+        self.note(url, false, body).await;
+        self.take(url).await
+    }
+
+    async fn post_json(&self, url: &str, body: &str) -> Result<OAuthResponse, OAuthCallFailure> {
+        self.note(url, true, body).await;
         self.take(url).await
     }
 }
 
 impl MemoryAuthorization {
+    async fn note(&self, url: &str, json: bool, body: &str) {
+        self.posts
+            .lock()
+            .await
+            .push((url.to_owned(), json, body.to_owned()));
+    }
+
     async fn take(&self, url: &str) -> Result<OAuthResponse, OAuthCallFailure> {
         let mut routes = self.routes.lock().await;
         let index = routes.iter().position(|(candidate, _)| candidate == url);

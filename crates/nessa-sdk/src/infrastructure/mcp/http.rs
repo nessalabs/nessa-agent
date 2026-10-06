@@ -185,17 +185,23 @@ impl HttpSession {
         let exchange = self.exchange.clone();
         let endpoint = self.url.as_str().to_owned();
         let finished = self.finished.clone();
+        let authorization = self.authorization.clone();
+        let server = self.server;
         tokio::spawn(async move {
+            let mut headers = vec![
+                ("Mcp-Session-Id".into(), session_id),
+                (
+                    "Accept".into(),
+                    "application/json, text/event-stream".into(),
+                ),
+            ];
+            if let Ok(Some(bearer)) = authorization.bearer(server).await {
+                headers.push(("Authorization".into(), format!("Bearer {}", bearer.token())));
+            }
             let request = HttpRequest {
                 method: HttpMethod::Delete,
                 url: endpoint,
-                headers: vec![
-                    ("Mcp-Session-Id".into(), session_id),
-                    (
-                        "Accept".into(),
-                        "application/json, text/event-stream".into(),
-                    ),
-                ],
+                headers,
                 body: Vec::new(),
             };
             let _ = exchange.exchange(request).await;
@@ -402,12 +408,20 @@ impl HttpSession {
     }
 
     async fn enter_legacy(&self, initialize: &[u8], id: Option<u64>) -> SendOutcome {
+        let bearer = match self.authorization.bearer(self.server).await {
+            Ok(bearer) => bearer,
+            Err(error) => return SendOutcome::End(error),
+        };
+        let mut headers = vec![("Accept".into(), "text/event-stream".into())];
+        if let Some(bearer) = bearer {
+            headers.push(("Authorization".into(), format!("Bearer {}", bearer.token())));
+        }
         let response = match self
             .exchange
             .exchange(HttpRequest {
                 method: HttpMethod::Get,
                 url: self.url.as_str().to_owned(),
-                headers: vec![("Accept".into(), "text/event-stream".into())],
+                headers,
                 body: Vec::new(),
             })
             .await
@@ -663,11 +677,16 @@ impl HttpSession {
         let url = self.url.as_str().to_owned();
         let version = self.phase.lock().expect("http phase").version.clone();
         let inbound = self.inbound.clone();
+        let authorization = self.authorization.clone();
+        let server = self.server;
         let task = tokio::spawn(async move {
             let mut headers = vec![("Accept".into(), "text/event-stream".into())];
             headers.push(("Mcp-Session-Id".into(), session_id));
             if let Some(version) = version {
                 headers.push(("MCP-Protocol-Version".into(), version));
+            }
+            if let Ok(Some(bearer)) = authorization.bearer(server).await {
+                headers.push(("Authorization".into(), format!("Bearer {}", bearer.token())));
             }
             let response = match exchange
                 .exchange(HttpRequest {
@@ -768,12 +787,18 @@ impl HttpSession {
         let exchange = self.exchange.clone();
         let url = self.url.as_str().to_owned();
         let session_id = session_id.to_owned();
+        let authorization = self.authorization.clone();
+        let server = self.server;
         tokio::spawn(async move {
+            let mut headers = vec![("Mcp-Session-Id".into(), session_id)];
+            if let Ok(Some(bearer)) = authorization.bearer(server).await {
+                headers.push(("Authorization".into(), format!("Bearer {}", bearer.token())));
+            }
             let _ = exchange
                 .exchange(HttpRequest {
                     method: HttpMethod::Delete,
                     url,
-                    headers: vec![("Mcp-Session-Id".into(), session_id)],
+                    headers,
                     body: Vec::new(),
                 })
                 .await;
