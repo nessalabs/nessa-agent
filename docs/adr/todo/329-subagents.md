@@ -145,12 +145,41 @@ The tree domain owns attached relationships and creation reservations. It does
 not keep another independently writable copy of the parent's execution state.
 Reservation and parent closure share one admission ordering. A closing ancestor
 excludes new work anywhere below it; child command admission consults that owner
-before entering the ordinary child scheduler.
+and acquires the ordinary child work permit in the same short ordered decision.
+There is no check-then-enqueue gap. The implementing SDK slice establishes one
+tree-admission scope for these decisions: acquire it before an individual
+lifecycle permit and release it before awaiting effects or acquiring a semantic
+writer lease. No individual lifecycle lock waits for tree admission. Gateway mode
+admission precedes tree admission when selecting policy. Child commands and
+ancestor close use that same scope, including restored Agents and existing
+clones; a gateway-only precheck cannot enforce this contract.
 
 Avoid strong reference cycles: the participant must not retain its parent in a
 way that prevents the parent's lifetime from ending. Use the existing lifecycle
 owner and non-owning upward notifications. The coordinator retains child cleanup
 owners until settlement, independently of UI subscribers or waiting callers.
+
+### Authoritative data and integration seams
+
+These are the contracts the implementation must expose, not a second scheduler.
+Type names other than `AgentLifetimeId` and the stop variants remain choices for
+their owning slice. Publish one SDK contract and map it at the gateway boundary.
+
+| Fact or seam | Authority and required content |
+| --- | --- |
+| Ownership binding | SDK immutable child/parent lifetime and session identities, spawn request binding, typed verified origin and selected configuration/provenance; the ownership store alone writes this graph. |
+| Lifetime admission | SDK tree transition owner supplies the ancestor fence; `SessionLifecycle` issues individual work permits and owns the typed stop selection. Construction registers participation before attachment authorization. |
+| Spawn progress | Ownership operation retains reservation and references to ordinary creation/attachment/submission receipts. Those receipt owners remain authoritative for their milestones; no copied provider readiness or queue state. |
+| Child factory port | SDK application consumes a prepare-only factory returning an ordinary Agent or the ordinary initialization failure with retained cleanup ownership. Gateway composition supplies provider/configuration, metadata and session mapping; attachment is authorized only after ownership acknowledgement. |
+| Ownership storage port | SDK application requests acknowledged binding, progress, close intent and settlement writes under a bounded writer lease, plus bounded reads. SQLite implements it on the shared record runtime; custom adapters face the same restoration validation. |
+| Close outcome | Existing individual cleanup reports retain attachment cause, physical release and audit outcome. The tree owner adds lifetime cause/initiator, target obligations and aggregate settlement without relabelling those reports. |
+| Product identity/configuration | Gateway metadata and `conversation_session` own access, recorded provider/model/approval selection and `ConversationId` to `SessionId` mapping. Root/child lifetime identity comes from the SDK publication. |
+| Result/read projection | Ordinary child history owns task outcome; relationship reads reference it. Foreground tool response and optional asynchronous report retain their distinct delivery owners. Desktop ids and activity are projections. |
+
+A restored child requires the matching parent lifetime and its own admitted
+configuration binding before its lifecycle grants a permit. A factory result and
+every later effect carry their original session/lifetime/operation/attempt correlation. A result
+cannot supply missing authority needed to validate itself.
 
 ## Identities and durable relationships
 
@@ -834,6 +863,14 @@ they do not implement the proposed ownership machine. Runtime slices add their
 domain/storage tests and signed-out gateway scenarios from the tables below.
 Live capture remains a separate, opt-in command documented beside the fixture.
 
+| Evidence input | Consuming regression and limit |
+| --- | --- |
+| Retained `codex-native.json` tool updates | Fixture replay validates sender/receiver/state agreement. If native-child observation is later implemented, feed these frames through its actual ACP decoder and projection; no current slice turns them into owned children. |
+| Contradictory and valid neighboring fixture inputs | Keep decoder/identity rejection and positive counterparts at that provider boundary. These inputs do not substitute for ownership-store corruption tests (R5). |
+| Scripted ordinary provider and public Agent commands | S1–S13, C1–C18 and R1–R6 require deterministic admission, failure and recovery tests using the new contracts and ordinary receipts. Scripted ACP processes additionally prove actual descendant process-group release for C1/C4/C5/C13. |
+| Exact child open configuration and its own review | Gateway/provider-boundary tests establish S8–S10 and C2/C3/C17, including mode/offer mapping, snapshot provenance and ordinary child audit. The live fixture's zero reviews establishes none of these. |
+| Real gateway, signed out of model providers | Extend the existing scripted desktop scenarios for the relationship source, child transcript/review and recursive close (R7–R10). Samples only establish the sample UI path. |
+
 ## State tables and regression evidence
 
 Each row is a proposed behavioral contract and needs a regression before that
@@ -913,58 +950,95 @@ runtime integration.
 
 ## Implementation sequence
 
-### 1. Reconcile the existing issue scopes
-
 Keep #329 as the decision owner. Update #330–#332 when implementation starts:
 their earlier sample/read-only acceptance cases remain useful, but they are not
 the complete runtime feature. File runtime slices under #329 before creating
 branches. Do not silently widen #330 into a backend implementation.
 
-### 2. SDK ownership and durable spawn
+Each row is an implementation handoff with an owned diff and an observable exit.
+The row references below allocate the existing behavioral tables; they do not
+create another checklist or weaken a later integration test of the same rule.
 
-Implement immutable bindings/lifetimes, tree transitions, storage port/SQLite
-adapter, bounded reservations and ordinary Agent composition. Integrate the
-ownership participant with the common stop transition. Test stable spawn ids,
-owned startup, recursive close, caller loss and recovery using deterministic
-providers. Update SDK Rustdoc/guides and module maps with the actual contract.
+| Slice and prerequisites | Source owners | Required behavior and exit evidence |
+| --- | --- | --- |
+| A. Ownership values and storage; first | Proposed SDK domain/application `agent_execution/subagents/`; feature child of `infrastructure/session_storage/`; matching layer tests | Immutable identities, graph validation, bounded reservations and acknowledged progress/close records. Test the storage/graph aspects of S3/S11/S13 and R1–R5 at the pure domain and real SQLite reload boundary, including custom storage input; B supplies their end-to-end operation cases. Select/publish finite defaults and accounting here. Inert infrastructure: no product/tool spawn is exposed. |
+| B. Agent participation and owned spawn/close; after A | Existing SDK `agents/lifecycle.rs`, `agent.rs`, `coordination.rs`, attachment and scheduling owners; new subagents application factory/supervisor | Install the admission scope and typed `AttachmentOnly`/`EndOwnedLifetime` selection before work can start. Compose ordinary Agents and retain initialization failures; cover S1–S7/S11/S13, C1–C12/C14–C16/C18 and R1–R5 through public APIs. Enumerate automatic stop paths at this head and test their typed classification. Disposal hands its drain to an independent supervisor without retaining a strong parent cycle. Exit includes sibling/grandchild cleanup, clone refusal, recoverable attachment reopening, both result orders, real-process cleanup and SQLite restart. |
+| C. Gateway ownership, policy and retirement; after B | `conversation/application/service.rs` and feature use cases beside `service/creation.rs`/`mutation.rs`; metadata, attachments and audit adapters; `composition/agent.rs` and `root.rs` | Host-authorized spawn/read/close over the SDK publication; exact configuration selection and product identity mapping. S8–S10/S12/S13 and C2/C3/C6/C13/C14/C17 at the real service/storage boundary; rerun SDK admission races through this consumer. Root/child direct close, deletion and shutdown share the drain. Mode recovery drains the retired tree before a new root at the last committed mode. Exit includes empty-child compatibility and current access/revocation with no model credentials. |
+| D. Product protocol and client; after C's contract | `protocol/product/v1.json`, existing product generator and `nessa-protocol` DTOs; server `product/`; `packages/nessa-client` application/presentation/validation | Publish the single relationship/command/outcome contract and map it without a second parent graph or scheduler. Round-trip compound receipts, lifetime/policy provenance and physical/audit outcomes; reject foreign identities, malformed values and stale control targets. Generated checks and real authenticated socket tests cover S2/S3/S12, C3/C6/C16 and R2/R4/R5. No version bump or legacy path. |
+| E. Nessa delegation tools; after D | Feature-first module in `crates/nessa-mcp/src/`; gateway MCP relay/invocation-binding composition; matching tool/relay tests | Propagate trusted execution/tool correlation, then expose spawn, read/status/wait and child close. Refuse model-originated spawn when correlation is unavailable. Scripted ACP → MCP → gateway → ordinary child → foreground tool result exercises S1/S2/S5/S12 and C1/C2/C6/C12. Exit includes caller loss and parent close while waiting, with no blind replay. Provider-native observation/control stays excluded. |
+| F. Read-only desktop; samples can start earlier, live source after D | #330 model/source/join/settings preview; #331 widget/panel/ordinary transcript; #332 parent accessory; `src/desktop/subagents/`, desktop composition and `verification/desktop/` | R7–R10, readable closed history and actual inherited modes. Real commands retain canonical ids. Extend the signed-out scripted runner and checklist for parent/child selection, review attribution and cascade outcomes in both engines; samples stay labelled. A read-only live view completes this UI milestone without a child composer. |
+| G. Messaging, asynchronous reports and experiment adapter; after E/F | Ordinary SDK/gateway submission owners; client commands; shared desktop outbox behavior; #337 source through the subagents barrel | Enable send/steer only from writable capability; R6 and C11/C12 cover report identity, uncertain admission and suppression without reopening. Experiment code consumes the source and ordinary commands. This extension is outside the first runtime milestone and does not block A–F. |
 
-Exit: ordinary parent/child Agents, stable spawn identity and owned cleanup.
-This slice adds no provider model loop and advertises no sample feature as live.
+Separate structural extraction from behavior where the existing owner needs it.
+A–B may be split further, but no runnable child is published until B's creation
+fence and cleanup ownership are present. D can author its schema/tests against
+C's settled contract; live routing waits for C. Sample F work can proceed against
+its port, while its live adapter waits for D. This dependency order allows useful
+cloud work without shipping an unowned-child window.
 
-### 3. Gateway composition and inherited approval
+### Cloud checks and supported environments
 
-Integrate `ConversationService` access, configuration selection, metadata,
-creation/submission receipts and provider resolution. Add child reads and close,
-then parent close/delete/shutdown. Prove policy inheritance/refusal and mandatory
-review audit. Exercise creation, mode-change, control and closure tables at the
-real gateway/storage boundary. Empty-child parents preserve existing behavior.
+Portable fixture inspection runs on bare Node 24, without `node_modules`, provider
+installation or account credentials. Rust ownership/storage and gateway contract
+tests run with the repository's Rust toolchain on Linux, macOS and Windows using
+controlled providers. Physical subprocess/ACP cascade and the Nessa MCP tool
+milestone initially target Linux and macOS; `check-mcp.mjs` explicitly skips
+Windows native supervision. A portable test pass is not a Windows tool-support
+claim. Chromium and WebKit checks require installed Playwright browsers and the
+repository frontend dependencies; Linux cloud workers use a display/virtual
+display as required by the runner. Native macOS WKWebView and live account-bound
+provider checks remain separate evidence, with exclusions recorded on the slice.
 
-### 4. Model-facing delegation
+Run from the checkout root. The fixture commands above are independent of the
+runtime; the commands below are current entry points for the corresponding
+slices, not claims that their proposed subagent cases exist yet:
 
-Add authenticated Nessa-owned tool adapters for spawn, status/read/wait and result
-return. Parent identity comes from the invocation binding. Add send/steer and
-proactive reports only through normal submission. A scripted ACP harness verifies
-tool -> gateway -> child -> result and parent closure without model credentials.
+```sh
+# A/B: lint before tests; documentation links and domain coverage remain gates.
+cargo fmt --all -- --check
+cargo clippy -p nessa-sdk --all-targets -- -D warnings
+cargo test -p nessa-sdk
+node scripts/check-sdk-docs.mjs
+bash scripts/check-sdk-domain-coverage.sh
 
-### 5. Desktop source and views
+# C/D: CI package selection also checks unified dependency features.
+cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk --all-targets -- -D warnings
+node scripts/cargo-test-parallel.mjs --concurrency 2 -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk
+pnpm protocol:check
+pnpm client:typecheck
+pnpm client:test
 
-Implement #330's model, source/join and preview; #331's panel/transcript; #332's
-header. Supply labelled samples and the real gateway adapter. Commands use real
-child identity. Run browser evidence and update checklist/module maps.
+# E: Linux/macOS process boundary. F and wire/client changes use frontend checks.
+node scripts/check-mcp.mjs
+pnpm frontend:check
+pnpm test:e2e:scripted -- --mode prod --evidence /tmp/subagents-scripted
+```
 
-### 6. Messaging and experiment adapter
+The coverage command needs `cargo-llvm-cov`/LLVM tools as in the existing CI job;
+the pnpm commands need the locked dependencies and configured UI checkout. Add
+the new deterministic cases to these owning suites and the subagent scenario to
+the existing scripted aggregate. A command that skips its required environment
+is reported as unverified. Do not require cloud workers to run live capture or
+install signed-in provider harnesses to validate the runtime contract.
 
-When the source really delivers, expose child messaging with shared outbox
-behavior and ordinary client commands. #337 supplies an experiment source through
-the join, importing the subagents barrel. Experiment scheduling and permission
-policy do not enter generic Agent/tree code.
+Each slice handoff records its base/head, owned paths, table rows with actual test
+names, commands/environment/results and remaining capability exclusions. The
+review uses the canonical [local gate](../../../CODING_STANDARDS.md#local-code-review-gate).
+Update SDK guides/module maps and product/desktop maps as their implementations
+land. The plan PR itself changes no runtime authority and advertises no new live
+capability.
 
 ## Completion and scope limits
 
 The first working runtime milestone is a parent that starts ordinary children
 under its effective approval configuration, exposes real histories/outcomes and
 closes the complete owned tree. Durable retries and recovery preserve ownership.
-The state-table tests and gateway-backed evidence accompany the desktop cases.
+It completes A–F: a trusted tool can create and observe a child, the live read-only
+desktop shows its ordinary history and reviews, and parent close drains siblings,
+grandchildren and in-flight constructors. The state-table tests assigned to those
+slices, reload/failure cases and gateway-backed evidence accompany the desktop
+cases. Every shipped binding declares exact inherited-mode support and proves
+physical tree cleanup; an unsupported binding returns the typed refusal.
 
 Detached children, reparenting, live tree-wide policy changes, copied approval
 grants, opaque provider-context cloning and universal control of provider-native
