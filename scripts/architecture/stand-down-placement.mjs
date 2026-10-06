@@ -14,8 +14,9 @@ const DEV_AGENT_CONFIG = "scripts/dev-agent-config.mjs"
  * script that rewrites a developer's files never ran.
  *
  * Exiting from under the configuration lock is the second cost: it skips the
- * `finally` that releases it, leaving a lock file for the next run to report
- * as somebody else's.
+ * `finally` that closes the flock's descriptor. A caller that stays up — the
+ * test run — would keep that flock until the process ended. The lock file
+ * itself stays; the gateway's protocol does not delete it.
  *
  * So a stand-down throws and the entry point turns it back into the status a
  * stand-down carries. That rule is correct and, without this, unguarded: the

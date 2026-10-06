@@ -1,12 +1,16 @@
 import assert from "node:assert/strict"
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawn, spawnSync } from "node:child_process"
 import {
   chmodSync,
+  closeSync,
+  constants,
   copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
+  symlinkSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -396,8 +400,9 @@ test(
     // The same rule as the guard above, for the other answer. `skip` is the
     // stand-down, and a stand-down that exited would end a caller's run at
     // whichever line reached it, carrying the status that says all was well.
-    // Reached here through the lock, which is also the release this throw lets
-    // run: an exit from under it left the lock file behind.
+    // Reached here through the lock. The throw lets `finally` release it; an
+    // exit would have ended this test run. The directory was removed, so the
+    // lock path is gone with it.
     const { publish } = await import("./dev-agent-config.mjs")
     const data = temporaryRoot()
     const directory = join(data, "dev")
@@ -603,6 +608,7 @@ test(
     const mine = agentsLaunching("/mine/index.js")
     const theirs = agentsLaunching("/theirs/index.js")
     let second
+    const said = []
 
     // The other run happens while this one holds the lock, which is exactly the
     // interleaving that used to lose a write.
@@ -611,37 +617,108 @@ test(
       agents: mine,
       node: mine.runtimes.claude.command,
       interrupt: () => {
-        second = publish({
-          configPath: path,
-          agents: theirs,
-          node: theirs.runtimes.claude.command,
-        })
+        second = withStdout(said, () =>
+          publish({
+            configPath: path,
+            agents: theirs,
+            node: theirs.runtimes.claude.command,
+          }),
+        )
       },
     })
 
     assert.equal(first, true, "the run holding the lock writes")
     assert.equal(second, false, "the run that could not take it stands down")
+    assert.match(
+      said.join("\n"),
+      /lock is held/,
+      "the stand-down is the flock, not another failure",
+    )
     assert.deepEqual(JSON.parse(readFileSync(path, "utf8")).agents, mine)
   },
 )
 
 /**
- * A lock left by a killed run is reported, not taken.
- *
- * Taking it is the race the lock exists to prevent: between reading the dead
- * pid and unlinking the file, that file can become a live run's lock, and two
- * runs then write the same configuration. So the file is left where it is and
- * the person is told the command that clears it.
+ * Hold `config.json.lock` with `flock(2)`, the call the gateway's
+ * `OsConfigFiles::try_lock` makes, from another process. Returns a function
+ * that releases it.
  */
-test("a lock whose owner is gone is reported, not taken", unixOnly, async () => {
+function holdFlock(lockPath) {
+  const fd = openSync(
+    lockPath,
+    constants.O_CREAT | constants.O_WRONLY | constants.O_NONBLOCK,
+    0o600,
+  )
+  const childFd = fd === 3 ? 4 : 3
+  const stdio = ["ignore", "pipe", "pipe"]
+  while (stdio.length <= childFd) stdio.push("ignore")
+  stdio[childFd] = fd
+  const child = spawn(
+    "perl",
+    [
+      "-e",
+      `
+use Fcntl qw(:flock);
+open(my $fh, ">&=${childFd}") or die "fdopen: $!";
+flock($fh, LOCK_EX|LOCK_NB) or die "flock: $!";
+$| = 1;
+print "held\\n";
+sleep 60;
+`,
+    ],
+    { stdio },
+  )
+  const closeFd = () => {
+    try {
+      closeSync(fd)
+    } catch {
+      // Closed once the child had the lock, or already closed on failure.
+    }
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const fail = (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      closeFd()
+      child.kill()
+      reject(error)
+    }
+    const timer = setTimeout(() => fail(new Error("the flock holder did not lock")), 2000)
+    let text = ""
+    child.stdout.on("data", (chunk) => {
+      text += chunk
+      if (!text.includes("held") || settled) return
+      settled = true
+      clearTimeout(timer)
+      closeFd()
+      resolve(() => {
+        child.kill()
+        return new Promise((done) => child.once("exit", done))
+      })
+    })
+    child.once("error", (error) => fail(error))
+    child.once("exit", (code) => {
+      if (text.includes("held")) return
+      fail(new Error(`the flock holder exited ${code} before locking`))
+    })
+  })
+}
+
+/**
+ * An empty lock file, or one still carrying a pid line from the old
+ * exclusive-create lock, is not a holder. The gateway leaves the file in
+ * place. The script takes the flock and writes.
+ */
+test("an empty lock file left by the gateway is not a holder", unixOnly, async () => {
   const { publish } = await import("./dev-agent-config.mjs")
   const data = temporaryRoot()
   mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
   const path = join(data, "dev/config.json")
   writeFileSync(path, JSON.stringify({}), { mode: 0o600 })
-  // A pid that cannot be running, which is what a killed run leaves behind.
-  const holder = "2147483647 stale-token 2026-01-01T00:00:00.000Z\n"
-  writeFileSync(`${path}.lock`, holder, { mode: 0o600 })
+  const stale = "2147483647 stale-token 2026-01-01T00:00:00.000Z\n"
+  writeFileSync(`${path}.lock`, stale, { mode: 0o600 })
 
   const agents = agentsLaunching("/mine/index.js")
   const said = []
@@ -653,53 +730,131 @@ test("a lock whose owner is gone is reported, not taken", unixOnly, async () => 
     }),
   )
 
-  assert.equal(wrote, false, "the run stands down")
-  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {}, "nothing is written")
-  assert.equal(
-    readFileSync(`${path}.lock`, "utf8"),
-    holder,
-    "the lock it did not take is left exactly as it was",
+  assert.equal(wrote, true, "the leftover file is not a holder")
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")).agents, agents)
+  assert.equal(readFileSync(`${path}.lock`, "utf8"), stale, "the lock file stays")
+  assert.doesNotMatch(said.join("\n"), /lock is held/)
+
+  const again = []
+  const second = withStdout(again, () =>
+    publish({
+      configPath: path,
+      agents,
+      node: agents.runtimes.claude.command,
+    }),
   )
-  assert.match(said.join("\n"), /rm .*config\.json\.lock/, "says how to clear it")
+  assert.equal(second, false, "the block is already there")
+  assert.doesNotMatch(
+    again.join("\n"),
+    /lock is held/,
+    "the first run released the flock",
+  )
 })
 
 /**
- * Two runs meeting the same stale lock is what made stealing unsafe: both read
- * the dead pid, both delete it, and both then believe they hold the lock. The
- * regression is that neither of them writes.
+ * A live `flock(2)` — the gateway's lock, not the file's bytes — makes this
+ * script stand down, and releasing it lets the next run take the same file.
  */
-test("two runs finding the same stale lock do not both write", unixOnly, async () => {
+test("a flock held on the lock file makes the script stand down", unixOnly, async () => {
   const { publish } = await import("./dev-agent-config.mjs")
   const data = temporaryRoot()
   mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
   const path = join(data, "dev/config.json")
   writeFileSync(path, JSON.stringify({}), { mode: 0o600 })
-  const holder = "2147483647 stale-token 2026-01-01T00:00:00.000Z\n"
-  writeFileSync(`${path}.lock`, holder, { mode: 0o600 })
+  writeFileSync(`${path}.lock`, "", { mode: 0o600 })
 
-  const attempt = (entry) => {
-    const agents = agentsLaunching(entry)
-    return publish({
+  const release = await holdFlock(`${path}.lock`)
+  const agents = agentsLaunching("/mine/index.js")
+  const said = []
+  try {
+    const wrote = withStdout(said, () =>
+      publish({
+        configPath: path,
+        agents,
+        node: agents.runtimes.claude.command,
+      }),
+    )
+    assert.equal(wrote, false, "the run stands down")
+    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {}, "nothing is written")
+    assert.equal(readFileSync(`${path}.lock`, "utf8"), "", "the lock file is not removed")
+    assert.match(said.join("\n"), /lock is held/)
+  } finally {
+    await release()
+  }
+
+  const after = withStdout([], () =>
+    publish({
       configPath: path,
       agents,
       node: agents.runtimes.claude.command,
-    })
-  }
-
-  const said = []
-  const [first, second] = withStdout(said, () => [
-    attempt("/mine/index.js"),
-    attempt("/theirs/index.js"),
-  ])
-
-  assert.equal(first, false, "neither takes a lock it cannot own")
-  assert.equal(second, false)
-  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {}, "neither writes")
-  assert.equal(readFileSync(`${path}.lock`, "utf8"), holder, "the lock is left alone")
+    }),
+  )
+  assert.equal(after, true, "the released flock can be taken")
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")).agents, agents)
 })
 
-/** A lock cleared by hand and retaken belongs to whoever has it now. */
-test("releasing does not remove somebody else's lock", unixOnly, async () => {
+/** A FIFO planted as the lock is refused at once, not waited on. */
+test(
+  "a lock that is not a regular file is refused without blocking",
+  unixOnly,
+  async () => {
+    const { publish } = await import("./dev-agent-config.mjs")
+    const data = temporaryRoot()
+    mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+    const path = join(data, "dev/config.json")
+    writeFileSync(path, JSON.stringify({}), { mode: 0o600 })
+    const made = spawnSync("mkfifo", [`${path}.lock`])
+    assert.equal(made.status, 0)
+
+    const agents = agentsLaunching("/mine/index.js")
+    const said = []
+    const started = Date.now()
+    const wrote = withStdout(said, () =>
+      publish({
+        configPath: path,
+        agents,
+        node: agents.runtimes.claude.command,
+      }),
+    )
+    assert.ok(Date.now() - started < 1000, "opening the FIFO blocked")
+    assert.equal(wrote, false)
+    assert.match(said.join("\n"), /could not lock/)
+    assert.match(said.join("\n"), /ENXIO/)
+    assert.doesNotMatch(said.join("\n"), /lock is held/)
+    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {})
+  },
+)
+
+/** A symlink at the lock path is refused, as the gateway's O_NOFOLLOW open is. */
+test("a symlink lock is refused", unixOnly, async () => {
+  const { publish } = await import("./dev-agent-config.mjs")
+  const data = temporaryRoot()
+  mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+  const path = join(data, "dev/config.json")
+  writeFileSync(path, JSON.stringify({}), { mode: 0o600 })
+  symlinkSync(path, `${path}.lock`)
+
+  const agents = agentsLaunching("/mine/index.js")
+  const said = []
+  const wrote = withStdout(said, () =>
+    publish({
+      configPath: path,
+      agents,
+      node: agents.runtimes.claude.command,
+    }),
+  )
+  assert.equal(wrote, false)
+  assert.match(said.join("\n"), /could not lock/)
+  assert.match(said.join("\n"), /ELOOP/)
+  assert.doesNotMatch(said.join("\n"), /lock is held/)
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {})
+})
+
+/**
+ * Replacing the lock file's bytes does not hand the flock to anyone, and
+ * release does not delete the file. The flock is on the inode.
+ */
+test("releasing does not remove the lock file", unixOnly, async () => {
   const { publish } = await import("./dev-agent-config.mjs")
   const data = temporaryRoot()
   mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
@@ -707,21 +862,14 @@ test("releasing does not remove somebody else's lock", unixOnly, async () => {
   writeFileSync(path, JSON.stringify({}), { mode: 0o600 })
 
   const agents = agentsLaunching("/mine/index.js")
-  const theirs = `${process.pid + 1} their-token 2026-01-01T00:00:00.000Z\n`
-
+  const replaced = "replaced bytes\n"
   const wrote = publish({
     configPath: path,
     agents,
     node: agents.runtimes.claude.command,
-    // Somebody clears the lock by hand and another run takes it, while this run
-    // is between acquiring and writing.
-    interrupt: () => writeFileSync(`${path}.lock`, theirs, { mode: 0o600 }),
+    interrupt: () => writeFileSync(`${path}.lock`, replaced, { mode: 0o600 }),
   })
 
   assert.equal(wrote, true)
-  assert.equal(
-    readFileSync(`${path}.lock`, "utf8"),
-    theirs,
-    "the other run is still holding its lock",
-  )
+  assert.equal(readFileSync(`${path}.lock`, "utf8"), replaced, "the lock file stays")
 })
