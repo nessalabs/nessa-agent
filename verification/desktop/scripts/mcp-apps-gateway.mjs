@@ -676,17 +676,22 @@ const checks = {
     if (paneMode !== "fullscreen") failures.push(`the pane's app is told ${paneMode}`)
     // The pane's own mount: its tool result arrives, and it makes no calls of its own.
     const baseline = await settleEarlier(page, stack, failures)
-    // A pointer click Playwright accepts can miss this button in the sandboxed
-    // pane: the output stays empty and the gateway records no call. The
-    // document click runs the same listener. Which one made the call is
-    // `paneClick`.
-    await pane.app.click(css.reviewControl("delete"), { timeout: 3_000 }).catch(() => {})
-    let paneClick = "pointer"
+    // A pointer click that does not reach the button leaves the call unmade.
+    // A click dispatched on the element would hide that, so the miss fails
+    // the step.
+    try {
+      await pane.app.click(css.reviewControl("delete"))
+    } catch (error) {
+      failures.push(
+        `the pane's delete click did not land: ${error.message.split("\n")[0]}`,
+      )
+      return { seen: { paneMode }, failures }
+    }
     if ((await said(pane.app, "again")) === "") {
-      paneClick = "document"
-      await pane.app.locator(css.reviewControl("delete")).evaluate((button) => {
-        button.click()
-      })
+      failures.push(
+        "the pane's delete click did not reach the app: its call never showed pending",
+      )
+      return { seen: { paneMode }, failures }
     }
     const waited = await awaitReview(stack, baseline, () => said(pane.app, "again"))
     if (waited.kind !== "review") {
@@ -695,7 +700,7 @@ const checks = {
           ? `the pane app's call was answered without a review: "${waited.output}"`
           : `the pane app's destructive call reached no review; ${reviewAbsentMessage(waited.samples, waited.reads)}`,
       )
-      return { seen: { paneMode, paneClick }, failures }
+      return { seen: { paneMode }, failures }
     }
     const waiting = waited.review
     if (!(await reviewShown(stack, waiting)))
@@ -736,7 +741,6 @@ const checks = {
     return {
       seen: {
         paneMode,
-        paneClick,
         review: { origin: waiting.origin, toolName: waiting.toolName },
         paneSaid,
         withdrawn: Boolean(withdrawn),
