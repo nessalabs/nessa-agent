@@ -10,6 +10,7 @@ use nessa_sdk::domain::agent_execution::sessions::{
 };
 use nessa_sdk::infrastructure::session_storage::RecordStorage;
 use std::sync::{Arc, Mutex};
+use tokio::sync::Notify;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ConfirmedSnapshot {
@@ -20,12 +21,14 @@ pub(super) struct ConfirmedSnapshot {
 pub(super) struct RecordingStorage {
     records: Arc<RecordStorage>,
     confirmed: Arc<Mutex<Option<ConfirmedSnapshot>>>,
+    changed: Arc<Notify>,
 }
 impl RecordingStorage {
     pub(super) fn new(records: Arc<RecordStorage>) -> Self {
         Self {
             records,
             confirmed: Arc::new(Mutex::new(None)),
+            changed: Arc::new(Notify::new()),
         }
     }
     pub(super) fn records(&self) -> &RecordStorage {
@@ -34,10 +37,15 @@ impl RecordingStorage {
     pub(super) fn confirmed(&self) -> Option<ConfirmedSnapshot> {
         self.confirmed.lock().unwrap().clone()
     }
+    /// Wakes a waiter after a confirmed snapshot is stored or cleared.
+    pub(super) fn changed(&self) -> tokio::sync::futures::Notified<'_> {
+        self.changed.notified()
+    }
     fn lease(&self, inner: Box<dyn SessionStorageLease>) -> Box<dyn SessionStorageLease> {
         Box::new(RecordingLease {
             inner,
             confirmed: self.confirmed.clone(),
+            changed: self.changed.clone(),
         })
     }
 }
@@ -67,6 +75,7 @@ impl SessionStorage for RecordingStorage {
 struct RecordingLease {
     inner: Box<dyn SessionStorageLease>,
     confirmed: Arc<Mutex<Option<ConfirmedSnapshot>>>,
+    changed: Arc<Notify>,
 }
 impl SessionStorageLease for RecordingLease {
     fn load(&self) -> StorageFuture<'_, SessionLoad> {
@@ -85,6 +94,7 @@ impl SessionStorageLease for RecordingLease {
                 binding: receipt.next().clone(),
                 snapshot: candidate,
             });
+            self.changed.notify_one();
             Ok(receipt)
         })
     }
@@ -92,6 +102,7 @@ impl SessionStorageLease for RecordingLease {
         Box::pin(async move {
             self.inner.erase().await?;
             *self.confirmed.lock().unwrap() = None;
+            self.changed.notify_one();
             Ok(())
         })
     }

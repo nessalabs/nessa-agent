@@ -26,13 +26,13 @@ stream nor writes progress.
 
 | Row | Saved state / ordering | Result and effects | Regression fixture |
 | --- | --- | --- | --- |
-| C1 | New verified request | Bind principal/request, operation, target, origin and fixed fingerprint; commit `Accepted`, then `Attempted`, prepare the original live conversation, join its original provider attachment and publication, then commit `Ready` | `creation_commits_the_original_attempt_before_provider_open`, `creation_waits_for_original_attachment_before_saving_ready` |
+| C1 | New verified request | Bind principal/request, operation, target, origin and fixed fingerprint; commit `Accepted`, then `Attempted`, prepare the original live conversation, join its original provider attachment and publication, then commit `Ready`. The fixture waits on the provider's open signal and on the live slot, and the ceiling covers the conversation-map lock as well as the slot poll; the bound only reports a hang while that durable work is still running (#552) | `creation_commits_the_original_attempt_before_provider_open`, `creation_waits_for_original_attachment_before_saving_ready` |
 | C2 | Exact retry after `Ready`, including restart / lost reply | Return the original receipt after current host target check; no provider open | `a_ready_creation_reopens_without_opening_the_provider_again` |
 | C3 | Same principal/request with different target, origin or fingerprint | Typed conflict before target calls or writes | `a_creation_identity_refuses_changed_target_origin_or_bytes`, `read_only_creation_refuses_a_conflicting_original_binding` |
 | C4 | Crash or process restart after durable `Attempted`, before acknowledged `Ready` | Original target and binding remain; restart/retry returns `Interrupted`, no second initialization. Caller loss while the owner is still running is C7, not this row | `an_interrupted_creation_preserves_its_target_without_reinitialization`, `a_crash_after_provider_open_reopens_the_original_interrupted_receipt` (child publishes its complete effect marker atomically before parent kill) |
 | C5 | `Accepted` saved but no `Attempted` | Exact explicit retry may make the first attempt; read-only lookup performs no writes | `an_accepted_creation_can_make_its_first_attempt_after_reopen` |
 | C6 | Deleted target on new, accepted, attempted, ready or read-only lookup, including after shutdown and reopen of a finished creation | Current host deletion refusal before initialization or returned readiness; control history remains non-content | `deletion_refuses_each_creation_state_and_read_only_lookup`, `deletion_refuses_finished_creation_lookup_and_retry_after_reopen` |
-| C7 | Caller stops waiting while initialization runs | One supervised operation retains its original principal lease and initializer; duplicate request is Busy until completion, then returns the same receipt | `caller_loss_keeps_the_original_creation_owner_until_completion`, `direct_sdk_caller_loss_retains_the_original_initializer_and_lease` |
+| C7 | Caller stops waiting while initialization runs | One supervised operation retains its original principal lease and initializer; duplicate request is Busy until completion, then returns the same receipt. Busy is the initializer still publishing, not a lost lease. Lookup waits until that publish is Ready; a five-second bound expired on Windows while the publish was still running (#558) | `caller_loss_keeps_the_original_creation_owner_until_completion`, `direct_sdk_caller_loss_retains_the_original_initializer_and_lease` |
 | C8 | Commit acknowledgement is uncertain | No initialization without acknowledged `Attempted`; exact event retry/replay establishes the retained fact, without an alternate ID | `an_uncertain_creation_commit_cannot_authorize_initialization` |
 | C9 | Target deleted while initialization or terminal save runs | Check current target again before returning the receipt; do not erase the original attempted/ready history | `deletion_during_initialization_refuses_the_returned_receipt` |
 | C12 | A second creation request names an already-owned target | Existing creation owner reopens it: no second provider open, original creator retained, and no second creation receipt. A stored receipt would skip the attach a later restart needs | `a_second_creation_request_cannot_reinitialize_the_original_target`, `a_new_request_reopens_an_owned_conversation_and_attaches_after_restart` |
@@ -92,7 +92,10 @@ refused before `Attempted`, so a later retry is not permanently interrupted.
 `Attempted` is durable before withdraw or cancel. A restored `Attempted` returns
 `Interrupted` and does not send another cancel or withdraw. The receipt stores
 the verified actor (principal, surface, request) and the stop cause is the
-settled outcome.
+settled outcome. The fixture that holds an active turn registers
+`execution_started` before it submits. The ceiling reports a hang if that
+start has not been notified; five seconds expired on Windows while the submit
+was still reaching the provider (#558).
 
 | Row | Saved state / ordering | Result and effects | Regression fixture |
 | --- | --- | --- | --- |

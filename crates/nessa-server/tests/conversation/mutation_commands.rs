@@ -183,6 +183,11 @@ async fn send(service: &ConversationService, target: &ConversationId, execution:
         .await
         .unwrap();
 }
+/// Hang ceiling while a held turn is still reaching the provider.
+///
+/// The wait is `execution_started`, armed before submit. Five seconds expired
+/// on a loaded Windows runner before that notify (#558).
+const TURN_HOLD_HANG: Duration = Duration::from_secs(60);
 async fn hold_turn(
     service: &ConversationService,
     provider: &ProviderFactory,
@@ -191,22 +196,27 @@ async fn hold_turn(
 ) -> oneshot::Sender<()> {
     let (release, gate) = oneshot::channel();
     *provider.execution_gate.lock().unwrap() = Some(gate);
+    let started = provider.execution_started.notified();
     let pending = {
         let service = service.clone();
         let target = target.clone();
         let execution = execution.to_owned();
         tokio::spawn(async move { send(&service, &target, &execution, "active").await })
     };
-    tokio::time::timeout(
-        Duration::from_secs(5),
-        provider.execution_started.notified(),
-    )
-    .await
-    .unwrap();
-    tokio::time::timeout(Duration::from_secs(5), pending)
-        .await
-        .unwrap()
-        .unwrap();
+    if tokio::time::timeout(TURN_HOLD_HANG, started).await.is_err() {
+        panic!(
+            "held turn had not started after {TURN_HOLD_HANG:?}; submit finished={} executions={:?}",
+            pending.is_finished(),
+            provider.executions.lock().unwrap()
+        );
+    }
+    match tokio::time::timeout(TURN_HOLD_HANG, pending).await {
+        Ok(joined) => joined.expect("held turn submit panicked"),
+        Err(_) => panic!(
+            "held turn submit had not finished after {TURN_HOLD_HANG:?}; executions={:?}",
+            provider.executions.lock().unwrap()
+        ),
+    }
     release
 }
 async fn tombstone(metadata: &LocalConversationStore, target: &ConversationId) {

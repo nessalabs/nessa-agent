@@ -879,29 +879,13 @@ async fn unwatch_ack_retains_original_authority_target_until_actual_join() {
 
 #[tokio::test]
 async fn notice_authority_deadline_abandons_socket_but_retains_actual_worker_until_join() {
-    let mut fixture = WatchFixture::new().await;
-    // Registration uses the same injected port, but only the next (notice) call is held.
-    let work = Arc::new(HeldReceiverWork {
-        released: Mutex::new(false),
-        wake: Condvar::new(),
-        entered: Notify::new(),
-        completed: AtomicU64::new(0),
-    });
+    // Row B5. The periodic refresh is a different resolve from this notice
+    // check (row A3). Its default one-second tick can be the call `first`
+    // holds while commit is still writing, and jumping the thirty-second
+    // notice deadline then makes that tick's handshake bound close the socket
+    // with a frame (row A3b). This scenario keeps the refresh outside the jump.
+    let (fixture, work, authority) = held_receiver_fixture(Duration::from_secs(3600)).await;
     let _release = ReleaseHeld(work.clone());
-    let authority = Arc::new(HoldFirstReceiver {
-        actual: RecordBinding,
-        first: AtomicBool::new(false),
-        work: work.clone(),
-        resolves: AtomicU64::new(0),
-        revoked: AtomicBool::new(false),
-        holding: AtomicBool::new(false),
-        during_hold: AtomicU64::new(0),
-    });
-    let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
-    fixture.state = fixture
-        .state
-        .clone()
-        .with_passive_read(authority.clone(), metadata);
     let (socket, mut peer) = test_socket(None);
     let socket = tokio::spawn(run_authenticated(
         socket,
@@ -923,7 +907,11 @@ async fn notice_authority_deadline_abandons_socket_but_retains_actual_worker_unt
         .await
         .unwrap()
         .unwrap();
-    assert!(peer.output.try_recv().is_err()); // No changed/late error frame was sent.
+    // No changed notice and no close frame. A periodic tick used to supply
+    // the latter once this deadline jump passed its handshake bound.
+    if let Ok(message) = peer.output.try_recv() {
+        panic!("notice deadline sent a frame: {message:?}");
+    }
     let mut drain = Box::pin(fixture.state.drain_watches());
     assert!(matches!(poll!(&mut drain), Poll::Pending));
     assert_eq!(
