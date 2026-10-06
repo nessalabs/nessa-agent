@@ -4,13 +4,14 @@
     "adapter": "@agentclientprotocol/codex-acp@1.12.0",
     "adapterSha256": "f45a64dc3a994556ebdb688dc8d59b86945a9b2f940a3e3e545739dd265a7cc5",
     "lockSha256": "e3bf37b4b3b373ec6d45cd23d564f0df271ebe8411d1cba75abefe073bb4f141",
-    "probeSha256": "6fbe18a5a3227ece6990c2ec6ec412c96720cbd7ba24091369e823c2e77e95af",
+    "probeSha256": "5fd359bdabcfbed029254f84d48244af02e859ba51040a9774c46e8592bea5ab",
     "sessionSha256": "5c7f48aa6570b11d6f2627a884fc7dfd4839f7870ae2cdda6011b942d087b800",
     "processSha256": "2102b0dea3d53154490f0cc910bf81b3725a90f52cf5e0810cd9193914e52046",
     "selectorSha256": "b287a27a24ea2bb02871a6c91a116750b25ae2a50480f11058075c752a07ffad",
+    "metadataSha256": "24466e42f18156dda325cb229b554b54b6dda38693af71a9b81bc805ae34021b",
     "model": "gpt-5.6-luna",
     "platform": "darwin/arm64",
-    "capturedAt": "2026-10-06T06:41:54.538Z",
+    "capturedAt": "2026-10-06T07:21:02.471Z",
     "declaredClientCapabilities": {
       "subagents": {},
       "fs": {
@@ -21,7 +22,6 @@
     },
     "agentInfo": {
       "name": "@agentclientprotocol/codex-acp",
-      "title": "Codex",
       "version": "1.12.0"
     },
     "sessionCapabilities": {
@@ -36,32 +36,22 @@
     "initialMode": "read-only",
     "modeConfig": {
       "id": "mode",
-      "name": "Mode",
-      "description": "Approval and sandboxing preset for the session",
-      "category": "mode",
-      "type": "select",
       "currentValue": "read-only",
       "options": [
         {
           "value": "read-only",
-          "name": "Ask for approval",
-          "description": "Always ask to edit external files and use the internet",
           "_meta": {
             "kind": "standard"
           }
         },
         {
           "value": "agent",
-          "name": "Approve for me",
-          "description": "Only ask for actions detected as potentially unsafe",
           "_meta": {
             "kind": "auto_review"
           }
         },
         {
           "value": "agent-full-access",
-          "name": "Full access",
-          "description": "Unrestricted access to the internet and any file on your computer",
           "_meta": {
             "kind": "full_access"
           }

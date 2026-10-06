@@ -12,9 +12,11 @@ This does not implement Nessa's proposed Agent parent relationship.
 | `capture.mjs` | Direct provider probe orchestration, source hashes, controlled-result selection and final attempt output |
 | `acp-session.mjs` | Sequential RPC/opening authority, pre-parse framing, first-failure retention and immutable record sealing |
 | `processes.mjs` | POSIX process-group cleanup independent of leader exit; bounded provider-version subprocess |
+| `metadata.mjs` | Installed-adapter identity match, capability presence and closed mode/kind projection; provider text and nested metadata are omitted |
 | `evidence.mjs` | Sealed-only projection; normalize opening/prompt boundary with tool IDs and check their agreement |
 | `fixtures/codex-native.json` | Sanitized selected live frames, capture provenance, advertised modes and explicit result |
 | `verify.mjs` | Credential-free inspection of that retained fixture; machine-readable JSON on stdout |
+| `provenance.test.mjs` | Real Git checkouts prove hashed source bytes remain LF with autocrlf enabled or disabled |
 | `evidence.test.mjs` | Recorded success plus contradictory identity, state, ordering and redaction inputs |
 | `capture.test.mjs`, `fixtures/probe-agent.mjs` | Explicit scripted failure data and real subprocess cleanup regressions; not provider recordings |
 
@@ -59,7 +61,7 @@ ordering cases. Those unimplemented guarantees have no fabricated live fixtures.
 The fixture records the run's exact UTC timestamp, platform, ACP package/source
 hash, checked-in harness lock hash, capture/session/process/selector source hashes, provider version, model,
 client capabilities, selected mode and controlled prompt. The local run on
-October 5, 2026 (America/Vancouver) used:
+October 6, 2026 (America/Vancouver) used:
 
 - `@agentclientprotocol/codex-acp@1.12.0`, `codex-cli 0.154.0`.
 - `gpt-5.6-luna`, initial mode `read-only`; advertised presets had kinds
@@ -104,6 +106,7 @@ This is a structural repair of the developer probe, not Nessa Agent ownership.
 | --- | --- | --- |
 | Starting; initialize/new dispatched | Retain the one active RPC identity and method; unmatched responses fail `unsolicited_response` | Unsolicited terminal subprocess test |
 | Opening; native collaboration arrives before an admitted prompt | Fail `premature_activity`; updates cannot invent admission | Startup activity subprocess test |
+| Initialize/new metadata | Match installed-adapter identity, project capability presence and admitted mode/kind values; omit provider labels, paths and unknown content before serialization | Secret-bearing metadata and rejected identity/mode subprocess tests |
 | Opening; matching new response | Retain its session ID as independent opening evidence; enter Open | Valid recorded opening |
 | Open; own prompt dispatched | Bind its request ID and admitted session; enter Prompt active | Valid opening/prompt boundary checks |
 | Prompt active; native tool update | Validate the raw envelope/sender against the admitted session before normalization; retain the call's sender/receiver target | Foreign session and wait/close target tests |
@@ -176,3 +179,10 @@ stored or printed.
 Do not replace the captured absence of native session updates with synthesized
 frames. A different provider/version or a capture with cancellation/reviews needs
 its own truthful provenance and tests before becoming evidence for those cases.
+
+Provider metadata is projected separately from tool evidence. Agent identity must
+match the trusted installed adapter; capabilities retain known presence flags,
+and mode values/kinds use the pinned closed vocabulary. Names, descriptions,
+titles, unknown fields and nested metadata are not copied from the provider.
+Source bytes are pinned to LF by `.gitattributes` so provenance is stable under
+Git's platform line-ending conversion.

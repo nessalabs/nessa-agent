@@ -47,10 +47,17 @@ if (scenario === "ignore-term") {
     if (request.method === "initialize") {
       if (scenario === "startup-native")
         process.stdout.write(`${JSON.stringify(captured.frames[0].frame)}\n`)
-      send(request.id, {
-        agentInfo: { name: "scripted-fixture", version: "1" },
-        agentCapabilities: { sessionCapabilities: { close: {} } },
-      })
+      const agentInfo = { name: "scripted-fixture", version: "1" }
+      const sessionCapabilities = { close: {} }
+      if (scenario === "metadata-secrets") {
+        agentInfo.account = "SECRET_ACCOUNT"
+        agentInfo.title = "SECRET_TOKEN"
+        agentInfo.path = "SECRET_PATH"
+        sessionCapabilities.account = "SECRET_ACCOUNT"
+        sessionCapabilities.close = { token: "SECRET_TOKEN", path: "SECRET_PATH" }
+      }
+      if (scenario === "metadata-invalid-agent") agentInfo.name = "SECRET_ACCOUNT"
+      send(request.id, { agentInfo, agentCapabilities: { sessionCapabilities } })
     }
     if (request.method === "session/new") {
       const result = {
@@ -58,6 +65,26 @@ if (scenario === "ignore-term") {
         modes: { currentModeId: "read-only" },
         configOptions: [{ id: "mode", currentValue: "read-only" }],
       }
+      if (scenario === "metadata-secrets") {
+        result.modes.account = "SECRET_ACCOUNT"
+        result.configOptions[0] = {
+          id: "mode",
+          currentValue: "read-only",
+          name: "SECRET_ACCOUNT",
+          description: "SECRET_TOKEN",
+          _meta: { token: "SECRET_TOKEN" },
+          options: [
+            {
+              value: "read-only",
+              name: "SECRET_ACCOUNT",
+              description: "SECRET_PATH",
+              _meta: { kind: "standard", token: "SECRET_TOKEN" },
+            },
+          ],
+        }
+      }
+      if (scenario === "metadata-invalid-mode")
+        result.modes.currentModeId = "SECRET_TOKEN"
       if (scenario === "open-before-prompt-native")
         process.stdout.write(
           `${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n${JSON.stringify(captured.frames[0].frame)}\n`,
@@ -65,6 +92,8 @@ if (scenario === "ignore-term") {
       else send(request.id, result)
     }
     if (request.method === "session/prompt") {
+      if (file && scenario.startsWith("metadata-"))
+        writeFileSync(file, "prompt-dispatched")
       for (const { frame } of captured.frames) {
         if (!frame.params) continue
         const selected = structuredClone(frame)

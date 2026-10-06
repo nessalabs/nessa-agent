@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert"
+import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { test } from "node:test"
 import { serveHttp, MAX_BODY_BYTES } from "./http-server.mjs"
@@ -10,10 +11,13 @@ const fixture = JSON.parse(
 const rpc = (id, method, params = {}) => ({ jsonrpc: "2.0", id, method, params })
 async function listening(t, options) {
   const server = await serveHttp(options)
-  t.after(() => {
-    server.closeAllConnections()
-    server.close()
-  })
+  t.after(
+    () =>
+      new Promise((resolve, reject) => {
+        server.closeAllConnections()
+        server.close((error) => (error ? reject(error) : resolve()))
+      }),
+  )
   return `http://127.0.0.1:${server.address().port}`
 }
 const post = (base, frame, session, extra = {}) =>
@@ -220,4 +224,17 @@ test("legacy expiry ends the stream and refuses its message endpoint", async (t)
     404,
   )
   assert.equal((await session.reader.read()).done, true)
+})
+
+test("HTTP replay corpus identifies the exact answer, transport and capture sources", () => {
+  for (const [field, relative] of [
+    ["serverSha256", "./server.mjs"],
+    ["transportSha256", "./http-server.mjs"],
+    ["probeSha256", "./capture-http.mjs"],
+  ]) {
+    const actual = createHash("sha256")
+      .update(readFileSync(new URL(relative, import.meta.url)))
+      .digest("hex")
+    assert.equal(fixture.source[field], actual, field)
+  }
 })

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url"
 import { startProbeSession } from "./acp-session.mjs"
 import { providerVersion } from "./processes.mjs"
 import { selectCapture, inspectCapture } from "./evidence.mjs"
+import { initializationMetadata, sessionMetadata } from "./metadata.mjs"
 
 export const PROMPT =
   "Use your native subagent capability to spawn one child agent. Tell the child to reply with exactly CHILD_DONE without tools, files, network, or commands. Wait for the child to finish, close it if a close operation is available, then reply exactly PARENT_DONE. Do not perform any other actions."
@@ -23,6 +24,7 @@ export async function captureProbe({
   args,
   env,
   source: provenance,
+  expectedAgent,
   versionCommand,
   versionArgs,
   workspaceParent = tmpdir(),
@@ -59,13 +61,7 @@ export async function captureProbe({
       },
       requestBudgetMs,
     )
-    if (
-      !initialized.result?.agentInfo ||
-      !initialized.result?.agentCapabilities?.sessionCapabilities
-    )
-      throw { code: "initialize_invalid" }
-    source.agentInfo = initialized.result.agentInfo
-    source.sessionCapabilities = initialized.result.agentCapabilities.sessionCapabilities
+    Object.assign(source, initializationMetadata(initialized.result, expectedAgent))
     const opened = await session.request(
       "session/new",
       { cwd: workspace, mcpServers: [] },
@@ -73,8 +69,7 @@ export async function captureProbe({
     )
     if (!opened.result?.modes || !Array.isArray(opened.result.configOptions))
       throw { code: "session_invalid" }
-    source.initialMode = opened.result.modes.currentModeId
-    source.modeConfig = opened.result.configOptions.find((option) => option.id === "mode")
+    Object.assign(source, sessionMetadata(opened.result))
     const sessionId = opened.result.sessionId
     source.prompt = PROMPT
     await session.request(
@@ -157,6 +152,7 @@ async function main(out) {
       sessionSha256: hash(fileURLToPath(new URL("./acp-session.mjs", import.meta.url))),
       processSha256: hash(fileURLToPath(new URL("./processes.mjs", import.meta.url))),
       selectorSha256: hash(fileURLToPath(new URL("./evidence.mjs", import.meta.url))),
+      metadataSha256: hash(fileURLToPath(new URL("./metadata.mjs", import.meta.url))),
       model: "gpt-5.6-luna",
       platform: `${process.platform}/${process.arch}`,
     }
@@ -172,6 +168,7 @@ async function main(out) {
         }),
       },
       source,
+      expectedAgent: { name: packageInfo.name, version: packageInfo.version },
       versionCommand: join(harness, "node_modules/.bin/codex"),
     })
   } catch {

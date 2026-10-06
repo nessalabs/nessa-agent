@@ -216,3 +216,8 @@ because time passes. These are fixture limits, not promises for the product
 transport. No test here proves Nessa session isolation, authenticated refresh,
 remote network cancellation, restart recovery or physical provider cleanup; those
 remain the implementation slices in [ADR 392](../../docs/adr/todo/392-remote-mcp-servers.md).
+
+The HTTP replay suite also recomputes `server.mjs`, `http-server.mjs` and
+`capture-http.mjs` SHA-256 values against the corpus provenance. Changing any
+producer without refreshing its corpus fails the check even if current replies
+still match. `.gitattributes` keeps those hashed sources at LF on each checkout.

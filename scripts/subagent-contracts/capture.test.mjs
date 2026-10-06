@@ -23,6 +23,7 @@ async function probe(t, scenario, extra = {}) {
   const result = await captureProbe({
     args: [fixture, scenario],
     source: { kind: "scripted-test-fixture" },
+    expectedAgent: { name: "scripted-fixture", version: "1" },
     workspaceParent: parent,
     versionCommand: process.execPath,
     versionArgs: [fixture, "version-ok"],
@@ -100,6 +101,7 @@ test("setup and spawn failure use the same workspace cleanup path", posix, async
   const setup = await captureProbe({
     workspaceParent: join(parent, "absent"),
     source: { kind: "scripted-test-fixture" },
+    expectedAgent: { name: "scripted-fixture", version: "1" },
   })
   assert.equal(setup.outcome.kind, "failed")
   assert.deepEqual(readdirSync(parent), [])
@@ -269,6 +271,7 @@ test(
     const result = await captureProbe({
       args: [fixture, "close-rejected"],
       source: { kind: "scripted-test-fixture" },
+      expectedAgent: { name: "scripted-fixture", version: "1" },
       workspaceParent: parent,
       requestBudgetMs: 1000,
       promptBudgetMs: 1000,
@@ -295,3 +298,39 @@ test("sealing refuses unfinished bytes already delivered after the close boundar
   reader.complete()
   assert.deepEqual(failures, ["incomplete_frame_at_seal"])
 })
+
+test(
+  "provider metadata is projected without account, label or nested credential content",
+  posix,
+  async (t) => {
+    const result = await probe(t, "metadata-secrets")
+    assert.equal(result.outcome.kind, "completed")
+    assert.deepEqual(result.source.agentInfo, { name: "scripted-fixture", version: "1" })
+    assert.deepEqual(result.source.sessionCapabilities, { close: {} })
+    assert.deepEqual(result.source.modeConfig, {
+      id: "mode",
+      currentValue: "read-only",
+      options: [{ value: "read-only", _meta: { kind: "standard" } }],
+    })
+    assert.doesNotMatch(JSON.stringify(result), /SECRET_/)
+  },
+)
+
+test(
+  "unadmitted provider identity or mode fails before prompt without exposing the value",
+  posix,
+  async (t) => {
+    for (const [scenario, code] of [
+      ["metadata-invalid-agent", "metadata_agent_mismatch"],
+      ["metadata-invalid-mode", "metadata_mode_invalid"],
+    ]) {
+      const parent = directory(t)
+      const marker = join(parent, "prompt.marker")
+      const result = await probe(t, scenario, { args: [fixture, scenario, marker] })
+      assert.equal(result.outcome.kind, "failed")
+      assert.equal(result.outcome.code, code)
+      assert.equal(existsSync(marker), false)
+      assert.doesNotMatch(JSON.stringify(result), /SECRET_/)
+    }
+  },
+)

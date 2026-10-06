@@ -152,6 +152,7 @@ test("capture provenance names the checked-in probe and pinned harness lock", ()
   assert.equal(fixture.source.sessionSha256, hash("./acp-session.mjs"))
   assert.equal(fixture.source.processSha256, hash("./processes.mjs"))
   assert.equal(fixture.source.selectorSha256, hash("./evidence.mjs"))
+  assert.equal(fixture.source.metadataSha256, hash("./metadata.mjs"))
   assert.equal(
     fixture.source.lockSha256,
     hash("../../crates/nessa-sdk/harnesses/codex-acp/package-lock.json"),
