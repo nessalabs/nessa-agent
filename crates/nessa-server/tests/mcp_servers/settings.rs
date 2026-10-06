@@ -11,6 +11,7 @@ use super::{
 };
 use crate::mcp_servers::domain::{
     stored_revision, ConfigurationKey, ConfiguredMcpServer, ServerEdit, ServerSave, StdioServer,
+    StoredMcpServer,
 };
 use crate::mcp_servers::infrastructure::settings_test_support::{
     config, entry, initiator, inspected_over, key, live, managed, server, settings_at_full_size,
@@ -63,6 +64,8 @@ fn audited(name: &str, enabled: bool, env_names: &[&str]) -> Box<AuditedServer> 
         args: server.args().to_vec(),
         enabled,
         env_names: env_names.iter().map(|name| (*name).to_owned()).collect(),
+        url: None,
+        remote_id: None,
     })
 }
 
@@ -487,10 +490,10 @@ impl super::LiveServerSet for HeldLive {
     fn bundled(&self) -> bool {
         self.live.bundled()
     }
-    fn problem(&self, stored: &[ConfiguredMcpServer]) -> Option<ServerProblem> {
+    fn problem(&self, stored: &[StoredMcpServer]) -> Option<ServerProblem> {
         self.live.problem(stored)
     }
-    fn replace(&self, stored: &[ConfiguredMcpServer]) -> Result<(), super::LiveSetKept> {
+    fn replace(&self, stored: &[StoredMcpServer]) -> Result<(), super::LiveSetKept> {
         self.replacing.store(true, Ordering::SeqCst);
         let gate = self.gate.lock().unwrap().take();
         if let Some(gate) = gate {
@@ -1371,11 +1374,11 @@ impl super::LiveServerSet for PanickingLive {
     fn bundled(&self) -> bool {
         self.live.bundled()
     }
-    fn problem(&self, stored: &[ConfiguredMcpServer]) -> Option<ServerProblem> {
+    fn problem(&self, stored: &[StoredMcpServer]) -> Option<ServerProblem> {
         assert!(!self.before_publish, "a fault before the publish");
         self.live.problem(stored)
     }
-    fn replace(&self, _: &[ConfiguredMcpServer]) -> Result<(), super::LiveSetKept> {
+    fn replace(&self, _: &[StoredMcpServer]) -> Result<(), super::LiveSetKept> {
         panic!("a fault after the publish")
     }
     fn withdraw(&self, _: &str) -> Result<bool, super::LiveSetKept> {
@@ -1391,7 +1394,7 @@ struct PanickingInspector {
 impl super::ServerInspector for PanickingInspector {
     fn inspect(
         &self,
-        _: &ConfiguredMcpServer,
+        _: &StoredMcpServer,
         _: super::InspectBounds,
         _: super::InspectStop,
         launch: super::LaunchBegun,
@@ -1596,6 +1599,8 @@ async fn a_refused_save_still_records_the_executable_it_asked_for() {
             args: vec!["--serve".into(), "/data".into()],
             enabled: false,
             env_names: vec!["TOKEN".into()],
+            url: None,
+            remote_id: None,
         }))
     );
     assert!(matches!(
@@ -1772,7 +1777,7 @@ fn launch_settings_print_names_never_values() {
     let base = BTreeMap::from([(OsString::from("HOME"), OsString::from("/home/secret-home"))]);
     let printed = format!(
         "{:?}",
-        LaunchSettings::new(&[nessa], true, "/w".into(), base)
+        LaunchSettings::new(&[StoredMcpServer::Stdio(nessa)], true, "/w".into(), base)
     );
     assert!(
         printed.contains("HOME") && printed.contains("nessa"),
@@ -1790,7 +1795,12 @@ fn a_servers_own_variables_win_over_the_gateways() {
         (OsString::from("PATH"), OsString::from("/usr/bin")),
         (OsString::from("HOME"), OsString::from("/home/me")),
     ]);
-    let launches = LaunchSettings::new(&[managed()], true, "/w".into(), base);
+    let launches = LaunchSettings::new(
+        &[StoredMcpServer::Stdio(managed())],
+        true,
+        "/w".into(),
+        base,
+    );
     let own = configured(server("a"), true, &[("PATH", "/mine")]);
     let managed_server = managed().server().clone();
     let stored_managed = configured(
@@ -1802,11 +1812,47 @@ fn a_servers_own_variables_win_over_the_gateways() {
         true,
         &[],
     );
-    let set = launches.launch_set(&[own, stored_managed]).unwrap();
+    let set = launches
+        .launch_set(&[
+            StoredMcpServer::Stdio(own),
+            StoredMcpServer::Stdio(stored_managed),
+        ])
+        .unwrap()
+        .0;
     assert_eq!(set.len(), 2);
     assert_eq!(set[0].server, sdk_server(managed().server()));
     assert_eq!(set[1].environment[&OsString::from("PATH")], "/mine");
     assert_eq!(set[1].environment[&OsString::from("HOME")], "/home/me");
+}
+
+/// A remote URL the SDK will not call is refused as that server's URL, and
+/// it is not launched. An acceptable one is in the live remote set.
+#[test]
+fn a_remote_url_is_the_sdks_to_accept() {
+    use crate::mcp_servers::domain::RemoteConfigured;
+    use uuid::Uuid;
+    let launches = LaunchSettings::new(&[], false, "/w".into(), BTreeMap::new());
+    let bad = StoredMcpServer::Remote(RemoteConfigured::new(
+        Uuid::from_u128(1),
+        "docs",
+        "http://example.com/mcp",
+        true,
+    ));
+    assert_eq!(
+        launches.launch_set(&[bad]).unwrap_err(),
+        nessa_sdk::infrastructure::acp::sessions::McpServerProblem::Url {
+            server: "docs".into()
+        }
+    );
+    let good = StoredMcpServer::Remote(RemoteConfigured::new(
+        Uuid::from_u128(2),
+        "local",
+        "http://127.0.0.1:9/mcp",
+        true,
+    ));
+    let (stdio, remotes) = launches.launch_set(&[good]).unwrap();
+    assert!(stdio.is_empty());
+    assert_eq!(remotes[0].url().as_str(), "http://127.0.0.1:9/mcp");
 }
 
 /// Settings over `files` inspecting with a scripted inspector, and both.
@@ -1850,9 +1896,12 @@ async fn an_inspection_starts_a_stored_server_on_or_off_and_is_audited_both_side
     assert_eq!(settings.inspect(initiator(), "off").await, Ok(read));
     let asked = inspector.asked.lock().unwrap().clone();
     assert_eq!(asked.len(), 1);
-    assert_eq!(asked[0].0.server(), &server("off"));
+    assert_eq!(asked[0].0.stdio().unwrap().server(), &server("off"));
     assert!(!asked[0].0.enabled());
-    assert_eq!(asked[0].0.env()["API_TOKEN"], "secret-value");
+    assert_eq!(
+        asked[0].0.stdio().unwrap().env()["API_TOKEN"],
+        "secret-value"
+    );
     assert_eq!(asked[0].1, INSPECT_BOUNDS);
     let records = audit.records();
     assert_eq!(

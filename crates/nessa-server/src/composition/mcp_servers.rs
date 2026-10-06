@@ -36,7 +36,7 @@ use crate::product::mcp_servers::list_fits;
 use nessa_sdk::infrastructure::{
     acp::sessions::{McpServerList, McpServerSource, StandInSessions, StdioMcpServer},
     clock::RuntimeClock,
-    mcp::{McpServerLaunch, McpServers},
+    mcp::McpServers,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -199,19 +199,36 @@ pub(super) fn server_environment(
 /// name, and the digest of its command, arguments and environment keyed with
 /// `key` ([`launch_digest`]), which the relay compares at each hello.
 pub(super) fn stand_ins(
-    servers: &[McpServerLaunch],
+    servers: &McpServers,
     gateway: &str,
     socket: &str,
     key: &ConfigurationKey,
 ) -> Vec<StdioMcpServer> {
-    servers
+    let mut stand_ins: Vec<StdioMcpServer> = servers
+        .configured()
         .iter()
         .map(|launch| StdioMcpServer {
             name: launch.server.name.clone(),
             command: gateway.into(),
             args: relay_arguments(socket, &launch.server.name, &launch_digest(key, launch)),
         })
-        .collect()
+        .collect();
+    for remote in servers.configured_remotes() {
+        stand_ins.push(StdioMcpServer {
+            name: remote.name().to_owned(),
+            command: gateway.into(),
+            args: relay_arguments(
+                socket,
+                remote.name(),
+                &crate::mcp_servers::domain::remote_configuration_digest(
+                    key,
+                    &remote.id().to_string(),
+                    remote.url().as_str(),
+                ),
+            ),
+        });
+    }
+    stand_ins
 }
 
 /// The stand-ins for the live set, which every provider open reads
@@ -244,12 +261,7 @@ impl StandIns {
 }
 impl McpServerSource for StandIns {
     fn servers(&self) -> Vec<StdioMcpServer> {
-        stand_ins(
-            &self.servers.configured(),
-            &self.gateway,
-            &self.socket,
-            &self.key,
-        )
+        stand_ins(&self.servers, &self.gateway, &self.socket, &self.key)
     }
 }
 
@@ -285,11 +297,22 @@ pub(super) async fn compose(
 ) -> Result<Option<McpComposition>, RunError> {
     let configured = std::mem::take(&mut agents.mcp_servers);
     let launches = LaunchSettings::new(&configured, bundled, agents.workspace.clone(), environment);
-    let launch_set = launches
+    let (launch_set, remotes) = launches
         .launch_set(&configured)
         .map_err(|problem| RunError::Agent(problem.to_string()))?;
-    let servers = McpServers::new(launch_set, Arc::new(RuntimeClock::new()))
+    let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new()))
         .map_err(|error| RunError::Agent(error.to_string()))?;
+    servers
+        .replace_all(launch_set, remotes)
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    if let Some(http) = crate::mcp_servers::infrastructure::ReqwestExchange::new() {
+        servers.set_remote_transport(
+            Arc::new(http),
+            Arc::new(nessa_sdk::infrastructure::mcp::NoAuthorization),
+        );
+    } else {
+        tracing::error!("remote MCP is unreachable this run: the HTTP client could not be built");
+    }
     let Some(key) = configuration_key(&OsTokens) else {
         tracing::error!(
             "MCP servers are off this run: no key for their configuration digests could be drawn"

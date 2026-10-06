@@ -23,7 +23,7 @@ use crate::mcp_servers::{
         EditProblem, Edited, InspectCut, InspectFailure, Inspection, LiveSetOutcome,
         McpServerInitiator, McpServerSettingsError, ServerList, ServerProblem,
     },
-    domain::{ServerEdit, ServerSave, StdioServer},
+    domain::{RemoteServerSave, ServerEdit, ServerSave, StdioServer},
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::product::generated::{
@@ -59,7 +59,9 @@ pub(super) async fn dispatch(
             let Ok(params) = serde_json::from_value::<McpServersSaveParams>(frame.params) else {
                 return failure(&frame.id, "invalid_request");
             };
-            let edit = ServerEdit::Save(save(params.previous_name, params.server));
+            let Ok(edit) = edit_of(params.previous_name, params.server) else {
+                return failure(&frame.id, "invalid_request");
+            };
             settings
                 .edit(initiator(session), params.revision, edit)
                 .await
@@ -112,20 +114,46 @@ fn initiator(session: &AuthenticatedSession) -> McpServerInitiator {
     }
 }
 
-fn save(previous_name: Option<String>, input: McpServerInput) -> ServerSave {
-    // One kind today; `kind` is matched so a second is a compile error here.
+/// The save the wire asked for. A stdio save carries command, args and env,
+/// and no url. A remote save carries url, and none of those. Either other
+/// shape is `invalid_request`: the fields do not match the kind.
+fn edit_of(previous_name: Option<String>, input: McpServerInput) -> Result<ServerEdit, ()> {
     match input.kind {
-        McpServerKind::Stdio => {}
-    }
-    ServerSave {
-        previous_name,
-        server: StdioServer::new(input.name, input.command, input.args),
-        env: input
-            .env
-            .into_iter()
-            .map(|entry| (entry.name, entry.value))
-            .collect(),
-        enabled: input.enabled,
+        McpServerKind::Stdio => {
+            if input.url.is_some() {
+                return Err(());
+            }
+            let (Some(command), Some(args), Some(env)) = (input.command, input.args, input.env)
+            else {
+                return Err(());
+            };
+            Ok(ServerEdit::Save(ServerSave {
+                previous_name,
+                server: StdioServer::new(input.name, command, args),
+                env: env
+                    .into_iter()
+                    .map(|entry| (entry.name, entry.value))
+                    .collect(),
+                enabled: input.enabled,
+            }))
+        }
+        McpServerKind::Remote => {
+            if input.command.is_some() || input.args.is_some() || input.env.is_some() {
+                return Err(());
+            }
+            let Some(url) = input.url else {
+                return Err(());
+            };
+            Ok(ServerEdit::SaveRemote(RemoteServerSave {
+                previous_name,
+                // Used only when this name is not already a remote entry.
+                // The domain keeps the stored id on replace.
+                id: uuid::Uuid::new_v4(),
+                name: input.name,
+                url,
+                enabled: input.enabled,
+            }))
+        }
     }
 }
 
@@ -135,15 +163,26 @@ fn listed(list: ServerList) -> McpServersListResult {
         servers: list
             .servers
             .into_iter()
-            .map(|listed| McpServerListEntry {
-                kind: McpServerKind::Stdio,
-                name: listed.server.name().to_owned(),
-                // Stored commands are UTF-8: the SDK's rules refuse any other.
-                command: listed.server.command().to_string_lossy().into_owned(),
-                args: listed.server.args().to_vec(),
-                env_names: listed.env_names,
-                enabled: listed.enabled,
-                managed: listed.managed,
+            .map(|listed| {
+                let remote = listed.url.is_some();
+                McpServerListEntry {
+                    kind: if remote {
+                        McpServerKind::Remote
+                    } else {
+                        McpServerKind::Stdio
+                    },
+                    name: listed.server.name().to_owned(),
+                    // Stored commands are UTF-8: the SDK's rules refuse any other.
+                    // A remote row's placeholder path is not a launch and is not listed.
+                    command: (!remote)
+                        .then(|| listed.server.command().to_string_lossy().into_owned()),
+                    args: (!remote).then(|| listed.server.args().to_vec()),
+                    env_names: (!remote).then_some(listed.env_names),
+                    enabled: listed.enabled,
+                    managed: listed.managed,
+                    id: listed.remote_id,
+                    url: listed.url,
+                }
             })
             .collect(),
     }
@@ -265,6 +304,10 @@ fn code(error: &McpServerSettingsError) -> McpServersErrorCode {
             InspectFailure::Gone => McpServersErrorCode::McpServerGone,
             InspectFailure::Malformed => McpServersErrorCode::McpServerMalformed,
             InspectFailure::RemoteError { .. } => McpServersErrorCode::McpServerRemoteError,
+            InspectFailure::Unreachable => McpServersErrorCode::McpServerUnreachable,
+            InspectFailure::Unauthorized => McpServersErrorCode::McpServerUnauthorized,
+            InspectFailure::InsufficientScope => McpServersErrorCode::McpServerInsufficientScope,
+            InspectFailure::SessionCollision => McpServersErrorCode::McpServerSessionCollision,
         },
     }
 }
@@ -346,6 +389,10 @@ fn problem_details(problem: EditProblem) -> McpServersInvalidDetails {
                 Some(server),
                 Some(name),
             ),
+            ServerProblem::Url { server } => (McpServerProblemCode::Url, Some(server), None),
+            ServerProblem::DuplicateServerId { server } => {
+                (McpServerProblemCode::DuplicateServerId, Some(server), None)
+            }
         },
         EditProblem::EnvironmentValueMissing { server, name } => (
             McpServerProblemCode::EnvironmentValueMissing,

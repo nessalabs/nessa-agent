@@ -32,11 +32,11 @@ use crate::mcp_servers::application::{
     InspectBounds, InspectCut, InspectFailure, InspectFuture, InspectStop, InspectedTool,
     InspectedUi, Inspection, LaunchBegun, ServerInspector,
 };
-use crate::mcp_servers::domain::ConfiguredMcpServer;
+use crate::mcp_servers::domain::StoredMcpServer;
 use nessa_sdk::domain::mcp_apps::UiResourceUri;
 use nessa_sdk::infrastructure::{
     clock::Clock,
-    mcp::{McpError, McpServers, McpSession},
+    mcp::{McpError, McpServers, McpSession, RemoteMcpServer},
 };
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -63,12 +63,24 @@ impl McpServerInspector {
 impl ServerInspector for McpServerInspector {
     fn inspect(
         &self,
-        server: &ConfiguredMcpServer,
+        server: &StoredMcpServer,
         bounds: InspectBounds,
         mut stop: InspectStop,
         begun: LaunchBegun,
     ) -> InspectFuture<'_> {
-        let launch = self.launches.launch(server);
+        let opening_target = match server {
+            StoredMcpServer::Stdio(stdio) => OpenTarget::Stdio(self.launches.launch(stdio)),
+            StoredMcpServer::Remote(remote) => {
+                match RemoteMcpServer::new(remote.id(), remote.name(), remote.url()) {
+                    Ok(remote) => OpenTarget::Remote(remote),
+                    Err(McpError::InvalidConfiguration(refused)) => {
+                        let problem = problem(refused);
+                        return Box::pin(async move { Err(InspectFailure::Invalid(problem)) });
+                    }
+                    Err(_) => return Box::pin(async { Err(InspectFailure::StartFailed) }),
+                }
+            }
+        };
         Box::pin(async move {
             // Stopped already: nothing is launched.
             if stop.given() {
@@ -80,7 +92,7 @@ impl ServerInspector for McpServerInspector {
             // launched. Polled first: its first poll refuses or launches.
             let session = tokio::select! {
                 biased;
-                opened = self.servers.open_once(&launch) => opened.map_err(opening)?,
+                opened = open_target(&self.servers, &opening_target) => opened.map_err(opening)?,
                 () = self.clock.sleep_until(deadline) => return Err(InspectFailure::TimedOut),
                 () = stop.wait() => return Ok(stopped()),
             };
@@ -109,6 +121,19 @@ impl ServerInspector for McpServerInspector {
             drop(session);
             read
         })
+    }
+}
+
+/// What an inspection opens: a local process, or a remote endpoint.
+enum OpenTarget {
+    Stdio(nessa_sdk::infrastructure::mcp::McpServerLaunch),
+    Remote(RemoteMcpServer),
+}
+
+async fn open_target(servers: &McpServers, target: &OpenTarget) -> Result<McpSession, McpError> {
+    match target {
+        OpenTarget::Stdio(launch) => servers.open_once(launch).await,
+        OpenTarget::Remote(remote) => servers.open_remote_once(remote).await,
     }
 }
 
@@ -207,7 +232,13 @@ fn failure(error: McpError) -> InspectFailure {
         | McpError::Busy
         | McpError::NotConfigured
         | McpError::ConfigurationChanged
-        | McpError::NoSession => InspectFailure::Gone,
+        | McpError::NoSession
+        | McpError::SessionExpired
+        | McpError::Unconfirmed => InspectFailure::Gone,
+        McpError::Unreachable => InspectFailure::Unreachable,
+        McpError::Unauthorized => InspectFailure::Unauthorized,
+        McpError::InsufficientScope => InspectFailure::InsufficientScope,
+        McpError::SessionCollision => InspectFailure::SessionCollision,
     }
 }
 

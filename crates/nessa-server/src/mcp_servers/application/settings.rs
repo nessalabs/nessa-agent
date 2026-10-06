@@ -77,7 +77,8 @@ use super::ports::{
     ServerProblem, StoreError, StoreLock, StoredServers,
 };
 use crate::mcp_servers::domain::{
-    ConfiguredMcpServer, EditRefusal, ServerEdit, ServerSave, StdioServer, MANAGED_SERVER_NAME,
+    EditRefusal, RemoteServerSave, ServerEdit, ServerSave, StdioServer, StoredMcpServer,
+    MANAGED_SERVER_NAME,
 };
 use nessa_protocol::product_contract::generated::{
     MCP_SERVER_INSPECT_DEADLINE_MS, MCP_SERVER_INSPECT_MAX_CONCURRENT,
@@ -122,6 +123,10 @@ pub struct ListedServer {
     pub enabled: bool,
     /// Nessa's own server: no edit names it.
     pub managed: bool,
+    /// Set when this row is a remote server. `server`'s command is not a launch.
+    pub remote_id: Option<String>,
+    /// The remote endpoint, when this row is remote.
+    pub url: Option<String>,
 }
 
 /// `mcpServers.list`: the stored revision, and each server.
@@ -232,6 +237,10 @@ impl McpServerSettingsError {
                 InspectFailure::Gone => "gone",
                 InspectFailure::Malformed => "malformed",
                 InspectFailure::RemoteError { .. } => "remote_error",
+                InspectFailure::Unreachable => "unreachable",
+                InspectFailure::Unauthorized => "unauthorized",
+                InspectFailure::InsufficientScope => "insufficient_scope",
+                InspectFailure::SessionCollision => "session_collision",
                 InspectFailure::Stopping => "stopping",
             },
         }
@@ -573,15 +582,27 @@ impl Operations {
     /// not shown: on a headless gateway it is the managed one, shown as the
     /// gateway started with it; on the desktop it is never used, and the
     /// next change drops it from the file ([`Self::publish`]).
-    fn listing(&self, revision: String, servers: &[ConfiguredMcpServer]) -> ServerList {
+    fn listing(&self, revision: String, servers: &[StoredMcpServer]) -> ServerList {
         let mut listed: Vec<ListedServer> = servers
             .iter()
             .filter(|server| !server.managed())
-            .map(|server| ListedServer {
-                server: server.server().clone(),
-                env_names: server.env_names(),
-                enabled: server.enabled(),
-                managed: false,
+            .map(|server| match server {
+                StoredMcpServer::Stdio(server) => ListedServer {
+                    server: server.server().clone(),
+                    env_names: server.env_names(),
+                    enabled: server.enabled(),
+                    managed: false,
+                    remote_id: None,
+                    url: None,
+                },
+                StoredMcpServer::Remote(remote) => ListedServer {
+                    server: StdioServer::new(remote.name(), "/", Vec::new()),
+                    env_names: Vec::new(),
+                    enabled: remote.enabled(),
+                    managed: false,
+                    remote_id: Some(remote.id().to_string()),
+                    url: Some(remote.url().to_owned()),
+                },
             })
             .collect();
         // As the gateway started with it, on or off, with its variables'
@@ -593,6 +614,8 @@ impl Operations {
                 enabled: managed.enabled(),
                 server: managed.server().clone(),
                 managed: true,
+                remote_id: None,
+                url: None,
             });
         }
         ServerList {
@@ -610,17 +633,19 @@ impl Operations {
     ) -> Result<Edited, McpServerSettingsError> {
         let request = McpServerChangeRequest {
             action: match edit {
-                ServerEdit::Save(_) => McpServerAction::Save,
+                ServerEdit::Save(_) | ServerEdit::SaveRemote(_) => McpServerAction::Save,
                 ServerEdit::Remove { .. } => McpServerAction::Remove,
             },
             target: edit.target().to_owned(),
             previous_name: match &edit {
                 ServerEdit::Save(save) => save.previous_name.clone(),
+                ServerEdit::SaveRemote(save) => save.previous_name.clone(),
                 ServerEdit::Remove { .. } => None,
             },
             revision: revision.clone(),
             server: match &edit {
                 ServerEdit::Save(save) => Some(Box::new(requested(save))),
+                ServerEdit::SaveRemote(save) => Some(Box::new(requested_remote(save))),
                 ServerEdit::Remove { .. } => None,
             },
         };
@@ -705,7 +730,7 @@ impl Operations {
         let server = stored
             .servers
             .iter()
-            .find(|each| each.server().name() == name)
+            .find(|each| each.name() == name)
             .ok_or(McpServerSettingsError::NotFound)?;
         let operation_id = operation_id();
         let record = |cause, phase| McpServerAuditRecord {
@@ -801,6 +826,7 @@ impl Operations {
         let stored = stored.map_err(|error| (error.into(), None))?;
         let before_target = match edit {
             ServerEdit::Save(save) => save.previous_name.as_deref().unwrap_or(edit.target()),
+            ServerEdit::SaveRemote(save) => save.previous_name.as_deref().unwrap_or(edit.target()),
             ServerEdit::Remove { name } => name,
         };
         let before = names(&stored.revision, &stored.servers, Some(before_target));
@@ -866,7 +892,7 @@ impl Operations {
         // valid again
         // (`a_remove_from_a_list_past_its_bounds_is_written_and_recovers`).
         let problem = match edit {
-            ServerEdit::Save(_) => self.live.problem(&edited),
+            ServerEdit::Save(_) | ServerEdit::SaveRemote(_) => self.live.problem(&edited),
             ServerEdit::Remove { .. } => None,
         };
         if let Some(problem) = problem {
@@ -876,7 +902,7 @@ impl Operations {
         }
         // The new revision is a digest of the same length as the stored one,
         // so the stored one stands in for it in the measure.
-        if matches!(edit, ServerEdit::Save(_))
+        if matches!(edit, ServerEdit::Save(_) | ServerEdit::SaveRemote(_))
             && !(self.list_fits)(&self.listing(stored.revision.clone(), &edited))
         {
             return Err(McpServerSettingsError::ConfigTooLarge);
@@ -917,6 +943,7 @@ impl Operations {
         drop(lock);
         let after_target = match edit {
             ServerEdit::Save(save) => Some(save.server.name()),
+            ServerEdit::SaveRemote(save) => Some(save.name.as_str()),
             ServerEdit::Remove { .. } => None,
         };
         Ok(Published {
@@ -960,15 +987,12 @@ impl Operations {
 }
 
 /// `servers` at `revision`, and the one stored as `target`, if any.
-fn names(revision: &str, servers: &[ConfiguredMcpServer], target: Option<&str>) -> ServerNames {
+fn names(revision: &str, servers: &[StoredMcpServer], target: Option<&str>) -> ServerNames {
     ServerNames {
         revision: revision.to_owned(),
-        names: servers
-            .iter()
-            .map(|each| each.server().name().to_owned())
-            .collect(),
+        names: servers.iter().map(|each| each.name().to_owned()).collect(),
         target: target
-            .and_then(|name| servers.iter().find(|each| each.server().name() == name))
+            .and_then(|name| servers.iter().find(|each| each.name() == name))
             .map(|each| Box::new(AuditedServer::of(each))),
     }
 }
@@ -986,6 +1010,20 @@ fn requested(save: &ServerSave) -> AuditedServer {
         args: save.server.args().to_vec(),
         enabled: save.enabled,
         env_names,
+        url: None,
+        remote_id: None,
+    }
+}
+
+fn requested_remote(save: &RemoteServerSave) -> AuditedServer {
+    AuditedServer {
+        name: save.name.clone(),
+        command: std::path::PathBuf::new(),
+        args: Vec::new(),
+        enabled: save.enabled,
+        env_names: Vec::new(),
+        url: Some(save.url.clone()),
+        remote_id: Some(save.id.to_string()),
     }
 }
 

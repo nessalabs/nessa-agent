@@ -18,6 +18,7 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
+use uuid::Uuid;
 
 /// The name of the server Nessa manages itself: the desktop's bundled one
 /// (`composition::desktop`). No edit names it, and `mcpServers.list` marks it
@@ -126,6 +127,107 @@ impl std::fmt::Debug for ConfiguredMcpServer {
     }
 }
 
+/// A remote server as `config.json` stores it: a durable id, the name a
+/// harness sees, and the endpoint. The URL's rules are the SDK's, asked of
+/// the whole list through the live set; this constructor checks none of them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteConfigured {
+    id: Uuid,
+    name: String,
+    url: String,
+    enabled: bool,
+}
+
+impl RemoteConfigured {
+    /// `id`, shown as `name`, reached at `url`, in the live set when `enabled`.
+    pub fn new(id: Uuid, name: impl Into<String>, url: impl Into<String>, enabled: bool) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            url: url.into(),
+            enabled,
+        }
+    }
+
+    /// The id settings minted. Rename does not change it.
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+
+    /// The name a harness sees.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The endpoint, as stored. Not yet checked.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// Whether new openings are admitted.
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+}
+
+/// One stored server, stdio or remote. The file is one list; this is that
+/// list's element.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StoredMcpServer {
+    /// A local process.
+    Stdio(ConfiguredMcpServer),
+    /// An HTTP endpoint.
+    Remote(RemoteConfigured),
+}
+
+impl StoredMcpServer {
+    /// Its name, unique among the configured servers.
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Stdio(server) => server.server().name(),
+            Self::Remote(server) => server.name(),
+        }
+    }
+
+    /// Whether it is in the live set.
+    pub fn enabled(&self) -> bool {
+        match self {
+            Self::Stdio(server) => server.enabled(),
+            Self::Remote(server) => server.enabled(),
+        }
+    }
+
+    /// Whether this is the server Nessa manages. A remote server is not.
+    pub fn managed(&self) -> bool {
+        match self {
+            Self::Stdio(server) => server.managed(),
+            Self::Remote(_) => false,
+        }
+    }
+
+    /// The stdio server, when this is one.
+    pub fn stdio(&self) -> Option<&ConfiguredMcpServer> {
+        match self {
+            Self::Stdio(server) => Some(server),
+            Self::Remote(_) => None,
+        }
+    }
+
+    /// The remote server, when this is one.
+    pub fn remote(&self) -> Option<&RemoteConfigured> {
+        match self {
+            Self::Remote(server) => Some(server),
+            Self::Stdio(_) => None,
+        }
+    }
+}
+
+impl From<ConfiguredMcpServer> for StoredMcpServer {
+    fn from(server: ConfiguredMcpServer) -> Self {
+        Self::Stdio(server)
+    }
+}
+
 /// A variable name given twice to one server.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnvironmentNameRepeated {
@@ -138,6 +240,24 @@ pub struct EnvironmentNameRepeated {
 fn first_repeated<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
     let mut seen = std::collections::BTreeSet::new();
     names.into_iter().find(|name| !seen.insert(*name))
+}
+
+/// A remote server as `mcpServers.save` asks for it. The id is the one
+/// already stored when this replaces a remote entry; settings mints it when
+/// the entry is new. The domain keeps the stored id on a remote replace, so
+/// a caller cannot rotate it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteServerSave {
+    /// The name it is stored under now, when it is being renamed.
+    pub previous_name: Option<String>,
+    /// The id to use when this does not replace a remote entry.
+    pub id: Uuid,
+    /// The name it should be stored under.
+    pub name: String,
+    /// The endpoint, checked by the live set.
+    pub url: String,
+    /// Whether it should be in the live set.
+    pub enabled: bool,
 }
 
 /// What `mcpServers.save` asks for: the server as it should be stored, under
@@ -171,9 +291,11 @@ impl std::fmt::Debug for ServerSave {
 /// One change to the stored list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerEdit {
-    /// Store a server, adding it or replacing the one under its name (or
-    /// under its previous name).
+    /// Store a stdio server, adding it or replacing the one under its name
+    /// (or under its previous name).
     Save(ServerSave),
+    /// Store a remote server.
+    SaveRemote(RemoteServerSave),
     /// Take the server stored under `name` out of the list.
     Remove {
         /// The stored name.
@@ -206,6 +328,7 @@ impl ServerEdit {
     pub fn target(&self) -> &str {
         match self {
             Self::Save(save) => &save.server.name,
+            Self::SaveRemote(save) => &save.name,
             Self::Remove { name } => name,
         }
     }
@@ -219,11 +342,8 @@ impl ServerEdit {
     /// [`EditRefusal`]: a reserved name, a name not stored, a variable given
     /// twice, or — the names once each — a variable kept that has no stored
     /// value.
-    pub fn apply(
-        &self,
-        stored: &[ConfiguredMcpServer],
-    ) -> Result<Vec<ConfiguredMcpServer>, EditRefusal> {
-        let position = |name: &str| stored.iter().position(|each| each.server.name == name);
+    pub fn apply(&self, stored: &[StoredMcpServer]) -> Result<Vec<StoredMcpServer>, EditRefusal> {
+        let position = |name: &str| stored.iter().position(|each| each.name() == name);
         match self {
             Self::Remove { name } => {
                 if name == MANAGED_SERVER_NAME {
@@ -232,6 +352,32 @@ impl ServerEdit {
                 let found = position(name).ok_or(EditRefusal::NotFound)?;
                 let mut edited = stored.to_vec();
                 edited.remove(found);
+                Ok(edited)
+            }
+            Self::SaveRemote(save) => {
+                if save.name == MANAGED_SERVER_NAME
+                    || save.previous_name.as_deref() == Some(MANAGED_SERVER_NAME)
+                {
+                    return Err(EditRefusal::ReservedName);
+                }
+                let replaced = match &save.previous_name {
+                    Some(previous) => Some(position(previous).ok_or(EditRefusal::NotFound)?),
+                    None => position(&save.name),
+                };
+                let id = replaced
+                    .and_then(|index| stored[index].remote().map(RemoteConfigured::id))
+                    .unwrap_or(save.id);
+                let saved = StoredMcpServer::Remote(RemoteConfigured::new(
+                    id,
+                    save.name.clone(),
+                    save.url.clone(),
+                    save.enabled,
+                ));
+                let mut edited = stored.to_vec();
+                match replaced {
+                    Some(index) => edited[index] = saved,
+                    None => edited.push(saved),
+                }
                 Ok(edited)
             }
             Self::Save(save) => {
@@ -255,7 +401,7 @@ impl ServerEdit {
                 let kept = replaced
                     .map(|index| &stored[index])
                     .filter(|stored| same_launch(stored, save))
-                    .map(|stored| &stored.env);
+                    .and_then(|stored| stored.stdio().map(ConfiguredMcpServer::env));
                 let env =
                     save.env
                         .iter()
@@ -269,10 +415,13 @@ impl ServerEdit {
                             Ok((name.clone(), value))
                         })
                         .collect::<Result<Vec<_>, EditRefusal>>()?;
-                let saved = ConfiguredMcpServer::new(save.server.clone(), save.enabled, env)
-                    .map_err(|repeated| EditRefusal::EnvironmentNameRepeated {
-                        name: repeated.name,
-                    })?;
+                let saved = StoredMcpServer::Stdio(
+                    ConfiguredMcpServer::new(save.server.clone(), save.enabled, env).map_err(
+                        |repeated| EditRefusal::EnvironmentNameRepeated {
+                            name: repeated.name,
+                        },
+                    )?,
+                );
                 let mut edited = stored.to_vec();
                 match replaced {
                     Some(index) => edited[index] = saved,
@@ -294,14 +443,17 @@ impl ServerEdit {
 /// inspection (#480 adversarial review). The command is compared byte for
 /// byte: `Path`'s equality reads `/bin//server` as `/bin/server`, a
 /// different command as written.
-fn same_launch(stored: &ConfiguredMcpServer, save: &ServerSave) -> bool {
-    stored.server.command.as_os_str() == save.server.command.as_os_str()
-        && stored.server.args == save.server.args
-        && save.env.len() == stored.env.len()
+fn same_launch(stored: &StoredMcpServer, save: &ServerSave) -> bool {
+    let Some(stored) = stored.stdio() else {
+        return false;
+    };
+    stored.server().command().as_os_str() == save.server.command.as_os_str()
+        && stored.server().args() == save.server.args
+        && save.env.len() == stored.env().len()
         && save
             .env
             .iter()
-            .all(|(name, value)| match stored.env.get(name) {
+            .all(|(name, value)| match stored.env().get(name) {
                 Some(stored) => value.as_ref().is_none_or(|value| value == stored),
                 None => false,
             })

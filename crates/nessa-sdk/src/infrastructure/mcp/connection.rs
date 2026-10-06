@@ -14,6 +14,7 @@
 //! cause, and every pending call gets that cause; a call admitted after the
 //! end gets it too, because admission and the end share one lock.
 use super::framing::{self, FrameEnd, Frames, MAX_FRAME_BYTES};
+use super::http::{HttpSession, SendOutcome};
 use super::McpError;
 use crate::infrastructure::clock::{within, Clock};
 use serde_json::{json, Value};
@@ -72,6 +73,19 @@ impl Shared {
         }
         self.ended.send_replace(Some(cause));
     }
+
+    /// Fail one admitted call and leave the connection open. The first end
+    /// cause still wins if the connection has already ended.
+    fn fail_one(&self, id: u64, error: McpError) {
+        let mut state = self.state.lock().expect("connection state");
+        if state.ended.is_some() {
+            return;
+        }
+        if let Some(waiter) = state.pending.remove(&id) {
+            drop(state);
+            let _ = waiter.send(Err(error));
+        }
+    }
 }
 
 /// A connection to one MCP server. Dropping it stops its tasks, which closes
@@ -82,6 +96,8 @@ pub(crate) struct Connection {
     clock: Arc<dyn Clock>,
     writer: JoinHandle<()>,
     reader: JoinHandle<()>,
+    /// Set for a remote session, so close can DELETE its upstream id once.
+    http: Option<Arc<HttpSession>>,
 }
 impl Drop for Connection {
     fn drop(&mut self) {
@@ -128,7 +144,64 @@ impl Connection {
             clock,
             writer,
             reader,
+            http: None,
         }
+    }
+
+    /// A connection whose frames are HTTP calls on `session`. The reader
+    /// consumes the JSON messages `session` pushes, including server requests
+    /// and notices. Dropping it aborts the tasks; [`Self::close`] also shuts
+    /// the HTTP session down so its DELETE runs once.
+    pub(crate) fn open_http(
+        session: Arc<HttpSession>,
+        incoming: mpsc::Receiver<Result<Vec<u8>, McpError>>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
+        let shared = Arc::new(Shared {
+            state: Mutex::new(State {
+                pending: HashMap::new(),
+                ended: None,
+            }),
+            ended: watch::channel(None).0,
+            notices: broadcast::channel(NOTICES).0,
+            next_id: AtomicU64::new(1),
+        });
+        let (outgoing, mut frames) = mpsc::channel::<Vec<u8>>(OUTGOING_FRAMES);
+        let writer = tokio::spawn({
+            let shared = shared.clone();
+            let session = session.clone();
+            async move {
+                while let Some(frame) = frames.recv().await {
+                    match session.dispatch(&frame).await {
+                        SendOutcome::Done => {}
+                        SendOutcome::FailCall { id, error } => {
+                            if let Some(id) = id {
+                                shared.fail_one(id, error);
+                            }
+                        }
+                        SendOutcome::End(error) => {
+                            shared.end(error);
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        let reader = tokio::spawn(read_messages(incoming, shared.clone(), outgoing.clone()));
+        Self {
+            shared,
+            outgoing,
+            clock,
+            writer,
+            reader,
+            http: Some(session),
+        }
+    }
+
+    /// Resolves when a remote session's close has finished its DELETE, or
+    /// immediately for stdio.
+    pub(crate) fn http_finished(&self) -> Option<watch::Receiver<bool>> {
+        self.http.as_ref().map(|session| session.finished())
     }
 
     /// Send `method` and wait for the answer, with no deadline of its own.
@@ -242,6 +315,9 @@ impl Connection {
     /// waiting on it get `cause`.
     pub(crate) fn close(&self, cause: McpError) {
         self.shared.end(cause);
+        if let Some(http) = &self.http {
+            http.shutdown();
+        }
         self.writer.abort();
     }
 }
@@ -317,48 +393,83 @@ async fn read<R: AsyncRead + Unpin>(
         let Ok(message) = serde_json::from_slice::<Value>(&bytes) else {
             break McpError::Malformed("a frame from the MCP server is not JSON".into());
         };
-        let method = message.get("method").and_then(Value::as_str);
-        let id = message.get("id").filter(|id| !id.is_null());
-        match (method, id) {
-            // A request of the server's own. This client declared no
-            // sampling, roots or elicitation, so only `ping` has an answer.
-            (Some(method), Some(id)) => {
-                let answer = if method == "ping" {
-                    json!({ "jsonrpc": "2.0", "id": id, "result": {} })
-                } else {
-                    json!({ "jsonrpc": "2.0", "id": id, "error": {
-                        "code": -32601, "message": "not supported by this MCP client" } })
-                };
-                // Never awaited: waiting here for room in a queue the server
-                // is not draining would stop reading what it writes.
-                if let Ok(frame) = framing::encode(&answer) {
-                    let _ = outgoing.try_send(frame);
-                }
+        if let Some(cause) = deliver(&message, &shared, &outgoing) {
+            break cause;
+        }
+    };
+    shared.end(cause);
+}
+
+/// Apply one JSON-RPC message. `Some` ends the connection with that cause.
+fn deliver(message: &Value, shared: &Shared, outgoing: &mpsc::Sender<Vec<u8>>) -> Option<McpError> {
+    let method = message.get("method").and_then(Value::as_str);
+    let id = message.get("id").filter(|id| !id.is_null());
+    match (method, id) {
+        // A request of the server's own. This client declared no
+        // sampling, roots or elicitation, so only `ping` has an answer.
+        (Some(method), Some(id)) => {
+            let answer = if method == "ping" {
+                json!({ "jsonrpc": "2.0", "id": id, "result": {} })
+            } else {
+                json!({ "jsonrpc": "2.0", "id": id, "error": {
+                    "code": -32601, "message": "not supported by this MCP client" } })
+            };
+            // Never awaited: waiting here for room in a queue the server
+            // is not draining would stop reading what it writes.
+            if let Ok(frame) = framing::encode(&answer) {
+                let _ = outgoing.try_send(frame);
             }
-            (Some(method), None) => {
-                if method.ends_with("/list_changed") {
-                    let _ = shared.notices.send(Arc::new(message));
-                }
+        }
+        (Some(method), None) => {
+            if method.ends_with("/list_changed") {
+                let _ = shared.notices.send(Arc::new(message.clone()));
             }
-            (None, Some(id)) => {
-                let Some(id) = id.as_u64() else { continue };
-                let waiter = shared
-                    .state
-                    .lock()
-                    .expect("connection state")
-                    .pending
-                    .remove(&id);
-                let Some(waiter) = waiter else { continue };
-                let reply = match (message.get("result"), message.get("error")) {
-                    (Some(result), None) => Ok(Ok(result.clone())),
-                    (None, Some(error)) if error.is_object() => Ok(Err(error.clone())),
-                    _ => Err(McpError::Malformed(
-                        "an answer without one result or error object".into(),
-                    )),
-                };
-                let _ = waiter.send(reply);
-            }
-            (None, None) => {}
+        }
+        (None, Some(id)) => {
+            let Some(id) = id.as_u64() else {
+                return None;
+            };
+            let waiter = shared
+                .state
+                .lock()
+                .expect("connection state")
+                .pending
+                .remove(&id);
+            let Some(waiter) = waiter else {
+                return None;
+            };
+            let reply = match (message.get("result"), message.get("error")) {
+                (Some(result), None) => Ok(Ok(result.clone())),
+                (None, Some(error)) if error.is_object() => Ok(Err(error.clone())),
+                _ => Err(McpError::Malformed(
+                    "an answer without one result or error object".into(),
+                )),
+            };
+            let _ = waiter.send(reply);
+        }
+        (None, None) => {}
+    }
+    None
+}
+
+/// The HTTP reader's loop: one JSON message at a time, the same correlation
+/// as [`read`].
+async fn read_messages(
+    mut incoming: mpsc::Receiver<Result<Vec<u8>, McpError>>,
+    shared: Arc<Shared>,
+    outgoing: mpsc::Sender<Vec<u8>>,
+) {
+    let cause = loop {
+        let bytes = match incoming.recv().await {
+            Some(Ok(bytes)) => bytes,
+            Some(Err(error)) => break error,
+            None => break McpError::ServerGone,
+        };
+        let Ok(message) = serde_json::from_slice::<Value>(&bytes) else {
+            break McpError::Malformed("a frame from the MCP server is not JSON".into());
+        };
+        if let Some(cause) = deliver(&message, &shared, &outgoing) {
+            break cause;
         }
     };
     shared.end(cause);

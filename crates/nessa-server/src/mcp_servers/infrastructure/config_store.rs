@@ -23,7 +23,7 @@ use super::stored_servers::{block, parse_block, revision};
 use crate::mcp_servers::application::{
     McpServerStore, StoreError, StoreFuture, StoreLock, StoredServers, Written,
 };
-use crate::mcp_servers::domain::{ConfigurationKey, ConfiguredMcpServer};
+use crate::mcp_servers::domain::{ConfigurationKey, StoredMcpServer};
 use nessa_sdk::infrastructure::clock::Clock;
 use serde_json::{Map, Value};
 use std::{io, sync::Arc, time::Duration};
@@ -185,11 +185,7 @@ impl McpServerStore for ConfigJsonStore {
         })
     }
 
-    fn write(
-        &self,
-        expected: &str,
-        servers: &[ConfiguredMcpServer],
-    ) -> Result<Written, StoreError> {
+    fn write(&self, expected: &str, servers: &[StoredMcpServer]) -> Result<Written, StoreError> {
         let mut document = self.document()?;
         // What is stored now is what the edit was made to, or the edit is
         // stale: something wrote outside the lock since the read.

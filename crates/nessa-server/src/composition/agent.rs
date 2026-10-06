@@ -45,7 +45,7 @@ use crate::agents::infrastructure::CredentialedClaudeProvider;
 use crate::conversation::application::{ConversationAgent, ProviderSessionErasers};
 #[cfg(any(unix, test))]
 use crate::core::RunError;
-use crate::mcp_servers::{domain::ConfiguredMcpServer, infrastructure::stored_servers};
+use crate::mcp_servers::{domain::StoredMcpServer, infrastructure::stored_servers};
 #[cfg(unix)]
 use nessa_auth::application::ports::Clock;
 use nessa_protocol::agents::AgentId;
@@ -79,7 +79,7 @@ pub(super) struct AgentsConfig {
     /// live set ([`super::mcp_servers`]) before any agent is built, leaving
     /// this empty; agents read `mcp_stand_ins` instead.
     #[serde(default, deserialize_with = "stored_servers")]
-    pub mcp_servers: Vec<ConfiguredMcpServer>,
+    pub mcp_servers: Vec<StoredMcpServer>,
     /// What each provider open's `mcpServers` are read from: the stand-ins
     /// for the gateway's live set once MCP is composed
     /// ([`super::mcp_servers`]), none before. Never configured. Unix only,

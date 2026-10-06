@@ -89,6 +89,10 @@ const refusalCodes: Record<
   mcp_server_timed_out: "timedOut",
   mcp_server_gone: "gone",
   mcp_server_malformed: "malformed",
+  mcp_server_unreachable: "unreachable",
+  mcp_server_unauthorized: "unauthorized",
+  mcp_server_insufficient_scope: "insufficientScope",
+  mcp_server_session_collision: "sessionCollision",
 }
 
 /** Every code in the window's words: what an audit refusal says stopped its request. */
@@ -112,6 +116,8 @@ const problems: Record<McpServerProblemCode, Problem> = {
   environment_value: "environmentValue",
   environment_value_missing: "environmentValueMissing",
   environment_name_repeated: "environmentNameRepeated",
+  url: "url",
+  duplicate_server_id: "duplicateServerId",
 }
 
 function refused(refusal: McpServersRefusal): Failure {
@@ -171,16 +177,16 @@ export function failureOf(error: unknown): Failure {
 function serverList(result: McpServersListResult): ServerList {
   return {
     revision: result.revision,
-    servers: result.servers.map(
-      ({ name, command, args, envNames, enabled, managed }) => ({
-        name,
-        command,
-        args,
-        envNames,
-        enabled,
-        managed,
-      }),
-    ),
+    servers: result.servers.map((server) => ({
+      name: server.name,
+      command: server.command ?? "",
+      args: server.args ?? [],
+      envNames: server.envNames ?? [],
+      enabled: server.enabled,
+      managed: server.managed,
+      ...(server.url === undefined ? {} : { url: server.url }),
+      ...(server.id === undefined ? {} : { remoteId: server.id }),
+    })),
   }
 }
 

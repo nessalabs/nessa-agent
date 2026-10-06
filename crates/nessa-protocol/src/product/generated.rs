@@ -1020,11 +1020,13 @@ pub struct McpRemoteErrorDetails {
 #[serde(rename_all = "snake_case")]
 pub enum McpServerKind {
     Stdio,
+    Remote,
 }
 impl McpServerKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Stdio => "stdio",
+            Self::Remote => "remote",
         }
     }
 }
@@ -1033,11 +1035,18 @@ impl McpServerKind {
 pub struct McpServerListEntry {
     pub kind: McpServerKind,
     pub name: String,
-    pub command: String,
-    pub args: Vec<String>,
-    pub env_names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_names: Option<Vec<String>>,
     pub enabled: bool,
     pub managed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1057,10 +1066,15 @@ pub struct McpServerEnvEntry {
 pub struct McpServerInput {
     pub kind: McpServerKind,
     pub name: String,
-    pub command: String,
-    pub args: Vec<String>,
-    pub env: Vec<McpServerEnvEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<Vec<McpServerEnvEntry>>,
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1095,6 +1109,8 @@ pub enum McpServerProblemCode {
     EnvironmentValue,
     EnvironmentValueMissing,
     EnvironmentNameRepeated,
+    Url,
+    DuplicateServerId,
 }
 impl McpServerProblemCode {
     pub fn as_str(self) -> &'static str {
@@ -1109,6 +1125,8 @@ impl McpServerProblemCode {
             Self::EnvironmentValue => "environment_value",
             Self::EnvironmentValueMissing => "environment_value_missing",
             Self::EnvironmentNameRepeated => "environment_name_repeated",
+            Self::Url => "url",
+            Self::DuplicateServerId => "duplicate_server_id",
         }
     }
 }
@@ -1211,6 +1229,10 @@ pub enum McpServersErrorCode {
     McpServerGone,
     McpServerMalformed,
     McpServerRemoteError,
+    McpServerUnreachable,
+    McpServerUnauthorized,
+    McpServerInsufficientScope,
+    McpServerSessionCollision,
 }
 impl McpServersErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -1231,6 +1253,10 @@ impl McpServersErrorCode {
             Self::McpServerGone => "mcp_server_gone",
             Self::McpServerMalformed => "mcp_server_malformed",
             Self::McpServerRemoteError => "mcp_server_remote_error",
+            Self::McpServerUnreachable => "mcp_server_unreachable",
+            Self::McpServerUnauthorized => "mcp_server_unauthorized",
+            Self::McpServerInsufficientScope => "mcp_server_insufficient_scope",
+            Self::McpServerSessionCollision => "mcp_server_session_collision",
         }
     }
 }

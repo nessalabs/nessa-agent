@@ -30,6 +30,10 @@ export interface ListedServer {
   readonly enabled: boolean
   /** Nessa's own server: listed, never edited here. */
   readonly managed: boolean
+  /** The remote endpoint, when this row is a remote server. */
+  readonly url?: string
+  /** The remote server's durable id, when this row is remote. */
+  readonly remoteId?: string
 }
 
 export interface ServerList {
@@ -114,6 +118,8 @@ export type Problem =
   | "environmentValue"
   | "environmentValueMissing"
   | "environmentNameRepeated"
+  | "url"
+  | "duplicateServerId"
 
 /** The gateway's refusals of these methods, one for each of its codes. */
 export type RefusalCode =
@@ -133,6 +139,10 @@ export type RefusalCode =
   | "gone"
   | "malformed"
   | "remoteError"
+  | "unreachable"
+  | "unauthorized"
+  | "insufficientScope"
+  | "sessionCollision"
 
 /**
  * How a request failed. `forbidden`: this credential may not manage servers.
@@ -585,6 +595,10 @@ function problemAt(failure: Invalid): FormProblem {
       return { field: "env", text: `${it} has no stored value. Enter one.` }
     case "environmentNameRepeated":
       return { field: "env", text: `${it} is given twice.` }
+    case "url":
+      return { field: "form", text: "This address can't be used for a server." }
+    case "duplicateServerId":
+      return { field: "form", text: "Two servers are stored with the same id." }
     case undefined:
       return { field: "form", text: "The gateway refused this server as it is." }
   }
@@ -593,6 +607,14 @@ function problemAt(failure: Invalid): FormProblem {
 /** What a failed inspection says. */
 function inspectSentence(name: string, failure: Failure, state: McpServersState) {
   switch (failure.kind) {
+    case "unreachable":
+      return `${quoted(name)} could not be reached.`
+    case "unauthorized":
+      return `${quoted(name)} refused the caller.`
+    case "insufficientScope":
+      return `${quoted(name)} needs a broader authorization.`
+    case "sessionCollision":
+      return `${quoted(name)} is already open under another session.`
     case "startFailed":
       return `${quoted(name)} couldn't be started. Check its command.`
     case "timedOut":
@@ -680,6 +702,10 @@ function writeSentence(failure: Failure, state: McpServersState): string {
     case "gone":
     case "malformed":
     case "remoteError":
+    case "unreachable":
+    case "unauthorized":
+    case "insufficientScope":
+    case "sessionCollision":
     case "unanswered":
       return sentences.unanswered
   }

@@ -13,6 +13,7 @@ mod apps;
 mod caller_wakes;
 mod fixture;
 mod forwarded;
+mod http;
 mod process;
 mod protocol;
 mod sessions;

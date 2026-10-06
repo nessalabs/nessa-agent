@@ -11,9 +11,12 @@
 //! JSON line of at most [`MAX_HELLO_BYTES`] within [`HELLO_TIMEOUT`] is closed
 //! without an answer.
 use super::grants::ConversationGrants;
-use crate::mcp_servers::domain::{admit, configuration_digest, ConfigurationKey, StandInRefusal};
+use crate::mcp_servers::domain::{
+    admit, configuration_digest, remote_configuration_digest, ConfigurationKey, StandInRefusal,
+};
 use nessa_sdk::infrastructure::mcp::{
-    McpError, McpOwner, McpServerLaunch, McpServers, McpSession, INITIALIZE_TIMEOUT,
+    McpError, McpOwner, McpServerLaunch, McpServers, McpSession, RemoteMcpServer,
+    INITIALIZE_TIMEOUT,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io, time::Duration};
@@ -145,6 +148,16 @@ pub(crate) fn opening_refused(error: McpError) -> (StandInRefusal, String) {
     }
 }
 
+/// What a hello was admitted against: the stdio launch or the remote server
+/// as configured at admission. Opening uses that value, so a replacement
+/// since is [`McpError::ConfigurationChanged`].
+pub(crate) enum AdmittedServer {
+    /// A local process.
+    Stdio(McpServerLaunch),
+    /// A remote endpoint.
+    Remote(RemoteMcpServer),
+}
+
 /// The gateway's side of the relay socket.
 pub struct Relay {
     /// The live set, whose digests each hello is admitted against as they
@@ -169,16 +182,34 @@ impl Relay {
     /// as it is now, a stand-in of a server since edited — its environment
     /// alone included — is refused `configuration-changed`, of one since
     /// removed `unknown-server`.
-    pub(crate) fn admitted(&self, hello: &Hello) -> Result<McpServerLaunch, StandInRefusal> {
+    pub(crate) fn admitted(&self, hello: &Hello) -> Result<AdmittedServer, StandInRefusal> {
         let configured = self.servers.configured();
-        let digests = configured
+        let remotes = self.servers.configured_remotes();
+        let mut digests = configured
             .iter()
             .map(|launch| (launch.server.name.clone(), launch_digest(&self.key, launch)))
             .collect::<BTreeMap<_, _>>();
+        for remote in &remotes {
+            digests.insert(
+                remote.name().to_owned(),
+                remote_configuration_digest(
+                    &self.key,
+                    &remote.id().to_string(),
+                    remote.url().as_str(),
+                ),
+            );
+        }
         admit(&hello.server, &hello.configuration, &digests)?;
-        configured
+        if let Some(launch) = configured
             .into_iter()
             .find(|launch| launch.server.name == hello.server)
+        {
+            return Ok(AdmittedServer::Stdio(launch));
+        }
+        remotes
+            .into_iter()
+            .find(|remote| remote.name() == hello.server)
+            .map(AdmittedServer::Remote)
             .ok_or(StandInRefusal::UnknownServer)
     }
 
@@ -189,13 +220,14 @@ impl Relay {
     /// it now ([`McpServers::open_as`]).
     pub(crate) async fn open_admitted(
         &self,
-        admitted: &McpServerLaunch,
+        admitted: &AdmittedServer,
         owner: McpOwner,
     ) -> Result<McpSession, (StandInRefusal, String)> {
-        self.servers
-            .open_as(admitted, owner)
-            .await
-            .map_err(opening_refused)
+        match admitted {
+            AdmittedServer::Stdio(launch) => self.servers.open_as(launch, owner).await,
+            AdmittedServer::Remote(remote) => self.servers.open_remote_as(remote, owner).await,
+        }
+        .map_err(opening_refused)
     }
 
     /// Serve one stand-in's connection until it, or its server, ends. Its end —

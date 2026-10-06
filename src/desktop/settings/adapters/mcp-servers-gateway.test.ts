@@ -43,6 +43,10 @@ describe("failureOf", () => {
       "gone",
       "malformed",
       "remoteError",
+      "unreachable",
+      "unauthorized",
+      "insufficientScope",
+      "sessionCollision",
     ])
   })
 
@@ -61,6 +65,8 @@ describe("failureOf", () => {
       "environmentValue",
       "environmentValueMissing",
       "environmentNameRepeated",
+      "url",
+      "duplicateServerId",
     ])
     expect(problems[0]).toEqual({
       kind: "invalid",

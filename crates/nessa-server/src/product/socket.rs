@@ -3181,6 +3181,8 @@ mod tests {
         ServerList {
             revision: "r".repeat(64),
             servers: vec![ListedServer {
+                remote_id: None,
+                url: None,
                 server: StdioServer::new("s", "/usr/bin/python3", vec!["p".repeat(padding)]),
                 env_names: vec![],
                 enabled: true,

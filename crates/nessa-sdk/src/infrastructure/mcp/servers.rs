@@ -1,5 +1,9 @@
+use super::authorization::{NoAuthorization, RemoteAuthorization};
 use super::connection::Connection;
+use super::http::{HttpSession, SessionClaims};
+use super::http_exchange::HttpExchange;
 use super::process::{Launched, Launcher, ProcessLauncher, ServerProcess};
+use super::remote::RemoteMcpServer;
 use super::stand_in::{self, Visibility};
 use super::{wire, McpError};
 use crate::application::agent_execution::caller_wake::contain_caller_wake;
@@ -7,7 +11,7 @@ use crate::domain::agent_execution::sessions::SessionId;
 use crate::domain::agent_execution::tools::McpTool;
 use crate::domain::mcp_apps::{ListedTool, ToolUi, UiResource, UiResourceUri, UiVisibility};
 use crate::infrastructure::acp::sessions::{
-    ForwardedResults, McpServerProblem, StandInGrant, StdioMcpServer,
+    ForwardedResults, McpServerProblem, StandInGrant, StdioMcpServer, MAX_MCP_SERVERS,
 };
 use crate::infrastructure::clock::{within, Clock};
 use serde_json::{json, Value};
@@ -144,6 +148,10 @@ pub(super) struct Inner {
     /// The configured set now, by name. Swapped whole by `replace`, under
     /// `live`'s lock, so a replacement and a stop are ordered.
     launches: RwLock<Arc<BTreeMap<String, McpServerLaunch>>>,
+    remotes: RwLock<Arc<BTreeMap<String, RemoteMcpServer>>>,
+    http: Mutex<Option<Arc<dyn HttpExchange>>>,
+    authorization: Mutex<Arc<dyn RemoteAuthorization>>,
+    claims: Arc<SessionClaims>,
     clock: Arc<dyn Clock>,
     launcher: Arc<dyn Launcher>,
     /// Set once, by `stop`; what an opening races.
@@ -344,6 +352,10 @@ impl McpServers {
         Ok(Self {
             inner: Arc::new(Inner {
                 launches: RwLock::new(Arc::new(by_name(servers)?)),
+                remotes: RwLock::new(Arc::new(BTreeMap::new())),
+                http: Mutex::new(None),
+                authorization: Mutex::new(Arc::new(NoAuthorization) as Arc<dyn RemoteAuthorization>),
+                claims: Arc::new(SessionClaims::default()),
                 clock,
                 launcher,
                 stopping: watch::channel(false).0,
@@ -385,6 +397,61 @@ impl McpServers {
         Ok(())
     }
 
+    /// The exchange and authorization owner later remote openings use.
+    /// Replacing them does not retarget a session already open.
+    pub fn set_remote_transport(
+        &self,
+        http: Arc<dyn HttpExchange>,
+        authorization: Arc<dyn RemoteAuthorization>,
+    ) {
+        *self.inner.http.lock().expect("http exchange") = Some(http);
+        *self.inner.authorization.lock().expect("authorization") = authorization;
+    }
+
+    /// Replace stdio launches and remote servers together. Openings from now
+    /// on read the new set; sessions already open keep what they were opened
+    /// on.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::InvalidConfiguration`] when the combined set breaks a rule,
+    /// and [`McpError::Stopped`] once [`McpServers::stop`] has begun.
+    pub fn replace_all(
+        &self,
+        servers: Vec<McpServerLaunch>,
+        remotes: Vec<RemoteMcpServer>,
+    ) -> Result<(), McpError> {
+        if let Some(problem) = configuration_problem(&servers, &remotes) {
+            return Err(McpError::InvalidConfiguration(problem));
+        }
+        let launches = servers
+            .into_iter()
+            .map(|launch| (launch.server.name.clone(), launch))
+            .collect();
+        let remotes = remotes
+            .into_iter()
+            .map(|remote| (remote.name().to_owned(), remote))
+            .collect();
+        let _live = self.inner.live.lock().expect("live sessions");
+        if *self.inner.stopping.borrow() {
+            return Err(McpError::Stopped);
+        }
+        *self.inner.launches.write().expect("configured servers") = Arc::new(launches);
+        *self.inner.remotes.write().expect("configured servers") = Arc::new(remotes);
+        Ok(())
+    }
+
+    /// The remote servers configured now, in name order.
+    pub fn configured_remotes(&self) -> Vec<RemoteMcpServer> {
+        self.inner
+            .remotes
+            .read()
+            .expect("configured servers")
+            .values()
+            .cloned()
+            .collect()
+    }
+
     fn launches(&self) -> Arc<BTreeMap<String, McpServerLaunch>> {
         self.inner
             .launches
@@ -408,8 +475,15 @@ impl McpServers {
     /// process is stopped on each. Nothing else makes it [`McpError::Closed`].
     pub async fn open(&self, server: &str, owner: McpOwner) -> Result<McpSession, McpError> {
         let launches = self.launches();
-        let launch = launches.get(server).ok_or(McpError::NotConfigured)?;
-        self.open_launch(launch, Some(owner)).await
+        if let Some(launch) = launches.get(server) {
+            return self.open_launch(launch, Some(owner)).await;
+        }
+        let remote = self
+            .configured_remotes()
+            .into_iter()
+            .find(|remote| remote.name() == server)
+            .ok_or(McpError::NotConfigured)?;
+        self.open_remote(remote, Some(owner)).await
     }
 
     /// Open a session, as [`Self::open`] does, on the server named
@@ -463,6 +537,90 @@ impl McpServers {
         self.open_launch(launch, None).await
     }
 
+    /// Open a remote session once, outside a conversation.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::Unreachable`] when no HTTP exchange was installed,
+    /// [`McpError::Stopped`], [`McpError::Closed`], and the handshake errors
+    /// of [`Self::open`].
+    pub async fn open_remote_once(&self, remote: &RemoteMcpServer) -> Result<McpSession, McpError> {
+        self.open_remote(remote.clone(), None).await
+    }
+
+    /// Open `remote` only while that id and URL are still configured under
+    /// its name.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::ConfigurationChanged`] when the id or URL differs,
+    /// [`McpError::NotConfigured`] when the name is gone, and the errors of
+    /// [`Self::open`].
+    pub async fn open_remote_as(
+        &self,
+        admitted: &RemoteMcpServer,
+        owner: McpOwner,
+    ) -> Result<McpSession, McpError> {
+        let current = self
+            .configured_remotes()
+            .into_iter()
+            .find(|remote| remote.name() == admitted.name())
+            .ok_or(McpError::NotConfigured)?;
+        if current.id() != admitted.id() || current.url() != admitted.url() {
+            return Err(McpError::ConfigurationChanged);
+        }
+        self.open_remote(current, Some(owner)).await
+    }
+
+    async fn open_remote(
+        &self,
+        remote: RemoteMcpServer,
+        owner: Option<McpOwner>,
+    ) -> Result<McpSession, McpError> {
+        contain_caller_wake(
+            format!("MCP open of {}", remote.name()),
+            self.open_remote_session(remote, owner),
+        )
+        .await
+    }
+
+    async fn open_remote_session(
+        &self,
+        remote: RemoteMcpServer,
+        owner: Option<McpOwner>,
+    ) -> Result<McpSession, McpError> {
+        let inner = &self.inner;
+        if *inner.stopping.borrow() {
+            return Err(McpError::Stopped);
+        }
+        if owner.as_ref().is_some_and(McpOwner::revoked) {
+            return Err(McpError::Closed);
+        }
+        let http = inner
+            .http
+            .lock()
+            .expect("http exchange")
+            .clone()
+            .ok_or(McpError::Unreachable)?;
+        let authorization = inner.authorization.lock().expect("authorization").clone();
+        let (session, incoming) = HttpSession::open(
+            remote.id(),
+            remote.url().clone(),
+            http,
+            authorization,
+            inner.claims.clone(),
+        );
+        let connection = Arc::new(Connection::open_http(
+            session,
+            incoming,
+            inner.clock.clone(),
+        ));
+        let deadline = inner.clock.now() + INITIALIZE_TIMEOUT;
+        let server = remote.name().to_owned();
+        self.finish_open(connection, None, server, owner, deadline)
+            .await
+    }
+
     /// Open a session on `launch`, for `owner`'s grant — or, with no owner,
     /// once ([`Self::open_once`]): then no grant holds it and no background
     /// list keeps its tools.
@@ -500,6 +658,19 @@ impl McpServers {
             process,
         } = inner.launcher.launch(launch)?;
         let connection = Arc::new(Connection::open(output, input, inner.clock.clone()));
+        self.finish_open(connection, process, server.to_owned(), owner, deadline)
+            .await
+    }
+
+    async fn finish_open(
+        &self,
+        connection: Arc<Connection>,
+        process: Option<ServerProcess>,
+        server: String,
+        owner: Option<McpOwner>,
+        deadline: crate::infrastructure::clock::ClockInstant,
+    ) -> Result<McpSession, McpError> {
+        let inner = &self.inner;
         let handshake = async {
             let answer = within(
                 &*inner.clock,
@@ -801,7 +972,47 @@ impl McpServers {
     }
 }
 
-/// `servers` by name, once [`McpServerLaunch::problem_in`] finds no problem.
+/// Why `servers` and `remotes` cannot be configured together, or `None`.
+/// The count is [`MAX_MCP_SERVERS`] across both, names are unique across
+/// both, remote ids are unique, and each entry's own rules apply. The first
+/// problem found is the one returned, the count before any server's.
+pub fn configuration_problem(
+    servers: &[McpServerLaunch],
+    remotes: &[RemoteMcpServer],
+) -> Option<McpServerProblem> {
+    if servers.len() + remotes.len() > MAX_MCP_SERVERS {
+        return Some(McpServerProblem::TooMany);
+    }
+    let mut names = std::collections::HashSet::new();
+    let mut ids = std::collections::HashSet::new();
+    for launch in servers {
+        if let Some(problem) = launch.problem() {
+            return Some(problem);
+        }
+        if !names.insert(launch.server.name.clone()) {
+            return Some(McpServerProblem::DuplicateName {
+                server: launch.server.name.clone(),
+            });
+        }
+    }
+    for remote in remotes {
+        if let Some(problem) = remote.problem() {
+            return Some(problem);
+        }
+        if !names.insert(remote.name().to_owned()) {
+            return Some(McpServerProblem::DuplicateName {
+                server: remote.name().to_owned(),
+            });
+        }
+        if !ids.insert(remote.id()) {
+            return Some(McpServerProblem::DuplicateServerId {
+                server: remote.name().to_owned(),
+            });
+        }
+    }
+    None
+}
+
 fn by_name(servers: Vec<McpServerLaunch>) -> Result<BTreeMap<String, McpServerLaunch>, McpError> {
     if let Some(problem) = McpServerLaunch::problem_in(&servers) {
         return Err(McpError::InvalidConfiguration(problem));
@@ -957,7 +1168,9 @@ impl McpSession {
 
 /// Close `session` and return once its server is stopped. The close that
 /// takes the process stops it; any other waits for that one to finish.
+/// A remote session waits up to [`STOP_GRACE`] for its DELETE observation.
 async fn close(session: Arc<Session>, cause: McpError) {
+    let http_done = session.connection.http_finished();
     let mut stopped = session.stopped.subscribe();
     if let Some(process) = session.close_now(cause) {
         // Said stopped however this ends: finished, or cancelled with the
@@ -965,6 +1178,9 @@ async fn close(session: Arc<Session>, cause: McpError) {
         let _said = Stopped(&session.stopped);
         process.stop().await;
         return;
+    }
+    if let Some(mut done) = http_done {
+        let _ = tokio::time::timeout(super::process::STOP_GRACE, done.wait_for(|done| *done)).await;
     }
     // The session holds the sender, so this ends.
     let _ = stopped.wait_for(|stopped| *stopped).await;

@@ -5,7 +5,9 @@
 //! agents the servers themselves.
 use super::super::agent::AgentsConfig;
 use super::{compose, relay_socket, server_environment, stand_ins, StandIns};
-use crate::mcp_servers::domain::{ConfigurationKey, ConfiguredMcpServer, StdioServer};
+use crate::mcp_servers::domain::{
+    ConfigurationKey, ConfiguredMcpServer, StdioServer, StoredMcpServer,
+};
 use crate::mcp_servers::infrastructure::launch_digest;
 use nessa_sdk::infrastructure::{
     acp::sessions::StdioMcpServer,
@@ -36,7 +38,7 @@ fn agents(servers: Vec<StdioMcpServer>) -> AgentsConfig {
             .into_iter()
             .map(|server| {
                 let server = StdioServer::new(server.name, server.command, server.args);
-                ConfiguredMcpServer::new(server, true, []).unwrap()
+                StoredMcpServer::Stdio(ConfiguredMcpServer::new(server, true, []).unwrap())
             })
             .collect(),
         stand_ins: Default::default(),
@@ -56,7 +58,7 @@ fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
     let socket = "/tmp/nessa-mcp-501/0123456789abcdef.sock";
     let key = ConfigurationKey::new([7; 32]);
     let configured = launches(&configured);
-    let handed = stand_ins(&configured, gateway, socket, &key);
+    let handed = stand_ins(&live_of(&configured), gateway, socket, &key);
     for (stand_in, launch) in handed.iter().zip(&configured) {
         assert_eq!(stand_in.name, launch.server.name);
         assert_eq!(stand_in.command, Path::new(gateway));
@@ -76,7 +78,10 @@ fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
     // conversation with `configuration-changed`. Another process's key gives
     // another stand-in: the restoration fingerprint does not read these
     // (ADR 344, #391).
-    assert_eq!(stand_ins(&configured, gateway, socket, &key), handed);
+    assert_eq!(
+        stand_ins(&live_of(&configured), gateway, socket, &key),
+        handed
+    );
     let mut changed = configured.clone();
     changed[0].server.args = vec!["/other.mjs".into()];
     let mut environment_only = configured.clone();
@@ -84,12 +89,12 @@ fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
         .environment
         .insert("API_TOKEN".into(), "rotated".into());
     for edited in [changed, environment_only] {
-        let again = stand_ins(&edited, gateway, socket, &key);
+        let again = stand_ins(&live_of(&edited), gateway, socket, &key);
         assert_ne!(again[0].args, handed[0].args);
         assert_eq!(again[1].args, handed[1].args);
     }
     let other_key = stand_ins(
-        &configured,
+        &live_of(&configured),
         gateway,
         socket,
         &ConfigurationKey::new([8; 32]),
@@ -115,6 +120,10 @@ fn the_relay_socket_is_short_per_user_and_the_same_for_one_namespace() {
 /// environment.
 fn live(servers: &[StdioMcpServer]) -> McpServers {
     McpServers::new(launches(servers), Arc::new(RuntimeClock::new())).unwrap()
+}
+
+fn live_of(launches: &[McpServerLaunch]) -> McpServers {
+    McpServers::new(launches.to_vec(), Arc::new(RuntimeClock::new())).unwrap()
 }
 
 fn launches(servers: &[StdioMcpServer]) -> Vec<McpServerLaunch> {
@@ -396,10 +405,11 @@ async fn servers_that_cannot_be_launched_as_configured_are_an_agent_error_naming
     ] {
         let mut config = agents(vec![server("ok", &[]), configured]);
         if let Some(variable) = variable {
-            let server = config.mcp_servers[1].server().clone();
-            config.mcp_servers[1] =
+            let server = config.mcp_servers[1].stdio().unwrap().server().clone();
+            config.mcp_servers[1] = StoredMcpServer::Stdio(
                 ConfiguredMcpServer::new(server, true, [(variable.into(), "value".into())])
-                    .unwrap();
+                    .unwrap(),
+            );
         }
         let refused = compose(
             &mut config,
@@ -580,7 +590,10 @@ async fn stored_entries_parse_with_their_defaults_and_a_disabled_one_is_not_laun
     let rows: Vec<_> = config
         .mcp_servers
         .iter()
-        .map(|each| (each.server().name(), each.enabled(), each.env_names()))
+        .map(|each| {
+            let stdio = each.stdio().expect("stdio");
+            (stdio.server().name(), each.enabled(), stdio.env_names())
+        })
         .collect();
     assert_eq!(
         rows,
@@ -701,11 +714,7 @@ async fn composed_settings_publish_privately_under_the_lock_and_audit_without_va
     );
     let agents = reread.agents.unwrap();
     assert_eq!(agents.workspace, std::env::temp_dir());
-    let stored: Vec<_> = agents
-        .mcp_servers
-        .iter()
-        .map(|each| each.server().name())
-        .collect();
+    let stored: Vec<_> = agents.mcp_servers.iter().map(|each| each.name()).collect();
     assert_eq!(stored, ["mcptest"]);
     let live: Vec<_> = composed
         .servers
@@ -1412,11 +1421,7 @@ async fn c_null_agents_is_read_and_written_as_absent() {
         .unwrap();
     assert_eq!(agents.catalog, config.catalog);
     assert_eq!(agents.workspace, config.workspace);
-    let stored: Vec<_> = agents
-        .mcp_servers
-        .iter()
-        .map(|each| each.server().name())
-        .collect();
+    let stored: Vec<_> = agents.mcp_servers.iter().map(|each| each.name()).collect();
     assert_eq!(stored, ["mcptest"]);
 }
 

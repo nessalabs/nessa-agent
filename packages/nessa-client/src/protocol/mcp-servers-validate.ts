@@ -25,7 +25,17 @@ import { boundedName, csp, object, permissions } from "./mcp-app-validate.js"
  * the schema describes, not for agreeing with a copy of the gateway's rules.
  */
 
-const entryKeys = ["kind", "name", "command", "args", "envNames", "enabled", "managed"]
+const entryKeys = [
+  "kind",
+  "name",
+  "command",
+  "args",
+  "envNames",
+  "enabled",
+  "managed",
+  "id",
+  "url",
+]
 const toolKeys = ["name", "readOnlyHint", "destructiveHint", "ui"]
 
 /**
@@ -65,19 +75,42 @@ function entry(value: unknown): McpServerListEntry {
   if (
     !kind ||
     !text(item.name) ||
-    !text(item.command) ||
-    !texts(item.args) ||
-    !texts(item.envNames) ||
     typeof item.enabled !== "boolean" ||
     typeof item.managed !== "boolean"
+  )
+    throw new Error("Invalid MCP server entry")
+  if (kind === McpServerKind.Stdio) {
+    if (
+      !text(item.command) ||
+      !texts(item.args) ||
+      !texts(item.envNames) ||
+      item.id !== undefined ||
+      item.url !== undefined
+    )
+      throw new Error("Invalid MCP server entry")
+    return {
+      kind,
+      name: item.name,
+      command: item.command,
+      args: [...item.args],
+      envNames: [...item.envNames],
+      enabled: item.enabled,
+      managed: item.managed,
+    }
+  }
+  if (
+    !text(item.id) ||
+    !text(item.url) ||
+    item.command !== undefined ||
+    item.args !== undefined ||
+    item.envNames !== undefined
   )
     throw new Error("Invalid MCP server entry")
   return {
     kind,
     name: item.name,
-    command: item.command,
-    args: [...item.args],
-    envNames: [...item.envNames],
+    id: item.id,
+    url: item.url,
     enabled: item.enabled,
     managed: item.managed,
   }

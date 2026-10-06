@@ -79,7 +79,13 @@ pub(crate) fn failure(error: McpError) -> McpAppFailure {
         | McpError::Stopped
         | McpError::Start(_)
         | McpError::ConfigurationChanged
-        | McpError::InvalidConfiguration(_) => McpAppFailure::SessionEnded,
+        | McpError::InvalidConfiguration(_)
+        | McpError::Unreachable
+        | McpError::Unauthorized
+        | McpError::InsufficientScope
+        | McpError::SessionExpired
+        | McpError::Unconfirmed
+        | McpError::SessionCollision => McpAppFailure::SessionEnded,
     }
 }
 

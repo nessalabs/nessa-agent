@@ -2,7 +2,7 @@
 //! and its lock, the live set it is launched as, a way to start one server
 //! once and look at it, and somewhere durable to record each change and
 //! each inspection.
-use crate::mcp_servers::domain::ConfiguredMcpServer;
+use crate::mcp_servers::domain::{ConfiguredMcpServer, StoredMcpServer};
 use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions};
 use std::{
     future::Future,
@@ -22,7 +22,7 @@ pub struct StoredServers {
     /// The digest of the stored block, which a write must name.
     pub revision: String,
     /// The servers in stored order.
-    pub servers: Vec<ConfiguredMcpServer>,
+    pub servers: Vec<StoredMcpServer>,
 }
 
 /// Why the stored servers could not be read or written.
@@ -83,8 +83,7 @@ pub trait McpServerStore: Send + Sync {
     /// unchanged on every error. A file replaced whose directory could not
     /// be synced is not an error: it is [`Written`] with `durable: false`
     /// (`s_sync_a_publish_whose_directory_sync_fails_is_applied_not_durable`).
-    fn write(&self, revision: &str, servers: &[ConfiguredMcpServer])
-        -> Result<Written, StoreError>;
+    fn write(&self, revision: &str, servers: &[StoredMcpServer]) -> Result<Written, StoreError>;
 }
 
 /// Why a list of servers cannot be the live set: the SDK's rules for a
@@ -94,13 +93,38 @@ pub trait McpServerStore: Send + Sync {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerProblem {
     TooMany,
-    DuplicateName { server: String },
-    Name { server: String },
-    Command { server: String },
-    Arguments { server: String },
-    EnvironmentName { server: String, name: String },
-    ReservedEnvironmentName { server: String, name: String },
-    EnvironmentValue { server: String, name: String },
+    DuplicateName {
+        server: String,
+    },
+    Name {
+        server: String,
+    },
+    Command {
+        server: String,
+    },
+    Arguments {
+        server: String,
+    },
+    EnvironmentName {
+        server: String,
+        name: String,
+    },
+    ReservedEnvironmentName {
+        server: String,
+        name: String,
+    },
+    EnvironmentValue {
+        server: String,
+        name: String,
+    },
+    /// The remote URL is not an endpoint the SDK will call.
+    Url {
+        server: String,
+    },
+    /// Two remote servers are stored with one id.
+    DuplicateServerId {
+        server: String,
+    },
 }
 
 /// The live set was kept as it was: the gateway is stopping, or the SDK
@@ -120,7 +144,7 @@ pub trait LiveServerSet: Send + Sync {
     fn bundled(&self) -> bool;
     /// Why `stored` — every server, on or off, with the managed one — cannot
     /// be launched as one set, or `None` when it can.
-    fn problem(&self, stored: &[ConfiguredMcpServer]) -> Option<ServerProblem>;
+    fn problem(&self, stored: &[StoredMcpServer]) -> Option<ServerProblem>;
     /// Make `stored`'s servers that are on, with the managed one, the live
     /// set: what the next open reads.
     ///
@@ -128,7 +152,7 @@ pub trait LiveServerSet: Send + Sync {
     ///
     /// [`LiveSetKept`] once the gateway is stopping, or for a set
     /// [`Self::problem`] refuses; the set is kept.
-    fn replace(&self, stored: &[ConfiguredMcpServer]) -> Result<(), LiveSetKept>;
+    fn replace(&self, stored: &[StoredMcpServer]) -> Result<(), LiveSetKept>;
     /// Take the server called `name` out of the live set, leaving the rest
     /// as they are: what a remove does when the list it leaves cannot be
     /// made live as a whole. A set only shrinks by this, so the SDK's rules
@@ -299,16 +323,33 @@ pub struct AuditedServer {
     pub enabled: bool,
     /// Its variables' names, sorted by name; never their values.
     pub env_names: Vec<String>,
+    /// Set for a remote server: its endpoint. Absent for stdio.
+    pub url: Option<String>,
+    /// Set for a remote server: its durable id.
+    pub remote_id: Option<String>,
 }
 impl AuditedServer {
     /// `server` as a record names it.
-    pub fn of(server: &ConfiguredMcpServer) -> Self {
-        Self {
-            name: server.server().name().to_owned(),
-            command: server.server().command().to_owned(),
-            args: server.server().args().to_vec(),
-            enabled: server.enabled(),
-            env_names: server.env_names(),
+    pub fn of(server: &StoredMcpServer) -> Self {
+        match server {
+            StoredMcpServer::Stdio(server) => Self {
+                name: server.server().name().to_owned(),
+                command: server.server().command().to_owned(),
+                args: server.server().args().to_vec(),
+                enabled: server.enabled(),
+                env_names: server.env_names(),
+                url: None,
+                remote_id: None,
+            },
+            StoredMcpServer::Remote(remote) => Self {
+                name: remote.name().to_owned(),
+                command: std::path::PathBuf::new(),
+                args: Vec::new(),
+                enabled: remote.enabled(),
+                env_names: Vec::new(),
+                url: Some(remote.url().to_owned()),
+                remote_id: Some(remote.id().to_string()),
+            },
         }
     }
 }
@@ -400,11 +441,26 @@ pub enum InspectFailure {
     Malformed,
     /// It answered with a JSON-RPC error.
     RemoteError { code: i64, message: String },
+    /// A remote endpoint could not be reached. Nothing was retained.
+    Unreachable,
+    /// The endpoint refused the caller. No token is carried.
+    Unauthorized,
+    /// The caller's scope was not enough. The call is not retried.
+    InsufficientScope,
+    /// Another opening already holds this upstream session id.
+    SessionCollision,
 }
 impl InspectFailure {
     /// Whether the server's process was started before this.
     pub fn started(&self) -> bool {
-        !matches!(self, Self::Invalid(_) | Self::StartFailed | Self::Stopping)
+        !matches!(
+            self,
+            Self::Invalid(_)
+                | Self::StartFailed
+                | Self::Stopping
+                | Self::Unreachable
+                | Self::SessionCollision
+        )
     }
 }
 
@@ -468,7 +524,7 @@ pub type InspectFuture<'a> =
 pub trait ServerInspector: Send + Sync {
     fn inspect(
         &self,
-        server: &ConfiguredMcpServer,
+        server: &StoredMcpServer,
         bounds: InspectBounds,
         stop: InspectStop,
         launch: LaunchBegun,

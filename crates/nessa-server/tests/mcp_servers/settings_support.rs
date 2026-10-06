@@ -13,7 +13,7 @@ use crate::mcp_servers::application::{
     McpServerAuditRecord, McpServerSettings, ServerInspector, StoreLock,
 };
 use crate::mcp_servers::domain::{
-    ConfigurationKey, ConfiguredMcpServer, StdioServer, MANAGED_SERVER_NAME,
+    ConfigurationKey, ConfiguredMcpServer, StdioServer, StoredMcpServer, MANAGED_SERVER_NAME,
 };
 use crate::mcp_servers::infrastructure::{
     ConfigCheck, ConfigFiles, ConfigJsonStore, LaunchSettings, LiveMcpServers, Published,
@@ -207,7 +207,7 @@ impl Clock for ManualClock {
 /// `stopping`.
 pub(crate) struct ScriptedInspector {
     pub(crate) answer: Mutex<Result<Inspection, InspectFailure>>,
-    pub(crate) asked: Mutex<Vec<(ConfiguredMcpServer, InspectBounds)>>,
+    pub(crate) asked: Mutex<Vec<(StoredMcpServer, InspectBounds)>>,
     pub(crate) gate: Arc<Semaphore>,
 }
 impl Default for ScriptedInspector {
@@ -225,7 +225,7 @@ impl Default for ScriptedInspector {
 impl ServerInspector for ScriptedInspector {
     fn inspect(
         &self,
-        server: &ConfiguredMcpServer,
+        server: &StoredMcpServer,
         bounds: InspectBounds,
         mut stop: InspectStop,
         launch: LaunchBegun,
@@ -440,9 +440,19 @@ fn live_through(
         clock,
         key(),
     );
-    let launches = LaunchSettings::new(startup, bundled, std::env::temp_dir(), BTreeMap::new());
+    let startup_stored: Vec<StoredMcpServer> = startup
+        .iter()
+        .cloned()
+        .map(StoredMcpServer::Stdio)
+        .collect();
+    let launches = LaunchSettings::new(
+        &startup_stored,
+        bundled,
+        std::env::temp_dir(),
+        BTreeMap::new(),
+    );
     let servers = McpServers::new(
-        launches.launch_set(&[]).unwrap(),
+        launches.launch_set(&[]).unwrap().0,
         Arc::new(RuntimeClock::new()),
     )
     .unwrap();
