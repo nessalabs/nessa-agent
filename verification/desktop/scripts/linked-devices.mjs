@@ -12,7 +12,7 @@
 import { openPage, need, withEngines } from "./lib/browser.mjs"
 import { attempt } from "./lib/cli.mjs"
 import { main } from "./lib/run.mjs"
-import { css, keys, names } from "./lib/selectors.mjs"
+import { css, keys, names, selectorFor } from "./lib/selectors.mjs"
 
 const wireCodes = [
   "pairing_not_configured",
@@ -327,7 +327,7 @@ await main(meta, async ({ options, rep, url }) => {
             text.includes("Not available yet")
               ? null
               : "the pending sentence was missing",
-            (await opened.page.locator(css.linkedAction("pair")).count()) === 0
+            (await opened.page.locator(selectorFor.linkedAction("pair")).count()) === 0
               ? null
               : "a pair control was offered with no gateway",
             ...rawCodesIn(text).map((code) => `wire code on the page: ${code}`),
@@ -369,7 +369,7 @@ await main(meta, async ({ options, rep, url }) => {
           : "the switch read on",
         (await toggle.isDisabled()) ? null : "the switch could be turned",
         text.includes("127.0.0.1:47650") ? null : "the enable hint was missing",
-        (await page.locator(css.linkedAction("pair")).count()) === 0
+        (await page.locator(selectorFor.linkedAction("pair")).count()) === 0
           ? null
           : "pair was offered while linking is off",
       ].filter(Boolean)
@@ -381,7 +381,7 @@ await main(meta, async ({ options, rep, url }) => {
       return [
         phase === "refused" ? null : `phase was ${phase}, expected refused`,
         text.includes("auth recover-owner") ? null : "recover-owner was not named",
-        (await page.locator(css.linkedAction("pair")).count()) === 0
+        (await page.locator(selectorFor.linkedAction("pair")).count()) === 0
           ? null
           : "pair was offered to a refused sign-in",
         (await page.locator("[data-credential]").count()) === 0
@@ -391,13 +391,13 @@ await main(meta, async ({ options, rep, url }) => {
     })
 
     await gatewayStep("pair", { mode: "on" }, async (page) => {
-      await page.locator(css.linkedAction("pair")).click()
+      await page.locator(selectorFor.linkedAction("pair")).click()
       await page.waitForFunction(
         (selector) => {
           const button = document.querySelector(selector)
           return button && !button.disabled && document.activeElement === button
         },
-        css.linkedAction("cancel"),
+        selectorFor.linkedAction("cancel"),
         { timeout: 10_000 },
       )
       const shown = (
@@ -408,7 +408,7 @@ await main(meta, async ({ options, rep, url }) => {
         qr: await page.locator(css.qrOrb).count(),
       }
       const fit = await laidOut(page)
-      await page.locator(css.linkedAction("cancel")).click()
+      await page.locator(selectorFor.linkedAction("cancel")).click()
       await page.waitForSelector(css.pairingCode, { state: "detached", timeout: 10_000 })
       return [
         shown === "ABCD2345" ? null : `the code was ${shown}`,
@@ -427,13 +427,13 @@ await main(meta, async ({ options, rep, url }) => {
       async (page) => {
         await page.waitForSelector(css.fingerprint, { timeout: 10_000 })
         const before = await panelText(page)
-        await page.locator(css.linkedAction("approve")).click()
+        await page.locator(selectorFor.linkedAction("approve")).click()
         await page.waitForSelector(css.linkedNotice, { timeout: 10_000 })
         const after = await panelText(page)
         return [
           before.includes("182F") ? null : "the fingerprint was not shown",
           after.includes("Try again") ? null : "the retryable stop was not said",
-          (await page.locator(css.linkedAction("approve")).count()) === 1
+          (await page.locator(selectorFor.linkedAction("approve")).count()) === 1
             ? null
             : "Approve was withdrawn",
         ].filter(Boolean)
@@ -455,9 +455,9 @@ await main(meta, async ({ options, rep, url }) => {
           .evaluateAll((nodes) =>
             nodes.map((node) => node.getAttribute("data-credential")),
           )
-        await page.locator(css.linkedAction("revoke")).click()
+        await page.locator(selectorFor.linkedAction("revoke")).click()
         const asked = await panelText(page)
-        await page.locator(css.linkedAction("confirm-revoke")).click()
+        await page.locator(selectorFor.linkedAction("confirm-revoke")).click()
         await page.waitForSelector(css.linkedNotice, { timeout: 10_000 })
         const after = await panelText(page)
         return [
@@ -470,7 +470,7 @@ await main(meta, async ({ options, rep, url }) => {
     )
 
     await gatewayStep("expired", { mode: "on", expire: true }, async (page) => {
-      await page.locator(css.linkedAction("pair")).click()
+      await page.locator(selectorFor.linkedAction("pair")).click()
       await page.waitForSelector(`${css.pairingCode}[data-state="expired"]`, {
         timeout: 10_000,
       })

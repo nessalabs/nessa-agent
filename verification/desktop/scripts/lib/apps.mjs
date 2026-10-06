@@ -5,7 +5,7 @@
  * through the page.
  */
 import { CannotRun } from "./cli.mjs"
-import { css, names } from "./selectors.mjs"
+import { css, names, selectorFor } from "./selectors.mjs"
 
 /**
  * The app's own document in the frame drawn in `place` (inline, pane,
@@ -15,7 +15,7 @@ import { css, names } from "./selectors.mjs"
 export async function appFrame(page, place, timeout = 10_000) {
   const until = Date.now() + timeout
   while (Date.now() < until) {
-    const element = await page.$(css.appFrameIn(place))
+    const element = await page.$(selectorFor.appFrameIn(place))
     const proxy = await element?.contentFrame()
     const app = proxy?.childFrames()[0]
     if (app && !app.isDetached()) return { element, proxy, app }
