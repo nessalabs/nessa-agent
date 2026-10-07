@@ -24,7 +24,13 @@ import { launch, openPage, waitUntilSettled, withEngines } from "./lib/browser.m
 import { attempt, CannotRun, chosen, log, table } from "./lib/cli.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
 import { panelCredential, startGatewayStack } from "./lib/gateway-stack.mjs"
-import { exceedsFrameBudget, measure, missingFrameSample, observers, throttle } from "./lib/perf.mjs"
+import {
+  exceedsFrameBudget,
+  measure,
+  missingFrameSample,
+  observers,
+  throttle,
+} from "./lib/perf.mjs"
 import { main } from "./lib/run.mjs"
 import { chordDown, css, keys } from "./lib/selectors.mjs"
 import { withSeeded } from "./lib/seeded-load.mjs"

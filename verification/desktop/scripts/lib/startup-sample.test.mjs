@@ -93,7 +93,10 @@ describe("startup sample", () => {
     try {
       const table = metricsSince(
         [{ name: "JSHeapUsedSize", value: 1 }],
-        [{ name: "JSHeapUsedSize", value: 2 }, { name: "Nodes", value: 3 }],
+        [
+          { name: "JSHeapUsedSize", value: 2 },
+          { name: "Nodes", value: 3 },
+        ],
       )
       assert.equal(Object.hasOwn(table, "LayoutCount"), false)
       assert.equal(metric(table, "LayoutCount"), null)
