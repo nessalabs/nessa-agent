@@ -237,13 +237,16 @@ while ordinary Agent controllers continue to enforce their own execution states.
 Spawn progress retains the reservation, prepared child, tree attachment and
 initial-submission reference. These are relationship facts, not another provider
 attachment state machine. Existing creation/attachment/submission receipts supply
-their authoritative progress. Every reservation ends in an attached child or a
-settled failure; uncertain startup retains its reservation and cleanup ownership.
-A rejected startup that held no cleanup owner ends the chart at `Ended` without
-a physical release and returns the live slot. The child lifetime stays open.
-A rejected publication does not prepare, returns the live slot, and keeps the
-in-memory reservation for an identical retry. An uncertain publication keeps
-the slot.
+their authoritative progress. Uncertain startup retains its reservation and
+cleanup ownership. An initial rejected publication never starts the factory and
+returns its unused live slot; the retained binding still identifies the original
+attempt. A later Prepared, Attached or TaskAdmitted publication failure retains
+actual cleanup ownership and any provider-acknowledged task receipt; capacity
+remains held until actual physical Released evidence. A rejected startup with no
+cleanup owner records `Ended` and returns its unused slot, while the admitted
+child lifetime is sealed `Closing` under row 38. Neither `Ended` nor a returned
+slot proves absence or `Closed`; failed-startup completion remains tracked in
+#649. Uncertain initial publication retains its slot.
 
 ## Statechart design contract
 
@@ -273,7 +276,7 @@ stateDiagram-v2
         ParentIdle --> ParentBusy: parent input admitted
         ParentBusy --> ParentIdle: parent execution settled
     }
-    Open --> Closing: close lifetime / seal tree admission and retain cause
+    Open --> Closing: close or admitted typed failure / seal tree admission and retain first cause
     state Closing {
         state ParentCleanup {
             [*] --> ParentPending
@@ -331,6 +334,12 @@ stateDiagram-v2
     Refused --> [*]
     Ended --> [*]
 ```
+
+The linked lifetime chart owns sealing independently of this spawn progress.
+Canonical row 38 synchronously seals an admitted child's actual shared gate and
+lifetime on typed failure before fallback evidence awaits. Joining an existing
+close preserves its first cause; lookup conflicts and pre-admission failures do
+not revoke another attempt's child. This does not imply physical release.
 
 Completion of this spawn chart means its admission operation settled, not that
 its child's task finished. Refusing dispatch records `Draining` and then `Ended`
@@ -618,11 +627,15 @@ This differs from the explicit approval-mode recovery retirement defined above.
    alongside descendant cleanup, so a parent waiting for child output cannot
    deadlock the drain.
 4. Join constructors and admitted controls through their existing supervisors.
-   A child produced after the fence is closed before dispatch. A failed
-   reservation that held a cleanup owner is released after its physical
-   ownership is settled. A rejected publication, or a rejected startup that
-   held no cleanup owner, returns the live slot without that physical release
-   and keeps the retained reservation.
+   A child produced after the fence shares its sealed admission gate; a
+   substitute submission-port call is not runnable permission. A failed
+   reservation that held a cleanup owner returns capacity only after actual
+   physical Released evidence. Initial rejected publication never starts the
+   factory and returns unused capacity; later publication failure retains actual
+   cleanup ownership and any acknowledged task receipt until physical release.
+   Rejected startup with no cleanup owner records Ended and returns unused
+   capacity, but its admitted child is already sealed Closing by row 38. The
+   retained binding is not absence or Closed proof (#649).
 5. Retain each child's physical cleanup, review/queue settlement and audit result.
    Failure on one child does not suppress cleanup attempts for the rest.
 6. Report aggregate success only after parent and descendants confirm cleanup
@@ -773,7 +786,7 @@ uncertain ports; whole-transaction panic supervision is separate #625 work.
 | 3 | A private reservation audit held; B unrelated commit | No private reservation/child/dependents appear in B snapshot; factory A has not run. |
 | 4 | A Prepared acknowledged; Attached audit held; B commits | A snapshot remains Prepared, retains A child/resource relation. |
 | 5 | A Attached acknowledged; TaskAdmitted audit held; B commits | A snapshot remains Attached; no unaudited affirmative task receipt. |
-| 6 | A transition audit accepts after close has sealed A | Token may acknowledge captured eligibility, but projected/live A remains Closing/Closed; never reopen or dispatch. |
+| 6 | A transition audit accepts after close has sealed A | Token may acknowledge captured eligibility, but projection cannot restore runnable permission and the sealed lifetime remains Closing/Closed. The factory-installed Agent shared gate owns attachment/submission admission; this does not claim a substitute InitialSubmit port is never called. |
 | 7 | A close intent mutates graph; its audit rejects; B or A stores | Coherent Closing rows/cause/operation persist; no new open/reservation permission leaks. |
 | 8 | Cleanup reports Released; cleanup audit/store rejects or is uncertain | Physical Released recorded and capacity reconciled before fallible ports; close evidence may remain failed/pending, never fake acknowledgement. |
 | 9 | Initial root audit accepts; store definitively rejects | ID already eligible: preserve ID, seal/reconcile root; return Store(Rejected). Do not delete eligible ID. |
