@@ -42,6 +42,7 @@ struct FaultAudit {
     observations: AtomicUsize,
     completions: AtomicUsize,
     reject_reservation: Mutex<bool>,
+    reject_ready: bool,
 }
 impl OwnershipAudit for FaultAudit {
     fn record<'s, 'e, 'f>(
@@ -69,8 +70,9 @@ impl OwnershipAudit for FaultAudit {
         if fault == Some(Fault::Constructor) {
             panic!("audit constructor");
         }
-        let reject = evidence.after == OwnershipMeaning::Reserved
-            && std::mem::take(&mut *self.reject_reservation.lock().unwrap());
+        let reject = (evidence.after == OwnershipMeaning::Reserved
+            && std::mem::take(&mut *self.reject_reservation.lock().unwrap()))
+            || (self.reject_ready && selected && fault == Some(Fault::ReadyDrop));
         Box::pin(PortFuture {
             inner: Box::pin(async move {
                 if reject {
@@ -91,6 +93,7 @@ fn fault_audit(fault: Fault, selected: CloseEvidenceDetail) -> Arc<FaultAudit> {
         observations: AtomicUsize::new(0),
         completions: AtomicUsize::new(0),
         reject_reservation: Mutex::new(false),
+        reject_ready: false,
     })
 }
 fn replace_ports(
@@ -187,6 +190,7 @@ struct FaultStore {
     fault: Mutex<Option<Fault>>,
     selected: Mutex<Option<AgentLifetimeId>>,
     terminal_writes: AtomicUsize,
+    reject_ready: bool,
 }
 impl OwnershipStore for FaultStore {
     fn write<'s, 'v, 'f>(
@@ -214,7 +218,13 @@ impl OwnershipStore for FaultStore {
             panic!("store constructor");
         }
         Box::pin(PortFuture {
-            inner: Box::pin(self.memory.write(snapshot)),
+            inner: Box::pin(async move {
+                if self.reject_ready && fault == Some(Fault::ReadyDrop) {
+                    Err(PortFailure::Rejected)
+                } else {
+                    self.memory.write(snapshot).await
+                }
+            }),
             fault,
             ready: false,
         })
@@ -238,6 +248,7 @@ async fn store_constructor_poll_and_ready_drop_keep_completion_and_writer_only_r
             fault: Mutex::new(Some(fault)),
             selected: Mutex::new(None),
             terminal_writes: AtomicUsize::new(0),
+            reject_ready: false,
         });
         let audit = world.audit.clone();
         replace_ports(&mut world, audit, store.clone());
@@ -296,6 +307,7 @@ async fn recovery_audit_fault_does_not_strand_original_publication_failure() {
         observations: AtomicUsize::new(0),
         completions: AtomicUsize::new(0),
         reject_reservation: Mutex::new(true),
+        reject_ready: false,
     });
     let store = world.store.clone();
     replace_ports(&mut world, audit.clone(), store);
@@ -357,13 +369,40 @@ fn panicking_caller_waker_and_payload_do_not_strand_other_close_waiters() {
                     .as_mut()
                     .poll(&mut Context::from_waker(&Waker::from(waker.clone())))
                     .is_pending());
-                let mut healthy = Box::pin(world.close(&child));
-                assert!(healthy
-                    .as_mut()
-                    .poll(&mut Context::from_waker(Waker::noop()))
-                    .is_pending());
+                let healthy_coordinator = world.coordinator.clone();
+                let healthy_child = child.clone();
+                let (registered, registered_rx) = tokio::sync::oneshot::channel();
+                let healthy = tokio::spawn(async move {
+                    let mut waiting = Box::pin(healthy_coordinator.end_lifetime(CloseCommand {
+                        lifetime: healthy_child,
+                        cause: LifetimeCause::HostClose,
+                        initiator: Initiator::Runtime,
+                        external_attachment: false,
+                        timeout: None,
+                    }));
+                    let mut registered = Some(registered);
+                    std::future::poll_fn(|cx| {
+                        let result = waiting.as_mut().poll(cx);
+                        if let Some(registered) = registered.take() {
+                            registered.send(()).unwrap();
+                        }
+                        result
+                    })
+                    .await
+                });
+                registered_rx.await.unwrap();
                 release.notify_one();
-                bounded(healthy).await.unwrap();
+                for _ in 0..1000 {
+                    if healthy.is_finished() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                assert!(
+                    healthy.is_finished(),
+                    "registered healthy waiter needs its terminal wake"
+                );
+                healthy.await.unwrap().unwrap();
                 bounded(faulty).await.unwrap();
                 assert!(waker.calls.load(Ordering::SeqCst) > 0);
                 assert_eq!(
@@ -378,7 +417,7 @@ fn panicking_caller_waker_and_payload_do_not_strand_other_close_waiters() {
     let log_path =
         std::env::temp_dir().join(format!("nessa-settlement-waker-{}.log", std::process::id()));
     let log = std::fs::File::create(&log_path).unwrap();
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact", "application::agent_execution::subagents::effects::panicking_caller_waker_and_payload_do_not_strand_other_close_waiters"]).env(CHILD, "1").stdout(log.try_clone().unwrap()).stderr(log).spawn().unwrap();
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact", "application::agent_execution::subagents::effects::panicking_caller_waker_and_payload_do_not_strand_other_close_waiters", "--nocapture"]).env(CHILD, "1").stdout(log.try_clone().unwrap()).stderr(log).spawn().unwrap();
     let started = std::time::Instant::now();
     loop {
         if let Some(status) = child.try_wait().unwrap() {
@@ -393,6 +432,243 @@ fn panicking_caller_waker_and_payload_do_not_strand_other_close_waiters() {
             child.kill().unwrap();
             let _ = child.wait();
             panic!("waker child timed out");
+        }
+        std::thread::yield_now();
+    }
+}
+
+#[tokio::test]
+async fn ready_audit_rejection_survives_future_drop() {
+    let mut world = World::new(2);
+    let mut audit = fault_audit(
+        Fault::ReadyDrop,
+        CloseEvidenceDetail::ResourceObservation {
+            physical: PhysicalFact::Released,
+            provider_evidence: EvidenceFact::Acknowledged,
+        },
+    );
+    Arc::get_mut(&mut audit).unwrap().reject_ready = true;
+    let memory = world.store.clone();
+    replace_ports(&mut world, audit.clone(), memory);
+    let root = world.root().await;
+    let child = world
+        .coordinator
+        .spawn(world.command(&root, "audit-ready-rejected", "task"))
+        .await
+        .unwrap()
+        .child;
+    assert_eq!(
+        bounded(world.close(&child)).await,
+        Err(OwnershipFailure::Audit(PortFailure::Rejected))
+    );
+    assert_eq!(
+        world.coordinator.lifetime_state(&child),
+        Some(LifetimeState::Closing)
+    );
+    bounded(world.close(&child)).await.unwrap();
+    assert_eq!(audit.observations.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        world.factory.children.lock().unwrap()[0]
+            .closes
+            .load(Ordering::SeqCst),
+        1
+    );
+}
+
+#[tokio::test]
+async fn ready_store_rejection_survives_future_drop() {
+    let mut world = World::new(2);
+    let store = Arc::new(FaultStore {
+        memory: world.store.clone(),
+        fault: Mutex::new(Some(Fault::ReadyDrop)),
+        selected: Mutex::new(None),
+        terminal_writes: AtomicUsize::new(0),
+        reject_ready: true,
+    });
+    let audit = world.audit.clone();
+    replace_ports(&mut world, audit, store.clone());
+    let root = world.root().await;
+    let child = world
+        .coordinator
+        .spawn(world.command(&root, "store-ready-rejected", "task"))
+        .await
+        .unwrap()
+        .child;
+    *store.selected.lock().unwrap() = Some(child.clone());
+    assert_eq!(
+        bounded(world.close(&child)).await,
+        Err(OwnershipFailure::Store(PortFailure::Rejected))
+    );
+    assert_eq!(
+        world.coordinator.lifetime_state(&child),
+        Some(LifetimeState::Closed)
+    );
+    assert_eq!(
+        world
+            .store
+            .read()
+            .await
+            .unwrap()
+            .lifetimes
+            .iter()
+            .find(|row| row.lifetime_id == child)
+            .unwrap()
+            .state,
+        LifetimeState::Closing
+    );
+    let audits = world.audit.records.lock().unwrap().len();
+    bounded(world.close(&child)).await.unwrap();
+    assert_eq!(world.audit.records.lock().unwrap().len(), audits);
+    assert_eq!(store.terminal_writes.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        world.factory.children.lock().unwrap()[0]
+            .closes
+            .load(Ordering::SeqCst),
+        1
+    );
+}
+
+struct BadDropPayload {
+    drops: Arc<AtomicUsize>,
+}
+impl Drop for BadDropPayload {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::SeqCst);
+        panic!("caller waker Drop payload destructor");
+    }
+}
+struct BadDropWake {
+    drops: Arc<AtomicUsize>,
+    owned_drops: Arc<AtomicUsize>,
+    payload_drops: Arc<AtomicUsize>,
+}
+impl Wake for BadDropWake {
+    fn wake(self: Arc<Self>) {}
+}
+impl Drop for BadDropWake {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::SeqCst);
+        if tokio::task::try_id().is_some() {
+            self.owned_drops.fetch_add(1, Ordering::SeqCst);
+        }
+        std::panic::panic_any(BadDropPayload {
+            drops: self.payload_drops.clone(),
+        });
+    }
+}
+#[test]
+fn panicking_caller_waker_drop_does_not_strand_registered_close_waiters() {
+    const CHILD: &str = "NESSA_SETTLEMENT_WAKER_DROP_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let world = World::new(1);
+                let root = world.root().await;
+                let release = Arc::new(Notify::new());
+                *world.factory.hold_next.lock().unwrap() = Some(release.clone());
+                let child = world
+                    .coordinator
+                    .spawn(world.command(&root, "wake-drop", "task"))
+                    .await
+                    .unwrap()
+                    .child;
+                let drops = Arc::new(AtomicUsize::new(0));
+                let owned_drops = Arc::new(AtomicUsize::new(0));
+                let payload_drops = Arc::new(AtomicUsize::new(0));
+                let caller = Waker::from(Arc::new(BadDropWake {
+                    drops: drops.clone(),
+                    owned_drops: owned_drops.clone(),
+                    payload_drops: payload_drops.clone(),
+                }));
+                let mut faulty = Box::pin(world.close(&child));
+                assert!(faulty
+                    .as_mut()
+                    .poll(&mut Context::from_waker(&caller))
+                    .is_pending());
+                drop(caller);
+                assert_eq!(
+                    drops.load(Ordering::SeqCst),
+                    0,
+                    "registered SDK waker holds the caller"
+                );
+                let healthy_coordinator = world.coordinator.clone();
+                let healthy_child = child.clone();
+                let (registered, registered_rx) = tokio::sync::oneshot::channel();
+                let healthy = tokio::spawn(async move {
+                    let mut waiting = Box::pin(healthy_coordinator.end_lifetime(CloseCommand {
+                        lifetime: healthy_child,
+                        cause: LifetimeCause::HostClose,
+                        initiator: Initiator::Runtime,
+                        external_attachment: false,
+                        timeout: None,
+                    }));
+                    let mut registered = Some(registered);
+                    std::future::poll_fn(|cx| {
+                        let result = waiting.as_mut().poll(cx);
+                        if let Some(registered) = registered.take() {
+                            registered.send(()).unwrap();
+                        }
+                        result
+                    })
+                    .await
+                });
+                registered_rx.await.unwrap();
+                release.notify_one();
+                for _ in 0..1000 {
+                    if healthy.is_finished() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                assert!(
+                    healthy.is_finished(),
+                    "caller waker Drop must not suppress another registered wake"
+                );
+                healthy.await.unwrap().unwrap();
+                bounded(faulty).await.unwrap();
+                assert_eq!(drops.load(Ordering::SeqCst), 1);
+                assert_eq!(
+                    owned_drops.load(Ordering::SeqCst),
+                    1,
+                    "destructor ran in SDK publisher task"
+                );
+                assert_eq!(
+                    payload_drops.load(Ordering::SeqCst),
+                    0,
+                    "SDK contains the fault payload before Tokio owns it"
+                );
+                assert_eq!(
+                    world.factory.children.lock().unwrap()[0]
+                        .closes
+                        .load(Ordering::SeqCst),
+                    1
+                );
+            });
+        return;
+    }
+    let log_path = std::env::temp_dir().join(format!(
+        "nessa-settlement-waker-drop-{}.log",
+        std::process::id()
+    ));
+    let log = std::fs::File::create(&log_path).unwrap();
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact", "application::agent_execution::subagents::effects::panicking_caller_waker_drop_does_not_strand_registered_close_waiters", "--nocapture"]).env(CHILD,"1").stdout(log.try_clone().unwrap()).stderr(log).spawn().unwrap();
+    let started = std::time::Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(
+                status.success(),
+                "waker Drop child failed {status}: {}",
+                std::fs::read_to_string(&log_path).unwrap()
+            );
+            break;
+        }
+        if started.elapsed() > Duration::from_secs(8) {
+            child.kill().unwrap();
+            let _ = child.wait();
+            panic!("waker Drop child timed out");
         }
         std::thread::yield_now();
     }

@@ -75,6 +75,7 @@ struct ReceiptSubmit {
     calls: AtomicUsize,
     drops: Arc<AtomicUsize>,
     fault: Fault,
+    rejected: bool,
 }
 // These signatures match async_trait's desugaring, while allowing constructor
 // faults BEFORE any Future exists. Do not add #[async_trait] to this impl.
@@ -95,7 +96,11 @@ impl InitialSubmit for ReceiptSubmit {
             fault(false);
         }
         Box::pin(OutputFuture {
-            output: Some(Ok(TaskReceiptId::new("ready-drop-receipt").unwrap())),
+            output: Some(if self.rejected {
+                Err(PortFailure::Rejected)
+            } else {
+                Ok(TaskReceiptId::new("ready-drop-receipt").unwrap())
+            }),
             gate: None,
             entered: Arc::new(Notify::new()),
             entered_once: false,
@@ -199,6 +204,7 @@ fn output_factory(
                 calls: AtomicUsize::new(0),
                 drops: Arc::new(AtomicUsize::new(0)),
                 fault: submit_fault,
+                rejected: false,
             }),
         }),
         release,
@@ -209,8 +215,8 @@ fn output_factory(
 async fn ready_factory_outputs_survive_effect_future_drop() {
     for output in [
         FactoryOutput::Prepared,
-        FactoryOutput::RejectedNone,
         FactoryOutput::RejectedCleanup,
+        FactoryOutput::RejectedNone,
     ] {
         let (factory, release) = output_factory(output, Fault::ReadyDrop, Fault::Clean);
         let world = with_factory(factory.clone());
@@ -222,7 +228,13 @@ async fn ready_factory_outputs_survive_effect_future_drop() {
         let first = tokio::spawn(async move { coordinator.spawn(admitted).await });
         timeout(BOUND, factory.entered.notified()).await.unwrap();
         release.send(()).unwrap();
-        let expected = Err(OwnershipFailure::Startup(PortFailure::Uncertain));
+        let expected = Err(OwnershipFailure::Startup(
+            if matches!(output, FactoryOutput::Prepared) {
+                PortFailure::Uncertain
+            } else {
+                PortFailure::Rejected
+            },
+        ));
         assert_eq!(timeout(BOUND, first).await.unwrap().unwrap(), expected);
         assert_eq!(factory.drops.load(Ordering::SeqCst), 1);
         assert_eq!(factory.submit.calls.load(Ordering::SeqCst), 0);
@@ -447,4 +459,190 @@ async fn resource_constructor_and_poll_faults_do_not_infer_release_or_absence() 
         timeout(BOUND, world.close(&root)).await.unwrap().unwrap();
         assert_eq!(resources.closes.load(Ordering::SeqCst), 2);
     }
+}
+
+#[tokio::test]
+async fn ready_submit_rejection_survives_future_drop_and_is_cached() {
+    let (mut factory, release) =
+        output_factory(FactoryOutput::Prepared, Fault::Clean, Fault::ReadyDrop);
+    Arc::get_mut(&mut Arc::get_mut(&mut factory).unwrap().submit)
+        .unwrap()
+        .rejected = true;
+    let world = with_factory(factory.clone());
+    let root = world.root().await;
+    world.bind_root(&root);
+    let command = world.command(&root, "ready-submit-rejected", "task");
+    release.send(()).unwrap();
+    let expected = Err(OwnershipFailure::Submission(PortFailure::Rejected));
+    assert_eq!(
+        timeout(BOUND, world.coordinator.spawn(command.clone()))
+            .await
+            .unwrap(),
+        expected
+    );
+    let saved = world.store.read().await.unwrap();
+    let progress = &saved
+        .spawns
+        .iter()
+        .find(|row| row.binding.request_id == command.request_id)
+        .unwrap()
+        .progress;
+    assert!(!matches!(
+        progress.known(),
+        KnownMilestone::TaskAdmitted { .. }
+    ));
+    assert_eq!(timeout(BOUND, world.close(&root)).await.unwrap(), Ok(()));
+    assert_eq!(
+        timeout(BOUND, world.coordinator.spawn(command))
+            .await
+            .unwrap(),
+        expected
+    );
+    assert_eq!(factory.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(factory.submit.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(factory.submit.drops.load(Ordering::SeqCst), 1);
+    assert_eq!(factory.resources.closes.load(Ordering::SeqCst), 1);
+}
+
+struct EscapingSubmit {
+    recovery_fault: Arc<std::sync::atomic::AtomicBool>,
+    drops: Arc<AtomicUsize>,
+}
+#[async_trait]
+impl InitialSubmit for EscapingSubmit {
+    async fn submit(
+        &self,
+        _task: &str,
+        _request: &SpawnRequestId,
+    ) -> Result<TaskReceiptId, PortFailure> {
+        panic!("factory Drop fault must prevent submission");
+    }
+}
+impl Drop for EscapingSubmit {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::SeqCst);
+        self.recovery_fault.store(true, Ordering::SeqCst);
+        panic!("retained Ready submit handle destructor escapes inner recovery");
+    }
+}
+struct EscapingFactory {
+    resources: Arc<ScriptResources>,
+    recovery_fault: Arc<std::sync::atomic::AtomicBool>,
+    submit_drops: Arc<AtomicUsize>,
+    calls: AtomicUsize,
+}
+impl ChildFactory for EscapingFactory {
+    fn prepare<'life0, 'async_trait>(
+        &'life0 self,
+        _request: PrepareRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<PreparedChild, PrepareFailure>> + Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(OutputFuture {
+            output: Some(Ok(PreparedChild {
+                resources: self.resources.clone(),
+                submit: Arc::new(EscapingSubmit {
+                    recovery_fault: self.recovery_fault.clone(),
+                    drops: self.submit_drops.clone(),
+                }),
+            })),
+            gate: None,
+            entered: Arc::new(Notify::new()),
+            entered_once: false,
+            fault: Fault::ReadyDrop,
+            drops: Arc::new(AtomicUsize::new(0)),
+        })
+    }
+}
+struct FaultingRecoveryStore {
+    memory: Arc<MemoryOwnershipStore>,
+    armed: Arc<std::sync::atomic::AtomicBool>,
+    faults: AtomicUsize,
+}
+impl OwnershipStore for FaultingRecoveryStore {
+    fn write<'s, 'v, 'f>(
+        &'s self,
+        snapshot: &'v OwnershipSnapshot,
+    ) -> Pin<Box<dyn Future<Output = Result<(), PortFailure>> + Send + 'f>>
+    where
+        's: 'f,
+        'v: 'f,
+        Self: 'f,
+    {
+        if self.armed.swap(false, Ordering::SeqCst) {
+            self.faults.fetch_add(1, Ordering::SeqCst);
+            panic!("outer recovery store constructor");
+        }
+        Box::pin(self.memory.write(snapshot))
+    }
+    fn read<'s, 'f>(
+        &'s self,
+    ) -> Pin<Box<dyn Future<Output = Result<OwnershipSnapshot, PortFailure>> + Send + 'f>>
+    where
+        's: 'f,
+        Self: 'f,
+    {
+        Box::pin(self.memory.read())
+    }
+}
+#[tokio::test]
+async fn escaping_ready_handle_drop_and_recovery_fault_still_publish_cached_terminal_result() {
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let resources = Arc::new(ScriptResources {
+        closes: AtomicUsize::new(0),
+        report: released(),
+        hold: None,
+    });
+    let factory = Arc::new(EscapingFactory {
+        resources: resources.clone(),
+        recovery_fault: armed.clone(),
+        submit_drops: Arc::new(AtomicUsize::new(0)),
+        calls: AtomicUsize::new(0),
+    });
+    let mut world = with_factory(factory.clone());
+    let store = Arc::new(FaultingRecoveryStore {
+        memory: world.store.clone(),
+        armed,
+        faults: AtomicUsize::new(0),
+    });
+    world.coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+        store: store.clone(),
+        audit: world.audit.clone(),
+        factory: factory.clone(),
+        room: Arc::new(LiveCapacity::new(1)),
+    });
+    let root = world.root().await;
+    world.bind_root(&root);
+    let command = world.command(&root, "escaping-ready-handle", "task");
+    let expected = Err(OwnershipFailure::Startup(PortFailure::Uncertain));
+    assert_eq!(
+        timeout(BOUND, world.coordinator.spawn(command.clone()))
+            .await
+            .unwrap(),
+        expected
+    );
+    assert_eq!(factory.submit_drops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        store.faults.load(Ordering::SeqCst),
+        1,
+        "bounded outer recovery actually faults"
+    );
+    let saved = world.store.read().await.unwrap();
+    assert_eq!(saved.spawns[0].progress.known(), KnownMilestone::Prepared);
+    assert!(
+        saved.settlements.is_empty(),
+        "a destructor fault cannot mint absence"
+    );
+    assert_eq!(
+        timeout(BOUND, world.coordinator.spawn(command))
+            .await
+            .unwrap(),
+        expected
+    );
+    assert_eq!(factory.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(timeout(BOUND, world.close(&root)).await.unwrap(), Ok(()));
+    assert_eq!(resources.closes.load(Ordering::SeqCst), 1);
 }

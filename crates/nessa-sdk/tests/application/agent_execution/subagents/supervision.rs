@@ -323,10 +323,7 @@ async fn ready_rejected_absence_returns_capacity_before_future_drop_fault() {
     world.bind_root(&root);
     let command = world.command(&root, "rejected-drop", "task");
     let first = bounded(world.coordinator.spawn(command.clone())).await;
-    assert_eq!(
-        first,
-        Err(OwnershipFailure::Startup(PortFailure::Uncertain))
-    );
+    assert_eq!(first, Err(OwnershipFailure::Startup(PortFailure::Rejected)));
     assert!(factory.observed_before_drop.load(Ordering::SeqCst));
     assert!(room.try_reserve());
     room.release();

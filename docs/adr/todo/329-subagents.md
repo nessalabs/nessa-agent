@@ -1219,10 +1219,15 @@ Released targets never repeat physical cleanup. Unknown/missing work is Incomple
 
 Effect construction, poll and Drop are separate contained boundaries. Ready
 owners, failure cleanup, receipts, absence and resource facts enter their existing
-authoritative owners before Drop. Outer workers terminalize even when recovery
+authoritative owners before Drop. An actually captured Ready Err remains the primary
+returned and cached typed failure when future destruction faults; the destructor
+fault is independently contained and diagnosed. Ready success followed by a Drop
+fault and constructor/poll faults without output remain Uncertain. Outer workers terminalize even when recovery
 faults; admitted request results are cached with binding validation, while
 preadmission NoRoom remains retriable. Owned drains register before fallible
-intent publication. Caller cancellation/waker/panic-payload faults do not erase
+intent publication. Caller waker destruction is contained in the same boundary: its fault payload
+is not handed to the SDK publisher task or runtime for destruction.
+Caller cancellation/waker/panic-payload faults do not erase
 terminal results. Runtime shutdown and process abort are outside unwind recovery.
 
 | Ordering | Required observable outcome / regression enforcer |
@@ -1239,9 +1244,9 @@ terminal results. Runtime shutdown and process abort are outside unwind recovery
 | Saved absence/mixed outstanding debts, resume | Validate exact correlation, retry retained records without factory/physical replay. `mixed_close_debt_and_later_release_witness_survive_sqlite_reopen`; recovery anchor above. |
 | Independent child audit held/rejected while parent joins | First operation remains; parent receives child failure; explicit parent retry reconciles fresh generation. `parent_joins_failed_independent_child_and_preserves_its_first_close_owner`. |
 | Parent overtakes factory/submit output | No reopening/dispatch; Ready owner/receipt survives before future Drop. Definite startup failure hands installed proof/owner to the registered first-owner drain and removes only its completed preparation flight before joining; there is no local parallel reconciliation or post-terminal startup writer. |
-| Initial publication fails before factory with concurrent bind | Live flight and same graph scope validate/install exclusion; persist the newly installed proof in Closing before returning the immutable failure; no restored inference. `row_38_publication_error_matrix_seals_actual_gate_preserves_owner_receipt_and_restore` checks retained actual exclusion. |
-| Constructor/poll panic; Ready then Drop panic; recovery faults | Cached typed uncertainty; retain observed owner/receipt/report, no inferred release. `ready_factory_outputs_survive_effect_future_drop`, submit/resource transfer tests, `audit_constructor_poll_and_ready_drop_preserve_exact_observation_authority`, `store_constructor_poll_and_ready_drop_keep_completion_and_writer_only_retry`, `recovery_audit_fault_does_not_strand_original_publication_failure`. |
-| Two close waiters/caller loss/waker or payload faults | All existing waiters settle same immutable result; later explicit retry differs without rewriting. `joined_close_waiters_keep_failed_generation_after_successful_retry_and_caller_loss`; `released_ready_drop_preserves_failed_old_waiter_after_successful_retry`; `panicking_caller_waker_and_payload_do_not_strand_other_close_waiters`. |
+| Initial publication fails before factory with concurrent bind | Live flight and same graph scope validate/install exclusion; persist the newly installed proof in Closing before returning the immutable failure; no restored inference. `eligible_store_rejection_keeps_live_flight_until_durable_absence_excludes_binding` checks concurrent live and restored bind exclusion; `row_38_publication_error_matrix_seals_actual_gate_preserves_owner_receipt_and_restore` checks retained actual exclusion. |
+| Constructor/poll panic; Ready then Drop panic; recovery faults | Captured Ready Err preserves its primary failure; absent output or Ready Ok plus Drop fault gives cached typed uncertainty; retain observed owner/receipt/report, no inferred release. `ready_factory_outputs_survive_effect_future_drop`, `ready_submit_rejection_survives_future_drop_and_is_cached`, `ready_audit_rejection_survives_future_drop`, `ready_store_rejection_survives_future_drop`, submit/resource transfer tests, `audit_constructor_poll_and_ready_drop_preserve_exact_observation_authority`, `store_constructor_poll_and_ready_drop_keep_completion_and_writer_only_retry`, `recovery_audit_fault_does_not_strand_original_publication_failure`, `escaping_ready_handle_drop_and_recovery_fault_still_publish_cached_terminal_result`. |
+| Two close waiters/caller loss/waker or payload faults | All existing waiters settle same immutable result; later explicit retry differs without rewriting. `joined_close_waiters_keep_failed_generation_after_successful_retry_and_caller_loss`; `released_ready_drop_preserves_failed_old_waiter_after_successful_retry`; `panicking_caller_waker_and_payload_do_not_strand_other_close_waiters`; `panicking_caller_waker_drop_does_not_strand_registered_close_waiters` observes destruction in the SDK publisher task and prevents secondary payload destruction. |
 | NoRoom then capacity available; identical/conflicting admitted retry | Nonadmitted retry can run; admitted retry returns cached result; changed binding conflicts. `no_room_request_can_admit_after_another_child_releases_capacity`; `dropped_spawn_caller_and_two_joiners_receive_one_cached_factory_failure`. |
 | Concurrent intent publication and terminal store rejection | Registered generation owns intent persistence before cleanup; no later independent intent writer publishes Closed after that generation's final refusal. |
 | End/host/root/disposal intent audit/store fault | Seal and owned drain precede fault; cleanup still executes under supervision. |
@@ -1250,7 +1255,7 @@ Current ownership JSON requires typed settlement proof and explicit Completion.
 Proofless old settlement bodies return PortFailure::Rejected (Store(Rejected) on
 resume), unchanged on disk. No migration, defaults-to-Ack, dual reader, schema
 version bump or compatibility aliases. SQLite remains user_version=1. Valid
-no-settlement bodies depend on the current DTO's required shape, tested directly.
+no-settlement bodies depend on the current DTO's required shape, tested directly. All-null Resource proof is refused despite matching Pending summary by `empty_resource_proof_is_rejected_unchanged_with_matching_pending_summary`; `private_child_completion_is_excluded_while_eligible_neighbor_completion_remains` enforces Completion projection alongside its exact eligible control.
 
 ### Cloud checks and supported environments
 

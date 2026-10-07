@@ -2522,3 +2522,125 @@ async fn row_38_uncertain_submission_revokes_before_held_fallback_and_retains_ow
     assert_eq!(factory.prepares(), 1);
     assert_eq!(factory.submits(), 1);
 }
+
+#[tokio::test]
+async fn private_child_completion_is_excluded_while_eligible_neighbor_completion_remains() {
+    use nessa_sdk::domain::agent_execution::subagents::CloseEvidenceDetail;
+
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let audit = IndependentAudit::new();
+    let factory = ScriptFactory::new();
+    let c = coordinator(
+        store.clone(),
+        audit.clone(),
+        factory.clone(),
+        Arc::new(LiveCapacity::new(2)),
+    );
+    let parent = bounded(open(&c, "eligible-parent")).await.unwrap();
+    let neighbor = bounded(open(&c, "eligible-history")).await.unwrap();
+    bounded(close(&c, &neighbor)).await.unwrap();
+    let control = store.read().await.unwrap();
+    let neighbor_completion = control
+        .close_completions
+        .iter()
+        .find(|row| row.close_lifetime() == &neighbor)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        neighbor_completion.acknowledgement(),
+        EvidenceFact::Acknowledged
+    );
+
+    audit
+        .failures
+        .lock()
+        .unwrap()
+        .push_back((OwnershipMeaning::Reserved, PortFailure::Rejected));
+    let request = command(&parent);
+    assert_eq!(
+        bounded(c.spawn(request.clone())).await,
+        Err(OwnershipFailure::Audit(PortFailure::Rejected))
+    );
+    let child = audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|record| {
+            record.parent_lifetime == parent && record.after == OwnershipMeaning::Reserved
+        })
+        .unwrap()
+        .child_lifetime
+        .clone()
+        .unwrap();
+    assert_eq!(c.lifetime_state(&child), Some(LifetimeState::Closing));
+    assert!(c.participation(&child).is_none());
+    assert_eq!(factory.prepares(), 0);
+    assert_eq!(factory.submits(), 0);
+
+    let (gate, release) = audit.gate(OwnershipMeaning::Closed);
+    audit.next.lock().unwrap().as_mut().unwrap().1 = Some(CloseEvidenceDetail::Completion);
+    let closing = tokio::spawn({
+        let c = c.clone();
+        let child = child.clone();
+        async move { close(&c, &child).await }
+    });
+    bounded(gate.entered.notified()).await;
+    let exact = gate.evidence.lock().unwrap().clone().unwrap();
+    assert_eq!(exact.parent_lifetime, child);
+    assert_eq!(exact.child_lifetime.as_ref(), Some(&child));
+    assert_eq!(exact.close_detail, Some(CloseEvidenceDetail::Completion));
+    assert!(exact.close_operation.is_some());
+    // The live graph has an explicit private Completion decision now. An
+    // unrelated eligible commit must filter this row alongside its identity.
+    let unrelated = bounded(open(&c, "unrelated-during-private-completion"))
+        .await
+        .unwrap();
+    let pending = store.read().await.unwrap();
+    assert!(pending
+        .lifetimes
+        .iter()
+        .any(|row| row.lifetime_id == unrelated));
+    assert!(pending.lifetimes.iter().all(|row| row.lifetime_id != child));
+    assert!(pending
+        .spawns
+        .iter()
+        .all(|row| row.binding.request_id != request.request_id));
+    assert!(pending
+        .settlements
+        .iter()
+        .all(|row| row.target != child && row.close_lifetime != child));
+    assert_eq!(pending.close_completions, vec![neighbor_completion.clone()]);
+    assert!(OwnershipGraph::restore(pending).refusal().is_none());
+
+    release.send(Ok(())).unwrap();
+    bounded(closing).await.unwrap().unwrap();
+    assert_eq!(c.lifetime_state(&child), Some(LifetimeState::Closed));
+    let _later = bounded(open(&c, "unrelated-after-private-completion"))
+        .await
+        .unwrap();
+    let closed = store.read().await.unwrap();
+    assert!(closed.lifetimes.iter().all(|row| row.lifetime_id != child));
+    assert!(closed
+        .spawns
+        .iter()
+        .all(|row| row.binding.request_id != request.request_id));
+    assert!(closed
+        .settlements
+        .iter()
+        .all(|row| row.target != child && row.close_lifetime != child));
+    assert_eq!(closed.close_completions, vec![neighbor_completion]);
+    assert_eq!(
+        closed
+            .lifetimes
+            .iter()
+            .find(|row| row.lifetime_id == neighbor)
+            .unwrap()
+            .state,
+        LifetimeState::Closed
+    );
+    assert!(OwnershipGraph::restore(closed).refusal().is_none());
+    assert_eq!(factory.prepares(), 0);
+    assert_eq!(factory.submits(), 0);
+    assert!(factory.children.lock().unwrap().is_empty());
+}

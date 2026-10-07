@@ -523,3 +523,36 @@ async fn current_empty_shape_is_accepted_and_proofless_old_body_is_rejected_unch
     )
     .await;
 }
+
+#[tokio::test]
+async fn empty_resource_proof_is_rejected_unchanged_with_matching_pending_summary() {
+    let directory = private_directory();
+    let path = directory.path().join("private/empty-proof.sqlite3");
+    let mut graph = closing_resource();
+    let exact = resource_report(&mut graph, PhysicalFact::Pending, EvidenceFact::Pending);
+    let restored = reopen_snapshot(&path, &graph.snapshot()).await;
+    assert_eq!(
+        restored.pending_close_evidence(&lifetime("root")),
+        vec![exact]
+    );
+    assert_eq!(
+        restored.lifetime_state(&lifetime("root")),
+        Some(LifetimeState::Closing)
+    );
+    assert!(restored.snapshot().close_completions.is_empty());
+    let mut invalid: Value = serde_json::from_str(&stored_body(&path)).unwrap();
+    // Preserve valid owner/operation/cause/actor and the exact three-slot shape.
+    // The coarse facts also match an unobserved Pending target, so this case
+    // isolates the missing actual observation rather than a forged summary.
+    invalid["settlements"][0]["proof"]["observations"] = json!([null, null, null]);
+    assert_eq!(invalid["settlements"][0]["physical"], json!("pending"));
+    assert_eq!(invalid["settlements"][0]["evidence"], json!("pending"));
+    assert_eq!(invalid["lifetimes"][0]["state"], json!("closing"));
+    assert_eq!(invalid["close_completions"], json!([]));
+    reject_body_without_rewrite(
+        &path,
+        &serde_json::to_string(&invalid).unwrap(),
+        "resource proof requires an actual observation even with a matching Pending summary",
+    )
+    .await;
+}
