@@ -24,9 +24,9 @@ import { launch, openPage, waitUntilSettled, withEngines } from "./lib/browser.m
 import { attempt, CannotRun, chosen, log, table } from "./lib/cli.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
 import { panelCredential, startGatewayStack } from "./lib/gateway-stack.mjs"
-import { exceedsFrameBudget, measure, observers, throttle } from "./lib/perf.mjs"
+import { exceedsFrameBudget, measure, missingFrameSample, observers, throttle } from "./lib/perf.mjs"
 import { main } from "./lib/run.mjs"
-import { css, keys } from "./lib/selectors.mjs"
+import { chordDown, css, keys } from "./lib/selectors.mjs"
 import { withSeeded } from "./lib/seeded-load.mjs"
 import { target } from "./lib/server.mjs"
 import { metricsSince, series, summarizeStartup } from "./lib/startup-sample.mjs"
@@ -83,7 +83,8 @@ Cold is a fresh context with the HTTP cache disabled (Chromium). Warm is
 two reloads later in that context, cache enabled: the first fills the
 cache and is not recorded; the second is the warm sample. WebKit cannot
 disable the cache; its cold sample is the first navigation and its warm
-sample is the second reload.
+sample is the second reload. A CDP counter that moved backwards between
+the baseline and the sample is omitted.
 
 Startup readyMs is the harness clock from just before navigation until
 the pane (or, for the gateway, the workspace after its index) is settled.
@@ -177,21 +178,45 @@ async function sampleOf(page, cdp, readyMs, cache, baseline) {
   }
 }
 
-/** Counts a capture-phase ⌘⇧N, the split-beside chord, so a missed key is not a refusal. */
+/**
+ * Counts a capture-phase delivery of the split-beside chord. The event has
+ * to match `keys.newSessionBeside` with the other modifiers up, so a key
+ * that never arrived is not recorded as a refusal.
+ */
 async function armSplitChord(page) {
-  await page.evaluate(() => {
+  const expected = chordDown(keys.newSessionBeside)
+  await page.evaluate((expected) => {
     window.__alphaSplitChord = 0
     if (window.__alphaSplitListening) return
     window.__alphaSplitListening = true
     window.addEventListener(
       "keydown",
       (event) => {
-        if (event.code === "KeyN" && event.shiftKey && event.metaKey)
+        if (
+          event.code === expected.code &&
+          event.metaKey === expected.metaKey &&
+          event.shiftKey === expected.shiftKey &&
+          event.altKey === expected.altKey &&
+          event.ctrlKey === expected.ctrlKey
+        )
           window.__alphaSplitChord += 1
       },
       true,
     )
-  })
+  }, expected)
+}
+
+/**
+ * Frames around `act`. `measure` throws when the page recorded no rAF gap,
+ * which is after `act` has already run. That gap is a missing sample. The
+ * caller still checks what `act` did.
+ */
+async function framesOf(page, act, settle) {
+  try {
+    return { frames: await measure(page, act, settle) }
+  } catch (error) {
+    return { frames: null, unmeasured: missingFrameSample(error) }
+  }
 }
 
 async function shot(page, shots, name) {
@@ -386,6 +411,7 @@ await main(
                 }
                 const filled = await paneCount(opened.page)
                 let frames = null
+                let unmeasured = null
                 let cdp = null
                 await armSplitChord(opened.page)
                 const chordBefore = await opened.page.evaluate(
@@ -396,11 +422,13 @@ await main(
                   try {
                     await cdp.send("Performance.enable")
                     await opened.page.waitForTimeout(400)
-                    frames = await measure(
+                    const sampled = await framesOf(
                       opened.page,
                       () => opened.page.keyboard.press(keys.newSessionBeside),
                       800,
                     )
+                    frames = sampled.frames
+                    unmeasured = sampled.unmeasured ?? null
                   } finally {
                     await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 })
                   }
@@ -434,6 +462,7 @@ await main(
                   heapUsed: surface.heapUsed,
                   nodes: surface.nodes,
                   frames,
+                  unmeasured,
                   overBudget: frames ? exceedsFrameBudget(frames.maxFrame) : null,
                   note: "split refused at paneLimits.maxPanes; #588/#606 own the budget rows",
                 }
@@ -480,6 +509,7 @@ await main(
                 await opened.page.waitForSelector(css.transcript, { timeout: 30_000 })
                 const plain = await opened.page.locator(css.transcript).innerText()
                 let frames = null
+                let unmeasured = null
                 let cdp = null
                 let scrolled
                 if (engine === "chromium") {
@@ -487,11 +517,13 @@ await main(
                   try {
                     await cdp.send("Performance.enable")
                     await opened.page.waitForTimeout(400)
-                    frames = await measure(
+                    const sampled = await framesOf(
                       opened.page,
                       () => scrollTranscript(opened.page),
                       600,
                     )
+                    frames = sampled.frames
+                    unmeasured = sampled.unmeasured ?? null
                   } finally {
                     await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 })
                   }
@@ -533,6 +565,7 @@ await main(
                   heapUsed: surface.heapUsed,
                   nodes: surface.nodes,
                   frames,
+                  unmeasured,
                   overBudget: frames ? exceedsFrameBudget(frames.maxFrame) : null,
                 }
               } finally {
@@ -583,7 +616,7 @@ await main(
               await pair.opened.close()
             }
             const failures = [...colds, ...warms].flatMap(startupFailures)
-            if (colds.some((sample) => sample.endpointAskMs == null))
+            if ([...colds, ...warms].some((sample) => sample.endpointAskMs == null))
               failures.push("the page did not ask the host for the gateway endpoint")
             if (listed.some((count) => count !== 0))
               failures.push(

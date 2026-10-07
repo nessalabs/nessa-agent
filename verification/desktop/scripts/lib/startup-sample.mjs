@@ -80,7 +80,9 @@ export function cdpMetrics(list) {
 /**
  * Gauges stay at their later reading. Counters become the difference, so a
  * warm sample does not include the cold load or the cache-fill reload.
- * A counter missing from the baseline counts from zero.
+ * A counter missing from the baseline counts from zero. A counter that
+ * moved backwards is omitted: these CDP counters are not strictly
+ * monotonic across a reload, and a negative duration is not a sample.
  */
 export function metricsSince(before, after) {
   const start = cdpMetrics(before)
@@ -92,6 +94,7 @@ export function metricsSince(before, after) {
   for (const name of cdpCounters) {
     if (!Object.hasOwn(end, name)) continue
     const from = Object.hasOwn(start, name) ? start[name] : 0
+    if (end[name] < from) continue
     table[name] = end[name] - from
   }
   return table

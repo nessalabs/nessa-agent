@@ -47,12 +47,14 @@ does not replace `workspace-load.mjs`.
   add a pane. The long transcript is 24 sessions, one transcript of 24
   messages, 4,000 ASCII characters in the plain part. Chromium records the
   refused split and the scroll at 4× CPU throttle. A frame over 50 ms is
-  stored and does not fail the row. A pane past the cap, a short fill, or
-  a transcript that does not overflow, fails the row.
+  stored and does not fail the row. A pane past the cap, a short fill, a
+  split chord that does not arrive, or a transcript that does not overflow,
+  fails the row. A missing frame sample does not replace that result.
   _Check:_ `alpha-perf.mjs` (`panes`, `transcript`).
 - [ ] **A scripted gateway's empty window is timed only with `--with-gateway`,
   in Chromium.** No conversation is created, and the session list stays
-  empty. This is not a catalogue walk. `#607` does not merge, so the
+  empty. Cold and warm each ask the host for the gateway endpoint. This is
+  not a catalogue walk. `#607` does not merge, so the
   desktop still cannot observe a stored count above `conversation.list`'s
   500 through this script.
   _Check:_ `alpha-perf.mjs --with-gateway` (`gateway`).

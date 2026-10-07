@@ -83,6 +83,28 @@ describe("startup sample", () => {
     assert.equal(Object.hasOwn(table, "UnknownMetric"), false)
   })
 
+  it("does not read a CDP name inherited from Object.prototype", () => {
+    Object.defineProperty(Object.prototype, "LayoutCount", {
+      configurable: true,
+      get() {
+        throw new Error("inherited LayoutCount")
+      },
+    })
+    try {
+      const table = metricsSince(
+        [{ name: "JSHeapUsedSize", value: 1 }],
+        [{ name: "JSHeapUsedSize", value: 2 }, { name: "Nodes", value: 3 }],
+      )
+      assert.equal(Object.hasOwn(table, "LayoutCount"), false)
+      assert.equal(metric(table, "LayoutCount"), null)
+      assert.equal(metric({}, "LayoutCount"), null)
+      assert.equal(table.JSHeapUsedSize, 2)
+      assert.equal(table.Nodes, 3)
+    } finally {
+      delete Object.prototype.LayoutCount
+    }
+  })
+
   it("keeps gauges and subtracts counters from the sample baseline", () => {
     const table = metricsSince(
       [
@@ -104,6 +126,24 @@ describe("startup sample", () => {
     assert.equal(table.Nodes, 3)
     assert.equal(table.TaskDuration, 8)
     assert.equal(metric(table, "LayoutCount"), 4)
+  })
+
+  it("omits a counter that moved backwards", () => {
+    const table = metricsSince(
+      [
+        { name: "LayoutCount", value: 10 },
+        { name: "ScriptDuration", value: 4 },
+      ],
+      [
+        { name: "LayoutCount", value: 9 },
+        { name: "ScriptDuration", value: 4.5 },
+        { name: "JSHeapUsedSize", value: 8 },
+      ],
+    )
+    assert.equal(Object.hasOwn(table, "LayoutCount"), false)
+    assert.equal(metric(table, "LayoutCount"), null)
+    assert.equal(table.ScriptDuration, 0.5)
+    assert.equal(table.JSHeapUsedSize, 8)
   })
 
   it("computes frames per second from the rAF gaps", () => {

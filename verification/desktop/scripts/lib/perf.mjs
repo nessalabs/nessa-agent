@@ -153,6 +153,15 @@ export async function calibrationFrame(page, cost = 120) {
   }
 }
 
+/**
+ * `measure` throws `CannotRun` after `act` when no rAF gap fell in the
+ * sample. That is a missing frame sample. Any other error still propagates.
+ */
+export function missingFrameSample(error) {
+  if (!(error instanceof CannotRun)) throw error
+  return error.message
+}
+
 /** Measures one interaction: frames from just before `act` to `settle` ms after. */
 export async function measure(page, act, settle = 1000) {
   const t0 = await page.evaluate(() => performance.now())

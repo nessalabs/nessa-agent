@@ -336,6 +336,29 @@ export const layouts = ["columns", "sidebar"]
  * Keyboard chords, as Playwright names them
  * (`src/desktop/workspace/ui/layouts/shortcuts.ts` is their owner).
  */
+const chordModifiers = ["Alt", "Control", "Meta", "Shift"]
+
+/**
+ * The key and the modifiers a Playwright chord holds down. Every other
+ * modifier is up. The last segment is the `KeyboardEvent.code`. The page
+ * listener that proves a chord arrived matches this, so it does not spell
+ * the chord a second time.
+ */
+export function chordDown(chord) {
+  const parts = String(chord).split("+")
+  const code = parts.at(-1) ?? ""
+  const modifiers = parts.slice(0, -1)
+  if (!code || modifiers.some((name) => !chordModifiers.includes(name)))
+    throw new Error(`not a Playwright chord: ${chord}`)
+  return {
+    code,
+    altKey: modifiers.includes("Alt"),
+    ctrlKey: modifiers.includes("Control"),
+    metaKey: modifiers.includes("Meta"),
+    shiftKey: modifiers.includes("Shift"),
+  }
+}
+
 export const keys = {
   escape: "Escape",
   enter: "Enter",
