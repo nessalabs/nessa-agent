@@ -1271,6 +1271,9 @@ async fn row_26_handed_out_gate_blocks_absence_through_rejected_close_and_remain
     assert!(snapshot.settlements.is_empty());
     gate.note_attachment(true, true).await;
     assert!(gate.is_sealed());
+    assert_eq!(c.lifetime_state(&root), Some(LifetimeState::Closing));
+    assert!(c.participation(&root).is_none());
+    bounded(gate.join_descendants()).await.unwrap();
     assert_eq!(c.lifetime_state(&root), Some(LifetimeState::Closed));
     assert!(c.participation(&root).is_none());
 }
@@ -1319,6 +1322,9 @@ async fn row_26_gate_handoff_before_caller_drop_retains_possible_external_owner(
     assert_eq!(c.lifetime_state(&root), Some(LifetimeState::Closing));
     assert!(store.read().await.unwrap().settlements.is_empty());
     gate.note_attachment(true, true).await;
+    assert_eq!(c.lifetime_state(&root), Some(LifetimeState::Closing));
+    assert!(c.participation(&root).is_none());
+    bounded(gate.join_descendants()).await.unwrap();
     assert_eq!(c.lifetime_state(&root), Some(LifetimeState::Closed));
 }
 

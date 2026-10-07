@@ -73,6 +73,13 @@ pub trait OwnedLifetime: Send + Sync {
     /// Physical cleanup still starts when the audit port rejects the intent.
     async fn seal_for_host(&self, actor: &ActionContext) -> Result<(), AgentError>;
     /// Record this Agent's own attachment cleanup under the close that sealed it.
+    /// Returns after publishing the observation and scheduling reconciliation;
+    /// it does not await the resource close that may be producing this callback.
+    /// Audit and persistence outcomes belong to [`Self::join_descendants`] and
+    /// the coordinator's explicit close operation. The real Agent regressions
+    /// `row_34_factory_gate_installs_on_real_agent_and_shared_close_refuses_attachment`
+    /// and `row_35_failed_factory_revokes_stale_real_agent_attachment_authority`
+    /// exercise this producer and observation ordering.
     async fn note_attachment(&self, released: bool, evidence_acknowledged: bool);
     /// Wait for the descendant drain started by seal. Dropping the caller does not cancel it.
     async fn join_descendants(&self) -> Result<(), AgentError>;

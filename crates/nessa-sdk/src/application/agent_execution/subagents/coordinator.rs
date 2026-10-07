@@ -2205,11 +2205,10 @@ impl OwnedLifetime for LifetimeGate {
                         evidence: evidence_fact,
                     },
                 );
-                // A newly observed host report starts or joins the existing first close;
-                // its owned generation performs exact audit and writer reconciliation.
-                if let Some(generation) = shared.start_drain(owner.clone(), false) {
-                    let _ = wait_generation(generation).await;
-                }
+                // The resource close can be awaiting this callback. Publish its
+                // observation and let the owned generation reconcile it without
+                // making the producer join its own pending resource future.
+                let _ = shared.start_drain(owner.clone(), false);
             }
         }
         shared.notify.notify_waiters();
