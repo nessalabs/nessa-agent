@@ -538,12 +538,15 @@ impl Drop for BadDropPayload {
     }
 }
 struct BadDropWake {
+    wakes: Arc<AtomicUsize>,
     drops: Arc<AtomicUsize>,
     owned_drops: Arc<AtomicUsize>,
     payload_drops: Arc<AtomicUsize>,
 }
 impl Wake for BadDropWake {
-    fn wake(self: Arc<Self>) {}
+    fn wake(self: Arc<Self>) {
+        self.wakes.fetch_add(1, Ordering::SeqCst);
+    }
 }
 impl Drop for BadDropWake {
     fn drop(&mut self) {
@@ -575,10 +578,12 @@ fn panicking_caller_waker_drop_does_not_strand_registered_close_waiters() {
                     .await
                     .unwrap()
                     .child;
+                let wakes = Arc::new(AtomicUsize::new(0));
                 let drops = Arc::new(AtomicUsize::new(0));
                 let owned_drops = Arc::new(AtomicUsize::new(0));
                 let payload_drops = Arc::new(AtomicUsize::new(0));
                 let caller = Waker::from(Arc::new(BadDropWake {
+                    wakes: wakes.clone(),
                     drops: drops.clone(),
                     owned_drops: owned_drops.clone(),
                     payload_drops: payload_drops.clone(),
@@ -629,6 +634,7 @@ fn panicking_caller_waker_drop_does_not_strand_registered_close_waiters() {
                 );
                 healthy.await.unwrap().unwrap();
                 bounded(faulty).await.unwrap();
+                assert!(wakes.load(Ordering::SeqCst) > 0);
                 assert_eq!(drops.load(Ordering::SeqCst), 1);
                 assert_eq!(
                     owned_drops.load(Ordering::SeqCst),
