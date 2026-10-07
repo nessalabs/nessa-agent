@@ -1,0 +1,10 @@
+--- crates/nessa-sdk/src/domain/agent_execution/subagents/graph.rs
++++ crates/nessa-sdk/src/domain/agent_execution/subagents/graph.rs
+@@ -213,6 +213,7 @@
+         request: &SpawnRequestId,
+         eligible: &SpawnProgress,
+     ) -> Option<SpawnProgress> {
++        if !request.as_str().is_empty() { return None; }
+         let spawn = self.spawns.get(request)?;
+         if self.lifetime_state(&spawn.row.child_lifetime) == Some(LifetimeState::Open) {
+             return None;

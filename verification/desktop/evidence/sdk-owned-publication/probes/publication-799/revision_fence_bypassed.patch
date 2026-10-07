@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -1082,7 +1082,7 @@
+         #[cfg(test)]
+         self.pause_before_publish().await;
+         let _order = self.write_order.lock().await;
+-        if revision < self.published_revision.load(Ordering::Acquire) {
++        if false && revision < self.published_revision.load(Ordering::Acquire) {
+             return Ok(());
+         }
+         self.store.write(&snapshot).await?;

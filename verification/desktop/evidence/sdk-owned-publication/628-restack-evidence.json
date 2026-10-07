@@ -1,0 +1,21 @@
+{
+  "preserved_head": "141755dde6fc159031047ae23f20c1f14dc6e2fd",
+  "restacked_head": "bb24a3646ae831e699ed86ccc4bdf00a4c528410",
+  "base": "f1682e8a763646c6c3e73dee73c1c47987e2cbae",
+  "sdk_diff_patch_equal": true,
+  "sdk_files_identical": {
+    "crates/nessa-sdk/README.md": "4009ba1b0db1c8284aee96980bbb2887a3ce980cf62962149af5bb3b66f0dbfd",
+    "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs": "0c9319565baa9c1ded9a076415d9fc34bce839af07bff0388b847ecb27b679cd",
+    "crates/nessa-sdk/src/application/agent_execution/subagents/failure.rs": "8531e2bf2d7e66ea9dd4f712063a7f5aa65058d45c061a75b89e77629779943c",
+    "crates/nessa-sdk/src/application/agent_execution/subagents/mod.rs": "12822a1bc0856378dedcfdbc77abf441b6618a5df8513fae76e02733a3d9535c",
+    "crates/nessa-sdk/src/application/agent_execution/subagents/ports.rs": "05131d906c664725c185e3b75a700a73b0fda6642e48b19861ce972e7c305647",
+    "crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs": "c2f5c80b69b751463e336628a15057fc68cd8bbbb256f1952f982e15ea08bc2b",
+    "crates/nessa-sdk/src/application/agent_execution/subagents/root.rs": "cd3ca1be4579ab7792203f6a71d7c36733403cdf17f0e1cdef690ef9a158dc44",
+    "crates/nessa-sdk/src/domain/agent_execution/subagents/graph.rs": "4ab472cd6b4d074eb0307ecdbbb7fecedd6a42f0bf3b64127da236b47abfa0a2",
+    "crates/nessa-sdk/src/domain/agent_execution/subagents/mod.rs": "3970a94d99d2802a8e17ca070199aecbf4f302db622d4d9a274622352fb4220f",
+    "crates/nessa-sdk/tests/application/agent_execution/agents/coordination/owned_lifetime.rs": "b812b48d05d8aa2e0583ac72c2181744d5f2bf623a61dcc269b121e72bed6228",
+    "crates/nessa-sdk/tests/application/agent_execution/subagents.rs": "eac2c572a4bb8c7513fc5d4328d6307d82500c1b6ae3f9b8a1bc13e50cfab3fe",
+    "crates/nessa-sdk/tests/application/agent_execution/subagents/publication.rs": "db518450ad698a95ebc0b3865506b7ba1b3f89ab0e8e5a54ff41d52bf63b419d",
+    "crates/nessa-sdk/tests/domain/agent_execution/ownership.rs": "5e3404d526ded7d55d6883558316bdd406472f1bdbe884b70338b767e615c0aa"
+  }
+}

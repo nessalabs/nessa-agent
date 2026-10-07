@@ -1,0 +1,12 @@
+Candidate: 1bf09a5ef83f2a4183f3dfbc05e057d5e0138a31
+Run: 37622329149
+Job: 112795480051
+Required SDK domain coverage: FAILED (100% lines/functions/regions required)
+Exact uncovered line IDs are not emitted by this job.
+2026-10-07T12:44:27.6290139Z test result: ok. 394 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 13.41s
+2026-10-07T12:44:28.1719977Z test result: ok. 209 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+2026-10-07T12:46:23.3175362Z test result: ok. 65 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 115.14s
+2026-10-07T12:46:27.0089699Z agent_execution/subagents/graph.rs                                 1317                 3    99.77%          82                 0   100.00%         986                 1    99.90%           0                 0         -
+2026-10-07T12:46:27.0529160Z TOTAL                                                              6552                 3    99.95%         703                 0   100.00%        5216                 1    99.98%           0                 0         -
+2026-10-07T12:46:29.8628692Z ##[error]Process completed with exit code 1.
+

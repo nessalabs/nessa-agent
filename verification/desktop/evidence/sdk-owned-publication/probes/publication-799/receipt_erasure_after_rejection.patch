@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs
+@@ -196,7 +196,7 @@
+             // transferred factory owner. An unaudited Attached permission is
+             // conservatively represented by that prior physical preparation.
+             let known = match row.progress.known() {
+-                milestone @ KnownMilestone::TaskAdmitted { .. } => milestone,
++                _milestone @ KnownMilestone::TaskAdmitted { .. } => eligible.known(),
+                 KnownMilestone::Prepared => KnownMilestone::Prepared,
+                 KnownMilestone::Attached
+                     if eligible.known() == KnownMilestone::Reserved

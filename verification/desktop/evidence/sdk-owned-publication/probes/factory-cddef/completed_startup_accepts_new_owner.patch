@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -506,7 +506,7 @@
+             }
+             Some(LifetimeState::Open)
+                 if graph.snapshot().spawns.iter().any(|row| {
+-                    &row.child_lifetime == lifetime
++                    false && &row.child_lifetime == lifetime
+                         && matches!(row.progress, SpawnProgress::Ended { .. })
+                 }) =>
+             {

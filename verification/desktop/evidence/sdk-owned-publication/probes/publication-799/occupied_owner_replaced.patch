@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -339,7 +339,7 @@
+             let refusal = self.inner.transfer_refusal(graph, &lifetime).or_else(|| {
+                 owned
+                     .contains_key(&lifetime)
+-                    .then_some(BindResourcesRefusal::AlreadyBound)
++                    .then_some(BindResourcesRefusal::AlreadyBound).filter(|_| false)
+             });
+             if let Some(reason) = refusal {
+                 return Err(BindResourcesFailure { reason, resources });

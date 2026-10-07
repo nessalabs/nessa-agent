@@ -1,0 +1,103 @@
+{
+  "head": "bb24a3646ae831e699ed86ccc4bdf00a4c528410",
+  "environment": {
+    "CARGO_HOME": "/tmp/nessa-cargo",
+    "RUSTUP_HOME": "/tmp/nessa-rustup",
+    "CARGO_TARGET_DIR": "/workspace/nessa-agent/target",
+    "CARGO_NET_OFFLINE": "true"
+  },
+  "gates": [
+    {
+      "name": "format",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "fmt",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-sdk",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 3.34,
+      "log": "/tmp/628-final-gates-assembled/format.log"
+    },
+    {
+      "name": "domain-ownership",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "domain",
+        "ownership"
+      ],
+      "exit_code": 0,
+      "seconds": 4.58,
+      "log": "/tmp/628-final-gates-assembled/domain-ownership.log"
+    },
+    {
+      "name": "application-ownership",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "subagents"
+      ],
+      "exit_code": 0,
+      "seconds": 2.55,
+      "log": "/tmp/628-final-gates-assembled/application-ownership.log"
+    },
+    {
+      "name": "sdk-storage",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "infrastructure",
+        "session_storage"
+      ],
+      "exit_code": 0,
+      "seconds": 87.63,
+      "log": "/tmp/628-final-gates-assembled/sdk-storage.log"
+    },
+    {
+      "name": "sdk-full",
+      "exit_code": 0,
+      "wait_status": 0,
+      "wait_status_source": "/proc/321290/stat",
+      "log": "/tmp/628-final-gates-assembled/sdk-full.log",
+      "note": "Owned controller stopped before next command; exact completed child OS status captured."
+    }
+  ]
+}

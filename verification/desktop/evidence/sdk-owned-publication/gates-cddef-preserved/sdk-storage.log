@@ -1,0 +1,63 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-sdk)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.68s
+     Running tests/infrastructure.rs (/workspace/nessa-agent/target/debug/deps/infrastructure-78b4678fdfb7e1e5)
+
+running 54 tests
+test infrastructure::session_storage::caller_wakes::a_wake_during_classification_is_not_a_missing_wake ... ok
+test infrastructure::session_storage::caller_wakes::panicking_first_identity_waiter_leaves_the_worker_answering ... ok
+test infrastructure::session_storage::caller_wakes::panicking_initialize_waiter_leaves_the_worker_answering ... ok
+test infrastructure::session_storage::caller_wakes::panicking_committed_read_waiter_is_not_a_shutdown_failure ... ok
+test infrastructure::session_storage::caller_wakes::panicking_record_identity_waiter_leaves_the_worker_answering ... ok
+test infrastructure::session_storage::caller_wakes::panicking_record_source_expected_waiter_leaves_the_worker_answering ... ok
+test infrastructure::session_storage::caller_wakes::panicking_record_source_waiter_leaves_the_worker_answering ... ok
+test infrastructure::session_storage::caller_wakes::panicking_shutdown_waiter_still_wakes_the_other_shutdown ... ok
+test infrastructure::session_storage::caller_wakes::stored_identity_ready_without_the_caller_waker_is_a_later_statement ... ok
+test infrastructure::session_storage::caller_wakes::held_exclusive_lock_past_the_deadline_is_still_cold_open ... ok
+test infrastructure::session_storage::child_record_source_server_probe ... ok
+test infrastructure::session_storage::caller_wakes::stored_ready_without_the_caller_waker_is_not_cold_open ... ok
+test infrastructure::session_storage::discovery::fresh_reader_pages_older_publication_after_another_reader_proves_newer_head ... ok
+test infrastructure::session_storage::discovery::competing_historical_query_advances_original_scan_and_preserves_forward_head ... ok
+test infrastructure::session_storage::caller_wakes::panicking_open_existing_waiter_leaves_the_worker_answering ... ok
+test infrastructure::session_storage::caller_wakes::panicking_open_waiter_leaves_the_worker_answering ... ok
+test infrastructure::session_storage::discovery::malformed_completion_remains_refused_after_physical_validator_advanced ... ok
+test infrastructure::session_storage::discovery::proven_historical_pages_remain_ready_after_newer_head ... ok
+test infrastructure::session_storage::discovery::shared_completion_proof_refuses_reset_and_same_incarnation_shrink ... ok
+test infrastructure::session_storage::discovery::shared_discovery_finishes_smaller_capture_before_larger_requests ... ok
+test infrastructure::session_storage::discovery::shared_discovery_refuses_intermediate_unit_and_keeps_larger_progress ... ok
+test infrastructure::session_storage::memory::actual_memory_binding_prefix_receipt_and_reset_keep_original_ownership ... ok
+test infrastructure::session_storage::memory::actual_memory_plan_preflight_refuses_before_replacing_published_evidence ... ok
+test infrastructure::session_storage::record::child_unpublished_unit_crash_probe ... ignored, child process crash probe
+test infrastructure::session_storage::record::concurrent_opening_saves_on_two_sessions_both_publish ... ok
+test infrastructure::session_storage::record::contention_writer_stops_when_its_guard_drops ... ok
+test infrastructure::session_storage::discovery::shared_discovery_serves_smaller_publication_then_resumes_captured_head ... ok
+test infrastructure::session_storage::record::empty_erase_invalidates_unpolled_original_save_before_new_work ... ok
+test infrastructure::session_storage::discovery::historical_scan_survives_public_source_drop_and_recreation ... ok
+test infrastructure::session_storage::record::late_invalid_unit_never_appends_valid_prefix ... ok
+test infrastructure::session_storage::record::load_binds_fresh_reopened_and_reset_writers_to_actual_stream_progress ... ok
+test infrastructure::session_storage::record::predecessor_semantic_sqlite_record_refuses_without_mutation ... ok
+test infrastructure::session_storage::record::record_watch_stays_clean_after_unit_seal_until_original_completion_retry ... ok
+test infrastructure::session_storage::record::save_commit_latency_sample ... ignored, latency measurement
+test infrastructure::session_storage::discovery::historical_miss_preserves_known_forward_failure_and_clean_head ... ok
+test infrastructure::session_storage::record::valid_unit_plan_with_wrong_candidate_never_appends ... ok
+test infrastructure::session_storage::record_source::restored_checkpoint_accepts_real_same_generation_extension ... ok
+test infrastructure::session_storage::record_source::save_units_remain_private_to_source_and_receiver_until_completion ... ok
+test infrastructure::session_storage::record_source_reads_committed_frames_while_writer_lease_is_held ... ok
+test infrastructure::session_storage::record_storage_lease_excludes_second_manager_and_reset_erases_history ... ok
+test infrastructure::session_storage::record_storage_reopens_the_same_semantic_history ... ok
+test infrastructure::session_storage::save_group::checkpoint_refuses_changed_final_unit_preimage_and_completion_chain ... ok
+test infrastructure::session_storage::save_group::checkpoint_refuses_higher_prior_base_with_other_completion_fields_unchanged ... ok
+test infrastructure::session_storage::save_group::checkpoint_refuses_lower_prior_base_with_other_completion_fields_unchanged ... ok
+test infrastructure::session_storage::save_group::checkpoint_rejects_each_independent_completion_binding_contradiction ... ok
+test infrastructure::session_storage::save_group::checkpoint_restore_refuses_independent_group_representation_contradictions ... ok
+test infrastructure::session_storage::save_group::completed_prefix_stays_published_during_same_generation_extension_and_checkpoint_restage ... ok
+test infrastructure::session_storage::save_group::emitted_record_rejection_preserves_public_projection_and_valid_completion ... ok
+test infrastructure::session_storage::save_group::physical_conflict_fences_live_load_and_later_saves ... ok
+test infrastructure::session_storage::separate_process_receiver_catches_write_between_head_and_recheck ... ok
+test infrastructure::session_storage::sync_pass_reloads_checkpoint_after_lost_commit_reply ... ok
+test infrastructure::session_storage::record::save_commits_its_physical_events_in_one_transaction ... ok
+test infrastructure::session_storage::record::killed_child_retains_original_unpublished_unit_retry ... ok
+test infrastructure::session_storage::record::explicit_units_publish_one_direct_save_beyond_one_body_bound has been running for over 60 seconds
+test infrastructure::session_storage::record::explicit_units_publish_one_direct_save_beyond_one_body_bound ... ok
+
+test result: ok. 52 passed; 0 failed; 2 ignored; 0 measured; 13 filtered out; finished in 88.54s
+

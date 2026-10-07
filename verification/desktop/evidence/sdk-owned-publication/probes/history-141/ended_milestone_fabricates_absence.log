@@ -1,0 +1,31 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-sdk)
+warning: unused import: `KnownMilestone`
+  --> crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs:39:55
+   |
+39 |         Dispatch, EvidenceFact, HostActor, Initiator, KnownMilestone, LifetimeCause, LifetimeState,
+   |                                                       ^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `nessa-sdk` (lib) generated 1 warning (run `cargo fix --lib -p nessa-sdk` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.09s
+     Running tests/application.rs (/workspace/nessa-agent/target/debug/deps/application-602976c2950e4911)
+
+running 1 test
+test application::agent_execution::subagents::publication::row_35_restored_ended_factual_owner_is_not_resource_absence ... FAILED
+
+failures:
+
+---- application::agent_execution::subagents::publication::row_35_restored_ended_factual_owner_is_not_resource_absence stdout ----
+
+thread 'application::agent_execution::subagents::publication::row_35_restored_ended_factual_owner_is_not_resource_absence' (318874) panicked at crates/nessa-sdk/tests/application/agent_execution/subagents/publication.rs:1822:48:
+called `Option::unwrap()` on a `None` value
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    application::agent_execution::subagents::publication::row_35_restored_ended_factual_owner_is_not_resource_absence
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 397 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-sdk --test application`

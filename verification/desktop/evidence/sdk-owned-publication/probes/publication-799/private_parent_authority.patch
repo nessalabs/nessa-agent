@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -673,7 +673,7 @@
+                 },
+             ));
+         }
+-        if !self
++        if false && !self
+             .publication
+             .lock()
+             .expect("ownership publication")

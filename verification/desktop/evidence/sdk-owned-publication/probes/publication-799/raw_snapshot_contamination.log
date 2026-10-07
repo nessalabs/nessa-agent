@@ -1,0 +1,115 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-sdk)
+warning: method `project` is never used
+   --> crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs:179:19
+    |
+ 55 | impl OwnershipPublication {
+    | ------------------------- method in this implementation
+...
+179 |     pub(super) fn project(&self, graph: &OwnershipGraph) -> OwnershipSnapshot {
+    |                   ^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `nessa-sdk` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.49s
+     Running tests/application.rs (/workspace/nessa-agent/target/debug/deps/application-602976c2950e4911)
+
+running 36 tests
+test application::agent_execution::subagents::publication::rejected_close_intent_is_persisted_before_cleanup_can_complete ... ok
+test application::agent_execution::subagents::publication::previously_bound_root_cannot_use_never_bound_settlement ... ok
+test application::agent_execution::subagents::publication::observed_task_receipt_survives_rejected_publication_in_nonrunnable_projection ... ok
+test application::agent_execution::subagents::publication::private_report_does_not_leak_through_unrelated_commit ... FAILED
+test application::agent_execution::subagents::publication::row_11_uncertain_root_identity_is_retained_nonrunnable ... ok
+test application::agent_execution::subagents::publication::row_10_write_then_uncertain_preserves_same_root_for_resume ... ok
+test application::agent_execution::subagents::publication::row_13_dropped_root_waiter_reconciles_accepted_identity ... ok
+test application::agent_execution::subagents::publication::row_14_queued_success_is_unclaimed_until_open_root_returns_ready ... ok
+test application::agent_execution::subagents::publication::row_15_dropped_waiter_during_store_keeps_transaction_and_reconciles_id ... ok
+test application::agent_execution::subagents::publication::row_12_dropped_root_waiter_does_not_abandon_definite_rejection ... ok
+test application::agent_execution::subagents::publication::row_24_failed_eligible_store_keeps_and_closes_actual_transferred_owner ... ok
+test application::agent_execution::subagents::publication::row_21_absence_claim_refuses_late_binding_and_returns_sole_owner_even_after_audit_rejection ... ok
+test application::agent_execution::subagents::publication::row_24_rejected_root_audit_preserves_preexisting_close_safety ... ok
+test application::agent_execution::subagents::publication::row_23_restored_closing_accepts_owner_before_release_and_refuses_owner_after_release ... ok
+test application::agent_execution::subagents::publication::row_26_gate_handoff_before_caller_drop_retains_possible_external_owner ... ok
+test application::agent_execution::subagents::publication::row_26_handed_out_gate_blocks_absence_through_rejected_close_and_remains_sealed ... ok
+test application::agent_execution::subagents::publication::row_25_close_over_pending_task_ack_retains_actual_receipt_through_resume ... FAILED
+test application::agent_execution::subagents::publication::row_25_close_over_pending_task_rejection_retains_actual_receipt_through_resume ... FAILED
+test application::agent_execution::subagents::publication::row_27_absence_claim_refuses_new_gate_during_rejected_audit_and_after_close ... ok
+test application::agent_execution::subagents::publication::row_28_acknowledged_child_subsequently_allows_gate_and_retains_factory_owner ... ok
+test application::agent_execution::subagents::publication::row_29_private_parent_rejection_keeps_descendant_factory_unreachable ... ok
+test application::agent_execution::subagents::publication::row_28_private_child_read_cannot_transfer_and_rejection_returns_owner ... ok
+test application::agent_execution::subagents::publication::row_29_private_parent_spawns_refused_until_audit_accepts ... ok
+test application::agent_execution::subagents::publication::row_30_already_unconfirmed_safety_persists_despite_rejected_or_uncertain_audit ... ok
+test application::agent_execution::subagents::publication::row_30_ended_startup_safety_persists_when_both_safety_audits_reject ... ok
+test application::agent_execution::subagents::publication::row_31_suppressed_report_survives_rejected_safety_audit ... ok
+test application::agent_execution::subagents::publication::row_32_uncertain_initial_reservation_retains_sealed_child_and_capacity ... ok
+test application::agent_execution::subagents::publication::row_3_private_reservation_excludes_child_and_factory_until_audit ... FAILED
+test application::agent_execution::subagents::publication::row_4_prepared_stays_durable_while_attached_audit_pending ... FAILED
+test application::agent_execution::subagents::publication::row_5_attached_stays_durable_while_task_audit_pending ... FAILED
+test application::agent_execution::subagents::publication::row_9_audit_eligible_root_survives_definite_store_rejection ... ok
+test application::agent_execution::subagents::publication::row_8_released_capacity_and_fact_precede_rejected_cleanup_audit ... ok
+test application::agent_execution::subagents::publication::rows_18_19_never_bound_settlement_rejection_stays_closing_and_explicit_retry_uses_actual_audit ... ok
+test application::agent_execution::subagents::publication::rows_1_2_private_root_excluded_while_neighbor_completes_and_rejection_resumes_cleanly ... FAILED
+test application::agent_execution::subagents::publication::rows_22_23_binding_wins_and_duplicate_unknown_closed_refusals_preserve_owners ... ok
+test application::agent_execution::subagents::publication::rows_6_7_pending_ack_cannot_reopen_rejected_close_intent ... ok
+
+failures:
+
+---- application::agent_execution::subagents::publication::private_report_does_not_leak_through_unrelated_commit stdout ----
+
+thread 'application::agent_execution::subagents::publication::private_report_does_not_leak_through_unrelated_commit' (253235) panicked at crates/nessa-sdk/tests/application/agent_execution/subagents/publication.rs:660:5:
+assertion failed: store.read().await.unwrap().reports.is_empty()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- application::agent_execution::subagents::publication::row_25_close_over_pending_task_ack_retains_actual_receipt_through_resume stdout ----
+
+thread 'application::agent_execution::subagents::publication::row_25_close_over_pending_task_ack_retains_actual_receipt_through_resume' (253247) panicked at crates/nessa-sdk/tests/application/agent_execution/subagents/publication.rs:1109:5:
+assertion `left == right` failed
+  left: TaskAdmitted { receipt: TaskReceiptId("receipt-1") }
+ right: Unconfirmed { known: TaskAdmitted { receipt: TaskReceiptId("receipt-1") } }
+
+---- application::agent_execution::subagents::publication::row_25_close_over_pending_task_rejection_retains_actual_receipt_through_resume stdout ----
+
+thread 'application::agent_execution::subagents::publication::row_25_close_over_pending_task_rejection_retains_actual_receipt_through_resume' (253248) panicked at crates/nessa-sdk/tests/application/agent_execution/subagents/publication.rs:1109:5:
+assertion `left == right` failed
+  left: TaskAdmitted { receipt: TaskReceiptId("receipt-1") }
+ right: Unconfirmed { known: TaskAdmitted { receipt: TaskReceiptId("receipt-1") } }
+
+---- application::agent_execution::subagents::publication::row_3_private_reservation_excludes_child_and_factory_until_audit stdout ----
+
+thread 'application::agent_execution::subagents::publication::row_3_private_reservation_excludes_child_and_factory_until_audit' (253260) panicked at crates/nessa-sdk/tests/application/agent_execution/subagents/publication.rs:176:5:
+assertion failed: snapshot.spawns.is_empty()
+
+---- application::agent_execution::subagents::publication::row_4_prepared_stays_durable_while_attached_audit_pending stdout ----
+
+thread 'application::agent_execution::subagents::publication::row_4_prepared_stays_durable_while_attached_audit_pending' (253261) panicked at crates/nessa-sdk/tests/application/agent_execution/subagents/publication.rs:204:5:
+assertion `left == right` failed
+  left: Attached
+ right: Prepared
+
+---- application::agent_execution::subagents::publication::row_5_attached_stays_durable_while_task_audit_pending stdout ----
+
+thread 'application::agent_execution::subagents::publication::row_5_attached_stays_durable_while_task_audit_pending' (253262) panicked at crates/nessa-sdk/tests/application/agent_execution/subagents/publication.rs:204:5:
+assertion `left == right` failed
+  left: TaskAdmitted { receipt: TaskReceiptId("receipt-1") }
+ right: Attached
+
+---- application::agent_execution::subagents::publication::rows_1_2_private_root_excluded_while_neighbor_completes_and_rejection_resumes_cleanly stdout ----
+
+thread 'application::agent_execution::subagents::publication::rows_1_2_private_root_excluded_while_neighbor_completes_and_rejection_resumes_cleanly' (253266) panicked at crates/nessa-sdk/tests/application/agent_execution/subagents/publication.rs:138:5:
+assertion `left == right` failed
+  left: 2
+ right: 1
+
+
+failures:
+    application::agent_execution::subagents::publication::private_report_does_not_leak_through_unrelated_commit
+    application::agent_execution::subagents::publication::row_25_close_over_pending_task_ack_retains_actual_receipt_through_resume
+    application::agent_execution::subagents::publication::row_25_close_over_pending_task_rejection_retains_actual_receipt_through_resume
+    application::agent_execution::subagents::publication::row_3_private_reservation_excludes_child_and_factory_until_audit
+    application::agent_execution::subagents::publication::row_4_prepared_stays_durable_while_attached_audit_pending
+    application::agent_execution::subagents::publication::row_5_attached_stays_durable_while_task_audit_pending
+    application::agent_execution::subagents::publication::rows_1_2_private_root_excluded_while_neighbor_completes_and_rejection_resumes_cleanly
+
+test result: FAILED. 29 passed; 7 failed; 0 ignored; 0 measured; 355 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p nessa-sdk --test application`

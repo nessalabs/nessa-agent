@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -495,7 +495,7 @@
+         match graph.lifetime_state(lifetime) {
+             None => Some(BindResourcesRefusal::UnknownLifetime),
+             Some(LifetimeState::Closed) => Some(BindResourcesRefusal::Closed),
+-            _ if !self
++            _ if false && !self
+                 .publication
+                 .lock()
+                 .expect("ownership publication")

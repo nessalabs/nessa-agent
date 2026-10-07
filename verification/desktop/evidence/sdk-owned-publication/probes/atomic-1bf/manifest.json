@@ -1,0 +1,64 @@
+{
+  "head": "bb24a3646ae831e699ed86ccc4bdf00a4c528410",
+  "cases": [
+    {
+      "name": "retained_root_actual_gate_unsealed",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "8bda94685e6d96c6e493abfa901b888cd01f90c9e748677fc181d1218a9b1316",
+      "mutated_sha256": "83697f77bd2c3ec12dd108936f01dbecddf2404fdb0cfc6b9c3b3905e1925d69",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--lib",
+        "row_37"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "retained_root_audit_intent_without_domain_seal",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "8bda94685e6d96c6e493abfa901b888cd01f90c9e748677fc181d1218a9b1316",
+      "mutated_sha256": "d6ab885241d61f5e1a0f2f91f5dc412fb396b68028de67e6e09fa26fa6e2b64a",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--lib",
+        "row_37"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    }
+  ],
+  "source_relationship": {
+    "probe_git_parent": "bb24a3646ae831e699ed86ccc4bdf00a4c528410",
+    "probe_tree_was_dirty": true,
+    "corrected_clean_checkpoint": "1bf09a5ef83f2a4183f3dfbc05e057d5e0138a31",
+    "checkpoint_path_sha256": {
+      "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs": "8bda94685e6d96c6e493abfa901b888cd01f90c9e748677fc181d1218a9b1316",
+      "crates/nessa-sdk/src/application/agent_execution/subagents/root.rs": "f00ba5d40d93aeea999f12648384304b308d777ca7a203f1060eddac4844dd62",
+      "docs/adr/todo/329-subagents.md": "df06dc37cf42ab686663206df2193ede176755b1ffe37a0f6720c276a16326ab"
+    },
+    "coordinator_matches_each_restored_probe_digest": true,
+    "other_paths_note": "Root and ADR were not mutated by probes; hashes identify the committed correction, not a separately captured pre-probe digest.",
+    "checkpoint_git_objects_match_restored_working_paths": {
+      "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs": true,
+      "crates/nessa-sdk/src/application/agent_execution/subagents/root.rs": true,
+      "docs/adr/todo/329-subagents.md": true
+    }
+  }
+}

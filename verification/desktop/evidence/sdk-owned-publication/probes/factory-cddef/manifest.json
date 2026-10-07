@@ -1,0 +1,134 @@
+{
+  "head": "cddefd5d00ffc01588b3688a135f4d6a3e35b5c4",
+  "cases": [
+    {
+      "name": "active_factory_transfer_guard_removed",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "a1f007a6e945268ec4dc9ef6d2965cf75b545c458bd292bc03dbd94fbd5ec505",
+      "mutated_sha256": "de7717c4a2c6902832c5d8993f421892b70a4ac2f7f813534a51edd1746473d1",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "rows_33"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "factory_wrong_lifetime_gate",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "a1f007a6e945268ec4dc9ef6d2965cf75b545c458bd292bc03dbd94fbd5ec505",
+      "mutated_sha256": "bd2ab28f32ff801721fb0eaa71742e2f2d0d9d7776ed5810a2c4590d90a53f03",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--lib",
+        "row_34_factory_gate"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "failed_factory_gate_not_revoked",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "a1f007a6e945268ec4dc9ef6d2965cf75b545c458bd292bc03dbd94fbd5ec505",
+      "mutated_sha256": "848526edc32d4e6a0e0b10fbe0f0b2b72bad8c3eca5b622da63092f2ceda6c3a",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--lib",
+        "row_35_failed_factory"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "restored_safety_attachment_seal_lost",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "a1f007a6e945268ec4dc9ef6d2965cf75b545c458bd292bc03dbd94fbd5ec505",
+      "mutated_sha256": "b4d16d9b1cd839f77f7b87c7d0f5ab38854ac2ab8ce0f4415346cdb0bd59e977",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "row_35_restored_unfinished"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "completed_startup_accepts_new_owner",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "a1f007a6e945268ec4dc9ef6d2965cf75b545c458bd292bc03dbd94fbd5ec505",
+      "mutated_sha256": "4ba7176accbe86811ba9236b13d31633550328c19bf11686aa4c09172e4bd62e",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "row_35_rejected_none"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "debug_calls_owned_gate",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/ports.rs",
+      "original_sha256": "3194b05b8988259d6348f7c687671a7c7ddd3bd701aee53cc87b666825181c19",
+      "mutated_sha256": "cc6c335b8898a8704026f2a638429162019c5f2c431aac3bd979b73fd6dbaef6",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--lib",
+        "row_34_prepare_request_debug"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    }
+  ]
+}

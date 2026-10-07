@@ -1,0 +1,119 @@
+{
+  "head": "1bf09a5ef83f2a4183f3dfbc05e057d5e0138a31",
+  "environment": {
+    "CARGO_HOME": "/tmp/nessa-cargo",
+    "RUSTUP_HOME": "/tmp/nessa-rustup",
+    "CARGO_TARGET_DIR": "/workspace/nessa-agent/target",
+    "CARGO_NET_OFFLINE": "true"
+  },
+  "gates": [
+    {
+      "name": "format",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "fmt",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-sdk",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 3.02,
+      "log": "/tmp/628-final-gates-atomic/format.log"
+    },
+    {
+      "name": "domain-ownership",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "domain",
+        "ownership"
+      ],
+      "exit_code": 0,
+      "seconds": 6.22,
+      "log": "/tmp/628-final-gates-atomic/domain-ownership.log"
+    },
+    {
+      "name": "application-ownership",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "subagents"
+      ],
+      "exit_code": 0,
+      "seconds": 5.62,
+      "log": "/tmp/628-final-gates-atomic/application-ownership.log"
+    },
+    {
+      "name": "sdk-storage",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "infrastructure",
+        "session_storage"
+      ],
+      "exit_code": 0,
+      "seconds": 89.95,
+      "log": "/tmp/628-final-gates-atomic/sdk-storage.log"
+    },
+    {
+      "name": "sdk-full",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline"
+      ],
+      "exit_code": 0,
+      "seconds": 228.12,
+      "log": "/tmp/628-final-gates-atomic/sdk-full.log"
+    },
+    {
+      "name": "ci-six-package-tests",
+      "exit_code": 0,
+      "wait_status": 0,
+      "wait_status_source": "/proc/334926/stat",
+      "log": "/tmp/628-final-gates-atomic/ci-six-package-tests.log",
+      "note": "Owned controller stopped before next command; successful completed child OS status captured."
+    }
+  ]
+}

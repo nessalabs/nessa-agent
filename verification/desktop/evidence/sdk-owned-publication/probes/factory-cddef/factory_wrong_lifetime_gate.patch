@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -768,7 +768,7 @@
+             self.gates
+                 .lock()
+                 .expect("lifetime gates")
+-                .get(&admitted.child)
++                .get(&command.parent)
+                 .cloned()
+                 .expect("admitted child gate") as Arc<dyn OwnedLifetime>
+         });

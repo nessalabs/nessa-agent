@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/ports.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/ports.rs
+@@ -109,7 +109,7 @@
+ impl std::fmt::Debug for PrepareRequest {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         f.debug_struct("PrepareRequest")
+-            .field("owned_lifetime", &"<owned lifetime>")
++            .field("owned_lifetime", &self.owned_lifetime.seal())
+             .field("parent", &self.parent)
+             .field("child", &self.child)
+             .field("session", &self.session)

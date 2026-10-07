@@ -1,0 +1,16 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs
+@@ -220,11 +220,11 @@
+         snapshot.reports.retain(|r| {
+             retained.contains(&r.parent_lifetime)
+                 && retained.contains(&r.child_lifetime)
+-                && (self.reports.contains_key(&r.report_id) || r.state == DeliveryState::Suppressed)
++                && true
+         });
+         for row in &mut snapshot.reports {
+             if row.state != DeliveryState::Suppressed {
+-                row.state = self.reports[&row.report_id];
++                row.state = self.reports.get(&row.report_id).copied().unwrap_or(row.state);
+             }
+         }
+         snapshot

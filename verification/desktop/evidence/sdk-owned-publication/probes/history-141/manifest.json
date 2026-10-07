@@ -1,0 +1,49 @@
+{
+  "head": "141755dde6fc159031047ae23f20c1f14dc6e2fd",
+  "cases": [
+    {
+      "name": "ended_milestone_fabricates_absence",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "0c9319565baa9c1ded9a076415d9fc34bce839af07bff0388b847ecb27b679cd",
+      "mutated_sha256": "7155a083e77c8974359fb6ce264be11cced6cf13764ec1f15ef96b1577786f83",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "row_35_restored_ended_factual"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "refused_rooted_history_accepts_owner",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "0c9319565baa9c1ded9a076415d9fc34bce839af07bff0388b847ecb27b679cd",
+      "mutated_sha256": "ec34eebdada35a854b65fcf53b234624a4afabee1192a6f831d560995743e472",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "row_36"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    }
+  ]
+}

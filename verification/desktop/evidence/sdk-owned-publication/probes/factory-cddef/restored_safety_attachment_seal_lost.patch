@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -1487,7 +1487,7 @@
+                     row.lifetime_id.clone(),
+                     refused
+                         || row.state != LifetimeState::Open
+-                        || nonrunnable_children.contains(&row.lifetime_id),
++                        || false && nonrunnable_children.contains(&row.lifetime_id),
+                 );
+             }
+         });

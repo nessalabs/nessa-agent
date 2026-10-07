@@ -1,0 +1,24 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-sdk)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.71s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_sdk-3a9a37445fc631f7)
+
+running 1 test
+test application::agent_execution::subagents::coordinator::lifetime_races::an_older_snapshot_does_not_replace_a_newer_seal ... FAILED
+
+failures:
+
+---- application::agent_execution::subagents::coordinator::lifetime_races::an_older_snapshot_does_not_replace_a_newer_seal stdout ----
+
+thread 'application::agent_execution::subagents::coordinator::lifetime_races::an_older_snapshot_does_not_replace_a_newer_seal' (258550) panicked at crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs:1977:9:
+assertion `left == right` failed
+  left: Open
+ right: Closed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    application::agent_execution::subagents::coordinator::lifetime_races::an_older_snapshot_does_not_replace_a_newer_seal
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 970 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-sdk --lib`

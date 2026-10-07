@@ -1,0 +1,119 @@
+{
+  "head": "cddefd5d00ffc01588b3688a135f4d6a3e35b5c4",
+  "environment": {
+    "CARGO_HOME": "/tmp/nessa-cargo",
+    "RUSTUP_HOME": "/tmp/nessa-rustup",
+    "CARGO_TARGET_DIR": "/workspace/nessa-agent/target",
+    "CARGO_NET_OFFLINE": "true"
+  },
+  "gates": [
+    {
+      "name": "format",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "fmt",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-sdk",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 3.24,
+      "log": "/tmp/628-final-gates/format.log"
+    },
+    {
+      "name": "domain-ownership",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "domain",
+        "ownership"
+      ],
+      "exit_code": 0,
+      "seconds": 3.87,
+      "log": "/tmp/628-final-gates/domain-ownership.log"
+    },
+    {
+      "name": "application-ownership",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "subagents"
+      ],
+      "exit_code": 0,
+      "seconds": 2.47,
+      "log": "/tmp/628-final-gates/application-ownership.log"
+    },
+    {
+      "name": "sdk-storage",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "infrastructure",
+        "session_storage"
+      ],
+      "exit_code": 0,
+      "seconds": 89.26,
+      "log": "/tmp/628-final-gates/sdk-storage.log"
+    },
+    {
+      "name": "sdk-full",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline"
+      ],
+      "exit_code": 0,
+      "seconds": 232.17,
+      "log": "/tmp/628-final-gates/sdk-full.log"
+    },
+    {
+      "name": "ci-six-package-tests",
+      "exit_code": 0,
+      "wait_status": 0,
+      "wait_status_source": "/proc/296661/stat",
+      "log": "/tmp/628-final-gates/ci-six-package-tests.log",
+      "note": "Owned runner paused while subprocess finished; OS exit status captured before gracefully interrupting/reaping runner."
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-sdk)
+warning: unused variable: `graph`
+    --> crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs:1271:26
+     |
+1271 |         self.with_graph(|graph| {
+     |                          ^^^^^ help: if this is intentional, prefix it with an underscore: `_graph`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `nessa-sdk` (lib test) generated 1 warning (run `cargo fix --lib -p nessa-sdk --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.38s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_sdk-3a9a37445fc631f7)
+
+running 1 test
+test application::agent_execution::subagents::coordinator::lifetime_races::row_37_retained_root_is_sealed_at_the_admission_scope_boundary ... FAILED
+
+failures:
+
+---- application::agent_execution::subagents::coordinator::lifetime_races::row_37_retained_root_is_sealed_at_the_admission_scope_boundary stdout ----
+
+thread 'application::agent_execution::subagents::coordinator::lifetime_races::row_37_retained_root_is_sealed_at_the_admission_scope_boundary' (327976) panicked at crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs:2049:13:
+assertion `left == right` failed
+  left: Some(Open)
+ right: Some(Closing)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    application::agent_execution::subagents::coordinator::lifetime_races::row_37_retained_root_is_sealed_at_the_admission_scope_boundary
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 974 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-sdk --lib`

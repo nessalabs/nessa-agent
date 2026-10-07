@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -798,7 +798,7 @@
+                         .expect("lifetime seals")
+                         .get(&admitted.child)
+                     {
+-                        seal.store(true, Ordering::Release);
++                        seal.store(false, Ordering::Release);
+                     }
+                 });
+                 if let Some(cleanup) = failure.cleanup {

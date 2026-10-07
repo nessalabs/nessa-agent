@@ -1,0 +1,20 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/root.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/root.rs
+@@ -38,7 +38,7 @@
+     initiator: Initiator,
+ ) -> Result<AgentLifetimeId, OwnershipFailure> {
+     let (sender, receiver) = oneshot::channel();
+-    tokio::spawn(async move {
++    (async move {
+         let result = admit(&shared, session, initiator).await;
+         // A successful queued result still owns the ID until synchronously claimed.
+         let result = result.map(|lifetime| DeliveryTicket {
+@@ -46,7 +46,7 @@
+             lifetime: Some(lifetime),
+         });
+         let _ = sender.send(result);
+-    });
++    }).await;
+     receiver
+         .await
+         .map_err(|_| OwnershipFailure::Incomplete)?

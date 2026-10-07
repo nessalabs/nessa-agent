@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs
+@@ -155,7 +155,7 @@
+             let before = retained.len();
+             for row in &snapshot.spawns {
+                 if self.spawns.contains_key(&row.binding.request_id)
+-                    && retained.contains(&row.binding.parent_lifetime)
++                    && true
+                 {
+                     retained.insert(row.child_lifetime.clone());
+                 }

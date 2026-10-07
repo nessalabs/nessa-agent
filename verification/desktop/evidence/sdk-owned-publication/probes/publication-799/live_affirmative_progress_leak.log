@@ -1,0 +1,46 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-sdk)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.81s
+     Running tests/application.rs (/workspace/nessa-agent/target/debug/deps/application-602976c2950e4911)
+
+running 16 tests
+test application::agent_execution::agents::initialization::caller_loss_while_started_audit_is_pending_keeps_close_evidence_owned ... ok
+test application::agent_execution::agents::conformance::queue_order::panicking_membership_admission_cancels_the_pending_owner_once ... ok
+test application::agent_execution::agents::review_regressions::provider_restoration::already_pending_permission_cannot_resume_against_a_cleaned_generation ... ok
+test application::agent_execution::agents::conformance::queue_order::close_interrupts_stalled_reorder_audit_and_settles_pending_receipts ... ok
+test application::agent_execution::agents::conformance::queue_order::close_interrupts_stalled_reorder_persistence_and_settles_pending_work ... ok
+test application::agent_execution::agents::streaming_persistence::eof_before_provider_reply_does_not_disable_pending_message_deadline ... ok
+test application::agent_execution::scheduling::scheduling_close_cancels_pending_with_attribution_without_dispatching_it ... ok
+test application::agent_execution::scheduling::scheduling_failed_close_audit_reports_failure_and_still_cleans_every_pending_item ... ok
+test application::agent_execution::subagents::publication::row_25_close_over_pending_task_ack_retains_actual_receipt_through_resume ... ok
+test application::agent_execution::subagents::publication::row_25_close_over_pending_task_rejection_retains_actual_receipt_through_resume ... ok
+test application::agent_execution::subagents::publication::row_4_prepared_stays_durable_while_attached_audit_pending ... FAILED
+test application::agent_execution::subagents::publication::row_5_attached_stays_durable_while_task_audit_pending ... FAILED
+test application::agent_execution::subagents::publication::rows_6_7_pending_ack_cannot_reopen_rejected_close_intent ... ok
+test application::agent_execution::agents::review_regressions::bulk_cancellation_panics::explicit_close_storage_panics_settle_every_pending_receipt_and_finalize_cleanup ... ok
+test application::agent_execution::agents::review_regressions::scheduled_panics::queued_storage_panics_retain_current_and_pending_receipts ... ok
+test application::agent_execution::scheduling::scheduling_capacity_counts_only_pending_and_retry_preserves_evidence ... ok
+
+failures:
+
+---- application::agent_execution::subagents::publication::row_4_prepared_stays_durable_while_attached_audit_pending stdout ----
+
+thread 'application::agent_execution::subagents::publication::row_4_prepared_stays_durable_while_attached_audit_pending' (253839) panicked at crates/nessa-sdk/tests/application/agent_execution/subagents/publication.rs:204:5:
+assertion `left == right` failed
+  left: Attached
+ right: Prepared
+
+---- application::agent_execution::subagents::publication::row_5_attached_stays_durable_while_task_audit_pending stdout ----
+
+thread 'application::agent_execution::subagents::publication::row_5_attached_stays_durable_while_task_audit_pending' (253840) panicked at crates/nessa-sdk/tests/application/agent_execution/subagents/publication.rs:204:5:
+assertion `left == right` failed
+  left: TaskAdmitted { receipt: TaskReceiptId("receipt-1") }
+ right: Attached
+
+
+failures:
+    application::agent_execution::subagents::publication::row_4_prepared_stays_durable_while_attached_audit_pending
+    application::agent_execution::subagents::publication::row_5_attached_stays_durable_while_task_audit_pending
+
+test result: FAILED. 14 passed; 2 failed; 0 ignored; 0 measured; 375 filtered out; finished in 0.20s
+
+error: test failed, to rerun pass `-p nessa-sdk --test application`

@@ -1,0 +1,12 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -945,9 +945,6 @@
+         target: &AgentLifetimeId,
+         report: super::ports::ResourceReport,
+     ) {
+-        if report.physical == PhysicalFact::Released {
+-            self.release_slot(target);
+-        }
+         let evidence = self.with_graph(|graph| {
+             graph
+                 .apply_report(root, operation, target, report.physical, report.evidence)

@@ -1,0 +1,17 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -1136,12 +1136,14 @@
+             };
+             (evidence, close)
+         });
++        let already_safety = evidence.is_none();
+         if let Some(evidence) = evidence {
+             let _ = self.audit.record(&evidence).await;
+         }
+         if let Some(evidence) = close {
+             let _ = self.audit.record(&evidence).await;
+         }
++        if already_safety { return; }
+         // Already-Unconfirmed and other terminal safety positions need no new
+         // graph transition, but their current facts still use the same writer.
+         let _ = self.commit_snapshot().await;

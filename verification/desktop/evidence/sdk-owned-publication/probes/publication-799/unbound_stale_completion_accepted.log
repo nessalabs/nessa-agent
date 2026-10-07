@@ -1,0 +1,24 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-sdk)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.74s
+     Running tests/domain.rs (/workspace/nessa-agent/target/debug/deps/domain-3fb4d9edd6241f66)
+
+running 1 test
+test domain::agent_execution::ownership::unbound_absence_token_refuses_child_closed_history_and_stale_completion ... FAILED
+
+failures:
+
+---- domain::agent_execution::ownership::unbound_absence_token_refuses_child_closed_history_and_stale_completion stdout ----
+
+thread 'domain::agent_execution::ownership::unbound_absence_token_refuses_child_closed_history_and_stale_completion' (262351) panicked at crates/nessa-sdk/tests/domain/agent_execution/ownership.rs:2123:5:
+assertion `left == right` failed
+  left: Ok(())
+ right: Err(StaleOutcome)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    domain::agent_execution::ownership::unbound_absence_token_refuses_child_closed_history_and_stale_completion
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 208 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-sdk --test domain`

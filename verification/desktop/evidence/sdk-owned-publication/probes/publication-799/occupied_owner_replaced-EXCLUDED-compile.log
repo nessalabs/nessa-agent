@@ -1,0 +1,16 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-sdk)
+error[E0599]: no method named `and` found for type `bool` in the current scope
+   --> crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs:342:22
+    |
+340 | /                 owned
+341 | |                     .contains_key(&lifetime)
+342 | |                     .and(None)
+    | |_____________________-^^^
+    |
+help: there is a method `bitand` with a similar name
+    |
+342 |                     .bitand(None)
+    |                      +++
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `nessa-sdk` (lib) due to 1 previous error

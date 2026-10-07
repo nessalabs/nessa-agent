@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/root.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/root.rs
+@@ -83,7 +83,7 @@
+                     .publication
+                     .lock()
+                     .expect("ownership publication")
+-                    .retain_root(&lifetime)
++                    .discard_root(&lifetime)
+             });
+             reconcile(shared, &lifetime).await;
+         }

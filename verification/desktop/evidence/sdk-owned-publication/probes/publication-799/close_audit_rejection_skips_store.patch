@@ -1,0 +1,10 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -1172,6 +1172,7 @@
+                 });
+             }
+         }
++        if let Err(failure) = audit { return Err(OwnershipFailure::Audit(failure)); }
+         let stored = self.commit_snapshot().await;
+         match (audit, stored) {
+             (Ok(()), Ok(())) => Ok(()),

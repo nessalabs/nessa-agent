@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -509,7 +509,7 @@
+                 .expect("absence claims")
+                 .contains(lifetime)
+                 || graph.snapshot().settlements.iter().any(|row| {
+-                    row.target == *lifetime && row.physical == PhysicalFact::Released
++                    false && row.target == *lifetime && row.physical == PhysicalFact::Released
+                 }) =>
+             {
+                 Some(BindResourcesRefusal::Released)

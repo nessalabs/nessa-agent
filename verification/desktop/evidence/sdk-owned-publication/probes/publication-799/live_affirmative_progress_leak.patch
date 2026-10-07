@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs
+@@ -211,7 +211,7 @@
+                 SpawnProgress::Draining { .. } => SpawnProgress::Draining { known },
+                 SpawnProgress::StartupFailed { .. } => SpawnProgress::StartupFailed { known },
+                 SpawnProgress::Ended { .. } => SpawnProgress::Ended { known },
+-                _ => eligible.clone(),
++                _ => row.progress.clone(),
+             };
+         }
+         snapshot

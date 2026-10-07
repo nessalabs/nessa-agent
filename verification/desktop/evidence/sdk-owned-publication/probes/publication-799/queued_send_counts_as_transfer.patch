@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/root.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/root.rs
+@@ -43,7 +43,7 @@
+         // A successful queued result still owns the ID until synchronously claimed.
+         let result = result.map(|lifetime| DeliveryTicket {
+             shared,
+-            lifetime: Some(lifetime),
++            lifetime: { let _ = lifetime; None },
+         });
+         let _ = sender.send(result);
+     });

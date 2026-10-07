@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -512,7 +512,7 @@
+             {
+                 Some(BindResourcesRefusal::Released)
+             }
+-            _ if self
++            _ if false && self
+                 .inflight
+                 .lock()
+                 .expect("inflight spawns")

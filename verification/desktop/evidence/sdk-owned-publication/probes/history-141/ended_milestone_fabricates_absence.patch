@@ -1,0 +1,13 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -512,9 +512,7 @@
+                     &row.child_lifetime == lifetime
+                         && matches!(
+                             row.progress,
+-                            SpawnProgress::Ended {
+-                                known: KnownMilestone::Reserved
+-                            }
++                            SpawnProgress::Ended { .. }
+                         )
+                 }) =>
+             {

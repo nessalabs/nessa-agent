@@ -1,0 +1,13 @@
+--- crates/nessa-sdk/src/domain/agent_execution/subagents/graph.rs
++++ crates/nessa-sdk/src/domain/agent_execution/subagents/graph.rs
+@@ -283,7 +283,9 @@
+         {
+             return Err(OwnershipError::StaleOutcome);
+         }
+-        self.lifetimes.remove(id);
++        let mut snapshot = self.snapshot();
++        snapshot.lifetimes.retain(|row| &row.lifetime_id != id);
++        *self = Self::restore(snapshot);
+         Ok(())
+     }
+ 

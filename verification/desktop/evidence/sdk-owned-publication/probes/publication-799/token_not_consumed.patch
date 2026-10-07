@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs
+@@ -113,7 +113,7 @@
+         if self.pending.get(&token.target).map(|t| t.generation) != Some(token.generation) {
+             return false;
+         }
+-        self.pending.remove(&token.target);
++        // mutation: leave pending token consumable
+         match (&token.target, &token.proposed) {
+             (PublicationTarget::Root(id), PublishedState::Root) => {
+                 self.roots.insert(id.clone());

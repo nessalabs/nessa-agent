@@ -1,0 +1,22 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-sdk)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.96s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_sdk-3a9a37445fc631f7)
+
+running 1 test
+test application::agent_execution::subagents::publication::tests::row_17_tokens_acknowledge_captured_progress_once_and_refuse_stale_generation ... FAILED
+
+failures:
+
+---- application::agent_execution::subagents::publication::tests::row_17_tokens_acknowledge_captured_progress_once_and_refuse_stale_generation stdout ----
+
+thread 'application::agent_execution::subagents::publication::tests::row_17_tokens_acknowledge_captured_progress_once_and_refuse_stale_generation' (255214) panicked at crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs:250:9:
+assertion failed: !p.acknowledge(&old)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    application::agent_execution::subagents::publication::tests::row_17_tokens_acknowledge_captured_progress_once_and_refuse_stale_generation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 970 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-sdk --lib`

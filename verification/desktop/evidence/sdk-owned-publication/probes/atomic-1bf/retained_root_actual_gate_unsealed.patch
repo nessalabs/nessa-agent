@@ -1,0 +1,17 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -1269,13 +1269,7 @@
+         lifetime: &AgentLifetimeId,
+     ) -> Result<OwnershipEvidence, OwnershipFailure> {
+         self.with_graph(|graph| {
+-            let evidence = self.seal_in_graph(
+-                graph,
+-                lifetime,
+-                mint_close(),
+-                LifetimeCause::OwnerDisposed,
+-                Initiator::Runtime,
+-            )?;
++            let evidence = graph.begin_close(lifetime, mint_close(), LifetimeCause::OwnerDisposed, Initiator::Runtime).map_err(OwnershipFailure::Domain)?.evidence;
+             self.publication
+                 .lock()
+                 .expect("ownership publication")
