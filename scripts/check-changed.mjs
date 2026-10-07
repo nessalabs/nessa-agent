@@ -11,36 +11,42 @@
  * That function is the owner of the extension rule.
  *
  *   git diff --name-only --no-renames base...head | node scripts/check-changed.mjs --plan
- *   node scripts/check-changed.mjs --plan -- src/panel/ui/app.tsx
+ *   node scripts/check-changed.mjs --plan src/panel/ui/app.tsx
  *   pnpm check:changed
  *
  * `--plan` prints one JSON object on stdout and runs nothing. Without it, the
- * plan is a line on stderr and the selected scripts inherit stdout.
+ * plan is a line on stderr and the selected scripts inherit stdout. An empty
+ * pipe is an empty list, which runs `pnpm check`. Paths are the arguments,
+ * with or without `--`. A terminal with no arguments reads the git diff.
  */
 import { spawnSync } from "node:child_process"
+import { readFileSync } from "node:fs"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 
 import { inertPath } from "./documentation-only.mjs"
 
 /**
- * Package scripts in the same order as `pnpm check`. A union of groups keeps
- * that order. A crate-only change does not run the scripts ahead of it.
+ * The `pnpm check` chain, in its order. `package.json` owns that sequence.
+ * A union of groups keeps it. A crate-only change does not run the scripts
+ * ahead of it.
  */
-const ORDER = [
-  "frontend:check",
-  "agents:check",
-  "server:fmt:check",
-  "server:clippy",
-  "server:test",
-  "auth:fmt:check",
-  "auth:clippy",
-  "auth:test",
-  "sdk:check",
-  "mcp:check",
-  "database:check",
-  "images:check",
-]
+export function parseCheckScript(script) {
+  if (typeof script !== "string" || script.length === 0) return null
+  const commands = []
+  for (const part of script.split("&&")) {
+    const match = part.trim().match(/^pnpm ([A-Za-z0-9:_-]+)$/)
+    if (!match) return null
+    commands.push(match[1])
+  }
+  return commands.length > 0 ? commands : null
+}
+
+const ORDER = parseCheckScript(
+  JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts
+    .check,
+)
+if (!ORDER) throw new Error("package.json scripts.check is not a chain of pnpm scripts")
 
 const GROUPS = [
   {
@@ -97,6 +103,7 @@ function commandsFor(changed) {
  * repository is unowned.
  */
 export function normalizeChangedPath(input) {
+  if (input.includes("\n") || input.includes("\r") || input.includes("\0")) return null
   const normalized = path.posix.normalize(input.replaceAll("\\", "/"))
   if (
     normalized.length === 0 ||
@@ -109,9 +116,9 @@ export function normalizeChangedPath(input) {
   return normalized
 }
 
-/** Selected scripts in `ORDER`, or null when one of them is not in that list. */
-export function orderCommands(selected) {
-  const commands = ORDER.filter((command) => selected.has(command))
+/** Selected scripts in `order`, or null when one of them is not in that list. */
+export function orderCommands(selected, order = ORDER) {
+  const commands = order.filter((command) => selected.has(command))
   if (commands.length !== selected.size) return null
   return commands
 }
@@ -205,9 +212,10 @@ if (invoked) {
   let paths
   if (rest[0] === "--") {
     paths = rest.slice(1)
+  } else if (rest.length > 0) {
+    paths = rest
   } else if (!process.stdin.isTTY) {
-    const piped = await readStdin(process.stdin)
-    paths = piped.some((path) => path.trim().length > 0) ? piped : changedPaths(gitOutput)
+    paths = await readStdin(process.stdin)
   } else {
     paths = changedPaths(gitOutput)
   }

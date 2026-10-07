@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import test from "node:test"
 
-import { changedPaths, orderCommands, plan } from "./check-changed.mjs"
+import { changedPaths, orderCommands, parseCheckScript, plan } from "./check-changed.mjs"
 import { documentationOnly } from "./documentation-only.mjs"
 
 test("an empty list runs the full local check", () => {
@@ -91,9 +91,18 @@ test("a dotted path is owned only after it is normalized", () => {
 })
 
 test("a selected script missing from the check order runs the full local check", () => {
-  assert.deepEqual(orderCommands(new Set(["frontend:check"])), ["frontend:check"])
-  assert.equal(orderCommands(new Set(["desktop:check"])), null)
-  assert.equal(orderCommands(new Set(["images:check", "desktop:check"])), null)
+  const order = ["frontend:check", "images:check"]
+  assert.deepEqual(orderCommands(new Set(["frontend:check"]), order), ["frontend:check"])
+  assert.equal(orderCommands(new Set(["desktop:check"]), order), null)
+  assert.equal(orderCommands(new Set(["images:check", "desktop:check"]), order), null)
+})
+
+test("pnpm check owns the narrow command order", () => {
+  const script = JSON.parse(readFileSync("package.json", "utf8")).scripts.check
+  const commands = parseCheckScript(script)
+  assert.equal(commands.map((command) => `pnpm ${command}`).join(" && "), script)
+  assert.equal(parseCheckScript("cargo test"), null)
+  assert.equal(plan(["src/panel/ui/app.tsx\nCargo.lock"]).tier, "full")
 })
 
 test("a src prefix does not claim src-tauri", () => {
@@ -120,6 +129,27 @@ test("git discovery fails closed when the base cannot be named", () => {
     [],
   )
   assert.equal(plan(changedPaths(() => null)).tier, "full")
+})
+
+test("an empty pipe is an empty list, and arguments do not need --", () => {
+  const empty = spawnSync(process.execPath, ["scripts/check-changed.mjs", "--plan"], {
+    input: "",
+    encoding: "utf8",
+  })
+  assert.equal(empty.status, 0)
+  assert.equal(empty.stderr, "")
+  assert.equal(
+    JSON.parse(empty.stdout).reason,
+    "an empty file list is not a narrowed check",
+  )
+
+  const named = spawnSync(
+    process.execPath,
+    ["scripts/check-changed.mjs", "--plan", "src/panel/ui/app.tsx"],
+    { encoding: "utf8" },
+  )
+  assert.equal(named.status, 0)
+  assert.deepEqual(JSON.parse(named.stdout).commands, ["frontend:check"])
 })
 
 test("the plan command prints JSON on stdout and does not run pnpm", () => {
