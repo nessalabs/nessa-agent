@@ -1,16 +1,22 @@
 //! SQLite ownership rows beside the session record database.
 //!
 //! ```text
-//! OwnershipStore::write -> ownership snapshot body -> ownership.sqlite3
-//! OwnershipStore::read  <- validated body
+//! OwnershipStore::write -> instance admission -> owned blocking job -> ownership.sqlite3
+//! OwnershipStore::read  <- blocking query/decode/validation <- ownership.sqlite3
 //! ```
 //!
 //! The arrow is one snapshot replace. A body that does not decode is rejected
-//! and left unchanged. This file does not copy transcripts.
+//! and left unchanged. This file does not copy transcripts. Private `ownership/blocking.rs`
+//! holds physical admission through input/state cleanup; `ownership/tests.rs`
+//! exercises cancellation, queue lifetime, poison, and watchdog responsiveness.
 #![deny(missing_docs)]
 
-use std::{path::Path, sync::Mutex};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
+use self::blocking::Worker;
 use async_trait::async_trait;
 use nessa_local_database::{open, rusqlite, OpenError, Schema};
 use serde::{Deserialize, Serialize};
@@ -28,6 +34,10 @@ use crate::domain::agent_execution::{
     tools::ToolCallId,
 };
 
+mod blocking;
+#[cfg(test)]
+mod physical_tests;
+
 const DEFINITION: &str = "\
 CREATE TABLE ownership_snapshot (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -37,8 +47,28 @@ PRAGMA user_version = 1;
 ";
 
 /// One ownership snapshot file. Writers replace the single retained body.
+///
+/// Each instance admits one physical operation before cloning its input. The
+/// `canceled_sqlite_write_excludes_following_io` and queued-worker tests cover
+/// caller cancellation: dropping the async wait leaves the admitted job owning
+/// its slot through physical I/O and captured-input cleanup. Independent instances
+/// have independent slots; this is not cross-process exclusion or a shutdown drain.
+/// The first poll requires a Tokio runtime; no runtime returns a typed
+/// pre-effect rejection (`no_runtime_first_poll_is_typed`). Admission captures
+/// that executor so the Send future can resume on another thread. The originating
+/// runtime must remain alive for reliable completion; shutdown yields typed
+/// uncertainty (`originating_runtime_shutdown_is_typed`).
+/// Interrupted work and a poisoned connection return [`PortFailure::Uncertain`].
+/// Read interruption does not become an empty snapshot; only SQLite NoRows does.
 pub struct SqliteOwnershipStore {
+    state: Arc<OwnershipState>,
+    worker: Worker,
+}
+
+struct OwnershipState {
     connection: Mutex<rusqlite::Connection>,
+    #[cfg(test)]
+    gate: Option<Arc<physical_tests::Gate>>,
 }
 
 impl SqliteOwnershipStore {
@@ -47,7 +77,12 @@ impl SqliteOwnershipStore {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let schema = Schema::new(DEFINITION).expect("ownership schema states its version");
         Ok(Self {
-            connection: Mutex::new(open(path, &schema)?),
+            state: Arc::new(OwnershipState {
+                connection: Mutex::new(open(path, &schema)?),
+                #[cfg(test)]
+                gate: None,
+            }),
+            worker: Worker::new(),
         })
     }
 }
@@ -55,9 +90,42 @@ impl SqliteOwnershipStore {
 #[async_trait]
 impl OwnershipStore for SqliteOwnershipStore {
     async fn write(&self, snapshot: &OwnershipSnapshot) -> Result<(), PortFailure> {
+        let permit = self
+            .worker
+            .admit()
+            .await
+            .map_err(|_| PortFailure::Rejected)?;
+        let state = self.state.clone();
+        let snapshot = self.worker.input(snapshot.clone());
+        self.worker
+            .run(permit, move || state.write(snapshot.get()))
+            .await
+            .map_err(|_| PortFailure::Uncertain)?
+    }
+
+    async fn read(&self) -> Result<OwnershipSnapshot, PortFailure> {
+        let permit = self
+            .worker
+            .admit()
+            .await
+            .map_err(|_| PortFailure::Rejected)?;
+        let state = self.worker.input(self.state.clone());
+        self.worker
+            .run(permit, move || state.get().read())
+            .await
+            .map_err(|_| PortFailure::Uncertain)?
+    }
+}
+
+impl OwnershipState {
+    fn write(&self, snapshot: &OwnershipSnapshot) -> Result<(), PortFailure> {
+        #[cfg(test)]
+        if let Some(gate) = &self.gate {
+            gate.enter();
+        }
         let body = serde_json::to_string(&SnapshotDto::from(snapshot))
             .map_err(|_| PortFailure::Rejected)?;
-        let connection = self.connection.lock().expect("ownership sqlite");
+        let connection = self.connection.lock().map_err(|_| PortFailure::Uncertain)?;
         let transaction = connection
             .unchecked_transaction()
             .map_err(|_| PortFailure::Rejected)?;
@@ -73,8 +141,12 @@ impl OwnershipStore for SqliteOwnershipStore {
         transaction.commit().map_err(|_| PortFailure::Rejected)
     }
 
-    async fn read(&self) -> Result<OwnershipSnapshot, PortFailure> {
-        let connection = self.connection.lock().expect("ownership sqlite");
+    fn read(&self) -> Result<OwnershipSnapshot, PortFailure> {
+        #[cfg(test)]
+        if let Some(gate) = &self.gate {
+            gate.enter();
+        }
+        let connection = self.connection.lock().map_err(|_| PortFailure::Uncertain)?;
         let body = match connection.query_row(
             "SELECT body FROM ownership_snapshot WHERE id = 1",
             [],
@@ -642,110 +714,4 @@ fn parse_cause(name: &str) -> Result<LifetimeCause, ()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::application::agent_execution::subagents::OwnershipStore;
-    use crate::domain::agent_execution::sessions::SessionId;
-    use crate::domain::agent_execution::subagents::{
-        AgentLifetimeId, Initiator, LifetimeState, OwnershipGraph,
-    };
-
-    fn private_directory() -> tempfile::TempDir {
-        let directory = tempfile::tempdir().unwrap();
-        nessa_local_storage::create_directory(&directory.path().join("private")).unwrap();
-        directory
-    }
-
-    #[tokio::test]
-    async fn a_snapshot_round_trips_and_a_corrupt_body_is_left_unchanged() {
-        let directory = private_directory();
-        let path = directory.path().join("private").join("ownership.sqlite3");
-        let store = SqliteOwnershipStore::open(&path).unwrap();
-        assert!(store.read().await.unwrap().lifetimes.is_empty());
-        let mut graph = OwnershipGraph::new();
-        let _evidence = graph
-            .open_root(
-                SessionId::new("root-session").unwrap(),
-                AgentLifetimeId::new("root-life").unwrap(),
-                Initiator::Runtime,
-            )
-            .unwrap();
-        store.write(&graph.snapshot()).await.unwrap();
-        drop(store);
-        let reopened = SqliteOwnershipStore::open(&path).unwrap();
-        let loaded = reopened.read().await.unwrap();
-        assert_eq!(loaded.lifetimes[0].state, LifetimeState::Open);
-        assert_eq!(loaded.lifetimes[0].lifetime_id.as_str(), "root-life");
-        drop(reopened);
-
-        let connection = rusqlite::Connection::open(&path).unwrap();
-        connection
-            .execute(
-                "UPDATE ownership_snapshot SET body = 'not-json' WHERE id = 1",
-                [],
-            )
-            .unwrap();
-        drop(connection);
-        let refused = SqliteOwnershipStore::open(&path).unwrap();
-        assert!(matches!(refused.read().await, Err(PortFailure::Rejected)));
-        let connection = rusqlite::Connection::open(&path).unwrap();
-        let body: String = connection
-            .query_row(
-                "SELECT body FROM ownership_snapshot WHERE id = 1",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(body, "not-json");
-    }
-
-    #[tokio::test]
-    async fn an_illegal_body_and_a_foreign_schema_version_are_left_unchanged() {
-        let directory = private_directory();
-        let path = directory.path().join("private").join("ownership.sqlite3");
-        let store = SqliteOwnershipStore::open(&path).unwrap();
-        let mut graph = OwnershipGraph::new();
-        let _evidence = graph
-            .open_root(
-                SessionId::new("root-session").unwrap(),
-                AgentLifetimeId::new("root-life").unwrap(),
-                Initiator::Runtime,
-            )
-            .unwrap();
-        store.write(&graph.snapshot()).await.unwrap();
-        drop(store);
-
-        let illegal = r#"{"lifetimes":[{"lifetime_id":"root-life","session_id":"root-session","state":"nope","close_operation":null,"cause":null,"initiator":null,"cascaded_from":null}],"spawns":[],"settlements":[],"reports":[]}"#;
-        let connection = rusqlite::Connection::open(&path).unwrap();
-        connection
-            .execute(
-                "UPDATE ownership_snapshot SET body = ?1 WHERE id = 1",
-                [illegal],
-            )
-            .unwrap();
-        drop(connection);
-        let refused = SqliteOwnershipStore::open(&path).unwrap();
-        assert!(matches!(refused.read().await, Err(PortFailure::Rejected)));
-        let connection = rusqlite::Connection::open(&path).unwrap();
-        let body: String = connection
-            .query_row(
-                "SELECT body FROM ownership_snapshot WHERE id = 1",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(body, illegal);
-        connection.pragma_update(None, "user_version", 2).unwrap();
-        drop(connection);
-        let before = std::fs::read(&path).unwrap();
-        let opened = SqliteOwnershipStore::open(&path);
-        assert!(matches!(
-            opened,
-            Err(OpenError::Version {
-                found: 2,
-                expected: 1
-            })
-        ));
-        assert_eq!(std::fs::read(&path).unwrap(), before);
-    }
-}
+mod tests;

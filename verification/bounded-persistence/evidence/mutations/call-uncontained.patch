@@ -1,0 +1,11 @@
+--- a/crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs
++++ b/crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs
+@@ -161,7 +161,7 @@
+     {
+         // Keep the capture owned by Job while the call unwinds; drop it only
+         // after catching the call fault, so capture Drop is a separate boundary.
+-        let called = catch_unwind(AssertUnwindSafe(|| self.call_operation()));
++        let called: Result<R, Box<dyn std::any::Any + Send>> = Ok(self.call_operation());
+         let output = called.map_err(|payload| {
+             std::mem::forget(payload);
+             Interrupted

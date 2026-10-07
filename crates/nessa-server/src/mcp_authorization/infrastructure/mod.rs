@@ -4,18 +4,25 @@
 //!
 //! ```text
 //! AuthorizationOwner ──▶ LoopbackCallback / HttpsOAuth / FileRecords
+//! FileRecords / FileAuthorizationAudit -> instance admission -> owned blocking job
 //! TransportAuthorization ──bearer──▶ HttpSession
 //! ```
 //!
 //! LoopbackCallback owns bounded, concurrently framed socket readers and a
 //! candidate channel. Receiver drop or the supplied whole-attempt deadline
 //! cancels the listener and its scoped readers; consent acceptance is inward
-//! in the domain, not repeated by this adapter.
+//! in the domain, not repeated by this adapter. Private `blocking.rs` serves the
+//! two file adapters; physical job/permit order is specified in
+//! `docs/design/bounded-physical-persistence.md` and exercised by their sibling
+//! `records/tests.rs` and `audit/tests.rs` with OS watchdog gates.
 mod audit;
+mod blocking;
 mod callback;
 mod clock;
 mod https;
 mod memory;
+#[cfg(test)]
+mod physical_tests;
 mod records;
 mod transport;
 

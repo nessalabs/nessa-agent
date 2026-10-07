@@ -1,0 +1,10 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-sdk)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.90s
+     Running tests/infrastructure.rs (/workspace/nessa-agent/target/debug/deps/infrastructure-78b4678fdfb7e1e5)
+
+running 1 test
+test infrastructure::session_storage::bounded_persistence_benchmark::benchmark_single_store_root_rows has been running for over 60 seconds
+test infrastructure::session_storage::bounded_persistence_benchmark::benchmark_single_store_root_rows ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 67 filtered out; finished in 91.68s
+

@@ -6,6 +6,9 @@ status: "implemented"
 summary: "MCP connects agents and interactive apps to tools."
 parent: "nessa"
 sources:
+  - "crates/nessa-server/src/mcp_authorization/infrastructure/records.rs"
+  - "crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs"
+  - "crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs"
   - "crates/nessa-sdk/src/infrastructure/mcp/servers.rs"
   - "crates/nessa-server/src/mcp_servers/infrastructure/grants.rs"
   - "crates/nessa-mcp/src/shell/application/service.rs"
@@ -41,3 +44,8 @@ flowchart TB
 
 - [One-use app resource tickets](resource-tickets.md)
 - [Conversation grants and upstream sessions](sessions.md)
+
+OAuth non-secret records, sealed tokens and authorization audit use
+[bounded physical adapter work](../storage/README.md#physical-adapter-work).
+Physical ordering preserves the AuthorizationOwner's generation, reply and
+settlement authority; session closure alone does not establish secret deletion.

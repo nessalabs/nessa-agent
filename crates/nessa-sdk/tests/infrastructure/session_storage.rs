@@ -414,3 +414,6 @@ fn child_record_source_server_probe() {
     server.serve().unwrap();
     control.join().unwrap();
 }
+
+#[path = "session_storage/bounded_persistence_benchmark.rs"]
+mod bounded_persistence_benchmark;

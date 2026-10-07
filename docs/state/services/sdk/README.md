@@ -6,6 +6,7 @@ status: "implemented"
 summary: "The SDK manages one live agent owner per conversation."
 parent: "nessa"
 sources:
+  - "crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/lifecycle.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/scheduling.rs"
   - "crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs"
@@ -55,3 +56,7 @@ flowchart TB
 - [Permission choice and response delivery](reviews.md)
 - [Runtime and tools](runtime/README.md)
 - [Submission scheduling and recovery](scheduling.md)
+
+Ownership snapshots use [bounded physical SQLite work](../storage/README.md#physical-adapter-work)
+owned by each store instance. Snapshot revision authority remains with the
+coordinator; this adapter lifetime is separate from submission scheduling.

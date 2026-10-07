@@ -4,6 +4,9 @@
 //! user-only permissions. A token is not written into the non-secret record.
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use super::blocking::Worker;
 
 use async_trait::async_trait;
 use hmac::{Hmac, Mac};
@@ -15,8 +18,8 @@ use uuid::Uuid;
 
 use crate::mcp_authorization::application::{AuthorizationRecords, RecordFailure, TokenMaterial};
 use crate::mcp_authorization::domain::{
-    Attempt, Obligation, Phase, RefreshActivity, RevokeCause, ServerAuth, Settlement,
-    TokenAvailability,
+    Attempt, Deletion, Obligation, Phase, Publication, RefreshActivity, RevokeCause, ServerAuth,
+    Settlement, TokenAvailability,
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -25,13 +28,25 @@ const KEY_LABEL_ENC: &[u8] = b"nessa-mcp-oauth-enc";
 const KEY_LABEL_MAC: &[u8] = b"nessa-mcp-oauth-mac";
 
 pub struct FileRecords {
+    state: Arc<FileRecordState>,
+    worker: Worker,
+}
+
+struct FileRecordState {
     directory: PathBuf,
+    #[cfg(test)]
+    gate: Option<Arc<super::physical_tests::Gate>>,
 }
 
 impl FileRecords {
     pub fn new(directory: impl Into<PathBuf>) -> Self {
         Self {
-            directory: directory.into(),
+            state: Arc::new(FileRecordState {
+                directory: directory.into(),
+                #[cfg(test)]
+                gate: None,
+            }),
+            worker: Worker::new(),
         }
     }
 
@@ -40,7 +55,9 @@ impl FileRecords {
     pub fn writer_available(&self) -> bool {
         true
     }
+}
 
+impl FileRecordState {
     fn path(&self, server: Uuid) -> PathBuf {
         self.directory.join(format!("{server}.json"))
     }
@@ -49,6 +66,83 @@ impl FileRecords {
 #[async_trait]
 impl AuthorizationRecords for FileRecords {
     async fn load(&self, server: Uuid) -> Result<Option<ServerAuth>, RecordFailure> {
+        let permit = self
+            .worker
+            .admit()
+            .await
+            .map_err(|_| RecordFailure::Unavailable)?;
+        let state = self.worker.input(self.state.clone());
+        self.worker
+            .run(permit, move || state.get().load(server))
+            .await
+            .map_err(|_| RecordFailure::Unavailable)?
+    }
+
+    async fn store(&self, auth: &ServerAuth) -> Result<(), RecordFailure> {
+        let permit = self
+            .worker
+            .admit()
+            .await
+            .map_err(|_| RecordFailure::Unavailable)?;
+        let state = self.state.clone();
+        let auth = self.worker.input(auth.clone());
+        self.worker
+            .run(permit, move || state.store(auth.get()))
+            .await
+            .map_err(|_| RecordFailure::Unavailable)?
+    }
+
+    async fn load_secret(&self, server: Uuid) -> Result<Option<TokenMaterial>, RecordFailure> {
+        let permit = self
+            .worker
+            .admit()
+            .await
+            .map_err(|_| RecordFailure::Unavailable)?;
+        let state = self.worker.input(self.state.clone());
+        self.worker
+            .run(permit, move || state.get().load_secret(server))
+            .await
+            .map_err(|_| RecordFailure::Unavailable)?
+    }
+
+    async fn store_secret(
+        &self,
+        server: Uuid,
+        secret: &TokenMaterial,
+    ) -> Result<Publication, RecordFailure> {
+        let permit = self
+            .worker
+            .admit()
+            .await
+            .map_err(|_| RecordFailure::Unavailable)?;
+        let state = self.state.clone();
+        let secret = self.worker.input(secret.clone());
+        self.worker
+            .run(permit, move || state.store_secret(server, secret.get()))
+            .await
+            .unwrap_or(Ok(Publication::Unknown))
+    }
+
+    async fn delete_secret(&self, server: Uuid) -> Result<Deletion, RecordFailure> {
+        let permit = self
+            .worker
+            .admit()
+            .await
+            .map_err(|_| RecordFailure::Unavailable)?;
+        let state = self.worker.input(self.state.clone());
+        self.worker
+            .run(permit, move || state.get().delete_secret(server))
+            .await
+            .unwrap_or(Ok(Deletion::Unknown))
+    }
+}
+
+impl FileRecordState {
+    fn load(&self, server: Uuid) -> Result<Option<ServerAuth>, RecordFailure> {
+        #[cfg(test)]
+        if let Some(gate) = &self.gate {
+            gate.enter();
+        }
         let path = self.path(server);
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
@@ -62,7 +156,11 @@ impl AuthorizationRecords for FileRecords {
             .map(Some)
     }
 
-    async fn store(&self, auth: &ServerAuth) -> Result<(), RecordFailure> {
+    fn store(&self, auth: &ServerAuth) -> Result<(), RecordFailure> {
+        #[cfg(test)]
+        if let Some(gate) = &self.gate {
+            gate.enter();
+        }
         nessa_local_storage::create_directory(&self.directory)
             .map_err(|_| RecordFailure::Unavailable)?;
         let path = self.path(auth.server);
@@ -71,22 +169,31 @@ impl AuthorizationRecords for FileRecords {
         write_new(&path, &body)
     }
 
-    async fn load_secret(&self, server: Uuid) -> Result<Option<TokenMaterial>, RecordFailure> {
+    fn load_secret(&self, server: Uuid) -> Result<Option<TokenMaterial>, RecordFailure> {
+        #[cfg(test)]
+        if let Some(gate) = &self.gate {
+            gate.enter();
+        }
         read_secret(&self.directory, server)
     }
 
-    async fn store_secret(
+    fn store_secret(
         &self,
         server: Uuid,
         secret: &TokenMaterial,
-    ) -> Result<crate::mcp_authorization::domain::Publication, RecordFailure> {
+    ) -> Result<Publication, RecordFailure> {
+        #[cfg(test)]
+        if let Some(gate) = &self.gate {
+            gate.enter();
+        }
         write_secret(&self.directory, server, secret)
     }
 
-    async fn delete_secret(
-        &self,
-        server: Uuid,
-    ) -> Result<crate::mcp_authorization::domain::Deletion, RecordFailure> {
+    fn delete_secret(&self, server: Uuid) -> Result<Deletion, RecordFailure> {
+        #[cfg(test)]
+        if let Some(gate) = &self.gate {
+            gate.enter();
+        }
         delete_secret(&self.directory, server)
     }
 }
@@ -506,121 +613,4 @@ fn apply_keystream(enc_key: &[u8], nonce: &[u8], data: &mut [u8]) {
 pub type SecretStore = FileRecords;
 
 #[cfg(test)]
-mod tests {
-    use std::io::{Read, Seek, SeekFrom, Write};
-
-    use uuid::Uuid;
-
-    use super::FileRecords;
-    use crate::mcp_authorization::application::{
-        AuthorizationRecords, RecordFailure, TokenMaterial,
-    };
-    use crate::mcp_authorization::domain::{Deletion, Publication, ServerAuth};
-
-    fn secret() -> TokenMaterial {
-        TokenMaterial {
-            access_token: "sekret-token".into(),
-            refresh_token: Some("refresh-sekret".into()),
-            generation: 3,
-        }
-    }
-
-    fn records() -> (FileRecords, std::path::PathBuf) {
-        let directory = std::env::temp_dir().join(format!("nessa-mcp-auth-{}", Uuid::new_v4()));
-        (FileRecords::new(&directory), directory)
-    }
-
-    fn contains_token(directory: &std::path::Path, token: &str) -> bool {
-        let mut pending = vec![directory.to_path_buf()];
-        while let Some(path) = pending.pop() {
-            let Ok(entries) = std::fs::read_dir(&path) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    pending.push(path);
-                    continue;
-                }
-                let Ok(bytes) = std::fs::read(&path) else {
-                    continue;
-                };
-                if bytes
-                    .windows(token.len())
-                    .any(|window| window == token.as_bytes())
-                {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    #[tokio::test]
-    async fn a_sealed_file_round_trips_and_never_stores_the_token_in_the_clear() {
-        let (records, directory) = records();
-        assert!(records.writer_available());
-        let server = Uuid::new_v4();
-        let secret = secret();
-        assert_eq!(
-            records.store_secret(server, &secret).await,
-            Ok(Publication::Acknowledged)
-        );
-        let loaded = records.load_secret(server).await.unwrap().unwrap();
-        assert_eq!(loaded.access_token, secret.access_token);
-        assert_eq!(loaded.refresh_token, secret.refresh_token);
-        assert_eq!(loaded.generation, secret.generation);
-        assert!(!contains_token(&directory, "sekret-token"));
-        assert!(!contains_token(&directory, "refresh-sekret"));
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            for name in ["key", &format!("{server}.seal")] {
-                let mode = std::fs::metadata(directory.join("secrets").join(name))
-                    .unwrap()
-                    .permissions()
-                    .mode();
-                assert_eq!(mode & 0o077, 0, "{name} is not user-only: {mode:o}");
-            }
-        }
-        let facts = ServerAuth::consent_needed(server, "docs", "https://mcp.example/mcp");
-        records.store(&facts).await.unwrap();
-        let record_path = directory.join(format!("{server}.json"));
-        let record = std::fs::read(&record_path).unwrap();
-        assert!(!record
-            .windows(b"sekret-token".len())
-            .any(|window| window == b"sekret-token"));
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&record_path)
-                .unwrap()
-                .permissions()
-                .mode();
-            assert_eq!(mode & 0o077, 0, "the record is not user-only: {mode:o}");
-        }
-        assert_eq!(records.delete_secret(server).await, Ok(Deletion::Deleted));
-        assert_eq!(records.load_secret(server).await, Ok(None));
-        let _ = std::fs::remove_dir_all(&directory);
-    }
-
-    #[tokio::test]
-    async fn a_tampered_seal_is_unavailable_and_not_a_token() {
-        let (records, directory) = records();
-        let server = Uuid::new_v4();
-        records.store_secret(server, &secret()).await.unwrap();
-        let path = directory.join("secrets").join(format!("{server}.seal"));
-        let mut file =
-            nessa_local_storage::open(&path, nessa_local_storage::OpenMode::ReadWrite).unwrap();
-        let mut byte = [0_u8; 1];
-        file.read_exact(&mut byte).unwrap();
-        byte[0] ^= 0xff;
-        file.seek(SeekFrom::Start(0)).unwrap();
-        file.write_all(&byte).unwrap();
-        assert_eq!(
-            records.load_secret(server).await,
-            Err(RecordFailure::Unavailable)
-        );
-        let _ = std::fs::remove_dir_all(&directory);
-    }
-}
+mod tests;
