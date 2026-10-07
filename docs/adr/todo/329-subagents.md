@@ -748,7 +748,10 @@ stateDiagram-v2
   RetainedClosing --> ClosingEvidenceFailed: never-bound absence audit rejects
   ClosingEvidenceFailed --> RetainedClosing: explicit close retry
   RetainedClosing --> RetainedClosing: binding wins scoped absence decision; drain reinspects actual owner
-  RetainedClosing --> Closed: absence or cleanup evidence acknowledged
+  RetainedClosing --> ClosingSafety: exact observation debts acknowledged and physical/provider proof ready
+  ClosingSafety --> Completion: covering Closing snapshot acknowledged
+  Completion --> Closed: exact aggregate Completion audit acknowledged
+  Closed --> Closed: final snapshot retry only
 ```
 
 Closing/Closed lifetime rows, physical release, and nonrunnable spawn safety
@@ -1227,19 +1230,19 @@ terminal results. Runtime shutdown and process abort are outside unwind recovery
 | Ready preparation Rejected+None then parent close | Actual absence/first child cause retained, parent closes; `rejected_startup_without_owner_then_parent_close_settles`. |
 | Released+provider Ack then coordinator observation rejects | Physical count one/capacity free, Audit(Rejected), Closing; `released_child_with_rejected_coordinator_observation_is_not_closed`. |
 | Actual never-bound absence, acknowledged Closing safety, final Closed store rejects, resume | Honest Store(Rejected), proof survives, explicit recovery closes/reopens; `never_bound_root_terminal_store_rejection_recovers_after_resume`. |
-| First Failed audit debt A, later Released debt B | Preserve both exact records; cleanup is not blocked by A; retry A once without re-closing B. |
-| Pending -> Failed -> Released, all audits reject | Maximum three immutable physical debts; capacity returns only on actual Released. |
-| Failed+provider Ack -> Released+provider Failed | Failure witness cannot acknowledge release; Incomplete despite coordinator Ack. |
-| Legitimate later Released+Ack report | Improve release witness without replacing first observation or physically replaying. |
-| Report token presented as Completion / foreign request, cause or operation | StaleOutcome; no coarse after-state authority. |
-| Closing safety write rejects vs final Closed write rejects | Former prevents Completion; latter allows only honest writer retry/recovery. |
-| Saved absence/mixed outstanding debts, resume | Validate exact correlation, retry retained records without factory/physical replay. |
-| Independent child audit held/rejected while parent joins | First operation remains; parent receives child failure; explicit parent retry reconciles fresh generation. |
-| Parent overtakes factory/submit output | No reopening/dispatch; Ready owner/receipt survives before future Drop. |
+| First Failed audit debt A, later Released debt B | Preserve both exact records; cleanup is not blocked by A; retry A once without re-closing B. `failed_observation_debt_survives_release_and_is_retried_once_per_generation`. |
+| Pending -> Failed -> Released, all audits reject | Maximum three immutable physical debts; capacity returns only on actual Released. `three_first_observations_survive_rejected_audits_and_release_advancement`. |
+| Failed+provider Ack -> Released+provider Failed | Failure witness cannot acknowledge release; Incomplete despite coordinator Ack. `failed_provider_witness_cannot_acknowledge_release_and_legitimate_improvement_keeps_record`. |
+| Legitimate later Released+Ack report | Improve release witness without replacing first observation or physically replaying. `failed_provider_witness_cannot_acknowledge_release_and_legitimate_improvement_keeps_record`; `mixed_close_debt_and_later_release_witness_survive_sqlite_reopen`. |
+| Report token presented as Completion / foreign request, cause or operation | StaleOutcome; no coarse after-state authority. `absence_proof_rejects_foreign_request_and_restored_contradictions_without_repair` and contradictory SQLite cases. |
+| Closing safety write rejects vs final Closed write rejects | Former prevents Completion; latter allows only honest writer retry/recovery. `rejected_safety_write_blocks_completion_and_final_rejection_retries_only_writer`. |
+| Saved absence/mixed outstanding debts, resume | Validate exact correlation, retry retained records without factory/physical replay. `mixed_close_debt_and_later_release_witness_survive_sqlite_reopen`; recovery anchor above. |
+| Independent child audit held/rejected while parent joins | First operation remains; parent receives child failure; explicit parent retry reconciles fresh generation. `parent_joins_failed_independent_child_and_preserves_its_first_close_owner`. |
+| Parent overtakes factory/submit output | No reopening/dispatch; Ready owner/receipt survives before future Drop. Definite startup failure hands installed proof/owner to the registered first-owner drain and removes only its completed preparation flight before joining; there is no local parallel reconciliation or post-terminal startup writer. |
 | Initial publication fails before factory with concurrent bind | Live flight and same graph scope validate/install exclusion; persist the newly installed proof in Closing before returning the immutable failure; no restored inference. `row_38_publication_error_matrix_seals_actual_gate_preserves_owner_receipt_and_restore` checks retained actual exclusion. |
-| Constructor/poll panic; Ready then Drop panic; recovery faults | Cached typed uncertainty; retain observed owner/receipt/report, no inferred release. |
-| Two close waiters/caller loss/waker or payload faults | All existing waiters settle same immutable result; later explicit retry differs without rewriting. |
-| NoRoom then capacity available; identical/conflicting admitted retry | Nonadmitted retry can run; admitted retry returns cached result; changed binding conflicts. |
+| Constructor/poll panic; Ready then Drop panic; recovery faults | Cached typed uncertainty; retain observed owner/receipt/report, no inferred release. `ready_factory_outputs_survive_effect_future_drop`, submit/resource transfer tests, `audit_constructor_poll_and_ready_drop_preserve_exact_observation_authority`, `store_constructor_poll_and_ready_drop_keep_completion_and_writer_only_retry`, `recovery_audit_fault_does_not_strand_original_publication_failure`. |
+| Two close waiters/caller loss/waker or payload faults | All existing waiters settle same immutable result; later explicit retry differs without rewriting. `joined_close_waiters_keep_failed_generation_after_successful_retry_and_caller_loss`; `released_ready_drop_preserves_failed_old_waiter_after_successful_retry`; `panicking_caller_waker_and_payload_do_not_strand_other_close_waiters`. |
+| NoRoom then capacity available; identical/conflicting admitted retry | Nonadmitted retry can run; admitted retry returns cached result; changed binding conflicts. `no_room_request_can_admit_after_another_child_releases_capacity`; `dropped_spawn_caller_and_two_joiners_receive_one_cached_factory_failure`. |
 | Concurrent intent publication and terminal store rejection | Registered generation owns intent persistence before cleanup; no later independent intent writer publishes Closed after that generation's final refusal. |
 | End/host/root/disposal intent audit/store fault | Seal and owned drain precede fault; cleanup still executes under supervision. |
 

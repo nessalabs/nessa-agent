@@ -636,7 +636,6 @@ pub struct OwnershipSnapshot {
     pub reports: Vec<ReportRow>,
 }
 
-
 /// Actual absence observed by the live transaction, never inferred during restoration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AbsenceProof {
@@ -708,34 +707,76 @@ pub struct CloseCompletionRow {
 
 impl ResourceObservationAudit {
     /// Exact immutable first-observation record.
-    pub fn record(&self) -> &OwnershipEvidence { &self.record }
+    pub fn record(&self) -> &OwnershipEvidence {
+        &self.record
+    }
     /// Actual coordinator acknowledgement of this record.
-    pub fn acknowledgement(&self) -> EvidenceFact { self.acknowledgement }
+    pub fn acknowledgement(&self) -> EvidenceFact {
+        self.acknowledgement
+    }
     /// Whether an actual provider witness for this outcome was observed.
-    pub fn provider_acknowledged(&self) -> bool { self.provider_acknowledged }
-    pub(crate) fn from_parts(record: OwnershipEvidence, acknowledgement: EvidenceFact, provider_acknowledged: bool) -> Self {
-        Self { record, acknowledgement, provider_acknowledged }
+    pub fn provider_acknowledged(&self) -> bool {
+        self.provider_acknowledged
+    }
+    pub(crate) fn from_parts(
+        record: OwnershipEvidence,
+        acknowledgement: EvidenceFact,
+        provider_acknowledged: bool,
+    ) -> Self {
+        Self {
+            record,
+            acknowledgement,
+            provider_acknowledged,
+        }
     }
 }
 impl AbsenceAudit {
     /// Actual live proof, validated with the enclosing graph on restoration.
-    pub fn proof(&self) -> &AbsenceProof { &self.proof }
+    pub fn proof(&self) -> &AbsenceProof {
+        &self.proof
+    }
     /// Exact immutable absence observation.
-    pub fn record(&self) -> &OwnershipEvidence { &self.record }
+    pub fn record(&self) -> &OwnershipEvidence {
+        &self.record
+    }
     /// Actual coordinator acknowledgement of the absence record.
-    pub fn acknowledgement(&self) -> EvidenceFact { self.acknowledgement }
-    pub(crate) fn from_parts(proof: AbsenceProof, record: OwnershipEvidence, acknowledgement: EvidenceFact) -> Self {
-        Self { proof, record, acknowledgement }
+    pub fn acknowledgement(&self) -> EvidenceFact {
+        self.acknowledgement
+    }
+    pub(crate) fn from_parts(
+        proof: AbsenceProof,
+        record: OwnershipEvidence,
+        acknowledgement: EvidenceFact,
+    ) -> Self {
+        Self {
+            proof,
+            record,
+            acknowledgement,
+        }
     }
 }
 impl CloseCompletionRow {
     /// First direct operation owner, which may itself be a child lifetime.
-    pub fn close_lifetime(&self) -> &AgentLifetimeId { &self.close_lifetime }
+    pub fn close_lifetime(&self) -> &AgentLifetimeId {
+        &self.close_lifetime
+    }
     /// Exact immutable explicitly typed aggregate decision.
-    pub fn record(&self) -> &OwnershipEvidence { &self.record }
+    pub fn record(&self) -> &OwnershipEvidence {
+        &self.record
+    }
     /// Actual mandatory audit acknowledgement of this decision.
-    pub fn acknowledgement(&self) -> EvidenceFact { self.acknowledgement }
-    pub(crate) fn from_parts(close_lifetime: AgentLifetimeId, record: OwnershipEvidence, acknowledgement: EvidenceFact) -> Self {
-        Self { close_lifetime, record, acknowledgement }
+    pub fn acknowledgement(&self) -> EvidenceFact {
+        self.acknowledgement
+    }
+    pub(crate) fn from_parts(
+        close_lifetime: AgentLifetimeId,
+        record: OwnershipEvidence,
+        acknowledgement: EvidenceFact,
+    ) -> Self {
+        Self {
+            close_lifetime,
+            record,
+            acknowledgement,
+        }
     }
 }

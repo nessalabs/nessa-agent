@@ -76,11 +76,15 @@ fn admit(
 
 fn complete(graph: &mut OwnershipGraph, root: &AgentLifetimeId) {
     for record in graph.pending_close_evidence(root) {
-        graph.acknowledge_observation(&record, EvidenceFact::Acknowledged).unwrap();
+        graph
+            .acknowledge_observation(&record, EvidenceFact::Acknowledged)
+            .unwrap();
     }
     let operation = graph.close_operation(root).cloned().unwrap();
     let completion = graph.prepare_completion(root, &operation).unwrap();
-    graph.acknowledge_completion(&completion, EvidenceFact::Acknowledged).unwrap();
+    graph
+        .acknowledge_completion(&completion, EvidenceFact::Acknowledged)
+        .unwrap();
 }
 
 #[path = "ownership/settlement.rs"]
@@ -1610,10 +1614,17 @@ fn second_physical_release_reuses_the_exact_first_observation() {
         .unwrap();
     assert_eq!(again.before, OwnershipMeaning::Closing);
     assert_eq!(again.after, OwnershipMeaning::Closing);
-    assert_eq!(again.close_detail, Some(CloseEvidenceDetail::ResourceObservation {
-        physical: PhysicalFact::Released, provider_evidence: EvidenceFact::Pending,
-    }));
-    assert_eq!(graph.lifetime_state(&life("parent")), Some(LifetimeState::Closing));
+    assert_eq!(
+        again.close_detail,
+        Some(CloseEvidenceDetail::ResourceObservation {
+            physical: PhysicalFact::Released,
+            provider_evidence: EvidenceFact::Pending,
+        })
+    );
+    assert_eq!(
+        graph.lifetime_state(&life("parent")),
+        Some(LifetimeState::Closing)
+    );
     complete(&mut graph, &life("parent"));
     assert_eq!(
         graph.close_cause(&life("parent")),
@@ -2150,10 +2161,26 @@ fn unbound_absence_token_refuses_child_closed_history_and_stale_completion() {
     let token = graph
         .note_unbound_root(&life("root"), &close_id("close"))
         .unwrap();
-    assert_eq!(graph.apply_report(&life("root"), &close_id("close"), &life("root"), PhysicalFact::Released, EvidenceFact::Acknowledged), Err(OwnershipError::StaleOutcome));
-    graph.acknowledge_unbound_root(token, EvidenceFact::Acknowledged).unwrap();
+    assert_eq!(
+        graph.apply_report(
+            &life("root"),
+            &close_id("close"),
+            &life("root"),
+            PhysicalFact::Released,
+            EvidenceFact::Acknowledged
+        ),
+        Err(OwnershipError::StaleOutcome)
+    );
+    graph
+        .acknowledge_unbound_root(token, EvidenceFact::Acknowledged)
+        .unwrap();
     complete(&mut graph, &life("root"));
-    assert_eq!(graph.note_unbound_root(&life("root"), &close_id("close")).unwrap_err(), OwnershipError::StaleOutcome);
+    assert_eq!(
+        graph
+            .note_unbound_root(&life("root"), &close_id("close"))
+            .unwrap_err(),
+        OwnershipError::StaleOutcome
+    );
     assert_eq!(
         graph.snapshot().settlements[0].evidence,
         EvidenceFact::Acknowledged

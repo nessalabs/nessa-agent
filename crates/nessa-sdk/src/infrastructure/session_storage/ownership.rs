@@ -29,10 +29,12 @@ use crate::domain::agent_execution::{
     executions::ExecutionId,
     sessions::SessionId,
     subagents::{
-        AbsenceAudit, AbsenceProof, AgentLifetimeId, CloseCompletionRow, CloseEvidenceDetail, OwnershipEvidence, OwnershipGraph, OwnershipMeaning, ResourceObservationAudit, SettlementProof, ApprovalPolicy, CloseOperationId, DeliveryState, EvidenceFact, HostActor,
-        Initiator, KnownMilestone, LifetimeCause, LifetimeRow, LifetimeState, ModelChoice,
-        OwnershipSnapshot, PhysicalFact, ReportId, ReportRow, SettlementRow, SpawnBinding,
-        SpawnOrigin, SpawnProgress, SpawnRequestId, SpawnRow, TaskDigest, TaskReceiptId,
+        AbsenceAudit, AbsenceProof, AgentLifetimeId, ApprovalPolicy, CloseCompletionRow,
+        CloseEvidenceDetail, CloseOperationId, DeliveryState, EvidenceFact, HostActor, Initiator,
+        KnownMilestone, LifetimeCause, LifetimeRow, LifetimeState, ModelChoice, OwnershipEvidence,
+        OwnershipGraph, OwnershipMeaning, OwnershipSnapshot, PhysicalFact, ReportId, ReportRow,
+        ResourceObservationAudit, SettlementProof, SettlementRow, SpawnBinding, SpawnOrigin,
+        SpawnProgress, SpawnRequestId, SpawnRow, TaskDigest, TaskReceiptId,
     },
     tools::ToolCallId,
 };
@@ -178,7 +180,12 @@ impl OwnershipState {
         let body: String = body;
         let dto: SnapshotDto = serde_json::from_str(&body).map_err(|_| PortFailure::Rejected)?;
         let snapshot: OwnershipSnapshot = dto.try_into().map_err(|_| PortFailure::Rejected)?;
-        if OwnershipGraph::restore(snapshot.clone()).refusal().is_some() { return Err(PortFailure::Rejected); }
+        if OwnershipGraph::restore(snapshot.clone())
+            .refusal()
+            .is_some()
+        {
+            return Err(PortFailure::Rejected);
+        }
         Ok(snapshot)
     }
 }
@@ -276,7 +283,11 @@ struct InitiatorDto {
 impl From<&OwnershipSnapshot> for SnapshotDto {
     fn from(snapshot: &OwnershipSnapshot) -> Self {
         Self {
-            close_completions: snapshot.close_completions.iter().map(CompletionDto::from).collect(),
+            close_completions: snapshot
+                .close_completions
+                .iter()
+                .map(CompletionDto::from)
+                .collect(),
             lifetimes: snapshot.lifetimes.iter().map(LifetimeDto::from).collect(),
             spawns: snapshot.spawns.iter().map(SpawnDto::from).collect(),
             settlements: snapshot
@@ -294,7 +305,11 @@ impl TryFrom<SnapshotDto> for OwnershipSnapshot {
 
     fn try_from(dto: SnapshotDto) -> Result<Self, Self::Error> {
         Ok(Self {
-            close_completions: dto.close_completions.into_iter().map(CompletionDto::try_into).collect::<Result<_, _>>()?,
+            close_completions: dto
+                .close_completions
+                .into_iter()
+                .map(CompletionDto::try_into)
+                .collect::<Result<_, _>>()?,
             lifetimes: dto
                 .lifetimes
                 .into_iter()

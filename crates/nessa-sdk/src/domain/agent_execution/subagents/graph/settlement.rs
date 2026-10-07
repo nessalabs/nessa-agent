@@ -9,7 +9,9 @@ pub struct CloseCompletion {
 }
 impl CloseCompletion {
     /// Exact immutable decision for the mandatory coordinator audit.
-    pub fn evidence(&self) -> &OwnershipEvidence { &self.record }
+    pub fn evidence(&self) -> &OwnershipEvidence {
+        &self.record
+    }
 }
 
 impl OwnershipGraph {
@@ -18,12 +20,18 @@ impl OwnershipGraph {
         let mut current = target.clone();
         let mut visited = BTreeSet::new();
         loop {
-            if !visited.insert(current.clone()) || self.close_operation(&current).is_none() { return None; }
+            if !visited.insert(current.clone()) || self.close_operation(&current).is_none() {
+                return None;
+            }
             match self.cascaded_from(&current) {
-                Some(parent) if self.close_operation(parent) == self.close_operation(&current)
-                    && self.close_cause(parent) == self.close_cause(&current)
-                    && self.close_initiator(parent) == self.close_initiator(&current)
-                    && self.parent_id(&current).as_ref() == Some(parent) => current = parent.clone(),
+                Some(parent)
+                    if self.close_operation(parent) == self.close_operation(&current)
+                        && self.close_cause(parent) == self.close_cause(&current)
+                        && self.close_initiator(parent) == self.close_initiator(&current)
+                        && self.parent_id(&current).as_ref() == Some(parent) =>
+                {
+                    current = parent.clone()
+                }
                 Some(_) => return None,
                 None => return Some(current),
             }
@@ -37,14 +45,23 @@ impl OwnershipGraph {
 
     /// Independently closing descendants whose own Completion this root must join.
     pub fn independent_closes(&self, root: &AgentLifetimeId) -> Vec<AgentLifetimeId> {
-        self.lifetimes.keys().filter(|id| *id != root && self.in_subtree(root, id)
-            && self.lifetime_state(id) == Some(LifetimeState::Closing)
-            && self.close_owner(id).as_ref() == Some(*id)).cloned().collect()
+        self.lifetimes
+            .keys()
+            .filter(|id| {
+                *id != root
+                    && self.in_subtree(root, id)
+                    && self.lifetime_state(id) == Some(LifetimeState::Closing)
+                    && self.close_owner(id).as_ref() == Some(*id)
+            })
+            .cloned()
+            .collect()
     }
 
     /// Whether durable live absence excludes new binding/gate transfer for this target.
     pub fn has_absence(&self, target: &AgentLifetimeId) -> bool {
-        self.settlements.values().any(|s| &s.row.target == target && matches!(s.row.proof, SettlementProof::Absence(_)))
+        self.settlements
+            .values()
+            .any(|s| &s.row.target == target && matches!(s.row.proof, SettlementProof::Absence(_)))
     }
 
     /// Record actual live absence with exact request/close correlation.
@@ -52,56 +69,114 @@ impl OwnershipGraph {
     ///
     /// # Errors
     /// Rejects a foreign request, mismatched owner/operation, existing resource fact or refused graph.
-    pub fn note_absence(&mut self, root: &AgentLifetimeId, operation: &CloseOperationId,
-        target: &AgentLifetimeId, proof: AbsenceProof) -> Result<OwnershipEvidence, OwnershipError> {
+    pub fn note_absence(
+        &mut self,
+        root: &AgentLifetimeId,
+        operation: &CloseOperationId,
+        target: &AgentLifetimeId,
+        proof: AbsenceProof,
+    ) -> Result<OwnershipEvidence, OwnershipError> {
         self.ensure_dispatch()?;
         self.validate_target(root, operation, target)?;
-        if !self.valid_absence(target, &proof) { return Err(OwnershipError::StaleOutcome); }
+        if !self.valid_absence(target, &proof) {
+            return Err(OwnershipError::StaleOutcome);
+        }
         let key = (root.clone(), target.clone());
         if let Some(existing) = self.settlements.get(&key) {
             return match &existing.row.proof {
-                SettlementProof::Absence(absence) if absence.proof == proof => Ok(absence.record.clone()),
+                SettlementProof::Absence(absence) if absence.proof == proof => {
+                    Ok(absence.record.clone())
+                }
                 _ => Err(OwnershipError::StaleOutcome),
             };
         }
-        let record = self.observation_record(root, operation, target, CloseEvidenceDetail::Absence(proof.clone()));
-        self.settlements.insert(key, Settlement { row: SettlementRow {
-            close_lifetime: root.clone(), target: target.clone(), physical: PhysicalFact::Released,
-            evidence: EvidenceFact::Pending,
-            proof: SettlementProof::Absence(AbsenceAudit { proof, record: record.clone(), acknowledgement: EvidenceFact::Pending }),
-        }});
+        let record = self.observation_record(
+            root,
+            operation,
+            target,
+            CloseEvidenceDetail::Absence(proof.clone()),
+        );
+        self.settlements.insert(
+            key,
+            Settlement {
+                row: SettlementRow {
+                    close_lifetime: root.clone(),
+                    target: target.clone(),
+                    physical: PhysicalFact::Released,
+                    evidence: EvidenceFact::Pending,
+                    proof: SettlementProof::Absence(AbsenceAudit {
+                        proof,
+                        record: record.clone(),
+                        acknowledgement: EvidenceFact::Pending,
+                    }),
+                },
+            },
+        );
         Ok(record)
     }
 
     /// Exact outstanding observation records, including physically Released targets.
     pub fn pending_close_evidence(&self, root: &AgentLifetimeId) -> Vec<OwnershipEvidence> {
-        self.settlements.values().filter(|s| &s.row.close_lifetime == root).flat_map(|s| {
-            match &s.row.proof {
-                SettlementProof::Absence(a) => if a.acknowledgement != EvidenceFact::Acknowledged { vec![a.record.clone()] } else { Vec::new() },
-                SettlementProof::Resource(slots) => slots.iter().flatten().filter(|a| a.acknowledgement != EvidenceFact::Acknowledged)
-                    .map(|a| a.record.clone()).collect(),
-            }
-        }).collect()
+        self.settlements
+            .values()
+            .filter(|s| &s.row.close_lifetime == root)
+            .flat_map(|s| match &s.row.proof {
+                SettlementProof::Absence(a) => {
+                    if a.acknowledgement != EvidenceFact::Acknowledged {
+                        vec![a.record.clone()]
+                    } else {
+                        Vec::new()
+                    }
+                }
+                SettlementProof::Resource(slots) => slots
+                    .iter()
+                    .flatten()
+                    .filter(|a| a.acknowledgement != EvidenceFact::Acknowledged)
+                    .map(|a| a.record.clone())
+                    .collect(),
+            })
+            .collect()
     }
 
     /// Apply actual coordinator acknowledgement to the exact observation, never Completion.
     ///
     /// # Errors
     /// A mismatched record/stage/current operation returns StaleOutcome.
-    pub fn acknowledge_observation(&mut self, record: &OwnershipEvidence, outcome: EvidenceFact) -> Result<(), OwnershipError> {
+    pub fn acknowledge_observation(
+        &mut self,
+        record: &OwnershipEvidence,
+        outcome: EvidenceFact,
+    ) -> Result<(), OwnershipError> {
         self.ensure_dispatch()?;
-        let target = record.child_lifetime.as_ref().ok_or(OwnershipError::StaleOutcome)?;
-        let operation = record.close_operation.as_ref().ok_or(OwnershipError::StaleOutcome)?;
+        let target = record
+            .child_lifetime
+            .as_ref()
+            .ok_or(OwnershipError::StaleOutcome)?;
+        let operation = record
+            .close_operation
+            .as_ref()
+            .ok_or(OwnershipError::StaleOutcome)?;
         self.validate_target(&record.parent_lifetime, operation, target)?;
-        let row = &mut self.settlements.get_mut(&(record.parent_lifetime.clone(), target.clone()))
-            .ok_or(OwnershipError::StaleOutcome)?.row;
+        let row = &mut self
+            .settlements
+            .get_mut(&(record.parent_lifetime.clone(), target.clone()))
+            .ok_or(OwnershipError::StaleOutcome)?
+            .row;
         let acknowledgement = match &mut row.proof {
             SettlementProof::Absence(a) if &a.record == record => &mut a.acknowledgement,
-            SettlementProof::Resource(slots) => &mut slots.iter_mut().flatten().find(|a| &a.record == record)
-                .ok_or(OwnershipError::StaleOutcome)?.acknowledgement,
+            SettlementProof::Resource(slots) => {
+                &mut slots
+                    .iter_mut()
+                    .flatten()
+                    .find(|a| &a.record == record)
+                    .ok_or(OwnershipError::StaleOutcome)?
+                    .acknowledgement
+            }
             _ => return Err(OwnershipError::StaleOutcome),
         };
-        if *acknowledgement != EvidenceFact::Acknowledged { *acknowledgement = outcome; }
+        if *acknowledgement != EvidenceFact::Acknowledged {
+            *acknowledgement = outcome;
+        }
         refresh_summary(row);
         Ok(())
     }
@@ -111,15 +186,31 @@ impl OwnershipGraph {
     ///
     /// # Errors
     /// Returns StaleOutcome for unresolved proof, debt, independent child or operation.
-    pub fn prepare_completion(&mut self, root: &AgentLifetimeId, operation: &CloseOperationId) -> Result<CloseCompletion, OwnershipError> {
+    pub fn prepare_completion(
+        &mut self,
+        root: &AgentLifetimeId,
+        operation: &CloseOperationId,
+    ) -> Result<CloseCompletion, OwnershipError> {
         self.ensure_dispatch()?;
-        if self.close_owner(root).as_ref() != Some(root) || self.close_operation(root) != Some(operation)
-            || !self.completion_ready(root) { return Err(OwnershipError::StaleOutcome); }
-        let record = self.observation_record(root, operation, root, CloseEvidenceDetail::Completion);
-        let fact = self.close_completions.entry(root.clone()).or_insert(CloseCompletionRow {
-            close_lifetime: root.clone(), record, acknowledgement: EvidenceFact::Pending,
-        });
-        Ok(CloseCompletion { record: fact.record.clone() })
+        if self.close_owner(root).as_ref() != Some(root)
+            || self.close_operation(root) != Some(operation)
+            || !self.completion_ready(root)
+        {
+            return Err(OwnershipError::StaleOutcome);
+        }
+        let record =
+            self.observation_record(root, operation, root, CloseEvidenceDetail::Completion);
+        let fact = self
+            .close_completions
+            .entry(root.clone())
+            .or_insert(CloseCompletionRow {
+                close_lifetime: root.clone(),
+                record,
+                acknowledgement: EvidenceFact::Pending,
+            });
+        Ok(CloseCompletion {
+            record: fact.record.clone(),
+        })
     }
 
     /// Apply the actual audit result for the explicit aggregate token.
@@ -127,51 +218,123 @@ impl OwnershipGraph {
     ///
     /// # Errors
     /// Rejects a stale decision or no longer ready target set.
-    pub fn acknowledge_completion(&mut self, token: &CloseCompletion, outcome: EvidenceFact) -> Result<(), OwnershipError> {
+    pub fn acknowledge_completion(
+        &mut self,
+        token: &CloseCompletion,
+        outcome: EvidenceFact,
+    ) -> Result<(), OwnershipError> {
         self.ensure_dispatch()?;
         let root = &token.record.parent_lifetime;
-        if !self.completion_ready(root) { return Err(OwnershipError::StaleOutcome); }
-        let fact = self.close_completions.get_mut(root).ok_or(OwnershipError::StaleOutcome)?;
-        if fact.record != token.record { return Err(OwnershipError::StaleOutcome); }
-        if fact.acknowledgement != EvidenceFact::Acknowledged { fact.acknowledgement = outcome; }
+        if !self.completion_ready(root) {
+            return Err(OwnershipError::StaleOutcome);
+        }
+        let fact = self
+            .close_completions
+            .get_mut(root)
+            .ok_or(OwnershipError::StaleOutcome)?;
+        if fact.record != token.record {
+            return Err(OwnershipError::StaleOutcome);
+        }
+        if fact.acknowledgement != EvidenceFact::Acknowledged {
+            fact.acknowledgement = outcome;
+        }
         if fact.acknowledgement == EvidenceFact::Acknowledged {
-            let owned: Vec<_> = self.lifetimes.keys().filter(|id| self.close_owner(id).as_ref() == Some(root)).cloned().collect();
-            for id in owned { self.lifetimes.get_mut(&id).expect("owned lifetime").row.state = LifetimeState::Closed; }
+            let owned: Vec<_> = self
+                .lifetimes
+                .keys()
+                .filter(|id| self.close_owner(id).as_ref() == Some(root))
+                .cloned()
+                .collect();
+            for id in owned {
+                self.lifetimes
+                    .get_mut(&id)
+                    .expect("owned lifetime")
+                    .row
+                    .state = LifetimeState::Closed;
+            }
         }
         Ok(())
     }
 
-    pub(super) fn validate_target(&self, root: &AgentLifetimeId, operation: &CloseOperationId, target: &AgentLifetimeId) -> Result<(), OwnershipError> {
-        if self.lifetime_state(root).is_none() { return Err(OwnershipError::ParentMissing); }
-        if self.lifetime_state(root) == Some(LifetimeState::Open) || self.close_operation(root) != Some(operation)
-            || self.close_owner(target).as_ref() != Some(root) || !self.in_subtree(root, target) {
+    pub(super) fn validate_target(
+        &self,
+        root: &AgentLifetimeId,
+        operation: &CloseOperationId,
+        target: &AgentLifetimeId,
+    ) -> Result<(), OwnershipError> {
+        if self.lifetime_state(root).is_none() {
+            return Err(OwnershipError::ParentMissing);
+        }
+        if self.lifetime_state(root) == Some(LifetimeState::Open)
+            || self.close_operation(root) != Some(operation)
+            || self.close_owner(target).as_ref() != Some(root)
+            || !self.in_subtree(root, target)
+        {
             return Err(OwnershipError::StaleOutcome);
         }
         Ok(())
     }
 
-    pub(super) fn observation_record(&self, root: &AgentLifetimeId, operation: &CloseOperationId, target: &AgentLifetimeId,
-        detail: CloseEvidenceDetail) -> OwnershipEvidence {
-        OwnershipEvidence { close_detail: Some(detail.clone()), parent_lifetime: root.clone(), child_lifetime: Some(target.clone()),
-            close_operation: Some(operation.clone()), before: OwnershipMeaning::Closing,
-            after: if detail == CloseEvidenceDetail::Completion { OwnershipMeaning::Closed } else { OwnershipMeaning::Closing },
-            cause: self.close_cause(root).cloned(), initiator: self.close_initiator(root).cloned().unwrap_or(Initiator::Runtime) }
+    pub(super) fn observation_record(
+        &self,
+        root: &AgentLifetimeId,
+        operation: &CloseOperationId,
+        target: &AgentLifetimeId,
+        detail: CloseEvidenceDetail,
+    ) -> OwnershipEvidence {
+        OwnershipEvidence {
+            close_detail: Some(detail.clone()),
+            parent_lifetime: root.clone(),
+            child_lifetime: Some(target.clone()),
+            close_operation: Some(operation.clone()),
+            before: OwnershipMeaning::Closing,
+            after: if detail == CloseEvidenceDetail::Completion {
+                OwnershipMeaning::Closed
+            } else {
+                OwnershipMeaning::Closing
+            },
+            cause: self.close_cause(root).cloned(),
+            initiator: self
+                .close_initiator(root)
+                .cloned()
+                .unwrap_or(Initiator::Runtime),
+        }
     }
 
     fn valid_absence(&self, target: &AgentLifetimeId, proof: &AbsenceProof) -> bool {
         match proof {
             AbsenceProof::NeverTransferredRoot => !self.child_request.contains_key(target),
-            AbsenceProof::PreparationRejectedWithoutOwner(request) | AbsenceProof::AdmissionFailedBeforeFactory(request) =>
-                self.child_lifetime(request) == Some(target) && self.spawn_progress(request).is_some_and(|p| p.known() == KnownMilestone::Reserved),
+            AbsenceProof::PreparationRejectedWithoutOwner(request)
+            | AbsenceProof::AdmissionFailedBeforeFactory(request) => {
+                self.child_lifetime(request) == Some(target)
+                    && self
+                        .spawn_progress(request)
+                        .is_some_and(|p| p.known() == KnownMilestone::Reserved)
+            }
         }
     }
 
-    pub(super) fn valid_record(&self, root: &AgentLifetimeId, target: &AgentLifetimeId, record: &OwnershipEvidence) -> bool {
-        record.close_operation.as_ref().is_some_and(|op| self.validate_target(root, op, target).is_ok())
-            && &record.parent_lifetime == root && record.child_lifetime.as_ref() == Some(target)
-            && record.cause.as_ref() == self.close_cause(root) && Some(&record.initiator) == self.close_initiator(root)
+    pub(super) fn valid_record(
+        &self,
+        root: &AgentLifetimeId,
+        target: &AgentLifetimeId,
+        record: &OwnershipEvidence,
+    ) -> bool {
+        record
+            .close_operation
+            .as_ref()
+            .is_some_and(|op| self.validate_target(root, op, target).is_ok())
+            && &record.parent_lifetime == root
+            && record.child_lifetime.as_ref() == Some(target)
+            && record.cause.as_ref() == self.close_cause(root)
+            && Some(&record.initiator) == self.close_initiator(root)
             && record.before == OwnershipMeaning::Closing
-            && record.after == if record.close_detail == Some(CloseEvidenceDetail::Completion) { OwnershipMeaning::Closed } else { OwnershipMeaning::Closing }
+            && record.after
+                == if record.close_detail == Some(CloseEvidenceDetail::Completion) {
+                    OwnershipMeaning::Closed
+                } else {
+                    OwnershipMeaning::Closing
+                }
     }
 
     pub(super) fn valid_settlement(&self, row: &SettlementRow) -> bool {
@@ -185,16 +348,31 @@ impl OwnershipGraph {
                     && !matches!(a.record.close_detail, Some(CloseEvidenceDetail::ResourceObservation { provider_evidence: EvidenceFact::Acknowledged, .. }) if !a.provider_acknowledged)
             })),
         };
-        let mut expected = row.clone(); refresh_summary(&mut expected);
-        valid && expected.physical == row.physical && expected.evidence == row.evidence
+        if !valid {
+            return false;
+        }
+        let mut expected = row.clone();
+        refresh_summary(&mut expected);
+        expected.physical == row.physical && expected.evidence == row.evidence
     }
 
     pub(super) fn completion_ready(&self, root: &AgentLifetimeId) -> bool {
-        self.lifetimes.keys().filter(|id| self.in_subtree(root, id)).all(|id| {
-            let Some(owner) = self.close_owner(id) else { return false; };
-            if &owner != root { return self.lifetime_state(id) == Some(LifetimeState::Closed); }
-            self.settlements.get(&(root.clone(), id.clone())).is_some_and(|s|
-                settlement_summary(&s.row.proof) == (PhysicalFact::Released, EvidenceFact::Acknowledged))
-        })
+        self.lifetimes
+            .keys()
+            .filter(|id| self.in_subtree(root, id))
+            .all(|id| {
+                let Some(owner) = self.close_owner(id) else {
+                    return false;
+                };
+                if &owner != root {
+                    return self.lifetime_state(id) == Some(LifetimeState::Closed);
+                }
+                self.settlements
+                    .get(&(root.clone(), id.clone()))
+                    .is_some_and(|s| {
+                        settlement_summary(&s.row.proof)
+                            == (PhysicalFact::Released, EvidenceFact::Acknowledged)
+                    })
+            })
     }
 }

@@ -9,11 +9,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::error::OwnershipError;
 use super::values::{
-    AbsenceAudit, AbsenceProof, AgentLifetimeId, CloseCompletionRow, CloseEvidenceDetail, CloseOperationId, ResourceObservationAudit, SettlementProof, DeliveryState, EvidenceFact, Initiator, KnownMilestone,
-    LifetimeCause, LifetimeRow, LifetimeState, OwnershipEvidence, OwnershipMeaning,
-    OwnershipSnapshot, PhysicalFact, ReportId, ReportRow, SettlementRow, SpawnBinding,
-    SpawnProgress, SpawnRequestId, SpawnRow, MAX_DEPTH, MAX_DIRECT_CHILDREN, MAX_READ_PAGE,
-    MAX_RETAINED_REQUESTS,
+    AbsenceAudit, AbsenceProof, AgentLifetimeId, CloseCompletionRow, CloseEvidenceDetail,
+    CloseOperationId, DeliveryState, EvidenceFact, Initiator, KnownMilestone, LifetimeCause,
+    LifetimeRow, LifetimeState, OwnershipEvidence, OwnershipMeaning, OwnershipSnapshot,
+    PhysicalFact, ReportId, ReportRow, ResourceObservationAudit, SettlementProof, SettlementRow,
+    SpawnBinding, SpawnProgress, SpawnRequestId, SpawnRow, MAX_DEPTH, MAX_DIRECT_CHILDREN,
+    MAX_READ_PAGE, MAX_RETAINED_REQUESTS,
 };
 use crate::domain::agent_execution::sessions::SessionId;
 
@@ -308,7 +309,8 @@ impl OwnershipGraph {
         {
             return Err(OwnershipError::StaleOutcome);
         }
-        let evidence = self.note_absence(root, operation, root, AbsenceProof::NeverTransferredRoot)?;
+        let evidence =
+            self.note_absence(root, operation, root, AbsenceProof::NeverTransferredRoot)?;
         Ok(UnboundRootSettlement {
             root: root.clone(),
             operation: operation.clone(),
@@ -491,39 +493,76 @@ impl OwnershipGraph {
     ///
     /// # Errors
     /// Rejects unknown requests or a preparation unrelated to the retained chart.
-    pub fn note_prepared_owner(&mut self, request: &SpawnRequestId) -> Result<OwnershipEvidence, OwnershipError> {
+    pub fn note_prepared_owner(
+        &mut self,
+        request: &SpawnRequestId,
+    ) -> Result<OwnershipEvidence, OwnershipError> {
         self.ensure_dispatch()?;
-        let spawn = self.spawns.get_mut(request).ok_or(OwnershipError::UnknownSpawn)?;
-        if spawn.row.progress.known() != KnownMilestone::Reserved { return Err(OwnershipError::IllegalSpawnProgress); }
+        let spawn = self
+            .spawns
+            .get_mut(request)
+            .ok_or(OwnershipError::UnknownSpawn)?;
+        if spawn.row.progress.known() != KnownMilestone::Reserved {
+            return Err(OwnershipError::IllegalSpawnProgress);
+        }
         let before = meaning_of(&spawn.row.progress);
         spawn.row.progress = match spawn.row.progress {
-            SpawnProgress::Draining { .. } => SpawnProgress::Draining { known: KnownMilestone::Prepared },
-            SpawnProgress::Unconfirmed { .. } => SpawnProgress::Unconfirmed { known: KnownMilestone::Prepared },
-            SpawnProgress::Ended { .. } | SpawnProgress::StartupFailed { .. } => return Err(OwnershipError::StaleOutcome),
+            SpawnProgress::Draining { .. } => SpawnProgress::Draining {
+                known: KnownMilestone::Prepared,
+            },
+            SpawnProgress::Unconfirmed { .. } => SpawnProgress::Unconfirmed {
+                known: KnownMilestone::Prepared,
+            },
+            SpawnProgress::Ended { .. } | SpawnProgress::StartupFailed { .. } => {
+                return Err(OwnershipError::StaleOutcome)
+            }
             _ => SpawnProgress::Prepared,
         };
-        Ok(evidence_for_spawn(&spawn.row, before, meaning_of(&spawn.row.progress), Initiator::Runtime))
+        Ok(evidence_for_spawn(
+            &spawn.row,
+            before,
+            meaning_of(&spawn.row.progress),
+            Initiator::Runtime,
+        ))
     }
 
     /// Install an actually returned task receipt without reopening a sealed lifetime.
     ///
     /// # Errors
     /// Rejects unknown requests, pre-attachment progress or conflicting known receipts.
-    pub fn note_task_receipt(&mut self, request: &SpawnRequestId, receipt: super::values::TaskReceiptId) -> Result<OwnershipEvidence, OwnershipError> {
+    pub fn note_task_receipt(
+        &mut self,
+        request: &SpawnRequestId,
+        receipt: super::values::TaskReceiptId,
+    ) -> Result<OwnershipEvidence, OwnershipError> {
         self.ensure_dispatch()?;
-        let spawn = self.spawns.get_mut(request).ok_or(OwnershipError::UnknownSpawn)?;
+        let spawn = self
+            .spawns
+            .get_mut(request)
+            .ok_or(OwnershipError::UnknownSpawn)?;
         let before = meaning_of(&spawn.row.progress);
-        let known = KnownMilestone::TaskAdmitted { receipt: receipt.clone() };
+        let known = KnownMilestone::TaskAdmitted {
+            receipt: receipt.clone(),
+        };
         if let KnownMilestone::TaskAdmitted { receipt: existing } = spawn.row.progress.known() {
-            if existing != receipt { return Err(OwnershipError::StaleOutcome); }
-        } else if spawn.row.progress.known() != KnownMilestone::Attached { return Err(OwnershipError::IllegalSpawnProgress); }
+            if existing != receipt {
+                return Err(OwnershipError::StaleOutcome);
+            }
+        } else if spawn.row.progress.known() != KnownMilestone::Attached {
+            return Err(OwnershipError::IllegalSpawnProgress);
+        }
         spawn.row.progress = match spawn.row.progress {
             SpawnProgress::Draining { .. } => SpawnProgress::Draining { known },
             SpawnProgress::Ended { .. } => SpawnProgress::Ended { known },
             SpawnProgress::Unconfirmed { .. } => SpawnProgress::Unconfirmed { known },
             _ => SpawnProgress::TaskAdmitted { receipt },
         };
-        Ok(evidence_for_spawn(&spawn.row, before, meaning_of(&spawn.row.progress), Initiator::Runtime))
+        Ok(evidence_for_spawn(
+            &spawn.row,
+            before,
+            meaning_of(&spawn.row.progress),
+            Initiator::Runtime,
+        ))
     }
 
     /// After the factory returns, say whether the child may be dispatched.
@@ -623,21 +662,37 @@ impl OwnershipGraph {
         self.ensure_dispatch()?;
         self.validate_target(close_lifetime, operation, target)?;
         let key = (close_lifetime.clone(), target.clone());
-        if self.physical(close_lifetime, target) == Some(PhysicalFact::Released) && physical != PhysicalFact::Released {
+        if self.physical(close_lifetime, target) == Some(PhysicalFact::Released)
+            && physical != PhysicalFact::Released
+        {
             return Err(OwnershipError::StaleOutcome);
         }
         let slot = physical_slot(physical);
-        let record = self.observation_record(close_lifetime, operation, target,
-            CloseEvidenceDetail::ResourceObservation { physical, provider_evidence: evidence });
+        let record = self.observation_record(
+            close_lifetime,
+            operation,
+            target,
+            CloseEvidenceDetail::ResourceObservation {
+                physical,
+                provider_evidence: evidence,
+            },
+        );
         let settlement = self.settlements.entry(key).or_insert_with(|| Settlement {
-            row: SettlementRow { close_lifetime: close_lifetime.clone(), target: target.clone(),
-                physical, evidence, proof: SettlementProof::Resource([None, None, None]) },
+            row: SettlementRow {
+                close_lifetime: close_lifetime.clone(),
+                target: target.clone(),
+                physical,
+                evidence,
+                proof: SettlementProof::Resource([None, None, None]),
+            },
         });
         let SettlementProof::Resource(slots) = &mut settlement.row.proof else {
             return Err(OwnershipError::StaleOutcome);
         };
         let observation = slots[slot].get_or_insert(ResourceObservationAudit {
-            record, acknowledgement: EvidenceFact::Pending, provider_acknowledged: false,
+            record,
+            acknowledgement: EvidenceFact::Pending,
+            provider_acknowledged: false,
         });
         observation.provider_acknowledged |= evidence == EvidenceFact::Acknowledged;
         let result = observation.record.clone();
@@ -863,7 +918,8 @@ impl OwnershipGraph {
                 || !graph.valid_record(&root, &root, &row.record)
                 || graph.cascaded_from(&root).is_some()
                 || !graph.completion_ready(&root)
-                || (row.acknowledgement == EvidenceFact::Acknowledged && graph.lifetime_state(&root) != Some(LifetimeState::Closed))
+                || (row.acknowledgement == EvidenceFact::Acknowledged
+                    && graph.lifetime_state(&root) != Some(LifetimeState::Closed))
             {
                 note_refusal(&mut refusal, OwnershipError::Contradictory);
             }
@@ -877,7 +933,9 @@ impl OwnershipGraph {
                 note_refusal(&mut refusal, OwnershipError::Contradictory);
             }
             if lifetime.row.state == LifetimeState::Closed {
-                if !graph.close_owner(id).and_then(|owner| graph.close_completions.get(&owner))
+                if !graph
+                    .close_owner(id)
+                    .and_then(|owner| graph.close_completions.get(&owner))
                     .is_some_and(|row| row.acknowledgement == EvidenceFact::Acknowledged)
                 {
                     note_refusal(&mut refusal, OwnershipError::Contradictory);
@@ -1079,7 +1137,9 @@ impl OwnershipGraph {
         targets: &mut Vec<AgentLifetimeId>,
     ) {
         let state = self.lifetime_state(lifetime);
-        if state == Some(LifetimeState::Closing) && self.close_owner(lifetime).as_ref() == Some(root) {
+        if state == Some(LifetimeState::Closing)
+            && self.close_owner(lifetime).as_ref() == Some(root)
+        {
             let released = self
                 .settlements
                 .get(&(root.clone(), lifetime.clone()))
@@ -1305,7 +1365,11 @@ fn delivery_meaning(state: DeliveryState) -> OwnershipMeaning {
 }
 
 fn physical_slot(physical: PhysicalFact) -> usize {
-    match physical { PhysicalFact::Pending => 0, PhysicalFact::Failed => 1, PhysicalFact::Released => 2 }
+    match physical {
+        PhysicalFact::Pending => 0,
+        PhysicalFact::Failed => 1,
+        PhysicalFact::Released => 2,
+    }
 }
 
 /// One derivation owns both the coarse inspection summary and aggregate readiness.
@@ -1313,13 +1377,36 @@ fn settlement_summary(proof: &SettlementProof) -> (PhysicalFact, EvidenceFact) {
     match proof {
         SettlementProof::Absence(absence) => (PhysicalFact::Released, absence.acknowledgement),
         SettlementProof::Resource(slots) => {
-            let observation = slots.iter().rev().flatten().next().expect("resource observation");
-            let Some(CloseEvidenceDetail::ResourceObservation { physical, provider_evidence }) = observation.record.close_detail else {
+            let observation = slots
+                .iter()
+                .rev()
+                .flatten()
+                .next()
+                .expect("resource observation");
+            let Some(CloseEvidenceDetail::ResourceObservation {
+                physical,
+                provider_evidence,
+            }) = observation.record.close_detail
+            else {
                 return (PhysicalFact::Pending, EvidenceFact::Pending);
             };
-            let evidence = if slots.iter().flatten().any(|a| a.acknowledgement == EvidenceFact::Failed) { EvidenceFact::Failed }
-                else if slots.iter().flatten().any(|a| a.acknowledgement != EvidenceFact::Acknowledged) { EvidenceFact::Pending }
-                else if observation.provider_acknowledged { EvidenceFact::Acknowledged } else { provider_evidence };
+            let evidence = if slots
+                .iter()
+                .flatten()
+                .any(|a| a.acknowledgement == EvidenceFact::Failed)
+            {
+                EvidenceFact::Failed
+            } else if slots
+                .iter()
+                .flatten()
+                .any(|a| a.acknowledgement != EvidenceFact::Acknowledged)
+            {
+                EvidenceFact::Pending
+            } else if observation.provider_acknowledged {
+                EvidenceFact::Acknowledged
+            } else {
+                provider_evidence
+            };
             (physical, evidence)
         }
     }

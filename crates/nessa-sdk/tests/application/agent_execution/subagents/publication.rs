@@ -16,7 +16,13 @@ struct AuditGate {
     result: Mutex<Option<oneshot::Receiver<Result<(), PortFailure>>>>,
 }
 struct IndependentAudit {
-    next: Mutex<Option<(OwnershipMeaning, Arc<AuditGate>)>>,
+    next: Mutex<
+        Option<(
+            OwnershipMeaning,
+            Option<nessa_sdk::domain::agent_execution::subagents::CloseEvidenceDetail>,
+            Arc<AuditGate>,
+        )>,
+    >,
     records: Mutex<Vec<OwnershipEvidence>>,
     failures: Mutex<VecDeque<(OwnershipMeaning, PortFailure)>>,
 }
@@ -38,8 +44,15 @@ impl IndependentAudit {
             evidence: Mutex::new(None),
             result: Mutex::new(Some(receiver)),
         });
-        *self.next.lock().unwrap() = Some((meaning, gate.clone()));
+        *self.next.lock().unwrap() = Some((meaning, None, gate.clone()));
         (gate, sender)
+    }
+    fn observation_gate(&self) -> (Arc<AuditGate>, oneshot::Sender<Result<(), PortFailure>>) {
+        let result = self.gate(OwnershipMeaning::Closing);
+        self.next.lock().unwrap().as_mut().unwrap().1 = Some(nessa_sdk::domain::agent_execution::subagents::CloseEvidenceDetail::ResourceObservation {
+            physical: PhysicalFact::Released, provider_evidence: EvidenceFact::Acknowledged,
+        });
+        result
     }
 }
 #[async_trait]
@@ -48,11 +61,13 @@ impl OwnershipAudit for IndependentAudit {
         self.records.lock().unwrap().push(evidence.clone());
         let gate = {
             let mut next = self.next.lock().unwrap();
-            if next
-                .as_ref()
-                .is_some_and(|(meaning, _)| meaning == &evidence.after)
-            {
-                next.take().map(|(_, gate)| gate)
+            if next.as_ref().is_some_and(|(meaning, detail, _)| {
+                meaning == &evidence.after
+                    && detail
+                        .as_ref()
+                        .is_none_or(|detail| evidence.close_detail.as_ref() == Some(detail))
+            }) {
+                next.take().map(|(_, _, gate)| gate)
             } else {
                 None
             }
@@ -309,10 +324,11 @@ async fn row_8_released_capacity_and_fact_precede_rejected_cleanup_audit() {
     );
     let root = open(&c, "a").await.unwrap();
     let child = c.spawn(command(&root)).await.unwrap().child;
-    // Closing intent consumes the first Closing audit; hold the cleanup's Closed audit.
-    let (gate, release) = audit.gate(OwnershipMeaning::Closed);
+    // Select the actual Released observation independently of intent and Completion.
+    let (gate, release) = audit.observation_gate();
     let closing = tokio::spawn({
         let c = c.clone();
+        let child = child.clone();
         async move { close(&c, &child).await }
     });
     bounded(gate.entered.notified()).await;
@@ -332,7 +348,11 @@ async fn row_8_released_capacity_and_fact_precede_rejected_cleanup_audit() {
                 && r.physical == PhysicalFact::Released
         ));
     release.send(Err(PortFailure::Rejected)).unwrap();
-    let _ = bounded(closing).await.unwrap();
+    assert_eq!(
+        bounded(closing).await.unwrap(),
+        Err(OwnershipFailure::Audit(PortFailure::Rejected))
+    );
+    assert_eq!(c.lifetime_state(&child), Some(LifetimeState::Closing));
 }
 
 #[tokio::test]
@@ -1715,7 +1735,10 @@ async fn row_35_rejected_none_revokes_gate_before_rejected_audit_and_releases_ca
     bounded(gate.entered.notified()).await;
     let supplied = factory.last_gate.lock().unwrap().clone().unwrap();
     assert!(supplied.is_sealed());
-    assert!(room.try_reserve(), "actual Ready absence returns capacity before fallible startup audit");
+    assert!(
+        room.try_reserve(),
+        "actual Ready absence returns capacity before fallible startup audit"
+    );
     room.release();
     release.send(Err(PortFailure::Rejected)).unwrap();
     assert_eq!(
@@ -1738,7 +1761,10 @@ async fn row_35_rejected_none_revokes_gate_before_rejected_audit_and_releases_ca
             .state,
         LifetimeState::Closed
     );
-    assert!(matches!(snapshot.settlements[0].proof, nessa_sdk::domain::agent_execution::subagents::SettlementProof::Absence(_)));
+    assert!(matches!(
+        snapshot.settlements[0].proof,
+        nessa_sdk::domain::agent_execution::subagents::SettlementProof::Absence(_)
+    ));
     let restored = coordinator(
         store,
         IndependentAudit::new(),
@@ -1752,7 +1778,9 @@ async fn row_35_rejected_none_revokes_gate_before_rejected_audit_and_releases_ca
     let drops = Arc::new(AtomicUsize::new(0));
     let closes = Arc::new(AtomicUsize::new(0));
     for coordinator in [&c, &restored] {
-        let refusal = coordinator.bind_resources(child.clone(), tracked_owner(&drops, &closes)).unwrap_err();
+        let refusal = coordinator
+            .bind_resources(child.clone(), tracked_owner(&drops, &closes))
+            .unwrap_err();
         assert_eq!(refusal.reason, BindResourcesRefusal::Closed);
         drop(refusal);
         assert!(coordinator.participation(&child).is_none());
@@ -2023,7 +2051,9 @@ async fn row_38_legacy_open_ended_reserved_refuses_transfer_without_claiming_clo
     }
     // This fixture represents the old progress-only history, before typed proof existed.
     history.settlements.retain(|row| row.target != child);
-    history.close_completions.retain(|row| row.close_lifetime() != &child);
+    history
+        .close_completions
+        .retain(|row| row.close_lifetime() != &child);
     let retained = Arc::new(MemoryOwnershipStore::new());
     retained.write(&history).await.unwrap();
     let restored = coordinator(
@@ -2098,7 +2128,8 @@ async fn row_38_publication_error_matrix_seals_actual_gate_preserves_owner_recei
                 let private = stage == OwnershipMeaning::Reserved
                     && !store_failure
                     && failure == PortFailure::Rejected;
-                let actual_absence = stage == OwnershipMeaning::Reserved && failure == PortFailure::Rejected;
+                let actual_absence =
+                    stage == OwnershipMeaning::Reserved && failure == PortFailure::Rejected;
                 if private || actual_absence {
                     assert!(c.participation(&child).is_none());
                 } else {
@@ -2168,8 +2199,11 @@ async fn row_38_publication_error_matrix_seals_actual_gate_preserves_owner_recei
                         restored.lifetime_state(&child),
                         Some(LifetimeState::Closing)
                     );
-                    if actual_absence { assert!(restored.participation(&child).is_none()); }
-                    else { assert!(restored.participation(&child).unwrap().is_sealed()); }
+                    if actual_absence {
+                        assert!(restored.participation(&child).is_none());
+                    } else {
+                        assert!(restored.participation(&child).unwrap().is_sealed());
+                    }
                     assert_eq!(restored_factory.prepares(), 0);
                 }
                 let mut available = 0;
@@ -2230,8 +2264,16 @@ async fn row_38_factory_and_submission_failures_revoke_descendants_without_erasi
                     })
                 );
                 let child = factory.last_child.lock().unwrap().clone().unwrap();
-                let definite_absence = factory_failure && !cleanup && failure == PortFailure::Rejected;
-                assert_eq!(c.lifetime_state(&child), Some(if definite_absence { LifetimeState::Closed } else { LifetimeState::Closing }));
+                let definite_absence =
+                    factory_failure && !cleanup && failure == PortFailure::Rejected;
+                assert_eq!(
+                    c.lifetime_state(&child),
+                    Some(if definite_absence {
+                        LifetimeState::Closed
+                    } else {
+                        LifetimeState::Closing
+                    })
+                );
                 assert!(factory
                     .last_gate
                     .lock()
@@ -2239,13 +2281,20 @@ async fn row_38_factory_and_submission_failures_revoke_descendants_without_erasi
                     .as_ref()
                     .unwrap()
                     .is_sealed());
-                if definite_absence { assert!(c.participation(&child).is_none()); }
-                else { assert!(c.participation(&child).unwrap().is_sealed()); }
+                if definite_absence {
+                    assert!(c.participation(&child).is_none());
+                } else {
+                    assert!(c.participation(&child).unwrap().is_sealed());
+                }
                 let mut descendant = command(&child);
                 descendant.request_id = SpawnRequestId::new("effect-descendant").unwrap();
                 assert_eq!(
                     c.spawn(descendant).await,
-                    Err(OwnershipFailure::Domain(if definite_absence { OwnershipError::ParentClosed } else { OwnershipError::ParentClosing }))
+                    Err(OwnershipFailure::Domain(if definite_absence {
+                        OwnershipError::ParentClosed
+                    } else {
+                        OwnershipError::ParentClosing
+                    }))
                 );
                 assert_eq!(factory.prepares(), 1);
                 assert_eq!(factory.submits(), usize::from(!factory_failure));
@@ -2264,9 +2313,16 @@ async fn row_38_factory_and_submission_failures_revoke_descendants_without_erasi
                         BindResourcesRefusal::AlreadyBound
                     );
                 } else if definite_absence {
-                    let refusal = c.bind_resources(child.clone(), Arc::new(ScriptResources {
-                        closes: AtomicUsize::new(0), report: released(), hold: None,
-                    })).unwrap_err();
+                    let refusal = c
+                        .bind_resources(
+                            child.clone(),
+                            Arc::new(ScriptResources {
+                                closes: AtomicUsize::new(0),
+                                report: released(),
+                                hold: None,
+                            }),
+                        )
+                        .unwrap_err();
                     assert_eq!(refusal.reason, BindResourcesRefusal::Closed);
                 } else {
                     c.bind_resources(

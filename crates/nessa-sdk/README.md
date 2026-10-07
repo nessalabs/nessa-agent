@@ -189,14 +189,19 @@ automatic session storage, hooks, invocation, and UI integration.
   identity-bearing observations; permissions own once-only decisions/cancellations;
   prompts own attributed system instructions. `subagents` owns the parent/child
   lifetime graph: identities, spawn progress, inherited policy selection, and
-  close evidence. It does not run a model loop. Public imports name the feature
+  bounded exact resource/absence evidence and first-operation aggregate Completion.
+  Observation acknowledgement and Completion are separate domain decisions.
+  It does not run a model loop. Public imports name the feature
   explicitly.
 - `application/agent_execution/`: `agents` exposes `Agent` and its errors,
   `subagents` the ownership coordinator that reserves, prepares, and closes
   ordinary child agents. Its private `publication` module projects audit-eligible
   identities/progress plus live safety facts; `root` owns admissions through
   synchronous ID delivery and reconciles failed or unclaimed eligible roots.
-  Snapshot revisions and the write fence preserve copy order. The read-only
+  The private `supervision` module installs Ready owners and facts before
+  containing effect future destruction. Registered drain generations retain
+  immutable results; they save actual Closing proof before Completion and the
+  final Closed write. Snapshot revisions and the write fence preserve copy order. The read-only
   `active_root_for_session` exposes eligible Open/Closing roots for explicit
   reconciliation without making `open_root` an idempotent retry.
   `bind_resources` now returns a typed refusal plus the unchanged owner when

@@ -31,6 +31,7 @@
 //! RecordStorage -> creation control stream -> principal command lease/receipts
 //! RecordStorage -> bounded committed-change watches (no read or permission)
 //! OwnershipStore -> ownership.sqlite3 snapshot rows
+//!                -> ownership::settlement strict proof/Completion codec
 //! MessageCommitClock <--------------------- Tokio monotonic clock adapter
 //! ```
 //! Arrows show calls and representation mapping. A complete outer save publishes
