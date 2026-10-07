@@ -32,6 +32,8 @@ import type {
   Problem,
   RefusalCode,
   RemoveRequest,
+  AuthorizeResult,
+  RevokeResult,
   SaveRequest,
   ServerList,
   WriteResult,
@@ -57,6 +59,8 @@ export interface McpServersGateway {
   save(request: SaveRequest): Promise<Outcome<WriteResult>>
   remove(request: RemoveRequest): Promise<Outcome<WriteResult>>
   inspect(name: string): Promise<Outcome<Inspection>>
+  authorize(id: string, revision: string): Promise<Outcome<AuthorizeResult>>
+  revoke(id: string, revision: string): Promise<Outcome<RevokeResult>>
 }
 
 /** The refusals that carry details, each read with them in `refused`. */
@@ -89,6 +93,15 @@ const refusalCodes: Record<
   mcp_server_timed_out: "timedOut",
   mcp_server_gone: "gone",
   mcp_server_malformed: "malformed",
+  mcp_server_unreachable: "unreachable",
+  mcp_server_unauthorized: "unauthorized",
+  mcp_server_insufficient_scope: "insufficientScope",
+  mcp_server_session_collision: "sessionCollision",
+  mcp_servers_authorization_held: "authorizationHeld",
+  mcp_servers_store_unavailable: "storeUnavailable",
+  mcp_servers_registration_unsupported: "registrationUnsupported",
+  mcp_servers_discovery_failed: "discoveryFailed",
+  mcp_servers_authorization_incomplete: "authorizationIncomplete",
 }
 
 /** Every code in the window's words: what an audit refusal says stopped its request. */
@@ -112,6 +125,8 @@ const problems: Record<McpServerProblemCode, Problem> = {
   environment_value: "environmentValue",
   environment_value_missing: "environmentValueMissing",
   environment_name_repeated: "environmentNameRepeated",
+  url: "url",
+  duplicate_server_id: "duplicateServerId",
 }
 
 function refused(refusal: McpServersRefusal): Failure {
@@ -171,16 +186,26 @@ export function failureOf(error: unknown): Failure {
 function serverList(result: McpServersListResult): ServerList {
   return {
     revision: result.revision,
-    servers: result.servers.map(
-      ({ name, command, args, envNames, enabled, managed }) => ({
-        name,
-        command,
-        args,
-        envNames,
-        enabled,
-        managed,
-      }),
-    ),
+    servers: result.servers.map((server) => ({
+      name: server.name,
+      command: server.command ?? "",
+      args: server.args ?? [],
+      envNames: server.envNames ?? [],
+      enabled: server.enabled,
+      managed: server.managed,
+      ...(server.url === undefined ? {} : { url: server.url }),
+      ...(server.id === undefined ? {} : { remoteId: server.id }),
+      ...(server.authorization === undefined
+        ? {}
+        : {
+            authorization: {
+              phase: server.authorization.phase,
+              tokenExpired: server.authorization.tokenExpired,
+              refreshFailing: server.authorization.refreshFailing,
+              scopeRequired: server.authorization.scopeRequired,
+            },
+          }),
+    })),
   }
 }
 
@@ -310,14 +335,22 @@ export function mcpServersGateway(options: {
           ...(request.previousName === undefined
             ? {}
             : { previousName: request.previousName }),
-          server: {
-            kind: McpServerKind.Stdio,
-            name: request.server.name,
-            command: request.server.command,
-            args: [...request.server.args],
-            env: request.server.env.map(({ name, value }) => ({ name, value })),
-            enabled: request.server.enabled,
-          },
+          server:
+            request.server.kind === "remote"
+              ? {
+                  kind: McpServerKind.Remote,
+                  name: request.server.name,
+                  url: request.server.url,
+                  enabled: request.server.enabled,
+                }
+              : {
+                  kind: McpServerKind.Stdio,
+                  name: request.server.name,
+                  command: request.server.command,
+                  args: [...request.server.args],
+                  env: request.server.env.map(({ name, value }) => ({ name, value })),
+                  enabled: request.server.enabled,
+                },
         })
         return { live }
       }),
@@ -329,5 +362,18 @@ export function mcpServersGateway(options: {
         return { live }
       }),
     inspect: (name) => outcome(async () => inspection(await (await api()).inspect(name))),
+    authorize: (id, revision) =>
+      outcome(async () => {
+        const result = await (await api()).authorize({ revision, id })
+        return {
+          status: result.status,
+          ...(result.consentUrl === undefined ? {} : { consentUrl: result.consentUrl }),
+        }
+      }),
+    revoke: (id, revision) =>
+      outcome(async () => {
+        const result = await (await api()).revoke({ revision, id })
+        return { settled: result.settled }
+      }),
   }
 }

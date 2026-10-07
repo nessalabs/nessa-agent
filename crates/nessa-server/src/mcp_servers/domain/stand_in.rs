@@ -53,6 +53,21 @@ impl std::fmt::Debug for ConfigurationKey {
 /// configurations share one. Its name is not in it; the stand-in carries
 /// that beside it. Another key, as another run of the gateway has, gives
 /// another digest for the same configuration.
+/// A digest of a remote server's id and URL, keyed like [`configuration_digest`].
+/// Rename is not part of it, so a rename keeps the binding a stand-in was
+/// admitted with; a URL change does not.
+pub fn remote_configuration_digest(key: &ConfigurationKey, id: &str, url: &str) -> String {
+    let mut hash = keyed(key);
+    let mut field = |bytes: &[u8]| {
+        hash.update(&(bytes.len() as u64).to_be_bytes());
+        hash.update(bytes);
+    };
+    field(b"remote");
+    field(id.as_bytes());
+    field(url.as_bytes());
+    finished(hash)
+}
+
 pub fn configuration_digest(
     key: &ConfigurationKey,
     command: &Path,

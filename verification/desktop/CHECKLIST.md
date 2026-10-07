@@ -729,6 +729,12 @@ publish, and refuses nothing the gateway would judge.
 - [ ] **A credential without `credential.manage` sees "Only an administrator
   can manage MCP servers", no control, and sends no `mcpServers` request**
   (U2). _Check:_ `mcp-servers-gateway.mjs --only non-admin`.
+- [ ] **A remote row shows its URL and consent state, and Authorize and Revoke
+  name that server's id and the list revision.** Waiting for consent shows the
+  consent URL as a link and does not put a token on the page. _Check:_
+  `integrations-tab.test.tsx` ("a remote row shows its consent state") and
+  `mcp-servers.test.ts` ("remote authorization"). A consenting remote account
+  is an owner-run check and is not in `mcp-servers-gateway.mjs`.
 - [ ] **It fits at 800 and 390px** — nothing outside its card, nothing
   clipped (a field's value included: the command wraps), Settings not
   scrolling sideways, the fold held, and under a 420px page a server row's

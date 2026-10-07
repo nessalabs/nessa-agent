@@ -18,21 +18,25 @@ use super::{
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
 };
+use crate::mcp_authorization::application::{AuthorizationOwner, AuthorizeAnswer};
+use crate::mcp_authorization::domain::RemoteObservation;
 use crate::mcp_servers::{
     application::{
         EditProblem, Edited, InspectCut, InspectFailure, Inspection, LiveSetOutcome,
-        McpServerInitiator, McpServerSettingsError, ServerList, ServerProblem,
+        McpServerInitiator, McpServerSettings, McpServerSettingsError, ServerList, ServerProblem,
     },
-    domain::{ServerEdit, ServerSave, StdioServer},
+    domain::{RemoteServerSave, ServerEdit, ServerSave, StdioServer},
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::product::generated::{
-    McpInspectedTool, McpInspectedUi, McpServerInput, McpServerKind, McpServerListEntry,
-    McpServerProblemCode, McpServersAuditUnavailableDetails, McpServersConfigTooLargeDetails,
+    McpAuthorizationPhase, McpInspectedTool, McpInspectedUi, McpRemoteObservation,
+    McpServerAuthorization, McpServerInput, McpServerKind, McpServerListEntry,
+    McpServerProblemCode, McpServersAuditUnavailableDetails, McpServersAuthorizationHeldDetails,
+    McpServersAuthorizeParams, McpServersAuthorizeResult, McpServersConfigTooLargeDetails,
     McpServersErrorCode, McpServersInspectCut, McpServersInspectParams, McpServersInspectResult,
     McpServersInvalidDetails, McpServersListResult, McpServersRemoveParams,
-    McpServersRevisionConflictDetails, McpServersSaveParams, McpServersStorageUnavailableDetails,
-    McpServersWriteResult,
+    McpServersRevisionConflictDetails, McpServersRevokeParams, McpServersRevokeResult,
+    McpServersSaveParams, McpServersStorageUnavailableDetails, McpServersWriteResult,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame, MAX_PAYLOAD_BYTES};
 use serde_json::json;
@@ -53,13 +57,23 @@ pub(super) async fn dispatch(
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
             }
-            settings.list().await.map(|list| answered(&frame.id, list))
+            match settings.list().await {
+                Ok(list) => {
+                    Ok(
+                        answered_authorized(&frame.id, list, state.mcp_authorization.as_deref())
+                            .await,
+                    )
+                }
+                Err(error) => Err(error),
+            }
         }
         "mcpServers.save" => {
             let Ok(params) = serde_json::from_value::<McpServersSaveParams>(frame.params) else {
                 return failure(&frame.id, "invalid_request");
             };
-            let edit = ServerEdit::Save(save(params.previous_name, params.server));
+            let Ok(edit) = edit_of(params.previous_name, params.server) else {
+                return failure(&frame.id, "invalid_request");
+            };
             settings
                 .edit(initiator(session), params.revision, edit)
                 .await
@@ -74,6 +88,19 @@ pub(super) async fn dispatch(
                 .edit(initiator(session), params.revision, edit)
                 .await
                 .map(|edited| written(&frame.id, edited))
+        }
+        "mcpServers.authorize" => {
+            let Ok(params) = serde_json::from_value::<McpServersAuthorizeParams>(frame.params)
+            else {
+                return failure(&frame.id, "invalid_request");
+            };
+            return authorize(state, settings, &frame.id, params).await;
+        }
+        "mcpServers.revoke" => {
+            let Ok(params) = serde_json::from_value::<McpServersRevokeParams>(frame.params) else {
+                return failure(&frame.id, "invalid_request");
+            };
+            return revoke(state, settings, &frame.id, params).await;
         }
         "mcpServers.inspect" => {
             let Ok(params) = serde_json::from_value::<McpServersInspectParams>(frame.params) else {
@@ -112,20 +139,46 @@ fn initiator(session: &AuthenticatedSession) -> McpServerInitiator {
     }
 }
 
-fn save(previous_name: Option<String>, input: McpServerInput) -> ServerSave {
-    // One kind today; `kind` is matched so a second is a compile error here.
+/// The save the wire asked for. A stdio save carries command, args and env,
+/// and no url. A remote save carries url, and none of those. Either other
+/// shape is `invalid_request`: the fields do not match the kind.
+fn edit_of(previous_name: Option<String>, input: McpServerInput) -> Result<ServerEdit, ()> {
     match input.kind {
-        McpServerKind::Stdio => {}
-    }
-    ServerSave {
-        previous_name,
-        server: StdioServer::new(input.name, input.command, input.args),
-        env: input
-            .env
-            .into_iter()
-            .map(|entry| (entry.name, entry.value))
-            .collect(),
-        enabled: input.enabled,
+        McpServerKind::Stdio => {
+            if input.url.is_some() {
+                return Err(());
+            }
+            let (Some(command), Some(args), Some(env)) = (input.command, input.args, input.env)
+            else {
+                return Err(());
+            };
+            Ok(ServerEdit::Save(ServerSave {
+                previous_name,
+                server: StdioServer::new(input.name, command, args),
+                env: env
+                    .into_iter()
+                    .map(|entry| (entry.name, entry.value))
+                    .collect(),
+                enabled: input.enabled,
+            }))
+        }
+        McpServerKind::Remote => {
+            if input.command.is_some() || input.args.is_some() || input.env.is_some() {
+                return Err(());
+            }
+            let Some(url) = input.url else {
+                return Err(());
+            };
+            Ok(ServerEdit::SaveRemote(RemoteServerSave {
+                previous_name,
+                // Used only when this name is not already a remote entry.
+                // The domain keeps the stored id on replace.
+                id: uuid::Uuid::new_v4(),
+                name: input.name,
+                url,
+                enabled: input.enabled,
+            }))
+        }
     }
 }
 
@@ -135,15 +188,27 @@ fn listed(list: ServerList) -> McpServersListResult {
         servers: list
             .servers
             .into_iter()
-            .map(|listed| McpServerListEntry {
-                kind: McpServerKind::Stdio,
-                name: listed.server.name().to_owned(),
-                // Stored commands are UTF-8: the SDK's rules refuse any other.
-                command: listed.server.command().to_string_lossy().into_owned(),
-                args: listed.server.args().to_vec(),
-                env_names: listed.env_names,
-                enabled: listed.enabled,
-                managed: listed.managed,
+            .map(|listed| {
+                let remote = listed.url.is_some();
+                McpServerListEntry {
+                    kind: if remote {
+                        McpServerKind::Remote
+                    } else {
+                        McpServerKind::Stdio
+                    },
+                    name: listed.server.name().to_owned(),
+                    // Stored commands are UTF-8: the SDK's rules refuse any other.
+                    // A remote row's placeholder path is not a launch and is not listed.
+                    command: (!remote)
+                        .then(|| listed.server.command().to_string_lossy().into_owned()),
+                    args: (!remote).then(|| listed.server.args().to_vec()),
+                    env_names: (!remote).then_some(listed.env_names),
+                    enabled: listed.enabled,
+                    managed: listed.managed,
+                    id: listed.remote_id,
+                    url: listed.url,
+                    authorization: None,
+                }
             })
             .collect(),
     }
@@ -152,9 +217,66 @@ fn listed(list: ServerList) -> McpServersListResult {
 /// `list`'s answer for `request_id`, when it is at most
 /// [`MAX_PAYLOAD_BYTES`]; past that, `mcp_servers_config_too_large` with
 /// the revision, which always fits, so a remove by name can still name it.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn answered(request_id: &str, list: ServerList) -> OutgoingMessage {
+    frame_list(request_id, listed(list))
+}
+
+async fn answered_authorized(
+    request_id: &str,
+    list: ServerList,
+    owner: Option<&AuthorizationOwner>,
+) -> OutgoingMessage {
+    let mut wire = listed(list);
+    if let Some(owner) = owner {
+        for entry in &mut wire.servers {
+            let Some(id) = entry
+                .id
+                .as_deref()
+                .and_then(|id| uuid::Uuid::parse_str(id).ok())
+            else {
+                continue;
+            };
+            if let Some(facts) = owner.facts(id).await {
+                entry.authorization = Some(McpServerAuthorization {
+                    phase: phase_of(facts.phase),
+                    generation: facts.generation,
+                    token_expired: facts.token_expired,
+                    refresh_failing: facts.refresh_failing,
+                    scope_required: facts.scope_required,
+                    remote_observation: facts.remote.map(observation_of),
+                    domains_digest: facts.domains_digest,
+                });
+            }
+        }
+    }
+    frame_list(request_id, wire)
+}
+
+fn phase_of(phase: &str) -> McpAuthorizationPhase {
+    match phase {
+        "unauthenticated" => McpAuthorizationPhase::Unauthenticated,
+        "pending_consent" => McpAuthorizationPhase::PendingConsent,
+        "ready" => McpAuthorizationPhase::Ready,
+        "scope_required" => McpAuthorizationPhase::ScopeRequired,
+        "authorization_incomplete" => McpAuthorizationPhase::AuthorizationIncomplete,
+        "revoking" => McpAuthorizationPhase::Revoking,
+        "revocation_incomplete" => McpAuthorizationPhase::RevocationIncomplete,
+        _ => McpAuthorizationPhase::ConsentNeeded,
+    }
+}
+
+fn observation_of(remote: RemoteObservation) -> McpRemoteObservation {
+    match remote {
+        RemoteObservation::Acknowledged => McpRemoteObservation::Acknowledged,
+        RemoteObservation::Unsupported => McpRemoteObservation::Unsupported,
+        RemoteObservation::Unconfirmed => McpRemoteObservation::Unconfirmed,
+    }
+}
+
+fn frame_list(request_id: &str, list: McpServersListResult) -> OutgoingMessage {
     let revision = list.revision.clone();
-    let message = success(request_id, &listed(list));
+    let message = success(request_id, &list);
     if within_frame(&message) {
         return message;
     }
@@ -257,6 +379,9 @@ fn code(error: &McpServerSettingsError) -> McpServersErrorCode {
         }
         McpServerSettingsError::Stopping => McpServersErrorCode::McpServersStopping,
         McpServerSettingsError::AuditUnavailable { .. } => McpServersErrorCode::AuditUnavailable,
+        McpServerSettingsError::AuthorizationHeld => {
+            McpServersErrorCode::McpServersAuthorizationHeld
+        }
         McpServerSettingsError::Inspect(failure) => match failure {
             InspectFailure::Invalid(_) => McpServersErrorCode::McpServersInvalid,
             InspectFailure::Stopping => McpServersErrorCode::McpServersStopping,
@@ -265,6 +390,10 @@ fn code(error: &McpServerSettingsError) -> McpServersErrorCode {
             InspectFailure::Gone => McpServersErrorCode::McpServerGone,
             InspectFailure::Malformed => McpServersErrorCode::McpServerMalformed,
             InspectFailure::RemoteError { .. } => McpServersErrorCode::McpServerRemoteError,
+            InspectFailure::Unreachable => McpServersErrorCode::McpServerUnreachable,
+            InspectFailure::Unauthorized => McpServersErrorCode::McpServerUnauthorized,
+            InspectFailure::InsufficientScope => McpServersErrorCode::McpServerInsufficientScope,
+            InspectFailure::SessionCollision => McpServersErrorCode::McpServerSessionCollision,
         },
     }
 }
@@ -287,6 +416,9 @@ fn refusal(request_id: &str, error: McpServerSettingsError) -> OutgoingMessage {
                 applied,
                 code: cause.map(|cause| self::code(&cause)),
             })
+        }
+        McpServerSettingsError::AuthorizationHeld => {
+            serde_json::to_value(McpServersAuthorizationHeldDetails { applied: true })
         }
         McpServerSettingsError::Inspect(InspectFailure::RemoteError { code, message }) => {
             match remote_details(code, &message) {
@@ -346,6 +478,10 @@ fn problem_details(problem: EditProblem) -> McpServersInvalidDetails {
                 Some(server),
                 Some(name),
             ),
+            ServerProblem::Url { server } => (McpServerProblemCode::Url, Some(server), None),
+            ServerProblem::DuplicateServerId { server } => {
+                (McpServerProblemCode::DuplicateServerId, Some(server), None)
+            }
         },
         EditProblem::EnvironmentValueMissing { server, name } => (
             McpServerProblemCode::EnvironmentValueMissing,
@@ -363,4 +499,158 @@ fn problem_details(problem: EditProblem) -> McpServersInvalidDetails {
         server,
         name,
     }
+}
+
+async fn authorize(
+    state: &ProductRouteState,
+    settings: &McpServerSettings,
+    request_id: &str,
+    params: McpServersAuthorizeParams,
+) -> OutgoingMessage {
+    let Some(owner) = state.mcp_authorization.clone() else {
+        return failure(
+            request_id,
+            McpServersErrorCode::McpServersNotConfigured.as_str(),
+        );
+    };
+    let Some((id, name, url)) = remote_of(settings, request_id, &params.revision, &params.id).await
+    else {
+        return located(settings, request_id, &params.revision, &params.id).await;
+    };
+    let answer = owner.authorize(id, &name, &url).await;
+    match answer {
+        AuthorizeAnswer::NotRequired => success(
+            request_id,
+            &McpServersAuthorizeResult {
+                status: "not_required".into(),
+                attempt_id: None,
+                consent_url: None,
+                deadline_ms: None,
+                generation: None,
+            },
+        ),
+        AuthorizeAnswer::PendingConsent {
+            attempt_id,
+            consent_url,
+            deadline_ms,
+        } => success(
+            request_id,
+            &McpServersAuthorizeResult {
+                status: "pending_consent".into(),
+                attempt_id: Some(attempt_id),
+                consent_url: Some(consent_url),
+                deadline_ms: Some(deadline_ms),
+                generation: None,
+            },
+        ),
+        AuthorizeAnswer::Ready { generation } => success(
+            request_id,
+            &McpServersAuthorizeResult {
+                status: "ready".into(),
+                attempt_id: None,
+                consent_url: None,
+                deadline_ms: None,
+                generation: Some(generation),
+            },
+        ),
+        AuthorizeAnswer::StoreUnavailable => failure(
+            request_id,
+            McpServersErrorCode::McpServersStoreUnavailable.as_str(),
+        ),
+        AuthorizeAnswer::RegistrationUnsupported => failure(
+            request_id,
+            McpServersErrorCode::McpServersRegistrationUnsupported.as_str(),
+        ),
+        AuthorizeAnswer::DiscoveryFailed => failure(
+            request_id,
+            McpServersErrorCode::McpServersDiscoveryFailed.as_str(),
+        ),
+        AuthorizeAnswer::AuthorizationIncomplete => failure(
+            request_id,
+            McpServersErrorCode::McpServersAuthorizationIncomplete.as_str(),
+        ),
+        AuthorizeAnswer::AuditUnavailable => failure_with_details(
+            request_id,
+            McpServersErrorCode::AuditUnavailable.as_str(),
+            serde_json::json!({ "applied": false }),
+        ),
+        AuthorizeAnswer::Busy => failure(request_id, McpServersErrorCode::McpServersBusy.as_str()),
+    }
+}
+
+async fn revoke(
+    state: &ProductRouteState,
+    settings: &McpServerSettings,
+    request_id: &str,
+    params: McpServersRevokeParams,
+) -> OutgoingMessage {
+    let Some(owner) = state.mcp_authorization.clone() else {
+        return failure(
+            request_id,
+            McpServersErrorCode::McpServersNotConfigured.as_str(),
+        );
+    };
+    let Some((id, _, _)) = remote_of(settings, request_id, &params.revision, &params.id).await
+    else {
+        return located(settings, request_id, &params.revision, &params.id).await;
+    };
+    let answer = owner.revoke(id).await;
+    success(
+        request_id,
+        &McpServersRevokeResult {
+            settled: answer.settled,
+            local_drained: answer.local_drained,
+            secret_deleted: answer.secret_deleted,
+            remote_observation: answer.remote.map(observation_of),
+            evidence_acknowledged: answer.evidence_acknowledged,
+        },
+    )
+}
+
+/// The remote named by `id` at `revision`, or `None` when the list, the
+/// revision, or the id does not match. The caller then answers with
+/// [`located`].
+async fn remote_of(
+    settings: &McpServerSettings,
+    _request_id: &str,
+    revision: &str,
+    id: &str,
+) -> Option<(uuid::Uuid, String, String)> {
+    let list = settings.list().await.ok()?;
+    if list.revision != revision {
+        return None;
+    }
+    let server = list
+        .servers
+        .into_iter()
+        .find(|server| server.remote_id.as_deref() == Some(id))?;
+    let url = server.url?;
+    let id = uuid::Uuid::parse_str(id).ok()?;
+    Some((id, server.server.name().to_owned(), url))
+}
+
+async fn located(
+    settings: &McpServerSettings,
+    request_id: &str,
+    revision: &str,
+    id: &str,
+) -> OutgoingMessage {
+    let Ok(list) = settings.list().await else {
+        return refusal(
+            request_id,
+            McpServerSettingsError::StorageUnavailable { applied: false },
+        );
+    };
+    if list.revision != revision {
+        return refusal(
+            request_id,
+            McpServerSettingsError::RevisionConflict {
+                revision: list.revision,
+            },
+        );
+    }
+    if uuid::Uuid::parse_str(id).is_err() {
+        return failure(request_id, "invalid_request");
+    }
+    refusal(request_id, McpServerSettingsError::NotFound)
 }

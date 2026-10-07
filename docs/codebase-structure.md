@@ -254,6 +254,8 @@ writing the full defaults on first launch is buying.
   window's client read into them in `adapters/mcp-servers-gateway.ts`, and
   the tab in `ui/integrations-tab.tsx`, given by composition
   (`dependencies.ts`, `main.tsx`) only where the window has a gateway.
+  A remote row shows its URL and redacted authorization facts, and
+  Authorize and Revoke call `mcpServers.authorize` and `mcpServers.revoke`.
   Linked devices (#462) is the same shape: `model/linked-devices.ts` and
   `model/device-key.ts`, `adapters/linked-devices-gateway.ts`, and
   `ui/linked-devices-tab.tsx`, which composes the UI kit's settings rows,
@@ -764,6 +766,16 @@ real processes in `tests/mcp_servers/inspect.rs`) and
 (`client.mcpServers`), its refusals `NessaMcpServersError`
 (`application/mcp-servers-error.ts`) and its answers checked by
 `protocol/mcp-servers-validate.ts`;
+`src/mcp_authorization/` owns one remote server's consent, token
+generation, refresh and revoke (ADR 392): the domain statechart, the
+owner that fences a URL change before the live set is replaced, the
+transport adapter that names an admitted token for the HTTP session, HTTPS
+discovery and token calls, the loopback callback, and the non-secret
+record beside the sealed token files. `mcpServers.authorize` and
+`mcpServers.revoke` are the product methods. An app call that the remote
+refuses, cannot reach, or answers with insufficient scope is
+`mcp_unauthorized`, `mcp_unreachable`, or `mcp_insufficient_scope`, not
+`mcp_session_unavailable`.
 `composition/mcp_servers.rs` takes the configured servers
 into `McpServers`, the one owner of the live set, gives every provider open
 the stand-ins for that set as it is then (`StandIns`, an

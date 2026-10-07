@@ -20,10 +20,12 @@
 //! it from the file
 //! (`a_desktop_change_drops_a_stored_nessa_and_its_audit_says_so`).
 use crate::mcp_servers::application::{LiveServerSet, LiveSetKept, ServerProblem};
-use crate::mcp_servers::domain::{ConfiguredMcpServer, StdioServer, MANAGED_SERVER_NAME};
+use crate::mcp_servers::domain::{
+    ConfiguredMcpServer, StdioServer, StoredMcpServer, MANAGED_SERVER_NAME,
+};
 use nessa_sdk::infrastructure::{
     acp::sessions::{McpServerProblem, StdioMcpServer},
-    mcp::{McpServerLaunch, McpServers},
+    mcp::{configuration_problem, McpServerLaunch, McpServers, RemoteMcpServer},
 };
 use std::{collections::BTreeMap, ffi::OsString, path::PathBuf};
 
@@ -76,13 +78,15 @@ impl LaunchSettings {
     /// bundled one when `bundled`, which composition put there in place of
     /// any stored under its name (`composition::desktop::configure`).
     pub fn new(
-        configured: &[ConfiguredMcpServer],
+        configured: &[StoredMcpServer],
         bundled: bool,
         working_directory: PathBuf,
         environment: BTreeMap<OsString, OsString>,
     ) -> Self {
         Self {
-            managed: configured.iter().find(|server| server.managed()).cloned(),
+            managed: configured
+                .iter()
+                .find_map(|server| server.managed().then(|| server.stdio().cloned()).flatten()),
             bundled,
             working_directory,
             environment,
@@ -113,30 +117,57 @@ impl LaunchSettings {
     /// with the managed one, on or off, as one set
     /// ([`McpServerLaunch::problem_in`]): a server turned off is still
     /// checked, and still counts.
+    /// The live stdio launches and remote servers for `stored`.
+    ///
+    /// # Errors
+    ///
+    /// The first problem of the combined set, including servers that are off.
     pub fn launch_set(
         &self,
-        stored: &[ConfiguredMcpServer],
-    ) -> Result<Vec<McpServerLaunch>, McpServerProblem> {
-        let every: Vec<&ConfiguredMcpServer> = self
-            .managed
-            .iter()
-            .chain(
-                stored
-                    .iter()
-                    .filter(|server| server.server().name() != MANAGED_SERVER_NAME),
-            )
-            .collect();
+        stored: &[StoredMcpServer],
+    ) -> Result<(Vec<McpServerLaunch>, Vec<RemoteMcpServer>), McpServerProblem> {
+        let mut stdio = Vec::new();
+        let mut remotes = Vec::new();
+        if let Some(managed) = &self.managed {
+            stdio.push(managed.clone());
+        }
+        for server in stored {
+            if server.name() == MANAGED_SERVER_NAME {
+                continue;
+            }
+            match server {
+                StoredMcpServer::Stdio(server) => stdio.push(server.clone()),
+                StoredMcpServer::Remote(remote) => remotes.push(remote.clone()),
+            }
+        }
         let launches: Vec<McpServerLaunch> =
-            every.iter().map(|server| self.launch(server)).collect();
-        if let Some(problem) = McpServerLaunch::problem_in(&launches) {
+            stdio.iter().map(|server| self.launch(server)).collect();
+        let remote_servers: Vec<RemoteMcpServer> = remotes
+            .iter()
+            .map(|remote| RemoteMcpServer::new(remote.id(), remote.name(), remote.url()))
+            .collect::<Result<_, _>>()
+            .map_err(|error| match error {
+                nessa_sdk::infrastructure::mcp::McpError::InvalidConfiguration(problem) => problem,
+                _ => McpServerProblem::Url {
+                    server: "remote".into(),
+                },
+            })?;
+        if let Some(problem) = configuration_problem(&launches, &remote_servers) {
             return Err(problem);
         }
-        Ok(every
+        let launches = stdio
             .iter()
             .zip(launches)
             .filter(|(server, _)| server.enabled())
             .map(|(_, launch)| launch)
-            .collect())
+            .collect();
+        let remotes = remotes
+            .into_iter()
+            .zip(remote_servers)
+            .filter(|(stored, _)| stored.enabled())
+            .map(|(_, remote)| remote)
+            .collect();
+        Ok((launches, remotes))
     }
 }
 
@@ -162,13 +193,15 @@ impl LiveServerSet for LiveMcpServers {
         self.launches.bundled
     }
 
-    fn problem(&self, stored: &[ConfiguredMcpServer]) -> Option<ServerProblem> {
+    fn problem(&self, stored: &[StoredMcpServer]) -> Option<ServerProblem> {
         self.launches.launch_set(stored).err().map(problem)
     }
 
-    fn replace(&self, stored: &[ConfiguredMcpServer]) -> Result<(), LiveSetKept> {
-        let launches = self.launches.launch_set(stored).map_err(|_| LiveSetKept)?;
-        self.servers.replace(launches).map_err(|_| LiveSetKept)
+    fn replace(&self, stored: &[StoredMcpServer]) -> Result<(), LiveSetKept> {
+        let (launches, remotes) = self.launches.launch_set(stored).map_err(|_| LiveSetKept)?;
+        self.servers
+            .replace_all(launches, remotes)
+            .map_err(|_| LiveSetKept)
     }
 
     /// The live set now, less `name`: a subset of a set the SDK took, so
@@ -176,16 +209,24 @@ impl LiveServerSet for LiveMcpServers {
     /// replaces the set between the read and the replacement. A name not
     /// in it replaces nothing.
     fn withdraw(&self, name: &str) -> Result<bool, LiveSetKept> {
-        let live = self.servers.configured();
-        let launches: Vec<_> = live
+        let launches = self.servers.configured();
+        let remotes = self.servers.configured_remotes();
+        let next_launches: Vec<_> = launches
             .iter()
             .filter(|launch| launch.server.name != name)
             .cloned()
             .collect();
-        if launches.len() == live.len() {
+        let next_remotes: Vec<_> = remotes
+            .iter()
+            .filter(|remote| remote.name() != name)
+            .cloned()
+            .collect();
+        if next_launches.len() == launches.len() && next_remotes.len() == remotes.len() {
             return Ok(false);
         }
-        self.servers.replace(launches).map_err(|_| LiveSetKept)?;
+        self.servers
+            .replace_all(next_launches, next_remotes)
+            .map_err(|_| LiveSetKept)?;
         Ok(true)
     }
 }
@@ -206,6 +247,10 @@ pub(super) fn problem(problem: McpServerProblem) -> ServerProblem {
         }
         McpServerProblem::EnvironmentValue { server, name } => {
             ServerProblem::EnvironmentValue { server, name }
+        }
+        McpServerProblem::Url { server } => ServerProblem::Url { server },
+        McpServerProblem::DuplicateServerId { server } => {
+            ServerProblem::DuplicateServerId { server }
         }
     }
 }

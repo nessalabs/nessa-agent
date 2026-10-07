@@ -30,6 +30,20 @@ export interface ListedServer {
   readonly enabled: boolean
   /** Nessa's own server: listed, never edited here. */
   readonly managed: boolean
+  /** The remote endpoint, when this row is a remote server. */
+  readonly url?: string
+  /** The remote server's durable id, when this row is remote. */
+  readonly remoteId?: string
+  /** Redacted authorization facts, when the gateway has a record. */
+  readonly authorization?: AuthorizationFacts
+}
+
+/** Where a remote server's authorization stands, with no token in it. */
+export interface AuthorizationFacts {
+  readonly phase: string
+  readonly tokenExpired: boolean
+  readonly refreshFailing: boolean
+  readonly scopeRequired: boolean
 }
 
 export interface ServerList {
@@ -45,17 +59,38 @@ export interface SavedVariable {
   readonly value: string | null
 }
 
+export type SavedServer =
+  | {
+      readonly kind: "stdio"
+      readonly name: string
+      readonly command: string
+      readonly args: readonly string[]
+      readonly env: readonly SavedVariable[]
+      readonly enabled: boolean
+    }
+  | {
+      readonly kind: "remote"
+      readonly name: string
+      readonly url: string
+      readonly enabled: boolean
+    }
+
 export interface SaveRequest {
   readonly revision: string
   /** The stored name, when the server is being renamed. */
   readonly previousName?: string
-  readonly server: {
-    readonly name: string
-    readonly command: string
-    readonly args: readonly string[]
-    readonly env: readonly SavedVariable[]
-    readonly enabled: boolean
-  }
+  readonly server: SavedServer
+}
+
+/** What mcpServers.authorize answered. No token is in it. */
+export interface AuthorizeResult {
+  readonly status: "not_required" | "pending_consent" | "ready"
+  readonly consentUrl?: string
+}
+
+/** What mcpServers.revoke answered. Incomplete stays incomplete. */
+export interface RevokeResult {
+  readonly settled: boolean
 }
 
 export interface RemoveRequest {
@@ -114,6 +149,8 @@ export type Problem =
   | "environmentValue"
   | "environmentValueMissing"
   | "environmentNameRepeated"
+  | "url"
+  | "duplicateServerId"
 
 /** The gateway's refusals of these methods, one for each of its codes. */
 export type RefusalCode =
@@ -133,6 +170,15 @@ export type RefusalCode =
   | "gone"
   | "malformed"
   | "remoteError"
+  | "unreachable"
+  | "unauthorized"
+  | "insufficientScope"
+  | "sessionCollision"
+  | "authorizationHeld"
+  | "storeUnavailable"
+  | "registrationUnsupported"
+  | "discoveryFailed"
+  | "authorizationIncomplete"
 
 /**
  * How a request failed. `forbidden`: this credential may not manage servers.
@@ -220,7 +266,7 @@ export interface ArgumentRow {
   readonly value: string
 }
 
-export type FormField = "name" | "command" | "args" | "env" | "form"
+export type FormField = "name" | "command" | "args" | "env" | "url" | "form"
 
 export interface FormProblem {
   readonly field: FormField
@@ -240,6 +286,10 @@ export interface ServerForm {
   readonly args: readonly ArgumentRow[]
   readonly env: readonly VariableRow[]
   readonly enabled: boolean
+  /** How this server is reached. An edit keeps the kind it was listed with. */
+  readonly kind: "stdio" | "remote"
+  /** The remote endpoint, while kind is remote. */
+  readonly url: string
   readonly problem?: FormProblem
   /**
    * Its save's outcome is not known (unanswered, or not said whether it was
@@ -260,6 +310,20 @@ export type PendingRequest =
       readonly toggled?: string
     }
   | { readonly kind: "remove"; readonly seq: number; readonly request: RemoveRequest }
+  | {
+      readonly kind: "authorize"
+      readonly seq: number
+      readonly id: string
+      readonly name: string
+      readonly revision: string
+    }
+  | {
+      readonly kind: "revoke"
+      readonly seq: number
+      readonly id: string
+      readonly name: string
+      readonly revision: string
+    }
 
 export type ListState =
   | { readonly phase: "loading" }
@@ -320,6 +384,8 @@ export interface McpServersState {
   /** The removal being asked about. */
   readonly confirming: Confirming | null
   readonly inspection: InspectionState | null
+  /** A consent page the host should open, for the named remote. */
+  readonly consent: { readonly name: string; readonly url: string } | null
   /** What the last answer said, when it said something. */
   readonly notice: Notice | null
   /** The last request number handed out. */
@@ -341,7 +407,9 @@ export type McpServersEvent =
   | { readonly type: "edit"; readonly name: string }
   | {
       readonly type: "change"
-      readonly patch: Partial<Pick<ServerForm, "name" | "command" | "enabled">>
+      readonly patch: Partial<
+        Pick<ServerForm, "name" | "command" | "enabled" | "kind" | "url">
+      >
     }
   /** A new argument, after the row keyed `after`, or last. */
   | { readonly type: "addArgument"; readonly after?: number }
@@ -372,6 +440,8 @@ export type McpServersEvent =
   | { readonly type: "changeRemoveName"; readonly name: string }
   | { readonly type: "askRemoveByName" }
   | { readonly type: "confirmRemove" }
+  | { readonly type: "authorize"; readonly name: string }
+  | { readonly type: "revoke"; readonly name: string }
   | { readonly type: "inspect"; readonly name: string }
   | {
       readonly type: "inspected"
@@ -390,6 +460,7 @@ export function initialMcpServersState(limits: McpServersLimits): McpServersStat
     form: null,
     confirming: null,
     inspection: null,
+    consent: null,
     notice: null,
     seq: 0,
     rows: 0,
@@ -437,6 +508,24 @@ export const sentences = {
     "The server list is too large to show. Removing a server fixes it: enter its name.",
   /** A list refused as too large with no revision to remove at (U47). */
   configFileTooLarge: "The configuration file is too large to read here.",
+  authorizationHeld:
+    "Saved, and the previous authorization is still in place. The new address is not live until that authorization is revoked.",
+  storeUnavailable: "This computer cannot store a token, so authorization did not start.",
+  registrationUnsupported:
+    "That server does not offer registration, so it cannot be authorized here.",
+  discoveryFailed: "Authorization did not finish. No token was stored.",
+  authorizationIncomplete:
+    "Authorization was sent and the answer was not kept. Authorize again before using the server.",
+  consentNeeded: "Consent needed",
+  pendingConsent: "Waiting for consent",
+  tokenExpired: "Token expired",
+  refreshFailing: "Refresh failing",
+  scopeRequired: "Scope required",
+  revocationIncomplete: "Revocation incomplete",
+  authorizeReady: "Authorized",
+  authorizeNotRequired: "This server does not require authorization.",
+  revokeSettled: "Authorization revoked.",
+  revokeIncomplete: "Revocation is incomplete.",
   /** A save whose resulting list would not fit (U48, U49). */
   saveTooLarge:
     "This would make the server list too large; remove a server or shorten its arguments.",
@@ -524,6 +613,15 @@ const causes: Record<RefusalCode, string> = {
   gone: "the server stopped before it answered",
   malformed: "the server's answer isn't MCP",
   remoteError: "the server answered with an error",
+  unreachable: "the server could not be reached",
+  unauthorized: "the server refused the caller",
+  insufficientScope: "the authorization is not broad enough",
+  sessionCollision: "the server is already open under another session",
+  authorizationHeld: "the previous authorization is still in place",
+  storeUnavailable: "this computer cannot store a token",
+  registrationUnsupported: "the server does not offer registration",
+  discoveryFailed: "authorization did not finish",
+  authorizationIncomplete: "the authorization answer was not kept",
 }
 
 function auditSentence(
@@ -585,6 +683,10 @@ function problemAt(failure: Invalid): FormProblem {
       return { field: "env", text: `${it} has no stored value. Enter one.` }
     case "environmentNameRepeated":
       return { field: "env", text: `${it} is given twice.` }
+    case "url":
+      return { field: "url", text: "This address can't be used for a server." }
+    case "duplicateServerId":
+      return { field: "form", text: "Two servers are stored with the same id." }
     case undefined:
       return { field: "form", text: "The gateway refused this server as it is." }
   }
@@ -593,6 +695,14 @@ function problemAt(failure: Invalid): FormProblem {
 /** What a failed inspection says. */
 function inspectSentence(name: string, failure: Failure, state: McpServersState) {
   switch (failure.kind) {
+    case "unreachable":
+      return `${quoted(name)} could not be reached.`
+    case "unauthorized":
+      return `${quoted(name)} refused the caller.`
+    case "insufficientScope":
+      return `${quoted(name)} needs a broader authorization.`
+    case "sessionCollision":
+      return `${quoted(name)} is already open under another session.`
     case "startFailed":
       return `${quoted(name)} couldn't be started. Check its command.`
     case "timedOut":
@@ -680,8 +790,22 @@ function writeSentence(failure: Failure, state: McpServersState): string {
     case "gone":
     case "malformed":
     case "remoteError":
+    case "unreachable":
+    case "unauthorized":
+    case "insufficientScope":
+    case "sessionCollision":
     case "unanswered":
       return sentences.unanswered
+    case "authorizationHeld":
+      return sentences.authorizationHeld
+    case "storeUnavailable":
+      return sentences.storeUnavailable
+    case "registrationUnsupported":
+      return sentences.registrationUnsupported
+    case "discoveryFailed":
+      return sentences.discoveryFailed
+    case "authorizationIncomplete":
+      return sentences.authorizationIncomplete
   }
 }
 
@@ -781,9 +905,26 @@ export function valuesNeeded(
  * launch changed (U33).
  */
 export function formReady(form: ServerForm, listed: ListedServer | undefined): boolean {
-  return (
-    form.name.trim() !== "" && form.command.trim() !== "" && !valuesNeeded(form, listed)
-  )
+  if (form.name.trim() === "") return false
+  if (form.kind === "remote") return form.url.trim() !== ""
+  return form.command.trim() !== "" && !valuesNeeded(form, listed)
+}
+
+/** The words for a remote row's authorization, when there is something to say. */
+export function authorizationLabel(server: ListedServer): string | undefined {
+  const auth = server.authorization
+  if (!server.url || !auth) return undefined
+  if (auth.phase === "revocation_incomplete" || auth.phase === "revoking")
+    return sentences.revocationIncomplete
+  if (auth.scopeRequired || auth.phase === "scope_required")
+    return sentences.scopeRequired
+  if (auth.tokenExpired) return sentences.tokenExpired
+  if (auth.refreshFailing && auth.phase === "authorization_incomplete")
+    return sentences.refreshFailing
+  if (auth.phase === "pending_consent") return sentences.pendingConsent
+  if (auth.phase === "consent_needed") return sentences.consentNeeded
+  if (auth.phase === "authorization_incomplete") return sentences.authorizationIncomplete
+  return undefined
 }
 
 /** The listed server the open form edits, when it edits one and the list still has it. */
@@ -871,10 +1012,24 @@ export const linesOf = (value: string) =>
  */
 export function saveRequestOf(form: ServerForm, revision: string): SaveRequest {
   const renamed = form.editing !== undefined && form.editing !== form.name
+  const previousName = renamed ? { previousName: form.editing } : {}
+  if (form.kind === "remote") {
+    return {
+      revision,
+      ...previousName,
+      server: {
+        kind: "remote",
+        name: form.name,
+        url: form.url,
+        enabled: form.enabled,
+      },
+    }
+  }
   return {
     revision,
-    ...(renamed ? { previousName: form.editing } : {}),
+    ...previousName,
     server: {
+      kind: "stdio",
       name: form.name,
       command: form.command,
       args: argsOf(form),
@@ -889,9 +1044,21 @@ export function saveRequestOf(form: ServerForm, revision: string): SaveRequest {
 
 /** The save a switch sends: the server as listed, every value kept, the other way on. */
 export function toggleRequestOf(server: ListedServer, revision: string): SaveRequest {
+  if (server.url !== undefined) {
+    return {
+      revision,
+      server: {
+        kind: "remote",
+        name: server.name,
+        url: server.url,
+        enabled: !server.enabled,
+      },
+    }
+  }
   return {
     revision,
     server: {
+      kind: "stdio",
       name: server.name,
       command: server.command,
       args: [...server.args],
@@ -976,6 +1143,8 @@ function editForm(state: McpServersState, name: string): McpServersState {
       args,
       env,
       enabled: found.enabled,
+      kind: found.url === undefined ? "stdio" : "remote",
+      url: found.url ?? "",
     },
   }
 }
@@ -1011,7 +1180,10 @@ function refilled(state: McpServersState): McpServersState {
   const base = form.base
   const clashes: string[] = []
   let rows = state.rows
-  let { command, args, enabled, env } = form
+  let { command, args, enabled, env, url } = form
+  if (form.kind === "remote" && now.url !== base.url) {
+    if (form.url === (base.url ?? "")) url = now.url ?? ""
+  }
   if (now.command !== base.command) {
     if (form.command === base.command) command = now.command
     else if (form.command !== now.command) clashes.push("the command")
@@ -1056,7 +1228,16 @@ function refilled(state: McpServersState): McpServersState {
     ...state,
     rows,
     notice,
-    form: { ...form, base: now, command, args, enabled, env, unconfirmed: undefined },
+    form: {
+      ...form,
+      base: now,
+      command,
+      args,
+      enabled,
+      env,
+      url,
+      unconfirmed: undefined,
+    },
   }
 }
 
@@ -1158,6 +1339,89 @@ function answeredList(
 const unconfirmedIf = (form: ServerForm | null, unknown: boolean): ServerForm | null =>
   form && unknown ? { ...form, unconfirmed: true } : form
 
+function authRequest(
+  state: McpServersState,
+  name: string,
+  kind: "authorize" | "revoke",
+): McpServersState {
+  const list = listed(state)
+  const found = server(state, name)
+  if (!canWrite(state) || !list || !found?.remoteId) return state
+  const seq = state.seq + 1
+  return {
+    ...state,
+    seq,
+    notice: null,
+    pending: { kind, seq, id: found.remoteId, name, revision: list.revision },
+  }
+}
+
+function answeredAuth(
+  state: McpServersState,
+  pending: Extract<PendingRequest, { kind: "authorize" | "revoke" }>,
+  outcome: Outcome<unknown>,
+): McpServersState {
+  const done = { ...state, pending: null }
+  if (!outcome.ok) {
+    if (outcome.failure.kind === "forbidden") return forbidden(state)
+    return {
+      ...done,
+      notice: said(failureText(outcome.failure), "write"),
+    }
+  }
+  if (pending.kind === "authorize") {
+    const value = outcome.value as AuthorizeResult
+    if (value.status === "pending_consent" && value.consentUrl)
+      return {
+        ...done,
+        consent: { name: pending.name, url: value.consentUrl },
+        notice: said(sentences.pendingConsent, "write"),
+      }
+    return listAgain({
+      ...done,
+      consent: null,
+      notice: said(
+        value.status === "not_required"
+          ? sentences.authorizeNotRequired
+          : sentences.authorizeReady,
+        "write",
+      ),
+    })
+  }
+  const value = outcome.value as RevokeResult
+  return listAgain({
+    ...done,
+    consent: state.consent?.name === pending.name ? null : state.consent,
+    notice: said(
+      value.settled ? sentences.revokeSettled : sentences.revokeIncomplete,
+      "write",
+    ),
+  })
+}
+
+function failureText(failure: Failure): string {
+  switch (failure.kind) {
+    case "authorizationHeld":
+      return sentences.authorizationHeld
+    case "storeUnavailable":
+      return sentences.storeUnavailable
+    case "registrationUnsupported":
+      return sentences.registrationUnsupported
+    case "discoveryFailed":
+      return sentences.discoveryFailed
+    case "authorizationIncomplete":
+      return sentences.authorizationIncomplete
+    case "busy":
+      return sentences.busy
+    case "notFound":
+      return sentences.notFound
+    case "revisionConflict":
+      return sentences.conflict
+    default:
+      return sentences.unanswered
+  }
+}
+
 function answeredWrite(
   state: McpServersState,
   pending: Extract<PendingRequest, { kind: "save" | "remove" }>,
@@ -1257,6 +1521,16 @@ function answeredWrite(
             : unconfirmedIf(state.form, fromForm && failure.applied === undefined),
         confirming: null,
       })
+    case "authorizationHeld":
+      // The file was written. The live set was not replaced, so the form
+      // closes and the list is read; the notice says the old authorization
+      // still holds the previous address.
+      return listAgain({
+        ...done,
+        notice: said(sentences.authorizationHeld, "write"),
+        form: fromForm ? null : state.form,
+        confirming: null,
+      })
     case "storageUnavailable":
       // Published but not synced is a change made: said as one, the form
       // closed, as a write that was recorded would be (U36).
@@ -1323,6 +1597,8 @@ export function mcpServersReducer(
     case "answered": {
       const pending = state.pending
       if (pending === null || pending.seq !== event.seq) return state
+      if (pending.kind === "authorize" || pending.kind === "revoke")
+        return answeredAuth(state, pending, event.outcome)
       return pending.kind === "list"
         ? answeredList(state, event.outcome)
         : answeredWrite(state, pending, event.outcome)
@@ -1341,7 +1617,15 @@ export function mcpServersReducer(
         ...state,
         notice: null,
         confirming: null,
-        form: { name: "", command: "", args: [], env: [], enabled: true },
+        form: {
+          name: "",
+          command: "",
+          args: [],
+          env: [],
+          enabled: true,
+          kind: "stdio",
+          url: "",
+        },
       }
     case "edit":
       return canWrite(state) && !sharesName(state, event.name)
@@ -1534,6 +1818,10 @@ export function mcpServersReducer(
         },
       }
     }
+    case "authorize":
+      return authRequest(state, event.name, "authorize")
+    case "revoke":
+      return authRequest(state, event.name, "revoke")
     case "inspect": {
       const found = server(state, event.name)
       // Shared, the gateway would start the first: not the one asked about (G4).

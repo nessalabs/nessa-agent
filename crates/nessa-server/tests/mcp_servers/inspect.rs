@@ -9,7 +9,7 @@ use crate::mcp_servers::application::{
     InspectBounds, InspectCut, InspectFailure, InspectStop, InspectedUi, LaunchBegun,
     ServerInspector, ServerProblem,
 };
-use crate::mcp_servers::domain::{ConfiguredMcpServer, StdioServer};
+use crate::mcp_servers::domain::{ConfiguredMcpServer, StdioServer, StoredMcpServer};
 use crate::mcp_servers::infrastructure::settings_test_support::ManualClock;
 use crate::mcp_servers::infrastructure::LaunchSettings;
 use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions};
@@ -24,18 +24,20 @@ const BOUNDS: InspectBounds = InspectBounds {
 
 /// The fixture server with `args`, stored as `fixture`, turned off: an
 /// inspection does not ask.
-fn fixture(args: &[&str]) -> ConfiguredMcpServer {
+fn fixture(args: &[&str]) -> StoredMcpServer {
     let mut arguments = vec![format!(
         "{}/../nessa-sdk/tests/infrastructure/mcp/fixtures/server.py",
         env!("CARGO_MANIFEST_DIR")
     )];
     arguments.extend(args.iter().map(|arg| (*arg).to_owned()));
-    ConfiguredMcpServer::new(
-        StdioServer::new("fixture", "/usr/bin/python3", arguments),
-        false,
-        [],
+    StoredMcpServer::Stdio(
+        ConfiguredMcpServer::new(
+            StdioServer::new("fixture", "/usr/bin/python3", arguments),
+            false,
+            [],
+        )
+        .unwrap(),
     )
-    .unwrap()
 }
 
 /// A stop nothing gives: its sender is gone.
@@ -155,16 +157,18 @@ async fn an_inspection_lists_hints_and_apps_then_stops_the_server() {
 #[tokio::test]
 async fn i1_a_missing_command_fails_to_start() {
     let fixture = fixture(&[]);
-    let server = ConfiguredMcpServer::new(
-        StdioServer::new(
-            "fixture",
-            "/nonexistent/mcp-server",
-            fixture.server().args().to_vec(),
-        ),
-        false,
-        [],
-    )
-    .unwrap();
+    let server = StoredMcpServer::Stdio(
+        ConfiguredMcpServer::new(
+            StdioServer::new(
+                "fixture",
+                "/nonexistent/mcp-server",
+                fixture.stdio().unwrap().server().args().to_vec(),
+            ),
+            false,
+            [],
+        )
+        .unwrap(),
+    );
     assert_eq!(
         inspector(Arc::new(RuntimeClock::new()))
             .inspect(&server, BOUNDS, unstopped(), LaunchBegun::default())
@@ -502,12 +506,14 @@ async fn i_invalid_a_stored_server_that_breaks_a_rule_is_invalid_and_not_started
     let directory = tempfile::tempdir().unwrap();
     let pid_file = directory.path().join("pid");
     let fixture = fixture(&["--pid-file", pid_file.to_str().unwrap()]);
-    let server = ConfiguredMcpServer::new(
-        fixture.server().clone(),
-        false,
-        [("1BAD".to_owned(), "value".to_owned())],
-    )
-    .unwrap();
+    let server = StoredMcpServer::Stdio(
+        ConfiguredMcpServer::new(
+            fixture.stdio().unwrap().server().clone(),
+            false,
+            [("1BAD".to_owned(), "value".to_owned())],
+        )
+        .unwrap(),
+    );
     let failure = inspector(Arc::new(RuntimeClock::new()))
         .inspect(&server, BOUNDS, unstopped(), LaunchBegun::default())
         .await
@@ -550,12 +556,14 @@ impl nessa_sdk::infrastructure::clock::Clock for StopOnRead {
 #[tokio::test]
 async fn a_stop_landing_as_the_opening_begins_never_cuts_a_server_never_started() {
     let fixture = fixture(&[]);
-    let server = ConfiguredMcpServer::new(
-        fixture.server().clone(),
-        false,
-        [("1BAD".to_owned(), "value".to_owned())],
-    )
-    .unwrap();
+    let server = StoredMcpServer::Stdio(
+        ConfiguredMcpServer::new(
+            fixture.stdio().unwrap().server().clone(),
+            false,
+            [("1BAD".to_owned(), "value".to_owned())],
+        )
+        .unwrap(),
+    );
     for _ in 0..64 {
         let (give, stop) = stop();
         let inspector = inspector(Arc::new(StopOnRead(std::sync::Mutex::new(Some(give)))));

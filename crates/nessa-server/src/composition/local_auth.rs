@@ -277,6 +277,7 @@ pub(super) async fn product_state(
                     built.catalogue_reader,
                     built.resource_route,
                     built.mcp_server_settings,
+                    built.mcp_authorization,
                     built.record_watches,
                     built.catalogue_watches,
                 )),
@@ -349,6 +350,7 @@ pub(super) async fn product_state(
         catalogue,
         resource_route,
         mcp_server_settings,
+        mcp_authorization,
         record_watches,
         catalogue_watches,
     )) = conversations
@@ -369,6 +371,9 @@ pub(super) async fn product_state(
         }
         if let Some(settings) = mcp_server_settings {
             product = product.with_mcp_server_settings(settings);
+        }
+        if let Some(authorization) = mcp_authorization {
+            product = product.with_mcp_authorization(authorization);
         }
     }
     Ok(LocalProduct {
@@ -452,6 +457,7 @@ struct BuiltConversations {
     /// What manages the stored servers and replaces the live set, where this
     /// run holds one.
     mcp_server_settings: Option<Arc<crate::mcp_servers::application::McpServerSettings>>,
+    mcp_authorization: Option<Arc<crate::mcp_authorization::application::AuthorizationOwner>>,
     /// What `GET /mcp-resources` redeems on, and records each redemption
     /// in: the store the conversation service issues on, and the audit it
     /// records an app's calls in. `None` without MCP servers.
@@ -798,15 +804,39 @@ async fn conversations(
         }
     };
     let root = conversation_root(namespace);
-    let mcp_server_settings = match &mcp {
-        Some(mcp) => super::mcp_servers::settings(
-            mcp,
-            &agents,
-            super::runtime_config::config_path(namespace),
-            root.join("audit").join("mcp-servers"),
-        )?
-        .map(Arc::new),
-        None => None,
+    let (mcp_server_settings, mcp_authorization) = match &mcp {
+        Some(mcp) => {
+            match super::mcp_servers::manage(
+                mcp,
+                &agents,
+                super::runtime_config::config_path(namespace),
+                root.join("audit").join("mcp-servers"),
+            )? {
+                Some(managed) => {
+                    let remotes: Vec<_> = mcp
+                        .servers
+                        .configured_remotes()
+                        .into_iter()
+                        .map(|remote| (remote.id(), remote.url().as_str().to_owned()))
+                        .collect();
+                    managed
+                        .authorization
+                        .revalidate(&remotes)
+                        .await
+                        .map_err(|_| {
+                            RunError::Agent(
+                                "remote MCP authorization could not be revalidated".into(),
+                            )
+                        })?;
+                    (
+                        Some(Arc::new(managed.settings)),
+                        Some(managed.authorization),
+                    )
+                }
+                None => (None, None),
+            }
+        }
+        None => (None, None),
     };
     let agents = &agents;
     let root = conversation_root(
@@ -1093,6 +1123,7 @@ async fn conversations(
         warm_ups,
         mcp,
         mcp_server_settings,
+        mcp_authorization,
         resource_route,
     })
 }

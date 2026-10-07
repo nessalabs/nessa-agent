@@ -26,6 +26,27 @@ pub enum McpError {
     Timeout,
     /// The server's process ended, or its pipes closed, before an answer.
     ServerGone,
+    /// DNS, TCP, TLS, or `initialize` failed before a session existed.
+    /// Nothing was retained. A later request that may already have been sent
+    /// is [`Self::Unconfirmed`].
+    Unreachable,
+    /// The server refused the call as unauthorized (HTTP 401). No token is
+    /// carried in the error.
+    Unauthorized,
+    /// The server answered 403 `insufficient_scope`. The call is not retried.
+    InsufficientScope,
+    /// The upstream session id is no longer recognized (HTTP 404 on a
+    /// session-bound request). In-flight calls on that epoch fail with this;
+    /// a later call may use a replacement session when the owner still admits
+    /// one recovery.
+    SessionExpired,
+    /// A request after `initialize` lost its response headers, was answered
+    /// HTTP 5xx, or its stream ended before the result was observed. The
+    /// remote may already have received it. That is not a cancellation receipt.
+    Unconfirmed,
+    /// Another opening already holds this upstream session id at the same MCP
+    /// endpoint. This opening is refused and does not delete the other id.
+    SessionCollision,
     /// The server answered with a JSON-RPC error.
     Remote {
         /// The JSON-RPC error code.
@@ -64,6 +85,18 @@ impl fmt::Display for McpError {
             Self::Handshake(reason) => write!(f, "the MCP server's handshake failed: {reason}"),
             Self::Timeout => f.write_str("the MCP server did not answer in time"),
             Self::ServerGone => f.write_str("the MCP server ended"),
+            Self::Unreachable => f.write_str("the remote MCP server could not be reached"),
+            Self::Unauthorized => f.write_str("the remote MCP server requires authorization"),
+            Self::InsufficientScope => {
+                f.write_str("the remote MCP server requires a broader scope")
+            }
+            Self::SessionExpired => f.write_str("the remote MCP session expired"),
+            Self::Unconfirmed => {
+                f.write_str("the remote MCP request ended without a confirmed result")
+            }
+            Self::SessionCollision => {
+                f.write_str("the remote MCP server reused a session id another opening holds")
+            }
             Self::Remote { code, message } => {
                 write!(f, "the MCP server answered with error {code}: {message}")
             }

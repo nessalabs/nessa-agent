@@ -14,6 +14,7 @@ pub mod device_pairing;
 pub mod env;
 pub mod health;
 pub(crate) mod limits;
+pub mod mcp_authorization;
 pub mod mcp_servers;
 pub mod product;
 pub mod server;

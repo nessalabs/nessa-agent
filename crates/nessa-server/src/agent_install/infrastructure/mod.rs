@@ -14,7 +14,7 @@
 //! application layer between the fetch and the unpack.
 mod audit;
 mod delivery;
-mod https_archives;
+pub(crate) mod https_archives;
 mod managed_runtimes;
 mod pinned_releases;
 mod runtime_reclamation;

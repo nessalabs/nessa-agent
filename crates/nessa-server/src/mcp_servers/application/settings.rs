@@ -7,7 +7,7 @@
 //! save, remove, inspect ─▶ admitted (or stopping) ─▶ a task this owns, tracked until its outcome record
 //! edit    ─▶ audit requested ─▶ store.lock (bounded wait) ─▶ read ─▶ revision? ─▶ ServerEdit::apply
 //!         ─▶ LiveServerSet::problem (the SDK's rules) ─▶ store.write (revision again, parse, bound, publish)
-//!         ─▶ LiveServerSet::replace ─▶ unlock ─▶ audit outcome
+//!         ─▶ authorization fence ─▶ LiveServerSet::replace ─▶ unlock ─▶ audit outcome
 //! inspect ─▶ a slot (or busy) ─▶ read ─▶ the stored server ─▶ audit requested
 //!         ─▶ ServerInspector::inspect (deadline, caps, the stop; stopped after) ─▶ audit outcome
 //! close    ─▶ admit no more ─▶ stop the inspections        (as the gateway's cleanup begins)
@@ -76,8 +76,10 @@ use super::ports::{
     McpServerInitiator, McpServerOutcome, McpServerStore, ServerInspector, ServerNames,
     ServerProblem, StoreError, StoreLock, StoredServers,
 };
+use crate::mcp_authorization::application::{AuthorizationHandoff, BindingChange};
 use crate::mcp_servers::domain::{
-    ConfiguredMcpServer, EditRefusal, ServerEdit, ServerSave, StdioServer, MANAGED_SERVER_NAME,
+    EditRefusal, RemoteServerSave, ServerEdit, ServerSave, StdioServer, StoredMcpServer,
+    MANAGED_SERVER_NAME,
 };
 use nessa_protocol::product_contract::generated::{
     MCP_SERVER_INSPECT_DEADLINE_MS, MCP_SERVER_INSPECT_MAX_CONCURRENT,
@@ -122,6 +124,10 @@ pub struct ListedServer {
     pub enabled: bool,
     /// Nessa's own server: no edit names it.
     pub managed: bool,
+    /// Set when this row is a remote server. `server`'s command is not a launch.
+    pub remote_id: Option<String>,
+    /// The remote endpoint, when this row is remote.
+    pub url: Option<String>,
 }
 
 /// `mcpServers.list`: the stored revision, and each server.
@@ -209,6 +215,9 @@ pub enum McpServerSettingsError {
     /// because the gateway is stopping ([`InspectFailure::Stopping`]); it is
     /// not running.
     Inspect(InspectFailure),
+    /// The file was published and the live set was not. The old token binding
+    /// could not be fenced, so the new URL is not admitted.
+    AuthorizationHeld,
 }
 
 impl McpServerSettingsError {
@@ -225,6 +234,7 @@ impl McpServerSettingsError {
             Self::StorageUnavailable { .. } => "storage_unavailable",
             Self::Stopping => "stopping",
             Self::AuditUnavailable { .. } => "audit_unavailable",
+            Self::AuthorizationHeld => "authorization_held",
             Self::Inspect(failure) => match failure {
                 InspectFailure::Invalid(_) => "invalid",
                 InspectFailure::StartFailed => "start_failed",
@@ -232,6 +242,10 @@ impl McpServerSettingsError {
                 InspectFailure::Gone => "gone",
                 InspectFailure::Malformed => "malformed",
                 InspectFailure::RemoteError { .. } => "remote_error",
+                InspectFailure::Unreachable => "unreachable",
+                InspectFailure::Unauthorized => "unauthorized",
+                InspectFailure::InsufficientScope => "insufficient_scope",
+                InspectFailure::SessionCollision => "session_collision",
                 InspectFailure::Stopping => "stopping",
             },
         }
@@ -246,6 +260,7 @@ impl McpServerSettingsError {
                 | Self::Stopping
                 | Self::AuditUnavailable { .. }
                 | Self::Inspect(_)
+                | Self::AuthorizationHeld
         )
     }
 }
@@ -279,6 +294,8 @@ struct Operations {
     inspector: Arc<dyn ServerInspector>,
     /// Whether a save's resulting list can still be listed.
     list_fits: ListFits,
+    /// Fences a remote token before a new URL or a removal is live.
+    handoff: Arc<dyn AuthorizationHandoff>,
     /// One permit per inspection that may run at once
     /// (`i6_a_third_inspection_at_once_is_busy`).
     inspections: Arc<Semaphore>,
@@ -295,6 +312,7 @@ impl McpServerSettings {
         live: Arc<dyn LiveServerSet>,
         inspector: Arc<dyn ServerInspector>,
         list_fits: ListFits,
+        handoff: Arc<dyn AuthorizationHandoff>,
     ) -> Self {
         Self {
             operations: Arc::new(Operations {
@@ -303,6 +321,7 @@ impl McpServerSettings {
                 live,
                 inspector,
                 list_fits,
+                handoff,
                 inspections: Arc::new(Semaphore::new(MCP_SERVER_INSPECT_MAX_CONCURRENT)),
                 stop: watch::channel(false).0,
             }),
@@ -573,15 +592,27 @@ impl Operations {
     /// not shown: on a headless gateway it is the managed one, shown as the
     /// gateway started with it; on the desktop it is never used, and the
     /// next change drops it from the file ([`Self::publish`]).
-    fn listing(&self, revision: String, servers: &[ConfiguredMcpServer]) -> ServerList {
+    fn listing(&self, revision: String, servers: &[StoredMcpServer]) -> ServerList {
         let mut listed: Vec<ListedServer> = servers
             .iter()
             .filter(|server| !server.managed())
-            .map(|server| ListedServer {
-                server: server.server().clone(),
-                env_names: server.env_names(),
-                enabled: server.enabled(),
-                managed: false,
+            .map(|server| match server {
+                StoredMcpServer::Stdio(server) => ListedServer {
+                    server: server.server().clone(),
+                    env_names: server.env_names(),
+                    enabled: server.enabled(),
+                    managed: false,
+                    remote_id: None,
+                    url: None,
+                },
+                StoredMcpServer::Remote(remote) => ListedServer {
+                    server: StdioServer::new(remote.name(), "/", Vec::new()),
+                    env_names: Vec::new(),
+                    enabled: remote.enabled(),
+                    managed: false,
+                    remote_id: Some(remote.id().to_string()),
+                    url: Some(remote.url().to_owned()),
+                },
             })
             .collect();
         // As the gateway started with it, on or off, with its variables'
@@ -593,6 +624,8 @@ impl Operations {
                 enabled: managed.enabled(),
                 server: managed.server().clone(),
                 managed: true,
+                remote_id: None,
+                url: None,
             });
         }
         ServerList {
@@ -610,17 +643,19 @@ impl Operations {
     ) -> Result<Edited, McpServerSettingsError> {
         let request = McpServerChangeRequest {
             action: match edit {
-                ServerEdit::Save(_) => McpServerAction::Save,
+                ServerEdit::Save(_) | ServerEdit::SaveRemote(_) => McpServerAction::Save,
                 ServerEdit::Remove { .. } => McpServerAction::Remove,
             },
             target: edit.target().to_owned(),
             previous_name: match &edit {
                 ServerEdit::Save(save) => save.previous_name.clone(),
+                ServerEdit::SaveRemote(save) => save.previous_name.clone(),
                 ServerEdit::Remove { .. } => None,
             },
             revision: revision.clone(),
             server: match &edit {
                 ServerEdit::Save(save) => Some(Box::new(requested(save))),
+                ServerEdit::SaveRemote(save) => Some(Box::new(requested_remote(save))),
                 ServerEdit::Remove { .. } => None,
             },
         };
@@ -678,6 +713,12 @@ impl Operations {
                 cause: (!change.durable).then(|| Box::new(not_durable)),
             }),
             (Err((error, _)), Ok(())) => Err(error),
+            (Err((McpServerSettingsError::AuthorizationHeld, _)), Err(AuditUnavailable)) => {
+                Err(McpServerSettingsError::AuditUnavailable {
+                    applied: true,
+                    cause: Some(Box::new(McpServerSettingsError::AuthorizationHeld)),
+                })
+            }
             (Err((error, _)), Err(AuditUnavailable)) => {
                 Err(McpServerSettingsError::AuditUnavailable {
                     applied: false,
@@ -705,7 +746,7 @@ impl Operations {
         let server = stored
             .servers
             .iter()
-            .find(|each| each.server().name() == name)
+            .find(|each| each.name() == name)
             .ok_or(McpServerSettingsError::NotFound)?;
         let operation_id = operation_id();
         let record = |cause, phase| McpServerAuditRecord {
@@ -801,6 +842,7 @@ impl Operations {
         let stored = stored.map_err(|error| (error.into(), None))?;
         let before_target = match edit {
             ServerEdit::Save(save) => save.previous_name.as_deref().unwrap_or(edit.target()),
+            ServerEdit::SaveRemote(save) => save.previous_name.as_deref().unwrap_or(edit.target()),
             ServerEdit::Remove { name } => name,
         };
         let before = names(&stored.revision, &stored.servers, Some(before_target));
@@ -866,7 +908,7 @@ impl Operations {
         // valid again
         // (`a_remove_from_a_list_past_its_bounds_is_written_and_recovers`).
         let problem = match edit {
-            ServerEdit::Save(_) => self.live.problem(&edited),
+            ServerEdit::Save(_) | ServerEdit::SaveRemote(_) => self.live.problem(&edited),
             ServerEdit::Remove { .. } => None,
         };
         if let Some(problem) = problem {
@@ -876,7 +918,7 @@ impl Operations {
         }
         // The new revision is a digest of the same length as the stored one,
         // so the stored one stands in for it in the measure.
-        if matches!(edit, ServerEdit::Save(_))
+        if matches!(edit, ServerEdit::Save(_) | ServerEdit::SaveRemote(_))
             && !(self.list_fits)(&self.listing(stored.revision.clone(), &edited))
         {
             return Err(McpServerSettingsError::ConfigTooLarge);
@@ -893,6 +935,11 @@ impl Operations {
         // follows it.
         let written = written?;
         reached.mark_applied();
+        let changes = binding_changes(&kept, &edited);
+        if self.handoff.fence(&changes).await.is_err() {
+            drop(lock);
+            return Err(McpServerSettingsError::AuthorizationHeld);
+        }
         // Published: the live set follows, under the same lock. A remove
         // always takes its server out of it: when the list it leaves cannot
         // be made live as a whole — a hand-edited list still past a bound —
@@ -917,6 +964,7 @@ impl Operations {
         drop(lock);
         let after_target = match edit {
             ServerEdit::Save(save) => Some(save.server.name()),
+            ServerEdit::SaveRemote(save) => Some(save.name.as_str()),
             ServerEdit::Remove { .. } => None,
         };
         Ok(Published {
@@ -959,16 +1007,41 @@ impl Operations {
     }
 }
 
+/// URL changes and removals. A rename, an enable change, and a new id are
+/// not fenced: the token stays bound to the same resource, or there is no
+/// old binding.
+fn binding_changes(before: &[StoredMcpServer], after: &[StoredMcpServer]) -> Vec<BindingChange> {
+    let mut changes = Vec::new();
+    for previous in before.iter().filter_map(StoredMcpServer::remote) {
+        match after
+            .iter()
+            .filter_map(StoredMcpServer::remote)
+            .find(|server| server.id() == previous.id())
+        {
+            Some(next) if next.url() != previous.url() => {
+                changes.push(BindingChange::ResourceChanged {
+                    id: previous.id(),
+                    previous_url: previous.url().to_owned(),
+                    url: next.url().to_owned(),
+                })
+            }
+            Some(_) => {}
+            None => changes.push(BindingChange::Removed {
+                id: previous.id(),
+                url: previous.url().to_owned(),
+            }),
+        }
+    }
+    changes
+}
+
 /// `servers` at `revision`, and the one stored as `target`, if any.
-fn names(revision: &str, servers: &[ConfiguredMcpServer], target: Option<&str>) -> ServerNames {
+fn names(revision: &str, servers: &[StoredMcpServer], target: Option<&str>) -> ServerNames {
     ServerNames {
         revision: revision.to_owned(),
-        names: servers
-            .iter()
-            .map(|each| each.server().name().to_owned())
-            .collect(),
+        names: servers.iter().map(|each| each.name().to_owned()).collect(),
         target: target
-            .and_then(|name| servers.iter().find(|each| each.server().name() == name))
+            .and_then(|name| servers.iter().find(|each| each.name() == name))
             .map(|each| Box::new(AuditedServer::of(each))),
     }
 }
@@ -986,6 +1059,20 @@ fn requested(save: &ServerSave) -> AuditedServer {
         args: save.server.args().to_vec(),
         enabled: save.enabled,
         env_names,
+        url: None,
+        remote_id: None,
+    }
+}
+
+fn requested_remote(save: &RemoteServerSave) -> AuditedServer {
+    AuditedServer {
+        name: save.name.clone(),
+        command: std::path::PathBuf::new(),
+        args: Vec::new(),
+        enabled: save.enabled,
+        env_names: Vec::new(),
+        url: Some(save.url.clone()),
+        remote_id: Some(save.id.to_string()),
     }
 }
 

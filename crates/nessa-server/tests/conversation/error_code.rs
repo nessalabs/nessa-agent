@@ -376,6 +376,9 @@ fn each_app_refusal_is_on_the_wire_by_the_code_audit_names_it_with() {
         McpAppError::Remote(None),
         McpAppError::Remote(Some((-32602, "bad".into()))),
         McpAppError::Busy,
+        McpAppError::Unreachable,
+        McpAppError::Unauthorized,
+        McpAppError::InsufficientScope,
     ] {
         let code = error.code();
         assert_eq!(

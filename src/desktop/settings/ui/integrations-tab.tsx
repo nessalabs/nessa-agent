@@ -17,6 +17,7 @@ import {
   canWrite,
   editedServer,
   endsWithLineBreak,
+  authorizationLabel,
   formReady,
   groupsOf,
   hasLineBreak,
@@ -110,7 +111,11 @@ function useRequests(
         ? gateway.list()
         : pending.kind === "save"
           ? gateway.save(pending.request)
-          : gateway.remove(pending.request)
+          : pending.kind === "remove"
+            ? gateway.remove(pending.request)
+            : pending.kind === "authorize"
+              ? gateway.authorize(pending.id, pending.revision)
+              : gateway.revoke(pending.id, pending.revision)
     void answer.then((outcome) =>
       dispatch({ type: "answered", seq: pending.seq, outcome }),
     )
@@ -577,7 +582,9 @@ function ServerRow({
   const askId = useId()
   const writable = canWrite(state) && state.form === null
   const confirming = !server.managed && state.confirming?.name === server.name
-  const command = [server.command, ...server.args].join(" ")
+  const command = server.url ?? [server.command, ...server.args].join(" ")
+  const authorization = authorizationLabel(server)
+  const consent = state.consent?.name === server.name ? state.consent : null
   return (
     <div
       className="settings-row settings-server"
@@ -591,8 +598,15 @@ function ServerRow({
         <small>
           {server.managed
             ? sentences.managed
-            : sentences.variables(server.envNames.length)}
+            : server.url
+              ? (authorization ?? server.url)
+              : sentences.variables(server.envNames.length)}
         </small>
+        {consent ? (
+          <a href={consent.url} data-mcp-consent>
+            {sentences.pendingConsent}
+          </a>
+        ) : null}
         {confirming ? (
           <p id={askId} className="settings-server-confirm" data-mcp-confirm>
             {sentences.removeAsk(server.name)}
@@ -615,6 +629,32 @@ function ServerRow({
             >
               Edit
             </button>,
+            ...(server.remoteId
+              ? [
+                  <button
+                    key="authorize"
+                    type="button"
+                    className="settings-button"
+                    data-mcp-action="authorize"
+                    aria-describedby={nameId}
+                    disabled={!writable}
+                    onClick={() => dispatch({ type: "authorize", name: server.name })}
+                  >
+                    Authorize
+                  </button>,
+                  <button
+                    key="revoke"
+                    type="button"
+                    className="settings-button"
+                    data-mcp-action="revoke"
+                    aria-describedby={nameId}
+                    disabled={!writable}
+                    onClick={() => dispatch({ type: "revoke", name: server.name })}
+                  >
+                    Revoke
+                  </button>,
+                ]
+              : []),
             <button
               key="inspect"
               type="button"
@@ -750,13 +790,20 @@ function FormGroup({
   form: ServerForm
   dispatch: Dispatch
 }) {
-  const ids = { name: useId(), command: useId(), args: useId(), values: useId() }
+  const ids = {
+    name: useId(),
+    command: useId(),
+    args: useId(),
+    values: useId(),
+    url: useId(),
+  }
   const problems = {
     form: useId(),
     name: useId(),
     command: useId(),
     args: useId(),
     env: useId(),
+    url: useId(),
   } satisfies Record<FormField, string>
   const first = useRef<HTMLInputElement>(null)
   const section = useRef<HTMLElement>(null)
@@ -847,129 +894,174 @@ function FormGroup({
           />
           <FieldProblem form={form} field="name" id={problems.name} />
         </div>
-        <div className="settings-field">
-          <label htmlFor={ids.command}>Command</label>
-          {/* A path is often wider than a narrow page: wrapped where it
-              is read, as the row's command is, rather than cut off. */}
-          <textarea
-            id={ids.command}
-            className="settings-input settings-input-mono settings-input-wrapped"
-            data-mcp-field="command"
-            rows={1}
-            value={form.command}
-            autoComplete="off"
-            spellCheck={false}
-            aria-invalid={form.problem?.field === "command" || undefined}
-            aria-describedby={described("command")}
-            onChange={(event) => change({ command: event.target.value })}
-          />
-          <FieldProblem form={form} field="command" id={problems.command} />
-        </div>
-        <div className="settings-field" role="group" aria-labelledby={ids.args}>
-          <span id={ids.args} className="settings-field-label">
-            Arguments
-          </span>
-          {/* One field each, so an empty argument, or one with a line break,
-              is one argument as typed. */}
-          {form.args.map((row, at) => (
-            <ArgumentField
-              key={row.key}
-              at={at}
-              value={row.value}
-              rowKey={row.key}
-              invalid={form.problem?.field === "args"}
-              problemId={described("args")}
-              onKeyDown={(event) => onArgumentKeyDown(event, row.key)}
-              onChange={(value) =>
-                dispatch({ type: "changeArgument", key: row.key, value })
-              }
-              onRemove={() => removeArgument(at)}
+        <div className="settings-field" role="group" aria-label="Server kind">
+          <label>
+            <input
+              type="radio"
+              name={`${ids.name}-kind`}
+              data-mcp-field="kind"
+              value="stdio"
+              checked={form.kind === "stdio"}
+              onChange={() => change({ kind: "stdio" })}
             />
-          ))}
-          <div>
-            <button
-              type="button"
-              className="settings-button"
-              data-mcp-action="add-argument"
-              onClick={() => addArgument()}
-            >
-              Add argument
-            </button>
-          </div>
-          <FieldProblem form={form} field="args" id={problems.args} />
+            Local command
+          </label>
+          <label>
+            <input
+              type="radio"
+              name={`${ids.name}-kind`}
+              data-mcp-field="kind"
+              value="remote"
+              checked={form.kind === "remote"}
+              onChange={() => change({ kind: "remote" })}
+            />
+            Remote URL
+          </label>
         </div>
-        <div className="settings-field">
-          <span className="settings-field-label">Variables</span>
-          {form.env.map((row, at) => (
-            <div
-              className="settings-variable"
-              key={row.key}
-              data-mcp-variable={row.name}
-              data-mcp-variable-key={row.key}
-            >
-              <input
-                className="settings-input settings-input-mono"
-                aria-label="Variable name"
-                value={row.name}
-                readOnly={row.stored}
-                aria-describedby={described("env")}
+        {form.kind === "remote" ? (
+          <div className="settings-field">
+            <label htmlFor={ids.url}>URL</label>
+            <input
+              id={ids.url}
+              className="settings-input"
+              data-mcp-field="url"
+              value={form.url}
+              autoComplete="off"
+              spellCheck={false}
+              aria-invalid={form.problem?.field === "url" || undefined}
+              aria-describedby={described("url")}
+              onChange={(event) => change({ url: event.target.value })}
+            />
+            <FieldProblem form={form} field="url" id={problems.url} />
+          </div>
+        ) : null}
+        {form.kind === "stdio" ? (
+          <>
+            <div className="settings-field">
+              <label htmlFor={ids.command}>Command</label>
+              {/* A path is often wider than a narrow page: wrapped where it
+              is read, as the row's command is, rather than cut off. */}
+              <textarea
+                id={ids.command}
+                className="settings-input settings-input-mono settings-input-wrapped"
+                data-mcp-field="command"
+                rows={1}
+                value={form.command}
                 autoComplete="off"
                 spellCheck={false}
-                onChange={(event) =>
-                  dispatch({
-                    type: "changeVariable",
-                    key: row.key,
-                    patch: { name: event.target.value },
-                  })
-                }
+                aria-invalid={form.problem?.field === "command" || undefined}
+                aria-describedby={described("command")}
+                onChange={(event) => change({ command: event.target.value })}
               />
-              <SecretField
-                secret={secretOf(row)}
-                relaunched={relaunched}
-                keepable={keepable}
-                describedBy={
-                  [described("env"), row.stored && waiting ? ids.values : undefined]
-                    .filter(Boolean)
-                    .join(" ") || undefined
-                }
-                dispatch={dispatch}
-                focusAfter={(selector) => {
-                  focusNext.current = `[data-mcp-variable-key="${row.key}"] ${selector}`
-                }}
-              />
-              <button
-                type="button"
-                className="settings-button"
-                aria-label={`Remove ${row.name || "this variable"}`}
-                onClick={() => removeVariable(at)}
-              >
-                Remove
-              </button>
+              <FieldProblem form={form} field="command" id={problems.command} />
             </div>
-          ))}
-          <div>
-            <button
-              type="button"
-              className="settings-button"
-              data-mcp-action="add-variable"
-              onClick={() => {
-                focusNext.current = variableField(nextKey)
-                dispatch({ type: "addVariable" })
-              }}
-            >
-              Add variable
-            </button>
-          </div>
-          <p
-            id={ids.values}
-            className="settings-field-note"
-            aria-live="polite"
-            data-mcp-values-needed
-          >
-            {waiting ? sentences.valuesAgain : null}
-          </p>
-          <FieldProblem form={form} field="env" id={problems.env} />
-        </div>
+            <div className="settings-field" role="group" aria-labelledby={ids.args}>
+              <span id={ids.args} className="settings-field-label">
+                Arguments
+              </span>
+              {/* One field each, so an empty argument, or one with a line break,
+              is one argument as typed. */}
+              {form.args.map((row, at) => (
+                <ArgumentField
+                  key={row.key}
+                  at={at}
+                  value={row.value}
+                  rowKey={row.key}
+                  invalid={form.problem?.field === "args"}
+                  problemId={described("args")}
+                  onKeyDown={(event) => onArgumentKeyDown(event, row.key)}
+                  onChange={(value) =>
+                    dispatch({ type: "changeArgument", key: row.key, value })
+                  }
+                  onRemove={() => removeArgument(at)}
+                />
+              ))}
+              <div>
+                <button
+                  type="button"
+                  className="settings-button"
+                  data-mcp-action="add-argument"
+                  onClick={() => addArgument()}
+                >
+                  Add argument
+                </button>
+              </div>
+              <FieldProblem form={form} field="args" id={problems.args} />
+            </div>
+            <div className="settings-field">
+              <span className="settings-field-label">Variables</span>
+              {form.env.map((row, at) => (
+                <div
+                  className="settings-variable"
+                  key={row.key}
+                  data-mcp-variable={row.name}
+                  data-mcp-variable-key={row.key}
+                >
+                  <input
+                    className="settings-input settings-input-mono"
+                    aria-label="Variable name"
+                    value={row.name}
+                    readOnly={row.stored}
+                    aria-describedby={described("env")}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(event) =>
+                      dispatch({
+                        type: "changeVariable",
+                        key: row.key,
+                        patch: { name: event.target.value },
+                      })
+                    }
+                  />
+                  <SecretField
+                    secret={secretOf(row)}
+                    relaunched={relaunched}
+                    keepable={keepable}
+                    describedBy={
+                      [described("env"), row.stored && waiting ? ids.values : undefined]
+                        .filter(Boolean)
+                        .join(" ") || undefined
+                    }
+                    dispatch={dispatch}
+                    focusAfter={(selector) => {
+                      focusNext.current = `[data-mcp-variable-key="${row.key}"] ${selector}`
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="settings-button"
+                    aria-label={`Remove ${row.name || "this variable"}`}
+                    onClick={() => removeVariable(at)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+              <div>
+                <button
+                  type="button"
+                  className="settings-button"
+                  data-mcp-action="add-variable"
+                  onClick={() => {
+                    focusNext.current = variableField(nextKey)
+                    dispatch({ type: "addVariable" })
+                  }}
+                >
+                  Add variable
+                </button>
+              </div>
+              <p
+                id={ids.values}
+                className="settings-field-note"
+                aria-live="polite"
+                data-mcp-values-needed
+              >
+                {waiting ? sentences.valuesAgain : null}
+              </p>
+              <FieldProblem form={form} field="env" id={problems.env} />
+            </div>
+          </>
+        ) : null}
         <div className="settings-field settings-field-inline">
           <span className="settings-field-label">Offered to new conversations</span>
           <Toggle

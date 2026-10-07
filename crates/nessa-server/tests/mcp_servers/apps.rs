@@ -79,6 +79,21 @@ fn each_session_failure_is_the_one_the_app_is_told() {
             McpAppFailure::SessionEnded,
             "mcp_session_unavailable",
         ),
+        (
+            McpError::Unreachable,
+            McpAppFailure::Unreachable,
+            "mcp_unreachable",
+        ),
+        (
+            McpError::Unauthorized,
+            McpAppFailure::Unauthorized,
+            "mcp_unauthorized",
+        ),
+        (
+            McpError::InsufficientScope,
+            McpAppFailure::InsufficientScope,
+            "mcp_insufficient_scope",
+        ),
     ] {
         let failed = failure(error);
         assert_eq!(failed, told);
