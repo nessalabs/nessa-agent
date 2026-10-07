@@ -119,6 +119,24 @@ function track(root: Element, animation: Animation): Animation {
   return animation
 }
 
+/**
+ * The element an animation was built on. `Animation.effect` is an
+ * `AnimationEffect`, and the element is a `KeyframeEffect`'s. The test
+ * window's effect carries it without defining that constructor
+ * (`drag.test.tsx`).
+ */
+function effectElement(effect: AnimationEffect | null | undefined): HTMLElement | null {
+  if (typeof effect !== "object" || effect === null) return null
+  const keyframes = globalThis.KeyframeEffect
+  if (typeof keyframes === "function") {
+    if (!(effect instanceof keyframes)) return null
+    return effect.target instanceof HTMLElement ? effect.target : null
+  }
+  if (!("target" in effect)) return null
+  const target = effect.target
+  return target instanceof HTMLElement ? target : null
+}
+
 /** A pane drawn away from where it is laid out, about its centre: moved, scaled, faded. */
 interface Drawn {
   readonly dx: number
@@ -633,9 +651,8 @@ export function useSplitPanesDrag(
       markCorner(scope, pane, null)
       if (pane.style.clipPath) pane.style.clipPath = ""
       for (const animation of [held.motion, ...held.parts]) {
-        const target = animation.effect?.target
-        if (target instanceof HTMLElement && target.style.clipPath)
-          target.style.clipPath = ""
+        const target = effectElement(animation.effect)
+        if (target?.style.clipPath) target.style.clipPath = ""
         animation.cancel()
         previews.get(scope)?.delete(animation)
       }

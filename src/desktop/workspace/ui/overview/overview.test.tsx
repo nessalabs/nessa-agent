@@ -736,8 +736,9 @@ describe("the agents overview", () => {
     const index = sampleIndex()
     // Newer than "first", so it leads Needs you and is the first row drawn.
     const earlier = [summary("a", "desktop", 400, "needs-you", { title: "a" })]
-    index.sessions = [...earlier, ...index.sessions]
-    const { store } = await mount({ index })
+    const { store } = await mount({
+      index: { ...index, sessions: [...earlier, ...index.sessions] },
+    })
     await act(async () => store.dispatch(selectInOverview({ sessionId: "first" })))
     await act(async () => entry()?.click())
     await act(async () => settle(10))
