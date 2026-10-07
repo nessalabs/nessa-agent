@@ -255,6 +255,8 @@ export type {
   AgentsListResult,
   ConversationSetApprovalModeResult,
   ConversationListResult,
+  ConversationObserveCursor,
+  ConversationObserveResult,
   ConversationSummary,
   ConversationLifecycle,
   ConversationLifecyclePhase,

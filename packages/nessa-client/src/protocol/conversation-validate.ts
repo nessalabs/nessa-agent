@@ -1,5 +1,6 @@
 import type {
   ConversationListResult,
+  ConversationObserveResult,
   ConversationSummary,
   ConversationView,
   ConversationReceipt,
@@ -28,6 +29,7 @@ import {
 import { imageAttachments, linkedFiles } from "./attachment-validate.js"
 import { approvalModeChoices } from "./agents-validate.js"
 import { boundedName } from "./mcp-app-validate.js"
+import { decimal } from "./passive-read-validate.js"
 
 const utf8 = new TextEncoder()
 
@@ -666,6 +668,40 @@ function time(item: Record<string, unknown>, key: string) {
   return value as number
 }
 
+/** One summary row, for a list and for an observation page. */
+function summaryRow(
+  row: Record<string, unknown>,
+  archived: boolean,
+  seen: Set<string>,
+  filter: string,
+): ConversationSummary {
+  exact(row, [
+    "conversationId",
+    "title",
+    "preview",
+    "createdAtMs",
+    "updatedAtMs",
+    "running",
+    "archived",
+  ])
+  const conversationId = identity(row, "conversationId")
+  if (!conversationIdPattern.test(conversationId) || seen.has(conversationId))
+    throw new Error("Invalid conversation conversationId")
+  seen.add(conversationId)
+  flag(row, "running")
+  flag(row, "archived")
+  if (row.archived !== archived) throw new Error(filter)
+  return {
+    conversationId,
+    title: optionalText(row, "title", bounds.maxConversationTitleBytes),
+    preview: optionalText(row, "preview", bounds.maxConversationPreviewBytes),
+    createdAtMs: time(row, "createdAtMs"),
+    updatedAtMs: time(row, "updatedAtMs"),
+    running: row.running as boolean,
+    archived: row.archived as boolean,
+  }
+}
+
 /**
  * The caller's conversations as the gateway listed them. Each row is checked
  * against the schema's bounds, and a conversation listed twice is refused: the
@@ -683,34 +719,57 @@ export function conversationList(
   flag(item, "complete")
   const seen = new Set<string>()
   const conversations = items(item, "conversations", bounds.maxListedConversations).map(
-    (row): ConversationSummary => {
-      exact(row, [
-        "conversationId",
-        "title",
-        "preview",
-        "createdAtMs",
-        "updatedAtMs",
-        "running",
-        "archived",
-      ])
-      const conversationId = identity(row, "conversationId")
-      if (!conversationIdPattern.test(conversationId) || seen.has(conversationId))
-        throw new Error("Invalid conversation conversationId")
-      seen.add(conversationId)
-      flag(row, "running")
-      flag(row, "archived")
-      if (row.archived !== archived)
-        throw new Error("Conversation list row contradicts the archived filter")
-      return {
-        conversationId,
-        title: optionalText(row, "title", bounds.maxConversationTitleBytes),
-        preview: optionalText(row, "preview", bounds.maxConversationPreviewBytes),
-        createdAtMs: time(row, "createdAtMs"),
-        updatedAtMs: time(row, "updatedAtMs"),
-        running: row.running as boolean,
-        archived: row.archived as boolean,
-      }
-    },
+    (row) =>
+      summaryRow(
+        row,
+        archived,
+        seen,
+        "Conversation list row contradicts the archived filter",
+      ),
   )
   return { conversations, complete: item.complete as boolean }
+}
+
+/**
+ * One page of `conversation.observe`. The row checks are the list's. A page
+ * longer than the catalogue bound is refused. `complete: false` is kept,
+ * including when the page has no cursor: that page is not every stored summary.
+ */
+export function conversationObserve(
+  value: unknown,
+  archived: boolean,
+): ConversationObserveResult {
+  const item = record(value)
+  exact(item, ["conversations", "complete", "cursor"])
+  flag(item, "complete")
+  const seen = new Set<string>()
+  const conversations = items(item, "conversations", bounds.maxCataloguePageEntries).map(
+    (row) =>
+      summaryRow(
+        row,
+        archived,
+        seen,
+        "Conversation observe row contradicts the archived filter",
+      ),
+  )
+  if (!Object.hasOwn(item, "cursor"))
+    return { conversations, complete: item.complete as boolean }
+  const cursor = record(item.cursor)
+  exact(cursor, ["incarnation", "boundary", "creation", "id"])
+  const incarnation = text(cursor, "incarnation", bounds.maxSyncIdBytes, false)
+  if (!decimal(cursor.boundary) || !decimal(cursor.creation))
+    throw new Error("Invalid conversation observe cursor")
+  const id = identity(cursor, "id")
+  if (!conversationIdPattern.test(id))
+    throw new Error("Invalid conversation observe cursor")
+  return {
+    conversations,
+    complete: item.complete as boolean,
+    cursor: {
+      incarnation,
+      boundary: cursor.boundary,
+      creation: cursor.creation,
+      id,
+    },
+  }
 }

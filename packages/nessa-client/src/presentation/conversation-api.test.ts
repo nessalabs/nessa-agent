@@ -6,7 +6,11 @@ import {
   NessaConversationMutationError,
   NessaConversationControlError,
 } from "../application/conversation-mutation-error.js"
-import { ConversationErrorCode, type ConversationView } from "../generated/product.js"
+import {
+  bounds,
+  ConversationErrorCode,
+  type ConversationView,
+} from "../generated/product.js"
 
 const conversationId = "00000000-0000-4000-8000-000000000001"
 
@@ -1359,6 +1363,64 @@ it("refuses a list row outside the schema, or one conversation listed twice", as
     )
     await expect(unsaid.list()).rejects.toThrow(/complete/)
   }
+})
+
+const observeCursor = {
+  incarnation: "a".repeat(32),
+  boundary: "9",
+  creation: "10",
+  id: conversationId,
+}
+
+it("observes one catalogue page and keeps an unfinished page unfinished", async () => {
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce({
+      conversations: [summary],
+      complete: false,
+      cursor: observeCursor,
+    })
+    .mockResolvedValueOnce({ conversations: [summary], complete: false })
+    .mockResolvedValue({ conversations: [summary], complete: true })
+  const api = createConversationApi({ request }, () => "id")
+  const page = await api.observe({ cursor: observeCursor })
+  expect(page.complete).toBe(false)
+  expect(page.cursor).toEqual(observeCursor)
+  expect(request).toHaveBeenCalledWith("conversation.observe", { cursor: observeCursor })
+  const unfinished = await api.observe()
+  expect(unfinished.complete).toBe(false)
+  expect(unfinished.cursor).toBeUndefined()
+  expect(request).toHaveBeenLastCalledWith("conversation.observe", {})
+  await expect(api.observe({ archived: true })).rejects.toThrow(/archived filter/)
+})
+
+it("refuses an observation page past the catalogue bound, or a cursor that does not advance as a decimal", async () => {
+  const over = createConversationApi(
+    {
+      request: vi.fn().mockResolvedValue({
+        conversations: Array.from(
+          { length: bounds.maxCataloguePageEntries + 1 },
+          (_, index) => ({
+            ...summary,
+            conversationId: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+          }),
+        ),
+        complete: false,
+        cursor: observeCursor,
+      }),
+    },
+    () => "id",
+  )
+  await expect(over.observe()).rejects.toThrow(/conversations/)
+  const request = vi.fn().mockResolvedValue({ conversations: [], complete: true })
+  const api = createConversationApi({ request }, () => "id")
+  await expect(
+    api.observe({ cursor: { ...observeCursor, creation: "01" } }),
+  ).rejects.toThrow(/cursor/i)
+  expect(request).not.toHaveBeenCalled()
+  await expect(api.observe({ cursor: observeCursor })).resolves.toMatchObject({
+    complete: true,
+  })
 })
 
 it("reads a deleted conversation as refused and an unfinished erasure as a delete that happened", async () => {

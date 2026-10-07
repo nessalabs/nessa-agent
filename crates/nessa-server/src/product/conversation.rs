@@ -10,7 +10,8 @@ use crate::conversation::application::{
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::conversation::view::{
-    ConversationList, ConversationView as ApplicationConversationView,
+    ConversationList, ConversationObservation, ConversationObservationCursor,
+    ConversationView as ApplicationConversationView,
 };
 use nessa_protocol::product::generated::{
     ApprovalMode as WireApprovalMode, ConversationAnswerParams, ConversationAnswerQuestionParams,
@@ -18,12 +19,14 @@ use nessa_protocol::product::generated::{
     ConversationCommandOperation, ConversationCommandOutcome, ConversationCommandReceipt,
     ConversationCommandStage, ConversationCreateParams, ConversationCreateResult,
     ConversationDeleteParams, ConversationListParams, ConversationListResult,
-    ConversationMutationResult, ConversationPermissionAnswerErrorDetails,
+    ConversationMutationResult, ConversationObserveCursor, ConversationObserveParams,
+    ConversationObserveResult, ConversationPermissionAnswerErrorDetails,
     ConversationPermissionSelectionState, ConversationReadParams, ConversationReceiptParams,
     ConversationReceiptResult, ConversationRemoveParams, ConversationReorderParams,
     ConversationSendParams, ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
     ConversationStopParams, ConversationSummary, ConversationView as WireConversationView,
 };
+use nessa_protocol::product::passive_read::decimal_u64;
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use nessa_protocol::{
@@ -128,10 +131,27 @@ pub(super) async fn dispatch(
                 let listed = service
                     .list(caller(frame.id.clone()), archived.unwrap_or(false))
                     .await;
-                // The desktop's index is this list. The same trace as a read,
-                // with the subject that tells the two apart.
+                // The desktop's index asks this list first. An incomplete list
+                // continues as conversation.observe. The subject tells a list
+                // from a read.
                 trace_conversation_index(listed.as_ref().err());
                 Ok(success(&frame.id, &list_result(listed?)))
+            }
+            "conversation.observe" => {
+                let params = params!(ConversationObserveParams);
+                let cursor = match params.cursor {
+                    Some(cursor) => Some(observation_cursor(cursor)?),
+                    None => None,
+                };
+                let observed = service
+                    .observe(
+                        caller(frame.id.clone()),
+                        params.archived.unwrap_or(false),
+                        cursor,
+                    )
+                    .await;
+                trace_conversation_observe(observed.as_ref().err());
+                Ok(success(&frame.id, &observe_result(observed?)))
             }
             "conversation.send" | "conversation.steer" => {
                 let params = params!(ConversationSendParams);
@@ -681,6 +701,42 @@ fn list_result(listed: ConversationList) -> ConversationListResult {
     }
 }
 
+fn observation_cursor(
+    cursor: ConversationObserveCursor,
+) -> Result<ConversationObservationCursor, ConversationError> {
+    Ok(ConversationObservationCursor {
+        incarnation: cursor.incarnation,
+        boundary: decimal_u64(&cursor.boundary).map_err(|_| ConversationError::InvalidInput)?,
+        creation: decimal_u64(&cursor.creation).map_err(|_| ConversationError::InvalidInput)?,
+        id: conversation_id(&cursor.id)?.to_string(),
+    })
+}
+
+fn observe_result(observed: ConversationObservation) -> ConversationObserveResult {
+    ConversationObserveResult {
+        conversations: observed
+            .conversations
+            .into_iter()
+            .map(|entry| ConversationSummary {
+                conversation_id: entry.conversation_id,
+                title: entry.title,
+                preview: entry.preview,
+                created_at_ms: entry.created_at_ms,
+                updated_at_ms: entry.updated_at_ms,
+                running: entry.running,
+                archived: entry.archived,
+            })
+            .collect(),
+        complete: observed.complete,
+        cursor: observed.cursor.map(|cursor| ConversationObserveCursor {
+            incarnation: cursor.incarnation,
+            boundary: cursor.boundary.to_string(),
+            creation: cursor.creation.to_string(),
+            id: cursor.id,
+        }),
+    }
+}
+
 /// A `conversation.read` on the process tracing subscriber.
 ///
 /// The ask is a debug event on a `conversation.read` span. A watched
@@ -728,6 +784,28 @@ fn trace_conversation_index(error: Option<&ConversationError>) {
         code = error_code(error).as_str(),
         hint = read_refusal_hint(error),
         "conversation index refused",
+    );
+}
+
+/// A `conversation.observe` page — the rest of the desktop's index — on the
+/// same subscriber. The list span stays the bounded newest-first read.
+fn trace_conversation_observe(error: Option<&ConversationError>) {
+    let span = tracing::info_span!(
+        "conversation.observe",
+        method = "conversation.observe",
+        subject = "index",
+    );
+    let _entered = span.enter();
+    tracing::debug!("conversation index page asked");
+    let Some(error) = error else {
+        return;
+    };
+    tracing::warn!(
+        method = "conversation.observe",
+        subject = "index",
+        code = error_code(error).as_str(),
+        hint = read_refusal_hint(error),
+        "conversation index page refused",
     );
 }
 

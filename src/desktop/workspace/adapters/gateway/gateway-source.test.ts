@@ -180,6 +180,67 @@ describe("reads", () => {
     })
   })
 
+  it("an incomplete list is every stored summary once observe finishes", async () => {
+    const { gateway, source } = started()
+    for (const id of ["a", "b", "c", "d", "e"])
+      gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
+    gateway.listLimit = 2
+    gateway.observePageSize = 1
+    const ids = (await source.index()).sessions.map((session) => session.id).sort()
+    expect(ids).toEqual(["a", "b", "c", "d", "e"])
+    expect(gateway.count("list")).toBe(1)
+    expect(gateway.count("observe")).toBe(5)
+  })
+
+  it("a listener who leaves during an observe walk is asked no further page", async () => {
+    const { gateway, source, follow, advance } = started()
+    gateway.rows.set("a", row("a", { updatedAtMs: 1 }))
+    gateway.rows.set("b", row("b", { updatedAtMs: 2 }))
+    gateway.rows.set("c", row("c", { updatedAtMs: 3 }))
+    const stop = follow()
+    await advance(timing.pollMs)
+    await flush()
+    expect(gateway.count("observe")).toBe(0)
+    gateway.listLimit = 1
+    gateway.observePageSize = 1
+    const held = deferred<void>()
+    gateway.once("observe", (normal) => held.promise.then(normal))
+    await advance(timing.pollMs)
+    await flush()
+    expect(gateway.count("observe")).toBe(1)
+    stop()
+    held.resolve()
+    await flush()
+    expect(gateway.count("observe")).toBe(1)
+    expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
+      "a",
+      "b",
+      "c",
+    ])
+  })
+
+  it("an observe page that does not finish keeps a summary it left out", async () => {
+    const { gateway, source, updates, follow } = started()
+    follow()
+    gateway.rows.set("a", row("a", { updatedAtMs: 1 }))
+    gateway.rows.set("b", row("b", { updatedAtMs: 2 }))
+    gateway.rows.set("c", row("c", { updatedAtMs: 3 }))
+    await source.index()
+    expect(gateway.count("observe")).toBe(0)
+    gateway.rows.delete("b")
+    gateway.complete = false
+    gateway.listLimit = 1
+    gateway.observePageSize = 1
+    gateway.observeStops = true
+    expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
+      "a",
+      "b",
+      "c",
+    ])
+    expect(kinds(updates)).not.toContain("session-removed")
+    expect(gateway.count("observe")).toBe(1)
+  })
+
   it("R3: a read sends no create, and reads at its first revision", async () => {
     const { gateway, source } = started()
     gateway.views.set("a", view("a"))

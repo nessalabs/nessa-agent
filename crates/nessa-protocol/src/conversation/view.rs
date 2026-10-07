@@ -573,6 +573,27 @@ pub struct ConversationList {
     /// was said in it, or its summary was never written).
     pub complete: bool,
 }
+/// One page of an observation pass, and whether the pass is finished.
+///
+/// [`ConversationList`] stays the newest-first bound. This is the creation-order
+/// page a caller walks when that list is not the whole catalogue.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationObservation {
+    pub conversations: Vec<ConversationListEntry>,
+    /// True only when this page finishes the pass.
+    pub complete: bool,
+    /// Where the next page resumes. Absent when the pass is finished, or when
+    /// this page cannot resume.
+    pub cursor: Option<ConversationObservationCursor>,
+}
+/// The cursor an observation pass echoes. Creation order, not newest-first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationObservationCursor {
+    pub incarnation: String,
+    pub boundary: u64,
+    pub creation: u64,
+    pub id: String,
+}
 /// One conversation as a row in a list of them: what it is called, the last
 /// thing said in it, and when. The product boundary maps it to the wire.
 #[derive(Clone, Debug, PartialEq, Eq)]
