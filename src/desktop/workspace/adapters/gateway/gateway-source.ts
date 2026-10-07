@@ -35,7 +35,7 @@
  *   already forwards.
  * - **Resync.** `{ kind: "resync" }` goes out when a connection comes back
  *   (the client reconnected, or a new one was made after the last closed —
- *   the close itself says nothing, C3), and on the first list that answers
+ *   the close itself does not resync, C3), and on the first list that answers
  *   after a poll (S5), a poll read (F4, active failure), or an index read
  *   failed (S9′).
  * - **A failed connect is waited out.** For `timing.reconnectRounds` poll
@@ -278,10 +278,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     }
   }
 
-  // Polls or index reads failed since the last resync: the next list that
-  // answers says resync. An index read the window did not get is a gap too:
-  // a poll that answers after it, the gateway having come up between them,
-  // would otherwise leave the window on its failure (S9, #419).
+  // A failed poll (S5), poll read (F4, active failure), or index read (S9′)
+  // since the last resync: the next list that answers says resync.
   let gap = false
   const resync = () => {
     gap = false
@@ -367,9 +365,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       if (state.status === "connected") resync()
       else if (state.status === "closed") {
         // Gone for good: the next call connects again. That next client
-        // resyncs when one had connected before (C3). The close itself is
-        // not a gap: a list still in flight that answers says nothing
-        // until the new client does.
+        // resyncs when one had connected before (C3). The close is not a
+        // gap. A list still in flight is applied and does not resync.
         current.off()
         current = undefined
       }

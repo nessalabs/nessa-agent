@@ -901,8 +901,7 @@ describe("the connection", () => {
     follow()
     await source.index()
     gateway.setState({ status: "closed", error: new Error("gone") })
-    // The close drops the client and says nothing. The resync is the next
-    // client's, and a person's index would swallow a gap without saying one.
+    // The close drops the client and does not resync. The next client does.
     expect(updates).toEqual([])
     await source.index()
     expect(attempts).toBe(2)
@@ -910,7 +909,7 @@ describe("the connection", () => {
     expect(next.count("list")).toBe(1)
   })
 
-  it("C3: a list that answers after a permanent close says nothing until the next client", async () => {
+  it("C3: a list that answers after a permanent close is applied and does not resync until the next client", async () => {
     const gateway = fakeGateway()
     const next = fakeGateway()
     let attempts = 0
@@ -918,20 +917,22 @@ describe("the connection", () => {
       Promise.resolve(++attempts === 1 ? gateway.client : next.client),
     )
     follow()
+    gateway.rows.set("a", row("a"))
     await source.index()
     const held = deferred<{ conversations: []; complete: boolean }>()
     gateway.once("list", () => held.promise)
     await advance(timing.pollMs)
     expect(gateway.count("list")).toBe(2)
     gateway.setState({ status: "closed", error: new Error("gone") })
+    // The list omits a, so it is applied. A gap marked on the close would
+    // resync here as well; the resync waits for the client that replaces it.
     held.resolve({ conversations: [], complete: true })
     await flush()
-    // This list already had its client. A gap marked on the close would
-    // resync here; the resync waits for the client that replaces it.
-    expect(updates).toEqual([])
+    expect(kinds(updates)).toEqual(["session", "session-removed"])
+    expect(updates[1]).toMatchObject({ kind: "session-removed", sessionId: "a" })
     await advance(timing.pollMs)
     expect(attempts).toBe(2)
-    expect(updates).toEqual([{ kind: "resync" }])
+    expect(kinds(updates)).toEqual(["session", "session-removed", "resync"])
     expect(next.count("list")).toBe(1)
   })
 
