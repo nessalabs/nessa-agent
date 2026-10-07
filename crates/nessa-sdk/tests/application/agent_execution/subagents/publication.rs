@@ -2,12 +2,13 @@
 use std::{
     future::Future,
     task::{Context, Poll, Waker},
+    thread,
 };
 
 use super::*;
 use nessa_sdk::application::agent_execution::subagents::{BindResourcesRefusal, LiveRoom};
 use nessa_sdk::domain::agent_execution::subagents::{KnownMilestone, OwnershipMeaning};
-use tokio::sync::oneshot;
+use tokio::{runtime::Handle, sync::oneshot};
 
 struct AuditGate {
     entered: Notify,
@@ -713,6 +714,71 @@ async fn row_14_queued_success_is_unclaimed_until_open_root_returns_ready() {
         store.read().await.unwrap().lifetimes[0].state,
         LifetimeState::Closed
     );
+}
+
+#[tokio::test]
+async fn row_14_queued_root_drop_without_tokio_context_uses_original_live_runtime() {
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let c = coordinator(
+        store.clone(),
+        IndependentAudit::new(),
+        ScriptFactory::new(),
+        Arc::new(LiveCapacity::new(8)),
+    );
+    let mut opening = Box::pin(open(&c, "off-runtime"));
+    assert!(matches!(
+        opening
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Pending
+    ));
+    // This current-thread runtime runs the owner's memory-store write and
+    // success send in the same poll. Observing its snapshot after yielding means
+    // the success ticket is queued; opening is never repolled or claimed.
+    let root = bounded(async {
+        loop {
+            let snapshot = store.read().await.unwrap();
+            if let Some(root) = snapshot.lifetimes.first() {
+                break root.lifetime_id.clone();
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert_eq!(c.lifetime_state(&root), Some(LifetimeState::Open));
+    let dropped = thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                assert!(Handle::try_current().is_err());
+                drop(opening);
+            })
+            .join()
+    });
+    assert!(
+        dropped.is_ok(),
+        "unclaimed delivery must not depend on drop-thread context"
+    );
+    bounded(async {
+        loop {
+            if c.lifetime_state(&root) == Some(LifetimeState::Closed) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    let snapshot = store.read().await.unwrap();
+    assert_eq!(snapshot.lifetimes[0].lifetime_id, root);
+    assert_eq!(snapshot.lifetimes[0].state, LifetimeState::Closed);
+    assert_eq!(snapshot.settlements[0].physical, PhysicalFact::Released);
+    assert_eq!(snapshot.settlements[0].evidence, EvidenceFact::Acknowledged);
+    assert!(c.participation(&root).is_none());
+    assert_eq!(c.close_cause(&root), Some(LifetimeCause::HostClose));
+    let replacement = open(&c, "off-runtime").await.unwrap();
+    assert_ne!(replacement, root);
+    bounded(close(&c, &replacement)).await.unwrap();
+    // The original runtime stays alive through all reconciliation/settlement;
+    // shutting down that executor is outside the delivery guarantee tested here.
 }
 
 #[tokio::test]

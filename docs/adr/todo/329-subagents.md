@@ -793,8 +793,8 @@ uncertain ports; whole-transaction panic supervision is separate #625 work.
 |10 | Initial root store writes then returns Uncertain; later reconcile/restart | Preserve same ID, seal/reconcile and persist conservative close state; never erase uncertain landed ID. |
 |11 | Initial root audit is Uncertain | No affirmative Open grant; preserve identity in conservative Closing retention; return typed audit uncertainty and own reconciliation. |
 |12 | Caller drops while root audit held; audit later rejects | Owned transaction completes; definitely preeligible private target removed only; no root ghost. |
-|13 | Caller drops while root audit held; audit later accepts/store succeeds | Owner detects unclaimed result and seals/reconciles eligible ID. No orphan Open root. |
-|14 | Success queued, caller drops before claiming delivery | Delivery-ticket Drop invokes same reconciliation; successful send alone does not transfer ownership. |
+|13 | Caller drops while root audit held; audit later accepts/store succeeds | Owner detects unclaimed result and seals/reconciles eligible ID on its originating live runtime, even if the caller moves to and drops on a thread without Tokio context. No orphan Open root. |
+|14 | Success queued, caller drops before claiming delivery | Delivery-ticket Drop schedules the same reconciliation using the originating live runtime capability, independent of the dropping thread context. Successful send alone does not transfer ownership; runtime shutdown is outside this live-runtime guarantee. |
 |15 | Caller drops during eligible root store/reconciliation | Root owner remains alive and keeps/reconciles eligible ID; other sessions can complete. |
 |16 | Older copied snapshot waits; newer eligible snapshot writes; older resumes | Existing revision fence skips older write; eligible IDs and last acknowledged progress were included in newer projection. |
 |17 | Older token completes after target settled or newer transition generation exists | Token cannot overwrite newer metadata or graph lifecycle; no reopening or stale progress substitution. |
