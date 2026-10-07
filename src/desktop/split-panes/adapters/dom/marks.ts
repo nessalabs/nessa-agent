@@ -49,6 +49,8 @@ export const marks = {
   waiting: "data-drag-waiting",
   /** On the drag's root while a drop shown would take the host's spare room (`takesSpare`). */
   takesSpare: "data-drag-takes-spare",
+  /** On a pane whose body waits out the drop's commit layout, one pane a frame. */
+  settling: "data-drag-settling",
 } as const
 
 /** The module's own elements a host may style or find. */

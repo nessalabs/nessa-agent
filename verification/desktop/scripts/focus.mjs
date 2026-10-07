@@ -31,6 +31,7 @@ import {
   frames,
   hideColumns,
   leaveSettings,
+  overviewListed,
   paneCount,
   requestCount,
   settled,
@@ -190,6 +191,8 @@ async function requestsNow(page) {
   await page.keyboard.press(keys.overview)
   await contentIs(page, content.overview)
   await settled(page)
+  if (!(await overviewListed(page)))
+    throw new CannotRun("the overview list did not finish drawing")
   const count = await requestCount(page)
   await page.keyboard.press(keys.escape)
   await contentIs(page, content.panes)
@@ -238,6 +241,17 @@ async function answerOnceInOverview(page) {
   await page.keyboard.press(keys.overview)
   await contentIs(page, content.overview)
   await settled(page)
+  // The list arrives a few rows at a time, and the caret the frame after
+  // the current row. Nothing animating is not that landing (`overview.tsx`).
+  const onRow = await until(
+    page,
+    (sel) => document.activeElement?.closest(sel) != null,
+    css.overviewItem,
+    1000,
+  )
+  if (!onRow) throw new CannotRun("the keyboard did not land on an overview row")
+  if (!(await overviewListed(page)))
+    throw new CannotRun("the overview list did not finish drawing")
   const start = await requestCount(page)
   if (start < 2)
     throw new CannotRun(`the overview lists ${start} requests; two are needed`)
@@ -317,6 +331,9 @@ async function answerOnceOnCard(page) {
     // while after, in case a second one was taken.
     await page.keyboard.press(keys.overview)
     await contentIs(page, content.overview)
+    // The list is drawn a few rows at a time. An empty prefix is not "fewer".
+    if (!(await overviewListed(page)))
+      throw new CannotRun("the overview list did not finish drawing")
     const once = (await fewer(page, before - 1)) && (await noFewer(page, before - 1))
     const after = await requestCount(page)
     await page.keyboard.press(keys.escape)

@@ -30,7 +30,7 @@ Usage: node verification/desktop/scripts/smoke.mjs [options]
 
 Checks, per engine and layout:
   loads            the page renders panes
-  ambient-grain    a decoded 160px PNG tile, repeated at 0.06 opacity with overlay blend
+  ambient-grain    a decoded 160px PNG tile, repeated at 0.06 opacity with normal blend
   draft-unlisted   ⌘N adds no row to the lists until something is sent
   send             a message typed in a new session appears in its transcript
   split            ⇧⌘N (new session beside) adds a pane
@@ -87,7 +87,7 @@ await main(meta, async ({ options, rep, url }) => {
           failures.push(`grain tile ${grain.width}×${grain.height}, expected 160×160`)
         if (
           grain.opacity !== "0.06" ||
-          grain.blend !== "overlay" ||
+          grain.blend !== "normal" ||
           grain.repeat !== "repeat"
         )
           failures.push(`grain layer changed: ${JSON.stringify(grain)}`)

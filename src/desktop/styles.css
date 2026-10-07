@@ -284,6 +284,9 @@ html:not(.dark) [data-surface] {
   z-index: -1;
   overflow: hidden;
   pointer-events: none;
+  /* Kept as its own layer, so a cover over it does not throw the blur away
+     and rebuild it when the cover lifts (`styles.test.ts`). */
+  will-change: transform;
 }
 
 /*
@@ -296,7 +299,9 @@ html:not(.dark) [data-surface] {
   inset: 0;
   z-index: 1;
   opacity: 0.06;
-  mix-blend-mode: overlay;
+  /* A flat veil. Blending it with the window would paint the whole window
+     again on every damaged frame (`styles.test.ts`). */
+  mix-blend-mode: normal;
   background-image: url("./ui/ambient-grain.png");
 }
 

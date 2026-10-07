@@ -2,7 +2,9 @@
  * The agents overview: one calm column in the content region's place (its
  * layer is the shell's, `layouts.css`). Requests
  * are cards, the one warm point is the dot beside "Needs you", and
- * everything else is a quiet grouped list. Only transform and opacity move;
+ * everything else is a quiet grouped list. The surface arrives at once:
+ * fading it in would composite the blurred ambient on every frame of the
+ * fade (`styles.test.ts`). What moves inside is transform and opacity only;
  * every duration is a window token, which less motion sets to zero.
  */
 
@@ -23,9 +25,7 @@
   background: var(--desktop-pane-fill);
   box-shadow:
     inset 0 0 0 1px var(--desktop-rim),
-    inset 0 1px 0 color-mix(in oklab, var(--foreground) 5%, transparent),
-    0 12px 40px -18px rgb(0 0 0 / 45%);
-  animation: agents-arrive var(--desktop-slow) var(--desktop-out) both;
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 5%, transparent);
 }
 
 /* Wide enough, the peek sits beside the list, on a hairline. */
@@ -57,16 +57,14 @@
 
 html:not(.dark) .agents-overview-surface {
   background: color-mix(in oklab, var(--background) 60%, white);
-  box-shadow:
-    inset 0 0 0 1px var(--desktop-rim),
-    0 12px 32px -18px rgb(0 0 0 / 18%);
+  box-shadow: inset 0 0 0 1px var(--desktop-rim);
 }
 
-@keyframes agents-arrive {
-  from {
-    opacity: 0;
-    transform: scale(0.99);
-  }
+/* The title's frame, before the filter and the list. No fill yet: painting
+   the card across the content region misses the frame budget (`overview.test.tsx`). */
+.agents-overview-surface[data-bare] {
+  background: none;
+  box-shadow: none;
 }
 
 .agents-overview-column {

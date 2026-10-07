@@ -69,7 +69,7 @@ export const css = {
   homePage: ".desktop-home[data-page]", // class: a home whose long draft opened the page
   homeCustomize: ".workspace-pane-home .desktop-header-customize", // class: the scene's Customize control
   dragLayer: ".split-panes-layer", // class: what is carried is drawn in it, below the titlebar row
-  dragGhost: ".split-panes-ghost", // class: the translucent copy the pointer carries
+  dragGhost: ".split-panes-ghost", // class: the opaque copy the pointer carries
   dragCarrier: ".split-panes-carrier", // class: holds the copy at the pointer
   dragPlaceholder: ".split-panes-placeholder", // class: where a drop would land
   dragShield: ".split-panes-shield", // class: holds the pointer while carrying
@@ -134,6 +134,8 @@ export const css = {
   overviewEntry: ".workspace-sidebar .agents-overview-entry", // class: the sidebar's "Agents"
   overview: ".agents-overview", // class
   overviewItem: "[data-overview-item]",
+  // On the column once this open has drawn every row (`overview.tsx`).
+  overviewListed: "[data-overview-listed]",
   overviewRequest: ".agents-request", // class
   overviewCommand: ".agents-request-command", // class: the command on a request row
   overviewRow: ".agents-row", // class

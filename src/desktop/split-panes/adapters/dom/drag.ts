@@ -579,7 +579,11 @@ export function useSplitPanesDrag(
       if (!held) return
       previewed.delete(pane)
       markCorner(scope, pane, null)
+      if (pane.style.clipPath) pane.style.clipPath = ""
       for (const animation of [held.motion, ...held.parts]) {
+        const target = animation.effect?.target
+        if (target instanceof HTMLElement && target.style.clipPath)
+          target.style.clipPath = ""
         animation.cancel()
         previews.get(scope)?.delete(animation)
       }
@@ -614,10 +618,11 @@ export function useSplitPanesDrag(
       const parts = made.parts.get(pane) ?? []
       // What keeps to the top ends where a composer at the foot begins: cut
       // by as much as the pane is shorter, it never runs under the composer.
+      // The cut is set once. Animating it would lay the transcript out on
+      // every frame of the glide (`drag.test.tsx`).
       const docked = parts.some(({ keeps }) => keeps === "foot")
       const box: Keyframe[] = []
       const counter: Keyframe[] = []
-      const cut: Keyframe[] = []
       for (let step = 0; step <= shapeSteps; step++) {
         const progress = step / shapeSteps
         const drawing = between(
@@ -626,12 +631,7 @@ export function useSplitPanesDrag(
           lerp(opacity.from, opacity.to, progress),
         )
         box.push({ transform: transformOf(drawing), opacity: drawing.opacity })
-        const scale = `scale(${1 / drawing.sx}, ${1 / drawing.sy})`
-        counter.push({ transform: scale })
-        cut.push({
-          transform: scale,
-          clipPath: `inset(0 0 ${Math.max(0, real.height * (1 - drawing.sy))}px 0)`,
-        })
+        counter.push({ transform: `scale(${1 / drawing.sx}, ${1 / drawing.sy})` })
       }
       pane.style.transformOrigin = "50% 50%"
       const motion = track(
@@ -639,18 +639,22 @@ export function useSplitPanesDrag(
         pane.animate(box, { ...made.motion, fill: "forwards", id: dragPreview }),
       )
       // The content keeps its size, as in a flight (`flip.tsx`), scaled back
-      // about the point of the pane each part keeps to (`PanePart`) — cut to
-      // the shape where it is smaller.
+      // about the point of the pane each part keeps to (`PanePart`).
       const shrinks = target.width < real.width
+      const clip =
+        docked && target.height < real.height - 0.5
+          ? `inset(0 0 ${real.height - target.height}px 0)`
+          : ""
       const undone = parts.map(({ element, left, top, keeps }) => {
         const across =
           keeps === "top-left" || (keeps !== "middle" && shrinks) ? 0 : real.width / 2
         const down =
           keeps === "foot" ? real.height : keeps === "middle" ? real.height / 2 : 0
         element.style.transformOrigin = `${across - left}px ${down - top}px`
+        element.style.clipPath = keeps === "top" ? clip : ""
         return track(
           scope,
-          element.animate(docked && keeps === "top" ? cut : counter, {
+          element.animate(counter, {
             ...made.motion,
             fill: "forwards",
             id: dragPreview,
@@ -670,7 +674,8 @@ export function useSplitPanesDrag(
     /**
      * The calm placeholder where the drop would land: a soft fill and a
      * hairline in the theme's edge light, at exactly the rect the pane will
-     * take. It moves between zones on its own short transition.
+     * take. It glides between zones by transform. Its width and height are
+     * set at once — transitioning them would lay the page out every frame.
      */
     const placeholder = (made: Made, box: Box | null) => {
       const { drawing } = made
@@ -1136,6 +1141,9 @@ export function useSplitPanesDrag(
      * the panes go back, from where the pointer left it — known, not read.
      * The room, the panes or the view changed (`at-once`): the copy and the
      * preview go now, and the change plays as it would with no drag.
+     * Flying home keeps the preview's cheap paint for two frames (`tidy`'s
+     * `later`), the same handoff a drop uses, so this turn does not also
+     * restore blur and shadows.
      */
     const cancel = (made: Made, how: "home" | "at-once") => {
       if (how === "at-once") {
@@ -1152,7 +1160,7 @@ export function useSplitPanesDrag(
       const back = flyTo(made, made.home, true)
       const panes = [...previewed.keys()]
       scope.removeAttribute(marks.takesSpare)
-      tidy(made)
+      tidy(made, true)
       void back.finished
         .catch(() => undefined)
         .then(() => {
@@ -1197,10 +1205,21 @@ export function useSplitPanesDrag(
       const unsubscribe = source.subscribe(() => {
         if (!previewHolds()) refuse()
       })
+      const revealSettling = () => {
+        const pane = scope.querySelector<HTMLElement>(`[${marks.settling}]`)
+        pane?.removeAttribute(marks.settling)
+        if (scope.querySelector(`[${marks.settling}]`))
+          requestAnimationFrame(revealSettling)
+      }
       const frame = requestAnimationFrame(() => {
         release()
         if (accept && previewHolds()) {
+          // Bodies stay out of this layout and return one a frame (`drag.test.tsx`).
+          scope.querySelectorAll<HTMLElement>("[data-pane-key]").forEach((pane) => {
+            pane.setAttribute(marks.settling, "")
+          })
           source.commitDrop({ carried: what, target: aim.target, zone: aim.zone, room })
+          requestAnimationFrame(revealSettling)
           return
         }
         // The preview was the arrangement this frame is not committing.
@@ -1229,7 +1248,7 @@ export function useSplitPanesDrag(
       void (flight?.finished ?? Promise.resolve())
         .catch(() => undefined)
         .then(() => {
-          const fade = ghost.animate([{ opacity: 0.85 }, { opacity: 0 }], {
+          const fade = ghost.animate([{ opacity: 1 }, { opacity: 0 }], {
             duration: reducedMotion() ? 0 : 120,
             fill: "forwards",
           })

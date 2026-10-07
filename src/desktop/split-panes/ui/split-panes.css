@@ -131,12 +131,15 @@
   contain: strict;
   overflow: hidden;
   border-radius: var(--desktop-radius);
-  opacity: 0.85;
+  /* Opaque. A translucent copy composites the blurred ambient on every
+     shape change and misses the frame budget (`styles.test.ts`). */
+  opacity: 1;
   pointer-events: none;
   transform-origin: 0 0;
   will-change: transform;
-  /* Lifted: one soft shadow, cheap enough to paint on the frame the drag begins. */
-  box-shadow: 0 18px 36px -14px rgb(0 0 0 / 65%);
+  /* No shadow. Painting a blur again as the copy changes shape misses the
+     frame budget (`styles.test.ts`). */
+  box-shadow: none;
   -webkit-user-select: none;
   user-select: none;
 }
@@ -163,12 +166,24 @@
   background: color-mix(in oklab, var(--background) 88%, var(--foreground));
 }
 
-/* A picture: nothing in it blurs what is behind, moves on its own, or eases. */
+/* A picture: nothing in it blurs what is behind, casts a shadow, moves on its
+   own, or eases. Container queries lay the picture out again at every shape
+   (`styles.test.ts`). */
 .split-panes-ghost * {
   animation: none !important;
   transition: none !important;
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
+  box-shadow: none !important;
+  filter: none !important;
+  container-type: normal !important;
+}
+
+/* The conversation stays in the copy and out of its paint: laying the body out
+   on the press, or rastering it on each shape change, misses the frame budget
+   (`styles.test.ts`). The title stays, so the copy can still be told apart. */
+.split-panes-ghost .workspace-pane-body {
+  content-visibility: hidden;
 }
 
 /*
@@ -187,11 +202,11 @@
   box-shadow: inset 0 0 0 1px
     color-mix(in oklab, var(--desktop-light-edge) 40%, transparent);
   pointer-events: none;
+  transform-origin: 0 0;
   animation: split-panes-fade-in var(--desktop-fast) ease both;
-  transition:
-    transform var(--desktop-base) var(--desktop-ease),
-    width var(--desktop-base) var(--desktop-ease),
-    height var(--desktop-base) var(--desktop-ease);
+  /* Width and height land at once. Transitioning them lays the page out on
+     every frame of the move, which misses the frame budget (`styles.test.ts`). */
+  transition: transform var(--desktop-base) var(--desktop-ease);
 }
 
 @keyframes split-panes-fade-in {

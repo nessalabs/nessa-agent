@@ -112,6 +112,13 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
   transition: none;
 }
 
+/* The drop's commit lays the panes out at their new sizes. Their bodies wait
+   out that frame and come back one a frame, so the commit does not also lay
+   every transcript out (`styles.test.ts`, `drag.test.tsx`). */
+.workspace-pane[data-drag-settling] > .workspace-pane-body {
+  content-visibility: hidden;
+}
+
 .workspace:is([data-split-flipping], [data-drag-reflow])
   .workspace-pane
   .desktop-composer {

@@ -195,6 +195,60 @@ it("names what a flight restyles, so beginning one restyles a few elements, not 
   for (const rule of flightRules) expect(rule, rule).not.toMatch(/(?:>|\s)\*\s*(?:,|\{)/)
 })
 
+it("moves a drop's placeholder by transform, not by laying out its size", () => {
+  // A width or height transition lays the page out on every frame of a drag.
+  const sheet = readFileSync(
+    new URL("./split-panes/ui/split-panes.css", import.meta.url),
+    "utf8",
+  )
+  const body = sheet.slice(sheet.indexOf(".split-panes-placeholder {")).split("}")[0]
+  const transition = body.match(/transition:[^;]*/)?.[0] ?? ""
+  expect(transition).toMatch(/^transition:\s*transform\b/)
+  expect(transition).not.toMatch(/\b(?:width|height)\b/)
+})
+
+it("lifts a drag's copy without painting a shadow", () => {
+  // A shadow is painted again each time the copy changes shape.
+  const sheet = readFileSync(
+    new URL("./split-panes/ui/split-panes.css", import.meta.url),
+    "utf8",
+  )
+  const body = sheet.slice(sheet.indexOf(".split-panes-ghost {")).split("}")[0]
+  const shadow = body.match(/box-shadow:[^;]*/)?.[0] ?? ""
+  expect(shadow).toMatch(/box-shadow:\s*none/)
+  expect(body).toMatch(/opacity:\s*1\b/)
+  const picture = sheet.slice(sheet.indexOf(".split-panes-ghost * {")).split("}")[0]
+  expect(picture).toMatch(/container-type:\s*normal\s*!important/)
+  expect(picture).toMatch(/box-shadow:\s*none\s*!important/)
+  expect(picture).toMatch(/(?:^|[;\n])\s*filter:\s*none\s*!important/)
+  const bodyHidden = sheet
+    .slice(sheet.indexOf(".split-panes-ghost .workspace-pane-body {"))
+    .split("}")[0]
+  expect(bodyHidden).toMatch(/content-visibility:\s*hidden/)
+})
+
+it("keeps the ambient blur on its own layer", () => {
+  const body = styles.slice(styles.indexOf(".desktop-ambient {")).split("}")[0]
+  expect(body).toMatch(/will-change:\s*transform/)
+})
+
+it("lays the grain on as a flat veil, not an overlay blend", () => {
+  const body = styles.slice(styles.indexOf(".desktop-grain {")).split("}")[0]
+  expect(body).toMatch(/mix-blend-mode:\s*normal/)
+  expect(body).not.toMatch(/overlay/)
+})
+
+it("skips pane bodies on the frame a drop commits them", () => {
+  const sheet = readFileSync(
+    new URL("./workspace/ui/panes/panes.css", import.meta.url),
+    "utf8",
+  )
+  const body = sheet
+    .slice(sheet.indexOf(".workspace-pane[data-drag-settling] > .workspace-pane-body {"))
+    .split("}")[0]
+  expect(body).toMatch(/content-visibility:\s*hidden/)
+})
+
 it("keeps the list and the panes under the Agents overview laid out, only unseen", () => {
   // A pane command asked while the overview is open measures the panes' room:
   // it must be the room they have, so nothing under the overview may leave the
@@ -208,14 +262,30 @@ it("keeps the list and the panes under the Agents overview laid out, only unseen
   const body = sheet.slice(sheet.indexOf(selector)).split("}")[0]
   expect(sheet).toContain(selector)
   expect(body).toMatch(/visibility:\s*hidden/)
-  const everyAgentsRule = sheet.match(/\[data-content="agents"\][^{]*\{[^}]*\}/g) ?? []
-  for (const rule of everyAgentsRule)
-    expect(rule, rule).not.toMatch(/display:|content-visibility|width:|padding/)
-  // The overview's own sheet sets nothing on what is under it.
+  // An opacity fade composites the blurred ambient on every frame of it.
+  expect(body).not.toMatch(/opacity/)
   const overview = readFileSync(
     new URL("./workspace/ui/overview/overview.css", import.meta.url),
     "utf8",
   )
+  const surface = overview
+    .slice(overview.indexOf(".agents-overview-surface {"))
+    .split("}")[0]
+  expect(surface).not.toMatch(/animation:|0 12px 40px/)
+  const bare = overview
+    .slice(overview.indexOf(".agents-overview-surface[data-bare] {"))
+    .split("}")[0]
+  expect(bare).toMatch(/background:\s*none/)
+  expect(bare).toMatch(/box-shadow:\s*none/)
+  const openLayer = sheet
+    .slice(sheet.indexOf(".workspace-overview-layer[data-open] {"))
+    .split("}")[0]
+  expect(openLayer).toMatch(/background:\s*var\(--background\)/)
+  expect(openLayer).not.toMatch(/desktop-pane-fill/)
+  const everyAgentsRule = sheet.match(/\[data-content="agents"\][^{]*\{[^}]*\}/g) ?? []
+  for (const rule of everyAgentsRule)
+    expect(rule, rule).not.toMatch(/display:|content-visibility|width:|padding/)
+  // The overview's own sheet sets nothing on what is under it.
   expect(overview).not.toMatch(/\.workspace-(?:list|chat)\b/)
 })
 

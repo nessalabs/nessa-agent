@@ -86,6 +86,13 @@ export const frames = (page, n = 2) =>
     n,
   )
 
+/**
+ * Waits until this open has drawn every overview row (`data-overview-listed`).
+ * A count taken before that is the prefix, not the list.
+ */
+export const overviewListed = (page, timeout = 2000) =>
+  until(page, (sel) => document.querySelector(sel) !== null, css.overviewListed, timeout)
+
 /** How many requests the Agents overview lists (it must be open). */
 export const requestCount = (page) => page.locator(css.overviewRequest).count()
 
