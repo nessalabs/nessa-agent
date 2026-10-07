@@ -1,0 +1,19 @@
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-oauth-callback/crates/nessa-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.68s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-e2f6c708a6cf158b)
+
+running 1 test
+
+thread 'mcp_authorization::tests::callback_application::a3c_real_listener_wrong_state_then_valid_closes_before_exchange' (173084) panicked at crates/nessa-server/src/mcp_authorization/../../tests/mcp_authorization/application/callback.rs:61:53:
+called `Result::unwrap()` on an `Err` value: Os { code: 111, kind: ConnectionRefused, message: "Connection refused" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test mcp_authorization::tests::callback_application::a3c_real_listener_wrong_state_then_valid_closes_before_exchange ... FAILED
+
+failures:
+
+failures:
+    mcp_authorization::tests::callback_application::a3c_real_listener_wrong_state_then_valid_closes_before_exchange
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1966 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

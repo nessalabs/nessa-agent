@@ -1,0 +1,169 @@
+{
+  "checkout": "/workspace/nessa-agent-oauth-callback",
+  "branch": "codex/624-629-oauth-callback",
+  "base": "d9a9b9cd366413d1375952249493b109a72171d4",
+  "head": "b8c3df35950c09a7aa59a468b0535099ec3ce9bc",
+  "clean": true,
+  "preserved_cff_base_head": "14667c5bc329e7b553463386dd55d7daf4b8ed45",
+  "intent": "Fix RFC8414 issuer-path discovery plus bounded complete loopback callback framing/concurrency; preserve original exact issuer binding and domain-only callback acceptance. Public complete_callback signature/answers unchanged.",
+  "files": [
+    "crates/nessa-server/src/mcp_authorization/application/discovery.rs",
+    "crates/nessa-server/src/mcp_authorization/application/mod.rs",
+    "crates/nessa-server/src/mcp_authorization/application/owner.rs",
+    "crates/nessa-server/src/mcp_authorization/application/ports.rs",
+    "crates/nessa-server/src/mcp_authorization/infrastructure/callback.rs",
+    "crates/nessa-server/src/mcp_authorization/infrastructure/memory.rs",
+    "crates/nessa-server/src/mcp_authorization/infrastructure/mod.rs",
+    "crates/nessa-server/tests/mcp_authorization/application/callback.rs",
+    "crates/nessa-server/tests/mcp_authorization/mod.rs",
+    "docs/adr/todo/392-remote-mcp-servers.md"
+  ],
+  "source_authorities": {
+    "discovery": "application/discovery.rs owns parsed issuer URL candidates; original identifier compared exactly into issuer_matches, consumed by unchanged domain DiscoveryAccepted",
+    "callback": "domain/machine.rs Command::Callback owns current state/resource/phase/consumption; application/owner.rs private AuthCallbackOutcome maps that same locked Decision and closes candidate receiver before terminal/accepted effects",
+    "bounds": "infrastructure/callback.rs owns four scoped connection futures including waiting candidate sends, one queued candidate, 4096-byte headers, two-second absolute connection budget and unchanged whole-attempt timeout",
+    "effects": "private prepared exchange keeps captured attempt/resource/endpoints; shared effect completion preserves existing typed exchange/publication failures"
+  },
+  "checks": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "pass"
+    },
+    {
+      "command": "cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk --all-targets -- -D warnings",
+      "result": "pass",
+      "log": "/tmp/nessa-624-629-d9-clippy.log"
+    },
+    {
+      "command": "node scripts/cargo-test-parallel.mjs --concurrency 2 -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-sdk",
+      "result": "pass including doctests",
+      "server_library": "1963 passed, 7 existing ignored",
+      "log": "/tmp/nessa-624-629-d9-tests.log"
+    },
+    {
+      "command": "node scripts/check-architecture.mjs and node --test scripts/architecture/*.test.mjs",
+      "result": "pass; 74 tests",
+      "log": "/tmp/nessa-624-629-d9-architecture.log"
+    },
+    {
+      "command": "pnpm test:e2e:scripted -- --channel bundled --evidence /tmp/nessa-624-629-d9-scripted",
+      "result": "pass Chromium and WebKit; MCP Apps 16/16, gateway-window 13/13, scenarios 8/8",
+      "summary": "/tmp/nessa-624-629-d9-scripted/pr-summary.md",
+      "log": "/tmp/nessa-624-629-d9-scripted.log"
+    }
+  ],
+  "mutation_probes": [
+    {
+      "probe": "oauth-prefix",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-oauth-prefix.log"
+    },
+    {
+      "probe": "exact-issuer",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-exact-issuer.log"
+    },
+    {
+      "probe": "issuer-query",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-issuer-query.log"
+    },
+    {
+      "probe": "lost-metadata",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-lost-metadata.log"
+    },
+    {
+      "probe": "partial-frame",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-partial-frame.log"
+    },
+    {
+      "probe": "header-limit",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-header-limit.log"
+    },
+    {
+      "probe": "duplicate-query",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-duplicate-query.log"
+    },
+    {
+      "probe": "complete-crlf",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-complete-crlf.log"
+    },
+    {
+      "probe": "bounded-connections",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-bounded-connections.log"
+    },
+    {
+      "probe": "connection-deadline",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-connection-deadline.log"
+    },
+    {
+      "probe": "pending-stale-continue",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-pending-stale-continue.log"
+    },
+    {
+      "probe": "terminal-stale-stop",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-terminal-stale-stop.log"
+    },
+    {
+      "probe": "early-receiver-drop",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-early-receiver-drop.log"
+    },
+    {
+      "probe": "response-failure",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-response-failure.log"
+    },
+    {
+      "probe": "receiver-cancellation",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-receiver-cancellation.log"
+    },
+    {
+      "probe": "whole-deadline",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-whole-deadline.log"
+    },
+    {
+      "probe": "fixed-secret-free-page",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-fixed-secret-free-page.log"
+    }
+  ],
+  "mutation_provenance": "17 one-at-a-time actual source mutations caught by failed regressions, each verified then restored/touched on preserved cff-base commit. All ten OAuth source/test/ADR files are byte-identical across restack (git diff --exit-code 14667c5b HEAD -- owning paths passed); assembled full checks passed afterward.",
+  "self_review": "Applied CODING_STANDARDS gates and review dimensions including authority/identity, domain invariants, admission/concurrency, failure/cleanup, input/outputs, resource bounds, public surface/organization and agreement across fields/layers. Canonical ADR A2a-A2d/A3a-A3g tables written before code. No unresolved self-review findings.",
+  "limitations": [
+    "Local Cargo/loopback verification is Linux; supported platform CI remains for root release.",
+    "Scripted browser evidence covers common MCP/gateway flows and new-main handshake assembly; OAuth socket/owner behavior is proven by deterministic framing and actual loopback integration tests, with no live third-party issuer.",
+    "An empty candidate stream has no new immediate revoke signal; its lifetime remains bounded by original whole-attempt deadline. A subsequent candidate observes authoritative domain phase.",
+    "Future 630/631 main merge is not included in this current d9-base assembled proof."
+  ],
+  "standards": "/workspace/nessa-agent-oauth-callback/CODING_STANDARDS.md",
+  "release": "Local frozen candidate only; nothing pushed. Root assigns fresh whole-PR review and owns PR/CI/merge."
+}

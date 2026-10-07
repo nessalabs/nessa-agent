@@ -1,0 +1,19 @@
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-oauth-callback/crates/nessa-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.76s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-e2f6c708a6cf158b)
+
+running 1 test
+
+thread 'mcp_authorization::application::discovery::tests::a2d_binding_uses_original_identifier_including_slash' (170466) panicked at crates/nessa-server/src/mcp_authorization/application/discovery.rs:481:13:
+assertion failed: !found.issuer_matches
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test mcp_authorization::application::discovery::tests::a2d_binding_uses_original_identifier_including_slash ... FAILED
+
+failures:
+
+failures:
+    mcp_authorization::application::discovery::tests::a2d_binding_uses_original_identifier_including_slash
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1966 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

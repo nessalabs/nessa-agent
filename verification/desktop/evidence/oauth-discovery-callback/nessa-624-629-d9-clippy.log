@@ -1,0 +1,4 @@
+    Checking nessa-protocol v0.1.0 (/workspace/nessa-agent-oauth-callback/crates/nessa-protocol)
+    Checking nessa-client-core v0.1.0 (/workspace/nessa-agent-oauth-callback/crates/nessa-client-core)
+    Checking nessa-server v0.1.0 (/workspace/nessa-agent-oauth-callback/crates/nessa-server)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 38.65s
