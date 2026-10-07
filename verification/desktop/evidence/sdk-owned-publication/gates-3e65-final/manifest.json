@@ -1,0 +1,164 @@
+{
+  "head": "3e65d96e44e27c502a6225ec16e554fe18c4a152",
+  "environment": {
+    "CARGO_HOME": "/tmp/nessa-cargo",
+    "RUSTUP_HOME": "/tmp/nessa-rustup",
+    "CARGO_TARGET_DIR": "/workspace/nessa-agent/target",
+    "CARGO_NET_OFFLINE": "true",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "gates": [
+    {
+      "name": "format",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "fmt",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-sdk",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 3.1,
+      "log": "/tmp/628651-executor-final-gates/format.log"
+    },
+    {
+      "name": "sdk-full",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline"
+      ],
+      "exit_code": 0,
+      "seconds": 227.79,
+      "log": "/tmp/628651-executor-final-gates/sdk-full.log"
+    },
+    {
+      "name": "ci-six-package-tests",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "node",
+        "scripts/cargo-test-parallel.mjs",
+        "--concurrency",
+        "2",
+        "--",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-sdk"
+      ],
+      "exit_code": 0,
+      "seconds": 294.51,
+      "log": "/tmp/628651-executor-final-gates/ci-six-package-tests.log"
+    },
+    {
+      "name": "ci-six-package-clippy",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "clippy",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-sdk",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 20.57,
+      "log": "/tmp/628651-executor-final-gates/ci-six-package-clippy.log"
+    },
+    {
+      "name": "sdk-docs",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "node",
+        "scripts/check-sdk-docs.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 2.97,
+      "log": "/tmp/628651-executor-final-gates/sdk-docs.log"
+    },
+    {
+      "name": "architecture-tests",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "node",
+        "--test",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/adr-numbers.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/composer-budget.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/desktop-verticals.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/imported-paths.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/overlay-placement.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/platform-boundaries.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/rust-boundaries.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/rust-dependency-graphs.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/setup-gate-placement.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/split-panes-boundary.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/stand-down-placement.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/whole-workspace.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/without-comments.test.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.47,
+      "log": "/tmp/628651-executor-final-gates/architecture-tests.log"
+    },
+    {
+      "name": "architecture",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "node",
+        "scripts/check-architecture.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.7,
+      "log": "/tmp/628651-executor-final-gates/architecture.log"
+    }
+  ]
+}
