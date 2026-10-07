@@ -1,0 +1,24 @@
+# Submission direction for #627
+
+Advisory only; root decides. Reviewed helper at a8e2f1397220cb84750ef4450b16bcd4314045c3, design ordering table, coding gates 13/15/16, supplied R1 refusal evidence, and installed Tokio 1.53.1 blocking pool source. No repository edits or Cargo runs.
+
+The proposed synchronous containment boundary is sound and is the smallest honest change. `Admission::submit` should synchronously catch `self.spawn(operation)`, immediately forget a caught payload, and put only `Result<JoinHandle<Result<R, Interrupted>>, Interrupted>` into the returned observer. The observer matches the submission result before awaiting the join. Catching only the future poll is too late; retaining the panic payload until observer polling or destruction also defeats containment when that observer is unpolled or abandoned.
+
+Keep the existing `Job` as the sole owner of the operation and permit. This is a distinct submission transition within the same shared physical-operation owner, not a second adapter rule. Adapter-specific existing conservative mappings remain the decision owners for their port outcomes. No controller, per-adapter catch, retry, artificial permit release, executor replacement, or abort machinery is warranted by this failure.
+
+Tokio 1.53.1 `pool.rs` queues the task before creating a thread (`spawn_task`), and its public `spawn_blocking` panics for `NoThreads` after the inner spawn returned. During that panic its JoinHandle is lost, but the queue still owns the task. Returning Interrupted therefore means no result can be confirmed. It cannot mean no job exists, no effect can land, or admission has been rolled back. Another later blocking submission on the originating runtime can create a worker that runs this older job. Retaining the permit excludes later same-instance work until actual Job cleanup and is precisely the honest safety behavior. An instance can remain unavailable indefinitely if that origin never makes progress; the design already conditions reliable progress on the origin, but the new row should explicitly include this failure.
+
+Add the ordering to the authoritative design table before code:
+
+| Event/order | Observer | Physical owner / slot | Evidence |
+|---|---|---|---|
+| OS rejects first blocking worker after Tokio queued the Job | submit returns an observer; observer yields Interrupted | Tokio may still own Job and slot; no fabricated release | Actual pthread refusal through production helper |
+| Interrupted observer is polled or dropped while queued Job remains | No panic payload destructor deferred into observer | Next same-instance admission stays pending | Refusal + unpolled/drop observation and admission poll |
+| Origin later acquires a blocking worker | Old result remains unconfirmed | Old operation may land; capture cleanup completes before permit releases | Recover thread creation, submit an independent origin task, observe old effect and next admission ordering |
+| Origin never progresses | Interrupted remains honest | No bounded recovery claim; slot can remain held | State the limitation; do not invent a timeout/retry contract |
+
+A separate observation of eventual cleanup on runtime shutdown must be earned, not inferred. `BlockingPool::shutdown` marks shutdown and joins workers; the explicit queue drain is inside a worker's `Inner::run`. With zero workers, retained handles, and potentially test-util scheduler handle retention, shutdown alone is not evidence of queue destruction. Prefer demonstrating recovery through a later independent spawn, and phrase the invariant as ownership until actual run/drop cleanup.
+
+For decisive validation, use the OS refusal shim against production helper code: assert submit itself does not unwind, its observer returns Interrupted, the physical capture has not dropped, and next admission is pending. Restore OS creation and kick the same origin with an independent blocking task; prove the first operation/capture then finishes and only then next admission succeeds. Keep an external watchdog for the subprocess. Include baseline/refused/restored provenance. The shim should deterministically refuse the intended blocking creation (or isolate the exact thread-count sequence and log it), not broadly exhaust host resources. A table-derived test exercising the new boundary without the real OS failure is useful, but does not replace the production Tokio regression witness. Existing typed adapter maps need no rewrite; observe representative actual port outcomes under refusal if feasible, and retain existing all-method mapping tests.
+
+Do not overstate this as full panic immunity. Existing documented physical-frame double faults, panic hooks, and abort behavior remain outside the guarantee. The fix contains an ordinary unwind at submission and preserves already-established ownership; it does not repair Tokio's liveness after resource refusal.

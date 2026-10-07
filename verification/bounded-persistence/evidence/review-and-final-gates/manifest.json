@@ -1,0 +1,33 @@
+{
+  "repository": "nessalabs/nessa-agent",
+  "issue": 627,
+  "pull_request": 652,
+  "source_head": "a8e2f1397220cb84750ef4450b16bcd4314045c3",
+  "base": "d55de88d9c6f5794b225da05b1055c511b9dba74",
+  "status": "R1 changes requested; synchronous submission containment correction in progress",
+  "completed": false,
+  "gate_records": {
+    "original209": "Full isolated SDK and exact six-package tests passed; all14 central cases named. One later cfg(test) .ok removal is separately recorded.",
+    "corrected_a8": "Seven local commands have observed exit0: fmt, SDK21, six-package all-targetClippy, SDKdocs, architecturetests, architecturechecker, frontendformat.",
+    "local_scripts": "348 tests,346 pass,0 fail,2 skip; final local process exit unavailable, not claimed as completed command.",
+    "hosted_frontend": "Run37670126367/job112959792534 SUCCESS on merge efb855f of a8 into d55; completed frontend command including matching script suite; raw log archived.",
+    "hosted_platforms": "Pending at publication; no full CI approval claimed."
+  },
+  "review_rounds": [
+    {
+      "round": 1,
+      "head": "a8e2f1397220cb84750ef4450b16bcd4314045c3",
+      "decision": "changes requested",
+      "findings": [
+        "R1-C1 major: synchronous OS blocking-thread refusal bypasses typed interruption",
+        "R1-C2 minor: tracked final-manifest link points to pending placeholder"
+      ],
+      "deferred_submit_disposition": "Compiled bounded-entry handshake expectation fails; tuple-count assertion did not execute. Not an orchestration timeout."
+    }
+  ],
+  "archive": {
+    "path": "a8-r1-handoff.tar.gz",
+    "sha256": "e63e7534f6d5c35111ad64ca824e8aeca0aa6c3b9a4b56ecc61ee60491256ff8"
+  },
+  "archive_contents": "Exact original implementer handoff manifests/logs/source hashes; initial environment failures; current hostedfrontend raw log; R1 reports/brief; actual OSrefusal baseline0/refusal101/restored0 shim/source/log/binary hashes; Astra advisory; first hosted cancelled run raw log/status."
+}
