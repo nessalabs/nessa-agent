@@ -14,7 +14,8 @@ when reviewing it, and after anything performance-sensitive.
 
 A large-workspace measurement is specified in
 [UI workspace load](../docs/design/ui-workspace-load.md). The seeded page is
-opt-in (`workspace-load.mjs`). It is not part of `pnpm verify:desktop`.
+opt-in (`workspace-load.mjs`). Startup, the pane cap, and one long transcript
+are opt-in too (`alpha-perf.mjs`). Neither is part of `pnpm verify:desktop`.
 
 ## Layout
 
@@ -43,6 +44,7 @@ verification/
       committed-transcript.mjs history notices, permission controls, re-enable
       smoke.mjs             loads, sends, splits, Settings, overview; console errors
       perf-budget.mjs       the frame budget, production build, 4× CPU throttling
+      alpha-perf.mjs        cold/warm startup, the pane cap, one long transcript (opt-in; not in run-all)
       safe-area.mjs         nothing painted under the window controls, per frame
       load-fallback.mjs     the load fallback inside, and centred in, the visible panel
       gateway-states.mjs    the desktop app's window when it cannot read the gateway: says why, never the sample

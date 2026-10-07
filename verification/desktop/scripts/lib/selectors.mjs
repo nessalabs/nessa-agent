@@ -114,6 +114,7 @@ export const css = {
   listSearch: ".workspace-list .workspace-search", // class: the session list's search field
   listScroll: ".workspace-list-scroll", // class: the session list's scroller
   sessionListRow: ".workspace-list [data-session-row]", // a row of the session list, not a sidebar thread
+  sessionItem: "[data-session-row]", // a session row in whichever list is showing
   sessionRow: "[data-drag-item]", // a session a drag can carry to a pane
   sidebarEdge: '[role="separator"][aria-label="Resize Sidebar"]',
 

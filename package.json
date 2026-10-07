@@ -66,6 +66,7 @@
     "verify:desktop:test": "node --test verification/desktop/scripts/lib/*.test.mjs",
     "verify:desktop:smoke": "node verification/desktop/scripts/smoke.mjs",
     "verify:desktop:perf": "node verification/desktop/scripts/perf-budget.mjs",
+    "verify:desktop:alpha": "node verification/desktop/scripts/alpha-perf.mjs",
     "verify:desktop:safe-area": "node verification/desktop/scripts/safe-area.mjs",
     "verify:desktop:drag": "node verification/desktop/scripts/drag.mjs",
     "verify:desktop:focus": "node verification/desktop/scripts/focus.mjs",
