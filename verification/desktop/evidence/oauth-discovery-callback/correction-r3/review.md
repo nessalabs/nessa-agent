@@ -1,0 +1,9 @@
+# Fresh whole-PR cumulative R3 review
+
+Exact clean candidate: `7e295565931c8f156e9069221fc079d0a63a1f73`; base: `e03e94c50ae025f9922a2f1d201ac0f63309ebcf`. Two fresh GPT-6.1 Sol medium reviewers inspected all 17 changed files against this actual base and adjacent domain/application/persistence/adapter/completion/reporting paths. Both reported no findings at any priority.
+
+They applied AGENTS, coding standards local-review dimensions and cross-field/layer agreement requirements, architecture/structure/DI, ADR392, ADR221 and canonical page-line policy. Checked original issuer versus discovery syntax and domain binding; state/resource/attempt/phase versus callback admission and captured exchange; scoped reader/channel ownership and completion; live-mount proof versus exact-origin late-line classification; recorded launch versus live PID and typed successful actual-runtime completion after cleanup. All five conversation callers retain live-process requirements. Unix-only inclusion keeps process/Python helpers out of Windows.
+
+Both inspected the actual delayed-drop, mismatched-runtime and failed-initialization regression logs, source mutation records and invalid namespace attempt exclusion. Confirmed OAuth/verification owning paths remain byte-identical from09e to7e. Their review was read-only source/diff/log inspection: no builds/tests, browser processes, mutations, network writes or subagents. Corrected7e supported-platform CI remained outstanding; historical09e Linux/Windows success is prior-head evidence, and exact original macOS failure mechanism remains unknown.
+
+Public review comment: https://github.com/nessalabs/nessa-agent/pull/645#issuecomment-6037284079 . Corrected candidate pushed only after both reviews were clean; required CI run37616663696 and current-head external review are pending. No merge claimed here.
