@@ -1424,7 +1424,7 @@ impl Shared {
             if targets.is_empty() {
                 return Ok(());
             }
-            let mut closed_any = false;
+            let mut processed_any = false;
             for target in &targets {
                 if external.load(Ordering::Acquire) && target == &root {
                     continue;
@@ -1449,11 +1449,11 @@ impl Shared {
                         }
                         absence_attempted = true;
                         super::root::settle_never_bound(self, target).await?;
-                        closed_any = true;
+                        processed_any = true;
                     }
                     continue;
                 };
-                closed_any = true;
+                processed_any = true;
                 let (cause, initiator, operation) = self.close_facts(&root);
                 let (cause, initiator) = (
                     cause.unwrap_or(LifetimeCause::HostClose),
@@ -1467,7 +1467,7 @@ impl Shared {
                     self.release_slot(target);
                 }
             }
-            if closed_any {
+            if processed_any {
                 self.notify.notify_waiters();
                 continue;
             }

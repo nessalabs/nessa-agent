@@ -747,6 +747,7 @@ stateDiagram-v2
   Eligible --> RetainedClosing: failed store or unclaimed ticket
   RetainedClosing --> ClosingEvidenceFailed: never-bound absence audit rejects
   ClosingEvidenceFailed --> RetainedClosing: explicit close retry
+  RetainedClosing --> RetainedClosing: binding wins scoped absence decision; drain reinspects actual owner
   RetainedClosing --> Closed: absence or cleanup evidence acknowledged
 ```
 

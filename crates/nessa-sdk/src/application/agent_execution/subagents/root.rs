@@ -102,26 +102,29 @@ pub(super) async fn settle_never_bound(
     shared: &Shared,
     root: &AgentLifetimeId,
 ) -> Result<(), OwnershipFailure> {
-    let token = shared
-        .with_graph(|graph| {
-            if shared.bound.lock().expect("bound lifetimes").contains(root) {
-                return Ok(None);
-            }
-            let operation = graph
-                .close_operation(root)
-                .cloned()
-                .ok_or(OwnershipFailure::Incomplete)?;
-            shared
-                .absence_claimed
-                .lock()
-                .expect("absence claims")
-                .insert(root.clone());
-            let token = graph
-                .note_unbound_root(root, &operation)
-                .map_err(OwnershipFailure::Domain)?;
-            Ok::<_, OwnershipFailure>(Some(token))
-        })?
-        .ok_or(OwnershipFailure::Incomplete)?;
+    let token = shared.with_graph(|graph| {
+        if shared.bound.lock().expect("bound lifetimes").contains(root) {
+            return Ok(None);
+        }
+        let operation = graph
+            .close_operation(root)
+            .cloned()
+            .ok_or(OwnershipFailure::Incomplete)?;
+        shared
+            .absence_claimed
+            .lock()
+            .expect("absence claims")
+            .insert(root.clone());
+        let token = graph
+            .note_unbound_root(root, &operation)
+            .map_err(OwnershipFailure::Domain)?;
+        Ok::<_, OwnershipFailure>(Some(token))
+    })?;
+    let Some(token) = token else {
+        // Transfer won the admission scope. The existing drain reinspects the
+        // actual owner; a gate-only handoff still supplies no settlement proof.
+        return Ok(());
+    };
     let audit = shared.audit.record(token.evidence()).await;
     shared
         .with_graph(|graph| {
