@@ -2203,6 +2203,46 @@ fn unbound_absence_admission_refuses_child_and_stale_operation_without_mutating_
 }
 
 #[test]
+fn unbound_absence_completion_refuses_restored_history_despite_matching_token() {
+    let mut graph = OwnershipGraph::new();
+    root(&mut graph, "root");
+    graph
+        .begin_close(
+            &life("root"),
+            close_id("close"),
+            LifetimeCause::HostClose,
+            Initiator::Runtime,
+        )
+        .unwrap();
+    let token = graph
+        .note_unbound_root(&life("root"), &close_id("close"))
+        .unwrap();
+    let mut history = graph.snapshot();
+    history.lifetimes.push(history.lifetimes[0].clone());
+    let mut refused = OwnershipGraph::restore(history);
+    assert_eq!(refused.refusal(), Some(&OwnershipError::Contradictory));
+    let before = refused.snapshot();
+    assert_eq!(
+        refused.acknowledge_unbound_root(token, EvidenceFact::Acknowledged),
+        Err(OwnershipError::DispatchRefused)
+    );
+    assert_eq!(refused.snapshot(), before);
+    assert_eq!(
+        refused.lifetime_state(&life("root")),
+        Some(LifetimeState::Closing)
+    );
+    assert_eq!(
+        refused.physical(&life("root"), &life("root")),
+        Some(PhysicalFact::Released)
+    );
+    assert_eq!(before.settlements[0].evidence, EvidenceFact::Pending);
+    assert_eq!(
+        refused.close_cause(&life("root")),
+        Some(&LifetimeCause::HostClose)
+    );
+}
+
+#[test]
 fn sealed_progress_retains_actual_receipt_without_inventing_permission_or_terminal_changes() {
     let mut graph = OwnershipGraph::new();
     assert_eq!(

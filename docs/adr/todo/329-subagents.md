@@ -785,7 +785,7 @@ uncertain ports; whole-transaction panic supervision is separate #625 work.
 |15 | Caller drops during eligible root store/reconciliation | Root owner remains alive and keeps/reconciles eligible ID; other sessions can complete. |
 |16 | Older copied snapshot waits; newer eligible snapshot writes; older resumes | Existing revision fence skips older write; eligible IDs and last acknowledged progress were included in newer projection. |
 |17 | Older token completes after target settled or newer transition generation exists | Token cannot overwrite newer metadata or graph lifecycle; no reopening or stale progress substitution. |
-|18 | Resource-free root was never bound, needs reconciliation | Explicit unbound-root transition proves absent resources, performs truthful settlement audit, and settles only with actual evidence acknowledgement. A child or stale close operation refuses before mutating physical/evidence facts. Empty drain is not success. |
+|18 | Resource-free root was never bound, needs reconciliation | Explicit unbound-root transition proves absent resources, performs truthful settlement audit, and settles only with actual evidence acknowledgement. A child or stale close operation refuses before mutating physical/evidence facts; a matching token cannot acknowledge against refused restored history. Empty drain is not success. |
 |19 | Row 18 settlement audit rejects | Root remains nonrunnable Closing with honest physical absence/evidence failure; eligible root lookup enables explicit retry. No fabricated ResourceReport. |
 |20 | Restore snapshots containing neighbors/history/private rejection cleanup | Preserve previous report states, close operations and spawn milestones; no incidental recovery changes to unrelated live graph caused by removal. |
 |21 | Never-bound absence claim wins admission scope; resource binding arrives while its audit is held or rejected | Reject binding and return the unchanged physical owner to the caller. Keep the absence claim through failure and evidence-only retry. |
@@ -819,8 +819,9 @@ adds the held-cleanup boundary for row 7. The library's
 `publication::tests::row_17_tokens_acknowledge_captured_progress_once_and_refuse_stale_generation`
 and the domain's `unbound_absence_token_refuses_child_closed_history_and_stale_completion`
 enforce row 17. Domain
-`unbound_absence_admission_refuses_child_and_stale_operation_without_mutating_history`
-enforces row 18's admission correlation, including rejection after failed evidence.
+`unbound_absence_admission_refuses_child_and_stale_operation_without_mutating_history` and
+`unbound_absence_completion_refuses_restored_history_despite_matching_token`
+enforce row 18's admission correlation and receiving-graph authority, including rejection after failed evidence and refused restored history.
 Domain `row_20_private_root_discard_preserves_neighbors_closed_history_reports_and_recovery`
 checks targeted removal without re-running recovery. Library
 `row_37_retained_root_is_sealed_at_the_admission_scope_boundary` checks
