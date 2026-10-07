@@ -3,13 +3,13 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 
 use super::{
-    coordinator::{mint_close, mint_lifetime, Shared},
+    coordinator::{mint_lifetime, Shared},
     publication::{PublicationTarget, PublishedState},
     OwnershipFailure, PortFailure,
 };
 use crate::domain::agent_execution::{
     sessions::SessionId,
-    subagents::{AgentLifetimeId, EvidenceFact, Initiator, LifetimeCause},
+    subagents::{AgentLifetimeId, EvidenceFact, Initiator},
 };
 
 struct DeliveryTicket {
@@ -78,13 +78,6 @@ async fn admit(
         let removed = error == OwnershipFailure::Audit(PortFailure::Rejected)
             && shared.drop_unpublished_root(&lifetime);
         if !removed {
-            shared.with_graph(|_| {
-                shared
-                    .publication
-                    .lock()
-                    .expect("ownership publication")
-                    .retain_root(&lifetime)
-            });
             reconcile(shared, &lifetime).await;
         }
         return Err(error);
@@ -93,12 +86,7 @@ async fn admit(
 }
 
 async fn reconcile(shared: &Arc<Shared>, lifetime: &AgentLifetimeId) {
-    if let Ok(evidence) = shared.seal_now(
-        lifetime,
-        mint_close(),
-        LifetimeCause::OwnerDisposed,
-        Initiator::Runtime,
-    ) {
+    if let Ok(evidence) = shared.retain_and_seal_root(lifetime) {
         let _ = shared.persist_evidence(&evidence).await;
         shared.start_drain(lifetime.clone(), false);
     }

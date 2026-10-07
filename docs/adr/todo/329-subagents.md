@@ -803,6 +803,8 @@ uncertain ports; whole-transaction panic supervision is separate #625 work.
 
 | 36 | Restored rooted history is contradictory but its IDs remain retained | Return RefusedHistory with the supplied cleanup owner. Only existing sealed inspection gates remain readable; no new transfer/dispatch authority or snapshot rewriting. Save/reload preserves the exact refusal evidence. |
 
+| 37 | Initial root audit is uncertain, or publication fails after eligibility | Seal the actual root and retain its identity in one admission scope, before retained eligibility becomes observable. Preserve first cause and bound ownership; persist evidence and start the existing drain outside the scope. No retained eligible Open frame may confer attachment or spawn authority. Closing cleanup binding remains legal. |
+
 Enforcers: the public coordinator tests in
 `tests/application/agent_execution/subagents/publication.rs` name rows 1–15,
 18–19 and 21–36. `rejected_close_intent_is_persisted_before_cleanup_can_complete`
@@ -812,7 +814,9 @@ adds the held-cleanup boundary for row 7. The library's
 and the domain's `unbound_absence_token_refuses_child_closed_history_and_stale_completion`
 enforce row 17. Domain
 `row_20_private_root_discard_preserves_neighbors_closed_history_reports_and_recovery`
-checks targeted removal without re-running recovery. Publication's
+checks targeted removal without re-running recovery. Library
+`row_37_retained_root_is_sealed_at_the_admission_scope_boundary` checks
+the retained identity and actual gate at the first observable scope boundary. Publication's
 `retained_projection_preserves_valid_history_and_referential_closure` checks
 valid Closed history and prevents child identity retention without its eligible ancestor.
 `row_30_already_safety_reconciliation_still_writes_current_fact` checks

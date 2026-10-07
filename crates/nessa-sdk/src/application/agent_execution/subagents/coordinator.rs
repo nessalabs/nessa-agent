@@ -1238,20 +1238,49 @@ impl Shared {
         cause: LifetimeCause,
         initiator: Initiator,
     ) -> Result<OwnershipEvidence, OwnershipFailure> {
-        self.with_graph(|graph| {
-            let admission = graph
-                .begin_close(lifetime, operation, cause, initiator)
-                .map_err(OwnershipFailure::Domain)?;
-            let seals = self.seals.lock().expect("lifetime seals");
-            if let Some(flag) = seals.get(lifetime) {
+        self.with_graph(|graph| self.seal_in_graph(graph, lifetime, operation, cause, initiator))
+    }
+
+    fn seal_in_graph(
+        &self,
+        graph: &mut OwnershipGraph,
+        lifetime: &AgentLifetimeId,
+        operation: CloseOperationId,
+        cause: LifetimeCause,
+        initiator: Initiator,
+    ) -> Result<OwnershipEvidence, OwnershipFailure> {
+        let admission = graph
+            .begin_close(lifetime, operation, cause, initiator)
+            .map_err(OwnershipFailure::Domain)?;
+        let seals = self.seals.lock().expect("lifetime seals");
+        if let Some(flag) = seals.get(lifetime) {
+            flag.store(true, Ordering::Release);
+        }
+        for target in &admission.targets {
+            if let Some(flag) = seals.get(target) {
                 flag.store(true, Ordering::Release);
             }
-            for target in &admission.targets {
-                if let Some(flag) = seals.get(target) {
-                    flag.store(true, Ordering::Release);
-                }
-            }
-            Ok(admission.evidence)
+        }
+        Ok(admission.evidence)
+    }
+
+    pub(super) fn retain_and_seal_root(
+        &self,
+        lifetime: &AgentLifetimeId,
+    ) -> Result<OwnershipEvidence, OwnershipFailure> {
+        self.with_graph(|graph| {
+            let evidence = self.seal_in_graph(
+                graph,
+                lifetime,
+                mint_close(),
+                LifetimeCause::OwnerDisposed,
+                Initiator::Runtime,
+            )?;
+            self.publication
+                .lock()
+                .expect("ownership publication")
+                .retain_root(lifetime);
+            Ok(evidence)
         })
     }
 
@@ -1887,7 +1916,8 @@ mod process_cleanup {
 #[cfg(test)]
 mod lifetime_races {
     use super::{
-        CloseCommand, OwnershipCoordinator, OwnershipDependencies, PublishPause, SpawnCommand,
+        CloseCommand, OwnershipCoordinator, OwnershipDependencies, OwnershipFailure, PublishPause,
+        SpawnCommand,
     };
     use crate::application::agent_execution::subagents::{
         ChildFactory, ChildResources, InitialSubmit, LiveCapacity, MemoryOwnershipStore,
@@ -1897,8 +1927,8 @@ mod lifetime_races {
     use crate::domain::agent_execution::sessions::SessionId;
     use crate::domain::agent_execution::subagents::{
         AgentLifetimeId, ApprovalPolicy, EvidenceFact, HostActor, Initiator, LifetimeCause,
-        LifetimeState, OwnershipEvidence, PhysicalFact, PolicyRead, SpawnOrigin, SpawnRequestId,
-        TaskReceiptId,
+        LifetimeState, OwnershipError, OwnershipEvidence, PhysicalFact, PolicyRead, SpawnOrigin,
+        SpawnRequestId, TaskReceiptId,
     };
     use async_trait::async_trait;
     use std::sync::{
@@ -1984,6 +2014,84 @@ mod lifetime_races {
             model: None,
             origin: SpawnOrigin::Host(HostActor::new("person", "desktop", "spawn").unwrap()),
         }
+    }
+
+    #[tokio::test]
+    async fn row_37_retained_root_is_sealed_at_the_admission_scope_boundary() {
+        let resources = Arc::new(Holding {
+            closes: AtomicUsize::new(0),
+            hold: Arc::new(Notify::new()),
+        });
+        let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+            store: Arc::new(MemoryOwnershipStore::new()),
+            audit: Arc::new(AcceptAudit),
+            factory: Arc::new(OnceFactory {
+                resources: Arc::clone(&resources),
+            }),
+            room: Arc::new(LiveCapacity::new(4)),
+        });
+        let session = SessionId::new("uncertain-root").unwrap();
+        let root = AgentLifetimeId::new("uncertain-root-id").unwrap();
+        coordinator.inner.with_graph(|graph| {
+            let _ = graph
+                .open_root(session.clone(), root.clone(), Initiator::Runtime)
+                .unwrap();
+            coordinator
+                .inner
+                .remember(Arc::downgrade(&coordinator.inner), root.clone(), false);
+        });
+        assert_eq!(coordinator.active_root_for_session(&session), None);
+
+        // This is the first scope boundary after conservative retention. No
+        // audit/store await or drain is needed to revoke attachment authority.
+        let _ = coordinator.inner.retain_and_seal_root(&root).unwrap();
+        coordinator.inner.with_graph(|graph| {
+            assert_eq!(graph.lifetime_state(&root), Some(LifetimeState::Closing));
+            assert!(coordinator
+                .inner
+                .publication
+                .lock()
+                .unwrap()
+                .lifetime_eligible(graph, &root));
+            assert_eq!(
+                graph.close_cause(&root),
+                Some(&LifetimeCause::OwnerDisposed)
+            );
+            assert!(coordinator.inner.seals.lock().unwrap()[&root].load(Ordering::Acquire));
+        });
+        assert_eq!(
+            coordinator.active_root_for_session(&session),
+            Some(root.clone())
+        );
+        let gate = coordinator.participation(&root).unwrap();
+        assert!(gate.seal().load(Ordering::Acquire));
+        assert_eq!(
+            coordinator.spawn(command(root.clone())).await,
+            Err(OwnershipFailure::Domain(OwnershipError::ParentClosing))
+        );
+        assert!(coordinator
+            .inner
+            .with_graph(|graph| graph.snapshot().spawns.is_empty()));
+        assert_eq!(resources.closes.load(Ordering::SeqCst), 0);
+
+        // Closing still accepts an actual cleanup owner; retention never
+        // manufactures absence, and repeated sealing preserves the first cause.
+        coordinator
+            .bind_resources(root.clone(), Arc::new(Released))
+            .unwrap();
+        let _ = coordinator.inner.retain_and_seal_root(&root).unwrap();
+        coordinator.inner.with_graph(|graph| {
+            assert_eq!(
+                graph.close_cause(&root),
+                Some(&LifetimeCause::OwnerDisposed)
+            );
+            assert!(coordinator
+                .inner
+                .resources
+                .lock()
+                .unwrap()
+                .contains_key(&root));
+        });
     }
 
     #[tokio::test]
