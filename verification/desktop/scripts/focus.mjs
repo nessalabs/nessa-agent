@@ -117,7 +117,10 @@ function overviewSteps() {
     ],
     [
       "⌘0 opens",
-      (p) => p.keyboard.press(keys.overview),
+      async (p) => {
+        await p.keyboard.press(keys.overview)
+        await onOverviewRow(p)
+      },
       (s) => ((last = s.activeOverviewItem), onItem(s)),
     ],
     [
@@ -144,7 +147,7 @@ function overviewSteps() {
       async (p) => {
         await p.keyboard.press(keys.focusPane(1))
         await p.keyboard.press(keys.overview)
-        await settled(p)
+        await onOverviewRow(p)
         await p.keyboard.press(keys.focusPane(1))
       },
       backInComposer,
@@ -153,7 +156,7 @@ function overviewSteps() {
       "⇧⌘[ at the first pane, from the overview",
       async (p) => {
         await p.keyboard.press(keys.overview)
-        await settled(p)
+        await onOverviewRow(p)
         await p.keyboard.press(keys.focusPrevious)
       },
       backInComposer,
@@ -162,7 +165,7 @@ function overviewSteps() {
       "⌃⌥← at the left edge, from the overview",
       async (p) => {
         await p.keyboard.press(keys.overview)
-        await settled(p)
+        await onOverviewRow(p)
         await p.keyboard.press(keys.moveLeft)
       },
       onItem,
@@ -184,6 +187,20 @@ async function openInPane(page, title) {
     throw new CannotRun(`"${title}" shows no approval card in the focused pane`)
   }
   return card.first()
+}
+
+/**
+ * The caret lands the frame after the current row is drawn. Rows arrive one
+ * a frame, so that is later than the peek's animation (`overview.tsx`).
+ */
+async function onOverviewRow(page) {
+  const landed = await until(
+    page,
+    (sel) => document.activeElement?.closest(sel) != null,
+    css.overviewItem,
+    1000,
+  )
+  if (!landed) throw new CannotRun("the keyboard did not land on an overview row")
 }
 
 /** How many requests the overview lists now: opened, counted, left. */
@@ -372,8 +389,7 @@ async function replyKeepsCaret(page) {
   const trail = []
   await page.keyboard.press(keys.overview)
   await contentIs(page, content.overview)
-  await settled(page)
-  await frames(page, 4)
+  await onOverviewRow(page)
   const start = (await state(page)).activeOverviewItem
   // ↓ and ⌘R in one breath, then the words at once: the peek may not have followed ↓ yet.
   await page.keyboard.press(keys.down)
@@ -450,8 +466,7 @@ async function regroupKeepsKeyboard(page, from) {
   const trail = []
   await page.keyboard.press(keys.overview)
   await contentIs(page, content.overview)
-  await settled(page)
-  await frames(page, 4)
+  await onOverviewRow(page)
   const on = (await state(page)).activeOverviewItem
   if (!on) throw new CannotRun("the keyboard did not land on an overview row")
   await page.keyboard.press(keys.reply)
@@ -590,8 +605,7 @@ async function givesBackLostFocus(page, cause) {
   const trail = []
   await page.keyboard.press(keys.overview)
   await contentIs(page, content.overview)
-  await settled(page)
-  await frames(page, 4)
+  await onOverviewRow(page)
   let scrolledTo = null
   if (cause === "moved") {
     // Scrolled away from the focused row, as when reading further down.

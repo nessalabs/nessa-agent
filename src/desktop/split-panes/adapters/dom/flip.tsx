@@ -23,7 +23,7 @@
 import { Component, type ReactNode, type RefObject } from "react"
 import { slideAnimation } from "../../../adapters/hold-still"
 import { letGoOfDragPreview } from "./drag"
-import { marks } from "./marks"
+import { marks, reflectMark } from "./marks"
 import { durationToken, motionToken } from "../../../adapters/motion"
 
 type Rects = { panes: Map<string, DOMRect>; slides: Map<string, DOMRect> }
@@ -212,19 +212,24 @@ export class FlipScope extends Component<{
     const flying = play(root, snapshot)
     this.flights = flying
     if (flying.length === 0) {
-      root.removeAttribute(marks.flipping)
+      reflectMark(root, marks.flipping, false)
       return
     }
-    root.setAttribute(marks.flipping, "")
+    reflectMark(root, marks.flipping, true)
     Promise.all(flying.map((flight) => flight.finished))
       .then(() => {
-        if (this.flights === flying) root.removeAttribute(marks.flipping)
+        if (this.flights === flying) reflectMark(root, marks.flipping, false)
       })
       .catch(() => undefined)
   }
 
   componentWillUnmount() {
     this.flights.forEach((flight) => flight.cancel())
+    // The finishing promise identifies this flight by identity. Replacing it
+    // means that promise is no longer this flight, so it leaves the mark.
+    this.flights = []
+    const root = this.props.root.current
+    if (root?.hasAttribute(marks.flipping)) reflectMark(root, marks.flipping, false)
   }
 
   render() {

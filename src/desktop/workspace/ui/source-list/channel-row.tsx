@@ -6,12 +6,12 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store
 import {
   selectChannel,
   selectChannelActivity,
-  selectOverviewOpen,
   selectPinnedIds,
   selectView,
 } from "../../adapters/store/selectors"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { ThreadRow } from "./thread-row"
+import { useOverviewQuiet } from "./overview-quiet"
 import { tooltip } from "../../../ui/tooltip"
 
 /**
@@ -22,18 +22,20 @@ import { tooltip } from "../../../ui/tooltip"
 export const ChannelRow = memo(function ChannelRow({ channelId }: { channelId: string }) {
   const dispatch = useWorkspaceDispatch()
   const channel = useWorkspaceSelector((state) => selectChannel(state, channelId))
-  // Chosen beside the panes or a widget over them: over both, the Agents
-  // overview is what is chosen.
-  const active = useWorkspaceSelector((state) => {
-    const view = selectView(state)
-    return view.channelId === channelId && !selectOverviewOpen(state)
-  })
+  // Chosen beside the panes. The overview paints the row quiet from
+  // `data-overview-glass` (`source-list.css`) instead of re-rendering it.
+  const active = useWorkspaceSelector(
+    (state) => selectView(state).channelId === channelId,
+  )
+  // After the open paint, so the key does not render the row (`layouts.test.tsx`).
+  const quiet = useOverviewQuiet()
   const activity = useWorkspaceSelector(
     (state) => selectChannelActivity(state, channelId),
     shallowEqual,
   )
   const pinned = useWorkspaceSelector(
-    (state) => (active ? selectPinnedIds(state, channelId) : []),
+    (state) =>
+      selectView(state).channelId === channelId ? selectPinnedIds(state, channelId) : [],
     shallowEqual,
   )
   if (!channel) return null
@@ -44,6 +46,7 @@ export const ChannelRow = memo(function ChannelRow({ channelId }: { channelId: s
         label={channel.name}
         title={channel.topic}
         active={active}
+        current={active && !quiet}
         unread={activity.unread}
         badge={activity.waiting}
         badgeTone="needs"
@@ -72,6 +75,7 @@ export function SidebarRow({
   label,
   title,
   active,
+  current,
   unread,
   badge,
   badgeTone,
@@ -82,6 +86,8 @@ export function SidebarRow({
   label: string
   title?: string
   active: boolean
+  /** The sidebar's current page. Lags `active` while the overview opens. */
+  current: boolean
   unread?: boolean
   /** A count, shown instead of the running glyph. */
   badge?: number
@@ -95,7 +101,7 @@ export function SidebarRow({
       className="workspace-row"
       data-active={active || undefined}
       data-unread={unread || undefined}
-      aria-current={active ? "page" : undefined}
+      aria-current={current ? "page" : undefined}
       {...tooltip(title ?? "")}
       onClick={onClick}
     >

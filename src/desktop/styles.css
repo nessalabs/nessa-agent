@@ -337,6 +337,34 @@ html:not(.dark) [data-surface] {
   animation: none;
 }
 
+/* While panes travel, the blur holds still. Drifting it would raster the
+   blur again on every frame of the drag (`styles.test.ts`). The mark is on
+   the document as well as the workspace, so the shell's blur is held too
+   (`marks.ts`). */
+:root:is([data-drag-pressing], [data-drag-reflow], [data-split-flipping])
+  .desktop-ambient::before,
+:root:is([data-drag-pressing], [data-drag-reflow], [data-split-flipping])
+  .desktop-ambient::after {
+  animation-play-state: paused;
+}
+
+/* The composer's blur would be sampled again on every frame the copy moves.
+   The sidebar keeps its blur and its resting shadow: turning the blur off
+   and back on, or swapping the shadow for a hairline, was a long frame
+   (`styles.test.ts`). */
+:root[data-drag-pressing] .desktop-composer {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--background);
+}
+
+/* The grain is a full-window layer. Hiding it while a drag is carried keeps
+   it out of every frame of the move; it is a flat image, so showing it again
+   does not rebuild a blur (`styles.test.ts`). */
+:root[data-drag-pressing] .desktop-grain {
+  visibility: hidden;
+}
+
 @keyframes desktop-drift {
   to {
     transform: translate3d(6vw, 4vh, 0) scale(1.08);

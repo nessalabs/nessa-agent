@@ -363,37 +363,29 @@ it("takes away what it made for a press that never becomes a drag", async () => 
   await act(async () => root.unmount())
 })
 
-it("copies one screen of the conversation, what is scrolled above standing in as a spacer", async () => {
+it("pictures the pane's header and leaves its conversation out of the copy", async () => {
   const { root } = await mounted()
   const pane = host.querySelector<HTMLElement>('[data-pane-key="1"]')
   if (!pane) throw new Error("no pane")
-  // The conversation shows 300–700; its five parts are 200px tall, from 0.
-  const view = pane.querySelector<HTMLElement>(".workspace-transcript")
-  if (view) {
-    view.getBoundingClientRect = () => new DOMRect(0, 300, 546, 400)
-    Object.defineProperty(view, "scrollTop", { value: 300 })
-  }
-  pane.querySelectorAll<HTMLElement>("[data-part]").forEach((part, index) => {
-    part.getBoundingClientRect = () => new DOMRect(0, index * 200, 546, 200)
-  })
   // The window's drag region and the focused pane's mark are no part of a copy.
+  // The header picture's night scene is tens of thousands of characters; shaping
+  // it is the lift's long layout.
   header(1).setAttribute("data-tauri-drag-region", "")
   pane.setAttribute("data-pane-focused", "")
+  const sliver = document.createElement("div")
+  sliver.dataset.sliver = ""
+  sliver.textContent = "night"
+  pane.prepend(sliver)
   await press(60, 16, header(1))
   pointer("pointermove", 90, 40)
   const ghost = host.querySelector(`.${classes.ghost}`)
   expect(ghost?.querySelector("[data-tauri-drag-region], [data-pane-focused]")).toBeNull()
-  const copied = host.querySelector(`.${classes.ghost} .workspace-transcript-inner`)
-  const parts = [...(copied?.querySelectorAll("[data-part]") ?? [])]
-  expect(parts.map((part) => part.textContent)).toEqual([
-    "a part 1",
-    "a part 2",
-    "a part 3",
-  ])
-  // What is scrolled out above keeps its height, so the copy shows the same screen.
-  expect((copied?.firstElementChild as HTMLElement | null)?.style.height).toBe("200px")
-  // Where it was scrolled to, by transform: a scroll would lay the copy out at once.
-  expect((copied as HTMLElement | null)?.style.transform).toBe("translateY(-300px)")
+  expect(ghost?.querySelector("[data-sliver]")).toBeNull()
+  expect(ghost?.querySelector(".workspace-pane-header")?.textContent).toBe(
+    header(1).textContent,
+  )
+  // The conversation is not painted, and building it is the press's long frame.
+  expect(ghost?.querySelector(".workspace-pane-body, .workspace-transcript")).toBeNull()
   expect(host.querySelector(`.${classes.ghost}`)?.hasAttribute(marks.waiting)).toBe(false)
   await act(async () => root.unmount())
 })
@@ -870,7 +862,7 @@ it("draws the copy at the slot it would land in, and the panes at the rects the 
   expect(said()).toBe("Move above Session c")
   expect(placeholder()?.style.width).toBe("1100px")
   expect(placeholder()?.style.height).toBe("396px")
-  // The copy is laid out at the slot's size, its centre on the pointer, at rest unscaled.
+  // The copy is the slot's size, so its centre stays on the pointer.
   expect(ghost()?.style.width).toBe("1100px")
   expect(ghost()?.style.height).toBe("396px")
   expect(lastDrawn(ghost())).toBe("translate(-550px, -198px) scale(1, 1)")
@@ -892,7 +884,8 @@ it("draws the copy at the slot it would land in, and the panes at the rects the 
   const paneHeader = pane(2).querySelector<HTMLElement>(".workspace-pane-header")
   const transcript = pane(2).querySelector<HTMLElement>(".workspace-transcript")
   expect(paneHeader?.style.transformOrigin).toBe("0px 0px")
-  expect(transcript?.style.transformOrigin).toBe("273px 0px")
+  // The conversation is not painted, so the preview does not make it a layer.
+  expect(transcript?.style.transformOrigin).toBe("")
   // Each box and its content start at one time: never a frame apart.
   for (const [box, content] of [
     [pane(2), pane(2).firstElementChild],

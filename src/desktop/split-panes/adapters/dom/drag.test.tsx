@@ -463,6 +463,28 @@ it("previews the outcome of the layout the source holds, and commits it through 
   await act(async () => root.unmount())
 })
 
+it("holds pane bodies out of the frame a cancel lets the preview go, and brings one back each frame after", async () => {
+  const fake = fakeSource(two())
+  const root = await mounted(fake)
+  await liftOntoTwo()
+  expect(document.documentElement.hasAttribute(marks.reflow)).toBe(true)
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
+  pointer("pointerup", 827, 400)
+  // The preview's mark drops as the copy flies home, and the bodies are
+  // waiting on that turn — one comes back on the frame after.
+  await act(async () => {})
+  expect(document.documentElement.hasAttribute(marks.reflow)).toBe(false)
+  expect(host.querySelectorAll("[data-drag-settling]").length).toBeGreaterThan(1)
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(host.querySelectorAll("[data-drag-settling]").length).toBe(1)
+  await frames()
+  expect(host.querySelector("[data-drag-settling]")).toBeNull()
+  expect(fake.state.drops).toEqual([])
+  await act(async () => root.unmount())
+})
+
 it("holds pane bodies out of the commit frame and brings one back each frame after", async () => {
   const fake = fakeSource(two())
   const root = await mounted(fake)

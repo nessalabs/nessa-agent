@@ -132,6 +132,29 @@ html:not(.dark) .workspace-sidebar {
     opacity var(--desktop-base) ease;
 }
 
+/* The open commit restyles these rows. A colour transition would keep
+   repainting them inside the sidebar for `--desktop-fast` (`styles.test.ts`).
+   The chosen channel and the focused session keep their attributes; the
+   overview's glass mark paints them quiet so the open commit does not
+   re-render the list. */
+.workspace[data-overview-glass] .workspace-row {
+  transition: none;
+}
+
+.workspace[data-overview-glass] .workspace-row[data-active]:not(.agents-overview-entry),
+.workspace[data-overview-glass] .workspace-thread-row[data-focused] {
+  background: transparent;
+  color: var(--desktop-ink-2) !important;
+  /* Weight stays. Changing it reflows the label on the glass frame
+     (`styles.test.ts`). */
+}
+
+.workspace[data-overview-glass]
+  .workspace-row[data-active]:not(.agents-overview-entry)
+  .workspace-row-icon {
+  color: var(--desktop-faint);
+}
+
 .workspace-row:hover {
   background: var(--desktop-hover);
 }

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import { DesktopIcon } from "../../../ui/icons"
 import { tooltip } from "../../../ui/tooltip"
 import { showContent } from "../../adapters/store/commands"
@@ -14,13 +15,19 @@ export function OverviewRow() {
   const dispatch = useWorkspaceDispatch()
   const frame = useWorkspaceFrame()
   const open = useWorkspaceSelector(selectOverviewOpen)
+  // After the open paint. Marking the row on the key restyles it inside the
+  // sidebar's blur (`overview-layer.tsx`). Tests flush this effect in `act`.
+  const [marked, setMarked] = useState(false)
+  useEffect(() => {
+    setMarked(open)
+  }, [open])
   const waiting = useWorkspaceSelector((state) => selectStatusCounts(state).needsYou)
   return (
     <button
       type="button"
       className="workspace-row agents-overview-entry"
-      data-active={open || undefined}
-      aria-current={open ? "page" : undefined}
+      data-active={marked || undefined}
+      aria-current={marked ? "page" : undefined}
       {...tooltip("Every agent at a glance", {
         shortcut: frame.shortcut("showOverview"),
       })}

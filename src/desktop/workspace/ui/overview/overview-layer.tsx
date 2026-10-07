@@ -1,4 +1,12 @@
-import { useCallback, useLayoutEffect, useRef, type RefObject } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react"
+import { flushSync } from "react-dom"
 import { isMac } from "../../../adapters/platform"
 import { matchesChord } from "../../../model/keyboard"
 import { focusInFront } from "../../adapters/dom/focus"
@@ -11,8 +19,8 @@ import { overviewKeys } from "./overview-keys"
 
 /**
  * Where the Agents overview is drawn: a layer over the session list and the
- * panes, which stay laid out beneath it — hidden and out of reach, at the
- * size and scroll they had — so the room a pane command measures is the
+ * panes, which stay laid out beneath it — out of reach, at the size and
+ * scroll they had — so the room a pane command measures is the
  * panes' own whether the overview is open or not, and coming back lays
  * nothing out again. The layer is on the page with the workspace, open or
  * not, so its width — whether the peek fits beside the list — is known
@@ -20,6 +28,13 @@ import { overviewKeys } from "./overview-keys"
  *
  * Escape is installed on the commit that opens, before paint, so it leaves
  * even though the list is not drawn yet (`overview.test.tsx`).
+ *
+ * Opening is four paints (`overview.test.tsx`). The commit sets the content
+ * and `data-open` only. The next frame marks the glass
+ * (`data-overview-glass`), which quiets the sidebar's rows. The frame after covers the list and the panes
+ * (`data-overview-covered` on the workspace, `data-covered` on this layer).
+ * The frame after that mounts the overview. Leaving lifts the cover and drops
+ * the overview in that commit (`overview.test.tsx`).
  *
  * Leaving it — Escape, Open, or going anywhere else — gives the keyboard
  * back to the focused pane's composer, a frame later, once the panes are
@@ -31,12 +46,85 @@ export function OverviewLayer({ root }: { root: RefObject<HTMLElement | null> })
   const group = useWorkspaceSelector(selectOverviewGroup)
   const layer = useRef<HTMLDivElement>(null)
   const split = useAtLeastWide(layer, splitWidth)
+  // Cover, then the overview, each on its own frame after the open commit.
+  // Both follow `open`, so a leave renders neither (`overview.test.tsx`).
+  const [coverReady, setCoverReady] = useState(false)
+  const [mountReady, setMountReady] = useState(false)
+  const covered = open && coverReady
+  // Unmounted in the leave's own commit. Keeping it and hiding it would
+  // restyle every row on that key (`overview.test.tsx`).
+  const mount = open && mountReady
+  useEffect(() => {
+    if (!open) {
+      // After the leave has painted, so that paint still has the rows quiet.
+      // The first paint has nothing to drop (`overview.test.tsx`).
+      root.current?.removeAttribute("data-overview-glass")
+      if (!coverReady && !mountReady) return
+      // After the leave has painted. Focusing waits a frame, so it does not
+      // measure the panes in that same turn (`overview.test.tsx`).
+      setCoverReady(false)
+      setMountReady(false)
+      const frame = requestAnimationFrame(() => {
+        stop.current = focusInFront(root.current ?? document)
+      })
+      return () => cancelAnimationFrame(frame)
+    }
+    let coverFrame = 0
+    let mountFrame = 0
+    // The open paint is only `data-open`. This frame quiets the sidebar's
+    // rows, and the cover waits one more, so the key itself does not restyle
+    // the sidebar (`overview.test.tsx`).
+    const glassFrame = requestAnimationFrame(() => {
+      root.current?.setAttribute("data-overview-glass", "")
+      coverFrame = requestAnimationFrame(() => {
+        // Committed before the callback returns, so this frame paints the
+        // cover and the next frame paints the mount (`overview.test.tsx`).
+        flushSync(() => setCoverReady(true))
+        mountFrame = requestAnimationFrame(() => {
+          flushSync(() => setMountReady(true))
+        })
+      })
+    })
+    return () => {
+      cancelAnimationFrame(glassFrame)
+      cancelAnimationFrame(coverFrame)
+      cancelAnimationFrame(mountFrame)
+    }
+  }, [open])
+  // What the cover stands over. `inert` takes it out of reach without
+  // `visibility`, which would restyle every descendant as the cover comes
+  // and goes. Lifting it waits a frame: doing it in the leave's commit lays
+  // the panes out on that key (`overview.test.tsx`).
+  const stilled = useRef<HTMLElement[]>([])
+  useLayoutEffect(() => {
+    const node = root.current
+    if (!node) return
+    if (covered) {
+      node.setAttribute("data-overview-covered", "")
+      stilled.current = [
+        ".workspace-list",
+        ".workspace-list-edge",
+        ".workspace-chat",
+      ].flatMap((selector) => {
+        const element = node.querySelector<HTMLElement>(selector)
+        if (!element) return []
+        element.setAttribute("inert", "")
+        return [element]
+      })
+      return
+    }
+    node.removeAttribute("data-overview-covered")
+    const frame = requestAnimationFrame(() => {
+      for (const element of stilled.current) element.removeAttribute("inert")
+      stilled.current = []
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [covered, root])
   const stop = useRef<() => void>(() => {})
   const leave = useCallback(() => {
     dispatch(showContent({ content: "panes" }))
     stop.current()
-    stop.current = focusInFront(root.current ?? document)
-  }, [dispatch, root])
+  }, [dispatch])
   const leaveNow = useRef(leave)
   leaveNow.current = leave
   const groupNow = useRef(group)
@@ -69,8 +157,13 @@ export function OverviewLayer({ root }: { root: RefObject<HTMLElement | null> })
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [open, dispatch])
   return (
-    <div className="workspace-overview-layer" ref={layer} data-open={open || undefined}>
-      {open ? <AgentsOverview split={split} onLeave={leave} /> : null}
+    <div
+      className="workspace-overview-layer"
+      ref={layer}
+      data-open={open || undefined}
+      data-covered={covered || undefined}
+    >
+      {mount ? <AgentsOverview split={split} onLeave={leave} /> : null}
     </div>
   )
 }

@@ -103,6 +103,11 @@ async function openOverview(page) {
   await focusComposer(page)
   await page.keyboard.press(keys.overview)
   await contentIs(page, content.overview)
+  // The list, then the caret, arrive on frames after the key. Leave and
+  // select start once that opening has finished (`data-overview-listed`),
+  // so their measurement is the leave, not the open.
+  await page.waitForSelector(css.overviewListed, { timeout: 3000 })
+  await frames(page, 2)
   await settled(page)
   if ((await state(page)).content !== content.overview)
     throw new CannotRun(

@@ -208,6 +208,17 @@ describe("Agents in the sidebar is a place to go, like a channel", () => {
       expect(shown()).toBe("agents")
       await act(async () => agents()?.click())
       expect(shown()).toBe("agents")
+      // The rows' current page waits out the overview's own frames
+      // (`overview-quiet.ts`).
+      for (
+        let frame = 0;
+        frame < 48 && current().some((row) => !row?.startsWith("Agents"));
+        frame++
+      )
+        await act(
+          async () =>
+            new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+        )
       expect(current()).toEqual([expect.stringMatching(/^Agents/)])
 
       await act(async () => channel()?.click())
@@ -309,6 +320,17 @@ describe("a widget over the panes keeps the sidebar's choice, and ⌘W closes it
       // The channel and the focused session stay chosen beside it.
       expect(current()).toEqual(overPanes)
       await act(async () => store.dispatch(showContent({ content: "agents" })))
+      // The rows' current page waits out the overview's own frames
+      // (`overview-quiet.ts`).
+      for (
+        let frame = 0;
+        frame < 48 && current().some((row) => !row?.startsWith("Agents"));
+        frame++
+      )
+        await act(
+          async () =>
+            new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+        )
       expect(current()).toEqual([expect.stringMatching(/^Agents/)])
 
       await act(async () => store.dispatch(openWidget({ widget: run, place: "window" })))

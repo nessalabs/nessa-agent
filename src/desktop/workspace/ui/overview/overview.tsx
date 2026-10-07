@@ -7,6 +7,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react"
+import { flushSync } from "react-dom"
 import { reducedMotion } from "../../../adapters/motion-preference"
 import { useNow } from "../../adapters/dom/clock"
 import { durationToken } from "../../../adapters/motion"
@@ -61,12 +62,11 @@ import "./overview.css"
 const settledFor = 700
 
 /**
- * How many overview rows mount on each frame after the one that opens it.
- * The open frame draws the title; the filter, the counts and the list
- * follow. Mounting every session on the open frame misses the frame budget
- * (`overview.test.tsx`).
+ * How many overview rows mount on each frame after the card has filled.
+ * One row: the filter, the count buttons and a request's transcript on the
+ * same frame missed the budget (`overview.test.tsx`).
  */
-const rowsPerOpenFrame = 4
+const rowsPerOpenFrame = 1
 
 const steps: Partial<Record<string, Step>> = {
   next: "next",
@@ -113,33 +113,59 @@ export function AgentsOverview({
     [settling],
   )
   const now = useNow(60_000)
+  // The minute the clock is on. The read itself is finer than the minute, and
+  // a second render in that minute would build the glance again (`selectors.ts`).
+  const minute = Math.floor(now / 60_000) * 60_000
   const glance = useWorkspaceSelector(
-    (state) => selectGlance(state, held, now),
+    (state) => selectGlance(state, held, minute),
     sameGlance,
   )
   const order = useMemo(() => readingOrder(glance), [glance])
-  // The turn that opens paints the layer alone. The title follows that
-  // commit's effect. The filter, the counts and the rows follow a frame
-  // later, the rows a few at a time (`overview.test.tsx`).
-  const [placed, setPlaced] = useState(false)
-  useEffect(() => {
-    if (!placed) setPlaced(true)
-  }, [placed])
+  // The mount paints the title. The next frame paints the counts as text.
+  // The card fills on the frame after that. The filter, the count buttons
+  // and one row follow, one frame each. Buttons on the counts frame, the
+  // fill sharing a frame with a row, or several rows at once, missed the
+  // budget (`overview.test.tsx`).
   const [chrome, setChrome] = useState(false)
   useEffect(() => {
-    if (!placed || chrome) return
-    const frame = requestAnimationFrame(() => setChrome(true))
-    return () => cancelAnimationFrame(frame)
-  }, [placed, chrome])
-  const [drawn, setDrawn] = useState(0)
-  const rowCount = order.length
-  useEffect(() => {
-    if (!placed || drawn >= rowCount) return
+    if (chrome) return
     const frame = requestAnimationFrame(() => {
-      setDrawn((current) => Math.min(rowCount, current + rowsPerOpenFrame))
+      flushSync(() => setChrome(true))
     })
     return () => cancelAnimationFrame(frame)
-  }, [placed, drawn, rowCount])
+  }, [chrome])
+  const [filled, setFilled] = useState(false)
+  useEffect(() => {
+    if (!chrome || filled) return
+    const frame = requestAnimationFrame(() => {
+      flushSync(() => setFilled(true))
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [chrome, filled])
+  const [drawn, setDrawn] = useState(0)
+  const rowCount = order.length
+  // The peek beside the list follows the first row, so the frame that draws
+  // the row lays out the list alone (`overview.test.tsx`). Committed in the
+  // callback, so the render does not slip into the next row's frame.
+  const [peekDrawn, setPeekDrawn] = useState(false)
+  useEffect(() => {
+    if (drawn === 0) return
+    const frame = requestAnimationFrame(() => {
+      flushSync(() => setPeekDrawn(true))
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [drawn])
+  useEffect(() => {
+    if (!filled || drawn >= rowCount) return
+    // The second row waits until the peek has painted (`overview.test.tsx`).
+    if (drawn === 1 && !peekDrawn) return
+    const frame = requestAnimationFrame(() => {
+      flushSync(() =>
+        setDrawn((current) => Math.min(rowCount, current + rowsPerOpenFrame)),
+      )
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [filled, drawn, rowCount, peekDrawn])
   // The workspace keeps a listed session chosen while it lists one (`keepOverviewChoice`).
   const current = selected !== null && order.includes(selected) ? selected : null
   const choose = useCallback(
@@ -163,7 +189,7 @@ export function AgentsOverview({
 
   const section = useRef<HTMLElement>(null)
   const focusItem = useCallback(
-    (id: string | null) => {
+    (id: string | null, scroll = true) => {
       const column = list.current
       if (!column) return
       if (id === null) {
@@ -183,6 +209,9 @@ export function AgentsOverview({
       // the page out on its own: scrolling now would make it lay out early.
       if (!item) return choose(id)
       item.focus({ preventScroll: true })
+      // The opening land does not scroll: the row is already in view, and
+      // scrolling forces a layout on its own frame (`overview.test.tsx`).
+      if (!scroll) return
       requestAnimationFrame(() =>
         item.scrollIntoView({
           block: "nearest",
@@ -208,7 +237,10 @@ export function AgentsOverview({
   const cancelLand = useRef<(() => void) | null>(null)
   useEffect(() => () => cancelLand.current?.(), [])
   useEffect(() => {
-    if (landed.current || cancelLand.current !== null || !ready || !placed) return
+    if (landed.current || cancelLand.current !== null || !ready) return
+    // The peek's frame is its own. Focusing in it forces a layout beside
+    // that paint (`overview.test.tsx`).
+    if (drawn > 0 && !peekDrawn) return
     const id = currentNow.current
     const column = list.current
     if (!column) return
@@ -217,25 +249,21 @@ export function AgentsOverview({
       column.querySelector(`[data-overview-item="${CSS.escape(id)}"]`) === null
     )
       return
-    let follow = 0
-    let first = 0
+    let frame = 0
     const cancel = () => {
-      cancelAnimationFrame(first)
-      cancelAnimationFrame(follow)
+      cancelAnimationFrame(frame)
       if (cancelLand.current === cancel) cancelLand.current = null
     }
-    // A frame asked for now is this frame's; the one after it is the next.
-    first = requestAnimationFrame(() => {
-      follow = requestAnimationFrame(() => {
-        if (cancelLand.current !== cancel) return
-        cancelLand.current = null
-        if (landed.current) return
-        landed.current = true
-        focusItem(currentNow.current)
-      })
+    // After this paint. The row is already in view, so the land does not scroll.
+    frame = requestAnimationFrame(() => {
+      if (cancelLand.current !== cancel) return
+      cancelLand.current = null
+      if (landed.current) return
+      landed.current = true
+      focusItem(currentNow.current, false)
     })
     cancelLand.current = cancel
-  }, [ready, placed, drawn, focusItem])
+  }, [ready, drawn, peekDrawn, focusItem])
 
   const timers = useRef(new Set<number>())
   useEffect(() => {
@@ -394,14 +422,6 @@ export function AgentsOverview({
     () => new Map(settling.map((entry) => [entry.sessionId, entry])),
     [settling],
   )
-
-  // The overview arrives fading in from nothing; the peek beside its list is
-  // drawn a frame later, so the frame it opens on lays out the list alone.
-  const [peekDrawn, setPeekDrawn] = useState(false)
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => setPeekDrawn(true))
-    return () => cancelAnimationFrame(frame)
-  }, [])
 
   // Wide enough, the peek sits beside the list and follows its choice — a
   // step behind the list, so a key that moves on (an arrow, an answer) draws
@@ -588,70 +608,72 @@ export function AgentsOverview({
         data-alt={alt || undefined}
         data-split={split || undefined}
       >
-        {placed ? (
-          <div className="agents-overview-surface" data-bare={chrome ? undefined : ""}>
-            {/* The header stays where it is; only the list under it scrolls. */}
-            <div className="agents-overview-side">
-              <header className="agents-overview-header">
-                <div className="agents-overview-title">
-                  <h1>Agents</h1>
-                  {chrome ? <FilterMenu filter={filter} onChange={setFilter} /> : null}
-                </div>
-                {chrome ? (
-                  <Counts ready={ready} glance={glance} onToggle={toggleGroup} />
-                ) : (
-                  <p className="agents-overview-counts">{"\u00a0"}</p>
-                )}
-              </header>
-              <div className="agents-overview-scroll">
-                <div
-                  ref={list}
-                  className="agents-overview-column"
-                  tabIndex={-1}
-                  data-overview-listed={
-                    ready && (rowCount === 0 || drawn >= rowCount) ? "" : undefined
-                  }
-                  onKeyDown={onKeyDown}
-                >
-                  {ready && (rowCount === 0 || drawn > 0) ? (
-                    <Groups
-                      glance={rowCount === 0 ? glance : listedThrough(glance, drawn)}
-                      current={current}
-                      selected={split ? current : null}
-                      expanded={split ? null : expanded}
-                      settlingOf={settlingOf}
-                      onFocusItem={choose}
-                      onChoose={pick}
-                      onOpen={open}
-                      onAnswer={answer}
-                      onLeaveReply={leaveReply}
-                      takesKey={takesKey}
-                      onShowAll={() => setFilter(everySession)}
-                    />
-                  ) : null}
-                  <p className="agents-overview-said" aria-live="polite">
-                    {said}
-                  </p>
-                </div>
+        <div className="agents-overview-surface" data-bare={filled ? undefined : ""}>
+          {/* The header stays where it is; only the list under it scrolls. */}
+          <div className="agents-overview-side">
+            <header className="agents-overview-header">
+              <div className="agents-overview-title">
+                <h1>Agents</h1>
+                {drawn > 0 ? <FilterMenu filter={filter} onChange={setFilter} /> : null}
               </div>
-            </div>
-            {split && peeked !== null ? (
-              <aside className="agents-overview-peek" aria-label="Peek">
-                {peekDrawn ? (
-                  <SessionPeek
-                    key={peeked}
-                    sessionId={peeked}
-                    placement="beside"
-                    settling={settlingOf.get(peeked)}
+              {drawn > 0 ? (
+                <Counts ready={ready} glance={glance} onToggle={toggleGroup} />
+              ) : (
+                <p className="agents-overview-counts">
+                  {chrome
+                    ? glanceCounts(glance)
+                        .map((count) => count.label)
+                        .join(" · ") || quietLine
+                    : "\u00a0"}
+                </p>
+              )}
+            </header>
+            <div className="agents-overview-scroll">
+              <div
+                ref={list}
+                className="agents-overview-column"
+                tabIndex={-1}
+                data-overview-listed={
+                  ready && (rowCount === 0 || drawn >= rowCount) ? "" : undefined
+                }
+                onKeyDown={onKeyDown}
+              >
+                {ready && (rowCount === 0 || drawn > 0) ? (
+                  <Groups
+                    glance={rowCount === 0 ? glance : listedThrough(glance, drawn)}
+                    current={current}
+                    selected={split ? current : null}
+                    expanded={split ? null : expanded}
+                    settlingOf={settlingOf}
+                    onFocusItem={choose}
+                    onChoose={pick}
                     onOpen={open}
                     onAnswer={answer}
                     onLeaveReply={leaveReply}
+                    takesKey={takesKey}
+                    onShowAll={() => setFilter(everySession)}
                   />
                 ) : null}
-              </aside>
-            ) : null}
+                <p className="agents-overview-said" aria-live="polite">
+                  {said}
+                </p>
+              </div>
+            </div>
           </div>
-        ) : null}
+          {split && peekDrawn && peeked !== null ? (
+            <aside className="agents-overview-peek" aria-label="Peek">
+              <SessionPeek
+                key={peeked}
+                sessionId={peeked}
+                placement="beside"
+                settling={settlingOf.get(peeked)}
+                onOpen={open}
+                onAnswer={answer}
+                onLeaveReply={leaveReply}
+              />
+            </aside>
+          ) : null}
+        </div>
       </section>
     </ReplyCaret.Provider>
   )

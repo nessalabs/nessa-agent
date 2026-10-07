@@ -134,9 +134,9 @@
   /* Opaque. A translucent copy composites the blurred ambient on every
      shape change and misses the frame budget (`styles.test.ts`). */
   opacity: 1;
+  background: var(--background);
   pointer-events: none;
   transform-origin: 0 0;
-  will-change: transform;
   /* No shadow. Painting a blur again as the copy changes shape misses the
      frame budget (`styles.test.ts`). */
   box-shadow: none;
@@ -144,9 +144,17 @@
   user-select: none;
 }
 
+/* Shown, it is its own layer. While it waits, it is not: promoting the hidden
+   copy rasters it under the glass blur (`styles.test.ts`). */
+.split-panes-ghost:not([data-drag-waiting]) {
+  will-change: transform;
+}
+
 /* Made as the press begins, it waits on the page unseen until the press becomes a drag. */
 .split-panes-ghost[data-drag-waiting] {
   opacity: 0;
+  content-visibility: hidden;
+  background: none;
 }
 
 .split-panes-ghost-inner {
@@ -167,8 +175,9 @@
 }
 
 /* A picture: nothing in it blurs what is behind, casts a shadow, moves on its
-   own, or eases. Container queries lay the picture out again at every shape
-   (`styles.test.ts`). */
+   own, or eases. Naming it as a pane container lays the real panes' text out
+   on the lift's hit-test, and container queries would lay the picture out at
+   every shape (`styles.test.ts`). */
 .split-panes-ghost * {
   animation: none !important;
   transition: none !important;
@@ -177,6 +186,7 @@
   box-shadow: none !important;
   filter: none !important;
   container-type: normal !important;
+  container-name: none !important;
 }
 
 /* The conversation stays in the copy and out of its paint: laying the body out
@@ -198,21 +208,17 @@
   top: 0;
   left: 0;
   border-radius: var(--desktop-radius);
-  background: color-mix(in oklab, var(--desktop-light-edge) 9%, transparent);
+  /* Opaque. A tint over transparent composites the blurred ambient on every
+     move (`styles.test.ts`). */
+  background: color-mix(in oklab, var(--desktop-light-edge) 9%, var(--background));
   box-shadow: inset 0 0 0 1px
     color-mix(in oklab, var(--desktop-light-edge) 40%, transparent);
   pointer-events: none;
   transform-origin: 0 0;
-  animation: split-panes-fade-in var(--desktop-fast) ease both;
+  will-change: transform;
   /* Width and height land at once. Transitioning them lays the page out on
      every frame of the move, which misses the frame budget (`styles.test.ts`). */
   transition: transform var(--desktop-base) var(--desktop-ease);
-}
-
-@keyframes split-panes-fade-in {
-  from {
-    opacity: 0;
-  }
 }
 
 /*
