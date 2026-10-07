@@ -556,3 +556,32 @@ async fn empty_resource_proof_is_rejected_unchanged_with_matching_pending_summar
     )
     .await;
 }
+
+#[tokio::test]
+async fn restored_completion_cannot_borrow_authority_from_a_nonresource_observation() {
+    let directory = private_directory();
+    let path = directory
+        .path()
+        .join("private/nonresource-completion.sqlite3");
+    let mut graph = closing_resource();
+    resource_report(
+        &mut graph,
+        PhysicalFact::Released,
+        EvidenceFact::Acknowledged,
+    );
+    complete(&mut graph, "root");
+    let restored = reopen_snapshot(&path, &graph.snapshot()).await;
+    assert_eq!(
+        restored.lifetime_state(&lifetime("root")),
+        Some(LifetimeState::Closed)
+    );
+    let mut invalid: Value = serde_json::from_str(&stored_body(&path)).unwrap();
+    invalid["settlements"][0]["proof"]["observations"][2]["record"]["detail"] =
+        json!({"kind": "Completion"});
+    reject_body_without_rewrite(
+        &path,
+        &serde_json::to_string(&invalid).unwrap(),
+        "Completion detail cannot act as a resource observation",
+    )
+    .await;
+}

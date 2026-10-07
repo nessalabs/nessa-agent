@@ -330,42 +330,6 @@ fn restored_cascade_cannot_invent_open_or_mismatched_first_close_authority() {
 }
 
 #[test]
-fn restored_completion_cannot_borrow_authority_from_a_nonresource_observation() {
-    let mut graph = ready_root("close");
-    complete(&mut graph, &life("root"));
-    let valid = graph.snapshot();
-    assert!(OwnershipGraph::restore(valid.clone()).refusal().is_none());
-    for detail in [None, Some(CloseEvidenceDetail::Completion)] {
-        let mut history = valid.clone();
-        let SettlementProof::Resource(slots) = &mut history.settlements[0].proof else {
-            panic!("actual resource control");
-        };
-        slots
-            .iter_mut()
-            .flatten()
-            .next()
-            .unwrap()
-            .record
-            .close_detail = detail;
-        let mut restored = OwnershipGraph::restore(history.clone());
-        assert_eq!(restored.refusal(), Some(&OwnershipError::Contradictory));
-        assert_eq!(
-            restored.snapshot(),
-            history,
-            "refusal does not repair stored authority"
-        );
-        let before = restored.snapshot();
-        assert_eq!(
-            restored
-                .prepare_completion(&life("root"), &close_id("close"))
-                .unwrap_err(),
-            OwnershipError::DispatchRefused
-        );
-        assert_eq!(restored.snapshot(), before);
-    }
-}
-
-#[test]
 fn restored_completion_with_empty_resource_proof_is_refused_without_repair() {
     let mut graph = ready_root("close");
     complete(&mut graph, &life("root"));
