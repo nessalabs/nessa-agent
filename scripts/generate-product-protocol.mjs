@@ -23,6 +23,22 @@ const pairingValues = JSON.parse(
 )
 const pairing = pairingValueSchema(pairingValues)
 const schema = JSON.parse(readFileSync(resolve(root, "protocol/product/v1.json"), "utf8"))
+const commonDefs = JSON.parse(
+  readFileSync(resolve(root, "protocol/schemas/v1/common.json"), "utf8"),
+).$defs
+const productKinds = schema.$defs?.ProductSurfaceKind
+const commonKinds =
+  commonDefs && Object.hasOwn(commonDefs, "SurfaceKind") ? commonDefs.SurfaceKind : undefined
+if (
+  !productKinds ||
+  !Array.isArray(productKinds.enum) ||
+  !commonKinds ||
+  !Array.isArray(commonKinds.enum) ||
+  JSON.stringify(productKinds.enum) !== JSON.stringify(commonKinds.enum)
+)
+  throw new Error(
+    "ProductSurfaceKind must match protocol/schemas/v1/common.json SurfaceKind",
+  )
 const manifest = JSON.parse(
   readFileSync(resolve(root, "protocol/product/manifest.json"), "utf8"),
 )
@@ -413,6 +429,8 @@ const bounds = {
     schema.$defs.SessionAuthenticateParams.properties.credential.maxLength,
   maxProductClientIdCharacters:
     schema.$defs.ProductClientMetadata.properties.id.maxLength,
+  maxProductSurfaceInstanceCharacters:
+    schema.$defs.ProductSurface.properties.instance.maxLength,
   maxPhysicalRecordPayloadBytes,
   maxRecordPageRecords: pageRequest.maxRecords.maximum,
   maxRecordPagePayloadBytes: pageRequest.maxPayloadBytes.maximum,
@@ -550,6 +568,7 @@ const bounds = {
 for (const name of [
   "maxAuthCredentialCharacters",
   "maxProductClientIdCharacters",
+  "maxProductSurfaceInstanceCharacters",
   "minAgentInstallRequestIdCharacters",
   "maxAgentInstallRequestIdBytes",
   "maxPhysicalRecordPayloadBytes",

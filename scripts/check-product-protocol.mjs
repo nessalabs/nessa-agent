@@ -101,10 +101,17 @@ for (const invalid of [
 ]) {
   if (validateRecordPage(invalid)) throw new Error("Record page accepts invalid bounds")
 }
+const authWithoutSurface = { ...auth }
+delete authWithoutSurface.surface
 for (const invalid of [
   { ...auth, credential: "" },
   { ...auth, client: { id: "fixture", role: "admin" } },
   { ...auth, nonce: "x".repeat(257) },
+  authWithoutSurface,
+  { ...auth, surface: { kind: "phone", instance: "fixture-window" } },
+  { ...auth, surface: { kind: "panel", instance: "" } },
+  { ...auth, surface: { kind: "panel", instance: "x".repeat(257) } },
+  { ...auth, surface: { kind: "panel", instance: "fixture-window", role: "admin" } },
 ]) {
   if (validateAuth(invalid))
     throw new Error("Product auth schema accepts invalid fixture")

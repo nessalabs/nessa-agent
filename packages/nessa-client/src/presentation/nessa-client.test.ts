@@ -69,14 +69,20 @@ describe("NessaClient", () => {
             text?: string
             executionId?: string
             watchId?: string
+            surface?: { kind?: string; instance?: string }
           }
         }
 
         if (frame.method === "session.authenticate") {
+          const surface = frame.params?.surface
           if (
             !product ||
             frame.params?.nonce !== CHALLENGE_NONCE ||
-            frame.params?.credential !== TOKEN
+            frame.params?.credential !== TOKEN ||
+            typeof surface?.kind !== "string" ||
+            surface.kind.length === 0 ||
+            typeof surface?.instance !== "string" ||
+            surface.instance.length === 0
           ) {
             socket.send(
               JSON.stringify({

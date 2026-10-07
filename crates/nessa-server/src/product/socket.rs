@@ -38,8 +38,8 @@ use nessa_protocol::product::generated::{
     CredentialIssueParams, CredentialListParams, CredentialListResult, CredentialRevokeParams,
     CredentialRevokeResult, ExistingCredentialResult, IssuedCredentialResult, ProductSessionReady,
     SessionAuthenticateParams, SessionChallenge, SessionTermination,
-    MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD,
-    PRODUCT_READY_METHODS, PRODUCT_VERSION,
+    MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
+    MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS, PRODUCT_VERSION,
 };
 use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
 use nessa_protocol::product_contract::generated::SessionCloseReason;
@@ -139,7 +139,7 @@ where
         receive_authentication(&mut socket, &state, &nonce, deadline, proof).await
     })
     .await;
-    let (request_id, session) = match authenticated {
+    let (request_id, session, handshake) = match authenticated {
         Ok(Ok(value)) => value,
         Ok(Err((request_id, code))) => {
             if code != "handshake_timeout" {
@@ -178,6 +178,7 @@ where
             return;
         }
     };
+    record_authenticated_surface(session.context().principal_id().as_str(), &handshake);
     let ready = session_ready(&state, &session, &snapshot);
     let response = match ResponseFrame::success(&request_id, &ready) {
         Ok(frame) => OutgoingMessage::Response(frame),
@@ -193,13 +194,113 @@ where
     run_authenticated(socket, state, session).await;
 }
 
+/// Surface and client id a successful handshake named. Neither grants
+/// permissions; the credential's principal is the identity.
+struct RecordedHandshake {
+    client_id: String,
+    surface_kind: &'static str,
+    surface_instance: String,
+}
+
+/// Write the handshake's surface to the gateway log. The callsite is not
+/// cached: a test that authenticates before a subscriber exists must not
+/// silence this line for the rest of the process.
+fn record_authenticated_surface(principal_id: &str, handshake: &RecordedHandshake) {
+    static CALLSITE: tracing::callsite::DefaultCallsite =
+        tracing::callsite::DefaultCallsite::new(&META);
+    static META: tracing::Metadata<'static> = tracing::Metadata::new(
+        "authenticated product session",
+        "nessa_server::product::socket",
+        tracing::Level::INFO,
+        Some(file!()),
+        Some(line!()),
+        Some(module_path!()),
+        tracing::field::FieldSet::new(
+            &[
+                "message",
+                "principal_id",
+                "client_id",
+                "surface_kind",
+                "surface_instance",
+            ],
+            tracing::callsite::Identifier(&CALLSITE),
+        ),
+        tracing::metadata::Kind::EVENT,
+    );
+
+    tracing::dispatcher::get_default(|dispatch| {
+        if !dispatch.enabled(&META) {
+            return;
+        }
+        let fields = META.fields();
+        let message_field = fields
+            .field("message")
+            .expect("message is one of the handshake record's fields");
+        let principal_field = fields
+            .field("principal_id")
+            .expect("principal_id is one of the handshake record's fields");
+        let client_field = fields
+            .field("client_id")
+            .expect("client_id is one of the handshake record's fields");
+        let kind_field = fields
+            .field("surface_kind")
+            .expect("surface_kind is one of the handshake record's fields");
+        let instance_field = fields
+            .field("surface_instance")
+            .expect("surface_instance is one of the handshake record's fields");
+        let message = "authenticated product session";
+        let client_id = handshake.client_id.as_str();
+        let surface_kind = handshake.surface_kind;
+        let surface_instance = handshake.surface_instance.as_str();
+        let values = [
+            (&message_field, Some(&message as &dyn tracing::field::Value)),
+            (
+                &principal_field,
+                Some(&principal_id as &dyn tracing::field::Value),
+            ),
+            (
+                &client_field,
+                Some(&client_id as &dyn tracing::field::Value),
+            ),
+            (
+                &kind_field,
+                Some(&surface_kind as &dyn tracing::field::Value),
+            ),
+            (
+                &instance_field,
+                Some(&surface_instance as &dyn tracing::field::Value),
+            ),
+        ];
+        let values = fields.value_set(&values);
+        dispatch.event(&tracing::Event::new(&META, &values));
+    });
+}
+
+/// Refuse an instance the product schema does not admit. Kind is the generated
+/// enum, so an unknown kind never reaches here.
+fn bounded_surface(params: &SessionAuthenticateParams) -> Result<RecordedHandshake, &'static str> {
+    let characters = params.surface.instance.chars().count();
+    if characters == 0 {
+        return Err("unauthorized");
+    }
+    if characters > MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS {
+        note_limit("product.max_surface_instance_characters");
+        return Err("unauthorized");
+    }
+    Ok(RecordedHandshake {
+        client_id: params.client.id.clone(),
+        surface_kind: params.surface.kind.as_str(),
+        surface_instance: params.surface.instance.clone(),
+    })
+}
+
 async fn receive_authentication<S, P>(
     socket: &mut S,
     state: &ProductRouteState,
     nonce: &str,
     deadline: Instant,
     proof: &P,
-) -> Result<(String, AuthenticatedSession), (String, &'static str)>
+) -> Result<(String, AuthenticatedSession, RecordedHandshake), (String, &'static str)>
 where
     S: Stream<Item = Result<Message, Error>> + Unpin,
     P: SessionProof<S>,
@@ -234,6 +335,10 @@ where
         note_limit("product.max_client_id_characters");
         return Err((frame.id, "unauthorized"));
     }
+    let handshake = match bounded_surface(&params) {
+        Ok(handshake) => handshake,
+        Err(code) => return Err((frame.id, code)),
+    };
     if let Some(id) = &state.browser_session_id {
         if !params.credential.is_empty() {
             return Err((frame.id, "unauthorized"));
@@ -287,7 +392,7 @@ where
                 ));
             }
         };
-        return Ok((frame.id, identity));
+        return Ok((frame.id, identity, handshake));
     }
     let evidence = CredentialEvidence::new(params.credential.into_bytes())
         .map_err(|_| (frame.id.clone(), "unauthorized"))?;
@@ -312,7 +417,7 @@ where
     if Instant::now() >= deadline {
         return Err((frame.id, "handshake_timeout"));
     }
-    Ok((frame.id, session))
+    Ok((frame.id, session, handshake))
 }
 
 fn credential_admin_code(error: CredentialAdminError) -> &'static str {
@@ -4605,7 +4710,8 @@ mod tests {
                 json!({
                     "type": "req", "id": "auth", "method": "session.authenticate", "params": {
                         "minVersion": 1, "maxVersion": 1, "nonce": challenge["payload"]["nonce"],
-                        "credential": "secret", "client": {"id": "test"}
+                        "credential": "secret", "client": {"id": "test"},
+                        "surface": {"kind": "cli", "instance": "test"}
                     }
                 })
                 .to_string()
@@ -4635,7 +4741,7 @@ mod tests {
         peer.input
             .send(Ok(Message::Text(
                 format!(
-                    r#"{{"type":"req","id":"auth","method":"session.authenticate","params":{{"minVersion":1,"maxVersion":1,"nonce":"{nonce}","credential":"wrong","credential":"secret","client":{{"id":"test"}}}}}}"#
+                    r#"{{"type":"req","id":"auth","method":"session.authenticate","params":{{"minVersion":1,"maxVersion":1,"nonce":"{nonce}","credential":"wrong","credential":"secret","client":{{"id":"test"}},"surface":{{"kind":"cli","instance":"test"}}}}}}"#
                 )
                 .into(),
             )))
@@ -4652,6 +4758,159 @@ mod tests {
         };
         assert_eq!(close.code, 4001);
         task.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_records_each_surface_and_keeps_the_credential_principal() {
+        let (captured, _guard) = info_log();
+        for (kind, instance) in [("desktop", "window-a"), ("panel", "window-b")] {
+            let (state, _) = fixture(MembershipRole::Member);
+            let (socket, mut peer) = test_socket(None);
+            let task = tokio::spawn(handle_socket(socket, state));
+            let Message::Text(challenge) = peer.message().await else {
+                panic!("challenge expected")
+            };
+            let challenge: Value = serde_json::from_str(&challenge).unwrap();
+            peer.input
+                .send(Ok(Message::Text(
+                    json!({
+                        "type": "req", "id": "auth", "method": "session.authenticate",
+                        "params": {
+                            "minVersion": 1, "maxVersion": 1,
+                            "nonce": challenge["payload"]["nonce"],
+                            "credential": "secret",
+                            "client": {"id": "nessa-panel"},
+                            "surface": {"kind": kind, "instance": instance}
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                )))
+                .unwrap();
+            let Message::Text(text) = peer.message().await else {
+                panic!("ready expected")
+            };
+            let value: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["ok"], true, "{value}");
+            assert_eq!(value["payload"]["principalId"], "principal");
+            task.abort();
+        }
+        let text = limit_text(&captured);
+        assert!(text.contains("surface_kind=\"desktop\""), "{text}");
+        assert!(text.contains("surface_instance=\"window-a\""), "{text}");
+        assert!(text.contains("surface_kind=\"panel\""), "{text}");
+        assert!(text.contains("surface_instance=\"window-b\""), "{text}");
+        assert!(text.contains("principal_id=\"principal\""), "{text}");
+        assert!(text.contains("client_id=\"nessa-panel\""), "{text}");
+        assert!(!text.contains("credential="), "{text}");
+        assert!(!text.contains("\"secret\""), "{text}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_refuses_a_surface_the_schema_does_not_admit() {
+        let (captured, _guard) = info_log();
+        let (state, _) = fixture(MembershipRole::Member);
+        let defects = [
+            json!({}),
+            json!({"kind": "phone", "instance": "window"}),
+            json!({"kind": "desktop", "instance": ""}),
+            json!({"kind": "desktop", "instance": "window", "role": "admin"}),
+        ];
+        for surface in defects {
+            let (socket, mut peer) = test_socket(None);
+            let task = tokio::spawn(handle_socket(socket, state.clone()));
+            let Message::Text(challenge) = peer.message().await else {
+                panic!("challenge expected")
+            };
+            let challenge: Value = serde_json::from_str(&challenge).unwrap();
+            let mut params = json!({
+                "minVersion": 1, "maxVersion": 1,
+                "nonce": challenge["payload"]["nonce"],
+                "credential": "secret",
+                "client": {"id": "test"},
+                "surface": {"kind": "desktop", "instance": "window"}
+            });
+            if surface.as_object().unwrap().is_empty() {
+                params.as_object_mut().unwrap().remove("surface");
+            } else {
+                params["surface"] = surface;
+            }
+            peer.input
+                .send(Ok(Message::Text(
+                    json!({
+                        "type": "req", "id": "auth", "method": "session.authenticate",
+                        "params": params
+                    })
+                    .to_string()
+                    .into(),
+                )))
+                .unwrap();
+            let Message::Text(text) = peer.message().await else {
+                panic!("refusal expected")
+            };
+            let value: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["id"], "auth");
+            assert_eq!(value["ok"], false);
+            assert_eq!(value["error"]["code"], "unauthorized");
+            let Message::Close(Some(close)) = peer.message().await else {
+                panic!("close expected")
+            };
+            assert_eq!(close.code, 4001);
+            task.abort();
+        }
+        assert!(
+            !limit_text(&captured).contains("authenticated product session"),
+            "{}",
+            limit_text(&captured)
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn surface_instance_bound_counts_characters_and_names_the_limit() {
+        let (captured, _guard) = info_log();
+        let exact = "😀".repeat(MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS);
+        let over = "😀".repeat(MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS + 1);
+        for (instance, admitted) in [(exact, true), (over, false)] {
+            let (state, _) = fixture(MembershipRole::Member);
+            let (socket, mut peer) = test_socket(None);
+            let task = tokio::spawn(handle_socket(socket, state));
+            let Message::Text(challenge) = peer.message().await else {
+                panic!("challenge expected")
+            };
+            let challenge: Value = serde_json::from_str(&challenge).unwrap();
+            peer.input
+                .send(Ok(Message::Text(
+                    json!({
+                        "type": "req", "id": "auth", "method": "session.authenticate",
+                        "params": {
+                            "minVersion": 1, "maxVersion": 1,
+                            "nonce": challenge["payload"]["nonce"],
+                            "credential": "secret",
+                            "client": {"id": "test"},
+                            "surface": {"kind": "web", "instance": instance}
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                )))
+                .unwrap();
+            let Message::Text(text) = peer.message().await else {
+                panic!("response expected")
+            };
+            let value: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["ok"], admitted, "{value}");
+            if !admitted {
+                assert_eq!(value["error"]["code"], "unauthorized");
+            }
+            task.abort();
+        }
+        let text = limit_text(&captured);
+        assert!(
+            text.contains("product.max_surface_instance_characters"),
+            "{text}"
+        );
+        assert!(text.contains("surface_kind=\"web\""), "{text}");
+        assert!(!text.contains("\"secret\""), "{text}");
     }
 
     #[tokio::test]
@@ -5161,6 +5420,15 @@ mod tests {
         fn make_writer(&'a self) -> Self {
             self.clone()
         }
+    }
+    fn info_log() -> (LimitLog, tracing::subscriber::DefaultGuard) {
+        let captured = LimitLog(Arc::new(std::sync::Mutex::new(Vec::new())));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(captured.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .finish();
+        (captured, tracing::subscriber::set_default(subscriber))
     }
     fn limit_log() -> (LimitLog, tracing::subscriber::DefaultGuard) {
         let captured = LimitLog(Arc::new(std::sync::Mutex::new(Vec::new())));

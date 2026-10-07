@@ -81,6 +81,29 @@
       "required": ["id"],
       "description": "Caller identification sent during the product handshake. This metadata does not grant permissions."
     },
+    "ProductSurfaceKind": {
+      "type": "string",
+      "enum": ["panel", "web", "desktop", "cli"],
+      "description": "Kind of user-facing surface. The same closed set as protocol/schemas/v1/common.json SurfaceKind; generation refuses a drift. Metadata only: it does not grant permissions."
+    },
+    "ProductSurface": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProductSurfaceKind",
+          "description": "Kind of user-facing surface."
+        },
+        "instance": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Identifier distinguishing instances of this surface."
+        }
+      },
+      "required": ["kind", "instance"],
+      "description": "Surface the handshake names so the gateway can tell connections that share a credential apart. The credential still decides identity."
+    },
     "SessionAuthenticateParams": {
       "type": "object",
       "additionalProperties": false,
@@ -112,9 +135,13 @@
         "client": {
           "$ref": "#/$defs/ProductClientMetadata",
           "description": "Descriptive client metadata, separate from authenticated identity."
+        },
+        "surface": {
+          "$ref": "#/$defs/ProductSurface",
+          "description": "Surface kind and instance. Descriptive only; the credential decides the principal."
         }
       },
-      "required": ["minVersion", "maxVersion", "nonce", "credential", "client"],
+      "required": ["minVersion", "maxVersion", "nonce", "credential", "client", "surface"],
       "description": "Wire request for session.authenticate. NessaClient.connect builds this after validating the server challenge; a successful response is ProductSessionReady."
     },
     "ProductSessionReady": {

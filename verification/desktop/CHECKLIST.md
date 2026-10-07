@@ -943,9 +943,10 @@ says why where the conversations would be.
   `conversation.read` holds, inside the chat area; and a turn sent from
   another surface under the same credential, once the gateway holds it, is
   drawn in the open transcript as its last two messages, the page not
-  reloaded (the gateway source's poller). Every handshake the window makes,
+  reloaded (the gateway source's poller).   Every handshake the window makes,
   each reconnect's too, is the first's: the host's endpoint, client
-  `nessa-panel`, principal `surface:nessa-panel`. No console error, page error
+  `nessa-panel`, surface kind `desktop` with an instance, principal
+  `surface:nessa-panel`. No console error, page error
   or failed request at any point. In Chromium and WebKit. The reply compared
   is a text-only one (only text parts, plain text, not empty), which the
   window draws as its text alone; an agent that answers otherwise leaves the
