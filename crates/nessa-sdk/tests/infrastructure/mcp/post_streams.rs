@@ -1,5 +1,6 @@
-//! ADR 392 P1–P8: owned POST bodies under controlled chunk/header ordering.
+//! ADR 392 P1–P14: owned HTTP readers under controlled chunk/header/cleanup ordering.
 use super::super::connection::Connection;
+use super::super::framing::MAX_FRAME_BYTES;
 use super::super::http::{HttpSession, SendOutcome, SessionClaims, MAX_POST_STREAMS};
 use super::super::{
     HttpBody, HttpChunks, HttpExchange, HttpFailure, HttpMethod, HttpRequest, HttpResponse,
@@ -585,5 +586,391 @@ async fn post_drop_outside_runtime_context_joins_body() {
     let mut finished = session.finished();
     std::thread::spawn(move || drop(session)).join().unwrap();
     bounded(finished.wait_for(|done| *done)).await.unwrap();
+    assert_eq!(probe.dropped.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn post_terminal_precedes_bad_trailing_event() {
+    for terminal in [
+        json!({"id":1,"result":{}}),
+        json!({"id":1,"error":{"code":-1}}),
+    ] {
+        for trailing in [b"data: \xff\n\n".to_vec(), vec![b'x'; MAX_FRAME_BYTES + 1]] {
+            let (probe, body) = Probe::body();
+            let mut chunk = format!("data: {terminal}\n\n").into_bytes();
+            chunk.extend(trailing);
+            probe.send.send(Ok(Some(chunk))).unwrap();
+            let (session, mut incoming) = session(Peer::new(vec![body]));
+            dispatch(&session, 1).await;
+            let received = bounded(incoming.recv()).await.unwrap().unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&received).unwrap(),
+                terminal
+            );
+            probe.released().await;
+            assert!(incoming.try_recv().is_err());
+            finish(&session).await;
+        }
+    }
+}
+
+struct InitializationPeer {
+    get_bodies: Mutex<VecDeque<HttpBody>>,
+    gets: AtomicUsize,
+    calls: AtomicUsize,
+    recover: bool,
+    headers: Option<Arc<Notify>>,
+    entered: Notify,
+}
+
+#[async_trait]
+impl HttpExchange for InitializationPeer {
+    async fn exchange(&self, request: HttpRequest) -> Result<HttpResponse, HttpFailure> {
+        match request.method {
+            HttpMethod::Get => {
+                let version = request.headers.iter().find_map(|(name, value)| {
+                    name.eq_ignore_ascii_case("MCP-Protocol-Version")
+                        .then_some(value.as_str())
+                });
+                assert_eq!(version, Some("2025-06-18"));
+                self.gets.fetch_add(1, Ordering::SeqCst);
+                Ok(HttpResponse {
+                    status: 200,
+                    headers: vec![("content-type".into(), "text/event-stream".into())],
+                    body: self
+                        .get_bodies
+                        .lock()
+                        .unwrap()
+                        .pop_front()
+                        .expect("scripted GET"),
+                })
+            }
+            HttpMethod::Delete => Ok(HttpResponse {
+                status: 202,
+                headers: vec![],
+                body: HttpBody::Buffered(vec![]),
+            }),
+            HttpMethod::Post => {
+                let message: Value = serde_json::from_slice(&request.body).unwrap();
+                if message["method"] == "initialize" {
+                    self.entered.notify_one();
+                    if let Some(headers) = &self.headers {
+                        headers.notified().await;
+                    }
+                    return Ok(HttpResponse { status: 200, headers: vec![("content-type".into(), "application/json".into()), ("mcp-session-id".into(), "new-session".into())], body: HttpBody::Buffered(serde_json::to_vec(&json!({"id":message["id"],"result":{"protocolVersion":"2025-06-18"}})).unwrap()) });
+                }
+                if message.get("id").is_none() {
+                    return Ok(HttpResponse {
+                        status: 202,
+                        headers: vec![],
+                        body: HttpBody::Buffered(vec![]),
+                    });
+                }
+                let first_call = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
+                assert!(self.recover && first_call);
+                Ok(HttpResponse {
+                    status: 404,
+                    headers: vec![],
+                    body: HttpBody::Buffered(vec![]),
+                })
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn late_initialize_after_close_does_not_claim_or_start_get() {
+    let gate = Arc::new(Notify::new());
+    let peer = Arc::new(InitializationPeer {
+        get_bodies: Mutex::new(VecDeque::new()),
+        gets: AtomicUsize::new(0),
+        calls: AtomicUsize::new(0),
+        recover: false,
+        headers: Some(gate.clone()),
+        entered: Notify::new(),
+    });
+    let claims = Arc::new(SessionClaims::default());
+    let (session, _incoming) = HttpSession::open(
+        Uuid::from_u128(1),
+        RemoteMcpUrl::parse("http://127.0.0.1/mcp").unwrap(),
+        peer.clone(),
+        Arc::new(NoAuthorization),
+        claims.clone(),
+    );
+    let initialize = serde_json::to_vec(&json!({"id":1,"method":"initialize"})).unwrap();
+    let mut send = Box::pin(session.dispatch(&initialize));
+    bounded(async { tokio::select! { _ = &mut send => panic!("headers escaped gate"), _ = peer.entered.notified() => {} } }).await;
+    finish(&session).await;
+    gate.notify_one();
+    assert!(matches!(
+        bounded(send).await,
+        SendOutcome::End(McpError::Closed)
+    ));
+    assert_eq!(peer.gets.load(Ordering::SeqCst), 0);
+    assert!(claims.claim("http://127.0.0.1/mcp", "new-session", u64::MAX));
+    claims.release("http://127.0.0.1/mcp", "new-session", u64::MAX);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retired_get_reader_remains_close_owned() {
+    let (old_probe, old_body) = Probe::body();
+    let (new_probe, new_body) = Probe::body();
+    let gate = Arc::new(DropGate {
+        entered: Notify::new(),
+        released: Mutex::new(false),
+        ready: Condvar::new(),
+    });
+    let _release_on_drop = ReleaseOnDrop(gate.clone());
+    *old_probe.drop_gate.lock().unwrap() = Some(gate.clone());
+    let peer = Arc::new(InitializationPeer {
+        get_bodies: Mutex::new(vec![old_body, new_body].into()),
+        gets: AtomicUsize::new(0),
+        calls: AtomicUsize::new(0),
+        recover: true,
+        headers: None,
+        entered: Notify::new(),
+    });
+    let (session, _incoming) = HttpSession::open(
+        Uuid::from_u128(1),
+        RemoteMcpUrl::parse("http://127.0.0.1/mcp").unwrap(),
+        peer.clone(),
+        Arc::new(NoAuthorization),
+        Arc::new(SessionClaims::default()),
+    );
+    let initialize = serde_json::to_vec(&json!({"id":1,"method":"initialize"})).unwrap();
+    assert!(matches!(
+        session.dispatch(&initialize).await,
+        SendOutcome::Done
+    ));
+    old_probe.polled(1).await;
+    assert!(matches!(
+        dispatch(&session, 2).await,
+        SendOutcome::FailCall {
+            id: Some(2),
+            error: McpError::SessionExpired
+        }
+    ));
+    new_probe.polled(1).await;
+    bounded(gate.entered.notified()).await;
+    let mut finished = session.finished();
+    session.shutdown();
+    let premature =
+        tokio::time::timeout(Duration::from_millis(50), finished.wait_for(|done| *done))
+            .await
+            .is_ok();
+    gate.release();
+    assert!(!premature, "retired GET reader lost close ownership");
+    bounded(finished.wait_for(|done| *done)).await.unwrap();
+    assert_eq!(old_probe.dropped.load(Ordering::SeqCst), 1);
+    assert_eq!(new_probe.dropped.load(Ordering::SeqCst), 1);
+    assert_eq!(peer.gets.load(Ordering::SeqCst), 2);
+}
+
+struct InitializePrefix {
+    peer: Arc<InitializationPeer>,
+    unrelated: bool,
+}
+
+#[async_trait]
+impl HttpExchange for InitializePrefix {
+    async fn exchange(&self, request: HttpRequest) -> Result<HttpResponse, HttpFailure> {
+        let initialize = request.method == HttpMethod::Post
+            && serde_json::from_slice::<Value>(&request.body).unwrap()["method"] == "initialize";
+        let mut response = self.peer.exchange(request).await?;
+        if initialize {
+            let HttpBody::Buffered(bytes) = response.body else {
+                panic!("buffered scripted initialize")
+            };
+            let result: Value = serde_json::from_slice(&bytes).unwrap();
+            let first = if self.unrelated {
+                json!({"id":999,"result":{"protocolVersion":"2024-11-05"}})
+            } else {
+                result.clone()
+            };
+            response.headers[0].1 = "text/event-stream".into();
+            response.body =
+                HttpBody::Buffered(format!("data: {first}\n\ndata: {result}\n\n").into_bytes());
+        }
+        Ok(response)
+    }
+}
+
+async fn initialize_prefix_owns_one_matching_phase(unrelated: bool) {
+    let (probe, body) = Probe::body();
+    let peer = Arc::new(InitializationPeer {
+        get_bodies: Mutex::new(vec![body].into()),
+        gets: AtomicUsize::new(0),
+        calls: AtomicUsize::new(0),
+        recover: false,
+        headers: None,
+        entered: Notify::new(),
+    });
+    let exchange = Arc::new(InitializePrefix {
+        peer: peer.clone(),
+        unrelated,
+    });
+    let authorization = Arc::new(NoAuthorization);
+    let (session, _incoming) = HttpSession::open(
+        Uuid::from_u128(1),
+        RemoteMcpUrl::parse("http://127.0.0.1/mcp").unwrap(),
+        exchange,
+        authorization.clone(),
+        Arc::new(SessionClaims::default()),
+    );
+    let initialize = serde_json::to_vec(&json!({"id":1,"method":"initialize"})).unwrap();
+    // The scripted exchange is ready. Disable cooperative budget yielding so
+    // spawned GET workers remain unpolled while their captured owners are counted.
+    assert!(matches!(
+        tokio::task::unconstrained(session.dispatch(&initialize)).await,
+        SendOutcome::Done
+    ));
+    assert_eq!(
+        Arc::strong_count(&authorization),
+        3,
+        "test owner, session, one GET worker"
+    );
+    probe.polled(1).await;
+    assert_eq!(peer.gets.load(Ordering::SeqCst), 1);
+    finish(&session).await;
+    assert_eq!(probe.dropped.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn repeated_initialize_result_owns_one_get() {
+    initialize_prefix_owns_one_matching_phase(false).await;
+}
+
+#[tokio::test]
+async fn unrelated_response_does_not_own_initialize_phase() {
+    initialize_prefix_owns_one_matching_phase(true).await;
+}
+
+struct LegacyHeaders {
+    body: Mutex<Option<HttpBody>>,
+    gate: Arc<Notify>,
+    entered: Notify,
+}
+
+#[async_trait]
+impl HttpExchange for LegacyHeaders {
+    async fn exchange(&self, request: HttpRequest) -> Result<HttpResponse, HttpFailure> {
+        match request.method {
+            HttpMethod::Post => Ok(HttpResponse {
+                status: 405,
+                headers: vec![],
+                body: HttpBody::Buffered(vec![]),
+            }),
+            HttpMethod::Get => {
+                self.entered.notify_one();
+                self.gate.notified().await;
+                Ok(HttpResponse {
+                    status: 200,
+                    headers: vec![("content-type".into(), "text/event-stream".into())],
+                    body: self.body.lock().unwrap().take().unwrap(),
+                })
+            }
+            HttpMethod::Delete => panic!("no modern session was claimed"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn late_legacy_get_after_close_releases_body() {
+    let (probe, body) = Probe::body();
+    probe
+        .send
+        .send(Ok(Some(b"event: endpoint\ndata: /messages\n\n".to_vec())))
+        .unwrap();
+    let gate = Arc::new(Notify::new());
+    let peer = Arc::new(LegacyHeaders {
+        body: Mutex::new(Some(body)),
+        gate: gate.clone(),
+        entered: Notify::new(),
+    });
+    let (session, _incoming) = HttpSession::open(
+        Uuid::from_u128(1),
+        RemoteMcpUrl::parse("http://127.0.0.1/mcp").unwrap(),
+        peer.clone(),
+        Arc::new(NoAuthorization),
+        Arc::new(SessionClaims::default()),
+    );
+    let initialize = serde_json::to_vec(&json!({"id":1,"method":"initialize"})).unwrap();
+    let mut send = Box::pin(session.dispatch(&initialize));
+    bounded(async { tokio::select! { _ = &mut send => panic!("legacy GET escaped headers gate"), _ = peer.entered.notified() => {} } }).await;
+    finish(&session).await;
+    gate.notify_one();
+    assert!(matches!(
+        bounded(send).await,
+        SendOutcome::End(McpError::Closed)
+    ));
+    assert_eq!(probe.dropped.load(Ordering::SeqCst), 1);
+}
+
+struct WrongRecovery {
+    peer: Arc<InitializationPeer>,
+    initialized: AtomicUsize,
+}
+
+#[async_trait]
+impl HttpExchange for WrongRecovery {
+    async fn exchange(&self, request: HttpRequest) -> Result<HttpResponse, HttpFailure> {
+        let message = if request.method == HttpMethod::Post {
+            serde_json::from_slice::<Value>(&request.body).unwrap()
+        } else {
+            Value::Null
+        };
+        if message["method"] == "notifications/initialized" {
+            self.initialized.fetch_add(1, Ordering::SeqCst);
+        }
+        let recovery = message["method"] == "initialize" && message["id"] == 0;
+        let mut response = self.peer.exchange(request).await?;
+        if recovery {
+            response.body = HttpBody::Buffered(
+                serde_json::to_vec(&json!({"id":999,"result":{"protocolVersion":"2025-06-18"}}))
+                    .unwrap(),
+            );
+        }
+        Ok(response)
+    }
+}
+
+#[tokio::test]
+async fn wrong_id_json_recovery_does_not_publish_readiness() {
+    let (probe, body) = Probe::body();
+    let peer = Arc::new(InitializationPeer {
+        get_bodies: Mutex::new(vec![body].into()),
+        gets: AtomicUsize::new(0),
+        calls: AtomicUsize::new(0),
+        recover: true,
+        headers: None,
+        entered: Notify::new(),
+    });
+    let exchange = Arc::new(WrongRecovery {
+        peer: peer.clone(),
+        initialized: AtomicUsize::new(0),
+    });
+    let claims = Arc::new(SessionClaims::default());
+    let (session, _incoming) = HttpSession::open(
+        Uuid::from_u128(1),
+        RemoteMcpUrl::parse("http://127.0.0.1/mcp").unwrap(),
+        exchange.clone(),
+        Arc::new(NoAuthorization),
+        claims.clone(),
+    );
+    let initialize = serde_json::to_vec(&json!({"id":1,"method":"initialize"})).unwrap();
+    assert!(matches!(
+        session.dispatch(&initialize).await,
+        SendOutcome::Done
+    ));
+    probe.polled(1).await;
+    assert!(matches!(
+        dispatch(&session, 2).await,
+        SendOutcome::End(McpError::SessionExpired)
+    ));
+    assert_eq!(peer.gets.load(Ordering::SeqCst), 1);
+    assert_eq!(exchange.initialized.load(Ordering::SeqCst), 0);
+    assert!(claims.claim("http://127.0.0.1/mcp", "new-session", u64::MAX));
+    claims.release("http://127.0.0.1/mcp", "new-session", u64::MAX);
+    finish(&session).await;
     assert_eq!(probe.dropped.load(Ordering::SeqCst), 1);
 }

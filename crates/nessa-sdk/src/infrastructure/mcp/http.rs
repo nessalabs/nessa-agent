@@ -20,7 +20,7 @@
 //!
 //! POST event streams are session-owned and separately bounded. A request reader
 //! forwards notices/requests until its matching result/error, then drops the body
-//! even if the peer leaves it open (ADR 392 P1–P8 and `tests::post_streams`).
+//! even if the peer leaves it open (ADR 392 P1–P14 and `tests::post_streams`).
 //!
 //! Dropping the session aborts its GET and POST streams and asks for the same single
 //! DELETE. The DELETE itself is best-effort and bounded by the exchange.
@@ -110,8 +110,7 @@ pub struct HttpSession {
     phase: Mutex<Phase>,
     closing: AtomicBool,
     delete_started: AtomicBool,
-    get_task: Mutex<Option<JoinHandle<()>>>,
-    post_tasks: Mutex<Vec<PostReader>>,
+    readers: Mutex<ReaderTasks>,
     post_capacity: Arc<Semaphore>,
     /// Becomes true once close has nothing left to wait for, including a
     /// DELETE that does not apply.
@@ -120,6 +119,21 @@ pub struct HttpSession {
 
 /// Retained POST readers, independent of pending JSON-RPC call capacity.
 pub(crate) const MAX_POST_STREAMS: usize = 256;
+
+#[derive(Default)]
+struct ReaderTasks {
+    get: Vec<JoinHandle<()>>,
+    post: Vec<PostReader>,
+}
+
+impl ReaderTasks {
+    fn stop_get(&mut self) {
+        for task in &self.get {
+            task.abort();
+        }
+        self.get.retain(|task| !task.is_finished());
+    }
+}
 
 struct PostReader {
     request_id: Option<u64>,
@@ -168,8 +182,7 @@ impl HttpSession {
             }),
             closing: AtomicBool::new(false),
             delete_started: AtomicBool::new(false),
-            get_task: Mutex::new(None),
-            post_tasks: Mutex::new(Vec::new()),
+            readers: Mutex::new(ReaderTasks::default()),
             post_capacity: Arc::new(Semaphore::new(MAX_POST_STREAMS)),
             finished: watch::channel(false).0,
         });
@@ -190,13 +203,15 @@ impl HttpSession {
         if self.delete_started.swap(true, Ordering::SeqCst) {
             return;
         }
-        let readers: Vec<_> = {
-            let mut readers = self.post_tasks.lock().expect("post streams");
+        let (readers, get_task): (Vec<_>, _) = {
+            let mut readers = self.readers.lock().expect("http readers");
             self.closing.store(true, Ordering::SeqCst);
-            readers.drain(..).collect()
+            (
+                readers.post.drain(..).collect(),
+                readers.get.drain(..).collect::<Vec<_>>(),
+            )
         };
-        let get_task = self.get_task.lock().expect("get stream").take();
-        if let Some(task) = &get_task {
+        for task in &get_task {
             task.abort();
         }
         for reader in &readers {
@@ -225,7 +240,7 @@ impl HttpSession {
             for reader in readers {
                 let _ = reader.task.await;
             }
-            if let Some(task) = get_task {
+            for task in get_task {
                 let _ = task.await;
             }
             let Some(session_id) = session_id else {
@@ -312,7 +327,7 @@ impl HttpSession {
 
     /// Stop this call's local POST reader, independently of remote cancellation.
     pub(crate) fn cancel_post(&self, id: u64) {
-        for reader in self.post_tasks.lock().expect("post streams").iter() {
+        for reader in self.readers.lock().expect("http readers").post.iter() {
             if reader.request_id == Some(id) {
                 reader.task.abort();
             }
@@ -320,9 +335,10 @@ impl HttpSession {
     }
 
     fn reap_post_readers(&self) {
-        self.post_tasks
+        self.readers
             .lock()
-            .expect("post streams")
+            .expect("http readers")
+            .post
             .retain(|reader| !reader.task.is_finished());
     }
 
@@ -386,8 +402,8 @@ impl HttpSession {
             let streamed = matches!(response.body, super::http_exchange::HttpBody::Stream(_));
             if streamed && method != Some("initialize") {
                 let request_id = method.and(id);
-                let mut readers = self.post_tasks.lock().expect("post streams");
-                readers.retain(|reader| !reader.task.is_finished());
+                let mut readers = self.readers.lock().expect("http readers");
+                readers.post.retain(|reader| !reader.task.is_finished());
                 if self.closing.load(Ordering::SeqCst) {
                     return SendOutcome::End(McpError::Closed);
                 }
@@ -399,7 +415,7 @@ impl HttpSession {
                 let task = self
                     .runtime
                     .spawn(forward_open_sse(response, inbound, request_id));
-                readers.push(PostReader {
+                readers.post.push(PostReader {
                     request_id,
                     task,
                     _permit: permit,
@@ -424,7 +440,7 @@ impl HttpSession {
                 return SendOutcome::End(McpError::Unconfirmed)
             }
         };
-        if let Err(error) = self.note_response(&bytes, method, session_header.as_deref()) {
+        if let Err(error) = self.note_response(&bytes, method, id, session_header.as_deref()) {
             return SendOutcome::End(error);
         }
         self.push_inbound(bytes).await
@@ -546,9 +562,17 @@ impl HttpSession {
         }
         let (endpoint_tx, endpoint_rx) = tokio::sync::oneshot::channel();
         let inbound = self.inbound.clone();
-        let closing = &self.closing;
-        let task = tokio::spawn(read_legacy_stream(response, inbound, Some(endpoint_tx)));
-        *self.get_task.lock().expect("get stream") = Some(task);
+        {
+            let mut readers = self.readers.lock().expect("http readers");
+            if self.closing.load(Ordering::SeqCst) {
+                return SendOutcome::End(McpError::Closed);
+            }
+            let task = self
+                .runtime
+                .spawn(read_legacy_stream(response, inbound, Some(endpoint_tx)));
+            readers.stop_get();
+            readers.get.push(task);
+        }
         let endpoint = match endpoint_rx.await {
             Ok(endpoint) => endpoint,
             Err(_) => return SendOutcome::End(McpError::Handshake("no endpoint event".into())),
@@ -558,11 +582,15 @@ impl HttpSession {
                 "the legacy endpoint is not on the configured origin".into(),
             ));
         };
-        if closing.load(Ordering::SeqCst) {
-            return SendOutcome::End(McpError::Closed);
+        {
+            let _readers = self.readers.lock().expect("http readers");
+            if self.closing.load(Ordering::SeqCst) {
+                return SendOutcome::End(McpError::Closed);
+            }
+            let mut phase = self.phase.lock().expect("http phase");
+            phase.legacy_post = Some(post.as_str().to_owned());
+            phase.open = true;
         }
-        self.phase.lock().expect("http phase").legacy_post = Some(post.as_str().to_owned());
-        self.phase.lock().expect("http phase").open = true;
         self.post_legacy(post.as_str(), initialize, id).await
     }
 
@@ -686,7 +714,7 @@ impl HttpSession {
                     continue;
                 }
                 if let Err(error) =
-                    self.note_response(event.data.as_bytes(), method, session_header.as_deref())
+                    self.note_response(event.data.as_bytes(), method, id, session_header.as_deref())
                 {
                     return SendOutcome::End(error);
                 }
@@ -740,7 +768,7 @@ impl HttpSession {
                 continue;
             }
             if let Err(error) =
-                self.note_response(event.data.as_bytes(), method, session_header.as_deref())
+                self.note_response(event.data.as_bytes(), method, id, session_header.as_deref())
             {
                 return SendOutcome::End(error);
             }
@@ -777,8 +805,12 @@ impl HttpSession {
             if event.data.is_empty() {
                 continue;
             }
-            self.note_response(event.data.as_bytes(), Some("initialize"), session_header)?;
-            noted = true;
+            noted |= self.note_response(
+                event.data.as_bytes(),
+                Some("initialize"),
+                Some(0),
+                session_header,
+            )?;
         }
         if noted {
             Ok(())
@@ -791,14 +823,24 @@ impl HttpSession {
         &self,
         body: &[u8],
         method: Option<&str>,
+        request_id: Option<u64>,
         session_header: Option<&str>,
-    ) -> Result<(), McpError> {
+    ) -> Result<bool, McpError> {
         if method != Some("initialize") {
-            return Ok(());
+            return Ok(false);
         }
         let message: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-        if message.get("result").is_none() {
-            return Ok(());
+        if !request_id.is_some_and(|id| is_response_to(&message, id))
+            || message.get("result").is_none()
+        {
+            return Ok(false);
+        }
+        let mut readers = self.readers.lock().expect("http readers");
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(McpError::Closed);
+        }
+        if self.phase.lock().expect("http phase").open {
+            return Ok(true);
         }
         if let Some(version) = message
             .get("result")
@@ -811,8 +853,8 @@ impl HttpSession {
         }
         let Some(session_id) = session_header.filter(|id| !id.is_empty()) else {
             self.phase.lock().expect("http phase").open = true;
-            self.start_get(None);
-            return Ok(());
+            self.start_get(None, &mut readers);
+            return Ok(true);
         };
         if session_id.len() > 1024 {
             return Err(McpError::TooLarge("Mcp-Session-Id"));
@@ -825,11 +867,11 @@ impl HttpSession {
         phase.claimed = true;
         phase.open = true;
         drop(phase);
-        self.start_get(Some(session_id.to_owned()));
-        Ok(())
+        self.start_get(Some(session_id.to_owned()), &mut readers);
+        Ok(true)
     }
 
-    fn start_get(&self, session_id: Option<String>) {
+    fn start_get(&self, session_id: Option<String>, readers: &mut ReaderTasks) {
         if self.phase.lock().expect("http phase").legacy_post.is_some() {
             return;
         }
@@ -842,7 +884,7 @@ impl HttpSession {
         let inbound = self.inbound.clone();
         let authorization = self.authorization.clone();
         let server = self.server;
-        let task = tokio::spawn(async move {
+        let task = self.runtime.spawn(async move {
             let mut headers = vec![("Accept".into(), "text/event-stream".into())];
             headers.push(("Mcp-Session-Id".into(), session_id));
             if let Some(version) = version {
@@ -868,9 +910,8 @@ impl HttpSession {
             }
             read_legacy_stream(response, inbound, None).await;
         });
-        if let Some(previous) = self.get_task.lock().expect("get stream").replace(task) {
-            previous.abort();
-        }
+        readers.stop_get();
+        readers.get.push(task);
     }
 
     async fn recover(&self, id: Option<u64>) -> SendOutcome {
@@ -892,9 +933,7 @@ impl HttpSession {
                 self.claims.release(self.url.as_str(), old, self.local);
             }
         }
-        if let Some(task) = self.get_task.lock().expect("get stream").take() {
-            task.abort();
-        }
+        self.readers.lock().expect("http readers").stop_get();
         if self.closing.load(Ordering::SeqCst) {
             return SendOutcome::End(McpError::Closed);
         }
@@ -926,8 +965,10 @@ impl HttpSession {
                 Ok(bytes) => bytes,
                 Err(_) => return SendOutcome::End(McpError::SessionExpired),
             };
-            if let Err(error) = self.note_response(&bytes, Some("initialize"), header.as_deref()) {
-                return SendOutcome::End(error);
+            match self.note_response(&bytes, Some("initialize"), Some(0), header.as_deref()) {
+                Ok(true) => {}
+                Ok(false) => return SendOutcome::End(McpError::SessionExpired),
+                Err(error) => return SendOutcome::End(error),
             }
         }
         if self.closing.load(Ordering::SeqCst) {
@@ -1017,37 +1058,42 @@ async fn forward_open_sse(
                 return;
             }
         };
-        let events = match parser.push(&chunk) {
-            Ok(events) => events,
-            Err(SseError::TooLarge) => {
-                let _ = inbound.send(Err(McpError::TooLarge("an SSE event"))).await;
-                return;
-            }
-            Err(SseError::Utf8) => {
-                let _ = inbound
-                    .send(Err(McpError::Malformed("an SSE event is not UTF-8".into())))
-                    .await;
-                return;
-            }
-        };
-        for event in events {
+        let mut chunk = chunk.as_slice();
+        loop {
+            let event = match parser.next_event(&mut chunk) {
+                Ok(Some(event)) => event,
+                Ok(None) => break,
+                Err(SseError::TooLarge) => {
+                    let _ = inbound.send(Err(McpError::TooLarge("an SSE event"))).await;
+                    return;
+                }
+                Err(SseError::Utf8) => {
+                    let _ = inbound
+                        .send(Err(McpError::Malformed("an SSE event is not UTF-8".into())))
+                        .await;
+                    return;
+                }
+            };
             if event.data.is_empty() {
                 continue;
             }
             let matched = request_id.is_some_and(|id| {
                 serde_json::from_str::<Value>(&event.data)
                     .ok()
-                    .is_some_and(|message| {
-                        message.get("method").is_none()
-                            && message.get("id").and_then(Value::as_u64) == Some(id)
-                            && (message.get("result").is_some() ^ message.get("error").is_some())
-                    })
+                    .is_some_and(|message| is_response_to(&message, id))
             });
             if inbound.send(Ok(event.data.into_bytes())).await.is_err() || matched {
                 return;
             }
         }
     }
+}
+
+/// Correlation and terminal shape shared by POST retirement and initialization.
+fn is_response_to(message: &Value, id: u64) -> bool {
+    message.get("method").is_none()
+        && message.get("id").and_then(Value::as_u64) == Some(id)
+        && (message.get("result").is_some() ^ message.get("error").is_some())
 }
 
 enum Modern {

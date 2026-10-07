@@ -307,7 +307,8 @@ ownership. Mandatory audit has its own documented bounded delivery attempts.
 calls. Its collection retains at most 256 handles (`MAX_POST_STREAMS`), including
 aborted readers until reaped after completion. The semaphore is the sole capacity
 authority: each retained reader holds its permit beside its task handle through
-reaping or close joining. Admission and close use the collection lock;
+reaping or close joining. Initialization identity and GET/POST reader admission share one reader-registry
+lock with close;
 readers own the response and inbound sender, with no reference back to the session.
 Before a non-initialize request POST, a capacity permit is reserved, or the call
 is refused with `Busy` before exchange. JSON/202/failure releases that permit;
@@ -315,6 +316,22 @@ a streamed response holds it through reader teardown. Notification and ping-repl
 POSTs bypass request reservation so they can unblock active streams. If those
 POSTs unexpectedly return a stream, they acquire available capacity or end with
 `Unconfirmed` after dropping the excess body. This does not claim cancellation.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Reserved: pre-POST capacity permit
+    Reserved --> Reading: response registered with JoinHandle
+    Reserved --> Released: JSON / 202 / exchange failure
+    Reading --> Finished: matching terminal / EOF / body failure
+    Reading --> Stopping: caller cancellation / session close (abort)
+    Stopping --> Finished: task destruction completes
+    Finished --> Released: is_finished reaping / close await joins
+    Released --> [*]: retained permit dropped
+```
+
+The permit and registered task handle enforce these resource states; the ordering
+table below names their regression tests. An unexpected notification/reply stream
+acquires its permit when its body is admitted, joining Reading directly.
 
 The client ends a request's POST stream after forwarding its matching result or
 error. This is a client resource-lifetime policy: the specification recommends
@@ -338,6 +355,12 @@ are reaped at admission.
 | P6 | POST exchange returns streamed body after close drained readers | Reject late admission with `Closed`, drop body | `post_late_body_after_close_is_dropped` |
 | P7 | Reader handles fill their independent bound; pending calls need not remain | Refuse next request before exchange; completed/aborted readers regain capacity | `post_reader_bound_refuses_before_exchange_and_recovers` |
 | P8 | Notification/ping response unexpectedly returns SSE with full reader capacity | Drop excess body and end with `Unconfirmed`; bypass reservation for ordinary 202 replies | `post_notification_stream_at_capacity_is_unconfirmed` |
+| P9 | Matching result/error is followed in the same HTTP chunk by invalid UTF-8 or an oversize event | Shared parser yields one event at a time; forward terminal and release body before interpreting trailing bytes | `post_terminal_precedes_bad_trailing_event` |
+| P10 | Initialize result arrives after close; close races identity publication and GET registration | Close's registry fence refuses identity/GET admission with `Closed`; no leaked session-id claim or late GET exchange | `late_initialize_after_close_does_not_claim_or_start_get`, `late_legacy_get_after_close_releases_body` |
+| P11 | One 404 recovery retires an active GET, then close begins before retirement completes | Aborted GET handle remains registry-owned until finished/reaped or joined by close; initial GET and the one recovery GET bound retained ownership on the public lifecycle | `retired_get_reader_remains_close_owned` |
+| P12 | One initialize body repeats its matching result | First matching result owns phase identity/version and one GET; repeats leave that phase untouched | `repeated_initialize_result_owns_one_get` |
+| P13 | Unrelated response precedes matching initialize result | Shared request-id/terminal matcher prevents unrelated data from owning negotiated identity/version; matching result establishes phase | `unrelated_response_does_not_own_initialize_phase` |
+| P14 | Recovery JSON body contains only an unrelated response id | Refuse with `SessionExpired` before initialized notification, GET or new session-id claim; recovery requires admitted initialization evidence | `wrong_id_json_recovery_does_not_publish_readiness` |
 
 ```mermaid
 sequenceDiagram
