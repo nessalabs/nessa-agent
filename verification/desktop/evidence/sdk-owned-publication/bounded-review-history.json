@@ -40,5 +40,12 @@
   ],
   "next_review_round": null,
   "budget_reset": false,
-  "limits": "Independent local R5 clean, no budget reset. Root full SDK exacthead passes; combined gates and exact-head CI/external review pending. No merge approval yet."
+  "limits": "Independent local R5 clean, no budget reset. Root full SDK exacthead passes; combined gates and exact-head CI/external review pending. No merge approval yet.",
+  "external_codex_adjudication": {
+    "comment": 4208337174,
+    "head": "3e65d96e44e27c502a6225ec16e554fe18c4a152",
+    "valid_limitation": "Acknowledged never-bound absence then failed final snapshot leaves memoryClosed/durableClosing; fresh restoration cannot re-prove absent physical ownership.",
+    "disposition": "Both same-head R5 reviewers traced baseline and exact claims; no current628 final-write/restart recovery promise, rootresourcefree baseline alwaysIncomplete, actual Storeerror returned. Valid adjacent646/649/625 work; provisional adversarialMajor withdrawn with history preserved.",
+    "next_regression": "Actual red restart after selectively rejected terminal write requested in625646649test-onlybranch; not yet executed."
+  }
 }
