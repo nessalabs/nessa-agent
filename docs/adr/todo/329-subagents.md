@@ -824,6 +824,10 @@ Enforcers: the public coordinator tests in
 `tests/application/agent_execution/subagents/publication.rs` name rows 1–15,
 18–19, 21–36 and 38. `rejected_close_intent_is_persisted_before_cleanup_can_complete`
 adds the held-cleanup boundary for row 7. The library's
+`row_14_queued_root_drop_without_tokio_context_uses_original_live_runtime`
+enforces row 14 after queued success moves to a thread without Tokio context,
+while the originating runtime remains live; the stored Closed/Released/
+Acknowledged facts and same-session reopening are observed before runtime exit.
 `an_older_snapshot_does_not_replace_a_newer_seal` enforces row 16;
 `publication::tests::row_17_tokens_acknowledge_captured_progress_once_and_refuse_stale_generation`
 and the domain's `unbound_absence_token_refuses_child_closed_history_and_stale_completion`

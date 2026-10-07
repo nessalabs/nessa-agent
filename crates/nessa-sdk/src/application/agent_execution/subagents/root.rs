@@ -1,6 +1,6 @@
 //! Root admission retains transaction ownership until the caller claims its ID.
 use std::sync::Arc;
-use tokio::sync::oneshot;
+use tokio::{runtime::Handle, sync::oneshot};
 
 use super::{
     coordinator::{mint_lifetime, Shared},
@@ -14,6 +14,8 @@ use crate::domain::agent_execution::{
 
 struct DeliveryTicket {
     shared: Arc<Shared>,
+    // The Send caller may drop its queued result outside any runtime context.
+    executor: Handle,
     lifetime: Option<AgentLifetimeId>,
 }
 impl DeliveryTicket {
@@ -25,7 +27,7 @@ impl Drop for DeliveryTicket {
     fn drop(&mut self) {
         if let Some(lifetime) = self.lifetime.take() {
             let shared = Arc::clone(&self.shared);
-            tokio::spawn(async move {
+            self.executor.spawn(async move {
                 reconcile(&shared, &lifetime).await;
             });
         }
@@ -38,11 +40,14 @@ pub(super) async fn open(
     initiator: Initiator,
 ) -> Result<AgentLifetimeId, OwnershipFailure> {
     let (sender, receiver) = oneshot::channel();
-    tokio::spawn(async move {
+    let executor = Handle::current();
+    let delivery_executor = executor.clone();
+    executor.spawn(async move {
         let result = admit(&shared, session, initiator).await;
         // A successful queued result still owns the ID until synchronously claimed.
         let result = result.map(|lifetime| DeliveryTicket {
             shared,
+            executor: delivery_executor,
             lifetime: Some(lifetime),
         });
         let _ = sender.send(result);

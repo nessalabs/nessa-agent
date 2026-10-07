@@ -758,22 +758,31 @@ async fn row_14_queued_root_drop_without_tokio_context_uses_original_live_runtim
         dropped.is_ok(),
         "unclaimed delivery must not depend on drop-thread context"
     );
-    bounded(async {
+    let snapshot = bounded(async {
         loop {
-            if c.lifetime_state(&root) == Some(LifetimeState::Closed) {
-                break;
+            let snapshot = store.read().await.unwrap();
+            if snapshot
+                .lifetimes
+                .iter()
+                .any(|row| row.lifetime_id == root && row.state == LifetimeState::Closed)
+                && snapshot.settlements.iter().any(|row| {
+                    row.physical == PhysicalFact::Released
+                        && row.evidence == EvidenceFact::Acknowledged
+                })
+            {
+                break snapshot;
             }
             tokio::task::yield_now().await;
         }
     })
     .await;
-    let snapshot = store.read().await.unwrap();
+    assert_eq!(c.lifetime_state(&root), Some(LifetimeState::Closed));
     assert_eq!(snapshot.lifetimes[0].lifetime_id, root);
     assert_eq!(snapshot.lifetimes[0].state, LifetimeState::Closed);
     assert_eq!(snapshot.settlements[0].physical, PhysicalFact::Released);
     assert_eq!(snapshot.settlements[0].evidence, EvidenceFact::Acknowledged);
     assert!(c.participation(&root).is_none());
-    assert_eq!(c.close_cause(&root), Some(LifetimeCause::HostClose));
+    assert_eq!(c.close_cause(&root), Some(LifetimeCause::OwnerDisposed));
     let replacement = open(&c, "off-runtime").await.unwrap();
     assert_ne!(replacement, root);
     bounded(close(&c, &replacement)).await.unwrap();
