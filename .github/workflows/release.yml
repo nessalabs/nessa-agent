@@ -160,10 +160,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: corepack enable
       # The gate signs with `pnpm exec tauri signer sign` — the same command a
       # release signs with — so the Tauri CLI has to be installed here.
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/pnpm-install
+        with:
+          save: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test -p nessa-app --test updater_key_pairing --no-default-features
 
   build:
@@ -216,8 +217,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: corepack enable
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/pnpm-install
+        with:
+          save: ${{ github.ref == 'refs/heads/main' }}
       # Decides signing and notarization, and is the only thing that writes the
       # variables the bundler reads. A half-configured repository stops here,
       # naming the secret that is missing, rather than twenty minutes later

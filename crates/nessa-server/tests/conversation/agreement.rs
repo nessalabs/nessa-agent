@@ -8,6 +8,7 @@ use nessa_protocol::conversation::domain::{
 use nessa_protocol::conversation::view::MAX_STRUCTURED_CONTENT_BYTES;
 use nessa_sdk::domain::agent_execution::tools::MAX_MCP_NAME_BYTES;
 use nessa_sdk::domain::mcp_apps::MAX_UI_URI_BYTES;
+use nessa_sync::replication::catalogue::MAX_CATALOGUE_ENTRIES;
 use serde_json::Value;
 
 fn schema() -> Value {
@@ -41,6 +42,11 @@ fn the_list_schema_states_the_bounds_the_summary_rules_keep() {
         schema["$defs"]["ConversationListResult"]["properties"]["conversations"]["maxItems"]
             .as_u64(),
         Some(MAX_LISTED_CONVERSATIONS as u64)
+    );
+    assert_eq!(
+        schema["$defs"]["ConversationObserveResult"]["properties"]["conversations"]["maxItems"]
+            .as_u64(),
+        Some(MAX_CATALOGUE_ENTRIES as u64)
     );
 }
 

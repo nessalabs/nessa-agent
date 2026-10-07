@@ -38,8 +38,13 @@
  */
 import { pathToFileURL } from "node:url"
 
-/** Paths CI cannot form an opinion about, so a change confined to them is inert. */
-function inert(path) {
+/**
+ * Paths CI cannot form an opinion about, so a change confined to them is inert.
+ *
+ * `scripts/check-changed.mjs` asks this same function. A second copy of the
+ * extension check would be a second owner of the decision.
+ */
+export function inertPath(path) {
   return path.endsWith(".md")
 }
 
@@ -54,7 +59,7 @@ function inert(path) {
 export function documentationOnly(paths) {
   const changed = paths.map((path) => path.trim()).filter((path) => path.length > 0)
   if (changed.length === 0) return false
-  return changed.every(inert)
+  return changed.every(inertPath)
 }
 
 /** Read the changed paths from stdin, one per line. */
