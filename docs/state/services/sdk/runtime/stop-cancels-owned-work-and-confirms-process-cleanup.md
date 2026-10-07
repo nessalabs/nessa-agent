@@ -89,6 +89,29 @@ else keeps the same budget.
 
 Held by `infrastructure::process::tests`: `an_interrupted_group_kill_retries_then_returns_the_verdict` (the injected signal: interrupt then absence, a refusal asked once, and sixteen interrupts), `an_interrupted_group_signal_is_not_a_cleanup_failure`, `a_group_probe_classifies_delivery_refusal_and_absence`, `an_interrupted_reap_keeps_the_same_cleanup_budget`, `signalling_an_exited_unreaped_group_is_not_a_cleanup_failure` (the macOS zombie), and `a_group_that_refuses_signals_is_never_confirmed_gone`.
 
+## Linux container acceptance (#630)
+
+Linux cleanup requires an init that reaps adopted descendants: use Docker
+`--init`, or launch the owning process under `tini -s --`. A non-reaping PID 1
+can retain a killed descendant as a zombie, so process-group absence remains
+unconfirmed and private directories remain owned. The SDK does not enable a
+process-global subreaper or treat a zombie as an absent group.
+
+The opt-in [container harness](../../../../../scripts/process-cleanup/README.md)
+uses the same explicitly selected SDK library test executable and fixture mounts
+in four disposable PID namespaces. Its orderings are specified before the harness:
+
+| Ordering | Required observation | Evidence test |
+| --- | --- | --- |
+| Directory test exits under non-reaping PID 1; inspect before PID 1 exits | One failed test, `CleanupUncertain`, new PPID-1 zombie, retained private directory | negative directory acceptance; missing-zombie and wrong-failure unit cases |
+| ACP TERM-resistant parent creates child before `running`; close kills group; inspect after test exits | One failed test, `CleanupUncertain`, new PPID-1 zombie | negative ACP acceptance |
+| Either test runs with Docker `--init`; init adopts and reaps descendants before inspection | One passing test, no new orphan zombie, no retained private directory | both positive acceptances; zero-test and positive-failure unit cases |
+| Timeout, interrupt, validation or Docker failure during a scenario | Harness fails; removal attempted independently of cancelled work | orchestration removal-on-interrupt and failure tests |
+
+The harness supervisor waits only for its direct test process. Inspection occurs
+while that supervisor remains alive; container removal then destroys the disposable
+PID namespace, including its intentionally unreaped zombies.
+
 ## Further reading
 
 [Source](../../../../../src/conversation/adapters/store/slice.ts) · [Related source](../../../../../crates/nessa-server/src/conversation/application/provider_sessions.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/infrastructure/process.rs)

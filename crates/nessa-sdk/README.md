@@ -457,3 +457,13 @@ credentials. They separate host pipe delay from exchange waiting; they do not
 identify work inside the external adapter or distinguish its CPU time from
 scheduling, filesystem or network waits. Enabling this target is instrumentation,
 not a startup performance change.
+
+### Linux container process cleanup
+
+Run Linux container consumers under Docker `--init` or `tini -s --` so adopted
+descendants are reaped. A non-reaping PID 1 can retain zombies and leave process
+cleanup unconfirmed, preserving owned private directories. The
+[opt-in acceptance harness](../../scripts/process-cleanup/README.md) compares both
+conditions with the same explicitly selected SDK library test binary. The
+[canonical cleanup state](../../docs/state/services/sdk/runtime/stop-cancels-owned-work-and-confirms-process-cleanup.md#linux-container-acceptance-630)
+describes the ordering evidence.
