@@ -801,9 +801,11 @@ uncertain ports; whole-transaction panic supervision is separate #625 work.
 | 34 | Accepted reservation/store invokes factory with its typed gate; close races preparation | PrepareRequest carries the already remembered OwnedLifetime gate with the same scope/seal. Record possible transfer under the admission scope; parent close seals the actual installed Agent gate. Public participation cannot bypass the flight. |
 | 35 | Factory returns preparation Err after receiving a gate; safety audit rejects/uncertain; restart | Revoke attachment authority synchronously through that gate before audit/store awaits. Preserve startup progress and cleanup ownership; revocation alone proves no physical release or Closed lifecycle. Rejected+None promises no outstanding attachment/cleanup; Some retains unfinished cleanup. Restore derives the seal from retained nonrunnable startup/safety progress without another durable boolean. |
 
+| 36 | Restored rooted history is contradictory but its IDs remain retained | Return RefusedHistory with the supplied cleanup owner. Only existing sealed inspection gates remain readable; no new transfer/dispatch authority or snapshot rewriting. Save/reload preserves the exact refusal evidence. |
+
 Enforcers: the public coordinator tests in
 `tests/application/agent_execution/subagents/publication.rs` name rows 1–15,
-18–19 and 21–35. `rejected_close_intent_is_persisted_before_cleanup_can_complete`
+18–19 and 21–36. `rejected_close_intent_is_persisted_before_cleanup_can_complete`
 adds the held-cleanup boundary for row 7. The library's
 `an_older_snapshot_does_not_replace_a_newer_seal` enforces row 16;
 `publication::tests::row_17_tokens_acknowledge_captured_progress_once_and_refuse_stale_generation`
@@ -819,8 +821,10 @@ inspection-only gates and refuses transfer/dispatch across save/reload.
 The real Agent factory tests `row_34_factory_gate_installs_on_real_agent_and_shared_close_refuses_attachment`
 and `row_35_failed_factory_revokes_stale_real_agent_attachment_authority` enforce
 the accepted typed gate and attachment revocation. `row_35_restored_unfinished_cleanup_accepts_vacant_binding_but_keeps_attachment_sealed`
-preserves cleanup recovery. Open + Ended startup history refuses new transfer;
-Closing with unfinished physical cleanup remains recoverable. Factory inflight
+preserves cleanup recovery. Open + Ended { known: Reserved } completed-startup history refuses new transfer;
+Ended Prepared/TaskAdmitted facts do not prove physical absence; their sealed
+identities accept a vacant cleanup owner. Closing with unfinished physical
+cleanup remains recoverable. Factory inflight
 ownership remains the existing admitted transaction, not a progress-string flag.
 
 Row 8 proves release/capacity ordering, not propagation of every extra

@@ -1733,3 +1733,166 @@ async fn row_35_restored_unfinished_cleanup_accepts_vacant_binding_but_keeps_att
     close(&c, &root).await.unwrap();
     assert_eq!(closes.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn row_35_restored_ended_factual_owner_is_not_resource_absence() {
+    for prepared in [true, false] {
+        let store = Arc::new(MemoryOwnershipStore::new());
+        let audit = IndependentAudit::new();
+        let factory = ScriptFactory::new();
+        if prepared {
+            audit
+                .failures
+                .lock()
+                .unwrap()
+                .push_back((OwnershipMeaning::Attached, PortFailure::Rejected));
+        }
+        let c = coordinator(
+            store.clone(),
+            audit,
+            factory.clone(),
+            Arc::new(LiveCapacity::new(1)),
+        );
+        let root = open(&c, "a").await.unwrap();
+        let command = command(&root);
+        let result = c.spawn(command.clone()).await;
+        if prepared {
+            assert_eq!(result, Err(OwnershipFailure::Audit(PortFailure::Rejected)));
+        } else {
+            result.unwrap();
+        }
+        let mut graph = OwnershipGraph::restore(store.read().await.unwrap());
+        let known = graph.spawn_progress(&command.request_id).unwrap().known();
+        if prepared {
+            assert_eq!(known, KnownMilestone::Prepared);
+        } else {
+            assert!(matches!(known, KnownMilestone::TaskAdmitted { .. }));
+            let _ = graph
+                .advance_spawn(
+                    &command.request_id,
+                    SpawnProgress::Unconfirmed {
+                        known: known.clone(),
+                    },
+                )
+                .unwrap();
+        }
+        let _ = graph
+            .advance_spawn(
+                &command.request_id,
+                SpawnProgress::Draining {
+                    known: known.clone(),
+                },
+            )
+            .unwrap();
+        let _ = graph
+            .advance_spawn(
+                &command.request_id,
+                SpawnProgress::Ended {
+                    known: known.clone(),
+                },
+            )
+            .unwrap();
+        let snapshot = graph.snapshot();
+        assert!(snapshot.settlements.is_empty());
+        assert_eq!(
+            snapshot
+                .lifetimes
+                .iter()
+                .find(|row| row.lifetime_id == snapshot.spawns[0].child_lifetime)
+                .unwrap()
+                .state,
+            LifetimeState::Open
+        );
+        let owner = factory.children.lock().unwrap()[0].clone();
+        assert_eq!(owner.closes.load(Ordering::SeqCst), 0);
+        drop(c);
+        drop(factory);
+        assert_eq!(Arc::strong_count(&owner), 1);
+        let weak = Arc::downgrade(&owner);
+        let history = Arc::new(MemoryOwnershipStore::new());
+        history.write(&snapshot).await.unwrap();
+        let restored = coordinator(
+            history.clone(),
+            IndependentAudit::new(),
+            ScriptFactory::new(),
+            Arc::new(LiveCapacity::new(1)),
+        );
+        restored.resume().await.unwrap();
+        let child = snapshot.spawns[0].child_lifetime.clone();
+        assert!(restored.participation(&child).unwrap().is_sealed());
+        restored.bind_resources(child.clone(), owner).unwrap();
+        assert_eq!(weak.upgrade().unwrap().closes.load(Ordering::SeqCst), 0);
+        assert_eq!(history.read().await.unwrap(), snapshot);
+        close(&restored, &child).await.unwrap();
+        assert_eq!(weak.upgrade().unwrap().closes.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            history.read().await.unwrap().spawns[0].progress,
+            SpawnProgress::Ended { known }
+        );
+    }
+}
+
+#[tokio::test]
+async fn row_36_rooted_refused_history_returns_actual_owner_and_preserves_inspection_evidence() {
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let factory = ScriptFactory::new();
+    let c = coordinator(
+        store.clone(),
+        IndependentAudit::new(),
+        factory.clone(),
+        Arc::new(LiveCapacity::new(1)),
+    );
+    let root = open(&c, "a").await.unwrap();
+    let receipt = c.spawn(command(&root)).await.unwrap();
+    let mut snapshot = store.read().await.unwrap();
+    snapshot.spawns[0].binding.parent_session = SessionId::new("foreign-parent-session").unwrap();
+    let owner = factory.children.lock().unwrap()[0].clone();
+    drop(c);
+    drop(factory);
+    assert_eq!(Arc::strong_count(&owner), 1);
+    let weak = Arc::downgrade(&owner);
+    let history = Arc::new(MemoryOwnershipStore::new());
+    history.write(&snapshot).await.unwrap();
+    let restored_factory = ScriptFactory::new();
+    let restored = coordinator(
+        history.clone(),
+        IndependentAudit::new(),
+        restored_factory.clone(),
+        Arc::new(LiveCapacity::new(1)),
+    );
+    restored.resume().await.unwrap();
+    assert!(restored.participation(&receipt.child).unwrap().is_sealed());
+    let refusal = restored
+        .bind_resources(receipt.child.clone(), owner)
+        .unwrap_err();
+    assert_eq!(refusal.reason, BindResourcesRefusal::RefusedHistory);
+    assert_eq!(weak.upgrade().unwrap().closes.load(Ordering::SeqCst), 0);
+    assert_eq!(history.read().await.unwrap(), snapshot);
+    let reloaded = coordinator(
+        history.clone(),
+        IndependentAudit::new(),
+        restored_factory.clone(),
+        Arc::new(LiveCapacity::new(1)),
+    );
+    reloaded.resume().await.unwrap();
+    assert!(reloaded.participation(&receipt.child).unwrap().is_sealed());
+    let refusal = reloaded
+        .bind_resources(receipt.child, refusal.resources)
+        .unwrap_err();
+    assert_eq!(refusal.reason, BindResourcesRefusal::RefusedHistory);
+    let mut fresh = command(&root);
+    fresh.request_id = SpawnRequestId::new("new-request").unwrap();
+    assert_eq!(
+        reloaded.spawn(fresh).await,
+        Err(OwnershipFailure::Domain(OwnershipError::DispatchRefused))
+    );
+    assert_eq!(restored_factory.prepares(), 0);
+    refusal
+        .resources
+        .close(&LifetimeCause::HostClose, &Initiator::Runtime)
+        .await;
+    assert_eq!(weak.upgrade().unwrap().closes.load(Ordering::SeqCst), 1);
+    drop(refusal);
+    assert!(weak.upgrade().is_none());
+    assert_eq!(history.read().await.unwrap(), snapshot);
+}
