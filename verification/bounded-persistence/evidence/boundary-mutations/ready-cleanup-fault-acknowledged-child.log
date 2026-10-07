@@ -1,0 +1,21 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_sdk-3a9a37445fc631f7)
+
+running 1 test
+
+thread 'tokio-rt-worker' (476800) panicked at crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs:52:13:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'infrastructure::session_storage::ownership::tests::ready_effect_input_drop_fault_is_uncertain' (476798) panicked at crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs:557:17:
+assertion failed: matches!(caller.await.unwrap(), Err(PortFailure::Uncertain))
+test infrastructure::session_storage::ownership::tests::ready_effect_input_drop_fault_is_uncertain ... FAILED
+
+failures:
+
+failures:
+    infrastructure::session_storage::ownership::tests::ready_effect_input_drop_fault_is_uncertain
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 985 filtered out; finished in 0.20s
+
+error: test failed, to rerun pass `-p nessa-sdk --lib`

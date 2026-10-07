@@ -1,0 +1,11 @@
+   Compiling nessa-local-storage v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-local-storage)
+   Compiling nessa-local-database v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-local-database)
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-sdk)
+   Compiling nessa-auth v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-auth)
+   Compiling nessa-gateway-endpoint v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-gateway-endpoint)
+   Compiling nessa-protocol v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-protocol)
+   Compiling nessa-client-core v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-client-core)
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-server)
+error: couldn't create a temp dir: No space left on device (os error 28) at path "/workspace/nessa-agent/target/debug/deps/rmeta0AcDfx"
+
+error: could not compile `nessa-server` (lib test) due to 1 previous error

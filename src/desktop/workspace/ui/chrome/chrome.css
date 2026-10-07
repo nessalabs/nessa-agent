@@ -37,7 +37,7 @@
 
 :where(.workspace :focus-visible:not(textarea, input, .desktop-resize-edge)),
 :where(.workspace .desktop-chip:focus-visible) {
-  outline: 1.5px solid var(--desktop-focus-ring);
+  outline: var(--desktop-focus-outline);
   outline-offset: -1.5px;
 }
 
@@ -292,7 +292,7 @@
   flex: none;
   padding: 0 12px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: var(--desktop-selected);
   color: var(--desktop-ink-2) !important;
   font-size: var(--desktop-text-footnote) !important;

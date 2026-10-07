@@ -1,0 +1,5 @@
+nessa-local-storage v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-local-storage)
+├── getrandom v0.3.4
+│   ├── cfg-if v1.0.4
+│   └── libc v0.2.189
+└── libc v0.2.189

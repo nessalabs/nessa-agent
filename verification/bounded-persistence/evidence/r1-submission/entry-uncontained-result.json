@@ -1,0 +1,7 @@
+{
+  "mutation": "entry-uncontained",
+  "red_exit": 101,
+  "restored_exit": 0,
+  "restored_source_sha256": "58b200e2a1220f5938f8750a52cf14414365ceabe97ef3fe04b49333adf5dd3b",
+  "candidate_sha256": "58b200e2a1220f5938f8750a52cf14414365ceabe97ef3fe04b49333adf5dd3b"
+}

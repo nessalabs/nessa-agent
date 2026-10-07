@@ -1,0 +1,32 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-sdk)
+   Compiling nessa-protocol v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-protocol)
+   Compiling nessa-client-core v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-client-core)
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 30.17s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-e2f6c708a6cf158b)
+
+running 2 tests
+
+thread 'tokio-rt-worker' (470042) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs:51:9:
+captured persistence input destructor fault
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'tokio-rt-worker' (470041) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs:51:9:
+captured persistence input destructor fault
+
+thread 'tokio-rt-worker' (470041) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs:51:9:
+captured persistence input destructor fault
+test mcp_authorization::infrastructure::audit::tests::ready_effect_input_drop_fault_is_uncertain ... ok
+
+thread 'mcp_authorization::infrastructure::records::tests::ready_effect_input_drop_fault_is_uncertain' (470040) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs:440:5:
+assertion failed: matches!(records.load(server).await, Err(RecordFailure::Unavailable))
+test mcp_authorization::infrastructure::records::tests::ready_effect_input_drop_fault_is_uncertain ... FAILED
+
+failures:
+
+failures:
+    mcp_authorization::infrastructure::records::tests::ready_effect_input_drop_fault_is_uncertain
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 1996 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

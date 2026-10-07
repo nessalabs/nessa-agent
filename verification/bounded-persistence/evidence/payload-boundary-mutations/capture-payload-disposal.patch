@@ -1,0 +1,11 @@
+--- a/crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs
++++ b/crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs
+@@ -147,7 +147,7 @@
+     match catch_unwind(AssertUnwindSafe(|| drop(value))) {
+         Ok(()) => true,
+         Err(payload) => {
+-            std::mem::forget(payload);
++            drop(payload);
+             false
+         }
+     }

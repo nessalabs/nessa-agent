@@ -1,0 +1,60 @@
+from pathlib import Path
+import json,hashlib,shutil,subprocess,os
+root=Path('/workspace/nessa-agent-bounded-persistence');old=Path('/tmp/627-consolidated-review-checkpoint-v2');new=Path('/tmp/627-consolidated-benchmark-checkpoint')
+m=json.loads((old/'source-manifest.json').read_text());sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+assert all((sha(root/p) if (root/p).is_file() else None)==h for p,h in m['source_sha256'].items())
+assert len(list(Path('/tmp/627-consolidated-mutations').glob('*.result.json')))==26
+assert all(json.loads(p.read_text())['valid'] for p in Path('/tmp/627-consolidated-mutations').glob('*.result.json'))
+p=root/'crates/nessa-sdk/tests/infrastructure/session_storage/bounded_persistence_benchmark.rs';s=p.read_text()
+s=s.replace('    let mut raw = std::fs::File::create(output).unwrap();','''    let batch_output = std::env::var("NESSA_627_BENCH_BATCH_OUT")
+        .unwrap_or_else(|_| format!("{output}.batches.csv"));
+    let mut raw = std::fs::File::create(output).unwrap();
+    let mut batch_raw = std::fs::File::create(batch_output).unwrap();
+    writeln!(batch_raw, "roots,closed,lifetimes,spawns,settlements,reports,live,body_bytes,instances,scheduled_callers,batch,wall_elapsed_ns").unwrap();''')
+s=s.replace('            let live = snapshot', '''            let expected_state = if closed { LifetimeState::Closed } else { LifetimeState::Open };
+            assert!(snapshot.lifetimes.iter().all(|row| row.state == expected_state));
+            let live = snapshot''')
+s=s.replace('                    let mut calls = Vec::new();','''                    // Wall scope includes scheduling: before spawning until all complete.
+                    let batch_start = Instant::now();
+                    let mut calls = Vec::new();''')
+s=s.replace('''                    for call in calls {
+                        let (sample, elapsed) = call.await.unwrap();
+                        writeln!(raw,''','''                    let mut completed = Vec::new();
+                    for call in calls { completed.push(call.await.unwrap()); }
+                    let batch_elapsed = batch_start.elapsed().as_nanos();
+                    for (sample, elapsed) in completed {
+                        writeln!(raw,''')
+old_end='''snapshot.reports.len()).unwrap();
+                    }
+                }
+            });'''
+new_end='''snapshot.reports.len()).unwrap();
+                    }
+                    writeln!(batch_raw, "{roots},{closed},{},{},{},{},{live},{body_bytes},1,4,{batch},{batch_elapsed}", snapshot.lifetimes.len(), snapshot.spawns.len(), snapshot.settlements.len(), snapshot.reports.len()).unwrap();
+                }
+            });'''
+assert s.count(old_end)==1;s=s.replace(old_end,new_end);p.write_text(s)
+subprocess.run(['/tmp/nessa-cargo/bin/rustfmt','--edition','2021',str(p)],env={**os.environ,'RUSTUP_HOME':'/tmp/nessa-rustup','CARGO_HOME':'/tmp/nessa-cargo'},check=True)
+# Documentation-only narrowing after frozen probes: shutdown can still complete queued work.
+own_rel='crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs'
+q=root/own_rel;text=q.read_text();before="""/// runtime must remain alive for reliable completion; shutdown yields typed
+/// uncertainty (`originating_runtime_shutdown_is_typed`).""";after="""/// runtime must remain alive for reliable completion; the ordering and shutdown
+/// limitations are documented in `docs/design/bounded-physical-persistence.md`."""
+assert text.count(before)==1;q.write_text(text.replace(before,after))
+doc_rel='docs/design/bounded-physical-persistence.md';q=root/doc_rel;text=q.read_text()
+before="""originating runtime must remain alive for reliable completion; shutdown is a
+typed conservative worker failure, not runtime-independent persistence.""";after="""originating runtime must remain alive for reliable completion. If its shutdown
+prevents submission or completion, the adapter maps the interruption conservatively;
+already queued blocking work may still complete successfully. This does not promise
+runtime-independent persistence."""
+assert text.count(before)==1;q.write_text(text.replace(before,after))
+shutil.copytree(old,new)
+rel=str(p.relative_to(root));(new/'source'/rel).write_bytes(p.read_bytes());previous=m['source_sha256'][rel];m['source_sha256'][rel]=sha(p)
+m['benchmark_only_change']={'path':rel,'before_sha256':previous,'after_sha256':sha(p),'scope':'250 existing four-caller batches per fixture; before spawn to all completion; separate sidecar; declared Open/Closed fixture assertion; original per-call clocks and operations unchanged'}
+m['documentation_only_changes']={}
+for changed in [own_rel,doc_rel]:
+ m['documentation_only_changes'][changed]={'before_sha256':m['source_sha256'][changed],'after_sha256':sha(root/changed)}
+ m['source_sha256'][changed]=sha(root/changed);(new/'source'/changed).write_bytes((root/changed).read_bytes())
+(new/'source-manifest.json').write_text(json.dumps(m,indent=2)+'\n')
+script=Path('/tmp/627-consolidated-benchmark-and-responsiveness.py');t=script.read_text().replace('/tmp/627-consolidated-review-checkpoint-v2','/tmp/627-consolidated-benchmark-checkpoint');script.write_text(t)
+print('Benchmark-only checkpoint prepared',m['benchmark_only_change'])

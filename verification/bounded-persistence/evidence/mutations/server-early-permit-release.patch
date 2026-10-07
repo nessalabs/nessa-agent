@@ -1,0 +1,25 @@
+--- a/crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs
++++ b/crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs
+@@ -100,11 +100,12 @@
+     {
+         #[cfg(test)]
+         self.probe.submitted.fetch_add(1, Ordering::SeqCst);
++        let _waiter_permit = admission.permit;
+         let job = Job {
+             operation: Some(operation),
+             #[cfg(test)]
+             completion: Completion(self.probe.clone()),
+-            _permit: admission.permit,
++            _permit: (),
+         };
+         let handle = admission.executor.spawn_blocking(move || job.run());
+         #[cfg(test)]
+@@ -137,7 +138,7 @@
+     operation: Option<F>,
+     #[cfg(test)]
+     completion: Completion,
+-    _permit: OwnedSemaphorePermit,
++    _permit: (),
+ }
+ 
+ fn contained_drop<T>(value: T) -> bool {

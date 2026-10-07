@@ -1,0 +1,11 @@
+--- a/crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs
++++ b/crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs
+@@ -147,7 +147,7 @@
+     match catch_unwind(AssertUnwindSafe(|| drop(value))) {
+         Ok(()) => true,
+         Err(payload) => {
+-            std::mem::forget(payload);
++            drop(payload);
+             false
+         }
+     }

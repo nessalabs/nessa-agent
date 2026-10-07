@@ -1,0 +1,24 @@
+
+running 19 tests
+test infrastructure::session_storage::ownership::tests::benchmark_single_store_root_rows ... ignored, manual local SQLite scaling measurements; writes raw CSV
+test infrastructure::session_storage::ownership::tests::an_illegal_body_and_a_foreign_schema_version_are_left_unchanged ... ok
+test infrastructure::session_storage::ownership::tests::no_runtime_first_poll_is_typed ... ok
+test infrastructure::session_storage::ownership::tests::a_snapshot_round_trips_and_a_corrupt_body_is_left_unchanged ... ok
+test infrastructure::session_storage::ownership::tests::originating_runtime_shutdown_is_typed ... ok
+test infrastructure::session_storage::ownership::tests::operation_panic_and_capture_drop_fault_are_separate_boundaries ... ok
+test infrastructure::session_storage::ownership::tests::ownership_read_keeps_current_thread_heartbeat_running ... ok
+test infrastructure::session_storage::ownership::tests::ownership_write_keeps_current_thread_heartbeat_running ... ok
+test infrastructure::session_storage::ownership::tests::pre_effect_worker_panic_is_typed_and_landed_effect_is_uncertain ... ok
+test infrastructure::session_storage::ownership::tests::panicking_payload_destructor_is_not_run_by_join_mapping ... ok
+test infrastructure::session_storage::ownership::tests::canceled_sqlite_write_excludes_following_io ... ok
+test infrastructure::session_storage::ownership::tests::detached_caller_faulting_payload_is_contained ... ok
+test infrastructure::session_storage::ownership::tests::queued_canceled_worker_retains_slot ... ok
+test infrastructure::session_storage::ownership::tests::queued_send_future_resumes_on_plain_thread ... ok
+test infrastructure::session_storage::ownership::tests::storage_read_decode_and_poison_are_typed ... ok
+test infrastructure::session_storage::ownership::tests::queued_abort_input_drop_fault_keeps_slot ... ok
+test infrastructure::session_storage::ownership::tests::ready_effect_input_drop_fault_is_uncertain ... ok
+test infrastructure::session_storage::ownership::tests::queued_never_started_job_drop_keeps_slot_through_input_cleanup ... ok
+test infrastructure::session_storage::ownership::tests::worker_input_drop_keeps_slot ... ok
+
+test result: ok. 18 passed; 0 failed; 1 ignored; 0 measured; 965 filtered out; finished in 0.62s
+

@@ -1,0 +1,26 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_local_storage-9b91eeac6b4e752d)
+
+running 1 test
+
+thread 'tokio-rt-worker' (535126) panicked at crates/nessa-local-storage/src/physical_operation/../../tests/support/physical_operation.rs:199:13:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'tokio-rt-worker' (535126) panicked at crates/nessa-local-storage/src/physical_operation/../../tests/support/physical_operation.rs:238:9:
+faulting panic payload destructor
+
+thread 'physical_operation::tests::detached_call_fault_payload_is_not_dropped' (535124) panicked at crates/nessa-local-storage/src/physical_operation/tests.rs:162:9:
+assertion `left == right` failed
+  left: 1
+ right: 0
+test physical_operation::tests::detached_call_fault_payload_is_not_dropped ... FAILED
+
+failures:
+
+failures:
+    physical_operation::tests::detached_call_fault_payload_is_not_dropped
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 38 filtered out; finished in 0.20s
+
+error: test failed, to rerun pass `-p nessa-local-storage --lib`

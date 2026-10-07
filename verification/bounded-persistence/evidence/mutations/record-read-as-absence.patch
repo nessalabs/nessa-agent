@@ -1,0 +1,11 @@
+--- a/crates/nessa-server/src/mcp_authorization/infrastructure/records.rs
++++ b/crates/nessa-server/src/mcp_authorization/infrastructure/records.rs
+@@ -75,7 +75,7 @@
+         self.worker
+             .run(permit, move || state.get().load(server))
+             .await
+-            .map_err(|_| RecordFailure::Unavailable)?
++            .unwrap_or(Ok(None))
+     }
+ 
+     async fn store(&self, auth: &ServerAuth) -> Result<(), RecordFailure> {

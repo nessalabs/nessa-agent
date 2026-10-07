@@ -1,0 +1,30 @@
+   Compiling nessa-local-storage v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-local-storage)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.52s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_local_storage-9b91eeac6b4e752d)
+
+running 14 tests
+test physical_operation::tests::closed_slot_admission_is_typed ... ok
+test physical_operation::tests::cancellation_while_waiting_submits_no_capture ... ok
+test physical_operation::tests::no_runtime_admission_is_typed ... ok
+
+thread 'tokio-rt-worker' (533977) panicked at crates/nessa-local-storage/src/physical_operation/../../tests/support/physical_operation.rs:201:9:
+physical pre-effect fault
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'tokio-rt-worker' (533977) panicked at crates/nessa-local-storage/src/physical_operation/../../tests/support/physical_operation.rs:210:9:
+physical post-effect fault
+test physical_operation::tests::independent_worker_instances_progress ... ok
+test physical_operation::tests::ordinary_pre_and_post_call_faults_release_slot ... ok
+test physical_operation::tests::call_and_capture_faults_are_separate_boundaries ... ok
+627 heartbeat: 1 -> 39 ticks during OS-held 120 ms physical operation
+test physical_operation::tests::physical_call_keeps_current_thread_heartbeat_running ... ok
+test physical_operation::tests::queued_send_future_uses_origin ... ok
+test physical_operation::tests::detached_call_fault_payload_is_not_dropped ... ok
+test physical_operation::tests::ready_capture_fault_downgrades_and_disposes_output_under_slot ... ok
+test physical_operation::tests::unused_admission_releases_slot ... ok
+test physical_operation::tests::queued_abort_capture_cleanup_keeps_slot ... ok
+test physical_operation::tests::unpolled_result_drop_retains_physical_slot ... ok
+test physical_operation::tests::queued_abort_fault_payload_is_not_dropped ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 25 filtered out; finished in 0.41s
+

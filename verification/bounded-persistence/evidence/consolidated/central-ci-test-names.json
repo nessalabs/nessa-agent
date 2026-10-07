@@ -1,0 +1,16 @@
+[
+  "unused_admission_releases_slot",
+  "no_runtime_admission_is_typed",
+  "closed_slot_admission_is_typed",
+  "queued_send_future_uses_origin",
+  "unpolled_result_drop_retains_physical_slot",
+  "physical_call_keeps_current_thread_heartbeat_running",
+  "queued_abort_capture_cleanup_keeps_slot",
+  "detached_call_fault_payload_is_not_dropped",
+  "queued_abort_fault_payload_is_not_dropped",
+  "call_and_capture_faults_are_separate_boundaries",
+  "ready_capture_fault_downgrades_and_disposes_output_under_slot",
+  "cancellation_while_waiting_submits_no_capture",
+  "independent_worker_instances_progress",
+  "ordinary_pre_and_post_call_faults_release_slot"
+]

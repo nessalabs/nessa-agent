@@ -207,7 +207,7 @@ html:not(.dark) .workspace-sidebar {
   align-items: center;
   justify-content: center;
   padding: 0 5px;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: var(--desktop-selected);
   color: var(--desktop-muted);
   font-size: var(--desktop-text-caption);

@@ -1,0 +1,324 @@
+[
+  {
+    "row": 1,
+    "ordering": "Current-thread runtime; ownership write held in actual adapter before SQLite effect",
+    "result": "Independent heartbeat/timer advances while write remains held.",
+    "witnesses": {
+      "ownership_write_keeps_current_thread_heartbeat_running": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 2,
+    "ordering": "Same for ownership read held at query/decode",
+    "result": "Heartbeat advances; read result remains pending then validates real snapshot.",
+    "witnesses": {
+      "ownership_read_keeps_current_thread_heartbeat_running": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 3,
+    "ordering": "FileRecords nonsecret load/store held at actual file helper",
+    "result": "Heartbeat advances; actual JSON/durability path resumes and completes.",
+    "witnesses": {
+      "record_store_keeps_current_thread_heartbeat_running": [
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs"
+      ],
+      "record_load_keeps_current_thread_heartbeat_running": [
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 4,
+    "ordering": "FileRecords secret load/store/delete held at physical helper",
+    "result": "Heartbeat advances; actual sealing/file/delete operation resumes with existing typed result.",
+    "witnesses": {
+      "secret_store_keeps_current_thread_heartbeat_running": [
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs"
+      ],
+      "secret_load_keeps_current_thread_heartbeat_running": [
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs"
+      ],
+      "secret_delete_keeps_current_thread_heartbeat_running": [
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 5,
+    "ordering": "FileAuthorizationAudit held at actual append/sync helper",
+    "result": "Heartbeat advances; real secret-free record appended only after gate release.",
+    "witnesses": {
+      "authorization_audit_keeps_current_thread_heartbeat_running": [
+        "crates/nessa-server/src/mcp_authorization/infrastructure/audit/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 6,
+    "ordering": "A holds instance worker; B/C wait async admission",
+    "result": "Only A submitted/started; no growing blocking jobs; heartbeat continues.",
+    "witnesses": {
+      "admission_precedes_owned_input_transfer": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs",
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs"
+      ],
+      "canceled_sqlite_write_excludes_following_io": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs"
+      ],
+      "canceled_delete_excludes_replacement": [
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs"
+      ],
+      "worker_input_drop_keeps_slot": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs",
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs",
+        "crates/nessa-server/src/mcp_authorization/infrastructure/audit/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 7,
+    "ordering": "B canceled while waiting admission",
+    "result": "B creates no worker/effect; A completes; next waiter can admit.",
+    "witnesses": {
+      "canceled_sqlite_write_excludes_following_io": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs"
+      ],
+      "canceled_secret_store_excludes_delete_and_load": [
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 8,
+    "ordering": "A admitted and queued in blocking pool; A caller drops before closure starts",
+    "result": "A still owns slot; B cannot start; A executes once when pool permits.",
+    "witnesses": {
+      "queued_canceled_worker_retains_slot": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 9,
+    "ordering": "A executing actual SQLite write; caller drops; B write/read arrives",
+    "result": "Permit remains held; B starts only after A physical completion; final snapshot order follows existing coordinator fence.",
+    "witnesses": {
+      "canceled_sqlite_write_excludes_following_io": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 10,
+    "ordering": "A executing secret write; caller drops; delete/load/replacement arrives",
+    "result": "All same-instance operations excluded until A ends; no late old publication after the later delete/replacement.",
+    "witnesses": {
+      "canceled_secret_store_excludes_delete_and_load": [
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 11,
+    "ordering": "A executing delete; caller drops; replacement secret write arrives",
+    "result": "Replacement waits for actual delete completion, then publishes; old delete cannot later remove replacement.",
+    "witnesses": {
+      "canceled_delete_excludes_replacement": [
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 12,
+    "ordering": "Audit A caller drops mid append; audit B arrives",
+    "result": "B waits until A physical append/sync ends; successful appends retain existing order and secret-free fields; interruption may leave partial bytes and is reported as failure.",
+    "witnesses": {
+      "canceled_audit_excludes_next_append": [
+        "crates/nessa-server/src/mcp_authorization/infrastructure/audit/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 13,
+    "ordering": "Worker panics before effect",
+    "result": "Typed conservative method outcome; permit eventually available; no fake absence/acknowledgement.",
+    "witnesses": {
+      "pre_effect_worker_panic_is_typed_and_landed_effect_is_uncertain": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs"
+      ],
+      "interrupted_record_operations_are_unavailable_or_unknown": [
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs"
+      ],
+      "interrupted_audit_and_poison_are_failures": [
+        "crates/nessa-server/src/mcp_authorization/infrastructure/audit/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 14,
+    "ordering": "Worker executes write/publish/delete/append then panics",
+    "result": "Ownership Uncertain; secret Unknown; delete Unknown; audit failure; recovery/load observes actual disk outcome.",
+    "witnesses": {
+      "pre_effect_worker_panic_is_typed_and_landed_effect_is_uncertain": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs"
+      ],
+      "interrupted_record_operations_are_unavailable_or_unknown": [
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs"
+      ],
+      "interrupted_audit_and_poison_are_failures": [
+        "crates/nessa-server/src/mcp_authorization/infrastructure/audit/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 15,
+    "ordering": "Disk/read/decode/lock-poison failure",
+    "result": "Correct typed failure; no empty snapshot/None invented; no runtime-thread lock wait.",
+    "witnesses": {
+      "storage_read_decode_and_poison_are_typed": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 16,
+    "ordering": "Ownership newer revision publishes before older snapshot reaches coordinator fence",
+    "result": "Existing fence skips old copy; worker adapter does not bypass/duplicate fence.",
+    "witnesses": {
+      "an_older_snapshot_does_not_replace_a_newer_seal": [
+        "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs"
+      ]
+    }
+  },
+  {
+    "row": 17,
+    "ordering": "Adapter instance A held; independent instance B/directory operation",
+    "result": "B can progress; no new global lock/serialization guarantee.",
+    "witnesses": {
+      "independent_instances_progress": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs",
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 18,
+    "ordering": "Panic/caller disappearance while worker state/input cleanup is still physical work",
+    "result": "Permit covers worker completion; later operation never starts merely because its original waiter exited.",
+    "witnesses": {
+      "worker_input_drop_keeps_slot": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs",
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs",
+        "crates/nessa-server/src/mcp_authorization/infrastructure/audit/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 19,
+    "ordering": "Port future first polled without a Tokio context",
+    "result": "Typed pre-effect unavailability; constructor does not need a runtime; no panic/effect/worker submission.",
+    "witnesses": {
+      "no_runtime_first_poll_is_typed": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs",
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs",
+        "crates/nessa-server/src/mcp_authorization/infrastructure/audit/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 20,
+    "ordering": "Send port future starts waiting for admission in Tokio and resumes on an ordinary thread",
+    "result": "Admission carries its originating executor; live originating runtime executes the physical job and caller observes actual result.",
+    "witnesses": {
+      "queued_send_future_resumes_on_plain_thread": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs",
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 21,
+    "ordering": "Originating executor shuts down after admission began",
+    "result": "No promise of runtime-independent completion; failed join stays typed conservative unavailability/uncertainty.",
+    "witnesses": {
+      "originating_runtime_shutdown_is_typed": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 22,
+    "ordering": "Caller disappears before physical operation panics with a faulting panic payload",
+    "result": "Physical Job catches call panic while still owning capture; forgets payload without inspection; captured cleanup remains under permit even without caller.",
+    "witnesses": {
+      "detached_caller_faulting_payload_is_contained": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs",
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs"
+      ],
+      "detached_call_fault_payload_is_not_dropped": [
+        "crates/nessa-local-storage/src/physical_operation/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 23,
+    "ordering": "Central queued blocking task is aborted before start with a detached caller; separately an actual adapter resumes after its captured executor stopped and submission is refused, then its capture destructor faults",
+    "result": "Job::Drop catches/takes captured operation before automatic permit release; next same-instance operation waits through actual input cleanup; payload destructor stays uncalled even without its waiter. The actual rejected-submission witness checks typed interruption and actual captured cleanup. It does not claim detached caller loss during synchronous rejected submission. Runtime shutdown does not cancel an already queued blocking operation.",
+    "witnesses": {
+      "stopped_executor_input_drop_fault_keeps_slot": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs",
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs"
+      ],
+      "queued_abort_capture_cleanup_keeps_slot": [
+        "crates/nessa-local-storage/src/physical_operation/tests.rs"
+      ],
+      "queued_abort_fault_payload_is_not_dropped": [
+        "crates/nessa-local-storage/src/physical_operation/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 24,
+    "ordering": "Actual storage effect returns a ready result; owned input destructor then faults, with its caller awaiting or detached",
+    "result": "Captured-operation Drop is caught separately while permit is held; dispose ready result under a separate catch and report interruption, never acknowledgement/absence.",
+    "witnesses": {
+      "ready_effect_input_drop_fault_is_uncertain": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs",
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs",
+        "crates/nessa-server/src/mcp_authorization/infrastructure/audit/tests.rs"
+      ],
+      "detached_ready_input_drop_fault_is_contained": [
+        "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs",
+        "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs"
+      ],
+      "ready_capture_fault_downgrades_and_disposes_output_under_slot": [
+        "crates/nessa-local-storage/src/physical_operation/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 25,
+    "ordering": "Admission is acquired but never submitted, then dropped",
+    "result": "Empty admission releases its instance slot; no operation or capture exists.",
+    "witnesses": {
+      "unused_admission_releases_slot": [
+        "crates/nessa-local-storage/src/physical_operation/tests.rs"
+      ]
+    }
+  },
+  {
+    "row": 26,
+    "ordering": "Synchronous submit returns its awaitable, which is dropped before first poll",
+    "result": "Job was already handed to the captured executor; operation/capture cleanup remains under the slot through completion.",
+    "witnesses": {
+      "unpolled_result_drop_retains_physical_slot": [
+        "crates/nessa-local-storage/src/physical_operation/tests.rs"
+      ]
+    }
+  }
+]

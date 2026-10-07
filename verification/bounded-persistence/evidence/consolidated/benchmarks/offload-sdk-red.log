@@ -1,0 +1,28 @@
+   Compiling nessa-local-storage v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-local-storage)
+   Compiling nessa-local-database v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-local-database)
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-sdk)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 50.98s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_sdk-33934274e459b55f)
+
+running 2 tests
+627 heartbeat: 1 -> 1 ticks during OS-held 120 ms physical operation
+
+thread 'infrastructure::session_storage::ownership::tests::ownership_write_keeps_current_thread_heartbeat_running' (538949) panicked at crates/nessa-sdk/src/infrastructure/session_storage/../../../../nessa-local-storage/tests/support/physical_operation.rs:68:5:
+current-thread heartbeat froze during physical I/O: 1 -> 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+627 heartbeat: 1 -> 1 ticks during OS-held 120 ms physical operation
+
+thread 'infrastructure::session_storage::ownership::tests::ownership_read_keeps_current_thread_heartbeat_running' (538948) panicked at crates/nessa-sdk/src/infrastructure/session_storage/../../../../nessa-local-storage/tests/support/physical_operation.rs:68:5:
+current-thread heartbeat froze during physical I/O: 1 -> 1
+test infrastructure::session_storage::ownership::tests::ownership_write_keeps_current_thread_heartbeat_running ... FAILED
+test infrastructure::session_storage::ownership::tests::ownership_read_keeps_current_thread_heartbeat_running ... FAILED
+
+failures:
+
+failures:
+    infrastructure::session_storage::ownership::tests::ownership_read_keeps_current_thread_heartbeat_running
+    infrastructure::session_storage::ownership::tests::ownership_write_keeps_current_thread_heartbeat_running
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 984 filtered out; finished in 0.12s
+
+error: test failed, to rerun pass `-p nessa-sdk --lib`

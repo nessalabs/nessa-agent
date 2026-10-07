@@ -1,0 +1,22 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-sdk)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.33s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_sdk-4679ef5c710a5d4a)
+
+running 1 test
+test infrastructure::session_storage::ownership::tests::no_runtime_first_poll_is_typed ... FAILED
+
+failures:
+
+---- infrastructure::session_storage::ownership::tests::no_runtime_first_poll_is_typed stdout ----
+
+thread 'infrastructure::session_storage::ownership::tests::no_runtime_first_poll_is_typed' (452033) panicked at crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs:85:22:
+there is no reactor running, must be called from the context of a Tokio 1.x runtime
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    infrastructure::session_storage::ownership::tests::no_runtime_first_poll_is_typed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 979 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-sdk --lib`
