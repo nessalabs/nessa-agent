@@ -51,12 +51,17 @@ does not replace `workspace-load.mjs`.
   split chord that does not arrive, or a transcript that does not overflow,
   fails the row. A missing frame sample does not replace that result.
   _Check:_ `alpha-perf.mjs` (`panes`, `transcript`).
-- [ ] **A scripted gateway's empty window is timed only with `--with-gateway`,
-  in Chromium.** No conversation is created, and the session list stays
-  empty. Cold and warm each ask the host for the gateway endpoint. This is
-  not a catalogue walk. `#607` is on main. This script does not time
-  `conversation.observe`. A browser timing of that walk is a follow-up.
-  _Check:_ `alpha-perf.mjs --with-gateway` (`gateway`).
+- [ ] **A scripted gateway is stressed only with `--with-gateway`, in
+  Chromium and WebKit, columns.** The gateway stores `paneLimits.maxPanes`
+  conversations. One of them has four copies of a 4,000-character user
+  message; the scripted agent answers each with text. Cold and warm each
+  ask the host for the endpoint, and the ready mark is that long
+  conversation's session row, so the clock includes the list. The same
+  window fills the pane cap and scrolls that transcript. `conversation.list`
+  has to be complete (`seedHeld`); an incomplete list is not measured.
+  This is not a catalogue walk.
+  _Check:_ `alpha-perf.mjs --with-gateway` (`gateway-seed`, `gateway-startup`,
+  `gateway-panes`, `gateway-transcript`).
 - [ ] **Overview, drag, and split budgets stay in `perf-budget.mjs`.** A number
   there that misses 50 ms and matches `#588` / `#606` is that known result.
   The 10,000-session dry run stays in `workspace-load.mjs`.
