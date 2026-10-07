@@ -4,7 +4,7 @@
   "pull_request": 652,
   "source_head": "616a5fb9b07b81e30f23ff3282c1c60722fbb306",
   "base": "d55de88d9c6f5794b225da05b1055c511b9dba74",
-  "status": "R1 corrections implemented; all11 exact616 local gates passed; freshR2 and requiredcurrentCI pending",
+  "status": "FreshR2 approved exact616; all11 localgates passed; currenthostedplatformCI and externalreview pending",
   "completed": false,
   "gate_records": {
     "original209": "Full isolated SDK and exact six-package tests passed; all14 central cases named. One later cfg(test) .ok removal is separately recorded.",
@@ -75,6 +75,16 @@
       ],
       "deferred_submit_disposition": "Compiled bounded-entry handshake expectation fails; tuple-count assertion did not execute. Not an orchestration timeout.",
       "dispositions": "616implements synchronouscatch/immediateforget+meaningfulnegative/restoredpositive+actualOSownershipproof, correctedcanonicalpointer anddeletedplaceholder. FreshR2required."
+    },
+    {
+      "round": 2,
+      "head": "616a5fb9b07b81e30f23ff3282c1c60722fbb306",
+      "decision": "both fresh independent reviews approve; nofindings anypriority",
+      "contracts": "627-r2-contracts-report.md",
+      "adversarial": "627-r2-adversarial-report.md",
+      "actual_independent_probe": "Existingexact616binary/shim hashes verified; OSbaseline/refusal/repeat andportablepayload case all exit0; no Cargo/sourceedit byreviewer.",
+      "probe_archive": "616-r2-independent-probe.tar.gz",
+      "probe_archive_sha256": "05c3043184dc09afd8d57a6206df5675c716229b1d7ac78ab1bb78fd2da0662c"
     }
   ],
   "archive": {
