@@ -279,7 +279,9 @@ it("drops the composer's blur while a drag is carried, and leaves the sidebar's 
   expect(body).toMatch(/background:\s*var\(--background\)/)
   // Turning the sidebar's blur off and back on was a long frame. It stays.
   expect(styles).not.toContain(":root[data-drag-pressing]\n  :is(.workspace-sidebar")
-  expect(styles).not.toContain(".workspace[data-overview-glass]\n  :is(.workspace-sidebar")
+  expect(styles).not.toContain(
+    ".workspace[data-overview-glass]\n  :is(.workspace-sidebar",
+  )
   const grain = styles
     .slice(styles.indexOf(":root[data-drag-pressing] .desktop-grain {"))
     .split("}")[0]

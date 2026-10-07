@@ -558,7 +558,8 @@ export function useSplitPanesDrag(
     const revealSettling = () => {
       const pane = scope.querySelector<HTMLElement>(`[${marks.settling}]`)
       pane?.removeAttribute(marks.settling)
-      if (scope.querySelector(`[${marks.settling}]`)) requestAnimationFrame(revealSettling)
+      if (scope.querySelector(`[${marks.settling}]`))
+        requestAnimationFrame(revealSettling)
     }
 
     /**

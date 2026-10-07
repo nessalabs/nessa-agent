@@ -37,9 +37,7 @@
     },
     {
       "ok": false,
-      "failures": [
-        "longest frame 66.69999999999982 ms > 50 ms (runs: 67)"
-      ],
+      "failures": ["longest frame 66.69999999999982 ms > 50 ms (runs: 67)"],
       "name": "drag-drop",
       "engine": "chromium",
       "layout": "columns",
@@ -208,9 +206,7 @@
     },
     {
       "ok": false,
-      "failures": [
-        "longest frame 83.30000000000018 ms > 50 ms (runs: 83)"
-      ],
+      "failures": ["longest frame 83.30000000000018 ms > 50 ms (runs: 83)"],
       "name": "drag-cancel",
       "engine": "chromium",
       "layout": "columns",
@@ -377,9 +373,7 @@
     },
     {
       "ok": false,
-      "failures": [
-        "longest frame 83.29999999999995 ms > 50 ms (runs: 83)"
-      ],
+      "failures": ["longest frame 83.29999999999995 ms > 50 ms (runs: 83)"],
       "name": "overview-open",
       "engine": "chromium",
       "layout": "columns",
@@ -532,9 +526,7 @@
     },
     {
       "ok": false,
-      "failures": [
-        "longest frame 83.30000000000018 ms > 50 ms (runs: 83)"
-      ],
+      "failures": ["longest frame 83.30000000000018 ms > 50 ms (runs: 83)"],
       "name": "drag-drop",
       "engine": "chromium",
       "layout": "sidebar",
@@ -721,9 +713,7 @@
     },
     {
       "ok": false,
-      "failures": [
-        "longest frame 83.40000000000055 ms > 50 ms (runs: 83)"
-      ],
+      "failures": ["longest frame 83.40000000000055 ms > 50 ms (runs: 83)"],
       "name": "drag-cancel",
       "engine": "chromium",
       "layout": "sidebar",
@@ -850,9 +840,7 @@
     },
     {
       "ok": false,
-      "failures": [
-        "longest frame 66.70000000000005 ms > 50 ms (runs: 67)"
-      ],
+      "failures": ["longest frame 66.70000000000005 ms > 50 ms (runs: 67)"],
       "name": "overview-open",
       "engine": "chromium",
       "layout": "sidebar",
