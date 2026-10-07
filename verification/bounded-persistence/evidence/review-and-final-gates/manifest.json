@@ -11,7 +11,7 @@
     "corrected_a8": "Seven local commands have observed exit0: fmt, SDK21, six-package all-targetClippy, SDKdocs, architecturetests, architecturechecker, frontendformat.",
     "local_scripts": "348 tests,346 pass,0 fail,2 skip; final local process exit unavailable, not claimed as completed command.",
     "hosted_frontend": "Run37670126367/job112959792534 SUCCESS on merge efb855f of a8 into d55; completed frontend command including matching script suite; raw log archived.",
-    "hosted_platforms": "Pending at publication; no full CI approval claimed."
+    "hosted_platforms": "Actual a8 run37670126367 ALL10jobsSUCCESS; synthetic mergeefb855fe168dfb883dd6ebe78987a4849c1369bd of a8 into d55. All14centraltests actuallyPASS onLinux/Mac/Windows. SDKdomain100%6552regions/703functions/5216lines,0uncovered. R1changesrequestedstillblocksmerge."
   },
   "review_rounds": [
     {
@@ -29,5 +29,15 @@
     "path": "a8-r1-handoff.tar.gz",
     "sha256": "e63e7534f6d5c35111ad64ca824e8aeca0aa6c3b9a4b56ecc61ee60491256ff8"
   },
-  "archive_contents": "Exact original implementer handoff manifests/logs/source hashes; initial environment failures; current hostedfrontend raw log; R1 reports/brief; actual OSrefusal baseline0/refusal101/restored0 shim/source/log/binary hashes; Astra advisory; first hosted cancelled run raw log/status."
+  "archive_contents": "Exact original implementer handoff manifests/logs/source hashes; initial environment failures; current hostedfrontend raw log; R1 reports/brief; actual OSrefusal baseline0/refusal101/restored0 shim/source/log/binary hashes; Astra advisory; first hosted cancelled run raw log/status.",
+  "a8_hosted_CI": {
+    "run": 37670126367,
+    "all10jobs": "success",
+    "merge_sha": "efb855fe168dfb883dd6ebe78987a4849c1369bd",
+    "raw_log_sha256": "ec8297651ea9eceb5bc82c187f4ddadc235d2aaeee5e2895d4c86a0f42856917",
+    "compressed_log_sha256": "63d21f4c53361d3e1fd6e65430a3eaa266bdb2d15bbec0e72b7599cfe3dac568",
+    "log_archive": "a8-hosted-ci.log.gz",
+    "status": "a8-hosted-ci-status.json",
+    "central_test_presence": "a8-central-ci-presence.json"
+  }
 }

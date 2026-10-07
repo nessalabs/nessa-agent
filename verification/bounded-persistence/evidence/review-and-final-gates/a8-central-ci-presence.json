@@ -1,0 +1,50 @@
+{
+  "ubuntu-latest": [
+    "call_and_capture_faults_are_separate_boundaries",
+    "cancellation_while_waiting_submits_no_capture",
+    "closed_slot_admission_is_typed",
+    "detached_call_fault_payload_is_not_dropped",
+    "independent_worker_instances_progress",
+    "no_runtime_admission_is_typed",
+    "ordinary_pre_and_post_call_faults_release_slot",
+    "physical_call_keeps_current_thread_heartbeat_running",
+    "queued_abort_capture_cleanup_keeps_slot",
+    "queued_abort_fault_payload_is_not_dropped",
+    "queued_send_future_uses_origin",
+    "ready_capture_fault_downgrades_and_disposes_output_under_slot",
+    "unpolled_result_drop_retains_physical_slot",
+    "unused_admission_releases_slot"
+  ],
+  "macos-latest": [
+    "call_and_capture_faults_are_separate_boundaries",
+    "cancellation_while_waiting_submits_no_capture",
+    "closed_slot_admission_is_typed",
+    "detached_call_fault_payload_is_not_dropped",
+    "independent_worker_instances_progress",
+    "no_runtime_admission_is_typed",
+    "ordinary_pre_and_post_call_faults_release_slot",
+    "physical_call_keeps_current_thread_heartbeat_running",
+    "queued_abort_capture_cleanup_keeps_slot",
+    "queued_abort_fault_payload_is_not_dropped",
+    "queued_send_future_uses_origin",
+    "ready_capture_fault_downgrades_and_disposes_output_under_slot",
+    "unpolled_result_drop_retains_physical_slot",
+    "unused_admission_releases_slot"
+  ],
+  "windows-latest": [
+    "call_and_capture_faults_are_separate_boundaries",
+    "cancellation_while_waiting_submits_no_capture",
+    "closed_slot_admission_is_typed",
+    "detached_call_fault_payload_is_not_dropped",
+    "independent_worker_instances_progress",
+    "no_runtime_admission_is_typed",
+    "ordinary_pre_and_post_call_faults_release_slot",
+    "physical_call_keeps_current_thread_heartbeat_running",
+    "queued_abort_capture_cleanup_keeps_slot",
+    "queued_abort_fault_payload_is_not_dropped",
+    "queued_send_future_uses_origin",
+    "ready_capture_fault_downgrades_and_disposes_output_under_slot",
+    "unpolled_result_drop_retains_physical_slot",
+    "unused_admission_releases_slot"
+  ]
+}
