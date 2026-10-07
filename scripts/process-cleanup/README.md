@@ -66,8 +66,8 @@ node scripts/process-cleanup/check-container.mjs \
 
 Each of the two exact tests runs once per PID 1 configuration, in a fresh
 container, with `--exact --nocapture --test-threads=1`. The negative needs a
-nonzero test exit, exactly one failed test, `CleanupUncertain` in the libtest
-panic output and a new PPID-1 zombie; the directory test also needs retained
+nonzero test exit, exactly one failed test, `CleanupUncertain` as the selected test's libtest
+panic cause (its panic header followed by the unwrap error) and a new PPID-1 zombie; the directory test also needs retained
 `/tmp/nessa-agent-*` directories. A different failure, timeout or missing zombie
 fails the harness. Both `--init` cases must pass and leave no new orphan zombie
 or retained private directory. The ACP fixture's `ignore-stop` mode ignores
@@ -85,7 +85,10 @@ Supervisor proof fields must be explicit: timeout/truncation booleans, process
 identities and states, retained private-directory paths and prerequisite package
 versions. Initial, test and adopted-process identities must agree; incomplete or
 contradictory evidence fails acceptance. Image inspection receives the same
-interrupt cancellation as container creation and execution.
+interrupt cancellation as container creation and execution. `publishAcceptance`
+checks cancellation before and after its record write; cancellation observed
+during independent removal or publication leaves rejected diagnostics and fails
+the harness.
 
 Libtest output is limited to 64K characters and Docker stdout/stderr to 128 KiB each;
 truncation fails acceptance. Rejected JSON, malformed output and Docker failure
@@ -94,8 +97,8 @@ triggers removal.
 
 `acceptance.json` records the selected image ID/reference, binary SHA-256,
 manifest directory, exact package versions and each accepted scenario's output,
-exit code, process identities/states and retained directories. Only four entries with `accepted: true` establish acceptance; a partial report
-or a rejected entry does not. Libtest's debug output is used only by this
+exit code, process identities/states and retained directories. A successful harness exit and four entries with `accepted: true` establish
+acceptance. A partial report, rejected entry or nonzero harness exit does not. Libtest's debug output is used only by this
 developer acceptance probe; SDK production decisions retain typed failures.
 
 ## Recorded acceptance
@@ -107,20 +110,25 @@ Installed prerequisites were `python3-minimal=3.13.5-1`, `libgcc-s1=14.2.0-19`
 and `ca-certificates=20250419`. Cargo JSON selected library test executable
 `nessa_sdk-3a9a37445fc631f7`, compiled from this worktree's SDK directory, with
 SHA-256 `932566e1324fb80f9e30d0512e823d04d6c97b375af3a565306e39b88dd6c28d`.
+Final acceptance used the explicit preserved copy
+`/tmp/nessa-630-main-base-library-test` with that same hash.
 
 | Test | PID 1 | Test exit | New orphan zombie | Retained private directory | Acceptance |
 | --- | --- | --- | --- | --- | --- |
-| Private directory cleanup | Python supervisor | 101 (`CleanupUncertain`) | PID 10, PPID 1, PGID 9, state Z | `/tmp/nessa-agent-EbolMH` | Passed |
+| Private directory cleanup | Python supervisor | 101 (`CleanupUncertain`) | PID 10, PPID 1, PGID 9, state Z | `/tmp/nessa-agent-00dvoJ` | Passed |
 | Private directory cleanup | Docker init | 0 | None | None | Passed |
 | TERM-resistant ACP parent and child | Python supervisor | 101 (`CleanupUncertain`) | PID 10, PPID 1, PGID 9, state Z | None | Passed |
 | TERM-resistant ACP parent and child | Docker init | 0 | None | None | Passed |
 
-The external evidence file was `/tmp/nessa-630-r1-evidence/acceptance.json`;
+The external evidence file was `/tmp/nessa-630-r2-evidence/acceptance.json`;
 all four entries recorded `accepted: true`, and all disposable containers were
-removed. Thirty-two pure orchestration tests and 74 architecture tests passed.
+removed. Thirty-seven pure orchestration tests and the architecture checker
+passed on the final correction; 74 architecture tests passed before that correction.
 At pre-review head `937610ee85494b53e4591a3b3b2146118f864971`, 32 individual
 acceptance/orchestration mutations caused test failures. The review correction
-added 22 schema/cancellation mutations that also failed tests. Restored files
+added 22 schema/cancellation mutations at `9364794177684a846b9071f268b5b870b198036a`
+that also failed tests. The final structural correction added seven targeted
+panic-cause/publication mutations, which each failed tests. Restored files
 received fresh modification times. A real-container supervisor
 mutation that reaped adopted children caused the negative case to fail with
 "no new adopted zombie"; restoring the direct-child-only supervisor restored

@@ -17,6 +17,36 @@ export const scenarios = [
   },
 ].flatMap((scenario) => [false, true].map((init) => ({ ...scenario, init })))
 
+// Libtest panic evidence is correlated to the selected test, not arbitrary output.
+function selectedCleanupPanic(output, test) {
+  const lines = output.split(/\r?\n/)
+  const header = `thread '${test}'`
+  return lines.some(
+    (line, index) =>
+      line.startsWith(header) &&
+      /^ (?:\(\d+\) )?panicked at .+:\d+:\d+:$/.test(line.slice(header.length)) &&
+      lines[index + 1] ===
+        "called `Result::unwrap()` on an `Err` value: CleanupUncertain",
+  )
+}
+
+export async function publishAcceptance(entry, signal, recordEvidence) {
+  const interrupted = async () => {
+    const failure = "Harness interrupted before acceptance publication completed"
+    await recordEvidence({ ...entry, accepted: false, failure })
+    throw new Error(failure)
+  }
+  // Removal remains independent; this owner settles its subsequent acceptance.
+  if (signal.aborted) return interrupted()
+  try {
+    await recordEvidence({ ...entry, accepted: true })
+  } catch (error) {
+    await recordEvidence({ ...entry, accepted: false, failure: error.message })
+    throw error
+  }
+  if (signal.aborted) return interrupted()
+}
+
 export function validate(report, scenario) {
   const fail = (reason) => {
     throw new Error(`Harness failure: ${reason}`)
@@ -124,7 +154,7 @@ export function validate(report, scenario) {
       report.test_exit === 0 ||
       summary[1] !== "FAILED" ||
       Number(summary[3]) !== 1 ||
-      !/\bCleanupUncertain\b/.test(report.output)
+      !selectedCleanupPanic(report.output, scenario.test)
     )
       fail("negative case did not fail with CleanupUncertain")
     if (!zombies.length) fail("negative case has no new adopted zombie")
@@ -262,7 +292,7 @@ export async function runScenario(options, scenario, run = docker) {
   }
 }
 
-export async function checkContainers(args, run = docker) {
+export async function checkContainers(args, run = docker, persist = writeFile) {
   const [binaryInput, manifest, image, evidence] = args
   if (
     !binaryInput ||
@@ -295,7 +325,7 @@ export async function checkContainers(args, run = docker) {
       .digest("hex")
     const recordEvidence = async (entry) => {
       reports.set(entry.container, entry)
-      await writeFile(
+      await persist(
         resolve(evidence, "acceptance.json"),
         JSON.stringify(
           {
@@ -328,7 +358,7 @@ export async function checkContainers(args, run = docker) {
         scenario,
         run,
       )
-      await recordEvidence({ ...captured, accepted: true })
+      await publishAcceptance(captured, controller.signal, recordEvidence)
       console.log(`${scenario.init ? "init" : "non-reaping"}: ${scenario.test}: accepted`)
     }
   } finally {

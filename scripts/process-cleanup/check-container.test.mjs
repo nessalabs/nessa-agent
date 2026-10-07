@@ -9,6 +9,7 @@ import {
   docker,
   DockerFailure,
   runScenario,
+  publishAcceptance,
   scenarios,
   validate,
 } from "./check-container.mjs"
@@ -36,7 +37,7 @@ function report(scenario) {
     test_exit: scenario.init ? 0 : 101,
     output: scenario.init
       ? `running 1 test\ntest ${scenario.test} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;`
-      : `running 1 test\ntest ${scenario.test} ... FAILED\nCleanupUncertain\ntest result: FAILED. 0 passed; 1 failed; 0 ignored;`,
+      : `running 1 test\ntest ${scenario.test} ... FAILED\nthread '${scenario.test}' (8) panicked at fixture.rs:69:10:\ncalled \`Result::unwrap()\` on an \`Err\` value: CleanupUncertain\ntest result: FAILED. 0 passed; 1 failed; 0 ignored;`,
     new_orphans: scenario.init ? [] : [{ pid: 10, ppid: 1, pgid: 9, state: "Z" }],
     retained_directories: scenario.init ? [] : ["/tmp/nessa-agent-owned"],
   }
@@ -647,3 +648,122 @@ test("all captured process entries require typed fields even when they are not z
     /Harness failure/,
   )
 })
+
+test("negative failure proof names the selected panic and its actual cause", () => {
+  for (const scenario of [scenarios[0], scenarios[2]]) {
+    const negative = report(scenario)
+    const output = negative.output
+    for (const changed of [
+      output.replace("value: CleanupUncertain", "value: DeadlineExceeded") +
+        "\nincidental CleanupUncertain",
+      output.replace(`thread '${scenario.test}'`, "thread 'another-test'"),
+      output.replace(
+        `thread '${scenario.test}'`,
+        `thread '${scenario.test.slice(0, -1)}x'`,
+      ),
+      output.replace(`thread '${scenario.test}'`, `thread '${scenario.test}-other'`),
+      output
+        .replace(
+          "called `Result::unwrap()`",
+          "debug CleanupUncertain\ncalled `Result::unwrap()`",
+        )
+        .replace("value: CleanupUncertain", "value: DeadlineExceeded"),
+    ])
+      assert.throws(
+        () => validate({ ...negative, output: changed }, scenario),
+        /CleanupUncertain/,
+      )
+    for (const supported of [
+      output.replace(" (8) panicked", " panicked"),
+      output.replaceAll("\n", "\r\n"),
+    ])
+      assert.equal(
+        validate({ ...negative, output: supported }, scenario).test,
+        scenario.test,
+      )
+  }
+})
+
+test("the acceptance publisher never writes accepted evidence when already interrupted", async () => {
+  const controller = new AbortController()
+  controller.abort()
+  const entries = []
+  await assert.rejects(
+    publishAcceptance(
+      { container: "removed", accepted: false },
+      controller.signal,
+      async (entry) => entries.push(entry),
+    ),
+    /interrupted/,
+  )
+  assert.ok(entries.length > 0 && entries.every((entry) => !entry.accepted))
+})
+
+test("an acceptance write failure retains unaccepted diagnostic evidence", async () => {
+  const entries = []
+  await assert.rejects(
+    publishAcceptance(
+      { container: "removed", accepted: false },
+      new AbortController().signal,
+      async (entry) => {
+        if (entry.accepted) throw new Error("acceptance write failed")
+        entries.push(entry)
+      },
+    ),
+    /acceptance write failed/,
+  )
+  assert.equal(entries.at(-1).accepted, false)
+  assert.equal(entries.at(-1).failure, "acceptance write failed")
+})
+
+for (const interruptAt of ["last-removal", "final-write"]) {
+  test(`interrupt during ${interruptAt} rejects four-case acceptance after independent removal`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "nessa-cleanup-publication-"))
+    try {
+      const binary = join(root, "binary")
+      const fixture = join(root, "tests/infrastructure/acp/contracts/fixtures")
+      const evidence = join(root, "evidence")
+      await writeFile(binary, "library test")
+      await mkdir(fixture, { recursive: true })
+      await writeFile(join(fixture, "claude_acp_test_handler.py"), "fixture")
+      let active
+      const removed = []
+      const run = async (args, operation) => {
+        if (args[0] === "image") return JSON.stringify([{ Id: "sha256:immutable" }])
+        if (args[0] === "create")
+          active = scenarios.find(
+            (scenario) =>
+              scenario.test === args.at(-1) && scenario.init === args.includes("--init"),
+          )
+        if (args[0] === "rm") {
+          assert.equal(operation.signal, undefined)
+          removed.push(args.at(-1))
+          if (interruptAt === "last-removal" && removed.length === 4)
+            process.emit("SIGINT")
+        }
+        return args[0] === "start" ? JSON.stringify(report(active)) : ""
+      }
+      const persist = async (path, contents) => {
+        await writeFile(path, contents)
+        const saved = JSON.parse(contents)
+        if (
+          interruptAt === "final-write" &&
+          saved.reports.length === 4 &&
+          saved.reports.at(-1).accepted
+        )
+          process.emit("SIGINT")
+      }
+      await assert.rejects(
+        checkContainers([binary, root, "image", evidence], run, persist),
+        /interrupted/,
+      )
+      const saved = JSON.parse(await readFile(join(evidence, "acceptance.json"), "utf8"))
+      assert.equal(removed.length, 4)
+      assert.equal(saved.reports.length, 4)
+      assert.equal(saved.reports.at(-1).accepted, false)
+      assert.match(saved.reports.at(-1).failure, /interrupted/)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+}

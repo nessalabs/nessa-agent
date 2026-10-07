@@ -103,10 +103,50 @@ in four disposable PID namespaces. Its orderings are specified before the harnes
 
 | Ordering | Required observation | Evidence test |
 | --- | --- | --- |
-| Directory test exits under non-reaping PID 1; inspect before PID 1 exits | One failed test, `CleanupUncertain`, new PPID-1 zombie, retained private directory | negative directory acceptance; missing-zombie and wrong-failure unit cases |
-| ACP TERM-resistant parent creates child before `running`; close kills group; inspect after test exits | One failed test, `CleanupUncertain`, new PPID-1 zombie | negative ACP acceptance |
+| Directory test exits under non-reaping PID 1; inspect before PID 1 exits | One failed test, selected-test panic caused by `CleanupUncertain`, new PPID-1 zombie, retained private directory | negative directory acceptance; missing-zombie and wrong-failure unit cases |
+| ACP TERM-resistant parent creates child before `running`; close kills group; inspect after test exits | One failed test, selected-test panic caused by `CleanupUncertain`, new PPID-1 zombie | negative ACP acceptance |
 | Either test runs with Docker `--init`; init adopts and reaps descendants before inspection | One passing test, no new orphan zombie, no retained private directory | both positive acceptances; zero-test and positive-failure unit cases |
 | Image inspection is interrupted, or timeout, repeated interrupt, malformed/missing proof, validation or Docker failure occurs during a scenario | Harness fails; inspection receives cancellation; required identities, flags and metadata are validated; diagnostics recorded before validation/removal; removal attempted independently of cancelled work | orchestration removal-on-interrupt, rejected-evidence and failure tests |
+
+Acceptance publication has one owner, after independent container removal:
+
+| Ordering | Publisher result | Evidence test |
+| --- | --- | --- |
+| Selected test panics for another cause; unrelated output mentions `CleanupUncertain` | Reject; the selected panic header and following unwrap error must establish the cause | incidental-token/wrong-panic tests |
+| Interrupt arrives during successful removal, before acceptance is written | Retain diagnostics with `accepted: false`; fail the run | last-removal interrupt test |
+| Interrupt arrives while the acceptance record is being written | Publisher observes cancellation after the write, replaces that entry with rejected diagnostics and fails the run | final-write interrupt test |
+| Acceptance write fails | Publisher fails; captured diagnostics remain unaccepted | acceptance-write failure test |
+| Publication checks finish before a later interrupt | Confirm that scenario; overall acceptance requires four confirmed entries and a successful harness exit | complete orchestration and real four-case acceptance |
+
+This diagram illustrates the table with the harness's actual functions:
+
+```mermaid
+sequenceDiagram
+    participant Check as checkContainers
+    participant Scenario as runScenario
+    participant Docker
+    participant Publisher as publishAcceptance
+    participant Evidence as acceptance.json
+    Check->>Scenario: Run exact test in fresh container
+    Scenario->>Evidence: Capture proof with accepted false
+    Scenario->>Scenario: Validate proof and selected panic cause
+    Scenario->>Docker: rm --force independently of cancellation
+    Docker-->>Scenario: Removal completes
+    Scenario-->>Check: Validated proof
+    Check->>Publisher: Proof and AbortSignal
+    alt Cancellation observed before acceptance
+        Publisher->>Evidence: Rejected diagnostics
+        Publisher-->>Check: Fail run
+    else Publication begins
+        Publisher->>Evidence: Await accepted record write
+        alt Cancellation observed after write
+            Publisher->>Evidence: Replace entry with rejected diagnostics
+            Publisher-->>Check: Fail run
+        else Publication checks complete
+            Publisher-->>Check: Scenario confirmed
+        end
+    end
+```
 
 The harness supervisor waits only for its direct test process. Inspection occurs
 while that supervisor remains alive; container removal then destroys the disposable
