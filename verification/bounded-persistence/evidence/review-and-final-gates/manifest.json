@@ -2,16 +2,67 @@
   "repository": "nessalabs/nessa-agent",
   "issue": 627,
   "pull_request": 652,
-  "source_head": "a8e2f1397220cb84750ef4450b16bcd4314045c3",
+  "source_head": "616a5fb9b07b81e30f23ff3282c1c60722fbb306",
   "base": "d55de88d9c6f5794b225da05b1055c511b9dba74",
-  "status": "R1 changes requested; synchronous submission containment correction in progress",
+  "status": "R1 corrections implemented; all11 exact616 local gates passed; freshR2 and requiredcurrentCI pending",
   "completed": false,
   "gate_records": {
     "original209": "Full isolated SDK and exact six-package tests passed; all14 central cases named. One later cfg(test) .ok removal is separately recorded.",
     "corrected_a8": "Seven local commands have observed exit0: fmt, SDK21, six-package all-targetClippy, SDKdocs, architecturetests, architecturechecker, frontendformat.",
     "local_scripts": "348 tests,346 pass,0 fail,2 skip; final local process exit unavailable, not claimed as completed command.",
     "hosted_frontend": "Run37670126367/job112959792534 SUCCESS on merge efb855f of a8 into d55; completed frontend command including matching script suite; raw log archived.",
-    "hosted_platforms": "Actual a8 run37670126367 ALL10jobsSUCCESS; synthetic mergeefb855fe168dfb883dd6ebe78987a4849c1369bd of a8 into d55. All14centraltests actuallyPASS onLinux/Mac/Windows. SDKdomain100%6552regions/703functions/5216lines,0uncovered. R1changesrequestedstillblocksmerge."
+    "hosted_platforms": "Actual a8 run37670126367 ALL10jobsSUCCESS; synthetic mergeefb855fe168dfb883dd6ebe78987a4849c1369bd of a8 into d55. All14centraltests actuallyPASS onLinux/Mac/Windows. SDKdomain100%6552regions/703functions/5216lines,0uncovered. R1changesrequestedstillblocksmerge.",
+    "corrected_616": {
+      "head": "616a5fb9b07b81e30f23ff3282c1c60722fbb306",
+      "gates": [
+        {
+          "name": "format",
+          "exit_code": 0
+        },
+        {
+          "name": "central-feature",
+          "exit_code": 0
+        },
+        {
+          "name": "sdk-ownership-matrix",
+          "exit_code": 0
+        },
+        {
+          "name": "server-records",
+          "exit_code": 0
+        },
+        {
+          "name": "server-audit",
+          "exit_code": 0
+        },
+        {
+          "name": "combined-central-ci-presence",
+          "exit_code": 0
+        },
+        {
+          "name": "ci-six-package-clippy",
+          "exit_code": 0
+        },
+        {
+          "name": "sdk-docs",
+          "exit_code": 0
+        },
+        {
+          "name": "architecture-tests",
+          "exit_code": 0
+        },
+        {
+          "name": "architecture",
+          "exit_code": 0
+        },
+        {
+          "name": "frontend-format",
+          "exit_code": 0
+        }
+      ],
+      "manual_OS": "Current616 binary baseline/refusal/restored all exit0; typedInterrupted, heldadmission, recovered origin worker, exactly-oncefileeffect/capturecleanup-before-release.",
+      "combined_feature_selection": "All15actualportablecentral names PASS; Linuxmanualcase explicitlyignored innormalCI."
+    }
   },
   "review_rounds": [
     {
@@ -22,7 +73,8 @@
         "R1-C1 major: synchronous OS blocking-thread refusal bypasses typed interruption",
         "R1-C2 minor: tracked final-manifest link points to pending placeholder"
       ],
-      "deferred_submit_disposition": "Compiled bounded-entry handshake expectation fails; tuple-count assertion did not execute. Not an orchestration timeout."
+      "deferred_submit_disposition": "Compiled bounded-entry handshake expectation fails; tuple-count assertion did not execute. Not an orchestration timeout.",
+      "dispositions": "616implements synchronouscatch/immediateforget+meaningfulnegative/restoredpositive+actualOSownershipproof, correctedcanonicalpointer anddeletedplaceholder. FreshR2required."
     }
   ],
   "archive": {
@@ -39,5 +91,18 @@
     "log_archive": "a8-hosted-ci.log.gz",
     "status": "a8-hosted-ci-status.json",
     "central_test_presence": "a8-central-ci-presence.json"
-  }
+  },
+  "current_616_hosted_CI": {
+    "run": 37675120022,
+    "status": "in_progress at publication, notapproved"
+  },
+  "correction_archive": {
+    "path": "616-r1-correction-handoff.tar.gz",
+    "sha256": "6b721eb7d6e00e9b4b202951f02dadae86a21ae310d5a80a8954ec3bf9febf0a",
+    "artifact_manifest_sha256": "e5f7eac30279d54a47696bee830eb123331e99c4ecf1eefc335f4dc5aaebf815",
+    "artifact_count": 25,
+    "root_verified_source_paths": 30,
+    "source_mismatches": []
+  },
+  "measurement_scope": "Original26mutants and66000percall/5250batchrows are pre-R1 helper evidence; two newmutants helper58b... before finalrustfmt8634... diff archived. No exact616 performance replay claimed."
 }

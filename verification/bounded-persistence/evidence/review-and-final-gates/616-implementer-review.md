@@ -1,0 +1,19 @@
+# Implementer review — R1 executor entry correction
+
+Frozen source: 616a5fb9b07b81e30f23ff3282c1c60722fbb306, base d55de88d9c6f5794b225da05b1055c511b9dba74; previous checkpoint a8e2f1397220cb84750ef4450b16bcd4314045c3.
+
+The shared Admission::submit now catches synchronous unwinding around its actual captured-executor spawn operation. Caught payloads are forgotten immediately, before construction of the result observer. The observer owns Result<JoinHandle,Interrupted>; all adapter typed mappings are unchanged. Tokio may have queued the original Job before failing initial worker creation. The Job and permit remain owned by that queue; interruption proves neither absence nor rollback. The correction does not add retry, abort, supervision, a registry, or public test switches.
+
+Portable legitimate Tokio thread_name_fn faults run in bounded child processes, with ManuallyDrop established before submission. The callback can poison Tokio's pool; this fixture deliberately promises no recovery/drain and retains its bounded leaked runtime until child exit. Both polled and dropped observers preserve immediate payload disposition and pending admission. Removing the new catch and replacing only its immediate forget with drop each produced compiled runtime failure and exact-source restored green.
+
+Actual Linux pthread EAGAIN injection uses the reviewer-owned existing C shim, with no compiler/shim dependency in normal CI. Baseline, refusal, and repeat exit0. Refusal yielded typed Interrupted before physical effect; independent same-origin blocking submission restored worker creation. The retained Job wrote a real file exactly once, then held capture cleanup while the next admission stayed pending. Releasing that actual cleanup allowed kick completion and successor admission. The kick is deliberately not awaited before releasing the older Job's capture gate.
+
+Canonical table row27 was added and rendered as one complete27-row table before executable changes. API and atlas scope match conditional progress, and the pending final-gate stub was removed. The README links the parent's maintained public evidence-branch gate/review record, with exact prior209/a8 checkpoint archive identities.
+
+The26 prior mutations and66000 per-call/5250 batch benchmark samples are pre-R1 helper proofs (a8-equivalent production source), not relabeled final-source observations. Exceptional submission containment changed; normal adapter/storage/fixture algorithms and typed outcome maps did not. No benchmark replay or speedup claim is made. The recorded single-slot caller/batch latency regressions remain disclosed.
+
+Returned-output destruction after Job completion remains outside slot lifetime. Physical/captured-frame double faults may abort, and external panic hooks are unsuppressed. Runtime shutdown is not a guaranteed queue drain, and no bounded recovery guarantee is added. SDK/server actual declared MSRV1.89 was not executed; tested rustc1.99 remains the executed toolchain. External atlas browser/Mermaid rendering remains unavailable; actual Markdown renderer and source/link checks are separate evidence.
+
+Finite exact-head gates are recorded in /tmp/627-r1-final-gates/manifest.json. Their actual results, not this text, determine completion. Source is frozen throughout checks; parent owns publication, current hosted CI and fresh formal R2 review.
+
+Completed: all11 finite local gates returned exit0 on clean616. Central15 normal cases pass; manual OS case is ignored in CI and passed baseline/refusal/repeat under independent external watchdog. Combined six-package selection names all15. Actual SDK21/records20/audit7 pass. The focused mutation restoration preceded a rustfmt-only expression wrap; hashes and exact diff disclose that distinction. Source remained clean/frozen through final gates.
