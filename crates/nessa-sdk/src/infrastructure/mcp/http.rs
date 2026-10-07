@@ -484,6 +484,7 @@ impl HttpSession {
             Ok(response) if response.status == 202 || (200..300).contains(&response.status) => {
                 SendOutcome::Done
             }
+            Ok(response) if response.status == 403 => self.refuse_scope(response).await,
             Ok(response) if response.status == 401 => {
                 let challenge = response
                     .header("www-authenticate")
@@ -508,6 +509,7 @@ impl HttpSession {
                             {
                                 SendOutcome::Done
                             }
+                            Ok(again) if again.status == 403 => self.refuse_scope(again).await,
                             Ok(again) if again.status >= 500 => {
                                 server_error(body_is_initialize(body), id)
                             }
@@ -528,6 +530,17 @@ impl HttpSession {
             },
             Err(_) => SendOutcome::End(lost_exchange(body)),
         }
+    }
+
+    async fn refuse_scope(&self, response: HttpResponse) -> SendOutcome {
+        let challenge = response
+            .header("www-authenticate")
+            .unwrap_or("Bearer")
+            .to_owned();
+        self.authorization
+            .insufficient_scope(self.server, &challenge)
+            .await;
+        SendOutcome::End(McpError::InsufficientScope)
     }
 
     async fn read_sse_body(

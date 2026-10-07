@@ -13,7 +13,7 @@ use crate::mcp_authorization::application::{
 };
 use crate::mcp_authorization::domain::{
     AcceptedDiscovery, Admission, Command, Deletion, Phase, Publication, RefreshActivity, Refusal,
-    RemoteObservation, ServerAuth, TokenAvailability,
+    RemoteObservation, RevokeCause, ServerAuth, Settlement, TokenAvailability,
 };
 use crate::mcp_authorization::infrastructure::{MemoryAuthorization, ScriptedCallback};
 
@@ -989,5 +989,249 @@ impl AuthorizationRecords for UnreadableRecords {
     async fn delete_secret(&self, _server: Uuid) -> Result<Deletion, RecordFailure> {
         self.deleted.store(true, Ordering::SeqCst);
         Err(RecordFailure::Unavailable)
+    }
+}
+
+#[tokio::test]
+async fn a_refused_revalidation_fence_is_not_discarded() {
+    let memory = Arc::new(MemoryAuthorization::new());
+    let records = Arc::new(UndeletableSecret(memory.clone()));
+    records.store(&ready_token()).await.unwrap();
+    records
+        .store_secret(
+            server(),
+            &TokenMaterial {
+                access_token: "access".into(),
+                refresh_token: None,
+                generation: 1,
+            },
+        )
+        .await
+        .unwrap();
+    memory
+        .set_resource(server(), "https://mcp.example/mcp")
+        .await;
+    let owner = AuthorizationOwner::new(
+        records,
+        memory.clone(),
+        memory.clone(),
+        Arc::new(ScriptedCallback::pending()),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        true,
+    );
+    assert_eq!(
+        owner
+            .revalidate(&[(server(), "https://other.example/mcp".into())])
+            .await,
+        Err(FenceRefusal)
+    );
+}
+
+struct UndeletableSecret(Arc<MemoryAuthorization>);
+
+#[async_trait]
+impl AuthorizationRecords for UndeletableSecret {
+    async fn load(&self, server: Uuid) -> Result<Option<ServerAuth>, RecordFailure> {
+        self.0.load(server).await
+    }
+    async fn store(&self, auth: &ServerAuth) -> Result<(), RecordFailure> {
+        self.0.store(auth).await
+    }
+    async fn load_secret(&self, server: Uuid) -> Result<Option<TokenMaterial>, RecordFailure> {
+        self.0.load_secret(server).await
+    }
+    async fn store_secret(
+        &self,
+        server: Uuid,
+        secret: &TokenMaterial,
+    ) -> Result<Publication, RecordFailure> {
+        self.0.store_secret(server, secret).await
+    }
+    async fn delete_secret(&self, _server: Uuid) -> Result<Deletion, RecordFailure> {
+        Ok(Deletion::Unknown)
+    }
+}
+
+#[tokio::test]
+async fn consent_asks_for_the_challenge_scope_only() {
+    let memory = Arc::new(MemoryAuthorization::new());
+    memory
+        .push_route(
+            "https://mcp.example/mcp",
+            Ok(OAuthResponse {
+                status: 401,
+                body: String::new(),
+                www_authenticate: Some(
+                    "Bearer scope=\"read\", resource_metadata=\"https://mcp.example/.well-known/oauth-protected-resource\""
+                        .into(),
+                ),
+            }),
+        )
+        .await;
+    memory
+        .push_route(
+            "https://mcp.example/.well-known/oauth-protected-resource",
+            Ok(OAuthResponse {
+                status: 200,
+                body: r#"{"resource":"https://mcp.example/mcp","authorization_servers":["https://as.example"],"scopes_supported":["mcp","admin"]}"#.into(),
+                www_authenticate: None,
+            }),
+        )
+        .await;
+    memory
+        .push_route(
+            "https://as.example/.well-known/oauth-authorization-server",
+            Ok(server_metadata()),
+        )
+        .await;
+    memory
+        .push_route(
+            "https://as.example/register",
+            Ok(OAuthResponse {
+                status: 201,
+                body: r#"{"client_id":"client"}"#.into(),
+                www_authenticate: None,
+            }),
+        )
+        .await;
+    let owner = Arc::new(owner(memory));
+    let AuthorizeAnswer::PendingConsent { consent_url, .. } = owner
+        .authorize(server(), "docs", "https://mcp.example/mcp")
+        .await
+    else {
+        panic!("expected consent");
+    };
+    assert!(consent_url.contains("scope=read"), "{consent_url}");
+    assert!(!consent_url.contains("admin"), "{consent_url}");
+}
+
+#[tokio::test]
+async fn a_saved_revocation_without_a_worker_is_resumed() {
+    let memory = Arc::new(MemoryAuthorization::new());
+    let mut stranded = ready_token();
+    stranded.phase = Phase::Revoking {
+        cause: RevokeCause::Revoke,
+        settlement: Settlement {
+            local_drained: false,
+            secret_deleted: false,
+            remote: None,
+            evidence_acked: false,
+        },
+    };
+    memory.store(&stranded).await.unwrap();
+    memory
+        .store_secret(
+            server(),
+            &TokenMaterial {
+                access_token: "access".into(),
+                refresh_token: None,
+                generation: 1,
+            },
+        )
+        .await
+        .unwrap();
+    memory.set_resource(server(), &stranded.resource).await;
+    let owner = owner(memory.clone());
+    let answer = owner.revoke(server()).await;
+    assert!(answer.settled, "{answer:?}");
+    assert!(answer.secret_deleted);
+    assert!(memory.load_secret(server()).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_revoke_joins_one_that_is_still_running() {
+    let memory = Arc::new(MemoryAuthorization::new());
+    let records = Arc::new(GatedDelete::new(memory.clone()));
+    records.store(&ready_token()).await.unwrap();
+    records
+        .store_secret(
+            server(),
+            &TokenMaterial {
+                access_token: "access".into(),
+                refresh_token: None,
+                generation: 1,
+            },
+        )
+        .await
+        .unwrap();
+    memory
+        .set_resource(server(), "https://mcp.example/mcp")
+        .await;
+    let owner = Arc::new(AuthorizationOwner::new(
+        records.clone(),
+        memory.clone(),
+        memory.clone(),
+        Arc::new(ScriptedCallback::pending()),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        true,
+    ));
+    let first = {
+        let owner = owner.clone();
+        tokio::spawn(async move { owner.revoke(server()).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !records.entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("delete started");
+    let joined = owner.revoke(server()).await;
+    assert!(!joined.settled, "{joined:?}");
+    assert_eq!(records.deletes.load(Ordering::SeqCst), 1);
+    records.release.notify_one();
+    let finished = first.await.unwrap();
+    assert!(finished.settled, "{finished:?}");
+    assert_eq!(records.deletes.load(Ordering::SeqCst), 1);
+}
+
+struct GatedDelete {
+    inner: Arc<MemoryAuthorization>,
+    entered: AtomicBool,
+    release: tokio::sync::Notify,
+    deletes: AtomicUsize,
+}
+
+impl GatedDelete {
+    fn new(inner: Arc<MemoryAuthorization>) -> Self {
+        Self {
+            inner,
+            entered: AtomicBool::new(false),
+            release: tokio::sync::Notify::new(),
+            deletes: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl AuthorizationRecords for GatedDelete {
+    async fn load(&self, server: Uuid) -> Result<Option<ServerAuth>, RecordFailure> {
+        self.inner.load(server).await
+    }
+    async fn store(&self, auth: &ServerAuth) -> Result<(), RecordFailure> {
+        self.inner.store(auth).await
+    }
+    async fn load_secret(&self, server: Uuid) -> Result<Option<TokenMaterial>, RecordFailure> {
+        self.inner.load_secret(server).await
+    }
+    async fn store_secret(
+        &self,
+        server: Uuid,
+        secret: &TokenMaterial,
+    ) -> Result<Publication, RecordFailure> {
+        self.inner.store_secret(server, secret).await
+    }
+    async fn delete_secret(&self, server: Uuid) -> Result<Deletion, RecordFailure> {
+        if self.deletes.fetch_add(1, Ordering::SeqCst) == 0 {
+            self.entered.store(true, Ordering::SeqCst);
+            self.release.notified().await;
+        }
+        self.inner.delete_secret(server).await
     }
 }

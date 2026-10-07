@@ -111,6 +111,8 @@ enum Behavior {
     Block,
     /// Legacy HTTP+SSE: POST 405, GET endpoint event, replies on that stream.
     Legacy,
+    /// Legacy message POST answers 403 insufficient_scope.
+    LegacyForbidden,
     /// A call after initialize has no HTTP status.
     UnreachableCall,
     /// `initialize` itself has no HTTP status.
@@ -185,7 +187,7 @@ impl Peer {
     async fn answer_get(&self, request: HttpRequest) -> Result<HttpResponse, HttpFailure> {
         if matches!(
             self.behavior,
-            Behavior::Legacy | Behavior::LegacyUnreachable
+            Behavior::Legacy | Behavior::LegacyUnreachable | Behavior::LegacyForbidden
         ) {
             let (tx, rx) = mpsc::unbounded_channel();
             let endpoint = endpoint_of(&request.url);
@@ -232,10 +234,20 @@ impl Peer {
         }
         if matches!(
             self.behavior,
-            Behavior::Legacy | Behavior::LegacyUnreachable
+            Behavior::Legacy | Behavior::LegacyUnreachable | Behavior::LegacyForbidden
         ) {
             if request.url.ends_with("/mcp") {
                 return Ok(response(405, vec![], Vec::new()));
+            }
+            if matches!(self.behavior, Behavior::LegacyForbidden) {
+                return Ok(response(
+                    403,
+                    vec![(
+                        "www-authenticate".into(),
+                        "Bearer error=\"insufficient_scope\", scope=\"read\"".into(),
+                    )],
+                    Vec::new(),
+                ));
             }
             if matches!(self.behavior, Behavior::LegacyUnreachable) {
                 return Err(HttpFailure::Unreachable);
@@ -733,6 +745,39 @@ async fn a_server_error_on_a_call_is_unconfirmed() {
         session.list_tools().await.unwrap_err(),
         McpError::Unconfirmed
     );
+}
+
+#[tokio::test]
+async fn a_legacy_403_tells_the_owner_the_scope_was_not_enough() {
+    let auth = Arc::new(ScopeWatch::default());
+    let error = must_err(
+        servers_with_auth(Peer::new(Behavior::LegacyForbidden), auth.clone())
+            .open_remote_once(&remote_at("http://127.0.0.1/mcp"))
+            .await,
+    );
+    assert_eq!(error, McpError::InsufficientScope);
+    assert_eq!(
+        auth.challenge.lock().expect("challenge").as_str(),
+        "Bearer error=\"insufficient_scope\", scope=\"read\""
+    );
+}
+
+#[derive(Default)]
+struct ScopeWatch {
+    challenge: Mutex<String>,
+}
+
+#[async_trait]
+impl RemoteAuthorization for ScopeWatch {
+    async fn bearer(&self, _: Uuid) -> Result<Option<Bearer>, McpError> {
+        Ok(None)
+    }
+    async fn rejected(&self, _: Uuid, _: &str) -> Result<Option<Bearer>, McpError> {
+        Err(McpError::Unauthorized)
+    }
+    async fn insufficient_scope(&self, _: Uuid, challenge: &str) {
+        *self.challenge.lock().expect("challenge") = challenge.to_owned();
+    }
 }
 
 #[tokio::test]

@@ -1,6 +1,7 @@
 //! The per-server owner. One step is chosen under the server's lock; the
 //! network, the store and the audit run after that lock is released.
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -38,6 +39,9 @@ struct Slot {
     /// The generation last returned from `bearer`. A rejection of an older
     /// generation reuses a replacement that was published since.
     handed: u64,
+    /// Set while this process is driving revoke cleanup. A saved `Revoking`
+    /// record with this clear has no worker, so the next revoke resumes it.
+    revoke_running: Arc<AtomicBool>,
 }
 
 struct RefreshFlight {
@@ -293,13 +297,12 @@ impl AuthorizationOwner {
             if bound == *url {
                 continue;
             }
-            let _ = self
-                .fence(&[BindingChange::ResourceChanged {
-                    id: *id,
-                    previous_url: bound,
-                    url: url.clone(),
-                }])
-                .await;
+            self.fence(&[BindingChange::ResourceChanged {
+                id: *id,
+                previous_url: bound,
+                url: url.clone(),
+            }])
+            .await?;
         }
         Ok(())
     }
@@ -510,10 +513,21 @@ impl AuthorizationOwner {
     }
 
     async fn revoke_slot(&self, slot: &Arc<Mutex<Slot>>, command: Command) -> RevokeAnswer {
-        let decision = self.apply(slot, command).await;
-        if decision.refusal == Some(Refusal::JoinRevoke) {
-            return snapshot(slot).await;
-        }
+        let running = {
+            let mut guard = slot.lock().await;
+            let decision = guard.auth.step(command);
+            guard.auth = decision.auth.clone();
+            // Another call in this process is already driving cleanup. A
+            // `Revoking` record loaded after that driver stopped is resumed.
+            if decision.refusal == Some(Refusal::JoinRevoke)
+                && guard.revoke_running.load(Ordering::SeqCst)
+            {
+                return revoke_answer(&guard.auth);
+            }
+            guard.revoke_running.store(true, Ordering::SeqCst);
+            guard.revoke_running.clone()
+        };
+        let _release = ReleaseRevoke(running);
         let _ = self.persist(slot).await;
         let _ = self.audit_slot(slot, "revoke", true).await;
         let name = {
@@ -772,6 +786,8 @@ impl AuthorizationOwner {
         discovered: Discovered,
         scope: Option<String>,
     ) -> Option<Discovered> {
+        // The challenge scope is what consent asks for. `scopes_supported`
+        // is only the fallback when the challenge names none.
         let scopes = match scope {
             Some(scope) => scope.split_whitespace().map(str::to_owned).collect(),
             None => discovered.scopes.clone(),
@@ -781,7 +797,7 @@ impl AuthorizationOwner {
                 slot,
                 Command::DiscoveryAccepted(AcceptedDiscovery {
                     issuer: discovered.issuer.clone(),
-                    scopes,
+                    scopes: scopes.clone(),
                     pkce_s256: discovered.pkce_s256,
                     registration_offered: discovered.registration_endpoint.is_some(),
                     revocation_offered: discovered.revocation_endpoint.is_some(),
@@ -790,7 +806,11 @@ impl AuthorizationOwner {
                 }),
             )
             .await;
-        decision.refusal.is_none().then_some(discovered)
+        decision.refusal.is_none().then(|| {
+            let mut accepted = discovered;
+            accepted.scopes = scopes;
+            accepted
+        })
     }
 
     async fn register(
@@ -929,6 +949,7 @@ impl AuthorizationOwner {
             token_endpoint,
             revocation_endpoint,
             handed: 0,
+            revoke_running: Arc::new(AtomicBool::new(false)),
         }));
         let mut slots = self.slots.lock().await;
         if let Some(existing) = slots.get(&server) {
@@ -969,6 +990,7 @@ impl AuthorizationOwner {
             token_endpoint,
             revocation_endpoint,
             handed: 0,
+            revoke_running: Arc::new(AtomicBool::new(false)),
         }));
         let mut slots = self.slots.lock().await;
         if let Some(existing) = slots.get(&server) {
@@ -1069,13 +1091,22 @@ fn held_revoke() -> RevokeAnswer {
     }
 }
 
+struct ReleaseRevoke(Arc<AtomicBool>);
+
+impl Drop for ReleaseRevoke {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 async fn snapshot(slot: &Arc<Mutex<Slot>>) -> RevokeAnswer {
-    let guard = slot.lock().await;
-    let (settled, local_drained, secret_deleted, remote, evidence_acknowledged) = match &guard
-        .auth
-        .phase
+    revoke_answer(&slot.lock().await.auth)
+}
+
+fn revoke_answer(auth: &ServerAuth) -> RevokeAnswer {
+    let (settled, local_drained, secret_deleted, remote, evidence_acknowledged) = match &auth.phase
     {
-        Phase::ConsentNeeded => (true, true, true, guard_remote(&guard.auth), true),
+        Phase::ConsentNeeded => (true, true, true, guard_remote(auth), true),
         Phase::RevocationIncomplete { settlement, .. } | Phase::Revoking { settlement, .. } => (
             false,
             settlement.local_drained,
@@ -1083,14 +1114,14 @@ async fn snapshot(slot: &Arc<Mutex<Slot>>) -> RevokeAnswer {
             settlement.remote,
             settlement.evidence_acked,
         ),
-        _ => (false, false, !guard.auth.secret_present, None, false),
+        _ => (false, false, !auth.secret_present, None, false),
     };
     let _ = secret_deleted;
     RevokeAnswer {
         settled,
         local_drained,
-        secret_deleted: !guard.auth.secret_present,
-        remote: remote.or(guard_remote(&guard.auth)),
+        secret_deleted: !auth.secret_present,
+        remote: remote.or(guard_remote(auth)),
         evidence_acknowledged,
     }
 }
