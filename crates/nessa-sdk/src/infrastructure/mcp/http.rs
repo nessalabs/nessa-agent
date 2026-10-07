@@ -6,6 +6,7 @@
 //! Connection writer ──dispatch(one JSON-RPC frame)──▶ HttpSession
 //!        ▲                                              ├── POST modern, or legacy endpoint
 //!        │                                              ├── HttpExchange
+//!        │                                              ├── bounded owned POST readers (abort/join on close)
 //!        └── reader ◀── inbound JSON messages ─────────┴── optional GET stream
 //! ```
 //!
@@ -17,7 +18,11 @@
 //! old id; the failed request is not replayed. Legacy mode records that DELETE
 //! does not apply.
 //!
-//! Dropping the session aborts its GET stream and asks for the same single
+//! POST event streams are session-owned and separately bounded. A request reader
+//! forwards notices/requests until its matching result/error, then drops the body
+//! even if the peer leaves it open (ADR 392 P1–P8 and `tests::post_streams`).
+//!
+//! Dropping the session aborts its GET and POST streams and asks for the same single
 //! DELETE. The DELETE itself is best-effort and bounded by the exchange.
 #![deny(missing_docs)]
 
@@ -32,7 +37,8 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::sync::{mpsc, watch};
+use tokio::runtime::Handle;
+use tokio::sync::{mpsc, watch, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -94,6 +100,7 @@ struct Phase {
 /// One remote opening's HTTP session.
 pub struct HttpSession {
     local: u64,
+    runtime: Handle,
     server: Uuid,
     url: RemoteMcpUrl,
     exchange: Arc<dyn HttpExchange>,
@@ -104,9 +111,21 @@ pub struct HttpSession {
     closing: AtomicBool,
     delete_started: AtomicBool,
     get_task: Mutex<Option<JoinHandle<()>>>,
+    post_tasks: Mutex<Vec<PostReader>>,
+    post_capacity: Arc<Semaphore>,
     /// Becomes true once close has nothing left to wait for, including a
     /// DELETE that does not apply.
     finished: watch::Sender<bool>,
+}
+
+/// Retained POST readers, independent of pending JSON-RPC call capacity.
+pub(crate) const MAX_POST_STREAMS: usize = 256;
+
+struct PostReader {
+    request_id: Option<u64>,
+    task: JoinHandle<()>,
+    /// Held until this handle is reaped or joined, including after abort.
+    _permit: OwnedSemaphorePermit,
 }
 
 /// The next local id handed to a session.
@@ -115,7 +134,13 @@ static NEXT_LOCAL: AtomicU64 = AtomicU64::new(1);
 impl HttpSession {
     /// A session that posts to `url` through `exchange`. `incoming` is the
     /// JSON messages the connection reader consumes. `finished` starts false
-    /// until [`Self::shutdown`].
+    /// until [`Self::shutdown`]. The current Tokio runtime owns reader/close
+    /// tasks and must remain running through [`Self::finished`], including when
+    /// this handle is dropped from an ordinary thread.
+    ///
+    /// # Panics
+    ///
+    /// Panics when called outside a Tokio runtime.
     pub fn open(
         server: Uuid,
         url: RemoteMcpUrl,
@@ -126,6 +151,7 @@ impl HttpSession {
         let (inbound, incoming) = mpsc::channel(64);
         let session = Arc::new(Self {
             local: NEXT_LOCAL.fetch_add(1, Ordering::Relaxed),
+            runtime: Handle::current(),
             server,
             url,
             exchange,
@@ -143,27 +169,38 @@ impl HttpSession {
             closing: AtomicBool::new(false),
             delete_started: AtomicBool::new(false),
             get_task: Mutex::new(None),
+            post_tasks: Mutex::new(Vec::new()),
+            post_capacity: Arc::new(Semaphore::new(MAX_POST_STREAMS)),
             finished: watch::channel(false).0,
         });
         (session, incoming)
     }
 
-    /// Resolves when shutdown has recorded its DELETE observation, or at once
-    /// when DELETE does not apply. Subscribed before [`Self::shutdown`].
+    /// Resolves after shutdown joins owned readers and records its DELETE
+    /// observation (or that DELETE does not apply). Subscribe before shutdown.
     pub fn finished(&self) -> watch::Receiver<bool> {
         self.finished.subscribe()
     }
 
-    /// Stop the GET stream and DELETE a claimed modern session id once.
+    /// Stop owned GET/POST streams and DELETE a claimed modern session id once.
+    /// [`Self::finished`] observes completion after reader joins and DELETE.
     /// Legacy sessions and sessions with no id record that DELETE does not
     /// apply and do not send one.
     pub fn shutdown(&self) {
         if self.delete_started.swap(true, Ordering::SeqCst) {
             return;
         }
-        self.closing.store(true, Ordering::SeqCst);
-        if let Some(task) = self.get_task.lock().expect("get stream").take() {
+        let readers: Vec<_> = {
+            let mut readers = self.post_tasks.lock().expect("post streams");
+            self.closing.store(true, Ordering::SeqCst);
+            readers.drain(..).collect()
+        };
+        let get_task = self.get_task.lock().expect("get stream").take();
+        if let Some(task) = &get_task {
             task.abort();
+        }
+        for reader in &readers {
+            reader.task.abort();
         }
         let phase = self.phase.lock().expect("http phase");
         let legacy = phase.legacy_post.is_some();
@@ -178,16 +215,23 @@ impl HttpSession {
             }
         }
         drop(phase);
-        let Some(session_id) = session_id else {
-            self.finished.send_replace(true);
-            return;
-        };
+
         let exchange = self.exchange.clone();
         let endpoint = self.url.as_str().to_owned();
         let finished = self.finished.clone();
         let authorization = self.authorization.clone();
         let server = self.server;
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
+            for reader in readers {
+                let _ = reader.task.await;
+            }
+            if let Some(task) = get_task {
+                let _ = task.await;
+            }
+            let Some(session_id) = session_id else {
+                finished.send_replace(true);
+                return;
+            };
             let mut headers = vec![
                 ("Mcp-Session-Id".into(), session_id),
                 (
@@ -228,16 +272,58 @@ impl HttpSession {
             .and_then(Value::as_str)
             .map(str::to_owned);
         let id = message.get("id").and_then(Value::as_u64);
+        if method.as_deref() == Some("notifications/cancelled") {
+            if let Some(id) = message
+                .get("params")
+                .and_then(|params| params.get("requestId"))
+                .and_then(Value::as_u64)
+            {
+                self.cancel_post(id);
+            }
+        }
         let legacy = self.phase.lock().expect("http phase").legacy_post.clone();
         if let Some(post) = legacy {
             return self.post_legacy(&post, bytes, id).await;
         }
+        let permit = if id.is_some() && method.is_some() && method.as_deref() != Some("initialize")
+        {
+            self.reap_post_readers();
+            match self.post_capacity.clone().try_acquire_owned() {
+                Ok(permit) => Some(permit),
+                Err(_) => {
+                    return SendOutcome::FailCall {
+                        id,
+                        error: McpError::Busy,
+                    }
+                }
+            }
+        } else {
+            None
+        };
         match self.post_modern(bytes, method.as_deref(), id).await {
-            Ok(Modern::Response(body)) => self.deliver_body(body, method.as_deref(), id).await,
+            Ok(Modern::Response(body)) => {
+                self.deliver_body(body, method.as_deref(), id, permit).await
+            }
             Ok(Modern::Accepted) => SendOutcome::Done,
             Ok(Modern::Legacy) => self.enter_legacy(bytes, id).await,
             Err(error) => self.terminal(id, error),
         }
+    }
+
+    /// Stop this call's local POST reader, independently of remote cancellation.
+    pub(crate) fn cancel_post(&self, id: u64) {
+        for reader in self.post_tasks.lock().expect("post streams").iter() {
+            if reader.request_id == Some(id) {
+                reader.task.abort();
+            }
+        }
+    }
+
+    fn reap_post_readers(&self) {
+        self.post_tasks
+            .lock()
+            .expect("post streams")
+            .retain(|reader| !reader.task.is_finished());
     }
 
     fn terminal(&self, id: Option<u64>, error: McpError) -> SendOutcome {
@@ -252,6 +338,7 @@ impl HttpSession {
         response: HttpResponse,
         method: Option<&str>,
         id: Option<u64>,
+        permit: Option<OwnedSemaphorePermit>,
     ) -> SendOutcome {
         let status = response.status;
         if status == 202 {
@@ -298,8 +385,25 @@ impl HttpSession {
             // before the opening returns.
             let streamed = matches!(response.body, super::http_exchange::HttpBody::Stream(_));
             if streamed && method != Some("initialize") {
+                let request_id = method.and(id);
+                let mut readers = self.post_tasks.lock().expect("post streams");
+                readers.retain(|reader| !reader.task.is_finished());
+                if self.closing.load(Ordering::SeqCst) {
+                    return SendOutcome::End(McpError::Closed);
+                }
+                let permit = permit.or_else(|| self.post_capacity.clone().try_acquire_owned().ok());
+                let Some(permit) = permit else {
+                    return SendOutcome::End(McpError::Unconfirmed);
+                };
                 let inbound = self.inbound.clone();
-                tokio::spawn(forward_open_sse(response, inbound));
+                let task = self
+                    .runtime
+                    .spawn(forward_open_sse(response, inbound, request_id));
+                readers.push(PostReader {
+                    request_id,
+                    task,
+                    _permit: permit,
+                });
                 return SendOutcome::Done;
             }
             return self
@@ -888,16 +992,6 @@ impl HttpSession {
 
 impl Drop for HttpSession {
     fn drop(&mut self) {
-        if tokio::runtime::Handle::try_current().is_err() {
-            self.closing.store(true, Ordering::SeqCst);
-            if let Ok(mut task) = self.get_task.lock() {
-                if let Some(task) = task.take() {
-                    task.abort();
-                }
-            }
-            let _ = self.finished.send_replace(true);
-            return;
-        }
         self.shutdown();
     }
 }
@@ -907,6 +1001,7 @@ impl Drop for HttpSession {
 async fn forward_open_sse(
     response: HttpResponse,
     inbound: mpsc::Sender<Result<Vec<u8>, McpError>>,
+    request_id: Option<u64>,
 ) {
     let mut stream = match response.body {
         super::http_exchange::HttpBody::Stream(stream) => stream,
@@ -939,7 +1034,16 @@ async fn forward_open_sse(
             if event.data.is_empty() {
                 continue;
             }
-            if inbound.send(Ok(event.data.into_bytes())).await.is_err() {
+            let matched = request_id.is_some_and(|id| {
+                serde_json::from_str::<Value>(&event.data)
+                    .ok()
+                    .is_some_and(|message| {
+                        message.get("method").is_none()
+                            && message.get("id").and_then(Value::as_u64) == Some(id)
+                            && (message.get("result").is_some() ^ message.get("error").is_some())
+                    })
+            });
+            if inbound.send(Ok(event.data.into_bytes())).await.is_err() || matched {
                 return;
             }
         }

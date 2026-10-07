@@ -9,7 +9,7 @@ Connection lifetime, token availability, consent and evidence settlement are
 separate stateful concerns with explicit synchronization.
 
 - **Date:** 2026-10-03
-- **Statechart revision:** 2026-10-05
+- **Statechart revision:** 2026-10-07
 - **Status:** accepted. The gateway owns remote Streamable HTTP (and the
   scoped HTTP+SSE fallback), OAuth 2.1 (discovery, PKCE S256, dynamic
   registration or `registration_unsupported`, loopback callback, the
@@ -300,6 +300,75 @@ DELETE/local drain share the owning close deadline, including fallback paths.
 Expired deadlines retain the observation and release confirmed local resources;
 remote uncertainty remains visible rather than reserving fictional remote-process
 ownership. Mandatory audit has its own documented bounded delivery attempts.
+
+### Owned POST event streams (#622)
+
+`HttpSession` owns non-initialize POST readers separately from pending JSON-RPC
+calls. Its collection retains at most 256 handles (`MAX_POST_STREAMS`), including
+aborted readers until reaped after completion. The semaphore is the sole capacity
+authority: each retained reader holds its permit beside its task handle through
+reaping or close joining. Admission and close use the collection lock;
+readers own the response and inbound sender, with no reference back to the session.
+Before a non-initialize request POST, a capacity permit is reserved, or the call
+is refused with `Busy` before exchange. JSON/202/failure releases that permit;
+a streamed response holds it through reader teardown. Notification and ping-reply
+POSTs bypass request reservation so they can unblock active streams. If those
+POSTs unexpectedly return a stream, they acquire available capacity or end with
+`Unconfirmed` after dropping the excess body. This does not claim cancellation.
+
+The client ends a request's POST stream after forwarding its matching result or
+error. This is a client resource-lifetime policy: the specification recommends
+server closure after the response, but trailing notices are not invalid protocol.
+Notices and server requests before the matching response retain their order and
+can elicit another POST. Events after the matching response are not consumed.
+Caller cancellation stops an admitted reader directly, independently of delivery
+of the best-effort upstream cancellation; a delivered queued cancellation also catches
+reader admission after caller loss. When caller loss precedes response headers
+and the outgoing queue cannot accept cancellation, a late reader remains bounded
+and close-owned; this slice does not add a cancellation ledger. Completed handles
+are reaped at admission.
+
+| Row | State/event/order | Result and ownership | Enforcer |
+| --- | --- | --- | --- |
+| P1 | Active reader receives notices/ping, then matching result/error; peer holds body | Forward preceding events and matching response, release body; repeated successful calls retain bounded readers | `post_result_releases_held_body`, `post_error_releases_held_body`, `post_ping_before_result_remains_live` |
+| P2 | Active reader receives another id's response, same-id server request or nonterminal envelope | Forward it without ending this reader; retain until its own response/EOF/cancel/close | `post_other_response_does_not_retire_reader` |
+| P3 | Active reader reaches EOF or body failure | Release body; failure publishes typed `Unconfirmed` | `post_eof_and_failure_release_body` |
+| P4 | Caller disappears during active read | Abort local reader; best-effort remote notification remains separate | `post_caller_cancellation_releases_body`, `post_cancellation_with_full_outgoing_queue_releases_active_body`, `post_cancellation_during_headers_releases_late_body` |
+| P5 | Close/drop while reader waits (including startup tools/list) or blocked inbound send; drop from an ordinary thread | Fence admission, abort and join owned readers before finished; repeated close shares completion | `post_close_joins_held_and_blocked_readers`, `post_finished_waits_for_reader_destruction`, `post_drop_releases_body`, `post_drop_outside_runtime_context_joins_body` |
+| P6 | POST exchange returns streamed body after close drained readers | Reject late admission with `Closed`, drop body | `post_late_body_after_close_is_dropped` |
+| P7 | Reader handles fill their independent bound; pending calls need not remain | Refuse next request before exchange; completed/aborted readers regain capacity | `post_reader_bound_refuses_before_exchange_and_recovers` |
+| P8 | Notification/ping response unexpectedly returns SSE with full reader capacity | Drop excess body and end with `Unconfirmed`; bypass reservation for ordinary 202 replies | `post_notification_stream_at_capacity_is_unconfirmed` |
+
+```mermaid
+sequenceDiagram
+  participant Caller
+  participant HttpSession
+  participant Reader as Owned POST reader
+  participant Peer
+  Caller->>HttpSession: tools/call
+  HttpSession->>Peer: POST (reader capacity available)
+  Peer-->>HttpSession: SSE response
+  HttpSession->>Reader: register handle under admission/close lock
+  Peer-->>Reader: ping or notice
+  Reader-->>Caller: inbound message
+  Caller->>HttpSession: ping reply POST
+  Peer-->>Reader: matching result, keep body open
+  Reader-->>Caller: matching result
+  Reader->>Reader: drop response body
+  Caller->>HttpSession: close
+  HttpSession->>Reader: abort remaining readers, join
+  HttpSession->>Peer: best-effort DELETE if applicable
+  HttpSession-->>Caller: finished after local joins and DELETE observation
+```
+
+Opening captures the owning Tokio runtime handle. Drop and shutdown use that
+handle to run the local joins from an ordinary thread too; the owning runtime must
+remain running through completion. Runtime shutdown is not fabricated as a
+finished HTTP close observation.
+
+This slice covers asynchronous non-initialize POST readers, including lists during
+opening. Stalled JSON body writes (#623) and held initialize handshakes (#626)
+remain separate work; stream release is not confirmation of remote tool stopping.
 
 ## Authorization statechart
 

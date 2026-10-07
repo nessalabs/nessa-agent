@@ -198,7 +198,7 @@ impl Connection {
         }
     }
 
-    /// Resolves when a remote session's close has finished its DELETE, or
+    /// Resolves when a remote session's close has joined readers and finished DELETE, or
     /// immediately for stdio.
     pub(crate) fn http_finished(&self) -> Option<watch::Receiver<bool>> {
         self.http.as_ref().map(|session| session.finished())
@@ -345,6 +345,9 @@ impl Drop for Pending<'_> {
             .remove(&self.id)
             .is_some();
         if waiting && self.sent {
+            if let Some(http) = &self.connection.http {
+                http.cancel_post(self.id);
+            }
             // Best effort: a drop cannot wait for room in the queue, and a
             // server that misses it answers a request nobody reads.
             let cancelled = json!({
