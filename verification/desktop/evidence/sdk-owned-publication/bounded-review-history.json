@@ -1,7 +1,7 @@
 {
   "pr": 650,
   "base": "f1682e8a763646c6c3e73dee73c1c47987e2cbae",
-  "current_head": "3e65d96e44e27c502a6225ec16e554fe18c4a152",
+  "current_head": "b78bf641825d77c8be2e88f9ac76b1f14ed2a8dc",
   "type": "root summary of actual independent source-review reports; not executed reviewer tests",
   "rounds": [
     {
@@ -36,16 +36,31 @@
         "650-r5-contracts-report.md",
         "650-r5-adversarial-report.md"
       ]
+    },
+    {
+      "round": 6,
+      "head": "b78bf641825d77c8be2e88f9ac76b1f14ed2a8dc",
+      "authorization": "Explicit narrow exception, not budget reset",
+      "findings": "Both fresh independent reviewers approve current scoped cumulative change, zero open findings at all severities. Binding-winner P1 fixed with actual public-path RED/green and compiled reversion; no new production scope.",
+      "reports": [
+        "binding-race-b78/650-r6-adversarial-report.md",
+        "binding-race-b78/650-r6-contracts-report.md"
+      ]
     }
   ],
   "next_review_round": null,
   "budget_reset": false,
-  "limits": "PR650draft, bounded5 budget notreset. All exactheadlocalgates+CI domaincoveragepass; openin-scopeP1 blocksmerge. Explicit narrow exception pending user reply.",
+  "limits": "Eight current-head local gates pass, source/log hashes verified; fresh R6 independent reviews clean; current-head domain coverage100% actual6552regions703functions5216lines0uncovered. Required supported-platform CI and external review remain pending; draft until required checks complete. No budget reset.",
   "external_codex_adjudication": {
     "comment": 4208337174,
     "head": "3e65d96e44e27c502a6225ec16e554fe18c4a152",
     "valid_limitation": "Acknowledged never-bound absence then failed final snapshot leaves memoryClosed/durableClosing; fresh restoration cannot re-prove absent physical ownership.",
     "disposition": "Both same-head R5 reviewers traced baseline and exact claims; no current628 final-write/restart recovery promise, rootresourcefree baseline alwaysIncomplete, actual Storeerror returned. Valid adjacent646/649/625 work; provisional adversarialMajor withdrawn with history preserved.",
-    "next_regression": "Actual red restart after selectively rejected terminal write requested in625646649test-onlybranch; not yet executed."
+    "next_regression": "Actual compiled RED and positive controls preserved in ../sdk-settlement-red; successor test-only branch db32c230. Deferred gap remains unfixed in PR650."
+  },
+  "authorized_exception": {
+    "scope": "Confirmed binding race only, deterministic RED/correction and one fresh independent follow-up round; adjacent settlement work excluded",
+    "user_reply": "Allow the exception and finish both PRs",
+    "github_scope_comment": 6041117516
   }
 }

@@ -1,0 +1,12 @@
+{
+  "head": "b78bf641825d77c8be2e88f9ac76b1f14ed2a8dc",
+  "run": 37653154842,
+  "job": 112901509063,
+  "result": "success",
+  "raw_log_sha256": "b9ef95b3090d7605684e37eab014bd26ad39788a65448c28b86eefdae402142c",
+  "regions": 6552,
+  "functions": 703,
+  "lines": 5216,
+  "uncovered": 0,
+  "percent": 100
+}
