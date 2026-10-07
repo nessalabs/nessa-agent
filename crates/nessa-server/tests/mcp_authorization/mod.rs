@@ -63,6 +63,7 @@ fn a3_a_callback_is_consumed_once() {
             state: state.clone(),
             now_ms: 1,
             denied: false,
+            resource: pending.resource.clone(),
         })
         .auth;
     assert!(matches!(exchanged.phase, Phase::Exchanging { .. }));
@@ -70,8 +71,24 @@ fn a3_a_callback_is_consumed_once() {
         state,
         now_ms: 1,
         denied: false,
+        resource: exchanged.resource.clone(),
     });
     assert_eq!(replay.refusal, Some(Refusal::StaleCallback));
+}
+
+#[test]
+fn a_callback_for_a_replaced_resource_is_not_consumed() {
+    let pending = pending_consent();
+    let state = pending.attempt.as_ref().unwrap().state.clone();
+    let rejected = pending.step(Command::Callback {
+        state,
+        now_ms: 1,
+        denied: false,
+        resource: "https://other.example/mcp".into(),
+    });
+    assert_eq!(rejected.refusal, Some(Refusal::StaleCallback));
+    assert!(matches!(rejected.auth.phase, Phase::PendingConsent { .. }));
+    assert!(!rejected.auth.attempt.unwrap().consumed);
 }
 
 #[test]
@@ -81,6 +98,7 @@ fn a4_a_lost_exchange_fences_use() {
             state: "state".into(),
             now_ms: 1,
             denied: false,
+            resource: "https://mcp.example/mcp".into(),
         })
         .auth;
     let lost = exchanging.step(Command::ExchangeUncertain).auth;
@@ -152,10 +170,30 @@ fn a7_a_late_refresh_does_not_publish_over_revoke() {
         from_generation: 1,
         publication: Publication::Acknowledged,
         expires_at_ms: None,
+        resource: revoking.resource.clone(),
     });
     assert_eq!(late.refusal, Some(Refusal::Stale));
     assert!(matches!(late.auth.phase, Phase::Revoking { .. }));
     assert_eq!(late.auth.generation, 1);
+}
+
+#[test]
+fn a_token_reply_for_another_attempt_does_not_publish() {
+    let mut exchanging = pending_consent();
+    exchanging.phase = Phase::Exchanging { attempt: 2 };
+    exchanging.resource = "https://other.example/mcp".into();
+    let late = exchanging.step(Command::SecretPublication {
+        publication: Publication::Acknowledged,
+        generation: 1,
+        expires_at_ms: None,
+        attempt: 1,
+        resource: "https://mcp.example/mcp".into(),
+    });
+    assert_eq!(late.refusal, Some(Refusal::Stale));
+    assert!(late.effects.is_empty());
+    assert!(matches!(late.auth.phase, Phase::Exchanging { attempt: 2 }));
+    assert_eq!(late.auth.resource, "https://other.example/mcp");
+    assert!(!late.auth.secret_present);
 }
 
 #[test]
@@ -1234,4 +1272,428 @@ impl AuthorizationRecords for GatedDelete {
         }
         self.inner.delete_secret(server).await
     }
+}
+
+const NEW_RESOURCE: &str = "https://other.example/mcp";
+
+async fn push_host(memory: &MemoryAuthorization, resource: &str) {
+    let metadata = format!("{resource}/.well-known/oauth-protected-resource");
+    memory
+        .push_route(
+            resource,
+            Ok(OAuthResponse {
+                status: 401,
+                body: String::new(),
+                www_authenticate: Some(format!("Bearer resource_metadata=\"{metadata}\"")),
+            }),
+        )
+        .await;
+    memory
+        .push_route(
+            &metadata,
+            Ok(OAuthResponse {
+                status: 200,
+                body: format!(
+                    r#"{{"resource":"{resource}","authorization_servers":["https://as.example"],"scopes_supported":["mcp"]}}"#
+                ),
+                www_authenticate: None,
+            }),
+        )
+        .await;
+    memory
+        .push_route(
+            "https://as.example/.well-known/oauth-authorization-server",
+            Ok(server_metadata()),
+        )
+        .await;
+    memory
+        .push_route(
+            "https://as.example/register",
+            Ok(OAuthResponse {
+                status: 201,
+                body: r#"{"client_id":"client"}"#.into(),
+                www_authenticate: None,
+            }),
+        )
+        .await;
+}
+
+fn consent_state(consent_url: &str) -> String {
+    consent_url
+        .split("state=")
+        .nth(1)
+        .and_then(|rest| rest.split('&').next())
+        .unwrap()
+        .to_owned()
+}
+
+/// The first token POST waits until `released` passes its index. Later token
+/// posts wait the same way, then use the inner client.
+struct HoldTokenPosts {
+    inner: Arc<MemoryAuthorization>,
+    started: AtomicUsize,
+    released: AtomicUsize,
+}
+
+impl HoldTokenPosts {
+    fn new(inner: Arc<MemoryAuthorization>) -> Self {
+        Self {
+            inner,
+            started: AtomicUsize::new(0),
+            released: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl OAuthHttp for HoldTokenPosts {
+    async fn get(&self, url: &str) -> Result<OAuthResponse, OAuthCallFailure> {
+        self.inner.get(url).await
+    }
+
+    async fn post_form(&self, url: &str, body: &str) -> Result<OAuthResponse, OAuthCallFailure> {
+        if url.ends_with("/token") {
+            let index = self.started.fetch_add(1, Ordering::SeqCst);
+            while self.released.load(Ordering::SeqCst) <= index {
+                tokio::task::yield_now().await;
+            }
+            if index == 0 {
+                return Ok(token_body("stale-from-old-host"));
+            }
+        }
+        self.inner.post_form(url, body).await
+    }
+
+    async fn post_json(&self, url: &str, body: &str) -> Result<OAuthResponse, OAuthCallFailure> {
+        self.inner.post_json(url, body).await
+    }
+}
+
+#[tokio::test]
+async fn a_callback_after_the_url_changed_does_not_exchange() {
+    let memory = Arc::new(MemoryAuthorization::new());
+    push_discovery(&memory).await;
+    let owner = Arc::new(owner(memory.clone()));
+    let AuthorizeAnswer::PendingConsent { consent_url, .. } = owner
+        .authorize(server(), "docs", "https://mcp.example/mcp")
+        .await
+    else {
+        panic!("expected consent");
+    };
+    memory.set_resource(server(), NEW_RESOURCE).await;
+    memory
+        .push_route(
+            "https://as.example/token",
+            Ok(token_body("should-not-store")),
+        )
+        .await;
+    let answer = owner
+        .complete_callback(
+            server(),
+            CallbackQuery {
+                state: consent_state(&consent_url),
+                code: Some("code".into()),
+                denied: false,
+            },
+        )
+        .await;
+    assert!(
+        !matches!(answer, AuthorizeAnswer::Ready { .. }),
+        "{answer:?}"
+    );
+    assert!(memory.load_secret(server()).await.unwrap().is_none());
+    assert!(
+        memory
+            .posts()
+            .await
+            .iter()
+            .all(|(url, _, _)| !url.ends_with("/token")),
+        "the old attempt exchanged after the URL changed"
+    );
+}
+
+#[tokio::test]
+async fn a_stale_exchange_does_not_bind_its_token_to_the_new_host() {
+    let memory = Arc::new(MemoryAuthorization::new());
+    let http = Arc::new(HoldTokenPosts::new(memory.clone()));
+    push_discovery(&memory).await;
+    let owner = Arc::new(AuthorizationOwner::new(
+        memory.clone(),
+        memory.clone(),
+        http.clone(),
+        Arc::new(ScriptedCallback::pending()),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        true,
+    ));
+    let AuthorizeAnswer::PendingConsent { consent_url, .. } = owner
+        .authorize(server(), "docs", "https://mcp.example/mcp")
+        .await
+    else {
+        panic!("expected consent");
+    };
+    let first = {
+        let owner = owner.clone();
+        let state = consent_state(&consent_url);
+        tokio::spawn(async move {
+            owner
+                .complete_callback(
+                    server(),
+                    CallbackQuery {
+                        state,
+                        code: Some("old-code".into()),
+                        denied: false,
+                    },
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while http.started.load(Ordering::SeqCst) < 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the first token post started");
+    memory.set_resource(server(), NEW_RESOURCE).await;
+    let fenced = owner
+        .fence(&[BindingChange::ResourceChanged {
+            id: server(),
+            previous_url: "https://mcp.example/mcp".into(),
+            url: NEW_RESOURCE.into(),
+        }])
+        .await;
+    assert!(fenced.is_ok(), "{fenced:?}");
+    push_host(&memory, NEW_RESOURCE).await;
+    memory
+        .push_route(
+            "https://as.example/token",
+            Ok(token_body("fresh-for-new-host")),
+        )
+        .await;
+    let AuthorizeAnswer::PendingConsent { consent_url, .. } =
+        owner.authorize(server(), "docs", NEW_RESOURCE).await
+    else {
+        panic!("expected a replacement consent");
+    };
+    let second = {
+        let owner = owner.clone();
+        let state = consent_state(&consent_url);
+        tokio::spawn(async move {
+            owner
+                .complete_callback(
+                    server(),
+                    CallbackQuery {
+                        state,
+                        code: Some("new-code".into()),
+                        denied: false,
+                    },
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while http.started.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the replacement exchange reached its token post");
+    http.released.store(1, Ordering::SeqCst);
+    let stale = first.await.unwrap();
+    assert!(!matches!(stale, AuthorizeAnswer::Ready { .. }), "{stale:?}");
+    let stored = memory.load_secret(server()).await.unwrap();
+    assert!(
+        stored.as_ref().map(|secret| secret.access_token.as_str()) != Some("stale-from-old-host"),
+        "the previous host's token was stored for the new attempt"
+    );
+    if let Ok(Some(token)) = owner.bearer(server()).await {
+        assert_ne!(token.access_token, "stale-from-old-host");
+    }
+    http.released.store(2, Ordering::SeqCst);
+    let fresh = second.await.unwrap();
+    assert!(matches!(fresh, AuthorizeAnswer::Ready { .. }), "{fresh:?}");
+    let admitted = owner.bearer(server()).await.unwrap().unwrap();
+    assert_eq!(admitted.access_token, "fresh-for-new-host");
+}
+
+struct FailingStore {
+    inner: Arc<MemoryAuthorization>,
+}
+
+#[async_trait]
+impl AuthorizationRecords for FailingStore {
+    async fn load(&self, server: Uuid) -> Result<Option<ServerAuth>, RecordFailure> {
+        self.inner.load(server).await
+    }
+    async fn store(&self, _auth: &ServerAuth) -> Result<(), RecordFailure> {
+        Err(RecordFailure::Unavailable)
+    }
+    async fn load_secret(&self, server: Uuid) -> Result<Option<TokenMaterial>, RecordFailure> {
+        self.inner.load_secret(server).await
+    }
+    async fn store_secret(
+        &self,
+        server: Uuid,
+        secret: &TokenMaterial,
+    ) -> Result<Publication, RecordFailure> {
+        self.inner.store_secret(server, secret).await
+    }
+    async fn delete_secret(&self, server: Uuid) -> Result<Deletion, RecordFailure> {
+        self.inner.delete_secret(server).await
+    }
+}
+
+/// Holds the revocation POST until `release` is set.
+struct HangRevoke {
+    inner: Arc<MemoryAuthorization>,
+    entered: AtomicBool,
+    release: AtomicBool,
+}
+
+impl HangRevoke {
+    fn new(inner: Arc<MemoryAuthorization>) -> Self {
+        Self {
+            inner,
+            entered: AtomicBool::new(false),
+            release: AtomicBool::new(false),
+        }
+    }
+}
+
+#[async_trait]
+impl OAuthHttp for HangRevoke {
+    async fn get(&self, url: &str) -> Result<OAuthResponse, OAuthCallFailure> {
+        self.inner.get(url).await
+    }
+
+    async fn post_form(&self, url: &str, body: &str) -> Result<OAuthResponse, OAuthCallFailure> {
+        if url.ends_with("/revoke") {
+            self.entered.store(true, Ordering::SeqCst);
+            while !self.release.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        }
+        self.inner.post_form(url, body).await
+    }
+
+    async fn post_json(&self, url: &str, body: &str) -> Result<OAuthResponse, OAuthCallFailure> {
+        self.inner.post_json(url, body).await
+    }
+}
+
+#[tokio::test]
+async fn an_unfinished_revoke_whose_record_could_not_be_saved_is_not_reusable() {
+    let memory = Arc::new(MemoryAuthorization::new());
+    let mut ready = ready_with_token_endpoint();
+    ready.revocation_endpoint = Some("https://as.example/revoke".into());
+    memory.store(&ready).await.unwrap();
+    memory
+        .store_secret(
+            server(),
+            &TokenMaterial {
+                access_token: "access".into(),
+                refresh_token: Some("refresh".into()),
+                generation: 1,
+            },
+        )
+        .await
+        .unwrap();
+    memory
+        .set_resource(server(), "https://mcp.example/mcp")
+        .await;
+    let records = Arc::new(FailingStore {
+        inner: memory.clone(),
+    });
+    let http = Arc::new(HangRevoke::new(memory.clone()));
+    let owner = Arc::new(AuthorizationOwner::new(
+        records.clone(),
+        memory.clone(),
+        http.clone(),
+        Arc::new(ScriptedCallback::pending()),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        true,
+    ));
+    let revoking = {
+        let owner = owner.clone();
+        tokio::spawn(async move { owner.revoke(server()).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !http.entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("revocation post started");
+    revoking.abort();
+    let restarted = Arc::new(AuthorizationOwner::new(
+        records,
+        memory.clone(),
+        memory.clone(),
+        Arc::new(ScriptedCallback::pending()),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        memory.clone(),
+        true,
+    ));
+    assert_eq!(
+        restarted.bearer(server()).await,
+        Err(AdmissionRefusal::Unauthorized)
+    );
+    assert!(memory.load_secret(server()).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_restart_resumes_a_stranded_revocation() {
+    let memory = Arc::new(MemoryAuthorization::new());
+    let mut stranded = ready_token();
+    stranded.phase = Phase::Revoking {
+        cause: RevokeCause::Revoke,
+        settlement: Settlement {
+            local_drained: false,
+            secret_deleted: false,
+            remote: None,
+            evidence_acked: false,
+        },
+    };
+    stranded.revocation_endpoint = Some("https://as.example/revoke".into());
+    memory.store(&stranded).await.unwrap();
+    memory
+        .store_secret(
+            server(),
+            &TokenMaterial {
+                access_token: "access".into(),
+                refresh_token: None,
+                generation: 1,
+            },
+        )
+        .await
+        .unwrap();
+    memory.set_resource(server(), &stranded.resource).await;
+    memory
+        .push_route(
+            "https://as.example/revoke",
+            Ok(OAuthResponse {
+                status: 200,
+                body: String::new(),
+                www_authenticate: None,
+            }),
+        )
+        .await;
+    let owner = Arc::new(owner(memory.clone()));
+    owner
+        .revalidate(&[(server(), stranded.resource.clone())])
+        .await
+        .unwrap();
+    assert!(memory.load_secret(server()).await.unwrap().is_none());
+    assert_eq!(
+        owner.bearer(server()).await,
+        Err(AdmissionRefusal::Unauthorized)
+    );
 }

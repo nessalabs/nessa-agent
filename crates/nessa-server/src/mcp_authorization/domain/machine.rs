@@ -237,14 +237,19 @@ impl ServerAuth {
                 state,
                 now_ms,
                 denied,
-            } => self.callback(&state, now_ms, denied),
+                resource,
+            } => self.callback(&state, now_ms, denied, &resource),
             Command::ExchangeRefused => self.exchange_refused(),
             Command::ExchangeUncertain => self.exchange_uncertain(),
             Command::SecretPublication {
                 publication,
                 generation,
                 expires_at_ms,
-            } => self.secret_publication(publication, generation, expires_at_ms),
+                attempt,
+                resource,
+            } => {
+                self.secret_publication(publication, generation, expires_at_ms, attempt, &resource)
+            }
             Command::Evidence { acked } => self.evidence(acked),
             Command::RefreshRequested { now_ms, rejected } => {
                 self.refresh_requested(now_ms, rejected)
@@ -255,7 +260,8 @@ impl ServerAuth {
                 from_generation,
                 publication,
                 expires_at_ms,
-            } => self.refresh_publication(from_generation, publication, expires_at_ms),
+                resource,
+            } => self.refresh_publication(from_generation, publication, expires_at_ms, &resource),
             Command::InvalidGrant => self.begin_revoke(RevokeCause::InvalidGrant),
             Command::InsufficientScope => self.insufficient_scope(),
             Command::Revoke => self.begin_revoke(RevokeCause::Revoke),
@@ -399,14 +405,18 @@ impl ServerAuth {
         }
     }
 
-    fn callback(&self, state: &str, now_ms: u64, denied: bool) -> Decision {
+    fn callback(&self, state: &str, now_ms: u64, denied: bool, resource: &str) -> Decision {
         let Phase::PendingConsent { attempt } = self.phase else {
             return self.same(Refusal::StaleCallback);
         };
         let Some(current) = &self.attempt else {
             return self.same(Refusal::StaleCallback);
         };
-        if current.consumed || current.id != attempt || current.state != state {
+        if current.consumed
+            || current.id != attempt
+            || current.state != state
+            || self.resource != resource
+        {
             return self.same(Refusal::StaleCallback);
         }
         if now_ms > current.deadline_ms {
@@ -446,27 +456,45 @@ impl ServerAuth {
         self.incomplete(Obligation::ExchangeUnknown)
     }
 
+    /// The exchange that produced a token reply is still the one in this record.
+    pub fn exchange_reply_current(&self, attempt: u64, resource: &str) -> bool {
+        matches!(self.phase, Phase::Exchanging { attempt: current } if current == attempt)
+            && self.resource == resource
+    }
+
+    /// The refresh that produced a token reply is still the one in this record.
+    pub fn refresh_reply_current(&self, generation: u64, resource: &str) -> bool {
+        matches!(
+            self.phase,
+            Phase::Ready {
+                refresh: RefreshActivity::Refreshing,
+                ..
+            }
+        ) && self.generation == generation
+            && self.resource == resource
+    }
+
     fn secret_publication(
+        &self,
+        publication: Publication,
+        generation: u64,
+        expires_at_ms: Option<u64>,
+        attempt: u64,
+        resource: &str,
+    ) -> Decision {
+        if !self.exchange_reply_current(attempt, resource) {
+            return self.stale_publication();
+        }
+        self.note_publication(publication, generation, expires_at_ms)
+    }
+
+    fn note_publication(
         &self,
         publication: Publication,
         generation: u64,
         expires_at_ms: Option<u64>,
     ) -> Decision {
         let exchanging = matches!(self.phase, Phase::Exchanging { .. });
-        let refreshing = matches!(
-            self.phase,
-            Phase::Ready {
-                refresh: RefreshActivity::Refreshing,
-                ..
-            }
-        );
-        if !exchanging && !refreshing {
-            return Decision {
-                auth: self.clone(),
-                effects: vec![Effect::DeleteCandidate],
-                refusal: Some(Refusal::Stale),
-            };
-        }
         match publication {
             Publication::Refused if exchanging && !self.candidate_retained => {
                 self.back_to_consent(Refusal::StoreRefused)
@@ -623,22 +651,34 @@ impl ServerAuth {
         from_generation: u64,
         publication: Publication,
         expires_at_ms: Option<u64>,
+        resource: &str,
     ) -> Decision {
-        if !matches!(
-            self.phase,
-            Phase::Ready {
-                refresh: RefreshActivity::Refreshing,
-                ..
-            }
-        ) || from_generation != self.generation
-        {
-            return Decision {
-                auth: self.clone(),
-                effects: vec![Effect::DeleteCandidate],
-                refusal: Some(Refusal::Stale),
-            };
+        if !self.refresh_reply_current(from_generation, resource) {
+            return self.stale_publication();
         }
-        self.secret_publication(publication, self.generation + 1, expires_at_ms)
+        self.note_publication(publication, self.generation + 1, expires_at_ms)
+    }
+
+    /// A reply whose attempt or resource is no longer current. A live exchange
+    /// or refresh owns the secret; deleting it would drop that replacement.
+    fn stale_publication(&self) -> Decision {
+        let replacement_owns_secret = matches!(
+            self.phase,
+            Phase::Exchanging { .. }
+                | Phase::Ready {
+                    refresh: RefreshActivity::Refreshing,
+                    ..
+                }
+        );
+        Decision {
+            auth: self.clone(),
+            effects: if replacement_owns_secret {
+                Vec::new()
+            } else {
+                vec![Effect::DeleteCandidate]
+            },
+            refusal: Some(Refusal::Stale),
+        }
     }
 
     fn insufficient_scope(&self) -> Decision {
@@ -661,7 +701,9 @@ impl ServerAuth {
     fn begin_revoke(&self, cause: RevokeCause) -> Decision {
         match self.phase {
             Phase::Revoking { .. } => self.same(Refusal::JoinRevoke),
-            Phase::RevocationIncomplete { settlement, .. } => self.settle(cause, settlement, false),
+            Phase::RevocationIncomplete { cause, settlement } => {
+                self.settle(cause, settlement, false)
+            }
             _ => {
                 let mut next = self.clone();
                 next.dispatch_fenced = true;
@@ -960,6 +1002,8 @@ pub enum Command {
         state: String,
         now_ms: u64,
         denied: bool,
+        /// Resource URL of the attempt that issued this state.
+        resource: String,
     },
     ExchangeRefused,
     ExchangeUncertain,
@@ -967,6 +1011,8 @@ pub enum Command {
         publication: Publication,
         generation: u64,
         expires_at_ms: Option<u64>,
+        attempt: u64,
+        resource: String,
     },
     Evidence {
         acked: bool,
@@ -981,6 +1027,7 @@ pub enum Command {
         from_generation: u64,
         publication: Publication,
         expires_at_ms: Option<u64>,
+        resource: String,
     },
     InvalidGrant,
     InsufficientScope,
