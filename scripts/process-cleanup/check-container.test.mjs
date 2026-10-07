@@ -417,3 +417,51 @@ test("the complete harness pins the inspected image and records four removed acc
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test("missing or nonnumeric negative exit evidence cannot pass", () => {
+  for (const test_exit of [undefined, null, "101"])
+    assert.throws(
+      () => validate({ ...report(scenarios[0]), test_exit }, scenarios[0]),
+      /integer test exit/,
+    )
+})
+
+test("repeated interrupts keep cancellation installed until removal finishes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "nessa-cleanup-interrupt-"))
+  const initialListeners = process.listenerCount("SIGINT")
+  try {
+    const binary = join(root, "binary")
+    const fixture = join(root, "tests/infrastructure/acp/contracts/fixtures")
+    await writeFile(binary, "library test")
+    await mkdir(fixture, { recursive: true })
+    await writeFile(join(fixture, "claude_acp_test_handler.py"), "fixture")
+    let removed = false
+    await assert.rejects(
+      checkContainers(
+        [binary, root, "image", join(root, "evidence")],
+        async (args, operation) => {
+          if (args[0] === "image") return JSON.stringify([{ Id: "sha256:immutable" }])
+          if (args[0] === "start") {
+            process.emit("SIGINT")
+            process.emit("SIGINT")
+            assert.equal(operation.signal.aborted, true)
+            assert.equal(process.listenerCount("SIGINT"), initialListeners + 1)
+            throw new Error("interrupted test")
+          }
+          if (args[0] === "rm") {
+            process.emit("SIGINT")
+            assert.equal(process.listenerCount("SIGINT"), initialListeners + 1)
+            assert.equal(operation.signal, undefined)
+            removed = true
+          }
+          return ""
+        },
+      ),
+      /interrupted test/,
+    )
+    assert.equal(removed, true)
+    assert.equal(process.listenerCount("SIGINT"), initialListeners)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

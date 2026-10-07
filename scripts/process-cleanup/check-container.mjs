@@ -21,6 +21,7 @@ export function validate(report, scenario) {
   const fail = (reason) => {
     throw new Error(`Harness failure: ${reason}`)
   }
+  if (!Number.isInteger(report.test_exit)) fail("missing integer test exit")
   if (report.test !== scenario.test || report.timed_out || report.output_truncated)
     fail("wrong test, timeout or truncated output")
   if (!report.output.includes(`test ${scenario.test} ...`))
@@ -206,8 +207,8 @@ export async function checkContainers(args, run = docker) {
   await mkdir(evidence, { recursive: true })
   const controller = new AbortController()
   const interrupt = () => controller.abort()
-  process.once("SIGINT", interrupt)
-  process.once("SIGTERM", interrupt)
+  process.on("SIGINT", interrupt)
+  process.on("SIGTERM", interrupt)
   const reports = new Map()
   try {
     const imageInfo = JSON.parse(await run(["image", "inspect", image]))[0]

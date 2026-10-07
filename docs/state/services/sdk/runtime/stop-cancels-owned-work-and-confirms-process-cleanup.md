@@ -106,7 +106,7 @@ in four disposable PID namespaces. Its orderings are specified before the harnes
 | Directory test exits under non-reaping PID 1; inspect before PID 1 exits | One failed test, `CleanupUncertain`, new PPID-1 zombie, retained private directory | negative directory acceptance; missing-zombie and wrong-failure unit cases |
 | ACP TERM-resistant parent creates child before `running`; close kills group; inspect after test exits | One failed test, `CleanupUncertain`, new PPID-1 zombie | negative ACP acceptance |
 | Either test runs with Docker `--init`; init adopts and reaps descendants before inspection | One passing test, no new orphan zombie, no retained private directory | both positive acceptances; zero-test and positive-failure unit cases |
-| Timeout, interrupt, validation or Docker failure during a scenario | Harness fails; diagnostics recorded before validation/removal; removal attempted independently of cancelled work | orchestration removal-on-interrupt, rejected-evidence and failure tests |
+| Timeout, repeated interrupt, validation or Docker failure during a scenario | Harness fails; diagnostics recorded before validation/removal; removal attempted independently of cancelled work | orchestration removal-on-interrupt, rejected-evidence and failure tests |
 
 The harness supervisor waits only for its direct test process. Inspection occurs
 while that supervisor remains alive; container removal then destroys the disposable

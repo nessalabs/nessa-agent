@@ -94,25 +94,25 @@ developer acceptance probe; SDK production decisions retain typed failures.
 
 ## Recorded acceptance
 
-On 2026-10-07, the assembled checkout based on corrected source
-`00ebdc4302adf9103a5ac4f3bcee3e71fbacd713` passed all four scenarios. The image ID
+On 2026-10-07, the checkout based on main
+`cffdabba64f821c012b2df04c2f02e5754511df3` passed all four scenarios. The image ID
 was `sha256:c30a858151fd1f110f5f1639372775425d3ed5602728f97bc288d5d1df273e4a`.
 Installed prerequisites were `python3-minimal=3.13.5-1`, `libgcc-s1=14.2.0-19`
 and `ca-certificates=20250419`. Cargo JSON selected library test executable
 `nessa_sdk-3a9a37445fc631f7`, compiled from this worktree's SDK directory, with
-SHA-256 `eef9f7838068e4f26bec6bf1d70c08e678b5457da19434d168cd4d2549ca3720`.
+SHA-256 `932566e1324fb80f9e30d0512e823d04d6c97b375af3a565306e39b88dd6c28d`.
 
 | Test | PID 1 | Test exit | New orphan zombie | Retained private directory | Acceptance |
 | --- | --- | --- | --- | --- | --- |
-| Private directory cleanup | Python supervisor | 101 (`CleanupUncertain`) | PID 10, PPID 1, PGID 9, state Z | `/tmp/nessa-agent-GNf5vk` | Passed |
+| Private directory cleanup | Python supervisor | 101 (`CleanupUncertain`) | PID 10, PPID 1, PGID 9, state Z | `/tmp/nessa-agent-7f02ZS` | Passed |
 | Private directory cleanup | Docker init | 0 | None | None | Passed |
 | TERM-resistant ACP parent and child | Python supervisor | 101 (`CleanupUncertain`) | PID 10, PPID 1, PGID 9, state Z | None | Passed |
 | TERM-resistant ACP parent and child | Docker init | 0 | None | None | Passed |
 
-The external evidence file was `/tmp/nessa-630-assembled-evidence/acceptance.json`;
+The external evidence file was `/tmp/nessa-630-final-evidence/acceptance.json`;
 all four entries recorded `accepted: true`, and all disposable containers were
-removed. Twenty-five pure orchestration tests and 74 architecture tests passed.
-Thirty individual acceptance/orchestration mutations caused test failures;
+removed. Twenty-seven pure orchestration tests and 74 architecture tests passed.
+Thirty-two individual acceptance/orchestration mutations caused test failures;
 restored files received fresh modification times. A real-container supervisor
 mutation that reaped adopted children caused the negative case to fail with
 "no new adopted zombie"; restoring the direct-child-only supervisor restored
