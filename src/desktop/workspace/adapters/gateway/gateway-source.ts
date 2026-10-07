@@ -36,7 +36,8 @@
  * - **Resync.** `{ kind: "resync" }` goes out when a connection comes back
  *   (the client reconnected, or a new one was made after the last closed —
  *   the close itself says nothing, C3), and on the first list that answers
- *   after a poll, a poll read, or an index read failed (S5; F4, active failure).
+ *   after a poll (S5), a poll read (F4, active failure), or an index read
+ *   failed (S9′).
  * - **A failed connect is waited out.** For `timing.reconnectRounds` poll
  *   rounds after it, neither the poller nor an MCP App connects again; a
  *   person's call connects at once (S10–S16 on #419).
