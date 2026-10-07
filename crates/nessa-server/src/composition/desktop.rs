@@ -7,7 +7,9 @@ use super::{
     agent::{AgentRuntime, AgentsConfig},
     runtime_config::RuntimeConfig,
 };
-use crate::mcp_servers::domain::{ConfiguredMcpServer, StdioServer, MANAGED_SERVER_NAME};
+use crate::mcp_servers::domain::{
+    ConfiguredMcpServer, StdioServer, StoredMcpServer, MANAGED_SERVER_NAME,
+};
 use crate::{core::RunError, desktop_runtime::domain::RunningRuntime};
 use nessa_protocol::agents::AgentId;
 use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
@@ -183,10 +185,10 @@ pub(super) fn configure(
         ],
     );
     // No variables of its own, so none is named twice.
-    agents.mcp_servers.push(
+    agents.mcp_servers.push(StoredMcpServer::Stdio(
         ConfiguredMcpServer::new(managed, true, [])
             .expect("a server with no variables names none twice"),
-    );
+    ));
     Ok(())
 }
 

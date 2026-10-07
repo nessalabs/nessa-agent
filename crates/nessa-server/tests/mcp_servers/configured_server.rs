@@ -1,19 +1,19 @@
 //! The stored list's edits as pure rules: which entry an edit names, the
 //! reserved name, and a kept value.
 use super::{
-    ConfiguredMcpServer, EditRefusal, EnvironmentNameRepeated, ServerEdit, ServerSave, StdioServer,
-    MANAGED_SERVER_NAME,
+    ConfiguredMcpServer, EditRefusal, EnvironmentNameRepeated, RemoteConfigured, RemoteServerSave,
+    ServerEdit, ServerSave, StdioServer, StoredMcpServer, MANAGED_SERVER_NAME,
 };
 
 fn server(name: &str) -> StdioServer {
     StdioServer::new(name, "/bin/server", vec![])
 }
 
-fn stored(name: &str, env: &[(&str, &str)]) -> ConfiguredMcpServer {
+fn stored(name: &str, env: &[(&str, &str)]) -> StoredMcpServer {
     let env = env
         .iter()
         .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()));
-    ConfiguredMcpServer::new(server(name), true, env).unwrap()
+    StoredMcpServer::Stdio(ConfiguredMcpServer::new(server(name), true, env).unwrap())
 }
 
 fn save(name: &str, previous: Option<&str>, env: &[(&str, Option<&str>)]) -> ServerEdit {
@@ -28,8 +28,42 @@ fn save(name: &str, previous: Option<&str>, env: &[(&str, Option<&str>)]) -> Ser
     })
 }
 
-fn names(list: &[ConfiguredMcpServer]) -> Vec<&str> {
-    list.iter().map(|each| each.server().name()).collect()
+fn names(list: &[StoredMcpServer]) -> Vec<&str> {
+    list.iter().map(StoredMcpServer::name).collect()
+}
+
+#[test]
+fn a_remote_rename_keeps_its_id_and_a_new_remote_takes_the_id_it_was_given() {
+    let kept = uuid::Uuid::from_u128(1);
+    let list = vec![StoredMcpServer::Remote(RemoteConfigured::new(
+        kept,
+        "old",
+        "https://mcp.example/a",
+        true,
+    ))];
+    let renamed = ServerEdit::SaveRemote(RemoteServerSave {
+        previous_name: Some("old".into()),
+        id: uuid::Uuid::from_u128(2),
+        name: "new".into(),
+        url: "https://mcp.example/a".into(),
+        enabled: true,
+    })
+    .apply(&list)
+    .unwrap();
+    assert_eq!(renamed[0].remote().unwrap().id(), kept);
+    assert_eq!(renamed[0].name(), "new");
+    let minted = uuid::Uuid::from_u128(3);
+    let added = ServerEdit::SaveRemote(RemoteServerSave {
+        previous_name: None,
+        id: minted,
+        name: "other".into(),
+        url: "https://mcp.example/b".into(),
+        enabled: false,
+    })
+    .apply(&list)
+    .unwrap();
+    assert_eq!(added[1].remote().unwrap().id(), minted);
+    assert!(!added[1].enabled());
 }
 
 #[test]
@@ -59,7 +93,7 @@ fn a_kept_value_comes_from_the_entry_being_replaced() {
     let renamed = save("b", Some("a"), &[("TOKEN", None)])
         .apply(&list)
         .unwrap();
-    assert_eq!(renamed[0].env()["TOKEN"], "old");
+    assert_eq!(renamed[0].stdio().unwrap().env()["TOKEN"], "old");
     assert_eq!(
         save("c", None, &[("TOKEN", None)]).apply(&list),
         Err(EditRefusal::EnvironmentValueMissing {
@@ -249,8 +283,8 @@ fn a_kept_value_is_refused_when_anything_else_in_the_launch_changes() {
         let kept = relaunched(previous, "/bin/server", vec![], env)
             .apply(&list)
             .unwrap();
-        assert_eq!(kept[0].env()["TOKEN"], "secret");
-        assert_eq!(kept[0].env()["URL"], "https://a");
+        assert_eq!(kept[0].stdio().unwrap().env()["TOKEN"], "secret");
+        assert_eq!(kept[0].stdio().unwrap().env()["URL"], "https://a");
     }
     // With nothing kept, anything may change.
     let given = relaunched(
@@ -261,5 +295,8 @@ fn a_kept_value_is_refused_when_anything_else_in_the_launch_changes() {
     )
     .apply(&list)
     .unwrap();
-    assert_eq!(given[0].env_names(), ["LD_PRELOAD", "TOKEN"]);
+    assert_eq!(
+        given[0].stdio().unwrap().env_names(),
+        ["LD_PRELOAD", "TOKEN"]
+    );
 }

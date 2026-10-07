@@ -10,6 +10,7 @@
 mod apps;
 mod config_store;
 mod grants;
+mod http_client;
 mod inspector;
 mod live_set;
 mod relay;
@@ -35,6 +36,7 @@ pub use config_store::{
     ConfigCheck, ConfigFiles, ConfigJsonStore, ConfigParse, Published, LOCK_WAIT,
 };
 pub use grants::{ConversationGrants, OsTokens, TokenSource};
+pub use http_client::ReqwestExchange;
 pub use inspector::McpServerInspector;
 pub use live_set::{sdk_server, LaunchSettings, LiveMcpServers};
 #[cfg(unix)]

@@ -112,6 +112,8 @@ export const css = {
   sidebar: ".workspace-sidebar", // class
   sessionList: ".workspace-list", // class
   listSearch: ".workspace-list .workspace-search", // class: the session list's search field
+  listScroll: ".workspace-list-scroll", // class: the session list's scroller
+  sessionListRow: ".workspace-list [data-session-row]", // a row of the session list, not a sidebar thread
   sessionRow: "[data-drag-item]", // a session a drag can carry to a pane
   sidebarEdge: '[role="separator"][aria-label="Resize Sidebar"]',
 
@@ -507,6 +509,8 @@ export const names = {
   },
   /** A channel's "Show all" in the sidebar, behind which its older sessions are. */
   showAll: /^Show all \d+$/,
+  /** The Agents overview's control that lists every session (`overview.tsx`). */
+  overviewShowAll: "Show All",
   /** The line for an app the host cannot show (`app-view.ts`, `appLines.load`). */
   appLoadLine: "This app couldn't be loaded",
   /** The notice above an app whose CSP blocked a load (`app-view.ts`, `appLines`). */

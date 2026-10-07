@@ -651,6 +651,33 @@ export interface ConversationListResult {
   /** True when `conversations` names every conversation the caller has under this list's filter. False when the 500 bound left some out, or when a stored record or summary of the caller's own cannot be read back, which lasts until an operator repairs it. Nobody else's conversations are read to answer a list, so nobody else's damage makes it false. A conversation missing from a complete list is not there under that filter: deleted, listed under the other filter, or one the gateway has no summary for (nothing was said in it, or its summary was never written). */
   complete: boolean
 }
+/** Where an observation pass resumes: the same incarnation and boundary, then the next descriptor after this creation revision and identity. */
+export interface ConversationObserveCursor {
+  /** Catalogue database incarnation captured with this pass. A later pass starts again when it no longer matches. */
+  incarnation: string
+  /** Fixed owner head captured when this pass began. A conversation created after it waits for the next pass. */
+  boundary: string
+  /** Creation revision of the last descriptor this pass has already returned. */
+  creation: string
+  /** Conversation identity of that last descriptor. Compared only when the creation revision is the same. */
+  id: string
+}
+/** One page of the caller's conversation catalogue. Opens no provider. Does not raise the 500-row list. */
+export interface ConversationObserveParams {
+  /** Observe only archived conversations when true; only unarchived ones when false or absent. The same filter as conversation.list. */
+  archived?: boolean
+  /** Absent on the first page. Later pages echo the cursor the previous page returned. */
+  cursor?: ConversationObserveCursor
+}
+/** One catalogue page of the caller's summaries, and whether the pass is finished. The page size is the catalogue bound, not a larger conversation.list. */
+export interface ConversationObserveResult {
+  /** Summaries from this catalogue page whose archived flag is the one asked for, creation order. At most one catalogue page. Deleted rows, rows with no summary, and the other archived flag are left out of this array and still advance the cursor. Ownership is applied before the page is returned. */
+  conversations: ConversationSummary[]
+  /** True only when this page finishes the pass: every stored summary under the filter, up to the captured head, was returned across the pages. False when further descriptors remain, or when this page cannot say where to resume. A false page is not every stored summary, including when it has no cursor. */
+  complete: boolean
+  /** Present when complete is false and another page can be asked. Absent when the pass is finished, or when this page cannot resume. */
+  cursor?: ConversationObserveCursor
+}
 /** Submit one input; execution and request IDs stay fixed across retries. */
 export interface ConversationSendParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
@@ -1041,25 +1068,114 @@ export interface McpRemoteErrorDetails {
   /** The server's message, at most 512 characters, control characters as spaces. */
   message: string
 }
-/** How a configured MCP server is reached. stdio: the gateway starts it as a local process and speaks MCP over its standard input and output. */
-export const McpServerKind = { Stdio: "stdio" } as const
+/** How a configured MCP server is reached. stdio: the gateway starts it as a local process and speaks MCP over its standard input and output. remote: the gateway connects to an HTTP endpoint. A remote entry has id and url, and no command, args, or env. */
+export const McpServerKind = { Stdio: "stdio", Remote: "remote" } as const
 export type McpServerKind = (typeof McpServerKind)[keyof typeof McpServerKind]
-/** One server as config.json stores it now, which mcpServers.list reads: the stored file, not the live set. A hand edit to the file is listed at once and reaches the live set, and new conversations, at the next save or remove or the next start. Variable values never leave the gateway; only their names are listed. */
+/** One server as config.json stores it now, which mcpServers.list reads: the stored file, not the live set. A hand edit to the file is listed at once and reaches the live set, and new conversations, at the next save or remove or the next start. Variable values never leave the gateway; only their names are listed. A stdio entry includes command, args and envNames. A remote entry includes id and url, and none of those three. */
 export interface McpServerListEntry {
   /** How the server is reached. */
   kind: McpServerKind
   /** The server's name, unique among the configured servers. */
   name: string
   /** The absolute path of the executable the gateway starts. */
-  command: string
+  command?: string
   /** The arguments it is started with, in order. */
-  args: string[]
+  args?: string[]
   /** The names of the variables it is given over the gateway's own, sorted by name. Never their values. */
-  envNames: string[]
+  envNames?: string[]
   /** Whether it is stored turned on. A server saved on is given to new conversations from that save; one turned on by hand in the file, from the next save or remove or the next start. A server turned off stays stored, and can be inspected. */
   enabled: boolean
   /** Nessa's own server: listed, never saved or removed through these methods. */
   managed: boolean
+  /** The remote server's durable id. Present exactly when kind is remote. A rename does not change it. A save cannot choose it. */
+  id?: string
+  /** The remote endpoint. Present exactly when kind is remote. */
+  url?: string
+  /** Redacted authorization facts for a remote server. Absent for stdio, and for a remote with no record yet. Never a token. */
+  authorization?: McpServerAuthorization
+}
+/** Where a remote server's authorization stands. unauthenticated: the endpoint accepted a probe with no credentials. consent_needed: a person must authorize, or discovery has not finished. pending_consent: a consent URL is outstanding. ready: a usable token is stored. scope_required: the last call was refused for scope and was not retried. authorization_incomplete: an exchange or refresh was not settled. revoking: revoke is in progress. revocation_incomplete: local cleanup or its evidence did not finish. */
+export const McpAuthorizationPhase = {
+  Unauthenticated: "unauthenticated",
+  ConsentNeeded: "consent_needed",
+  PendingConsent: "pending_consent",
+  Ready: "ready",
+  ScopeRequired: "scope_required",
+  AuthorizationIncomplete: "authorization_incomplete",
+  Revoking: "revoking",
+  RevocationIncomplete: "revocation_incomplete",
+} as const
+export type McpAuthorizationPhase =
+  (typeof McpAuthorizationPhase)[keyof typeof McpAuthorizationPhase]
+/** What the authorization server did with a revocation. acknowledged: its revocation endpoint answered success. unsupported: it advertised no revocation endpoint. unconfirmed: the call was sent and the answer was not retained, or it failed. */
+export const McpRemoteObservation = {
+  Acknowledged: "acknowledged",
+  Unsupported: "unsupported",
+  Unconfirmed: "unconfirmed",
+} as const
+export type McpRemoteObservation =
+  (typeof McpRemoteObservation)[keyof typeof McpRemoteObservation]
+/** Redacted authorization facts mcpServers.list may attach to a remote server. No token, refresh secret, or authorization code is included. */
+export interface McpServerAuthorization {
+  /** Where authorization stands. */
+  phase: McpAuthorizationPhase
+  /** The token generation. A refresh that published a replacement increments it. */
+  generation: number
+  /** Whether the stored access token is past its expiry or was marked unavailable. */
+  tokenExpired: boolean
+  /** Whether a refresh is in flight, or the last refresh was not settled. */
+  refreshFailing: boolean
+  /** Whether the last call was refused for scope. The call was not retried. */
+  scopeRequired: boolean
+  /** The last revocation's remote observation, when a revoke has been asked. */
+  remoteObservation?: McpRemoteObservation
+  /** The domain-set digest a person acknowledged for this server, when one has been. */
+  domainsDigest?: string
+}
+/** Wire input for mcpServers.authorize: begin consent for the remote server id at the listed revision. A stdio server cannot be authorized. Status and list reads do not open a browser; this method returns a consent URL when one is required. */
+export interface McpServersAuthorizeParams {
+  /** The revision the caller last listed. */
+  revision: string
+  /** The remote server's durable id. */
+  id: string
+}
+/** Result of mcpServers.authorize. No token is included. pending_consent carries the URL the host opens and the deadline of that attempt. ready means a token is already usable. not_required means the endpoint accepted a probe with no credentials. */
+export interface McpServersAuthorizeResult {
+  /** What authorize settled to. */
+  status: "not_required" | "pending_consent" | "ready"
+  /** The consent attempt, present for pending_consent. */
+  attemptId?: string
+  /** The authorization URL, present for pending_consent. It carries no code verifier. */
+  consentUrl?: string
+  /** When the consent attempt expires, as milliseconds since the Unix epoch. Present for pending_consent. */
+  deadlineMs?: number
+  /** The token generation, present for ready. */
+  generation?: number
+}
+/** Wire input for mcpServers.revoke: fence the remote server id at the listed revision. Local sessions of that server are closed. The result keeps drain, secret deletion, remote observation and evidence apart; an incomplete revoke is not reported as settled. */
+export interface McpServersRevokeParams {
+  /** The revision the caller last listed. */
+  revision: string
+  /** The remote server's durable id. */
+  id: string
+}
+/** Result of mcpServers.revoke. settled is true only after the local drain, secret deletion, remote observation and required evidence all finished. An incomplete result stays incomplete. */
+export interface McpServersRevokeResult {
+  /** Whether revoke finished. */
+  settled: boolean
+  /** Whether local sessions of this server were closed. */
+  localDrained: boolean
+  /** Whether the private token is gone. */
+  secretDeleted: boolean
+  /** What the authorization server did, when that was observed. */
+  remoteObservation?: McpRemoteObservation
+  /** Whether the outcome record was acknowledged. */
+  evidenceAcknowledged: boolean
+}
+/** Attached to a refusal coded mcp_servers_authorization_held. The configuration file was written. The live set was not replaced, because the previous token binding could not be fenced. */
+export interface McpServersAuthorizationHeldDetails {
+  /** Whether the configuration file was written. True: it was, and the live set still has the previous URL. */
+  applied: boolean
 }
 /** Result of mcpServers.list: the stored servers and the revision a save or remove must name. */
 export interface McpServersListResult {
@@ -1075,20 +1191,22 @@ export interface McpServerEnvEntry {
   /** Its value, or null to keep the value stored for this name on the server being saved, only when the save launches that server as stored apart from the kept values: the same command and args, and the same variable names, each other one null or given its stored value. A save that changes anything else (the command, an argument, a variable added, left out or given another value) must give every value again. Required: an entry without value is refused invalid_request, so leaving it out never keeps a value by accident. A null for a name with no stored value is refused mcp_servers_invalid (environment_value_missing). */
   value: string | null
 }
-/** A server as mcpServers.save stores it. */
+/** A server as mcpServers.save stores it. kind stdio requires command, args and env, and refuses url. kind remote requires url, and refuses command, args and env. A remote save cannot choose the stored id. */
 export interface McpServerInput {
   /** How the server is reached. */
   kind: McpServerKind
   /** Its name: ASCII letters, digits, - and _, 1 to x-mcpServerRules.nameMaxBytes bytes, without __ and not starting or ending with _. nessa is reserved. */
   name: string
   /** The absolute path of its executable. */
-  command: string
+  command?: string
   /** Its arguments, in order: at most x-mcpServerRules.maxArgs, each at most x-mcpServerRules.argMaxBytes bytes. Never put credentials here; use env. */
-  args: string[]
+  args?: string[]
   /** Every variable it is given over the gateway's own, each name once; they are stored, and listed, sorted by name whatever order they are given in. A stored variable left out is removed. */
-  env: McpServerEnvEntry[]
+  env?: McpServerEnvEntry[]
   /** Whether new conversations are given it. */
   enabled: boolean
+  /** The remote endpoint. Required when kind is remote, and refused when kind is stdio. The gateway checks it; this field does not restate that rule. */
+  url?: string
 }
 /** Wire input for mcpServers.save: store a server, adding it or replacing the one under its name, or renaming the one under previousName, in one write. */
 export interface McpServersSaveParams {
@@ -1113,7 +1231,7 @@ export interface McpServersWriteResult {
   /** Whether new conversations get the stored list as now written. False when the gateway is stopping (the next start reads the file), or when a remove left a list edited by hand still past a bound (more servers than x-mcpServerRules.maxServers, or one that breaks a rule): the removed server is out of the live set all the same, and the rest stay as they were until a change brings the list within its bounds. */
   live: boolean
 }
-/** Why a saved server, or a stored one inspected, is invalid. The numbers are x-mcpServerRules, which the gateway's own rules publish. too_many: more than maxServers servers, the managed one included. duplicate_name: another server has the name. name: not 1 to nameMaxBytes bytes of ASCII letters, digits, - and _, holds __, or starts or ends with _. command: not an absolute UTF-8 path. arguments: more than maxArgs, or one over argMaxBytes bytes or holding NUL. environment_name: a variable name that is not ASCII letters, digits and _ (1 to environmentNameMaxBytes bytes, not starting with a digit). reserved_environment_name: NESSA_MCP_SESSION. environment_value: a value holding NUL. environment_value_missing: a null value for a name with no stored value, or in a save that changes anything else the server is launched with. environment_name_repeated: a variable given twice, which is said before a value missing. */
+/** Why a saved server, or a stored one inspected, is invalid. The numbers are x-mcpServerRules, which the gateway's own rules publish. too_many: more than maxServers servers, the managed one included. duplicate_name: another server has the name. name: not 1 to nameMaxBytes bytes of ASCII letters, digits, - and _, holds __, or starts or ends with _. command: not an absolute UTF-8 path. arguments: more than maxArgs, or one over argMaxBytes bytes or holding NUL. environment_name: a variable name that is not ASCII letters, digits and _ (1 to environmentNameMaxBytes bytes, not starting with a digit). reserved_environment_name: NESSA_MCP_SESSION. environment_value: a value holding NUL. environment_value_missing: a null value for a name with no stored value, or in a save that changes anything else the server is launched with. environment_name_repeated: a variable given twice, which is said before a value missing. url: a remote endpoint that is not https, and not http on an explicit loopback host, or that carries userinfo or a fragment. duplicate_server_id: two remote servers are stored with one id. */
 export const McpServerProblemCode = {
   TooMany: "too_many",
   DuplicateName: "duplicate_name",
@@ -1125,6 +1243,8 @@ export const McpServerProblemCode = {
   EnvironmentValue: "environment_value",
   EnvironmentValueMissing: "environment_value_missing",
   EnvironmentNameRepeated: "environment_name_repeated",
+  Url: "url",
+  DuplicateServerId: "duplicate_server_id",
 } as const
 export type McpServerProblemCode =
   (typeof McpServerProblemCode)[keyof typeof McpServerProblemCode]
@@ -1202,7 +1322,7 @@ export interface McpServersInspectResult {
   /** The tools, in the server's order. */
   tools: McpInspectedTool[]
 }
-/** Why the gateway refused an mcpServers method it dispatched. mcp_servers_not_configured: this gateway holds no live MCP server set to manage (not Unix, no agents configured, or MCP off this run because its relay socket could not be bound, a path was not UTF-8, or no key for its configuration digests could be drawn). mcp_servers_invalid: the saved server or the resulting set breaks a rule; or, for mcpServers.inspect, the stored server does (an entry added to config.json by hand), and it was not started (details: McpServersInvalidDetails). mcp_servers_reserved_name: the request names nessa, Nessa's own server. mcp_servers_not_found: no server is stored under the name. mcp_servers_revision_conflict: the stored list changed since the caller's revision (details: McpServersRevisionConflictDetails). mcp_servers_busy: another change held config.json's lock too long, and nothing was written; or, for mcpServers.inspect, x-mcpServerInspect.maxConcurrent inspections are running already, and nothing was started. mcp_servers_config_invalid: config.json does not parse, as it is or as it would be written (a stored server name past x-mcpServerRules.nameMaxBytes among it, so every request naming a stored server fits one frame). It is never repaired. mcp_servers_config_too_large: the result would pass 64 KiB as written, which is pretty-printed or, when only that fits, compact; or, for mcpServers.save, the resulting mcpServers.list answer would not fit one frame for the longest request id, and nothing was written (a remove is never refused for that); or, for mcpServers.list, the stored list would not fit one frame (details: McpServersConfigTooLargeDetails), or config.json itself passes 64 KiB (no details). mcp_servers_storage_unavailable (details: McpServersStorageUnavailableDetails): config.json could not be read, locked or published, or the work failed unexpectedly before it published or before the inspected server's launch began — its outcome recorded failed, panicked — and the stored file and the live set are unchanged (applied false); or the change was published, and the live set followed as far as it could (replaced, withdrawn, or kept during shutdown or when the list is past a bound), but config.json's directory could not be synced, so the change may not survive a crash (applied true); list again to see the current state. mcp_servers_stopping: the gateway is stopping, and nothing was started or written: the request came after shutdown began, and nothing was recorded; or, for mcpServers.inspect, shutdown began before the server was started, or the MCP client refused to start it, as the inspection's outcome record says (stopping, started false). Changes admitted before shutdown finish, and are recorded, before the gateway stops its MCP servers; an inspection already started is cut instead (McpServersInspectCut stopping). audit_unavailable: a record of the change or inspection could not be made durable, or the work failed unexpectedly after the change was published or the server's launch began, so no outcome was recorded (details: McpServersAuditUnavailableDetails). The mcp_server_ codes answer mcpServers.inspect, whose server was stopped on each: mcp_server_start_failed, its process could not be launched (a missing command among them); mcp_server_timed_out, it did not finish within x-mcpServerInspect.deadlineMs, or did not answer a request in time; mcp_server_gone, it ended before it answered; mcp_server_malformed, it answered something that is not MCP, or a UI resource that is not an MCP App within its bounds; mcp_server_remote_error, it answered a request with a JSON-RPC error (details: McpRemoteErrorDetails). */
+/** Why the gateway refused an mcpServers method it dispatched. mcp_servers_not_configured: this gateway holds no live MCP server set to manage (not Unix, no agents configured, or MCP off this run because its relay socket could not be bound, a path was not UTF-8, or no key for its configuration digests could be drawn). mcp_servers_invalid: the saved server or the resulting set breaks a rule; or, for mcpServers.inspect, the stored server does (an entry added to config.json by hand), and it was not started (details: McpServersInvalidDetails). mcp_servers_reserved_name: the request names nessa, Nessa's own server. mcp_servers_not_found: no server is stored under the name. mcp_servers_revision_conflict: the stored list changed since the caller's revision (details: McpServersRevisionConflictDetails). mcp_servers_busy: another change held config.json's lock too long, and nothing was written; or, for mcpServers.inspect, x-mcpServerInspect.maxConcurrent inspections are running already, and nothing was started. mcp_servers_config_invalid: config.json does not parse, as it is or as it would be written (a stored server name past x-mcpServerRules.nameMaxBytes among it, so every request naming a stored server fits one frame). It is never repaired. mcp_servers_config_too_large: the result would pass 64 KiB as written, which is pretty-printed or, when only that fits, compact; or, for mcpServers.save, the resulting mcpServers.list answer would not fit one frame for the longest request id, and nothing was written (a remove is never refused for that); or, for mcpServers.list, the stored list would not fit one frame (details: McpServersConfigTooLargeDetails), or config.json itself passes 64 KiB (no details). mcp_servers_storage_unavailable (details: McpServersStorageUnavailableDetails): config.json could not be read, locked or published, or the work failed unexpectedly before it published or before the inspected server's launch began — its outcome recorded failed, panicked — and the stored file and the live set are unchanged (applied false); or the change was published, and the live set followed as far as it could (replaced, withdrawn, or kept during shutdown or when the list is past a bound), but config.json's directory could not be synced, so the change may not survive a crash (applied true); list again to see the current state. mcp_servers_stopping: the gateway is stopping, and nothing was started or written: the request came after shutdown began, and nothing was recorded; or, for mcpServers.inspect, shutdown began before the server was started, or the MCP client refused to start it, as the inspection's outcome record says (stopping, started false). Changes admitted before shutdown finish, and are recorded, before the gateway stops its MCP servers; an inspection already started is cut instead (McpServersInspectCut stopping). audit_unavailable: a record of the change or inspection could not be made durable, or the work failed unexpectedly after the change was published or the server's launch began, so no outcome was recorded (details: McpServersAuditUnavailableDetails). The mcp_server_ codes answer mcpServers.inspect, whose server was stopped on each: mcp_server_start_failed, its process could not be launched (a missing command among them); mcp_server_timed_out, it did not finish within x-mcpServerInspect.deadlineMs, or did not answer a request in time; mcp_server_gone, it ended before it answered; mcp_server_malformed, it answered something that is not MCP, or a UI resource that is not an MCP App within its bounds; mcp_server_remote_error, it answered a request with a JSON-RPC error (details: McpRemoteErrorDetails). mcp_server_unreachable, a remote endpoint could not be reached and nothing was retained. mcp_server_unauthorized, the endpoint refused the caller; the answer carries no token. mcp_server_insufficient_scope, the caller's scope was not enough and the call was not retried. mcp_server_session_collision, another opening already holds that upstream session id, and this inspection did not delete it. mcp_servers_authorization_held (details: McpServersAuthorizationHeldDetails): a save or remove wrote config.json, and the live set was not replaced because the previous remote token could not be fenced; applied is true. mcp_servers_store_unavailable: this platform has no private token writer, so authorize did not start. mcp_servers_registration_unsupported: the authorization server does not offer dynamic client registration. mcp_servers_discovery_failed: discovery, the callback, or the token exchange was refused, and no token was stored. mcp_servers_authorization_incomplete: an exchange or refresh was sent and its result was not retained, so the token is fenced until authorize is repeated. */
 export const McpServersErrorCode = {
   McpServersNotConfigured: "mcp_servers_not_configured",
   McpServersInvalid: "mcp_servers_invalid",
@@ -1220,10 +1340,19 @@ export const McpServersErrorCode = {
   McpServerGone: "mcp_server_gone",
   McpServerMalformed: "mcp_server_malformed",
   McpServerRemoteError: "mcp_server_remote_error",
+  McpServerUnreachable: "mcp_server_unreachable",
+  McpServerUnauthorized: "mcp_server_unauthorized",
+  McpServerInsufficientScope: "mcp_server_insufficient_scope",
+  McpServerSessionCollision: "mcp_server_session_collision",
+  McpServersAuthorizationHeld: "mcp_servers_authorization_held",
+  McpServersStoreUnavailable: "mcp_servers_store_unavailable",
+  McpServersRegistrationUnsupported: "mcp_servers_registration_unsupported",
+  McpServersDiscoveryFailed: "mcp_servers_discovery_failed",
+  McpServersAuthorizationIncomplete: "mcp_servers_authorization_incomplete",
 } as const
 export type McpServersErrorCode =
   (typeof McpServersErrorCode)[keyof typeof McpServersErrorCode]
-/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). */
+/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended. */
 export const ConversationErrorCode = {
   AgentNotConfigured: "agent_not_configured",
   AgentUnsupported: "agent_unsupported",
@@ -1268,6 +1397,9 @@ export const ConversationErrorCode = {
   McpResultTooLarge: "mcp_result_too_large",
   McpTimedOut: "mcp_timed_out",
   McpRemoteError: "mcp_remote_error",
+  McpUnauthorized: "mcp_unauthorized",
+  McpUnreachable: "mcp_unreachable",
+  McpInsufficientScope: "mcp_insufficient_scope",
 } as const
 export type ConversationErrorCode =
   (typeof ConversationErrorCode)[keyof typeof ConversationErrorCode]
@@ -1878,7 +2010,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 49,
+  maxReadyMethods: 52,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxPhysicalRecordPayloadBytes: 65546,
@@ -1911,6 +2043,7 @@ export const bounds = {
   minRecordPayloadEncodedCharacters: 4,
   maxRecordPayloadEncodedCharacters: 87396,
   maxListedConversations: 500,
+  maxCataloguePageEntries: 256,
   maxToolStructuredContentBytes: 16384,
   maxMcpNameBytes: 128,
   maxUiResourceUriBytes: 2048,
@@ -1945,6 +2078,7 @@ export const ProductMethod = {
   ConversationRecordsHead: "conversation.recordsHead",
   ConversationRecordsPage: "conversation.recordsPage",
   ConversationList: "conversation.list",
+  ConversationObserve: "conversation.observe",
   ConversationSend: "conversation.send",
   ConversationSteer: "conversation.steer",
   ConversationRemove: "conversation.remove",
@@ -1975,6 +2109,8 @@ export const ProductMethod = {
   McpServersSave: "mcpServers.save",
   McpServersRemove: "mcpServers.remove",
   McpServersInspect: "mcpServers.inspect",
+  McpServersAuthorize: "mcpServers.authorize",
+  McpServersRevoke: "mcpServers.revoke",
   PairingCreate: "pairing.create",
   PairingPending: "pairing.pending",
   PairingStatus: "pairing.status",
@@ -2002,6 +2138,7 @@ export const productReadyMethods = [
   "conversation.recordsHead",
   "conversation.recordsPage",
   "conversation.list",
+  "conversation.observe",
   "conversation.send",
   "conversation.steer",
   "conversation.remove",
@@ -2032,6 +2169,8 @@ export const productReadyMethods = [
   "mcpServers.save",
   "mcpServers.remove",
   "mcpServers.inspect",
+  "mcpServers.authorize",
+  "mcpServers.revoke",
   "pairing.create",
   "pairing.pending",
   "pairing.status",

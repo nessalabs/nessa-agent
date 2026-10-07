@@ -8,7 +8,8 @@ use crate::conversation::application::{
     ConversationFuture, ConversationLimits, ConversationListing, ConversationModeApplication,
     ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
     ConversationService, ConversationSummaries, ListedConversation, ListedConversations,
-    ProviderSessionEraser, ProviderSessionErasers, UnfinishedDeletions,
+    ObservationCursor, ObservedConversations, ProviderSessionEraser, ProviderSessionErasers,
+    UnfinishedDeletions,
 };
 use crate::conversation::domain::{Conversation, ConversationDeletion, ProviderSessionErasure};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -462,6 +463,54 @@ impl ConversationListing for MemoryListing {
             Ok(listed)
         })
     }
+    fn observe(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        archived: bool,
+        _: Option<ObservationCursor>,
+    ) -> ConversationFuture<'_, ObservedConversations> {
+        let records: Vec<Conversation> = self
+            .repository
+            .records
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|record| record.allows(organization, owner) && record.deletion().is_none())
+            .cloned()
+            .collect();
+        Box::pin(async move {
+            let mut observed = ObservedConversations {
+                conversations: Vec::new(),
+                complete: true,
+                cursor: None,
+            };
+            for conversation in records {
+                match self.summaries.load(conversation.id()).await {
+                    Ok(Some(summary)) if summary.archived() == archived => {
+                        observed.conversations.push(ListedConversation {
+                            conversation,
+                            summary,
+                        });
+                    }
+                    Ok(_) => {}
+                    Err(_) => observed.complete = false,
+                }
+            }
+            observed.conversations.sort_by(|left, right| {
+                left.conversation
+                    .creation_requested_at_ms()
+                    .cmp(&right.conversation.creation_requested_at_ms())
+                    .then_with(|| {
+                        left.conversation
+                            .id()
+                            .to_string()
+                            .cmp(&right.conversation.id().to_string())
+                    })
+            });
+            Ok(observed)
+        })
+    }
 }
 
 /// For a service no test lists: refuses, so a test that does list without
@@ -475,6 +524,15 @@ impl ConversationListing for Unlisted {
         _: bool,
         _: usize,
     ) -> ConversationFuture<'_, ListedConversations> {
+        Box::pin(async { Err(ConversationError::Metadata) })
+    }
+    fn observe(
+        &self,
+        _: &OrganizationId,
+        _: &PrincipalId,
+        _: bool,
+        _: Option<ObservationCursor>,
+    ) -> ConversationFuture<'_, ObservedConversations> {
         Box::pin(async { Err(ConversationError::Metadata) })
     }
 }

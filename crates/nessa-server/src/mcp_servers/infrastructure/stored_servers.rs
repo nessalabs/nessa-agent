@@ -19,7 +19,8 @@
 //! server could not be taken out through the gateway
 //! (`a_stored_name_past_the_sdks_bound_makes_the_configuration_invalid`).
 use crate::mcp_servers::domain::{
-    stored_revision, ConfigurationKey, ConfiguredMcpServer, StdioServer,
+    stored_revision, ConfigurationKey, ConfiguredMcpServer, RemoteConfigured, StdioServer,
+    StoredMcpServer,
 };
 use nessa_sdk::infrastructure::acp::sessions::MAX_MCP_SERVER_NAME_BYTES;
 use serde::{
@@ -31,7 +32,7 @@ use std::{collections::BTreeMap, fmt, path::PathBuf};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct StoredMcpServer {
+struct StoredFileServer {
     name: String,
     command: PathBuf,
     #[serde(default)]
@@ -82,27 +83,14 @@ fn enabled() -> bool {
     true
 }
 
-impl StoredMcpServer {
+impl StoredFileServer {
     /// The entry at `index` as the gateway holds it, or why it cannot be: a
     /// name past [`MAX_MCP_SERVER_NAME_BYTES`], or a variable named twice.
     /// A name past the bound is logged by its entry's index and its length,
     /// since `config_invalid` carries no details to say which entry it was
     /// (`a_stored_name_past_the_sdks_bound_makes_the_configuration_invalid`).
     fn configured(self, index: usize) -> Result<ConfiguredMcpServer, String> {
-        let bytes = self.name.len();
-        if bytes > MAX_MCP_SERVER_NAME_BYTES {
-            // Not the name itself, nor any value: it may be most of the file.
-            tracing::warn!(
-                index,
-                bytes,
-                max = MAX_MCP_SERVER_NAME_BYTES,
-                "agents.mcpServers entry's name is past the bound; the configuration is refused"
-            );
-            return Err(format!(
-                "the MCP server name of agents.mcpServers entry {index} is {bytes} bytes, \
-                 past the {MAX_MCP_SERVER_NAME_BYTES} allowed"
-            ));
-        }
+        check_name(&self.name, index)?;
         let name = self.name.clone();
         ConfiguredMcpServer::new(
             StdioServer::new(self.name, self.command, self.args),
@@ -118,41 +106,122 @@ impl StoredMcpServer {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct StoredRemote {
+    kind: String,
+    id: String,
+    name: String,
+    url: String,
+    #[serde(default = "enabled")]
+    enabled: bool,
+}
+
 /// Parse an `agents.mcpServers` block: `#[serde(deserialize_with)]` for
-/// `AgentsConfig`.
+/// `AgentsConfig`. A stdio entry has no `kind`. A remote entry is
+/// `{kind: "remote", id, name, url, enabled?}`.
 pub fn stored_servers<'de, D: Deserializer<'de>>(
     deserializer: D,
-) -> Result<Vec<ConfiguredMcpServer>, D::Error> {
-    let stored = Vec::<StoredMcpServer>::deserialize(deserializer)?;
-    stored
+) -> Result<Vec<StoredMcpServer>, D::Error> {
+    // The entry's own JSON, not a `Value`: a map decoded first keeps one
+    // value when a name is given twice, and the repetition would be lost
+    // (`a_repeated_variable_name_in_the_file_is_refused_in_either_order`).
+    let values = Vec::<Box<serde_json::value::RawValue>>::deserialize(deserializer)?;
+    values
         .into_iter()
         .enumerate()
-        .map(|(index, server)| server.configured(index))
+        .map(|(index, value)| parse_entry(value.get(), index))
         .collect::<Result<_, _>>()
         .map_err(serde::de::Error::custom)
 }
 
+#[derive(Deserialize)]
+struct KindProbe {
+    kind: Option<String>,
+}
+
+fn parse_entry(raw: &str, index: usize) -> Result<StoredMcpServer, String> {
+    let kind = serde_json::from_str::<KindProbe>(raw)
+        .map_err(|error| error.to_string())?
+        .kind;
+    match kind.as_deref() {
+        Some("remote") => {
+            let stored: StoredRemote =
+                serde_json::from_str(raw).map_err(|error| error.to_string())?;
+            if stored.kind != "remote" {
+                return Err(format!("agents.mcpServers entry {index} is not remote"));
+            }
+            check_name(&stored.name, index)?;
+            let id = uuid::Uuid::parse_str(&stored.id).map_err(|_| {
+                format!("agents.mcpServers entry {index} has an id that is not a UUID")
+            })?;
+            Ok(StoredMcpServer::Remote(RemoteConfigured::new(
+                id,
+                stored.name,
+                stored.url,
+                stored.enabled,
+            )))
+        }
+        Some(_) => Err(format!(
+            "agents.mcpServers entry {index} has an unknown kind"
+        )),
+        None => {
+            let stored: StoredFileServer =
+                serde_json::from_str(raw).map_err(|error| error.to_string())?;
+            stored.configured(index).map(StoredMcpServer::Stdio)
+        }
+    }
+}
+
+fn check_name(name: &str, index: usize) -> Result<(), String> {
+    let bytes = name.len();
+    if bytes > MAX_MCP_SERVER_NAME_BYTES {
+        tracing::warn!(
+            index,
+            bytes,
+            max = MAX_MCP_SERVER_NAME_BYTES,
+            "agents.mcpServers entry's name is past the bound; the configuration is refused"
+        );
+        return Err(format!(
+            "the MCP server name of agents.mcpServers entry {index} is {bytes} bytes, \
+             past the {MAX_MCP_SERVER_NAME_BYTES} allowed"
+        ));
+    }
+    Ok(())
+}
+
 /// `block` (an `agents.mcpServers` value) parsed, or `None` when it is not
 /// one.
-pub(crate) fn parse_block(block: &Value) -> Option<Vec<ConfiguredMcpServer>> {
+pub(crate) fn parse_block(block: &Value) -> Option<Vec<StoredMcpServer>> {
     stored_servers(block).ok()
 }
 
 /// `servers` as an `agents.mcpServers` block, every field written; `None`
 /// when a command is not UTF-8, which the SDK's rules refuse first
 /// (`McpServerProblem::Command`).
-pub(crate) fn block(servers: &[ConfiguredMcpServer]) -> Option<Value> {
-    let stored: Vec<WrittenMcpServer<'_>> = servers
-        .iter()
-        .map(|configured| WrittenMcpServer {
-            name: configured.server().name(),
-            command: configured.server().command(),
-            args: configured.server().args(),
-            enabled: configured.enabled(),
-            env: configured.env(),
-        })
-        .collect();
-    serde_json::to_value(stored).ok()
+pub(crate) fn block(servers: &[StoredMcpServer]) -> Option<Value> {
+    let mut stored = Vec::with_capacity(servers.len());
+    for server in servers {
+        let value = match server {
+            StoredMcpServer::Stdio(configured) => serde_json::to_value(WrittenMcpServer {
+                name: configured.server().name(),
+                command: configured.server().command(),
+                args: configured.server().args(),
+                enabled: configured.enabled(),
+                env: configured.env(),
+            })
+            .ok()?,
+            StoredMcpServer::Remote(remote) => serde_json::json!({
+                "kind": "remote",
+                "id": remote.id().to_string(),
+                "name": remote.name(),
+                "url": remote.url(),
+                "enabled": remote.enabled(),
+            }),
+        };
+        stored.push(value);
+    }
+    Some(Value::Array(stored))
 }
 
 /// The revision of a stored block: a digest of its JSON keyed with this

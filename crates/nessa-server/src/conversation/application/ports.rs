@@ -299,6 +299,53 @@ pub trait ConversationListing: Send + Sync {
         archived: bool,
         limit: usize,
     ) -> ConversationFuture<'_, ListedConversations>;
+    /// One page of the caller's catalogue, creation order, under the same
+    /// archived filter as [`Self::list`].
+    ///
+    /// `cursor` is absent on the first page. A later page echoes the cursor
+    /// the previous page returned: the same incarnation and boundary, then
+    /// the next descriptor. Deleted rows, rows with no summary, and the other
+    /// archived flag are left out of [`ObservedConversations::conversations`]
+    /// and still advance the cursor. A row that cannot be read back is left
+    /// out, the page is not complete, and it names no cursor, so the pass
+    /// does not skip it and later claim to be finished
+    /// (`an_unreadable_summary_leaves_the_page_unfinished_and_keeps_the_others`).
+    /// [`ObservedConversations::complete`] is true only when the pass has
+    /// returned every matching summary up to the captured head. This does not
+    /// open a provider. The page size is the catalogue's. It is not the
+    /// newest-first list bound.
+    fn observe(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        archived: bool,
+        cursor: Option<ObservationCursor>,
+    ) -> ConversationFuture<'_, ObservedConversations>;
+}
+
+/// Where an observation pass resumes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObservationCursor {
+    /// Catalogue database incarnation captured with this pass.
+    pub incarnation: String,
+    /// Owner head captured when the pass began.
+    pub boundary: u64,
+    /// Creation revision of the last descriptor already returned.
+    pub creation: u64,
+    /// Identity of that descriptor.
+    pub id: ConversationId,
+}
+
+/// What [`ConversationListing::observe`] read from one catalogue page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObservedConversations {
+    /// Matching summaries from this page, creation order.
+    pub conversations: Vec<ListedConversation>,
+    /// Whether the pass is finished. False when further descriptors remain,
+    /// or when this page cannot say where to resume.
+    pub complete: bool,
+    /// Present when [`Self::complete`] is false and another page can be asked.
+    pub cursor: Option<ObservationCursor>,
 }
 
 /// What [`ConversationListing::list`] read.

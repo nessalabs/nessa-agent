@@ -57,12 +57,11 @@ let root: Root
 let host: HTMLDivElement
 let animation: AnimationFrames
 
-// jsdom stamps a key's `timeStamp` with `Date.now()` when the event is built.
-// The overview takes a later answer only once `answerPause` has passed on
-// that clock (`takesAnswerKey`). A wall-clock wait is at least that long, so
-// under a loaded suite the clock can pass the pause while the test meant to
-// stay inside it. This clock moves only when `elapse` says so. A browser
-// stamps the same instant on `performance.now()`; one clock for both.
+// jsdom stamps a key's `timeStamp` with `Date.now()` as the event is built.
+// The overview times a later answer from that instant (`takesAnswerKey`).
+// `stamp` is the instant a pause test means, and a later `elapse` — the page
+// reaching the key — does not move it (#464). `press` stamps the controlled
+// `now`. A browser stamps the same instant on `performance.now()`.
 let now = 1_000_000
 const elapse = (ms: number) => {
   now += ms
@@ -230,6 +229,12 @@ async function open() {
   for (let frame = 0; frame < 3; frame++) await nextFrame()
 }
 
+/** The instant the overview will read, whatever clock built the event. */
+function stamp<T extends Event>(event: T, at: number): T {
+  Object.defineProperty(event, "timeStamp", { configurable: true, get: () => at })
+  return event
+}
+
 /** ⌘↩ and the like, as a keyboard off the Mac sends them: Control stands for ⌘. */
 async function press(
   target: HTMLElement,
@@ -238,18 +243,35 @@ async function press(
 ) {
   await act(async () => {
     target.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        code,
-        key: code,
-        ctrlKey: modifiers.command ?? false,
-        altKey: modifiers.alt ?? false,
-        repeat: modifiers.repeat ?? false,
-        bubbles: true,
-        cancelable: true,
-      }),
+      stamp(
+        new KeyboardEvent("keydown", {
+          code,
+          key: code,
+          ctrlKey: modifiers.command ?? false,
+          altKey: modifiers.alt ?? false,
+          repeat: modifiers.repeat ?? false,
+          bubbles: true,
+          cancelable: true,
+        }),
+        now,
+      ),
     )
     await settle(10)
   })
+}
+
+/** A key whose `timeStamp` is `at`, not the instant it was constructed. */
+function keyAt(at: number) {
+  return stamp(
+    new KeyboardEvent("keydown", {
+      code: "Enter",
+      key: "Enter",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    }),
+    at,
+  )
 }
 
 /** The source moves a session on, as after an answer given elsewhere; a frame on. */
@@ -504,17 +526,13 @@ describe("the agents overview", () => {
   it("measures the pause from when a key was pressed, not from when the page got to it", async () => {
     const { source } = await mount()
     await open()
+    const pressedAt = now
     await press(card("first") as HTMLElement, "Enter", { command: true })
-    // Pressed straight after the answer, and handled only once the pause has
-    // passed — the page busy meanwhile: still too soon to be a choice.
-    const early = new KeyboardEvent("keydown", {
-      code: "Enter",
-      key: "Enter",
-      ctrlKey: true,
-      bubbles: true,
-      cancelable: true,
-    })
-    elapse(answerPause + 20)
+    // Pressed just inside the pause, and handled only after a long wait —
+    // the page busy meanwhile. The wait is not the press.
+    const early = keyAt(pressedAt + answerPause - 1)
+    elapse(5_000)
+    expect(early.timeStamp).toBe(pressedAt + answerPause - 1)
     await act(async () => {
       document.activeElement?.dispatchEvent(early)
       await settle(10)
@@ -528,19 +546,14 @@ describe("the agents overview", () => {
   it("times the pause from when the answering key was pressed, not from when the page got to it", async () => {
     const { source } = await mount()
     await open()
-    const key = () =>
-      new KeyboardEvent("keydown", {
-        code: "Enter",
-        key: "Enter",
-        ctrlKey: true,
-        bubbles: true,
-        cancelable: true,
-      })
-    // The answer is pressed; the page gets to it only after the pause, and a
-    // second press was made that long after the first: a choice, and taken.
-    const answer = key()
-    elapse(answerPause + 30)
-    const next = key()
+    const base = now
+    // The answer is pressed; the page gets to it only long after, and a
+    // second press was made one pause after the first: a choice, and taken.
+    const answer = keyAt(base)
+    const next = keyAt(base + answerPause)
+    elapse(10_000)
+    expect(answer.timeStamp).toBe(base)
+    expect(next.timeStamp).toBe(base + answerPause)
     await act(async () => {
       card("first")?.dispatchEvent(answer)
       await settle(10)

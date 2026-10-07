@@ -639,6 +639,30 @@ pub struct ConversationListResult {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationObserveCursor {
+    pub incarnation: String,
+    pub boundary: String,
+    pub creation: String,
+    pub id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationObserveParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<ConversationObserveCursor>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationObserveResult {
+    pub conversations: Vec<ConversationSummary>,
+    pub complete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<ConversationObserveCursor>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationSendParams {
     pub conversation_id: String,
     pub request_id: String,
@@ -1020,11 +1044,13 @@ pub struct McpRemoteErrorDetails {
 #[serde(rename_all = "snake_case")]
 pub enum McpServerKind {
     Stdio,
+    Remote,
 }
 impl McpServerKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Stdio => "stdio",
+            Self::Remote => "remote",
         }
     }
 }
@@ -1033,11 +1059,115 @@ impl McpServerKind {
 pub struct McpServerListEntry {
     pub kind: McpServerKind,
     pub name: String,
-    pub command: String,
-    pub args: Vec<String>,
-    pub env_names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_names: Option<Vec<String>>,
     pub enabled: bool,
     pub managed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization: Option<McpServerAuthorization>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpAuthorizationPhase {
+    Unauthenticated,
+    ConsentNeeded,
+    PendingConsent,
+    Ready,
+    ScopeRequired,
+    AuthorizationIncomplete,
+    Revoking,
+    RevocationIncomplete,
+}
+impl McpAuthorizationPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unauthenticated => "unauthenticated",
+            Self::ConsentNeeded => "consent_needed",
+            Self::PendingConsent => "pending_consent",
+            Self::Ready => "ready",
+            Self::ScopeRequired => "scope_required",
+            Self::AuthorizationIncomplete => "authorization_incomplete",
+            Self::Revoking => "revoking",
+            Self::RevocationIncomplete => "revocation_incomplete",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpRemoteObservation {
+    Acknowledged,
+    Unsupported,
+    Unconfirmed,
+}
+impl McpRemoteObservation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Acknowledged => "acknowledged",
+            Self::Unsupported => "unsupported",
+            Self::Unconfirmed => "unconfirmed",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServerAuthorization {
+    pub phase: McpAuthorizationPhase,
+    pub generation: u64,
+    pub token_expired: bool,
+    pub refresh_failing: bool,
+    pub scope_required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_observation: Option<McpRemoteObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domains_digest: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServersAuthorizeParams {
+    pub revision: String,
+    pub id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServersAuthorizeResult {
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServersRevokeParams {
+    pub revision: String,
+    pub id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServersRevokeResult {
+    pub settled: bool,
+    pub local_drained: bool,
+    pub secret_deleted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_observation: Option<McpRemoteObservation>,
+    pub evidence_acknowledged: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServersAuthorizationHeldDetails {
+    pub applied: bool,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1057,10 +1187,15 @@ pub struct McpServerEnvEntry {
 pub struct McpServerInput {
     pub kind: McpServerKind,
     pub name: String,
-    pub command: String,
-    pub args: Vec<String>,
-    pub env: Vec<McpServerEnvEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<Vec<McpServerEnvEntry>>,
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1095,6 +1230,8 @@ pub enum McpServerProblemCode {
     EnvironmentValue,
     EnvironmentValueMissing,
     EnvironmentNameRepeated,
+    Url,
+    DuplicateServerId,
 }
 impl McpServerProblemCode {
     pub fn as_str(self) -> &'static str {
@@ -1109,6 +1246,8 @@ impl McpServerProblemCode {
             Self::EnvironmentValue => "environment_value",
             Self::EnvironmentValueMissing => "environment_value_missing",
             Self::EnvironmentNameRepeated => "environment_name_repeated",
+            Self::Url => "url",
+            Self::DuplicateServerId => "duplicate_server_id",
         }
     }
 }
@@ -1211,6 +1350,15 @@ pub enum McpServersErrorCode {
     McpServerGone,
     McpServerMalformed,
     McpServerRemoteError,
+    McpServerUnreachable,
+    McpServerUnauthorized,
+    McpServerInsufficientScope,
+    McpServerSessionCollision,
+    McpServersAuthorizationHeld,
+    McpServersStoreUnavailable,
+    McpServersRegistrationUnsupported,
+    McpServersDiscoveryFailed,
+    McpServersAuthorizationIncomplete,
 }
 impl McpServersErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -1231,6 +1379,15 @@ impl McpServersErrorCode {
             Self::McpServerGone => "mcp_server_gone",
             Self::McpServerMalformed => "mcp_server_malformed",
             Self::McpServerRemoteError => "mcp_server_remote_error",
+            Self::McpServerUnreachable => "mcp_server_unreachable",
+            Self::McpServerUnauthorized => "mcp_server_unauthorized",
+            Self::McpServerInsufficientScope => "mcp_server_insufficient_scope",
+            Self::McpServerSessionCollision => "mcp_server_session_collision",
+            Self::McpServersAuthorizationHeld => "mcp_servers_authorization_held",
+            Self::McpServersStoreUnavailable => "mcp_servers_store_unavailable",
+            Self::McpServersRegistrationUnsupported => "mcp_servers_registration_unsupported",
+            Self::McpServersDiscoveryFailed => "mcp_servers_discovery_failed",
+            Self::McpServersAuthorizationIncomplete => "mcp_servers_authorization_incomplete",
         }
     }
 }
@@ -1772,6 +1929,7 @@ pub mod product_method {
     pub const CONVERSATION_RECORDS_HEAD: &str = "conversation.recordsHead";
     pub const CONVERSATION_RECORDS_PAGE: &str = "conversation.recordsPage";
     pub const CONVERSATION_LIST: &str = "conversation.list";
+    pub const CONVERSATION_OBSERVE: &str = "conversation.observe";
     pub const CONVERSATION_SEND: &str = "conversation.send";
     pub const CONVERSATION_STEER: &str = "conversation.steer";
     pub const CONVERSATION_REMOVE: &str = "conversation.remove";
@@ -1802,6 +1960,8 @@ pub mod product_method {
     pub const MCP_SERVERS_SAVE: &str = "mcpServers.save";
     pub const MCP_SERVERS_REMOVE: &str = "mcpServers.remove";
     pub const MCP_SERVERS_INSPECT: &str = "mcpServers.inspect";
+    pub const MCP_SERVERS_AUTHORIZE: &str = "mcpServers.authorize";
+    pub const MCP_SERVERS_REVOKE: &str = "mcpServers.revoke";
     pub const PAIRING_CREATE: &str = "pairing.create";
     pub const PAIRING_PENDING: &str = "pairing.pending";
     pub const PAIRING_STATUS: &str = "pairing.status";
@@ -1965,7 +2125,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 49
+                items.len() <= 52
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -2000,6 +2160,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.recordsHead",
     "conversation.recordsPage",
     "conversation.list",
+    "conversation.observe",
     "conversation.send",
     "conversation.steer",
     "conversation.remove",
@@ -2030,6 +2191,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "mcpServers.save",
     "mcpServers.remove",
     "mcpServers.inspect",
+    "mcpServers.authorize",
+    "mcpServers.revoke",
     "pairing.create",
     "pairing.pending",
     "pairing.status",

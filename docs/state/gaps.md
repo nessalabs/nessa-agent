@@ -17,7 +17,7 @@ These findings came from the original [inspection snapshot](inventory.md#inspect
 
 | ID | Current gap or limit | Useful next step |
 | --- | --- | --- |
-| G01 | **Resolved integration gap.** Native desktop and browser gateway mode now use the gateway. Other browser previews retain sample data. | Keep [connection modes](services/desktop/workspace/README.md#connection-modes) explicit. Sample replies still do not prove a provider ran. |
+| G01 | **Resolved integration gap.** Native desktop and browser gateway mode now use the gateway. Other browser previews retain sample data, except a query that names a seeded run. | Keep [connection modes](services/desktop/workspace/README.md#connection-modes) explicit. Sample replies still do not prove a provider ran. |
 | G02 | **Resolved integration gap.** [Gateway composition](../../src/desktop/dependencies.ts) now connects server apps through the workspace client. Sample mode retains fixture apps. | Keep resource loading, mount readiness and tool approval separate. This documentation pass did not run a live app. |
 | G03 | **Documentation correction.** Older maps called that renderer a placeholder. The [current lifecycle](../../src/desktop/widgets/app/model/lifecycle.ts) and bridge implement it. | Keep the renderer lifecycle separate from workspace connection mode and tool permission. Update the owning pages when composition changes. |
 | G04 | **Persistence limit.** [Saved tabs](../../src/conversation/application/saved-tabs.ts) retain IDs and titles, but not drafts or uncertain-send identity and content. | Decide whether crash-safe recovery is needed. If so, design retained exact requests before adding retry behavior. |

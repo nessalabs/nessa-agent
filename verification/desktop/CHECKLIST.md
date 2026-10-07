@@ -15,6 +15,20 @@ desktop surface_ and the workspace section).
 Every scripted item runs in **Chromium and WebKit** unless it says otherwise.
 The app ships in WKWebView; Chrome alone is not evidence.
 
+## Seeded workspace load
+
+Opt-in. Not part of `run-all`. The contract is
+[UI workspace load](../../docs/design/ui-workspace-load.md).
+
+- [ ] **Rendered count matches the generated count** on the Agents overview
+  after Show All, on the columns session list for the opening channel, and
+  on the sidebar branch after Show all. The collapsed branch is short of
+  that channel. The page does not call `conversation.list`.
+  _Check:_ `workspace-load.mjs` (defaults: `--mode prod`, the dry run of
+  10,000 sessions). Chromium records split and drag frames through
+  `lib/perf.mjs` at 4× after calibration. A frame over 50 ms is a finding,
+  not a failure of this check. WebKit runs the journeys without that throttle.
+
 ## Performance budget
 
 _ADR 238 › Context_: "Calm means no dropped frames" — no frame over 50 ms, in a
@@ -172,7 +186,7 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   `drag.mjs` (`preview-panes-take-shape`; every drag check's residue).
 - _Harmless, and not a failure:_ a single read of a title's transforms in
   WebKit that mixes two moments. How the two stretch checks read a title is
-  `recordShapes`' (`drag.mjs`), and why, with the runs and probes, is #365.
+  `recordShapeFrames` (`scripts/lib/shape-sampler.mjs`), and why, with the runs and probes, is #365.
   Also harmless: one agreed read of about a percent (both axes within two
   percent of 1, and the two scales within four percent of each other) while
   every running animation on that title shares one start time. That is the
@@ -432,11 +446,12 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   patched the event APIs), its links to a fragment of any kind (`<a>`,
   `<area>`, SVG, in a shadow root, `target="_self"`, a spaced `href`) and its
   moves to one by script (WebKit loads the frame for these), a first load
-  held back, going back across a move to a fragment (on a page of its own,
-  where an answer to an earlier check, coming after a later load, ends no
-  wait), an app forging departures, and a third party forging them and the
-  check's answers at every proxy and app frame, are not; a deadline no
-  timer can wait loads nothing. _#349 design, L32._ _Check:_ `mcp-apps.mjs --only
+  held by an image the fixture leaves unanswered, going back across a move to
+  a fragment (on a page of its own, where an answer to an earlier check,
+  coming after a later load, ends no wait), an app forging departures, and a
+  third party forging them and the check's answers at every proxy and app
+  frame, are not; a deadline no timer can wait loads nothing. _#349 design,
+  L32._ _Check:_ `mcp-apps.mjs --only
   departures,departures-back` (dev server: it imports the host's builder; it
   waits past the initialize deadline).
 - [ ] **It is torn down on close**: a pane's close takes its proxy and app
@@ -716,6 +731,12 @@ publish, and refuses nothing the gateway would judge.
 - [ ] **A credential without `credential.manage` sees "Only an administrator
   can manage MCP servers", no control, and sends no `mcpServers` request**
   (U2). _Check:_ `mcp-servers-gateway.mjs --only non-admin`.
+- [ ] **A remote row shows its URL and consent state, and Authorize and Revoke
+  name that server's id and the list revision.** Waiting for consent shows the
+  consent URL as a link and does not put a token on the page. _Check:_
+  `integrations-tab.test.tsx` ("a remote row shows its consent state") and
+  `mcp-servers.test.ts` ("remote authorization"). A consenting remote account
+  is an owner-run check and is not in `mcp-servers-gateway.mjs`.
 - [ ] **It fits at 800 and 390px** — nothing outside its card, nothing
   clipped (a field's value included: the command wraps), Settings not
   scrolling sideways, the fold held, and under a 420px page a server row's

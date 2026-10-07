@@ -34,6 +34,7 @@ Layout can survive navigation in memory, but a restart does not restore every pa
 | --- | --- |
 | Native desktop window | The local gateway, after host startup is ready. The window reads it and does not start or reconcile it. |
 | Browser preview with `?gateway` | The gateway session already signed in on this origin. Sign-in and renewal belong to the panel browser surface. |
+| Browser preview whose query names a seeded run | The in-memory seeded workspace. Not a gateway, and not the sample. |
 | Other browser previews | In-memory sample sessions and scripted replies. These do not prove a provider ran. |
 
 [Backend selection](../../../../../src/desktop/model/workspace-backend.ts) chooses the mode. [Composition](../../../../../src/desktop/dependencies.ts) supplies the corresponding workspace source. Gateway mode uses server-provided MCP Apps through the same client; sample mode keeps its fixture app. A missing sandbox is still an explicit cannot-show outcome.

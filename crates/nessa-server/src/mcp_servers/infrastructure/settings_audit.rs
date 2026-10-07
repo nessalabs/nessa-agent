@@ -42,13 +42,20 @@ impl DurableMcpServerAudit {
 /// A server as a record names it: what it is started with and its
 /// variables' names, never their values.
 fn server(server: &AuditedServer) -> Value {
-    json!({
+    let mut value = json!({
         "name": server.name,
         "command": server.command.to_string_lossy(),
         "args": server.args,
         "enabled": server.enabled,
         "envNames": server.env_names,
-    })
+    });
+    if let Some(url) = &server.url {
+        value["url"] = json!(url);
+    }
+    if let Some(id) = &server.remote_id {
+        value["id"] = json!(id);
+    }
+    value
 }
 
 /// A revision, its names, and the change's target there.

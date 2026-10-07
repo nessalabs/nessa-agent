@@ -16,6 +16,7 @@
 //!     └── revoke (a grant's sessions closed, none opened under it after)
 //!
 //! Connection: framing (bounded newline JSON-RPC) ─ wire (MCP JSON → domain)
+//! Remote: HttpExchange (injected) ─ HttpSession (streamable HTTP, legacy SSE) ─ the same Connection
 //! ```
 //!
 //! Arrows are calls. `McpServers` owns the configured set, which a host
@@ -39,19 +40,30 @@
 //! error goes to this process's, unread.
 #![deny(missing_docs)]
 
+mod authorization;
 mod connection;
 mod error;
 mod framing;
+mod http;
+mod http_exchange;
 mod process;
+mod remote;
 mod servers;
+mod sse;
 mod stand_in;
 mod wire;
 
+pub use authorization::{Bearer, NoAuthorization, RemoteAuthorization};
 pub use error::McpError;
+pub use http::SessionClaims;
+pub use http_exchange::{
+    HttpBody, HttpChunks, HttpExchange, HttpFailure, HttpMethod, HttpRequest, HttpResponse,
+};
+pub use remote::{RemoteMcpServer, RemoteMcpUrl, RemoteUrlProblem};
 pub use servers::{
-    ListedPages, McpOwner, McpServerLaunch, McpServers, McpSession, INITIALIZE_TIMEOUT,
-    MAX_MCP_ENVIRONMENT_NAME_BYTES, MAX_TOOLS, MAX_TOOL_PAGES, MCP_SESSION_VARIABLE,
-    REQUEST_TIMEOUT,
+    configuration_problem, ListedPages, McpOwner, McpServerLaunch, McpServers, McpSession,
+    INITIALIZE_TIMEOUT, MAX_MCP_ENVIRONMENT_NAME_BYTES, MAX_TOOLS, MAX_TOOL_PAGES,
+    MCP_SESSION_VARIABLE, REQUEST_TIMEOUT,
 };
 pub(crate) use wire::structured_result;
 #[cfg(test)]

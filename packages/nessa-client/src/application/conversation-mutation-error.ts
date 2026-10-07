@@ -149,7 +149,9 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     // server or its tool is not one it may use, its request is too large,
     // the review it needed was denied, expired, or withdrawn while it
     // waited, or — mcp_cancelled with no review — its mount was released or
-    // its opening ended first, which for a message sends nothing.
+    // its opening ended first, which for a message sends nothing. The same
+    // is true when the remote refused, could not be reached, or the token's
+    // scope was not enough: the tool was not run.
     case ConversationErrorCode.McpAppUnknown:
     case ConversationErrorCode.McpServerMismatch:
     case ConversationErrorCode.McpToolNotForApp:
@@ -157,6 +159,9 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.McpApprovalDenied:
     case ConversationErrorCode.McpApprovalExpired:
     case ConversationErrorCode.McpCancelled:
+    case ConversationErrorCode.McpUnauthorized:
+    case ConversationErrorCode.McpUnreachable:
+    case ConversationErrorCode.McpInsufficientScope:
       return true
     // Possibly after the server was asked: its session ended, it did not
     // answer in time, it answered with an error, or its answer was too large

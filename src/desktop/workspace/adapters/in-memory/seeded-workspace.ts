@@ -1,8 +1,9 @@
 /**
- * A workspace built during a run for a large-list measurement (#590).
+ * A workspace built during a run for a large-list measurement (#590, #595).
  *
- * The window boots `sampleWorkspace`. This builder is not called from there.
- * It returns the same index and transcript shape `inMemorySource` already
+ * The sample boot does not call this builder. A browser page whose query
+ * names a seeded run does (`seededWorkspaceSpec`, `seeded-window.ts`). It
+ * returns the same index and transcript shape `inMemorySource` already
  * accepts, with titles cut by `titleFrom`. Session ids are load-fixture ids,
  * not gateway conversation UUIDs. The builder does not call the gateway's
  * title, preview, list, or view owners, and it does not write a fixture file.
@@ -93,6 +94,10 @@ export interface SeededWorkspaceReport {
     readonly needsYou: number
   }
   readonly largestChannelSessions: number
+  /** Sessions stored on each channel id, counted from the kept index. */
+  readonly channelSessions: Readonly<Record<string, number>>
+  /** Each channel's name, from the kept index, keyed by that same id. */
+  readonly channelNames: Readonly<Record<string, string>>
 }
 
 /**
@@ -404,18 +409,24 @@ function lastSaid(transcript: Transcript): string {
 
 function reportFor(
   spec: SeededWorkspaceSpec,
-  sessions: readonly SessionSummary[],
+  index: WorkspaceIndex,
   longTranscripts: readonly Transcript[],
 ): SeededWorkspaceReport {
   const utf8 = new TextEncoder()
   const statusCounts = { idle: 0, running: 0, needsYou: 0 }
-  const channelCounts = new Map<string, number>()
+  const channelSessions: Record<string, number> = {}
+  const channelNames: Record<string, string> = {}
+  for (const channel of index.channels) {
+    channelSessions[channel.id] = 0
+    channelNames[channel.id] = channel.name
+  }
   let maxTitleCharacters = 0
   let maxPreviewUtf8Bytes = 0
-  for (const session of sessions) {
+  for (const session of index.sessions) {
     if (session.status === "needs-you") statusCounts.needsYou += 1
     else statusCounts[session.status] += 1
-    channelCounts.set(session.channelId, (channelCounts.get(session.channelId) ?? 0) + 1)
+    if (Object.hasOwn(channelSessions, session.channelId))
+      channelSessions[session.channelId] += 1
     if (session.title.length > maxTitleCharacters)
       maxTitleCharacters = session.title.length
     const previewBytes = utf8.encode(session.preview).byteLength
@@ -434,8 +445,8 @@ function reportFor(
     algorithm: "mulberry32",
     seed: spec.seed,
     now: spec.now,
-    sessions: sessions.length,
-    channels: channels.length,
+    sessions: index.sessions.length,
+    channels: index.channels.length,
     longTranscripts: longTranscripts.length,
     messages: longTranscripts[0]?.messages.length ?? 0,
     maxTitleCharacters,
@@ -443,7 +454,9 @@ function reportFor(
     longPlainTextCharacters,
     longTranscriptUtf8Bytes,
     statusCounts,
-    largestChannelSessions: Math.max(0, ...channelCounts.values()),
+    largestChannelSessions: Math.max(0, ...Object.values(channelSessions)),
+    channelSessions,
+    channelNames,
   }
 }
 
@@ -493,8 +506,57 @@ export function seededWorkspace(
     contradictions: kept.contradictions,
     report: reportFor(
       spec,
-      kept.index.sessions,
+      kept.index,
       longTranscripts.filter((transcript) => keptIds.has(transcript.sessionId)),
     ),
   }
+}
+
+const decimal = /^(0|[1-9][0-9]*)$/
+
+/** A whole decimal from the query. The ranges belong to `accepted`. */
+function decimalField(raw: string, reason: SeededWorkspaceReason): number {
+  if (!decimal.test(raw)) refuse(reason)
+  const value = Number(raw)
+  if (!Number.isSafeInteger(value)) refuse(reason)
+  return value
+}
+
+/** The one value of a seeded-run field. Missing and repeated values refuse that field. */
+function onlyValue(
+  params: URLSearchParams,
+  name: string,
+  reason: SeededWorkspaceReason,
+): string {
+  const values = params.getAll(name)
+  if (values.length !== 1) refuse(reason)
+  return values[0]
+}
+
+/**
+ * The seeded run a page query asks for. The search string is read the same
+ * way as `workspaceBackend`: `URLSearchParams` strips one leading `?`.
+ * No `seeded` key means this page is not a seeded run. A seeded run whose
+ * field is missing, repeated, or not a whole decimal refuses that field.
+ * The same spec `seededWorkspace` accepts.
+ */
+export function seededWorkspaceSpec(search: string): SeededWorkspaceSpec | null {
+  const params = new URLSearchParams(search)
+  if (params.getAll("seeded").length === 0) return null
+  const spec: SeededWorkspaceSpec = {
+    seed: decimalField(onlyValue(params, "seeded", "seed"), "seed"),
+    now: decimalField(onlyValue(params, "now", "now"), "now"),
+    sessions: decimalField(onlyValue(params, "sessions", "sessions"), "sessions"),
+    longTranscripts: decimalField(
+      onlyValue(params, "longTranscripts", "longTranscripts"),
+      "longTranscripts",
+    ),
+    messages: decimalField(onlyValue(params, "messages", "messages"), "messages"),
+    messageCharacters: decimalField(
+      onlyValue(params, "messageCharacters", "messageCharacters"),
+      "messageCharacters",
+    ),
+  }
+  accepted(spec)
+  return spec
 }

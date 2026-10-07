@@ -43,6 +43,15 @@ describe("failureOf", () => {
       "gone",
       "malformed",
       "remoteError",
+      "unreachable",
+      "unauthorized",
+      "insufficientScope",
+      "sessionCollision",
+      "authorizationHeld",
+      "storeUnavailable",
+      "registrationUnsupported",
+      "discoveryFailed",
+      "authorizationIncomplete",
     ])
   })
 
@@ -61,6 +70,8 @@ describe("failureOf", () => {
       "environmentValue",
       "environmentValueMissing",
       "environmentNameRepeated",
+      "url",
+      "duplicateServerId",
     ])
     expect(problems[0]).toEqual({
       kind: "invalid",
@@ -208,6 +219,7 @@ describe("mcpServersGateway", () => {
         revision: "r1",
         previousName: "a",
         server: {
+          kind: "stdio",
           name: "b",
           command: "/c",
           args: ["x"],

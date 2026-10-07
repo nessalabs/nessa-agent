@@ -112,7 +112,7 @@ impl HttpsArchives {
 /// reported. `reqwest` reads that default when it builds a client and falls
 /// back to a panic when there is none, so this runs before the builder rather
 /// than beside it.
-fn install_tls_backend() {
+pub(crate) fn install_tls_backend() {
     if CryptoProvider::get_default().is_none() {
         let _ = rustls::crypto::ring::default_provider().install_default();
     }

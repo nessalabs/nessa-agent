@@ -62,6 +62,16 @@ export {
   type InMemorySource,
 } from "./adapters/in-memory/in-memory-source"
 export {
+  seededWorkspace,
+  seededWorkspaceSpec,
+  SeededWorkspaceRefusal,
+} from "./adapters/in-memory/seeded-workspace"
+export type {
+  SeededWorkspace,
+  SeededWorkspaceReport,
+  SeededWorkspaceSpec,
+} from "./adapters/in-memory/seeded-workspace"
+export {
   gatewaySource,
   type GatewayClient,
   type GatewaySource,

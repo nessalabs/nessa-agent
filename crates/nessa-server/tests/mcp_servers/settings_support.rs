@@ -5,6 +5,7 @@
 //! Most tests that use these run on Unix only, as the live set does; a
 //! helper only those tests use is compiled only there, so no other target
 //! sees dead code (`clippy --all-targets -D warnings` on Windows).
+use crate::mcp_authorization::application::PermissiveHandoff;
 #[cfg(unix)]
 use crate::mcp_servers::application::McpServerInitiator;
 use crate::mcp_servers::application::{
@@ -13,7 +14,7 @@ use crate::mcp_servers::application::{
     McpServerAuditRecord, McpServerSettings, ServerInspector, StoreLock,
 };
 use crate::mcp_servers::domain::{
-    ConfigurationKey, ConfiguredMcpServer, StdioServer, MANAGED_SERVER_NAME,
+    ConfigurationKey, ConfiguredMcpServer, StdioServer, StoredMcpServer, MANAGED_SERVER_NAME,
 };
 use crate::mcp_servers::infrastructure::{
     ConfigCheck, ConfigFiles, ConfigJsonStore, LaunchSettings, LiveMcpServers, Published,
@@ -207,7 +208,7 @@ impl Clock for ManualClock {
 /// `stopping`.
 pub(crate) struct ScriptedInspector {
     pub(crate) answer: Mutex<Result<Inspection, InspectFailure>>,
-    pub(crate) asked: Mutex<Vec<(ConfiguredMcpServer, InspectBounds)>>,
+    pub(crate) asked: Mutex<Vec<(StoredMcpServer, InspectBounds)>>,
     pub(crate) gate: Arc<Semaphore>,
 }
 impl Default for ScriptedInspector {
@@ -225,7 +226,7 @@ impl Default for ScriptedInspector {
 impl ServerInspector for ScriptedInspector {
     fn inspect(
         &self,
-        server: &ConfiguredMcpServer,
+        server: &StoredMcpServer,
         bounds: InspectBounds,
         mut stop: InspectStop,
         launch: LaunchBegun,
@@ -440,9 +441,19 @@ fn live_through(
         clock,
         key(),
     );
-    let launches = LaunchSettings::new(startup, bundled, std::env::temp_dir(), BTreeMap::new());
+    let startup_stored: Vec<StoredMcpServer> = startup
+        .iter()
+        .cloned()
+        .map(StoredMcpServer::Stdio)
+        .collect();
+    let launches = LaunchSettings::new(
+        &startup_stored,
+        bundled,
+        std::env::temp_dir(),
+        BTreeMap::new(),
+    );
     let servers = McpServers::new(
-        launches.launch_set(&[]).unwrap(),
+        launches.launch_set(&[]).unwrap().0,
         Arc::new(RuntimeClock::new()),
     )
     .unwrap();
@@ -452,6 +463,7 @@ fn live_through(
         live(LiveMcpServers::new(servers.clone(), launches)),
         inspector,
         list_fits,
+        Arc::new(PermissiveHandoff),
     );
     (settings, servers)
 }

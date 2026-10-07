@@ -12,12 +12,12 @@ pub use app_call::{
     MAX_APP_RESULT_BYTES,
 };
 pub use configured_server::{
-    ConfiguredMcpServer, EditRefusal, EnvironmentNameRepeated, ServerEdit, ServerSave, StdioServer,
-    MANAGED_SERVER_NAME,
+    ConfiguredMcpServer, EditRefusal, EnvironmentNameRepeated, RemoteConfigured, RemoteServerSave,
+    ServerEdit, ServerSave, StdioServer, StoredMcpServer, MANAGED_SERVER_NAME,
 };
 pub use resource_ticket::{resource_ticket, ResourceTicketDigest};
 pub use session_token::{session_token, TokenDigest};
 pub use stand_in::{
-    admit, configuration_digest, relay_arguments, stored_revision, ConfigurationKey,
-    StandInRefusal, RELAY_SUBCOMMAND,
+    admit, configuration_digest, relay_arguments, remote_configuration_digest, stored_revision,
+    ConfigurationKey, StandInRefusal, RELAY_SUBCOMMAND,
 };

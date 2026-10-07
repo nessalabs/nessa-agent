@@ -76,7 +76,7 @@ fn bundle_configuration_is_relocatable_and_does_not_overwrite_user_settings() {
     }
     assert_eq!(agents.mcp_servers.len(), 1);
     assert_eq!(
-        agents.mcp_servers[0].server().command(),
+        agents.mcp_servers[0].stdio().unwrap().server().command(),
         bundle.join("nessa-mcp")
     );
     assert!(!data.join("config.json").exists());
@@ -112,11 +112,7 @@ fn the_default_workspace_is_made_whenever_it_is_the_one_configured() {
         assert_eq!(agents.workspace, workspace);
         assert!(workspace.is_dir());
         // The stored server is kept and the managed one added beside it.
-        let names: Vec<_> = agents
-            .mcp_servers
-            .iter()
-            .map(|each| each.server().name())
-            .collect();
+        let names: Vec<_> = agents.mcp_servers.iter().map(|each| each.name()).collect();
         assert_eq!(names, ["mcptest", "nessa"]);
     }
 }

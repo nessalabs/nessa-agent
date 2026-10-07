@@ -43,16 +43,7 @@ impl StdioMcpServer {
     /// [`MAX_MCP_SERVER_ARG_BYTES`] bytes, none holding NUL. The rules for
     /// one server; [`Self::problem_in`] adds the set's.
     pub fn problem(&self) -> Option<McpServerProblem> {
-        if self.name.is_empty()
-            || self.name.len() > MAX_MCP_SERVER_NAME_BYTES
-            || self.name.contains("__")
-            || self.name.starts_with('_')
-            || self.name.ends_with('_')
-            || !self
-                .name
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        {
+        if server_name_unacceptable(&self.name) {
             return Some(McpServerProblem::Name {
                 server: self.name.clone(),
             });
@@ -97,6 +88,21 @@ impl StdioMcpServer {
             })
         })
     }
+}
+
+/// Whether `name` cannot be an MCP server name: empty, longer than
+/// [`MAX_MCP_SERVER_NAME_BYTES`], holding `__`, starting or ending with `_`,
+/// or holding anything but ASCII letters, digits, `-` and `_`. The one check
+/// [`StdioMcpServer::problem`] and a remote server's name both ask.
+pub fn server_name_unacceptable(name: &str) -> bool {
+    name.is_empty()
+        || name.len() > MAX_MCP_SERVER_NAME_BYTES
+        || name.contains("__")
+        || name.starts_with('_')
+        || name.ends_with('_')
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 /// The most MCP servers one set may hold: what an ACP binding is given and
@@ -172,6 +178,17 @@ pub enum McpServerProblem {
         /// The variable's name; never its value.
         name: String,
     },
+    /// A remote server's URL is not HTTPS, or HTTP on an explicit loopback
+    /// host, or it carries userinfo or a fragment.
+    Url {
+        /// The server's name.
+        server: String,
+    },
+    /// Two remote servers are stored under this id.
+    DuplicateServerId {
+        /// One of the servers.
+        server: String,
+    },
 }
 impl fmt::Display for McpServerProblem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -200,6 +217,13 @@ impl fmt::Display for McpServerProblem {
                 f,
                 "the environment variable {name} of the MCP server {server:?} holds NUL"
             ),
+            Self::Url { server } => write!(
+                f,
+                "the MCP server {server:?}'s URL must be https, or http on loopback, with no userinfo or fragment"
+            ),
+            Self::DuplicateServerId { server } => {
+                write!(f, "two remote MCP servers share an id ({server:?})")
+            }
         }
     }
 }

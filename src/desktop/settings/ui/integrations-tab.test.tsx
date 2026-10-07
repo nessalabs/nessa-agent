@@ -16,7 +16,7 @@ import type {
   McpServersConnection,
   McpServersGateway,
 } from "../adapters/mcp-servers-gateway"
-import type { Outcome, SaveRequest, ServerList } from "../model/mcp-servers"
+import type { ListedServer, Outcome, SaveRequest, ServerList } from "../model/mcp-servers"
 import { IntegrationsTab, McpServersProvider } from "./integrations-tab"
 
 let root: Root
@@ -78,6 +78,8 @@ function fakeGateway() {
     save: (request: SaveRequest) => ask("save", request),
     remove: (request) => ask("remove", request),
     inspect: (name) => ask("inspect", name),
+    authorize: (id, revision) => ask("authorize", { id, revision }),
+    revoke: (id, revision) => ask("revoke", { id, revision }),
   }
   return {
     gateway,
@@ -125,7 +127,7 @@ async function press(element: Element | null, key: string) {
   })
 }
 
-const list = (...servers: (typeof charts)[]): Outcome<ServerList> => ({
+const list = (...servers: ListedServer[]): Outcome<ServerList> => ({
   ok: true,
   value: { revision: "r1", servers },
 })
@@ -361,9 +363,13 @@ describe("Integrations", () => {
     }
     const field = () =>
       variable().querySelector("[data-mcp-secret]") as HTMLInputElement | null
-    const saved = (fake: ReturnType<typeof fakeGateway>) =>
-      (fake.requests.find((each) => each.method === "save")?.argument as SaveRequest)
-        .server.env
+    const saved = (fake: ReturnType<typeof fakeGateway>) => {
+      const server = (
+        fake.requests.find((each) => each.method === "save")?.argument as SaveRequest
+      ).server
+      if (server.kind !== "stdio") throw new Error("not a command server")
+      return server.env
+    }
     async function paste(element: Element | null, text: string) {
       if (!element) throw new Error("nothing to paste into")
       const event = new Event("paste", { bubbles: true, cancelable: true })
@@ -1076,5 +1082,46 @@ describe("Integrations", () => {
     )
     const controls = [...host.querySelectorAll("button")]
     expect(controls.every((each) => each.disabled)).toBe(true)
+  })
+
+  it("a remote row shows its consent state and sends authorize and revoke", async () => {
+    const docs: ListedServer = {
+      name: "docs",
+      command: "",
+      args: [],
+      envNames: [],
+      enabled: true,
+      managed: false,
+      url: "https://mcp.example/mcp",
+      remoteId: "11111111-1111-4111-8111-111111111111",
+      authorization: {
+        phase: "consent_needed",
+        tokenExpired: false,
+        refreshFailing: false,
+        scopeRequired: false,
+      },
+    }
+    const fake = fakeGateway()
+    await mount(fake.gateway)
+    await answer(fake, "list", list(docs, nessa))
+    const docsRow = row("docs")
+    expect(docsRow.textContent).toContain("https://mcp.example/mcp")
+    expect(docsRow.textContent).toContain("Consent needed")
+    expect(button("Authorize", docsRow)).toBeDefined()
+    expect(button("Revoke", docsRow)).toBeDefined()
+    expect(button("Authorize", row("nessa"))).toBeUndefined()
+    await click(button("Authorize", docsRow))
+    const authorize = fake.requests.filter((each) => each.method === "authorize").at(-1)
+    expect(authorize?.argument).toEqual({ id: docs.remoteId, revision: "r1" })
+    await answer(fake, "authorize", {
+      ok: true,
+      value: { status: "pending_consent", consentUrl: "http://127.0.0.1:9/start" },
+    })
+    const consent = host.querySelector("[data-mcp-consent]")
+    expect(consent?.getAttribute("href")).toBe("http://127.0.0.1:9/start")
+    expect(consent?.textContent).toBe("Waiting for consent")
+    await click(button("Revoke", row("docs")))
+    const revoke = fake.requests.filter((each) => each.method === "revoke").at(-1)
+    expect(revoke?.argument).toEqual({ id: docs.remoteId, revision: "r1" })
   })
 })

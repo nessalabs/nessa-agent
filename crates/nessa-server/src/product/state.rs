@@ -94,6 +94,10 @@ pub struct ProductRouteState {
     /// not be bound, a path was not UTF-8 or no key for its digests could be
     /// drawn — which they answer `mcp_servers_not_configured`.
     pub(crate) mcp_server_settings: Option<Arc<McpServerSettings>>,
+    /// Remote MCP authorization. `None` when this gateway is not managing
+    /// stored servers. `mcpServers.authorize` and `mcpServers.revoke` use it.
+    pub(crate) mcp_authorization:
+        Option<Arc<crate::mcp_authorization::application::AuthorizationOwner>>,
     /// Owner pairing commands, composed only when `config.json` names a native
     /// listen address. `None` answers every pairing method
     /// `pairing_not_configured`.
@@ -212,6 +216,7 @@ impl ProductRouteState {
             policy: dependencies.policy,
             admin: None,
             mcp_server_settings: None,
+            mcp_authorization: None,
             pairing: None,
             conversations: None,
             passive_read: None,
@@ -262,6 +267,16 @@ impl ProductRouteState {
     /// the `mcpServers.*` methods answer `mcp_servers_not_configured`.
     pub fn with_mcp_server_settings(mut self, settings: Arc<McpServerSettings>) -> Self {
         self.mcp_server_settings = Some(settings);
+        self
+    }
+
+    /// Register the remote authorization owner. Without it, authorize and
+    /// revoke answer `mcp_servers_not_configured`.
+    pub fn with_mcp_authorization(
+        mut self,
+        authorization: Arc<crate::mcp_authorization::application::AuthorizationOwner>,
+    ) -> Self {
+        self.mcp_authorization = Some(authorization);
         self
     }
 

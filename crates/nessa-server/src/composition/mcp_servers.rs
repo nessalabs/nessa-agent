@@ -22,6 +22,11 @@ use super::agent::{agent_search_path, AgentsConfig};
 use super::runtime_config::{RuntimeConfig, MAX_CONFIG_BYTES};
 use crate::conversation::application::{DroppedContexts, McpAppAudit};
 use crate::core::RunError;
+use crate::mcp_authorization::application::AuthorizationOwner;
+use crate::mcp_authorization::infrastructure::{
+    FileAuthorizationAudit, FileRecords, HttpsOAuth, LoopbackCallback, OsEntropy, SystemAuthClock,
+    TransportAuthorization,
+};
 use crate::mcp_servers::{
     application::{McpServerSettings, Unfinished},
     domain::{relay_arguments, ConfigurationKey},
@@ -36,7 +41,7 @@ use crate::product::mcp_servers::list_fits;
 use nessa_sdk::infrastructure::{
     acp::sessions::{McpServerList, McpServerSource, StandInSessions, StdioMcpServer},
     clock::RuntimeClock,
-    mcp::{McpServerLaunch, McpServers},
+    mcp::McpServers,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -199,19 +204,36 @@ pub(super) fn server_environment(
 /// name, and the digest of its command, arguments and environment keyed with
 /// `key` ([`launch_digest`]), which the relay compares at each hello.
 pub(super) fn stand_ins(
-    servers: &[McpServerLaunch],
+    servers: &McpServers,
     gateway: &str,
     socket: &str,
     key: &ConfigurationKey,
 ) -> Vec<StdioMcpServer> {
-    servers
+    let mut stand_ins: Vec<StdioMcpServer> = servers
+        .configured()
         .iter()
         .map(|launch| StdioMcpServer {
             name: launch.server.name.clone(),
             command: gateway.into(),
             args: relay_arguments(socket, &launch.server.name, &launch_digest(key, launch)),
         })
-        .collect()
+        .collect();
+    for remote in servers.configured_remotes() {
+        stand_ins.push(StdioMcpServer {
+            name: remote.name().to_owned(),
+            command: gateway.into(),
+            args: relay_arguments(
+                socket,
+                remote.name(),
+                &crate::mcp_servers::domain::remote_configuration_digest(
+                    key,
+                    &remote.id().to_string(),
+                    remote.url().as_str(),
+                ),
+            ),
+        });
+    }
+    stand_ins
 }
 
 /// The stand-ins for the live set, which every provider open reads
@@ -244,12 +266,7 @@ impl StandIns {
 }
 impl McpServerSource for StandIns {
     fn servers(&self) -> Vec<StdioMcpServer> {
-        stand_ins(
-            &self.servers.configured(),
-            &self.gateway,
-            &self.socket,
-            &self.key,
-        )
+        stand_ins(&self.servers, &self.gateway, &self.socket, &self.key)
     }
 }
 
@@ -285,11 +302,22 @@ pub(super) async fn compose(
 ) -> Result<Option<McpComposition>, RunError> {
     let configured = std::mem::take(&mut agents.mcp_servers);
     let launches = LaunchSettings::new(&configured, bundled, agents.workspace.clone(), environment);
-    let launch_set = launches
+    let (launch_set, remotes) = launches
         .launch_set(&configured)
         .map_err(|problem| RunError::Agent(problem.to_string()))?;
-    let servers = McpServers::new(launch_set, Arc::new(RuntimeClock::new()))
+    let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new()))
         .map_err(|error| RunError::Agent(error.to_string()))?;
+    servers
+        .replace_all(launch_set, remotes)
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    if let Some(http) = crate::mcp_servers::infrastructure::ReqwestExchange::new() {
+        servers.set_remote_transport(
+            Arc::new(http),
+            Arc::new(nessa_sdk::infrastructure::mcp::NoAuthorization),
+        );
+    } else {
+        tracing::error!("remote MCP is unreachable this run: the HTTP client could not be built");
+    }
     let Some(key) = configuration_key(&OsTokens) else {
         tracing::error!(
             "MCP servers are off this run: no key for their configuration digests could be drawn"
@@ -328,6 +356,12 @@ pub(super) async fn compose(
     }))
 }
 
+/// The stored-server owner and the authorization owner for one gateway run.
+pub(super) struct ManagedMcp {
+    pub(super) settings: McpServerSettings,
+    pub(super) authorization: Arc<AuthorizationOwner>,
+}
+
 /// What manages the stored servers of the namespace whose `config.json` is
 /// at `config` (`mcpServers.list`, `.save`, `.remove`, `.inspect`): the file
 /// and its lock, checked by the runtime configuration's own parse and bound;
@@ -347,23 +381,45 @@ pub(super) async fn compose(
 /// # Errors
 ///
 /// [`RunError::Agent`] when the audit's directory cannot be created.
+// Unix composition tests are the callers. A non-test build has none.
+#[cfg_attr(not(all(test, unix)), allow(dead_code))]
 pub(super) fn settings(
     mcp: &McpComposition,
     agents: &AgentsConfig,
     config: PathBuf,
     audit: PathBuf,
 ) -> Result<Option<McpServerSettings>, RunError> {
-    settings_over(mcp, agents, Arc::new(OsConfigFiles::new(config)), audit)
+    Ok(manage(mcp, agents, config, audit)?.map(|managed| managed.settings))
+}
+
+/// [`settings`] together with the authorization owner, for the product routes.
+pub(super) fn manage(
+    mcp: &McpComposition,
+    agents: &AgentsConfig,
+    config: PathBuf,
+    audit: PathBuf,
+) -> Result<Option<ManagedMcp>, RunError> {
+    manage_over(mcp, agents, Arc::new(OsConfigFiles::new(config)), audit)
 }
 
 /// [`settings`] over `files`: the real file and its lock, or — in a test —
 /// something wrapped around them.
+#[cfg_attr(not(all(test, unix)), allow(dead_code))]
 pub(super) fn settings_over(
     mcp: &McpComposition,
     agents: &AgentsConfig,
     files: Arc<dyn ConfigFiles>,
     audit: PathBuf,
 ) -> Result<Option<McpServerSettings>, RunError> {
+    Ok(manage_over(mcp, agents, files, audit)?.map(|managed| managed.settings))
+}
+
+fn manage_over(
+    mcp: &McpComposition,
+    agents: &AgentsConfig,
+    files: Arc<dyn ConfigFiles>,
+    audit: PathBuf,
+) -> Result<Option<ManagedMcp>, RunError> {
     let Some(fallback) = fallback_agents(agents) else {
         tracing::error!(
             "MCP server settings are off this run: the catalog or workspace path is not UTF-8, \
@@ -381,22 +437,113 @@ pub(super) fn settings_over(
         Arc::new(RuntimeClock::new()),
         mcp.key.clone(),
     );
-    let audit = DurableMcpServerAudit::new(audit, Arc::new(super::local_auth::SystemClock))
+    let audit_clock = Arc::new(super::local_auth::SystemClock);
+    let server_audit = DurableMcpServerAudit::new(audit.clone(), audit_clock)
         .map_err(|_| RunError::Agent("the MCP server audit could not be opened".into()))?;
-    Ok(Some(McpServerSettings::new(
-        Arc::new(store),
-        Arc::new(audit),
-        Arc::new(LiveMcpServers::new(
-            mcp.servers.clone(),
-            mcp.launches.clone(),
+    let parent = audit
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| audit.clone());
+    let records = Arc::new(FileRecords::new(parent.join("mcp-authorization")));
+    let writer = records.writer_available();
+    let http: Arc<dyn crate::mcp_authorization::application::OAuthHttp> = match HttpsOAuth::new() {
+        Some(client) => Arc::new(client),
+        None => Arc::new(RefusingOAuth),
+    };
+    let authorization = Arc::new(AuthorizationOwner::new(
+        records,
+        Arc::new(FileAuthorizationAudit::new(
+            parent.join("mcp-authorization-audit.jsonl"),
         )),
-        Arc::new(McpServerInspector::new(
-            mcp.servers.clone(),
-            mcp.launches.clone(),
-            Arc::new(RuntimeClock::new()),
-        )),
-        list_fits,
-    )))
+        http,
+        Arc::new(LoopbackCallback),
+        Arc::new(SystemAuthClock),
+        Arc::new(OsEntropy),
+        Arc::new(NamedDrain(mcp.servers.clone())),
+        Arc::new(ConfiguredResources(mcp.servers.clone())),
+        writer,
+    ));
+    mcp.servers
+        .set_authorization(Arc::new(TransportAuthorization::new(authorization.clone())));
+    Ok(Some(ManagedMcp {
+        settings: McpServerSettings::new(
+            Arc::new(store),
+            Arc::new(server_audit),
+            Arc::new(LiveMcpServers::new(
+                mcp.servers.clone(),
+                mcp.launches.clone(),
+            )),
+            Arc::new(McpServerInspector::new(
+                mcp.servers.clone(),
+                mcp.launches.clone(),
+                Arc::new(RuntimeClock::new()),
+            )),
+            list_fits,
+            authorization.clone(),
+        ),
+        authorization,
+    }))
+}
+
+/// The configured remote URL a bearer would be sent to.
+struct ConfiguredResources(McpServers);
+
+impl crate::mcp_authorization::application::ResourceLookup for ConfiguredResources {
+    fn resource(&self, server: uuid::Uuid) -> Option<String> {
+        self.0
+            .configured_remotes()
+            .into_iter()
+            .find(|remote| remote.id() == server)
+            .map(|remote| remote.url().as_str().to_owned())
+    }
+}
+
+/// Closes the local sessions of one server name.
+struct NamedDrain(McpServers);
+
+#[async_trait::async_trait]
+impl crate::mcp_authorization::application::SessionDrain for NamedDrain {
+    async fn drain(&self, server_name: &str) {
+        self.0.close_named(server_name);
+    }
+}
+
+/// Used when the HTTPS client cannot be built. No request is sent.
+struct RefusingOAuth;
+
+#[async_trait::async_trait]
+impl crate::mcp_authorization::application::OAuthHttp for RefusingOAuth {
+    async fn get(
+        &self,
+        _url: &str,
+    ) -> Result<
+        crate::mcp_authorization::application::OAuthResponse,
+        crate::mcp_authorization::application::OAuthCallFailure,
+    > {
+        Err(crate::mcp_authorization::application::OAuthCallFailure::NotSent)
+    }
+
+    async fn post_form(
+        &self,
+        _url: &str,
+        _body: &str,
+    ) -> Result<
+        crate::mcp_authorization::application::OAuthResponse,
+        crate::mcp_authorization::application::OAuthCallFailure,
+    > {
+        Err(crate::mcp_authorization::application::OAuthCallFailure::NotSent)
+    }
+
+    async fn post_json(
+        &self,
+        _url: &str,
+        _body: &str,
+    ) -> Result<
+        crate::mcp_authorization::application::OAuthResponse,
+        crate::mcp_authorization::application::OAuthCallFailure,
+    > {
+        Err(crate::mcp_authorization::application::OAuthCallFailure::NotSent)
+    }
 }
 
 /// The `agents` block a first write starts from: the running catalog and

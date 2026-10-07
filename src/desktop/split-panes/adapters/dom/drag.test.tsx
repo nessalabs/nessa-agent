@@ -519,6 +519,54 @@ it("does not commit a drop after a resize in the frame it waits, and still commi
   await act(async () => sameRoot.unmount())
 })
 
+it("does not commit a flick released before the target preview was shown", async () => {
+  const fake = fakeSource(two())
+  const root = await mounted(fake)
+  const header = element('[data-drag-pane="1"]')
+  const button = document.createElement("button")
+  header.append(button)
+  const onButton = new PointerEvent("pointerdown", {
+    clientX: 60,
+    clientY: 16,
+    button: 0,
+    buttons: 1,
+    bubbles: true,
+    cancelable: true,
+  })
+  button.dispatchEvent(onButton)
+  expect(onButton.defaultPrevented).toBe(false)
+  const down = new PointerEvent("pointerdown", {
+    clientX: 60,
+    clientY: 16,
+    button: 0,
+    buttons: 1,
+    bubbles: true,
+    cancelable: true,
+  })
+  header.dispatchEvent(down)
+  // Cancelled, so the button's press was not taken: a press already held is ignored.
+  expect(down.isTrusted).toBe(false)
+  expect(down.defaultPrevented).toBe(true)
+  await painted()
+  // Across and up in this turn. The preview is a frame, and that frame has not run.
+  pointer("pointermove", 90, 40)
+  pointer("pointermove", 827, 400)
+  pointer("pointerup", 827, 400)
+  expect(fake.state.drops).toEqual([])
+  await frames()
+  expect(fake.state.drops).toEqual([])
+  expect(items(fake)).toEqual(["a", "b"])
+  expect(said() ?? "").toBe("")
+  // The same release, once that preview has been shown, commits on the next frame.
+  await liftOntoTwo()
+  expect(said()).toBe("Swap with Pane b")
+  pointer("pointerup", 827, 400)
+  expect(fake.state.drops).toEqual([])
+  await frames()
+  expect(fake.state.drops).toHaveLength(1)
+  await act(async () => root.unmount())
+})
+
 it("does not commit a drop whose frame was cancelled by unmount", async () => {
   const fake = fakeSource(two())
   const root = await mounted(fake)

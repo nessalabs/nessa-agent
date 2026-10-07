@@ -237,7 +237,7 @@ writing the full defaults on first launch is buying.
   with `testing.ts` the fake source, the store, and the animation frames its
   tests share. The window has its own store (`src/desktop/store.ts`) and composition
   (`src/desktop/dependencies.ts`). Where its workspace comes from is the
-  window's too: the host's gateway, a browser's, or the sample, by
+  window's too: the host's gateway, a browser's, a seeded run, or the sample, by
   `src/desktop/model/workspace-backend.ts`, with the desktop app's connection
   in `src/desktop/adapters/host-gateway.ts`. How the window's keys are matched and
   written on this platform is the window's, not the workspace's:
@@ -254,6 +254,8 @@ writing the full defaults on first launch is buying.
   window's client read into them in `adapters/mcp-servers-gateway.ts`, and
   the tab in `ui/integrations-tab.tsx`, given by composition
   (`dependencies.ts`, `main.tsx`) only where the window has a gateway.
+  A remote row shows its URL and redacted authorization facts, and
+  Authorize and Revoke call `mcpServers.authorize` and `mcpServers.revoke`.
   Linked devices (#462) is the same shape: `model/linked-devices.ts` and
   `model/device-key.ts`, `adapters/linked-devices-gateway.ts`, and
   `ui/linked-devices-tab.tsx`, which composes the UI kit's settings rows,
@@ -641,7 +643,10 @@ send, and a sink already holding different paths for that submission refuses it
 too. See [ADR 0013](adr/done/0013-files-by-path-not-by-payload.md).
 A list of conversations is read without opening one, and without reading anybody
 else's: `conversation.list` asks `ConversationListing` for the caller's own
-conversations, newest first and one past the bound. `LocalConversationStore`
+conversations, newest first and one past the bound. `conversation.observe` asks
+the same store's catalogue, one page at a time in creation order, when that
+list is not the whole catalogue. The page size is the catalogue's. It does not
+raise the list bound, and it does not open a provider. `LocalConversationStore`
 (`infrastructure/store.rs`) answers it, and is the repository and the
 `ConversationSummaries` store too: ownership records, tombstones and summaries are
 tables of one private SQLite file, `conversations/metadata.sqlite3`, defined
@@ -764,6 +769,16 @@ real processes in `tests/mcp_servers/inspect.rs`) and
 (`client.mcpServers`), its refusals `NessaMcpServersError`
 (`application/mcp-servers-error.ts`) and its answers checked by
 `protocol/mcp-servers-validate.ts`;
+`src/mcp_authorization/` owns one remote server's consent, token
+generation, refresh and revoke (ADR 392): the domain statechart, the
+owner that fences a URL change before the live set is replaced, the
+transport adapter that names an admitted token for the HTTP session, HTTPS
+discovery and token calls, the loopback callback, and the non-secret
+record beside the sealed token files. `mcpServers.authorize` and
+`mcpServers.revoke` are the product methods. An app call that the remote
+refuses, cannot reach, or answers with insufficient scope is
+`mcp_unauthorized`, `mcp_unreachable`, or `mcp_insufficient_scope`, not
+`mcp_session_unavailable`.
 `composition/mcp_servers.rs` takes the configured servers
 into `McpServers`, the one owner of the live set, gives every provider open
 the stand-ins for that set as it is then (`StandIns`, an
