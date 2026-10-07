@@ -1250,6 +1250,7 @@ terminal results. Runtime shutdown and process abort are outside unwind recovery
 | NoRoom then capacity available; identical/conflicting admitted retry | Nonadmitted retry can run; admitted retry returns cached result; changed binding conflicts. `no_room_request_can_admit_after_another_child_releases_capacity`; `dropped_spawn_caller_and_two_joiners_receive_one_cached_factory_failure`. |
 | Concurrent intent publication and terminal store rejection | Registered generation owns intent persistence before cleanup; no later independent intent writer publishes Closed after that generation's final refusal. |
 | End/host/root/disposal intent audit/store fault | Seal and owned drain precede fault; cleanup still executes under supervision. |
+| Owned physical close calls real Agent close, which reports attachment progress | Report callback installs the actual fact and registers/notifies its owner without waiting for that same generation; explicit public/gate joins retain typed results. `row_34_factory_gate_installs_on_real_agent_and_shared_close_refuses_attachment`, `row_35_failed_factory_revokes_stale_real_agent_attachment_authority`. |
 
 Current ownership JSON requires typed settlement proof and explicit Completion.
 Proofless old settlement bodies return PortFailure::Rejected (Store(Rejected) on

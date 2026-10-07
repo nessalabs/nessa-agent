@@ -85,6 +85,29 @@ stateDiagram-v2
     Closed --> Closed: final snapshot failure permits writer retry
 ```
 
+Attachment callbacks install observed facts and notify the owned drain. Explicit
+end and join calls wait for its result. The real-Agent factory regressions
+`row_34_factory_gate_installs_on_real_agent_and_shared_close_refuses_attachment`
+and `row_35_failed_factory_revokes_stale_real_agent_attachment_authority` enforce
+this dependency through `LifetimeGate::note_attachment`.
+
+```mermaid
+flowchart LR
+    Caller[Explicit end or join]
+    Drain[Owned drain generation]
+    Physical[Physical close future]
+    Attachment[Agent attachment cleanup]
+    Callback[Attachment report callback]
+    Graph[First-owner facts and exact audit debt]
+    Caller -->|await result| Drain
+    Drain -->|await physical outcome| Physical
+    Physical -->|await Agent close| Attachment
+    Attachment -->|report observed cleanup| Callback
+    Callback -.->|install observation| Graph
+    Callback -.->|notify owner and return| Drain
+    Drain -->|audit and persist settlement| Graph
+```
+
 Physical release returns capacity before auditing its exact observation. A Released
 resource can therefore remain Closing while audit debt exists. Each independently
 closing child keeps its own operation; the parent's drain joins that child's
