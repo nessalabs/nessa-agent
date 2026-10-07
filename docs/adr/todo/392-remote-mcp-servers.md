@@ -492,11 +492,6 @@ infer which request produced it.
 | J15 | Stateless control waits on headers; private initialize publishes replacement; control returns 404 | Classify actual stateless attempt as Malformed FailCall(None), preserve queued Ready and successful subsequent replacement call; no second initialize/replay | `j15_control_response_uses_its_actual_request_context` |
 | J16 | Stateless control returns 401 after replacement publication; refreshed retry emits replacement ID and returns 404 | Classify final bound attempt as SessionExpired, end without second recovery/replay; capture context separately for each real attempt | `j16_refreshed_control_retry_uses_its_own_bound_context` |
 
-The related audit verification correction (#631) pairs inspection requested/outcome
-records by action, phase and operation identity. Millisecond wall-clock observations
-do not order files; equal/backward timestamps and shuffled files exercise that
-same lookup in `audit_inspection_pair_does_not_depend_on_file_or_timestamp_order`.
-
 ```mermaid
 sequenceDiagram
     participant Writer
