@@ -3,7 +3,14 @@ import { spawnSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import test from "node:test"
 
-import { changedPaths, orderCommands, parseCheckScript, plan } from "./check-changed.mjs"
+import {
+  changedPaths,
+  orderCommands,
+  parseCheckScript,
+  plan,
+  pnpmInvocation,
+  runScripts,
+} from "./check-changed.mjs"
 import { documentationOnly } from "./documentation-only.mjs"
 
 test("an empty list runs the full local check", () => {
@@ -161,6 +168,69 @@ test("the plan command prints JSON on stdout and does not run pnpm", () => {
   assert.equal(result.status, 0)
   assert.equal(result.stderr, "")
   assert.deepEqual(JSON.parse(result.stdout), plan(["src/panel/ui/app.tsx"]))
+})
+
+test("selected checks spawn pnpm directly, and through cmd.exe on Windows", () => {
+  const calls = []
+  const spawn = (file, args, options) => {
+    calls.push({ file, args, options })
+    return { status: 0 }
+  }
+  assert.equal(runScripts(["frontend:check", "sdk:check"], spawn, "linux"), 0)
+  assert.deepEqual(calls, [
+    {
+      file: "pnpm",
+      args: ["frontend:check"],
+      options: { stdio: "inherit" },
+    },
+    {
+      file: "pnpm",
+      args: ["sdk:check"],
+      options: { stdio: "inherit" },
+    },
+  ])
+
+  calls.length = 0
+  assert.equal(runScripts(["frontend:check"], spawn, "darwin"), 0)
+  assert.equal(calls[0].file, "pnpm")
+  assert.equal(calls[0].options.shell, undefined)
+
+  calls.length = 0
+  assert.equal(runScripts(["frontend:check"], spawn, "win32"), 0)
+  const windows = pnpmInvocation("frontend:check", "win32")
+  assert.deepEqual(calls, [windows])
+  assert.match(windows.file, /cmd\.exe$/i)
+  assert.deepEqual(windows.args, ["/d", "/s", "/c", '"pnpm frontend:check"'])
+  assert.equal(windows.options.windowsVerbatimArguments, true)
+  assert.equal(windows.options.shell, undefined)
+})
+
+test("a pnpm script name with shell metacharacters is refused before spawn", () => {
+  for (const command of [
+    "frontend:check && calc",
+    "check\n",
+    "check|more",
+    "check>out",
+  ]) {
+    assert.throws(() => pnpmInvocation(command, "win32"), /not one token/)
+    assert.throws(() => pnpmInvocation(command, "linux"), /not one token/)
+  }
+})
+
+test("a failing check stops the chain and a spawn error is thrown", () => {
+  const calls = []
+  const spawn = (file, args) => {
+    calls.push(args)
+    return { status: 2 }
+  }
+  assert.equal(runScripts(["frontend:check", "sdk:check"], spawn, "linux"), 2)
+  assert.deepEqual(calls, [["frontend:check"]])
+
+  const error = Object.assign(new Error("spawn pnpm ENOENT"), { code: "ENOENT" })
+  assert.throws(
+    () => runScripts(["frontend:check"], () => ({ error, status: null }), "linux"),
+    /ENOENT/,
+  )
 })
 
 test("required CI does not call the local narrower", () => {

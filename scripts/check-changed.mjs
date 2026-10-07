@@ -26,6 +26,9 @@ import { pathToFileURL } from "node:url"
 
 import { inertPath } from "./documentation-only.mjs"
 
+/** One `pnpm <script>` token. The Windows command line is built from this alphabet. */
+const PNPM_SCRIPT = /^pnpm ([A-Za-z0-9:_-]+)$/
+
 /**
  * The `pnpm check` chain, in its order. `package.json` owns that sequence.
  * A union of groups keeps it. A crate-only change does not run the scripts
@@ -35,7 +38,7 @@ export function parseCheckScript(script) {
   if (typeof script !== "string" || script.length === 0) return null
   const commands = []
   for (const part of script.split("&&")) {
-    const match = part.trim().match(/^pnpm ([A-Za-z0-9:_-]+)$/)
+    const match = part.trim().match(PNPM_SCRIPT)
     if (!match) return null
     commands.push(match[1])
   }
@@ -195,9 +198,34 @@ async function readStdin(stream) {
   return text.split("\n")
 }
 
-function runScripts(commands) {
+/**
+ * How to start one package script.
+ *
+ * On Windows, pnpm is a `.cmd` shim. `spawnSync` without a command interpreter
+ * does not launch that file, so this path uses `cmd.exe` the way Node's
+ * `shell` option does: `/d /s /c` and one quoted command. Other platforms
+ * spawn `pnpm` directly. The script name has to match `PNPM_SCRIPT`, which is
+ * the same token `parseCheckScript` accepts, so the command line has no shell
+ * metacharacters.
+ */
+export function pnpmInvocation(command, platform = process.platform) {
+  if (!PNPM_SCRIPT.test(`pnpm ${command}`)) {
+    throw new Error(`pnpm script name is not one token: ${command}`)
+  }
+  if (platform === "win32") {
+    return {
+      file: process.env.comspec || process.env.ComSpec || "cmd.exe",
+      args: ["/d", "/s", "/c", `"pnpm ${command}"`],
+      options: { stdio: "inherit", windowsVerbatimArguments: true },
+    }
+  }
+  return { file: "pnpm", args: [command], options: { stdio: "inherit" } }
+}
+
+export function runScripts(commands, spawn = spawnSync, platform = process.platform) {
   for (const command of commands) {
-    const result = spawnSync("pnpm", [command], { stdio: "inherit" })
+    const launch = pnpmInvocation(command, platform)
+    const result = spawn(launch.file, launch.args, launch.options)
     if (result.error) throw result.error
     if ((result.status ?? 1) !== 0) return result.status ?? 1
   }
