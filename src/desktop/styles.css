@@ -48,6 +48,8 @@ body {
   /* Between fast and base: a fill or fade on something the pointer rests on. */
   --desktop-medium: 160ms;
   --desktop-radius-pill: 999px;
+  /* Settles with a slight overshoot, like a spring, for things that appear. */
+  --desktop-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
   --desktop-hover: color-mix(in oklab, var(--foreground) 5%, transparent);
 }
 
@@ -84,15 +86,13 @@ body {
   );
   --desktop-pane-fill: color-mix(in oklab, var(--foreground) 3.5%, transparent);
   --desktop-ease: cubic-bezier(0.32, 0.72, 0, 1);
-  /* Settles with a slight overshoot, like a spring, for things that appear. */
-  --desktop-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
 
   /*
    * The window's shared scales, defined once. Every surface takes its motion,
    * radii, type and inks from here; a component that needs another value is a
    * change to this list, not a local token.
    */
-  /* Motion: three durations for everything, two for the workspace's travel. */
+  /* Motion: base and slow, beside fast and medium above; two more for the workspace's travel. */
   --desktop-base: 180ms;
   --desktop-slow: 240ms;
   /* A pane travelling to its new place when the layout changes. */
@@ -169,7 +169,7 @@ body {
   --desktop-press: color-mix(in oklab, var(--foreground) 11%, transparent);
   --desktop-rim: color-mix(in oklab, var(--foreground) 7%, transparent);
   --desktop-focus-ring: color-mix(in oklab, var(--desktop-light-edge) 42%, transparent);
-  /* The one focus recipe; a surface says only its `outline-offset`. */
+  /* The one outline recipe; a surface says only its `outline-offset`. (Two inset box-shadow rings remain: the picture band's adjust state and the Agents peek story.) */
   --desktop-focus-outline: 1.5px solid var(--desktop-focus-ring);
   /* What waits on the person, and what is running. */
   --desktop-needs: oklch(0.82 0.13 78);

@@ -310,20 +310,35 @@ it("draws a pill, a short fade and a focus ring from the window's tokens, not fr
   }
 })
 
-it("defines the scale on :root too, because menus and pickers portal outside every surface", () => {
+it("defines every token a portalled layer reads on :root, because menus and pickers sit outside every surface", () => {
   // A `var()` with no value drops its whole declaration: a menu closed without its
-  // fade, and the model picker lost its selected row (#632 review).
-  const scope = styles.match(/(:root,\s*\[data-surface\]\s*\{[^}]*\})/)?.[1] ?? ""
-  for (const token of [
-    "--desktop-fast",
-    "--desktop-medium",
-    "--desktop-radius-pill",
-    "--desktop-hover",
-  ])
-    expect(scope, token).toContain(`${token}:`)
-  const portalled = readFileSync(new URL("./ui/menu/menu.css", import.meta.url), "utf8")
-  for (const [, token] of portalled.matchAll(
-    /var\((--desktop-(?:fast|medium|radius-pill|hover))\)/g,
-  ))
-    expect(scope, token).toContain(`${token}:`)
+  // fade, the model picker lost its selected row, and a popover opened without its
+  // rise (#632 review). Menus and the model picker portal to <body>.
+  const comments = /\/\*[\s\S]*?\*\//g
+  const defined = (source: string) =>
+    new Set([...source.matchAll(/(--desktop-[\w-]+)\s*:/g)].map((match) => match[1]))
+  const rules = (source: string) =>
+    [...source.replace(comments, "").matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+      selector: match[1],
+      body: match[2],
+    }))
+  const scope = styles.match(/:root,\s*\[data-surface\]\s*\{([^}]*)\}/)?.[1] ?? ""
+  const onRoot = defined(scope)
+  expect(onRoot.size).toBeGreaterThan(0)
+  const menu = readFileSync(new URL("./ui/menu/menu.css", import.meta.url), "utf8")
+  const portalled = [
+    ...rules(menu),
+    ...rules(styles).filter(({ selector }) =>
+      /\.desktop-popover|\.desktop-model-picker/.test(selector),
+    ),
+  ]
+  // What the portalled rules define themselves (the popover material) is theirs.
+  const own = new Set(portalled.flatMap(({ body }) => [...defined(body)]))
+  const read = new Set<string>()
+  for (const { body } of portalled)
+    for (const [, token] of body.matchAll(/var\((--desktop-[\w-]+)/g))
+      // `--desktop-light-*` is set on <html> by the theme (`adapters/theme-preference.ts`).
+      if (!own.has(token) && !token.startsWith("--desktop-light-")) read.add(token)
+  expect(read.size).toBeGreaterThan(0)
+  for (const token of read) expect(onRoot, token).toContain(token)
 })
