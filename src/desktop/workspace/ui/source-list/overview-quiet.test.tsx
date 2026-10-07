@@ -113,3 +113,14 @@ it("keeps its painted state when the window rerenders", async () => {
   await current.render(1)
   expect(current.quiet()).toBe("true")
 })
+
+it("finishes publication while unrelated store updates arrive between paints", async () => {
+  const current = await renderWindow()
+  await current.open()
+  current.listed()
+  for (let frame = 0; frame < 3; frame++) {
+    await act(async () => current.store.dispatch({ type: "verification/unrelated" }))
+    await paint(1)
+  }
+  expect(current.quiet()).toBe("true")
+})

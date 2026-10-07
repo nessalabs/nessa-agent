@@ -21,6 +21,7 @@ type Quiet = {
 /** Publication belongs to one workspace store and the root that paints it. */
 function quietFor(store: Watched, root: RefObject<HTMLElement | null>): Quiet {
   let cached = false
+  let requested: boolean | null = null
   const listeners = new Set<() => void>()
   let stopStore: (() => void) | null = null
   let outerFrame: number | null = null
@@ -60,8 +61,11 @@ function quietFor(store: Watched, root: RefObject<HTMLElement | null>): Quiet {
     outerFrame = requestAnimationFrame(wait)
   }
   const changed = () => {
+    const next = selectOverviewOpen(store.getState())
+    if (next === requested) return
+    requested = next
     cancelFrames()
-    if (selectOverviewOpen(store.getState()) !== cached) publishAfterPaint()
+    if (next !== cached) publishAfterPaint()
   }
   return {
     read: () => cached,
@@ -75,6 +79,7 @@ function quietFor(store: Watched, root: RefObject<HTMLElement | null>): Quiet {
         listeners.delete(onChange)
         if (listeners.size > 0) return
         cancelFrames()
+        requested = null
         stopStore?.()
         stopStore = null
       }
