@@ -54,12 +54,18 @@ export function OverviewLayer({ root }: { root: RefObject<HTMLElement | null> })
   // Unmounted in the leave's own commit. Keeping it and hiding it would
   // restyle every row on that key (`overview.test.tsx`).
   const mount = open && mountReady
+  // The scheduled frames are what flip these. Subscribing the effect to them
+  // would cancel the frame it just armed (`overview.test.tsx`).
+  const coverReadyNow = useRef(coverReady)
+  coverReadyNow.current = coverReady
+  const mountReadyNow = useRef(mountReady)
+  mountReadyNow.current = mountReady
   useEffect(() => {
     if (!open) {
       // After the leave has painted, so that paint still has the rows quiet.
       // The first paint has nothing to drop (`overview.test.tsx`).
       root.current?.removeAttribute("data-overview-glass")
-      if (!coverReady && !mountReady) return
+      if (!coverReadyNow.current && !mountReadyNow.current) return
       // After the leave has painted. Focusing waits a frame, so it does not
       // measure the panes in that same turn (`overview.test.tsx`).
       setCoverReady(false)
@@ -90,7 +96,7 @@ export function OverviewLayer({ root }: { root: RefObject<HTMLElement | null> })
       cancelAnimationFrame(coverFrame)
       cancelAnimationFrame(mountFrame)
     }
-  }, [open])
+  }, [open, root])
   // What the cover stands over. `inert` takes it out of reach without
   // `visibility`, which would restyle every descendant as the cover comes
   // and goes. Lifting it waits a frame: doing it in the leave's commit lays
