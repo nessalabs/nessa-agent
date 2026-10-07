@@ -1,0 +1,27 @@
+{
+  "head": "b78bf641825d77c8be2e88f9ac76b1f14ed2a8dc",
+  "run": 37653154842,
+  "required_aggregator": "pending",
+  "platforms": [
+    {
+      "platform": "linux",
+      "job": 112901509135,
+      "conclusion": "success",
+      "sha256": "53c5a3c0947edeb086fe00aa27cf39732517a20d7dfa8b9b75d132dc00e9b5af",
+      "new_owner_regression_named": true,
+      "new_gate_control_named": true
+    },
+    {
+      "platform": "macos",
+      "job": 112901509264,
+      "conclusion": "success",
+      "sha256": "4376a8dcbb80b2c9cc4bdb4aaa5e530e7949c58f30cd30974d4ff81b321613f3",
+      "new_owner_regression_named": true,
+      "new_gate_control_named": true
+    }
+  ],
+  "synthetic_merge_sha": "3801f3cf1e5e251f4cca9c06ba4c411f8e267eba",
+  "integration_base": "3d81cbaf1a98b2d27ec6a7bf24277d52ceab5646",
+  "checkout_proof": "Linux raw checkout log: HEAD is now at3801f3c Merge b78bf641 into3d81cbaf",
+  "head_note": "Run targets exact b78 PR head; actions/checkout tests the synthetic integration merge, not a head-only checkout. Base gained unrelated #639 verification harness after original f168 branch base."
+}

@@ -8,5 +8,7 @@
   "functions": 703,
   "lines": 5216,
   "uncovered": 0,
-  "percent": 100
+  "percent": 100,
+  "synthetic_merge_sha": "3801f3cf1e5e251f4cca9c06ba4c411f8e267eba",
+  "integration_base": "3d81cbaf1a98b2d27ec6a7bf24277d52ceab5646"
 }
