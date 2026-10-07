@@ -185,7 +185,7 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   `drag.mjs` (`preview-panes-take-shape`; every drag check's residue).
 - _Harmless, and not a failure:_ a single read of a title's transforms in
   WebKit that mixes two moments. How the two stretch checks read a title is
-  `recordShapes`' (`drag.mjs`), and why, with the runs and probes, is #365.
+  `recordShapeFrames` (`scripts/lib/shape-sampler.mjs`), and why, with the runs and probes, is #365.
   Also harmless: one agreed read of about a percent (both axes within two
   percent of 1, and the two scales within four percent of each other) while
   every running animation on that title shares one start time. That is the
