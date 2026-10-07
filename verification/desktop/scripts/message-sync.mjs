@@ -166,6 +166,7 @@ await main(
                 .first()
                 .click()
               await page.locator(css.message, { hasText: "Initial answer" }).waitFor()
+              await page.evaluate(() => window.__messageSync.start())
               if (engine === "chromium") await throttle(opened.context, page, rate)
               await page.waitForTimeout(400)
               const before = await page.evaluate(() => window.__messageSync.snapshot())
@@ -195,6 +196,27 @@ await main(
               )
               const stalled = await page.evaluate(() => window.__messageSync.snapshot())
               await shot("held-list-transcript")
+              const failures = []
+              for (const [name, samples] of Object.entries({ active, held }))
+                if (samples.some((ms) => ms === null || ms > 600))
+                  failures.push(
+                    `${name}: delivery exceeded 600 ms: ${JSON.stringify(samples)}`,
+                  )
+              // Keep the delivery failure and samples before secondary idle waits.
+              if (failures.length)
+                return {
+                  failures,
+                  measured: {
+                    activeMs: active,
+                    heldMs: held,
+                    before,
+                    after,
+                    stalled,
+                    timeoutDiagnostics: await page.evaluate(
+                      () => window.__messageSyncTimeouts ?? [],
+                    ),
+                  },
+                }
               await page.evaluate(() => window.__messageSync.rest())
               await page.locator(css.message, { hasText: "Finished" }).waitFor()
               // The final list changes the row read-against; let that idle refresh settle.
@@ -210,12 +232,6 @@ await main(
                 { timeout: 4_000 },
               )
               const rested = await page.evaluate(() => window.__messageSync.snapshot())
-              const failures = []
-              for (const [name, samples] of Object.entries({ active, held }))
-                if (samples.some((ms) => ms === null || ms > 600))
-                  failures.push(
-                    `${name}: delivery exceeded 600 ms: ${JSON.stringify(samples)}`,
-                  )
               if (stalled.heldReads !== 1)
                 failures.push(
                   `held conversation admitted ${stalled.heldReads} reads, expected one`,

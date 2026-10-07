@@ -1040,7 +1040,9 @@ or clocks.
   600 ms in Chromium and WebKit, in both layouts. A held summary list and another
   conversation's held read do not delay delivery. One background read per
   conversation, at most four active reads per second, one-second summaries and
-  no idle transcript reads. `message-sync.mjs` measures these contracts over the
+  no idle transcript reads. Running/queued text keeps fast polling after an idle
+  send even while its summary still says idle (#616). `run-all.mjs --mode prod`
+  gives this check its dedicated fixture build. `message-sync.mjs` measures these contracts over the
   production source, store and window with controlled gateway replies. See the
   [ordering table](../../docs/reviews/startup-latency.md#desktop-transcript-delivery-experiment-532).
   Three fresh-page runs report delivery median/max and frame attribution. Chromium

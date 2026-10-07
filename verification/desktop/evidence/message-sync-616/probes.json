@@ -1,0 +1,15 @@
+{
+  "base": "86cbce1885d998165fa2c3c0cfbcfb37ec6a00cc",
+  "fixedSourceSha256": "55a30b12a6fa90845e987273a060786938f690ee45fb8a38b2023b98c1797a4d",
+  "originalSourceSha256": "a85a0aa005cc9ad023234687d4c91db42d7ed1ab9855207cb223b89c05737f23",
+  "unitBefore": {
+    "failed": 4,
+    "skipped": 146
+  },
+  "unitAfter": {
+    "passed": 150
+  },
+  "runnerBefore": "could-not-run: message-sync fixture is not served",
+  "browserReverted": "Chromium/WebKit: ten active and five held samples null per engine",
+  "browserRestored": "run-all --mode prod --only message-sync: 5/5 held, Chromium/WebKit columns"
+}

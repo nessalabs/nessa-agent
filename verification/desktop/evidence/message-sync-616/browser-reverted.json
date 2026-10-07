@@ -1,0 +1,1214 @@
+{
+  "check": "message-sync",
+  "ok": false,
+  "started": "2026-10-07T02:35:30.244Z",
+  "finished": "2026-10-07T02:36:48.074Z",
+  "target": {
+    "url": "http://127.0.0.1:59039/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:59039/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "calibration",
+      "engine": "chromium",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 23,
+        "throttledMs": 66,
+        "ratio": 2.9,
+        "ok": true
+      },
+      "calibrationFrame": {
+        "cost": 120,
+        "measuredMs": 116.60000000000014,
+        "attributed": true,
+        "ok": true
+      }
+    },
+    {
+      "ok": false,
+      "failures": [
+        "active: delivery exceeded 600 ms: [null,null,null,null,null,null,null,null,null,null]",
+        "held: delivery exceeded 600 ms: [null,null,null,null,null]"
+      ],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "columns",
+      "run": 1,
+      "measured": {
+        "activeMs": [null, null, null, null, null, null, null, null, null, null],
+        "heldMs": [null, null, null, null, null],
+        "before": {
+          "lists": 2,
+          "reads": 7,
+          "fastReads": 2,
+          "slowReads": 5,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 1361.8999999910593,
+          "lastFastRequest": {
+            "at": 1057.199999988079,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 23,
+          "reads": 80,
+          "fastReads": 2,
+          "slowReads": 78,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 22545.39999999106,
+          "lastFastRequest": {
+            "at": 1057.199999988079,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "stalled": {
+          "lists": 24,
+          "reads": 81,
+          "fastReads": 2,
+          "slowReads": 79,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 33711.59999999404,
+          "lastFastRequest": {
+            "at": 1057.199999988079,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "timeoutDiagnostics": [
+          {
+            "marker": "active-0",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 2,
+              "reads": 7,
+              "fastReads": 2,
+              "slowReads": 5,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 1365,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 4,
+              "reads": 13,
+              "fastReads": 2,
+              "slowReads": 11,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 3366.0999999940395,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000.699999988079
+          },
+          {
+            "marker": "active-1",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 4,
+              "reads": 13,
+              "fastReads": 2,
+              "slowReads": 11,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 3442.699999988079,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 6,
+              "reads": 21,
+              "fastReads": 2,
+              "slowReads": 19,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 5443.199999988079,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000.0999999940395
+          },
+          {
+            "marker": "active-2",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 6,
+              "reads": 22,
+              "fastReads": 2,
+              "slowReads": 20,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 5592.899999991059,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 8,
+              "reads": 30,
+              "fastReads": 2,
+              "slowReads": 28,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 7593.29999999702,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000.4000000059605
+          },
+          {
+            "marker": "active-3",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 8,
+              "reads": 30,
+              "fastReads": 2,
+              "slowReads": 28,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 7814.399999991059,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 10,
+              "reads": 35,
+              "fastReads": 2,
+              "slowReads": 33,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 9815.39999999106,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000.8999999910593
+          },
+          {
+            "marker": "active-4",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 10,
+              "reads": 36,
+              "fastReads": 2,
+              "slowReads": 34,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 9857.09999999404,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 12,
+              "reads": 42,
+              "fastReads": 2,
+              "slowReads": 40,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 11857.29999999702,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000.1000000089407
+          },
+          {
+            "marker": "active-5",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 12,
+              "reads": 42,
+              "fastReads": 2,
+              "slowReads": 40,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 11973.29999999702,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 14,
+              "reads": 49,
+              "fastReads": 2,
+              "slowReads": 47,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 13974.39999999106,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000.5999999940395
+          },
+          {
+            "marker": "active-6",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 15,
+              "reads": 50,
+              "fastReads": 2,
+              "slowReads": 48,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 14162.29999999702,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 17,
+              "reads": 57,
+              "fastReads": 2,
+              "slowReads": 55,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 16162.89999999106,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000.0999999940395
+          },
+          {
+            "marker": "active-7",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 17,
+              "reads": 57,
+              "fastReads": 2,
+              "slowReads": 55,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 16173.59999999404,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 19,
+              "reads": 65,
+              "fastReads": 2,
+              "slowReads": 63,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 18174.59999999404,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000.5999999940395
+          },
+          {
+            "marker": "active-8",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 19,
+              "reads": 65,
+              "fastReads": 2,
+              "slowReads": 63,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 18258.89999999106,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 21,
+              "reads": 71,
+              "fastReads": 2,
+              "slowReads": 69,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 20259.19999998808,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000.199999988079
+          },
+          {
+            "marker": "active-9",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 21,
+              "reads": 72,
+              "fastReads": 2,
+              "slowReads": 70,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 20416.39999999106,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 23,
+              "reads": 80,
+              "fastReads": 2,
+              "slowReads": 78,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 22417.79999999702,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2001.3999999910593
+          },
+          {
+            "marker": "held-0",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 24,
+              "reads": 81,
+              "fastReads": 2,
+              "slowReads": 79,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 23077.69999998808,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 24,
+              "reads": 81,
+              "fastReads": 2,
+              "slowReads": 79,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 25078.19999998808,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000.4000000059605
+          },
+          {
+            "marker": "held-1",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 24,
+              "reads": 81,
+              "fastReads": 2,
+              "slowReads": 79,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 25153.89999999106,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 24,
+              "reads": 81,
+              "fastReads": 2,
+              "slowReads": 79,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 27154.59999999404,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000.7000000029802
+          },
+          {
+            "marker": "held-2",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 24,
+              "reads": 81,
+              "fastReads": 2,
+              "slowReads": 79,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 27303.39999999106,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 24,
+              "reads": 81,
+              "fastReads": 2,
+              "slowReads": 79,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 29303.79999999702,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000.4000000059605
+          },
+          {
+            "marker": "held-3",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 24,
+              "reads": 81,
+              "fastReads": 2,
+              "slowReads": 79,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 29525.5,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 24,
+              "reads": 81,
+              "fastReads": 2,
+              "slowReads": 79,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 31525.79999999702,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000.2999999970198
+          },
+          {
+            "marker": "held-4",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 24,
+              "reads": 81,
+              "fastReads": 2,
+              "slowReads": 79,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 31570,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 24,
+              "reads": 81,
+              "fastReads": 2,
+              "slowReads": 79,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 33571,
+              "lastFastRequest": {
+                "at": 1057.199999988079,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000.9000000059605
+          }
+        ]
+      }
+    },
+    {
+      "ok": false,
+      "failures": [
+        "active: delivery exceeded 600 ms: [null,null,null,null,null,null,null,null,null,null]",
+        "held: delivery exceeded 600 ms: [null,null,null,null,null]"
+      ],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "columns",
+      "run": 1,
+      "measured": {
+        "activeMs": [null, null, null, null, null, null, null, null, null, null],
+        "heldMs": [null, null, null, null, null],
+        "before": {
+          "lists": 2,
+          "reads": 7,
+          "fastReads": 2,
+          "slowReads": 5,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 1382,
+          "lastFastRequest": {
+            "at": 1082,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 23,
+          "reads": 91,
+          "fastReads": 2,
+          "slowReads": 89,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 22576,
+          "lastFastRequest": {
+            "at": 1082,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "stalled": {
+          "lists": 24,
+          "reads": 92,
+          "fastReads": 2,
+          "slowReads": 90,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 33774,
+          "lastFastRequest": {
+            "at": 1082,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "timeoutDiagnostics": [
+          {
+            "marker": "active-0",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 2,
+              "reads": 7,
+              "fastReads": 2,
+              "slowReads": 5,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 1390,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 4,
+              "reads": 15,
+              "fastReads": 2,
+              "slowReads": 13,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 3392,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2002
+          },
+          {
+            "marker": "active-1",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 4,
+              "reads": 15,
+              "fastReads": 2,
+              "slowReads": 13,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 3470,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 6,
+              "reads": 23,
+              "fastReads": 2,
+              "slowReads": 21,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 5470,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2001
+          },
+          {
+            "marker": "active-2",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 6,
+              "reads": 24,
+              "fastReads": 2,
+              "slowReads": 22,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 5620,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 8,
+              "reads": 31,
+              "fastReads": 2,
+              "slowReads": 29,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 7620,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000
+          },
+          {
+            "marker": "active-3",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 8,
+              "reads": 32,
+              "fastReads": 2,
+              "slowReads": 30,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 7842,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 10,
+              "reads": 40,
+              "fastReads": 2,
+              "slowReads": 38,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 9843,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2001
+          },
+          {
+            "marker": "active-4",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 10,
+              "reads": 40,
+              "fastReads": 2,
+              "slowReads": 38,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 9887,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 12,
+              "reads": 48,
+              "fastReads": 2,
+              "slowReads": 46,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 11888,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000
+          },
+          {
+            "marker": "active-5",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 12,
+              "reads": 49,
+              "fastReads": 2,
+              "slowReads": 47,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 12006,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 14,
+              "reads": 57,
+              "fastReads": 2,
+              "slowReads": 55,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 14007,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2001
+          },
+          {
+            "marker": "active-6",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 15,
+              "reads": 58,
+              "fastReads": 2,
+              "slowReads": 56,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 14198,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 17,
+              "reads": 66,
+              "fastReads": 2,
+              "slowReads": 64,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 16199,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2001
+          },
+          {
+            "marker": "active-7",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 17,
+              "reads": 66,
+              "fastReads": 2,
+              "slowReads": 64,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 16211,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 19,
+              "reads": 74,
+              "fastReads": 2,
+              "slowReads": 72,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 18212,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2001
+          },
+          {
+            "marker": "active-8",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 19,
+              "reads": 74,
+              "fastReads": 2,
+              "slowReads": 72,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 18298,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 21,
+              "reads": 82,
+              "fastReads": 2,
+              "slowReads": 80,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 20299,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2001
+          },
+          {
+            "marker": "active-9",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 21,
+              "reads": 82,
+              "fastReads": 2,
+              "slowReads": 80,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 20457,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 23,
+              "reads": 90,
+              "fastReads": 2,
+              "slowReads": 88,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 22458,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2001
+          },
+          {
+            "marker": "held-0",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 24,
+              "reads": 92,
+              "fastReads": 2,
+              "slowReads": 90,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 23156,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 24,
+              "reads": 92,
+              "fastReads": 2,
+              "slowReads": 90,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 25157,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2001
+          },
+          {
+            "marker": "held-1",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 24,
+              "reads": 92,
+              "fastReads": 2,
+              "slowReads": 90,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 25233,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 24,
+              "reads": 92,
+              "fastReads": 2,
+              "slowReads": 90,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 27233,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000
+          },
+          {
+            "marker": "held-2",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 24,
+              "reads": 92,
+              "fastReads": 2,
+              "slowReads": 90,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 27382,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 24,
+              "reads": 92,
+              "fastReads": 2,
+              "slowReads": 90,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 29383,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2001
+          },
+          {
+            "marker": "held-3",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 24,
+              "reads": 92,
+              "fastReads": 2,
+              "slowReads": 90,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 29605,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 24,
+              "reads": 92,
+              "fastReads": 2,
+              "slowReads": 90,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 31605,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000
+          },
+          {
+            "marker": "held-4",
+            "seen": false,
+            "visibility": "visible",
+            "before": {
+              "lists": 24,
+              "reads": 92,
+              "fastReads": 2,
+              "slowReads": 90,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 31650,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 24,
+              "reads": 92,
+              "fastReads": 2,
+              "slowReads": 90,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 33650,
+              "lastFastRequest": {
+                "at": 1082,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "rendered": ["Synchronize this message", "Initial answer"],
+            "elapsedMs": 2000
+          }
+        ]
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery-statistics",
+      "summaries": [],
+      "aggregates": []
+    }
+  ]
+}

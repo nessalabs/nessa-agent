@@ -61,10 +61,10 @@ function changed(text: string, running = true) {
     ),
   )
 }
-gateway.rows.set(fast, row(fast, { title: "Message synchronization", running: true }))
+gateway.rows.set(fast, row(fast, { title: "Message synchronization" }))
 gateway.rows.set(slow, row(slow, { title: "Slow conversation", running: true }))
 gateway.views.set(slow, view(slow))
-changed("Initial answer")
+changed("Initial answer", false)
 let lastFastRequest: { at: number; revision: string; text: string } | null = null
 const client = {
   ...gateway.client,
@@ -121,6 +121,16 @@ store.dispatch(followWorkspace())
 void store.dispatch(loadWorkspace())
 Object.assign(window, {
   __messageSync: {
+    async start() {
+      changed("Initial answer")
+      await source.send({
+        sessionId: fast,
+        messageId: "turn",
+        text: "Synchronize this message",
+        model: { provider: "anthropic", modelId: "claude-opus-5" },
+        initiator: "person",
+      })
+    },
     publish(text: string) {
       changed(text)
       return performance.now()
