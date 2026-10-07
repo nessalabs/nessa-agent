@@ -96,44 +96,6 @@
   user-select: none;
 }
 
-.workspace-icon-button {
-  display: inline-flex;
-  width: var(--desktop-control-size);
-  height: var(--desktop-control-size);
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: var(--desktop-control-radius);
-  background: transparent;
-  color: var(--desktop-muted) !important;
-  transition:
-    color var(--desktop-fast) ease,
-    background-color var(--desktop-fast) ease,
-    opacity var(--desktop-base) ease;
-}
-
-.workspace-icon-button:hover,
-.workspace-icon-button[data-state="open"] {
-  color: var(--foreground) !important;
-  background: var(--desktop-hover);
-}
-
-.workspace-icon-button:active {
-  background: var(--desktop-press);
-}
-
-.workspace-icon-button svg {
-  width: 16px;
-  height: 16px;
-  stroke-width: 1.75;
-}
-
-/* Holds its place when there is nothing for it to do, so its neighbours never move. */
-.workspace-icon-button[data-reserved] {
-  visibility: hidden;
-}
-
 /* ——— Agent tiles and status glyphs ——— */
 
 .workspace-agent-tile {

@@ -1,5 +1,4 @@
-import { DesktopIcon } from "./icons"
-import { tooltip } from "./tooltip"
+import { IconButton, type IconButtonSize } from "./icon-button"
 
 /**
  * Back and Forward, beside the sidebar toggle in every surface's titlebar —
@@ -24,12 +23,12 @@ export const historyActions = {
 } as const
 
 export function HistoryButtons({
-  className,
+  size,
   canGoBack = false,
   canGoForward = false,
   onBack,
   onForward,
-}: History & { className: string }) {
+}: History & { size?: IconButtonSize }) {
   const button = (
     direction: "back" | "forward",
     enabled: boolean,
@@ -38,18 +37,16 @@ export function HistoryButtons({
     const { label, shortcut } = historyActions[direction]
     const usable = enabled && go !== undefined
     return (
-      <button
-        type="button"
-        className={className}
-        aria-label={label}
+      <IconButton
+        icon={direction}
+        label={label}
+        shortcut={shortcut}
+        size={size}
         // Resting, not disabled: its tooltip still says what it will do.
         aria-disabled={!usable || undefined}
         data-history={direction}
-        {...tooltip(label, { shortcut })}
         onClick={usable ? go : undefined}
-      >
-        <DesktopIcon name={direction} />
-      </button>
+      />
     )
   }
   return (

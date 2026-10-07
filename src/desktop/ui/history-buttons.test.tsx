@@ -10,20 +10,18 @@ it("rests while there is no history, saying what it will do and doing nothing", 
   document.body.append(host)
   const root = createRoot(host)
   const went: string[] = []
-  await act(async () => root.render(<HistoryButtons className="b" />))
+  await act(async () => root.render(<HistoryButtons />))
   const [back, forward] = host.querySelectorAll("button")
   expect([back.getAttribute("aria-label"), forward.getAttribute("aria-label")]).toEqual([
-    "Go Back",
-    "Go Forward",
+    "Go Back (⌘[)",
+    "Go Forward (⌘])",
   ])
   expect(back.getAttribute("aria-disabled")).toBe("true")
   expect(back.dataset.tooltipShortcut).toBe("⌘[")
   back.click()
   // The seam: given history, they walk it.
   await act(async () =>
-    root.render(
-      <HistoryButtons className="b" canGoBack onBack={() => went.push("back")} />,
-    ),
+    root.render(<HistoryButtons canGoBack onBack={() => went.push("back")} />),
   )
   host.querySelector<HTMLButtonElement>('[data-history="back"]')?.click()
   host.querySelector<HTMLButtonElement>('[data-history="forward"]')?.click()
