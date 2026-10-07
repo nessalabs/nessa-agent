@@ -1,0 +1,55 @@
+✔ negative infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed (2.16043ms)
+✔ init infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed (0.199199ms)
+✔ negative infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child (0.168434ms)
+✔ init infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child (0.089715ms)
+✔ zero selected tests cannot pass (0.444408ms)
+✔ a different negative failure is a harness failure (0.342305ms)
+✔ the negative requires a new adopted zombie (0.456857ms)
+✔ directory retention is required in the negative directory case (0.21943ms)
+✔ positive failures, zombies, retention and timeout cannot pass (0.30547ms)
+✔ four scenarios use distinct containers, same inputs and readonly mounts (1.350421ms)
+✔ removal is attempted after create failure (0.426412ms)
+✔ removal is attempted after start failure (0.109204ms)
+✔ removal is attempted after validation failure (0.129986ms)
+✔ removal is attempted after interrupt failure (0.238599ms)
+✔ supervisor ownership and selected test must agree with scenario (0.209786ms)
+✔ a failed removal prevents acceptance (0.281013ms)
+✔ rejected evidence is saved before removal (1.022047ms)
+✔ malformed output and Docker failure retain diagnostics before removal (0.382425ms)
+✔ evidence failure still removes the container (0.203436ms)
+✔ truncated output cannot be accepted (0.14631ms)
+✔ Docker uses the managed socket, bounded deadline and supplied cancellation (0.46536ms)
+✔ Docker output overflow kills the client and keeps bounded failure diagnostics (1.109809ms)
+✔ libtest output must name the selected test and account for one active test (0.333151ms)
+✔ libtest counts, status and process exit cannot contradict each other (0.367663ms)
+non-reaping: infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed: accepted
+init: infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed: accepted
+non-reaping: infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child: accepted
+init: infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child: accepted
+✔ the complete harness pins the inspected image and records four removed acceptances (24.503076ms)
+✔ missing or nonnumeric negative exit evidence cannot pass (0.420332ms)
+✔ repeated interrupts keep cancellation installed until removal finishes (4.450243ms)
+✔ incomplete proof fields cannot produce a positive or negative acceptance (0.857029ms)
+✔ zombie, directory and package evidence must identify concrete captured resources (0.470687ms)
+✔ captured process identities cannot be reused or contradict the supervisor (0.326992ms)
+✔ image inspection receives interrupt cancellation before any container is created (4.311566ms)
+✔ all captured process entries require typed fields even when they are not zombies (0.328203ms)
+✔ negative failure proof names the selected panic and its actual cause (0.362836ms)
+✔ the acceptance publisher never writes accepted evidence when already interrupted (0.18616ms)
+✔ an acceptance write failure retains unaccepted diagnostic evidence (0.155464ms)
+non-reaping: infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed: accepted
+init: infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed: accepted
+non-reaping: infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child: accepted
+✔ interrupt during last-removal rejects four-case acceptance after independent removal (7.498128ms)
+non-reaping: infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed: accepted
+init: infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed: accepted
+non-reaping: infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child: accepted
+✔ interrupt during final-write rejects four-case acceptance after independent removal (7.003724ms)
+ℹ tests 37
+ℹ suites 0
+ℹ pass 37
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 127.025692
