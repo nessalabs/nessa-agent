@@ -206,10 +206,14 @@ automatic session storage, hooks, invocation, and UI integration.
   Handing out an eligible participation gate records possible ownership transfer
   and prevents a never-bound absence claim. Active child flights refuse public
   transfers; their accepted `PrepareRequest.owned_lifetime` supplies the actual
-  child gate to its factory for Agent installation. Preparation failure seals
-  attachment authority before audit; retained nonrunnable progress preserves
-  this seal after restart. Open + Ended Reserved startup history refuses new
-  transfer; other factual milestones and unfinished cleanup can regain a vacant
+  child gate to its factory for Agent installation. Every typed failure after
+  this invocation admits a child seals its graph lifetime and actual gate before
+  fallback audit/storage or slot return, preserving the first cause and original
+  error. Lookup/conflict/pre-admission errors cannot revoke another operation's
+  child. Restored Closing and nonrunnable progress preserve the seal. Legacy
+  Open + Ended Reserved startup history refuses new transfer; current failed
+  startup is conservatively Closing until authoritative settlement (#649).
+  Other factual milestones and unfinished cleanup can regain a vacant
   cleanup owner without attachment authority. Captured safety facts use
   the same snapshot writer even when their audit rejects or is uncertain.
   Never-bound root settlement consumes the actual absence audit result; rejection

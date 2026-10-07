@@ -1659,7 +1659,7 @@ async fn row_35_rejected_none_revokes_gate_before_rejected_audit_and_releases_ca
             .find(|r| r.lifetime_id == snapshot.spawns[0].child_lifetime)
             .unwrap()
             .state,
-        LifetimeState::Open
+        LifetimeState::Closing
     );
     assert!(snapshot.settlements.is_empty());
     let restored = coordinator(
@@ -1670,19 +1670,20 @@ async fn row_35_rejected_none_revokes_gate_before_rejected_audit_and_releases_ca
     );
     restored.resume().await.unwrap();
     let child = snapshot.spawns[0].child_lifetime.clone();
-    assert!(restored.participation(&child).is_none());
-    assert!(c.participation(&child).is_none());
+    assert!(restored.participation(&child).unwrap().is_sealed());
+    assert!(c.participation(&child).unwrap().is_sealed());
     let drops = Arc::new(AtomicUsize::new(0));
     let closes = Arc::new(AtomicUsize::new(0));
     for coordinator in [&c, &restored] {
-        let refusal = coordinator
+        // Closing alone records revocation, not authoritative absence. Until
+        // settlement, conservative vacant cleanup reattachment remains legal.
+        coordinator
             .bind_resources(child.clone(), tracked_owner(&drops, &closes))
-            .unwrap_err();
-        assert_eq!(refusal.reason, BindResourcesRefusal::Released);
-        assert_eq!(closes.load(Ordering::SeqCst), 0);
-        drop(refusal);
+            .unwrap();
+        assert!(coordinator.participation(&child).unwrap().is_sealed());
     }
-    assert_eq!(drops.load(Ordering::SeqCst), 2);
+    assert_eq!(closes.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
     assert!(room.try_reserve());
     room.release();
 }
@@ -1761,7 +1762,19 @@ async fn row_35_restored_ended_factual_owner_is_not_resource_absence() {
         } else {
             result.unwrap();
         }
-        let mut graph = OwnershipGraph::restore(store.read().await.unwrap());
+        let mut retained = store.read().await.unwrap();
+        // Exercise legacy Open nonrunnable history independently of today's
+        // typed-error close. Prepared is factual ownership, not absence.
+        for row in &mut retained.lifetimes {
+            if row.lifetime_id == retained.spawns[0].child_lifetime {
+                row.state = LifetimeState::Open;
+                row.close_operation = None;
+                row.cause = None;
+                row.initiator = None;
+                row.cascaded_from = None;
+            }
+        }
+        let mut graph = OwnershipGraph::restore(retained);
         let known = graph.spawn_progress(&command.request_id).unwrap().known();
         if prepared {
             assert_eq!(known, KnownMilestone::Prepared);
@@ -1895,4 +1908,475 @@ async fn row_36_rooted_refused_history_returns_actual_owner_and_preserves_inspec
     drop(refusal);
     assert!(weak.upgrade().is_none());
     assert_eq!(history.read().await.unwrap(), snapshot);
+}
+
+#[tokio::test]
+async fn row_38_legacy_open_ended_reserved_refuses_transfer_without_claiming_closing_absence() {
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let factory = ScriptFactory::new();
+    *factory.fail.lock().unwrap() = Some(PrepareFailure {
+        failure: PortFailure::Rejected,
+        cleanup: None,
+    });
+    let c = coordinator(
+        store.clone(),
+        IndependentAudit::new(),
+        factory,
+        Arc::new(LiveCapacity::new(1)),
+    );
+    let root = open(&c, "legacy").await.unwrap();
+    assert_eq!(
+        c.spawn(command(&root)).await,
+        Err(OwnershipFailure::Startup(PortFailure::Rejected))
+    );
+    let mut history = store.read().await.unwrap();
+    let child = history.spawns[0].child_lifetime.clone();
+    assert_eq!(
+        history.spawns[0].progress,
+        SpawnProgress::Ended {
+            known: KnownMilestone::Reserved
+        }
+    );
+    for row in &mut history.lifetimes {
+        if row.lifetime_id == child {
+            row.state = LifetimeState::Open;
+            row.close_operation = None;
+            row.cause = None;
+            row.initiator = None;
+            row.cascaded_from = None;
+        }
+    }
+    let retained = Arc::new(MemoryOwnershipStore::new());
+    retained.write(&history).await.unwrap();
+    let restored = coordinator(
+        retained.clone(),
+        IndependentAudit::new(),
+        ScriptFactory::new(),
+        Arc::new(LiveCapacity::new(1)),
+    );
+    restored.resume().await.unwrap();
+    assert!(restored.participation(&child).is_none());
+    let drops = Arc::new(AtomicUsize::new(0));
+    let closes = Arc::new(AtomicUsize::new(0));
+    let owner = tracked_owner(&drops, &closes);
+    let weak = Arc::downgrade(&owner);
+    let refusal = restored.bind_resources(child, owner).unwrap_err();
+    assert_eq!(refusal.reason, BindResourcesRefusal::Released);
+    assert!(Arc::ptr_eq(&weak.upgrade().unwrap(), &refusal.resources));
+    assert_eq!(closes.load(Ordering::SeqCst), 0);
+    assert_eq!(retained.read().await.unwrap(), history);
+}
+
+#[tokio::test]
+async fn row_38_publication_error_matrix_seals_actual_gate_preserves_owner_receipt_and_restore() {
+    for stage in [
+        OwnershipMeaning::Reserved,
+        OwnershipMeaning::Prepared,
+        OwnershipMeaning::Attached,
+        OwnershipMeaning::TaskAdmitted,
+    ] {
+        for failure in [PortFailure::Rejected, PortFailure::Uncertain] {
+            for store_failure in [false, true] {
+                let store = Arc::new(MemoryOwnershipStore::new());
+                let audit = IndependentAudit::new();
+                let factory = ScriptFactory::new();
+                let room = Arc::new(LiveCapacity::new(8));
+                let c = coordinator(store.clone(), audit.clone(), factory.clone(), room.clone());
+                let root = open(&c, "matrix").await.unwrap();
+                let (gate, release) = audit.gate(stage.clone());
+                let spawning = tokio::spawn({
+                    let c = c.clone();
+                    let root = root.clone();
+                    async move { c.spawn(command(&root)).await }
+                });
+                bounded(gate.entered.notified()).await;
+                let child = gate
+                    .evidence
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .child_lifetime
+                    .clone()
+                    .unwrap();
+                if store_failure {
+                    store.fail_next_write(failure);
+                }
+                release
+                    .send(if store_failure { Ok(()) } else { Err(failure) })
+                    .unwrap();
+                let expected = if store_failure {
+                    OwnershipFailure::Store(failure)
+                } else {
+                    OwnershipFailure::Audit(failure)
+                };
+                assert_eq!(
+                    bounded(spawning).await.unwrap(),
+                    Err(expected),
+                    "{stage:?}/{failure:?}/store={store_failure}"
+                );
+                assert_eq!(c.lifetime_state(&child), Some(LifetimeState::Closing));
+                assert_eq!(c.close_cause(&child), Some(LifetimeCause::TerminalFailure));
+                let private = stage == OwnershipMeaning::Reserved
+                    && !store_failure
+                    && failure == PortFailure::Rejected;
+                if private {
+                    assert!(c.participation(&child).is_none());
+                } else {
+                    assert!(c.participation(&child).unwrap().is_sealed());
+                }
+                let mut descendant = command(&child);
+                descendant.request_id = SpawnRequestId::new("late-descendant").unwrap();
+                assert_eq!(
+                    c.spawn(descendant).await,
+                    Err(if private {
+                        OwnershipFailure::UnpublishedParent
+                    } else {
+                        OwnershipFailure::Domain(OwnershipError::ParentClosing)
+                    })
+                );
+                let initial = stage == OwnershipMeaning::Reserved;
+                assert_eq!(factory.prepares(), usize::from(!initial));
+                assert_eq!(
+                    factory.submits(),
+                    usize::from(stage == OwnershipMeaning::TaskAdmitted)
+                );
+                if !initial {
+                    assert!(factory
+                        .last_gate
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .is_sealed());
+                    assert_eq!(
+                        factory.children.lock().unwrap()[0]
+                            .closes
+                            .load(Ordering::SeqCst),
+                        0
+                    );
+                    let supplied = Arc::new(ScriptResources {
+                        closes: AtomicUsize::new(0),
+                        report: released(),
+                        hold: None,
+                    });
+                    assert_eq!(
+                        c.bind_resources(child.clone(), supplied)
+                            .unwrap_err()
+                            .reason,
+                        BindResourcesRefusal::AlreadyBound
+                    );
+                }
+                let snapshot = store.read().await.unwrap();
+                if private {
+                    assert!(snapshot.spawns.is_empty());
+                } else {
+                    if stage == OwnershipMeaning::TaskAdmitted {
+                        assert!(matches!(
+                            snapshot.spawns[0].progress.known(),
+                            KnownMilestone::TaskAdmitted { .. }
+                        ));
+                    }
+                    let restored_factory = ScriptFactory::new();
+                    let restored = coordinator(
+                        store,
+                        IndependentAudit::new(),
+                        restored_factory.clone(),
+                        Arc::new(LiveCapacity::new(8)),
+                    );
+                    restored.resume().await.unwrap();
+                    assert_eq!(
+                        restored.lifetime_state(&child),
+                        Some(LifetimeState::Closing)
+                    );
+                    assert!(restored.participation(&child).unwrap().is_sealed());
+                    assert_eq!(restored_factory.prepares(), 0);
+                }
+                let mut available = 0;
+                while room.try_reserve() {
+                    available += 1;
+                }
+                let returned = initial && failure == PortFailure::Rejected;
+                assert_eq!(available, if returned { 8 } else { 7 });
+                for _ in 0..available {
+                    room.release();
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn row_38_factory_and_submission_failures_revoke_descendants_without_erasing_actual_cleanup()
+{
+    for failure in [PortFailure::Rejected, PortFailure::Uncertain] {
+        for factory_failure in [false, true] {
+            for cleanup in [false, true] {
+                if !factory_failure && cleanup {
+                    continue;
+                }
+                let store = Arc::new(MemoryOwnershipStore::new());
+                let factory = ScriptFactory::new();
+                let owner = Arc::new(ScriptResources {
+                    closes: AtomicUsize::new(0),
+                    report: ResourceReport {
+                        physical: PhysicalFact::Failed,
+                        evidence: EvidenceFact::Failed,
+                    },
+                    hold: None,
+                });
+                if factory_failure {
+                    *factory.fail.lock().unwrap() = Some(PrepareFailure {
+                        failure,
+                        cleanup: cleanup.then(|| owner.clone() as Arc<dyn ChildResources>),
+                    });
+                } else {
+                    *factory.submit_result.lock().unwrap() = Err(failure);
+                }
+                let room = Arc::new(LiveCapacity::new(8));
+                let c = coordinator(
+                    store.clone(),
+                    IndependentAudit::new(),
+                    factory.clone(),
+                    room.clone(),
+                );
+                let root = open(&c, "effect").await.unwrap();
+                assert_eq!(
+                    c.spawn(command(&root)).await,
+                    Err(if factory_failure {
+                        OwnershipFailure::Startup(failure)
+                    } else {
+                        OwnershipFailure::Submission(failure)
+                    })
+                );
+                let child = factory.last_child.lock().unwrap().clone().unwrap();
+                assert_eq!(c.lifetime_state(&child), Some(LifetimeState::Closing));
+                assert!(factory
+                    .last_gate
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .is_sealed());
+                assert!(c.participation(&child).unwrap().is_sealed());
+                let mut descendant = command(&child);
+                descendant.request_id = SpawnRequestId::new("effect-descendant").unwrap();
+                assert_eq!(
+                    c.spawn(descendant).await,
+                    Err(OwnershipFailure::Domain(OwnershipError::ParentClosing))
+                );
+                assert_eq!(factory.prepares(), 1);
+                assert_eq!(factory.submits(), usize::from(!factory_failure));
+                if cleanup || !factory_failure {
+                    assert_eq!(
+                        c.bind_resources(
+                            child.clone(),
+                            Arc::new(ScriptResources {
+                                closes: AtomicUsize::new(0),
+                                report: released(),
+                                hold: None
+                            })
+                        )
+                        .unwrap_err()
+                        .reason,
+                        BindResourcesRefusal::AlreadyBound
+                    );
+                } else {
+                    c.bind_resources(
+                        child,
+                        Arc::new(ScriptResources {
+                            closes: AtomicUsize::new(0),
+                            report: released(),
+                            hold: None,
+                        }),
+                    )
+                    .unwrap();
+                }
+                assert_eq!(
+                    owner.closes.load(Ordering::SeqCst),
+                    usize::from(cleanup && failure == PortFailure::Rejected)
+                );
+                let mut available = 0;
+                while room.try_reserve() {
+                    available += 1;
+                }
+                assert_eq!(
+                    available,
+                    if factory_failure && !cleanup && failure == PortFailure::Rejected {
+                        8
+                    } else {
+                        7
+                    }
+                );
+                for _ in 0..available {
+                    room.release();
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn row_38_known_failure_revokes_before_failed_fallback_audit_and_store_awaits() {
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let audit = IndependentAudit::new();
+    let factory = ScriptFactory::new();
+    let c = coordinator(
+        store.clone(),
+        audit.clone(),
+        factory.clone(),
+        Arc::new(LiveCapacity::new(8)),
+    );
+    let root = open(&c, "fallback").await.unwrap();
+    let (main, main_release) = audit.gate(OwnershipMeaning::Prepared);
+    let spawning = tokio::spawn({
+        let c = c.clone();
+        let root = root.clone();
+        async move { c.spawn(command(&root)).await }
+    });
+    bounded(main.entered.notified()).await;
+    let child = factory.last_child.lock().unwrap().clone().unwrap();
+    let (fallback, fallback_release) = audit.gate(OwnershipMeaning::Unconfirmed);
+    main_release.send(Err(PortFailure::Rejected)).unwrap();
+    bounded(fallback.entered.notified()).await;
+    assert_eq!(c.lifetime_state(&child), Some(LifetimeState::Closing));
+    assert!(factory
+        .last_gate
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .is_sealed());
+    let mut descendant = command(&child);
+    descendant.request_id = SpawnRequestId::new("fallback-descendant").unwrap();
+    assert_eq!(
+        c.spawn(descendant).await,
+        Err(OwnershipFailure::Domain(OwnershipError::ParentClosing))
+    );
+    open(&c, "neighbor").await.unwrap();
+    assert_eq!(
+        store.read().await.unwrap().spawns[0].progress.known(),
+        KnownMilestone::Prepared
+    );
+    store.fail_next_write(PortFailure::Rejected);
+    fallback_release.send(Err(PortFailure::Uncertain)).unwrap();
+    assert_eq!(
+        bounded(spawning).await.unwrap(),
+        Err(OwnershipFailure::Audit(PortFailure::Rejected))
+    );
+    assert_eq!(factory.prepares(), 1);
+    assert_eq!(factory.submits(), 0);
+    assert_eq!(
+        factory.children.lock().unwrap()[0]
+            .closes
+            .load(Ordering::SeqCst),
+        0
+    );
+    let records = audit.records.lock().unwrap();
+    let closes: Vec<_> = records
+        .iter()
+        .filter(|r| r.parent_lifetime == child && r.after == OwnershipMeaning::Closing)
+        .collect();
+    // The inner failure owns the first close; its outer fallback only retries
+    // the shared writer rather than inventing another first-close audit.
+    assert_eq!(closes.len(), 1);
+    assert_eq!(closes[0].cause, Some(LifetimeCause::TerminalFailure));
+}
+
+#[tokio::test]
+async fn row_38_conflict_and_pre_admission_failures_do_not_revoke_another_admitted_child() {
+    let factory = ScriptFactory::new();
+    let release = Arc::new(Notify::new());
+    *factory.release.lock().unwrap() = Some(release.clone());
+    let c = coordinator(
+        Arc::new(MemoryOwnershipStore::new()),
+        IndependentAudit::new(),
+        factory.clone(),
+        Arc::new(LiveCapacity::new(8)),
+    );
+    let root = open(&c, "owner").await.unwrap();
+    let original = command(&root);
+    let spawning = tokio::spawn({
+        let c = c.clone();
+        let original = original.clone();
+        async move { c.spawn(original).await }
+    });
+    bounded(factory.entered.notified()).await;
+    let child = factory.last_child.lock().unwrap().clone().unwrap();
+    let actual = factory.last_gate.lock().unwrap().clone().unwrap();
+    let mut conflict = original.clone();
+    conflict.task = "different".to_owned();
+    let conflicting = tokio::spawn({
+        let c = c.clone();
+        async move { c.spawn(conflict).await }
+    });
+    let mut refused = original.clone();
+    refused.request_id = SpawnRequestId::new("policy-refused").unwrap();
+    refused.policy = PolicyRead::ParentUnavailable;
+    assert_eq!(
+        c.spawn(refused).await,
+        Err(OwnershipFailure::Domain(OwnershipError::ParentClosing))
+    );
+    assert_eq!(c.lifetime_state(&child), Some(LifetimeState::Open));
+    assert!(!actual.is_sealed());
+    release.notify_one();
+    let result = bounded(spawning).await.unwrap().unwrap();
+    assert_eq!(
+        bounded(conflicting).await.unwrap(),
+        Err(OwnershipFailure::Domain(OwnershipError::RequestConflict))
+    );
+    assert_eq!(c.spawn(original).await.unwrap(), result);
+    assert_eq!(factory.prepares(), 1);
+    assert_eq!(factory.submits(), 1);
+    assert_eq!(c.lifetime_state(&child), Some(LifetimeState::Open));
+    assert!(!actual.is_sealed());
+}
+
+#[tokio::test]
+async fn row_38_uncertain_submission_revokes_before_held_fallback_and_retains_owner() {
+    let audit = IndependentAudit::new();
+    let factory = ScriptFactory::new();
+    *factory.submit_result.lock().unwrap() = Err(PortFailure::Uncertain);
+    let (fallback, release) = audit.gate(OwnershipMeaning::Unconfirmed);
+    let c = coordinator(
+        Arc::new(MemoryOwnershipStore::new()),
+        audit,
+        factory.clone(),
+        Arc::new(LiveCapacity::new(8)),
+    );
+    let root = open(&c, "uncertain-submit").await.unwrap();
+    let spawning = tokio::spawn({
+        let c = c.clone();
+        let root = root.clone();
+        async move { c.spawn(command(&root)).await }
+    });
+    bounded(fallback.entered.notified()).await;
+    let child = factory.last_child.lock().unwrap().clone().unwrap();
+    assert_eq!(c.lifetime_state(&child), Some(LifetimeState::Closing));
+    assert!(factory
+        .last_gate
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .is_sealed());
+    let mut descendant = command(&child);
+    descendant.request_id = SpawnRequestId::new("submit-descendant").unwrap();
+    assert_eq!(
+        c.spawn(descendant).await,
+        Err(OwnershipFailure::Domain(OwnershipError::ParentClosing))
+    );
+    assert_eq!(
+        factory.children.lock().unwrap()[0]
+            .closes
+            .load(Ordering::SeqCst),
+        0
+    );
+    release.send(Err(PortFailure::Rejected)).unwrap();
+    assert_eq!(
+        bounded(spawning).await.unwrap(),
+        Err(OwnershipFailure::Submission(PortFailure::Uncertain))
+    );
+    assert_eq!(factory.prepares(), 1);
+    assert_eq!(factory.submits(), 1);
 }

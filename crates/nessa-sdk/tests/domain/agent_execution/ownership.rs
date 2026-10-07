@@ -2135,3 +2135,93 @@ fn unbound_absence_token_refuses_child_closed_history_and_stale_completion() {
         EvidenceFact::Acknowledged
     );
 }
+
+#[test]
+fn sealed_progress_retains_actual_receipt_without_inventing_permission_or_terminal_changes() {
+    let mut graph = OwnershipGraph::new();
+    assert_eq!(
+        graph.sealed_spawn_progress(&spawn_id("missing"), &SpawnProgress::Reserved),
+        None
+    );
+    root(&mut graph, "parent");
+    admit(&mut graph, "parent", "child", "request");
+    let request = spawn_id("request");
+    assert_eq!(
+        graph.sealed_spawn_progress(&request, &SpawnProgress::Reserved),
+        None
+    );
+    graph
+        .advance_spawn(&request, SpawnProgress::Prepared)
+        .unwrap();
+    graph
+        .advance_spawn(&request, SpawnProgress::Attached)
+        .unwrap();
+    let actual = SpawnProgress::TaskAdmitted {
+        receipt: receipt("actual"),
+    };
+    graph.advance_spawn(&request, actual.clone()).unwrap();
+    assert_eq!(
+        graph.sealed_spawn_progress(&request, &SpawnProgress::Attached),
+        None
+    );
+    graph
+        .begin_close(
+            &life("child"),
+            close_id("stop"),
+            LifetimeCause::TerminalFailure,
+            Initiator::Runtime,
+        )
+        .unwrap();
+    assert_eq!(graph.sealed_spawn_progress(&request, &actual), None);
+    let pending = SpawnProgress::Unconfirmed {
+        known: actual.known(),
+    };
+    assert_eq!(
+        graph.sealed_spawn_progress(&request, &SpawnProgress::Attached),
+        Some(pending.clone())
+    );
+    graph.advance_spawn(&request, pending.clone()).unwrap();
+    assert_eq!(
+        graph.sealed_spawn_progress(&request, &SpawnProgress::Attached),
+        Some(pending)
+    );
+    let draining = SpawnProgress::Draining {
+        known: actual.known(),
+    };
+    graph.advance_spawn(&request, draining.clone()).unwrap();
+    assert_eq!(
+        graph.sealed_spawn_progress(&request, &SpawnProgress::Attached),
+        Some(draining)
+    );
+    let ended = SpawnProgress::Ended {
+        known: actual.known(),
+    };
+    graph.advance_spawn(&request, ended.clone()).unwrap();
+    assert_eq!(
+        graph.sealed_spawn_progress(&request, &SpawnProgress::Attached),
+        Some(ended.clone())
+    );
+    graph
+        .apply_report(
+            &life("child"),
+            &close_id("stop"),
+            &life("child"),
+            PhysicalFact::Released,
+            EvidenceFact::Acknowledged,
+        )
+        .unwrap();
+    assert_eq!(
+        graph.lifetime_state(&life("child")),
+        Some(LifetimeState::Closed)
+    );
+    assert_eq!(
+        graph.sealed_spawn_progress(&request, &SpawnProgress::Attached),
+        Some(ended)
+    );
+    assert_eq!(
+        graph.spawn_progress(&request),
+        Some(&SpawnProgress::Ended {
+            known: actual.known()
+        })
+    );
+}

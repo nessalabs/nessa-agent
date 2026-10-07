@@ -665,6 +665,8 @@ impl Shared {
             )
             .await
         {
+            // Publication failure has already revoked admission before its
+            // fallback evidence awaits; only now may a definite slot return.
             // Rejected means the publication did not happen, so this reservation
             // is not a live child. The graph row stays so an identical retry
             // still finds it and does not prepare a second child.
@@ -677,7 +679,14 @@ impl Shared {
             }
             return Err(error);
         }
-        self.preparing_factory(&command, admitted).await
+        let child = admitted.child.clone();
+        let result = self.preparing_factory(&command, admitted).await;
+        if result.is_err() {
+            // Only this invocation's admitted child belongs to this fallback.
+            let closing = self.revoke_child(&child);
+            self.persist_revocation(closing).await;
+        }
+        result
     }
 
     fn admit_new(
@@ -799,16 +808,7 @@ impl Shared {
             Err(failure) => {
                 // Stop new attachment admission before any fallible safety publication.
                 // This revokes permission; it does not prove physical cleanup.
-                self.with_graph(|_| {
-                    if let Some(seal) = self
-                        .seals
-                        .lock()
-                        .expect("lifetime seals")
-                        .get(&admitted.child)
-                    {
-                        seal.store(true, Ordering::Release);
-                    }
-                });
+                let closing = self.revoke_child(&admitted.child);
                 if let Some(cleanup) = failure.cleanup {
                     self.bound
                         .lock()
@@ -819,6 +819,7 @@ impl Shared {
                         .expect("child resources")
                         .insert(admitted.child.clone(), cleanup);
                 }
+                self.persist_revocation(closing).await;
                 let known = SpawnProgress::Reserved.known();
                 let next = match failure.failure {
                     PortFailure::Uncertain => SpawnProgress::Unconfirmed { known },
@@ -883,6 +884,8 @@ impl Shared {
                 self.receipt(&command.request_id)
             }
             Err(PortFailure::Uncertain) => {
+                let closing = self.revoke_child(&admitted.child);
+                self.persist_revocation(closing).await;
                 let _ = self
                     .advance(
                         &command.request_id,
@@ -893,6 +896,8 @@ impl Shared {
                     .await;
                 Err(OwnershipFailure::Submission(PortFailure::Uncertain))
             }
+            // There is no fallback await here; drive_spawn synchronously
+            // revokes its locally admitted child before returning this error.
             Err(PortFailure::Rejected) => Err(OwnershipFailure::Submission(PortFailure::Rejected)),
         }
     }
@@ -1090,6 +1095,9 @@ impl Shared {
                     });
                     if eligible {
                         self.mark_unconfirmed(request).await;
+                    } else {
+                        let closing = self.revoke_request(request);
+                        self.persist_revocation(closing).await;
                     }
                 }
                 return Err(OwnershipFailure::Audit(PortFailure::Rejected));
@@ -1103,7 +1111,13 @@ impl Shared {
         }
         match self.commit_snapshot().await {
             Ok(()) => Ok(()),
-            Err(PortFailure::Rejected) => Err(OwnershipFailure::Store(PortFailure::Rejected)),
+            Err(PortFailure::Rejected) => {
+                if let Some(request) = unconfirmed_request {
+                    let closing = self.revoke_request(request);
+                    self.persist_revocation(closing).await;
+                }
+                Err(OwnershipFailure::Store(PortFailure::Rejected))
+            }
             Err(PortFailure::Uncertain) => {
                 if let Some(request) = unconfirmed_request {
                     self.mark_unconfirmed(request).await;
@@ -1151,13 +1165,59 @@ impl Shared {
         }
     }
 
+    fn revoke_child_in_graph(
+        &self,
+        graph: &mut OwnershipGraph,
+        child: &AgentLifetimeId,
+    ) -> Option<OwnershipEvidence> {
+        let first_close = graph.lifetime_state(child) == Some(LifetimeState::Open);
+        let evidence = self
+            .seal_in_graph(
+                graph,
+                child,
+                mint_close(),
+                LifetimeCause::TerminalFailure,
+                Initiator::Runtime,
+            )
+            .ok()?;
+        // Joins still seal every actual gate, but are not another first close.
+        first_close.then_some(evidence)
+    }
+
+    fn revoke_child(&self, child: &AgentLifetimeId) -> Option<OwnershipEvidence> {
+        self.with_graph(|graph| self.revoke_child_in_graph(graph, child))
+    }
+
+    fn revoke_request(&self, request: &SpawnRequestId) -> Option<OwnershipEvidence> {
+        self.with_graph(|graph| {
+            let child = graph.child_lifetime(request)?.clone();
+            self.revoke_child_in_graph(graph, &child)
+        })
+    }
+
+    async fn persist_revocation(&self, evidence: Option<OwnershipEvidence>) {
+        if let Some(evidence) = evidence {
+            // The original typed operation failure remains the returned error.
+            let _ = self.persist_evidence(&evidence).await;
+        } else {
+            // A joined close may need a conservative writer retry; that does
+            // not acknowledge or re-audit its existing evidence debt.
+            let _ = self.commit_snapshot().await;
+        }
+    }
+
     async fn mark_unconfirmed(&self, request: &SpawnRequestId) {
         let (evidence, close) = self.with_graph(|graph| {
-            let mut publication = self.publication.lock().expect("ownership publication");
-            let initially_private = !publication.spawn_eligible(request);
-            publication.retain_spawn(request);
+            let close = graph
+                .child_lifetime(request)
+                .cloned()
+                .and_then(|child| self.revoke_child_in_graph(graph, &child));
+            self.publication
+                .lock()
+                .expect("ownership publication")
+                .retain_spawn(request);
             let Some(progress) = graph.spawn_progress(request).cloned() else {
-                return (None, None);
+                return (None, close);
             };
             let evidence = graph
                 .advance_spawn(
@@ -1167,24 +1227,6 @@ impl Shared {
                     },
                 )
                 .ok();
-            let close = if initially_private {
-                graph.child_lifetime(request).cloned().and_then(|child| {
-                    let admission = graph
-                        .begin_close(
-                            &child,
-                            mint_close(),
-                            LifetimeCause::TerminalFailure,
-                            Initiator::Runtime,
-                        )
-                        .ok()?;
-                    if let Some(flag) = self.seals.lock().expect("lifetime seals").get(&child) {
-                        flag.store(true, Ordering::Release);
-                    }
-                    Some(admission.evidence)
-                })
-            } else {
-                None
-            };
             (evidence, close)
         });
         if let Some(evidence) = evidence {
@@ -1194,7 +1236,7 @@ impl Shared {
             let _ = self.audit.record(&evidence).await;
         }
         // Already-Unconfirmed and other terminal safety positions need no new
-        // graph transition, but their current facts still use the same writer.
+        // progress transition, but their close facts still use the same writer.
         let _ = self.commit_snapshot().await;
     }
 
@@ -2092,6 +2134,74 @@ mod lifetime_races {
                 .unwrap()
                 .contains_key(&root));
         });
+    }
+
+    #[tokio::test]
+    async fn row_38_error_revocation_joins_preserve_first_cause_and_actual_gates_without_new_evidence(
+    ) {
+        let hold = Arc::new(Notify::new());
+        let resources = Arc::new(Holding {
+            closes: AtomicUsize::new(0),
+            hold: hold.clone(),
+        });
+        let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+            store: Arc::new(MemoryOwnershipStore::new()),
+            audit: Arc::new(AcceptAudit),
+            factory: Arc::new(OnceFactory {
+                resources: resources.clone(),
+            }),
+            room: Arc::new(LiveCapacity::new(4)),
+        });
+        let root = coordinator
+            .open_root(SessionId::new("join-root").unwrap(), Initiator::Runtime)
+            .await
+            .unwrap();
+        let child = coordinator.spawn(command(root)).await.unwrap().child;
+        let gate = coordinator.participation(&child).unwrap();
+        let first = coordinator
+            .inner
+            .seal_now(
+                &child,
+                super::mint_close(),
+                LifetimeCause::HostClose,
+                Initiator::Runtime,
+            )
+            .unwrap();
+        coordinator.inner.persist_evidence(&first).await.unwrap();
+        assert!(coordinator.inner.revoke_child(&child).is_none());
+        coordinator.inner.persist_revocation(None).await;
+        assert!(gate.is_sealed());
+        assert_eq!(
+            coordinator.close_cause(&child),
+            Some(LifetimeCause::HostClose)
+        );
+        assert_eq!(
+            coordinator.lifetime_state(&child),
+            Some(LifetimeState::Closing)
+        );
+        assert_eq!(resources.closes.load(Ordering::SeqCst), 0);
+        hold.notify_one();
+        coordinator
+            .end_lifetime(CloseCommand {
+                lifetime: child.clone(),
+                cause: LifetimeCause::TerminalFailure,
+                initiator: Initiator::Runtime,
+                external_attachment: false,
+                timeout: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(resources.closes.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            coordinator.lifetime_state(&child),
+            Some(LifetimeState::Closed)
+        );
+        assert!(coordinator.inner.revoke_child(&child).is_none());
+        assert!(gate.is_sealed());
+        assert_eq!(
+            coordinator.close_cause(&child),
+            Some(LifetimeCause::HostClose)
+        );
     }
 
     #[tokio::test]

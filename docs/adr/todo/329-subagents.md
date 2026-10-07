@@ -753,6 +753,10 @@ history may expose only its already-sealed inspection gate. Active child flights
 refuse public transfers; their accepted PrepareRequest supplies the remembered
 child gate directly to the factory. Preparation Err seals attachment authority
 before fallible publication, without manufacturing Closed or physical release.
+The same graph/gate revocation applies to every typed error after this invocation
+admits its own child, before fallback evidence awaits or definite slot return.
+It preserves earlier close cause, factual ownership/receipts and the original
+failure. Lookup, conflict and pre-admission errors cannot revoke another child.
 Restore derives that seal from retained nonrunnable progress. The claim's actual
 audit result controls settlement.
 A queued successful send does not transfer root ownership; claiming its internal
@@ -805,9 +809,11 @@ uncertain ports; whole-transaction panic supervision is separate #625 work.
 
 | 37 | Initial root audit is uncertain, or publication fails after eligibility | Seal the actual root and retain its identity in one admission scope, before retained eligibility becomes observable. Preserve first cause and bound ownership; persist evidence and start the existing drain outside the scope. No retained eligible Open frame may confer attachment or spawn authority. Closing cleanup binding remains legal. |
 
+| 38 | This invocation admitted a child; initial or milestone publication, factory, or submission returns a typed error | Revoke graph and actual child/descendant gates with TerminalFailure/Runtime synchronously before fallback audit/store awaits, definite slot return, or flight release. Join preserves the first cause and exact original failure. Preserve actual owners/receipts and private rejection exclusion; no physical release or completion inference. Lookup/conflict/pre-admission errors do not revoke another child. Closing vacant cleanup binding remains legal until actual settlement; legacy restored Open+Ended Reserved still refuses transfer. |
+
 Enforcers: the public coordinator tests in
 `tests/application/agent_execution/subagents/publication.rs` name rows 1–15,
-18–19 and 21–36. `rejected_close_intent_is_persisted_before_cleanup_can_complete`
+18–19, 21–36 and 38. `rejected_close_intent_is_persisted_before_cleanup_can_complete`
 adds the held-cleanup boundary for row 7. The library's
 `an_older_snapshot_does_not_replace_a_newer_seal` enforces row 16;
 `publication::tests::row_17_tokens_acknowledge_captured_progress_once_and_refuse_stale_generation`
@@ -816,7 +822,13 @@ enforce row 17. Domain
 `row_20_private_root_discard_preserves_neighbors_closed_history_reports_and_recovery`
 checks targeted removal without re-running recovery. Library
 `row_37_retained_root_is_sealed_at_the_admission_scope_boundary` checks
-the retained identity and actual gate at the first observable scope boundary. Publication's
+the retained identity and actual gate at the first observable scope boundary. Row38
+checks admitted typed-error revocation across publication/factory/submission,
+held fallback evidence, original error priority, and non-admitted conflicts.
+Library `row_38_error_revocation_joins_preserve_first_cause_and_actual_gates_without_new_evidence`
+checks Closing/Closed joins and the first cause without a new first-close audit.
+Domain `sealed_progress_retains_actual_receipt_without_inventing_permission_or_terminal_changes`
+checks the direct unknown/Open/sealed/terminal receipt projection boundaries. Publication's
 `retained_projection_preserves_valid_history_and_referential_closure` checks
 valid Closed history and prevents child identity retention without its eligible ancestor.
 `row_30_already_safety_reconciliation_still_writes_current_fact` checks
@@ -825,7 +837,11 @@ inspection-only gates and refuses transfer/dispatch across save/reload.
 The real Agent factory tests `row_34_factory_gate_installs_on_real_agent_and_shared_close_refuses_attachment`
 and `row_35_failed_factory_revokes_stale_real_agent_attachment_authority` enforce
 the accepted typed gate and attachment revocation. `row_35_restored_unfinished_cleanup_accepts_vacant_binding_but_keeps_attachment_sealed`
-preserves cleanup recovery. Open + Ended { known: Reserved } completed-startup history refuses new transfer;
+preserves cleanup recovery. Legacy restored Open + Ended { known: Reserved } completed-startup history refuses new transfer;
+current failed startup revokes to Closing and conservatively permits vacant
+cleanup binding until authoritative absence/release settlement (#649). Closing
++ Ended Reserved alone does not prove absence: draining after preparation can
+emit it while cleanup is Failed/Pending.
 Ended Prepared/TaskAdmitted facts do not prove physical absence; their sealed
 identities accept a vacant cleanup owner. Closing with unfinished physical
 cleanup remains recoverable. Factory inflight
