@@ -41,8 +41,9 @@ impl ConversationLocks {
             }
         }
     }
-    /// How many hold `id`'s lock or wait for it: each holder's guard and
-    /// each waiter keep the lock itself alive.
+    /// Retained lock references, including guards and unpolled lock futures.
+    /// This does not establish FIFO waiter admission
+    /// (`an_unpolled_lock_future_does_not_establish_waiter_order`).
     #[cfg(test)]
     pub(super) fn holders_and_waiters(&self, id: &ConversationId) -> usize {
         let locks = self.locks.lock().unwrap_or_else(PoisonError::into_inner);
@@ -54,5 +55,51 @@ impl ConversationLocks {
         let mut locks = self.locks.lock().unwrap_or_else(PoisonError::into_inner);
         locks.retain(|_, lock| lock.strong_count() > 0);
         locks.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        future::{poll_fn, Future},
+        task::Poll,
+    };
+
+    #[tokio::test]
+    async fn an_unpolled_lock_future_does_not_establish_waiter_order() {
+        let locks = ConversationLocks::default();
+        let id = ConversationId::new("00000000-0000-0000-0000-000000000651").unwrap();
+        let held = locks.lock(&id).await;
+        let mut unpolled = Box::pin(locks.entry(&id).lock_owned());
+        assert_eq!(locks.holders_and_waiters(&id), 2);
+
+        let mut first = Box::pin(locks.lock(&id));
+        assert!(
+            poll_fn(|cx| Poll::Ready(
+                std::pin::pin!(tokio::task::unconstrained(first.as_mut()))
+                    .poll(cx)
+                    .is_pending()
+            ))
+            .await
+        );
+        assert_eq!(locks.holders_and_waiters(&id), 3);
+        drop(held);
+        let acquired_first = tokio::time::timeout(std::time::Duration::from_secs(5), first)
+            .await
+            .expect("the polled waiter acquires before the unpolled future");
+        // The future counted before `first` still has no queue position.
+        assert!(
+            poll_fn(|cx| Poll::Ready(
+                std::pin::pin!(tokio::task::unconstrained(unpolled.as_mut()))
+                    .poll(cx)
+                    .is_pending()
+            ))
+            .await
+        );
+        drop(acquired_first);
+        let acquired_second = unpolled.await;
+        drop(acquired_second);
+        assert_eq!(locks.in_use(), 0);
     }
 }

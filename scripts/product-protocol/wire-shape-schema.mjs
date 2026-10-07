@@ -100,6 +100,10 @@ export function admitWireSchemas(definitions, roots, references = {}) {
     }
     switch (node.type) {
       case "string":
+        if (owns(node, "enum")) {
+          fields(node, ["type", "enum"])
+          return { kind: "stringEnum", values: stringEnum(node.enum) }
+        }
         fields(node, ["type", "minLength", "maxLength"])
         return { kind: "string", ...bounds(node, "minLength", "maxLength") }
       case "boolean":
@@ -153,6 +157,19 @@ export function admitWireSchemas(definitions, roots, references = {}) {
       default:
         refuse("type")
     }
+  }
+  function stringEnum(values) {
+    if (!Array.isArray(values) || values.length === 0) refuse("string enum")
+    const admitted = []
+    const seen = new Set()
+    for (const value of values) {
+      const text = literal(value)
+      if (text.length === 0) refuse("empty string enum")
+      if (seen.has(text)) refuse("duplicate string enum")
+      seen.add(text)
+      admitted.push(text)
+    }
+    return admitted
   }
   function integer(node) {
     if (!owns(node, "minimum") || node.minimum !== 0) refuse("unsigned minimum")

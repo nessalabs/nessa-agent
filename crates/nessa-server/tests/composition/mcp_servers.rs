@@ -724,14 +724,8 @@ async fn composed_settings_publish_privately_under_the_lock_and_audit_without_va
         .collect();
     assert_eq!(live, ["mcptest", "nessa"]);
     // Two changes, two records each: requested, then the outcome.
-    let mut records: Vec<serde_json::Value> = std::fs::read_dir(&audit)
-        .unwrap()
-        .map(|entry| {
-            serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()
-        })
-        .collect();
+    let records = records_in(&audit);
     assert_eq!(records.len(), 4);
-    records.sort_by_key(|record| record["observedAtMs"].as_u64());
     for record in &records {
         assert_eq!(record["kind"], "mcp_servers");
         assert_eq!(record["target"]["name"], "mcptest");
@@ -1182,16 +1176,80 @@ async fn pid_in(file: &Path) -> i64 {
     read().unwrap()
 }
 
-/// The records in `audit`, in the order they were observed.
+/// Audit records have no chronological ordering contract.
 fn records_in(audit: &Path) -> Vec<serde_json::Value> {
-    let mut records: Vec<serde_json::Value> = std::fs::read_dir(audit)
+    let records: Vec<serde_json::Value> = std::fs::read_dir(audit)
         .unwrap()
         .map(|entry| {
             serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()
         })
         .collect();
-    records.sort_by_key(|record| record["observedAtMs"].as_u64());
     records
+}
+
+/// Select by recorded semantics; operation IDs pair requested and outcome.
+fn audit_record<'a>(
+    records: &'a [serde_json::Value],
+    action: &str,
+    phase: &str,
+) -> &'a serde_json::Value {
+    let mut matching = records
+        .iter()
+        .filter(|record| record["action"] == action && record["phase"] == phase);
+    let record = matching.next().expect("recorded transition");
+    assert!(matching.next().is_none(), "one matching transition");
+    record
+}
+
+#[test]
+#[should_panic(expected = "one matching transition")]
+fn audit_selection_rejects_ambiguous_operation_ids() {
+    let records = [
+        serde_json::json!({"action": "inspect", "phase": "outcome", "operationId": "first"}),
+        serde_json::json!({"action": "inspect", "phase": "outcome", "operationId": "second"}),
+    ];
+    audit_record(&records, "inspect", "outcome");
+}
+
+#[test]
+#[should_panic(expected = "recorded transition")]
+fn audit_selection_rejects_a_missing_phase() {
+    let records = [serde_json::json!({
+        "action": "inspect", "phase": "requested", "operationId": "inspection"
+    })];
+    audit_record(&records, "inspect", "outcome");
+}
+
+#[test]
+fn audit_inspection_pair_does_not_depend_on_file_or_timestamp_order() {
+    for times in [[7, 7, 7, 7], [9, 8, 3, 1]] {
+        let root = tempfile::tempdir().unwrap();
+        for (name, action, phase, operation, time) in [
+            ("d", "inspect", "requested", "inspection", times[0]),
+            ("a", "save", "outcome", "save", times[1]),
+            ("c", "inspect", "outcome", "inspection", times[2]),
+            ("b", "save", "requested", "save", times[3]),
+        ] {
+            std::fs::write(
+                root.path().join(name),
+                serde_json::to_vec(&serde_json::json!({
+                    "action": action, "phase": phase, "operationId": operation, "observedAtMs": time
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let mut records = records_in(root.path());
+        assert_eq!(records.len(), 4);
+        // Exercise the selector against every rotation, independent of read_dir order.
+        for _ in 0..4 {
+            let requested = audit_record(&records, "inspect", "requested");
+            let outcome = audit_record(&records, "inspect", "outcome");
+            assert_eq!(requested["operationId"], "inspection");
+            assert_eq!(requested["operationId"], outcome["operationId"]);
+            records.rotate_left(1);
+        }
+    }
 }
 
 /// LS3e, on the composed gateway: shutdown while an inspection is blocked
@@ -1261,11 +1319,12 @@ async fn shutdown_cuts_an_inspection_blocked_mid_read_and_records_it_before_the_
     );
     let took = started.elapsed();
     assert!(took < Duration::from_secs(2), "{took:?}");
-    // Written before the stop returned: the inspection's two records, after
-    // the save's two.
+    // All four records exist before stop returns; operation IDs pair the
+    // inspection independently of file order and wall-clock observations.
     let records = records_in(&audit);
     assert_eq!(records.len(), 4);
-    let outcome = &records[3];
+    let outcome = audit_record(&records, "inspect", "outcome");
+    let requested = audit_record(&records, "inspect", "requested");
     assert_eq!(outcome["action"], "inspect");
     assert_eq!(outcome["phase"], "outcome");
     assert_eq!(outcome["transition"]["outcome"], "inspected");
@@ -1275,8 +1334,8 @@ async fn shutdown_cuts_an_inspection_blocked_mid_read_and_records_it_before_the_
     // requested record.
     assert_eq!(outcome["cause"], "gateway_stopping");
     assert_eq!(outcome["initiator"], serde_json::json!({"kind": "system"}));
-    assert_eq!(records[2]["cause"], "caller_requested");
-    assert_eq!(records[2]["operationId"], outcome["operationId"]);
+    assert_eq!(requested["cause"], "caller_requested");
+    assert_eq!(requested["operationId"], outcome["operationId"]);
     // Killed with its group.
     within("the server and its child are gone", || {
         !alive(pid) && !alive(child)

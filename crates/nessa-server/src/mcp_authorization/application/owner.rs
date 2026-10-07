@@ -7,7 +7,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{mpsc::Receiver, Mutex, Notify};
 use uuid::Uuid;
 
 use super::discovery::{self, DiscoverFailure, Discovered};
@@ -46,6 +46,22 @@ struct PendingExchange {
     verifier: Option<String>,
     redirect: Option<String>,
     client_id: Option<String>,
+}
+
+/// Admission is decided once under the domain lock. The stream can release
+/// its listener before an accepted callback starts any external effect.
+enum AuthCallbackOutcome {
+    PendingStale(Arc<Mutex<Slot>>),
+    Refused {
+        slot: Arc<Mutex<Slot>>,
+        refusal: Refusal,
+    },
+    Answer(AuthorizeAnswer),
+    Exchange {
+        slot: Arc<Mutex<Slot>>,
+        code: String,
+        prepared: PendingExchange,
+    },
 }
 
 impl Reply {
@@ -261,9 +277,7 @@ impl AuthorizationOwner {
         };
         let owner = Arc::clone(self);
         tokio::spawn(async move {
-            if let Ok(query) = redirect.accepted.await {
-                let _ = owner.complete_callback(server, query).await;
-            }
+            owner.receive_callbacks(server, redirect.candidates).await;
         });
         AuthorizeAnswer::PendingConsent {
             attempt_id,
@@ -273,14 +287,36 @@ impl AuthorizationOwner {
     }
 
     pub async fn complete_callback(&self, server: Uuid, query: CallbackQuery) -> AuthorizeAnswer {
+        let admission = self.admit_callback(server, query).await;
+        self.finish_callback(admission).await
+    }
+
+    async fn receive_callbacks(&self, server: Uuid, mut candidates: Receiver<CallbackQuery>) {
+        while let Some(query) = candidates.recv().await {
+            let admission = self.admit_callback(server, query).await;
+            if matches!(admission, AuthCallbackOutcome::PendingStale(_)) {
+                let _ = self.finish_callback(admission).await;
+                continue;
+            }
+            drop(candidates);
+            let _ = self.finish_callback(admission).await;
+            return;
+        }
+    }
+
+    async fn admit_callback(&self, server: Uuid, query: CallbackQuery) -> AuthCallbackOutcome {
         let slot = match self.existing(server).await {
             Recalled::Present(slot) => slot,
-            Recalled::Absent => return AuthorizeAnswer::DiscoveryFailed,
-            Recalled::Unavailable => return AuthorizeAnswer::AuthorizationIncomplete,
+            Recalled::Absent => {
+                return AuthCallbackOutcome::Answer(AuthorizeAnswer::DiscoveryFailed)
+            }
+            Recalled::Unavailable => {
+                return AuthCallbackOutcome::Answer(AuthorizeAnswer::AuthorizationIncomplete)
+            }
         };
         let now = self.clock.now_ms();
         let configured = self.resources.resource(server);
-        let (decision, prepared) = {
+        let outcome = {
             let mut guard = slot.lock().await;
             let resource = configured.unwrap_or_else(|| guard.auth.resource.clone());
             let decision = guard.auth.step(Command::Callback {
@@ -290,33 +326,63 @@ impl AuthorizationOwner {
                 resource,
             });
             guard.auth = decision.auth.clone();
-            let prepared = match decision.auth.phase {
-                Phase::Exchanging { attempt } => Some(PendingExchange {
-                    reply: Reply::exchange(attempt, decision.auth.resource.clone()),
-                    endpoint: guard.token_endpoint.clone(),
-                    verifier: guard.verifier.clone(),
-                    redirect: guard.redirect_uri.clone(),
-                    client_id: guard.auth.client_id.clone(),
-                }),
-                _ => None,
-            };
-            (decision, prepared)
+            match decision.refusal {
+                Some(Refusal::StaleCallback)
+                    if matches!(decision.auth.phase, Phase::PendingConsent { .. }) =>
+                {
+                    AuthCallbackOutcome::PendingStale(Arc::clone(&slot))
+                }
+                Some(refusal) => AuthCallbackOutcome::Refused {
+                    slot: Arc::clone(&slot),
+                    refusal,
+                },
+                None => match (decision.auth.phase, query.code) {
+                    (Phase::Exchanging { attempt }, Some(code)) => AuthCallbackOutcome::Exchange {
+                        slot: Arc::clone(&slot),
+                        code,
+                        prepared: PendingExchange {
+                            reply: Reply::exchange(attempt, decision.auth.resource.clone()),
+                            endpoint: guard.token_endpoint.clone(),
+                            verifier: guard.verifier.clone(),
+                            redirect: guard.redirect_uri.clone(),
+                            client_id: guard.auth.client_id.clone(),
+                        },
+                    },
+                    _ => AuthCallbackOutcome::Refused {
+                        slot: Arc::clone(&slot),
+                        refusal: Refusal::StaleCallback,
+                    },
+                },
+            }
         };
-        if let Some(refusal) = decision.refusal {
-            let _ = self.persist(&slot).await;
-            return match refusal {
-                Refusal::StaleCallback | Refusal::Expired | Refusal::Denied => {
-                    AuthorizeAnswer::DiscoveryFailed
-                }
-                Refusal::AlreadyReady => {
-                    let generation = slot.lock().await.auth.generation;
-                    AuthorizeAnswer::Ready { generation }
-                }
-                _ => self.refusal_now(&slot).await,
-            };
-        }
-        let Some(prepared) = prepared else {
-            return self.refusal_now(&slot).await;
+        outcome
+    }
+
+    async fn finish_callback(&self, outcome: AuthCallbackOutcome) -> AuthorizeAnswer {
+        let (slot, code, prepared) = match outcome {
+            AuthCallbackOutcome::PendingStale(slot) => {
+                let _ = self.persist(&slot).await;
+                return AuthorizeAnswer::DiscoveryFailed;
+            }
+            AuthCallbackOutcome::Refused { slot, refusal } => {
+                let _ = self.persist(&slot).await;
+                return match refusal {
+                    Refusal::StaleCallback | Refusal::Expired | Refusal::Denied => {
+                        AuthorizeAnswer::DiscoveryFailed
+                    }
+                    Refusal::AlreadyReady => {
+                        let generation = slot.lock().await.auth.generation;
+                        AuthorizeAnswer::Ready { generation }
+                    }
+                    _ => self.refusal_now(&slot).await,
+                };
+            }
+            AuthCallbackOutcome::Exchange {
+                slot,
+                code,
+                prepared,
+            } => (slot, code, prepared),
+            AuthCallbackOutcome::Answer(answer) => return answer,
         };
         if self.persist(&slot).await.is_err() {
             return AuthorizeAnswer::AuthorizationIncomplete;
@@ -326,9 +392,6 @@ impl AuthorizationOwner {
                 .exchange_stopped(&slot, &prepared.reply, Command::ExchangeUncertain, false)
                 .await;
         }
-        let Some(code) = query.code else {
-            return self.refusal_now(&slot).await;
-        };
         self.exchange(&slot, &code, prepared).await
     }
 

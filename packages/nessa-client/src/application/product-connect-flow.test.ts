@@ -26,6 +26,11 @@ describe("runProductHandshake", () => {
     await expect(runProductHandshake(wire, options, challenge)).rejects.toThrow("sent")
     // A cap, not a replacement: the wait may be shorter than the connection's
     // deadline but never outlives the challenge it answers.
+    expect(request.mock.calls[0]?.[1]).toMatchObject({
+      credential: "secret",
+      client: { id: "test" },
+      surface: { kind: "cli", instance: "test" },
+    })
     expect(request.mock.calls[0]?.[2]).toEqual({ atMostMs: 1_500 })
     request.mockClear()
     vi.setSystemTime(102_000)

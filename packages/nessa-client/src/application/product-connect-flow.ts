@@ -9,6 +9,7 @@ import {
   ProductEvent,
   ProductMethod,
   type ProductSessionReady,
+  type SessionAuthenticateParams,
   type SessionChallenge,
 } from "../protocol/product-types.js"
 import type { WireSession } from "../transport/wire-session.js"
@@ -63,15 +64,17 @@ export async function runProductHandshake(
   if (remainingMs <= 0) {
     throw new RetryableConnectError("session.challenge expired")
   }
+  const authenticate: SessionAuthenticateParams = {
+    minVersion,
+    maxVersion,
+    nonce: challenge.nonce,
+    credential: options.auth.credential,
+    client: { id: options.client.id },
+    surface: options.surface,
+  }
   const payload = await session.request(
     ProductMethod.SessionAuthenticate,
-    {
-      minVersion,
-      maxVersion,
-      nonce: challenge.nonce,
-      credential: options.auth.credential,
-      client: { id: options.client.id },
-    },
+    authenticate,
     // The challenge expires; waiting past it proves nothing.
     { atMostMs: remainingMs },
   )

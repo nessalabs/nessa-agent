@@ -4,23 +4,36 @@
  * long seeded transcript. Not part of run-all. Not a frame-budget gate —
  * those rows stay in perf-budget.mjs (sample workspace, #588 / #606). Not a
  * 10,000-chat run — that stays workspace-load.mjs (#595). The observe
- * walk is on main (#607). This script does not time it. A browser
- * timing of that catalogue is a follow-up.
+ * walk is on main (#607). An incomplete `conversation.list` is refused
+ * before a gateway page opens (`seedHeld` in `lib/alpha-gateway.mjs`).
  *
  * Chromium records CDP Performance metrics, Long Animation Frames, and long
  * tasks. WebKit records Navigation Timing, paint, and rAF gaps, without
  * CPU throttling or CDP. A frame over 50 ms is stored on the row. It does
  * not fail the row: this script fails when the window never became ready
  * or the interaction did not do what it is named for.
+ *
+ * `--with-gateway` is the alpha path: a scripted gateway with
+ * `paneLimits.maxPanes` conversations and one long transcript the gateway
+ * stored. The sample workspace above is the fixture path.
  */
 import { execSync } from "node:child_process"
-import { mkdirSync } from "node:fs"
+import { mkdirSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { register } from "tsx/esm/api"
-import { TEXT_REPLY_SCENARIO } from "../../../scripts/mcp-test-server/scenarios.mjs"
-import { launch, openPage, waitUntilSettled, withEngines } from "./lib/browser.mjs"
+import { parseScenario } from "../../../scripts/mcp-test-server/scripted-scenario.mjs"
+import {
+  capHeld,
+  listedOnPage,
+  scrollHeld,
+  scriptedReplyText,
+  seedGatewayStress,
+  sessionRowSelector,
+  transcriptHeld,
+} from "./lib/alpha-gateway.mjs"
+import { openPage, waitUntilSettled, withEngines } from "./lib/browser.mjs"
 import { attempt, CannotRun, chosen, log, table } from "./lib/cli.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
 import { panelCredential, startGatewayStack } from "./lib/gateway-stack.mjs"
@@ -79,11 +92,13 @@ Chromium uses CDP. WebKit has no CPU throttle and no CDP metrics.
 
   --runs <n>       Cold/warm pairs (default 3).
   --only <list>    startup, panes, transcript, gateway.
-  --with-gateway   Also time a scripted gateway's empty window (no agent
-                   turn, no catalogue). Needs the gateway built. Adds the
-                   gateway phase even when --only is omitted.
+  --with-gateway   Also stress a scripted gateway: cold and warm startup
+                   once the seeded conversations are listed, panes filled
+                   to the cap, and one long transcript scrolled. Needs the
+                   gateway built. Adds the gateway phase even when --only
+                   is omitted. Columns only. Both engines; Chromium adds CDP.
   --agent          Passed to the gateway stack (default claude). The
-                   scripted agent does not call it.
+                   scripted agent answers every prompt with text.
 
 Cold is a fresh context with the HTTP cache disabled (Chromium). Warm is
 two reloads later in that context, cache enabled: the first fills the
@@ -98,7 +113,9 @@ Navigation Timing and paint are the document's own clock. Startup is not
 CPU-throttled. Neither clock is a budget. The table's median is the same
 upper-middle median as the frame budget's. maxFrameMs is the largest of
 each run's longest rAF gap, not a median. WebKit leaves cache null.
-The transcript phase uses the columns session list.
+The transcript phase uses the columns session list. The gateway phase
+does too: its ready mark is the long conversation's session row, so the
+clock includes the list arriving.
 
 Panes fill to paneLimits.maxPanes (the layout's own cap) with the
 switcher, then one more split is pressed. That split must not add a pane.
@@ -217,6 +234,59 @@ async function armSplitChord(page) {
  * which is after `act` has already run. That gap is a missing sample. The
  * caller still checks what `act` did.
  */
+/**
+ * Fills to the layout cap, then presses one more split. Chromium throttles
+ * that press. A short fill is returned as a failure, not thrown: the row
+ * still records what the window did.
+ */
+async function measureRefusedSplit(page, context, engine) {
+  try {
+    await openPanes(page, paneLimits.maxPanes)
+  } catch (error) {
+    if (!(error instanceof CannotRun)) throw error
+  }
+  const filled = await paneCount(page)
+  let frames = null
+  let unmeasured = null
+  let cdp = null
+  await armSplitChord(page)
+  const chordBefore = await page.evaluate(() => window.__alphaSplitChord ?? 0)
+  if (engine === "chromium") {
+    cdp = await throttle(context, page, 4)
+    try {
+      await cdp.send("Performance.enable")
+      await page.waitForTimeout(400)
+      const sampled = await framesOf(
+        page,
+        () => page.keyboard.press(keys.newSessionBeside),
+        800,
+      )
+      frames = sampled.frames
+      unmeasured = sampled.unmeasured ?? null
+    } finally {
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 })
+    }
+  } else {
+    await page.keyboard.press(keys.newSessionBeside)
+    await settled(page)
+  }
+  const chordAfter = await page.evaluate(() => window.__alphaSplitChord ?? 0)
+  const after = await paneCount(page)
+  return {
+    filled,
+    after,
+    frames,
+    unmeasured,
+    surface: await sampleOf(page, cdp, null, null),
+    failures: capHeld({
+      filled,
+      after,
+      cap: paneLimits.maxPanes,
+      chordArrived: chordAfter !== chordBefore,
+    }),
+  }
+}
+
 async function framesOf(page, act, settle) {
   try {
     return { frames: await measure(page, act, settle) }
@@ -291,6 +361,7 @@ async function coldAndWarm(
       baseline,
     )
     await shot(opened.page, shots, shotName)
+    if (prepare?.afterSample) await prepare.afterSample(opened.page, "cold")
     if (engine === "chromium" && cdp)
       await cdp.send("Network.setCacheDisabled", { cacheDisabled: false })
     await opened.page.reload({ waitUntil: "domcontentloaded" })
@@ -308,11 +379,75 @@ async function coldAndWarm(
       engine === "chromium" ? "enabled" : null,
       baseline,
     )
+    if (prepare?.afterSample) await prepare.afterSample(opened.page, "warm")
     return { opened, cold, warm }
   } catch (error) {
     await opened.close()
     throw error
   }
+}
+
+function sessionIds(page) {
+  return page
+    .locator(css.sessionListRow)
+    .evaluateAll((rows) =>
+      rows
+        .map((row) => row.getAttribute("data-session-row"))
+        .filter((value) => value !== null),
+    )
+}
+
+function messageTexts(page, role) {
+  return page
+    .locator(css.message)
+    .evaluateAll(
+      (rows, wanted) =>
+        rows
+          .filter((row) => row.getAttribute("data-role") === wanted)
+          .map((row) => row.textContent),
+      role,
+    )
+}
+
+function openSessionId(page) {
+  return page.evaluate(
+    (selector) =>
+      document.querySelector(selector)?.getAttribute("data-session-row") ?? null,
+    `${css.sessionList} [data-session-row][data-open]`,
+  )
+}
+
+/**
+ * True when the long conversation is the open session-list row, its
+ * transcript has a box, every user bubble is the seeded text, and every
+ * agent bubble is the scripted reply. Evaluated in the page: it closes
+ * over nothing.
+ */
+function transcriptOnScreen({
+  transcript,
+  message,
+  turns,
+  longText,
+  replyText,
+  longId,
+  openRow,
+}) {
+  const scroller = document.querySelector(transcript)
+  if (!scroller || scroller.getClientRects().length === 0) return false
+  const open = document.querySelector(openRow)
+  if (!open || open.getAttribute("data-session-row") !== longId) return false
+  const bubbles = (role) =>
+    [...scroller.querySelectorAll(message)].filter(
+      (row) => row.getAttribute("data-role") === role,
+    )
+  const users = bubbles("user")
+  const agents = bubbles("agent")
+  return (
+    users.length === turns &&
+    users.every((bubble) => bubble.textContent === longText) &&
+    agents.length === turns &&
+    agents.every((bubble) => bubble.textContent === replyText)
+  )
 }
 
 async function scrollTranscript(page) {
@@ -409,67 +544,25 @@ await main(
                 initScripts: [observers],
               })
               try {
-                // A short fill is this row failing, not "could not run".
-                try {
-                  await openPanes(opened.page, paneLimits.maxPanes)
-                } catch (error) {
-                  if (!(error instanceof CannotRun)) throw error
-                }
-                const filled = await paneCount(opened.page)
-                let frames = null
-                let unmeasured = null
-                let cdp = null
-                await armSplitChord(opened.page)
-                const chordBefore = await opened.page.evaluate(
-                  () => window.__alphaSplitChord ?? 0,
+                const measured = await measureRefusedSplit(
+                  opened.page,
+                  opened.context,
+                  engine,
                 )
-                if (engine === "chromium") {
-                  cdp = await throttle(opened.context, opened.page, 4)
-                  try {
-                    await cdp.send("Performance.enable")
-                    await opened.page.waitForTimeout(400)
-                    const sampled = await framesOf(
-                      opened.page,
-                      () => opened.page.keyboard.press(keys.newSessionBeside),
-                      800,
-                    )
-                    frames = sampled.frames
-                    unmeasured = sampled.unmeasured ?? null
-                  } finally {
-                    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 })
-                  }
-                } else {
-                  await opened.page.keyboard.press(keys.newSessionBeside)
-                  await settled(opened.page)
-                }
-                const chordAfter = await opened.page.evaluate(
-                  () => window.__alphaSplitChord ?? 0,
-                )
-                const after = await paneCount(opened.page)
-                const surface = await sampleOf(opened.page, cdp, null, null)
                 if (engine === "chromium")
                   await shot(opened.page, shots, `panes-${layout}.jpg`)
-                const failures = []
-                if (filled !== paneLimits.maxPanes)
-                  failures.push(
-                    `opened ${filled} panes, the layout caps at ${paneLimits.maxPanes}`,
-                  )
-                if (chordAfter === chordBefore)
-                  failures.push("the split chord did not reach the page")
-                if (after !== filled)
-                  failures.push(
-                    `a split past the cap left ${after} panes, the cap is ${paneLimits.maxPanes}`,
-                  )
                 return {
-                  failures,
-                  panes: after,
+                  failures: measured.failures,
+                  panes: measured.after,
                   cap: paneLimits.maxPanes,
-                  dom: surface.dom,
-                  heapUsed: surface.heapUsed,
-                  nodes: surface.nodes,
-                  frames,
-                  unmeasured,
-                  overBudget: frames ? exceedsFrameBudget(frames.maxFrame) : null,
+                  dom: measured.surface.dom,
+                  heapUsed: measured.surface.heapUsed,
+                  nodes: measured.surface.nodes,
+                  frames: measured.frames,
+                  unmeasured: measured.unmeasured,
+                  overBudget: measured.frames
+                    ? exceedsFrameBudget(measured.frames.maxFrame)
+                    : null,
                   note: "split refused at paneLimits.maxPanes; #588/#606 own the budget rows",
                 }
               } finally {
@@ -558,11 +651,7 @@ await main(
                   failures.push("the long transcript is not in the session list")
                 if ((plain?.length ?? 0) < transcriptSpec.messageCharacters)
                   failures.push("the open transcript is shorter than the long plain part")
-                if (!scrolled?.found) failures.push("no transcript to scroll")
-                if (scrolled?.found && !scrolled.overflow)
-                  failures.push("the long transcript did not overflow its scroller")
-                if (scrolled?.overflow && !(scrolled.scrollTop > 0))
-                  failures.push("the scroll did not move")
+                failures.push(...scrollHeld(scrolled))
                 return {
                   failures,
                   spec: transcriptSpec,
@@ -584,76 +673,231 @@ await main(
     }
 
     if (want("gateway")) {
-      await attempt(
-        rep,
-        { name: "gateway", engine: "chromium", layout: "columns" },
-        async () => {
-          const stack = await startGatewayStack(
-            { ...options, mode: "prod", verbose: options.verbose },
-            "alpha-perf",
-            { as: "panel", scenario: TEXT_REPLY_SCENARIO },
+      if (!options.layouts.includes("columns"))
+        throw new CannotRun("gateway stress uses the columns session list")
+      const scenarioPath = join(here, "../fixtures/alpha-stress/reply.json")
+      const replyText = scriptedReplyText(
+        parseScenario(JSON.parse(readFileSync(scenarioPath, "utf8"))),
+      )
+      await attempt(rep, { name: "gateway-seed" }, async () => {
+        const stack = await startGatewayStack(
+          { ...options, mode: "prod", verbose: options.verbose },
+          "alpha-perf",
+          {
+            as: "panel",
+            scenario: scenarioPath,
+          },
+        )
+        try {
+          const seed = await seedGatewayStress(
+            stack.client,
+            options.agent,
+            paneLimits.maxPanes,
+            stack.gateway,
+            replyText,
           )
-          let browser
-          try {
-            const endpoint = stack.gateway.url.replace(/^http/, "ws")
-            const credential = panelCredential(stack.gateway)
-            browser = await launch("chromium", options)
-            const colds = []
-            const warms = []
-            const listed = []
-            const origin = new URL(stack.url).origin
-            for (let run = 0; run < runs; run++) {
-              const pair = await coldAndWarm(browser, {
-                url: `${origin}/desktop.html`,
-                engine: "chromium",
-                layout: "columns",
-                ready: css.pane,
-                shots: run === 0 ? shots : null,
-                shotName: "gateway-startup.jpg",
-                prepare: {
-                  readyTimeout: 60_000,
-                  initScripts: [[gatewayHost, { endpoint, credential }]],
-                },
-              })
-              colds.push(pair.cold)
-              warms.push(pair.warm)
-              listed.push(await pair.opened.page.locator(css.sessionListRow).count())
-              if (run === 0) await shot(pair.opened.page, shots, "gateway-warm.jpg")
-              await pair.opened.close()
-            }
-            const failures = [...colds, ...warms].flatMap(startupFailures)
-            if ([...colds, ...warms].some((sample) => sample.endpointAskMs == null))
-              failures.push("the page did not ask the host for the gateway endpoint")
-            if (listed.some((count) => count !== 0))
-              failures.push(
-                `the gateway window listed sessions (${listed.join(" ")}); none were created`,
+          const endpoint = stack.gateway.url.replace(/^http/, "ws")
+          const credential = panelCredential(stack.gateway)
+          const url = `${new URL(stack.url).origin}/desktop.html`
+          const ready = `${css.sessionList} ${sessionRowSelector(seed.longId)}`
+          const host = [gatewayHost, { endpoint, credential }]
+          const layout = "columns"
+          await withEngines(options, rep, async (engine, browser) => {
+            log(`browser ${engine} ${browser.version()}`)
+            await attempt(rep, { name: "gateway-startup", engine, layout }, async () => {
+              const colds = []
+              const warms = []
+              const idChecks = []
+              let opened
+              try {
+                for (let run = 0; run < runs; run++) {
+                  const pair = await coldAndWarm(browser, {
+                    url,
+                    engine,
+                    layout,
+                    ready,
+                    shots: run === 0 && engine === "chromium" ? shots : null,
+                    shotName: "gateway-startup.jpg",
+                    prepare: {
+                      readyTimeout: 60_000,
+                      initScripts: [host],
+                      afterSample: async (page, kind) => {
+                        idChecks.push({ kind, run, ids: await sessionIds(page) })
+                      },
+                    },
+                  })
+                  opened = pair.opened
+                  colds.push(pair.cold)
+                  warms.push(pair.warm)
+                  if (run === 0 && engine === "chromium")
+                    await shot(pair.opened.page, shots, "gateway-warm.jpg")
+                  await pair.opened.close()
+                  opened = null
+                }
+              } finally {
+                await opened?.close()
+              }
+              const failures = [...colds, ...warms].flatMap(startupFailures)
+              for (const check of idChecks) {
+                for (const line of listedOnPage(seed.ids, check.ids))
+                  failures.push(`${check.kind} run ${check.run + 1}: ${line}`)
+              }
+              if ([...colds, ...warms].some((sample) => sample.endpointAskMs == null))
+                failures.push("the page did not ask the host for the gateway endpoint")
+              rows.push(
+                { engine, layout, ...startupRow("gateway-cold", colds) },
+                { engine, layout, ...startupRow("gateway-warm", warms) },
               )
-            rows.push(
-              {
-                engine: "chromium",
-                layout: "columns",
-                ...startupRow("gateway-cold", colds),
-              },
-              {
-                engine: "chromium",
-                layout: "columns",
-                ...startupRow("gateway-warm", warms),
+              return {
+                failures,
+                cold: colds,
+                warm: warms,
+                note: "scripted gateway; ready when the long conversation is listed",
+              }
+            })
+
+            await attempt(rep, { name: "gateway-panes", engine, layout }, async () => {
+              const opened = await openPage(browser, {
+                url,
+                layout,
+                ...viewport,
+                readySelector: ready,
+                readyTimeout: 60_000,
+                initScripts: [observers, host],
+              })
+              try {
+                const measured = await measureRefusedSplit(
+                  opened.page,
+                  opened.context,
+                  engine,
+                )
+                if (engine === "chromium")
+                  await shot(opened.page, shots, "gateway-panes.jpg")
+                return {
+                  failures: [
+                    ...listedOnPage(seed.ids, await sessionIds(opened.page)),
+                    ...measured.failures,
+                  ],
+                  panes: measured.after,
+                  cap: paneLimits.maxPanes,
+                  dom: measured.surface.dom,
+                  heapUsed: measured.surface.heapUsed,
+                  nodes: measured.surface.nodes,
+                  frames: measured.frames,
+                  unmeasured: measured.unmeasured,
+                  overBudget: measured.frames
+                    ? exceedsFrameBudget(measured.frames.maxFrame)
+                    : null,
+                  note: "split refused at paneLimits.maxPanes on the scripted gateway",
+                }
+              } finally {
+                await opened.close()
+              }
+            })
+
+            await attempt(
+              rep,
+              { name: "gateway-transcript", engine, layout },
+              async () => {
+                const opened = await openPage(browser, {
+                  url,
+                  layout,
+                  ...viewport,
+                  readySelector: ready,
+                  readyTimeout: 60_000,
+                  initScripts: [observers, host],
+                })
+                try {
+                  const row = opened.page.locator(ready)
+                  if (await row.count()) await row.click()
+                  let onScreen = false
+                  try {
+                    await opened.page.waitForFunction(
+                      transcriptOnScreen,
+                      {
+                        transcript: css.transcript,
+                        message: css.message,
+                        turns: seed.turns,
+                        longText: seed.longText,
+                        replyText: seed.replyText,
+                        longId: seed.longId,
+                        openRow: `${css.sessionList} [data-session-row][data-open]`,
+                      },
+                      { timeout: 30_000 },
+                    )
+                    onScreen = true
+                  } catch (error) {
+                    if (!String(error?.message ?? error).includes("Timeout")) throw error
+                  }
+                  let frames = null
+                  let unmeasured = null
+                  let cdp = null
+                  let scrolled = null
+                  if (onScreen && engine === "chromium") {
+                    cdp = await throttle(opened.context, opened.page, 4)
+                    try {
+                      await cdp.send("Performance.enable")
+                      await opened.page.waitForTimeout(400)
+                      const sampled = await framesOf(
+                        opened.page,
+                        () => scrollTranscript(opened.page),
+                        600,
+                      )
+                      frames = sampled.frames
+                      unmeasured = sampled.unmeasured ?? null
+                    } finally {
+                      await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 })
+                    }
+                    scrolled = await scrollTranscript(opened.page)
+                  } else if (onScreen) {
+                    scrolled = await scrollTranscript(opened.page)
+                  }
+                  const surface = await sampleOf(opened.page, cdp, null, null)
+                  if (engine === "chromium")
+                    await shot(opened.page, shots, "gateway-transcript.jpg")
+                  return {
+                    failures: transcriptHeld({
+                      turns: seed.turns,
+                      longText: seed.longText,
+                      replyText: seed.replyText,
+                      userTexts: await messageTexts(opened.page, "user"),
+                      agentTexts: await messageTexts(opened.page, "agent"),
+                      openId: await openSessionId(opened.page),
+                      longId: seed.longId,
+                      scrolled,
+                      onScreen,
+                    }),
+                    scrolled,
+                    dom: surface.dom,
+                    heapUsed: surface.heapUsed,
+                    nodes: surface.nodes,
+                    frames,
+                    unmeasured,
+                    overBudget: frames ? exceedsFrameBudget(frames.maxFrame) : null,
+                  }
+                } finally {
+                  await opened.close()
+                }
               },
             )
-            return {
-              failures,
-              gatewayMs: stack.timings.gatewayMs,
-              previewMs: stack.timings.devServerMs,
-              cold: colds,
-              warm: warms,
-              note: "scripted gateway, no conversation created; not a catalogue walk (#607 observe is on main; this script does not time it)",
-            }
-          } finally {
-            await browser?.close()
-            await stack.close()
+          })
+          return {
+            failures: [],
+            gatewayMs: stack.timings.gatewayMs,
+            previewMs: stack.timings.devServerMs,
+            conversations: seed.ids.length,
+            turns: seed.turns,
+            characters: seed.characters,
+            listComplete: seed.listComplete,
+            listedCount: seed.listedCount,
+            truncated: seed.truncated,
+            messageCount: seed.messageCount,
+            note: "scripted gateway; conversation.list complete; the catalogue walk is not measured",
           }
-        },
-      )
+        } finally {
+          await stack.close()
+        }
+      })
     }
 
     if (rows.length)

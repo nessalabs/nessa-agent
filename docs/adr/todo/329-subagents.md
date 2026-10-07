@@ -237,13 +237,16 @@ while ordinary Agent controllers continue to enforce their own execution states.
 Spawn progress retains the reservation, prepared child, tree attachment and
 initial-submission reference. These are relationship facts, not another provider
 attachment state machine. Existing creation/attachment/submission receipts supply
-their authoritative progress. Every reservation ends in an attached child or a
-settled failure; uncertain startup retains its reservation and cleanup ownership.
-A rejected startup that held no cleanup owner ends the chart at `Ended` without
-a physical release and returns the live slot. The child lifetime stays open.
-A rejected publication does not prepare, returns the live slot, and keeps the
-in-memory reservation for an identical retry. An uncertain publication keeps
-the slot.
+their authoritative progress. Uncertain startup retains its reservation and
+cleanup ownership. An initial rejected publication never starts the factory and
+returns its unused live slot; the retained binding still identifies the original
+attempt. A later Prepared, Attached or TaskAdmitted publication failure retains
+actual cleanup ownership and any provider-acknowledged task receipt; capacity
+remains held until actual physical Released evidence. A rejected startup with no
+cleanup owner records `Ended` and returns its unused slot, while the admitted
+child lifetime is sealed `Closing` under row 38. Neither `Ended` nor a returned
+slot proves absence or `Closed`; failed-startup completion remains tracked in
+#649. Uncertain initial publication retains its slot.
 
 ## Statechart design contract
 
@@ -273,7 +276,7 @@ stateDiagram-v2
         ParentIdle --> ParentBusy: parent input admitted
         ParentBusy --> ParentIdle: parent execution settled
     }
-    Open --> Closing: close lifetime / seal tree admission and retain cause
+    Open --> Closing: close or admitted spawn failure / seal tree admission and retain first cause
     state Closing {
         state ParentCleanup {
             [*] --> ParentPending
@@ -331,6 +334,12 @@ stateDiagram-v2
     Refused --> [*]
     Ended --> [*]
 ```
+
+The linked lifetime chart owns sealing independently of this spawn progress.
+Canonical row 38 synchronously seals an admitted child's actual shared gate and
+lifetime on typed failure before fallback evidence awaits. Joining an existing
+close preserves its first cause; lookup conflicts and pre-admission failures do
+not revoke another attempt's child. This does not imply physical release.
 
 Completion of this spawn chart means its admission operation settled, not that
 its child's task finished. Refusing dispatch records `Draining` and then `Ended`
@@ -618,11 +627,15 @@ This differs from the explicit approval-mode recovery retirement defined above.
    alongside descendant cleanup, so a parent waiting for child output cannot
    deadlock the drain.
 4. Join constructors and admitted controls through their existing supervisors.
-   A child produced after the fence is closed before dispatch. A failed
-   reservation that held a cleanup owner is released after its physical
-   ownership is settled. A rejected publication, or a rejected startup that
-   held no cleanup owner, returns the live slot without that physical release
-   and keeps the retained reservation.
+   A child produced after the fence shares its sealed admission gate; a
+   substitute submission-port call is not runnable permission. A failed
+   reservation that held a cleanup owner returns capacity only after actual
+   physical Released evidence. Initial rejected publication never starts the
+   factory and returns unused capacity; later publication failure retains actual
+   cleanup ownership and any acknowledged task receipt until physical release.
+   Rejected startup with no cleanup owner records Ended and returns unused
+   capacity, but its admitted child is already sealed Closing by row 38. The
+   retained binding is not absence or Closed proof (#649).
 5. Retain each child's physical cleanup, review/queue settlement and audit result.
    Failure on one child does not suppress cleanup attempts for the rest.
 6. Report aggregate success only after parent and descendants confirm cleanup
@@ -703,6 +716,165 @@ snapshot copy takes its revision with the copy. After a newer copy is
 acknowledged, an older copy is not written. The store still replaces one body.
 A newer write that fails does not record that acknowledgement, so an older copy
 can still be written afterward.
+
+### SDK audit eligibility and owned root delivery (#628)
+
+The SDK implementation uses one live `OwnershipGraph`. Application publication
+metadata selects durable identities and the last audit-acknowledged affirmative
+spawn/report state. Snapshot writers copy this projection and its revision under
+the admission scope; audit and store ports run outside that scope. The existing
+write fence orders copied projections. This SDK behavior does not implement the
+proposed gateway child composition above.
+
+```mermaid
+flowchart LR
+  Transition[Graph transition under admission scope] --> Token[Immutable target and generation token]
+  Token --> Audit[Audit outside scope]
+  Audit -->|accepted| Ack[Validate token and acknowledge captured state under scope]
+  Audit -->|rejected or uncertain safety transition| Projection
+  Ack --> Projection[Eligible projection plus live safety facts]
+  Projection --> Fence[Revision and write-order fence]
+  Fence --> Store[Ownership store]
+```
+
+```mermaid
+stateDiagram-v2
+  [*] --> Private: owned root transaction admits
+  Private --> Removed: definite rejection with no retained safety/dependents
+  Private --> RetainedClosing: audit uncertainty
+  Private --> Eligible: audit acceptance
+  Eligible --> Delivered: caller claims delivery ticket before returning Ready
+  Eligible --> RetainedClosing: failed store or unclaimed ticket
+  RetainedClosing --> ClosingEvidenceFailed: never-bound absence audit rejects
+  ClosingEvidenceFailed --> RetainedClosing: explicit close retry
+  RetainedClosing --> RetainedClosing: binding wins scoped absence decision; drain reinspects actual owner
+  RetainedClosing --> Closed: absence or cleanup evidence acknowledged
+```
+
+Closing/Closed lifetime rows, physical release, and nonrunnable spawn safety
+states override pending permission milestones. A safety state's KnownMilestone
+preserves a returned task receipt and actual physical preparation; an unaudited
+Attached permission retains Prepared in the nonrunnable shape. Normal pending
+affirmative rows retain their last eligible milestone. These milestones do not
+assert resource absence. Transferred resources retain their actual cleanup owner.
+The absence of any recorded transfer, together with the domain's root identity
+check, permits an atomic never-bound absence claim. Binding a resource owner or
+handing out an eligible participation gate records possible transfer and blocks
+that claim. A prior claim refuses later external transfers and usable gate
+handoffs. Private lifetimes cannot confer transfer or descendant admission
+authority; eligibility includes the retained ancestor chain. Refused restored
+history may expose only its already-sealed inspection gate. Active child flights
+refuse public transfers; their accepted PrepareRequest supplies the remembered
+child gate directly to the factory. Preparation Err seals attachment authority
+before fallible publication, without manufacturing Closed or physical release.
+The same graph/gate revocation applies to every typed error after this invocation
+admits its own child, before fallback evidence awaits or definite slot return.
+It preserves earlier close cause, factual ownership/receipts and the original
+failure. Lookup, conflict and pre-admission errors cannot revoke another child.
+Restore derives that seal from retained nonrunnable progress. The claim's actual
+audit result controls settlement.
+A queued successful send does not transfer root ownership; claiming its internal
+delivery ticket when `open_root` returns Ready does. Eligible or uncertain IDs
+remain retained; only a definite preeligible audit rejection removes its target.
+
+The table shares ordering requirements with #625. #628 verifies rejected and
+uncertain ports; whole-transaction panic supervision is separate #625 work.
+
+| # | Ordering | Required result |
+|---|---|---|
+| 1 | A inserts private root; A audit held; B root audit accepts and stores | B completes; durable view includes B, excludes A and A dependents. |
+| 2 | Row 1; A audit rejects; restart | Remove only private A; restart has no A ghost; opening A succeeds. B and unrelated history unchanged. |
+| 3 | A private reservation audit held; B unrelated commit | No private reservation/child/dependents appear in B snapshot; factory A has not run. |
+| 4 | A Prepared acknowledged; Attached audit held; B commits | A snapshot remains Prepared, retains A child/resource relation. |
+| 5 | A Attached acknowledged; TaskAdmitted audit held; B commits | A snapshot remains Attached; no unaudited affirmative task receipt. |
+| 6 | A transition audit accepts after close has sealed A | Token may acknowledge captured eligibility, but projection cannot restore runnable permission and the sealed lifetime remains Closing/Closed. The factory-installed Agent shared gate owns attachment/submission admission; this does not claim a substitute InitialSubmit port is never called. |
+| 7 | A close intent mutates graph; its audit rejects; B or A stores | Coherent Closing rows/cause/operation persist; no new open/reservation permission leaks. |
+| 8 | Cleanup reports Released; cleanup audit/store rejects or is uncertain | Physical Released recorded and capacity reconciled before fallible ports; close evidence may remain failed/pending, never fake acknowledgement. |
+| 9 | Initial root audit accepts; store definitively rejects | ID already eligible: preserve ID, seal/reconcile root; return Store(Rejected). Do not delete eligible ID. |
+|10 | Initial root store writes then returns Uncertain; later reconcile/restart | Preserve same ID, seal/reconcile and persist conservative close state; never erase uncertain landed ID. |
+|11 | Initial root audit is Uncertain | No affirmative Open grant; preserve identity in conservative Closing retention; return typed audit uncertainty and own reconciliation. |
+|12 | Caller drops while root audit held; audit later rejects | Owned transaction completes; definitely preeligible private target removed only; no root ghost. |
+|13 | Caller drops while root audit held; audit later accepts/store succeeds | Owner detects unclaimed result and seals/reconciles eligible ID on its originating live runtime, even if the caller moves to and drops on a thread without Tokio context. No orphan Open root. |
+|14 | Success queued, caller drops before claiming delivery | Delivery-ticket Drop schedules the same reconciliation using the originating live runtime capability, independent of the dropping thread context. Successful send alone does not transfer ownership; runtime shutdown is outside this live-runtime guarantee. |
+|15 | Caller drops during eligible root store/reconciliation | Root owner remains alive and keeps/reconciles eligible ID; other sessions can complete. |
+|16 | Older copied snapshot waits; newer eligible snapshot writes; older resumes | Existing revision fence skips older write; eligible IDs and last acknowledged progress were included in newer projection. |
+|17 | Older token completes after target settled or newer transition generation exists | Token cannot overwrite newer metadata or graph lifecycle; no reopening or stale progress substitution. |
+|18 | Resource-free root was never bound, needs reconciliation | Explicit unbound-root transition proves absent resources, performs truthful settlement audit, and settles only with actual evidence acknowledgement. A child or stale close operation refuses before mutating physical/evidence facts; a matching token cannot acknowledge against refused restored history. Empty drain is not success. |
+|19 | Row 18 settlement audit rejects | Root remains nonrunnable Closing with honest physical absence/evidence failure; eligible root lookup enables explicit retry. No fabricated ResourceReport. |
+|20 | Restore snapshots containing neighbors/history/private rejection cleanup | Preserve previous report states, close operations and spawn milestones; no incidental recovery changes to unrelated live graph caused by removal. |
+|21 | Never-bound absence claim wins admission scope; resource binding arrives while its audit is held or rejected | Reject binding and return the unchanged physical owner to the caller. Keep the absence claim through failure and evidence-only retry. |
+|22 | Drain sees no owner and no bound fact; resource binding then wins admission scope before the scoped absence decision | Skip absence and let the existing drain inspect again, retain the accepted owner and once-bound fact, and close that owner without a caller retry, including unclaimed-root reconciliation. No never-bound proof may be inferred. A gate-only handoff at the same boundary retains Closing/Incomplete because it supplies no cleanup owner. |
+|23 | Binding names unknown/Closed/released lifetime, or replaces an occupied resource slot | Return typed refusal plus the rejected owner; preserve any previous owner. Restored Closing may bind only before physical release or absence claim. |
+|24 | Initial root audit rejects after another operation sealed it, or eligible publication fails after a cleanup owner transferred | Targeted deletion refuses safety history; retain and reconcile the same identity and its real ownership facts. Private external transfers are refused by row 28. |
+|25 | Task submission returned its receipt; TaskAdmitted audit is held; close seals/settles child and stores before audit accepts or rejects | Domain-derived nonrunnable Unconfirmed retention includes the actual receipt while its permission is pending. Preserve Closing/Closed cause, terminal safety progress, and the receipt through resume without prepare or resubmit. |
+| 26 | Admitted lifetime gate is handed out before absence is claimed; caller drops or close audit rejects | Record possible ownership transfer under admission scope. Seal the held gate and retain Closing until real external attachment evidence; gate handoff does not prove physical existence or absence. |
+| 27 | Never-bound absence claim wins before gate handoff | Refuse a new usable participation gate while audit is held/rejected and after closure; preserve already-held gates and their seals. |
+| 28 | Private reservation/root identity is visible through reads/audit; external bind or participation is requested | Binding returns UnpublishedLifetime plus the unchanged owner; participation is absent. Read visibility confers no transfer authority. Accepted admission subsequently permits normal transfer. |
+| 29 | Root admission audit held; its observed ID is used as spawn parent | Refuse UnpublishedParent before capacity reservation, graph rows, or factory effect. Acceptance permits a later spawn; rejection leaves no descendants. |
+| 30 | Unconfirmed/StartupFailed/Ended safety transition audit rejects or is uncertain; graph is already nonrunnable | Use the shared safety writer. Persist the actual safety fact even when a same-state mark_unconfirmed transition is unnecessary or refused. |
+| 31 | Report is suppressed by a closed parent; suppression audit rejects | Persist suppression as a safety fact and return the actual audit failure. Do not turn a rejected Submitted admission into suppression without a domain close. |
+| 32 | Initial reservation audit is uncertain | Retain request/binding/child identity as Unconfirmed and seal its child lifetime. No runnable external gate or affirmative Reserved grant; retain capacity until authoritative release. |
+| 33 | Accepted reservation; factory future held; external binding or participation arrives | The existing admitted child flight owns the transfer slot. Refuse external binding with its unchanged owner and refuse a new external gate. Success and failure.cleanup retain the factory's actual owner; caller drop does not end the owned transaction. Restored vacant children have no replaying flight and permit cleanup binding. |
+| 34 | Accepted reservation/store invokes factory with its typed gate; close races preparation | PrepareRequest carries the already remembered OwnedLifetime gate with the same scope/seal. Record possible transfer under the admission scope; parent close seals the actual installed Agent gate. Public participation cannot bypass the flight. |
+| 35 | Factory returns preparation Err after receiving a gate; safety audit rejects/uncertain; restart | Revoke attachment authority synchronously through that gate before audit/store awaits. Preserve startup progress and cleanup ownership; revocation alone proves no physical release or Closed lifecycle. Rejected+None promises no outstanding attachment/cleanup; Some retains unfinished cleanup. Restore derives the seal from retained nonrunnable startup/safety progress without another durable boolean. |
+| 36 | Restored rooted history is contradictory but its IDs remain retained | Return RefusedHistory with the supplied cleanup owner. Only existing sealed inspection gates remain readable; no new transfer/dispatch authority or snapshot rewriting. Save/reload preserves the exact refusal evidence. |
+| 37 | Initial root audit is uncertain, or publication fails after eligibility | Seal the actual root and retain its identity in one admission scope, before retained eligibility becomes observable. Preserve first cause and bound ownership; persist evidence and start the existing drain outside the scope. No retained eligible Open frame may confer attachment or spawn authority. Closing cleanup binding remains legal. |
+| 38 | This invocation admitted a child; initial or milestone publication, factory, or submission returns a typed error | Revoke graph and actual child/descendant gates with TerminalFailure/Runtime synchronously before fallback audit/store awaits, definite slot return, or flight release. Join preserves the first cause and exact original failure. Preserve actual owners/receipts and private rejection exclusion; no physical release or completion inference. Lookup/conflict/pre-admission errors do not revoke another child. Closing vacant cleanup binding remains legal until actual settlement; legacy restored Open+Ended Reserved still refuses transfer. |
+
+Enforcers: the public coordinator tests in
+`tests/application/agent_execution/subagents/publication.rs` name rows 1–15,
+18–19, 21–36 and 38. `rejected_close_intent_is_persisted_before_cleanup_can_complete`
+adds the held-cleanup boundary for row 7. The library's
+`row_14_queued_root_drop_without_tokio_context_uses_original_live_runtime`
+enforces row 14 after queued success moves to a thread without Tokio context,
+while the originating runtime remains live; the stored Closed/Released/
+Acknowledged facts and same-session reopening are observed before runtime exit.
+`an_older_snapshot_does_not_replace_a_newer_seal` enforces row 16;
+`publication::tests::row_17_tokens_acknowledge_captured_progress_once_and_refuse_stale_generation`
+and the domain's `unbound_absence_token_refuses_child_closed_history_and_stale_completion`
+enforce row 17. Domain
+`unbound_absence_admission_refuses_child_and_stale_operation_without_mutating_history` and
+`unbound_absence_completion_refuses_restored_history_despite_matching_token`
+enforce row 18's admission correlation and receiving-graph authority, including rejection after failed evidence and refused restored history.
+Domain `row_20_private_root_discard_preserves_neighbors_closed_history_reports_and_recovery`
+checks targeted removal without re-running recovery. Library
+`row_37_retained_root_is_sealed_at_the_admission_scope_boundary` checks
+the retained identity and actual gate at the first observable scope boundary. Row38
+checks admitted typed-error revocation across publication/factory/submission,
+held fallback evidence, original error priority, and non-admitted conflicts.
+Library `row_38_error_revocation_joins_preserve_first_cause_and_actual_gates_without_new_evidence`
+checks Closing/Closed joins and the first cause without a new first-close audit.
+Library `row_22_binding_between_absence_inspections_is_drained_without_caller_retry`
+holds the boundary after the speculative owner/bound inspection and before the
+admission-scoped absence decision; public binding supplies the actual owner and
+unclaimed reconciliation closes it once with durable provider acknowledgement.
+`row_22_gate_between_absence_inspections_retains_closing_incomplete` holds the same
+boundary but hands out only a participation gate; it cannot invent settlement.
+Domain `sealed_progress_retains_actual_receipt_without_inventing_permission_or_terminal_changes`
+checks the direct unknown/Open/sealed/terminal receipt projection boundaries. Publication's
+`retained_projection_preserves_valid_history_and_referential_closure` checks
+valid Closed history and prevents child identity retention without its eligible ancestor.
+`row_30_already_safety_reconciliation_still_writes_current_fact` checks
+same-state safety reconciliation; the restored cycle test preserves sealed
+inspection-only gates and refuses transfer/dispatch across save/reload.
+The real Agent factory tests `row_34_factory_gate_installs_on_real_agent_and_shared_close_refuses_attachment`
+and `row_35_failed_factory_revokes_stale_real_agent_attachment_authority` enforce
+the accepted typed gate and attachment revocation. `row_35_restored_unfinished_cleanup_accepts_vacant_binding_but_keeps_attachment_sealed`
+preserves cleanup recovery. Legacy restored Open + Ended { known: Reserved } completed-startup history refuses new transfer;
+current failed startup revokes to Closing and conservatively permits vacant
+cleanup binding until authoritative absence/release settlement (#649). Closing
++ Ended Reserved alone does not prove absence: draining after preparation can
+emit it while cleanup is Failed/Pending.
+Ended Prepared/TaskAdmitted facts do not prove physical absence; their sealed
+identities accept a vacant cleanup owner. Closing with unfinished physical
+cleanup remains recoverable. Factory inflight
+ownership remains the existing admitted transaction, not a progress-string flag.
+
+Row 8 proves release/capacity ordering, not propagation of every extra
+coordinator cleanup audit/storage failure: that evidence debt is tracked in #646
+with #625 supervision. Report admission uses independently held audit in
+`private_report_does_not_leak_through_unrelated_commit`. These SDK tests do not
+claim the proposed gateway wiring or #625 panic supervision is implemented.
 
 Validate retained ownership before allowing child dispatch on startup:
 
@@ -856,6 +1028,10 @@ Keep the preview under Settings > Advanced > Experimental as a window preference
 owned by the settings catalogue/preferences layer. It controls whether the view
 is offered, not whether the backend executes or closes children. Preview-off
 cannot disable required cleanup.
+
+Linux process cleanup acceptance and its before/after-init ordering table live in
+the [canonical cleanup state](../../state/services/sdk/runtime/stop-cancels-owned-work-and-confirms-process-cleanup.md#linux-container-acceptance-630).
+They exercise existing physical cleanup, not recursive child-Agent ownership.
 
 ## Portable fixtures and live boundary evidence
 

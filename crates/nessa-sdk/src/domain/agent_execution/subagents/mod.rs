@@ -7,12 +7,18 @@
 //! The arrow is a method call. The graph decides which relationship changes are
 //! legal. It does not read a clock, a database, or a provider. Application code
 //! audits the evidence these methods return and performs effects outside the decision.
+//! Targeted private-root discard preserves neighboring live/history rows. A
+//! correlated UnboundRootSettlement consumes the actual absence-audit result;
+//! the application supplies proof that no physical owner was transferred.
 mod error;
 mod graph;
 mod values;
 
 pub use error::OwnershipError;
-pub use graph::{ChildPage, ChildView, CloseAdmission, Dispatch, OwnershipGraph, SpawnAdmission};
+pub use graph::{
+    ChildPage, ChildView, CloseAdmission, Dispatch, OwnershipGraph, SpawnAdmission,
+    UnboundRootSettlement,
+};
 pub use values::{
     select_inherited_policy, AgentLifetimeId, ApprovalPolicy, CloseOperationId, DeliveryState,
     EvidenceFact, HostActor, Initiator, KnownMilestone, LifetimeCause, LifetimeRow, LifetimeState,
