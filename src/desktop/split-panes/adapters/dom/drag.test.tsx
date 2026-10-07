@@ -497,6 +497,13 @@ it("holds pane bodies out of the commit frame and brings one back each frame aft
   await frames()
   expect(host.querySelector("[data-drag-settling]")).toBeNull()
   expect(fake.state.drops).toHaveLength(1)
+  // The copy is gone on that landing. Fading it would blend it with the blur.
+  const handoff = animated.filter(
+    (asked) =>
+      asked.element.classList.contains(classes.ghost) &&
+      asked.keyframes.some((frame) => frame.opacity === 0),
+  )
+  expect(handoff.at(-1)?.duration).toBe(0)
   await act(async () => root.unmount())
 })
 

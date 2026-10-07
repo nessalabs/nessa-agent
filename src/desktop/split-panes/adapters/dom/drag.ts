@@ -51,7 +51,6 @@
  * ways — whatever moves a host gives a pane — are untouched.
  */
 import { useEffect, type RefObject } from "react"
-import { reducedMotion } from "../../../adapters/motion-preference"
 import type { SplitPanesSource } from "../../application/ports"
 import {
   copyShape,
@@ -1339,8 +1338,10 @@ export function useSplitPanesDrag(
       ])
         .then(() => {
           if (!ownsDragResources(phase, made)) return
+          // Gone at once. A fade would blend the copy with the blur after it
+          // landed (`drag.test.tsx`).
           const fade = ghost.animate([{ opacity: 0.85 }, { opacity: 0 }], {
-            duration: reducedMotion() ? 0 : 120,
+            duration: 0,
             fill: "forwards",
           })
           drawing.fade = fade
