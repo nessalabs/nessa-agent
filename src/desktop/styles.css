@@ -338,9 +338,9 @@ html:not(.dark) [data-surface] {
 }
 
 /* While panes travel, the blur holds still. Drifting it would raster the
-   blur again on every frame of the drag (`styles.test.ts`). The mark is on
-   the document as well as the workspace, so the shell's blur is held too
-   (`marks.ts`). */
+   blur again on every frame of the drag (`styles.test.ts`). Pressing and a
+   flight set their mark on the document (`marks.ts`). A drag's preview sets
+   its mark on the grid, not the document (`drag.test.tsx`). */
 :root:is([data-drag-pressing], [data-drag-reflow], [data-split-flipping])
   .desktop-ambient::before,
 :root:is([data-drag-pressing], [data-drag-reflow], [data-split-flipping])
@@ -363,6 +363,14 @@ html:not(.dark) [data-surface] {
    does not rebuild a blur (`styles.test.ts`). */
 :root[data-drag-pressing] .desktop-grain {
   visibility: hidden;
+}
+
+/* Outside the open sidebar's blur sample, so hiding the grain does not
+   rebuild that blur (`styles.test.ts`). The 28px is the sidebar's blur radius. */
+.workspace[data-sidebar="open"] .desktop-grain {
+  clip-path: inset(
+    0 0 0 calc(var(--workspace-sidebar-width) + var(--desktop-gutter) + 28px)
+  );
 }
 
 @keyframes desktop-drift {

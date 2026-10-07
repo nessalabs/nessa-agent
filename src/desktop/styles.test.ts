@@ -286,20 +286,30 @@ it("drops the composer's blur while a drag is carried, and leaves the sidebar's 
     .slice(styles.indexOf(":root[data-drag-pressing] .desktop-grain {"))
     .split("}")[0]
   expect(grain).toMatch(/visibility:\s*hidden/)
-  // The resting shadow stays. A hairline in its place rastered a new blur
-  // on the release.
-  expect(styles).not.toContain(":root[data-drag-pressing] .workspace-sidebar {")
-  const rows = readFileSync(
+  // Grain stays outside the open sidebar's blur sample. Hiding it then changes
+  // none of the pixels that blur reads. The inset is the sidebar's own radius.
+  const sample = styles
+    .slice(styles.indexOf('.workspace[data-sidebar="open"] .desktop-grain {'))
+    .split("}")[0]
+  const inset = sample.match(/\+\s*(\d+)px\)/)
+  const sidebar = readFileSync(
     new URL("./workspace/ui/source-list/source-list.css", import.meta.url),
     "utf8",
   )
-  const row = rows
-    .slice(rows.indexOf(".workspace[data-overview-glass] .workspace-row {"))
+  const radius = sidebar.match(
+    /\.workspace-sidebar \{[^}]*backdrop-filter:\s*blur\((\d+)px\)/,
+  )
+  expect(inset?.[1]).toBe(radius?.[1])
+  // The resting shadow stays. A hairline in its place rastered a new blur
+  // on the release.
+  expect(styles).not.toContain(":root[data-drag-pressing] .workspace-sidebar {")
+  const row = sidebar
+    .slice(sidebar.indexOf(".workspace[data-overview-glass] .workspace-row {"))
     .split("}")[0]
   expect(row).toMatch(/transition:\s*none/)
-  const quiet = rows
+  const quiet = sidebar
     .slice(
-      rows.indexOf(
+      sidebar.indexOf(
         ".workspace[data-overview-glass] .workspace-row[data-active]:not(.agents-overview-entry)",
       ),
     )
@@ -346,17 +356,19 @@ it("skips pane bodies on the frame a drop commits them", () => {
   // While the preview moves, the conversation is not painted. The scroller
   // keeps its box (`drag.mjs`).
   const quiet = sheet
-    .slice(sheet.indexOf(".workspace[data-drag-reflow] .workspace-transcript-inner {"))
+    .slice(
+      sheet.indexOf(".split-panes-grid[data-drag-reflow] .workspace-transcript-inner {"),
+    )
     .split("}")[0]
   expect(quiet).toMatch(/content-visibility:\s*hidden/)
   const mask = sheet
-    .slice(sheet.indexOf(".workspace[data-drag-reflow] .workspace-transcript {"))
+    .slice(sheet.indexOf(".split-panes-grid[data-drag-reflow] .workspace-transcript {"))
     .split("}")[0]
   expect(mask).toMatch(/mask-image:\s*none/)
   const travelling = sheet
     .slice(
       sheet.indexOf(
-        ".workspace:is([data-split-flipping], [data-drag-reflow]) .workspace-pane {",
+        ":is(.workspace[data-split-flipping], .split-panes-grid[data-drag-reflow])\n  .workspace-pane {",
       ),
     )
     .split("}")[0]
@@ -452,7 +464,7 @@ it("paints nothing of a pane under the window's controls: its content below the 
   expect(
     body(
       panes,
-      ".workspace:is([data-split-flipping], [data-drag-reflow]) .desktop-header[data-sliver] {",
+      ":is(.workspace[data-split-flipping], .split-panes-grid[data-drag-reflow])\n  .desktop-header[data-sliver] {",
     ),
   ).toMatch(/opacity:\s*0/)
 })

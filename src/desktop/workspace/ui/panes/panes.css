@@ -102,15 +102,16 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
  * as `> *`: a rule whose subject is any element makes the browser restyle
  * every element in every pane as a flight begins; named, two per pane.
  */
-.workspace:is([data-split-flipping], [data-drag-reflow]) .workspace-pane,
-.workspace:is([data-split-flipping], [data-drag-reflow])
+:is(.workspace[data-split-flipping], .split-panes-grid[data-drag-reflow]) .workspace-pane,
+:is(.workspace[data-split-flipping], .split-panes-grid[data-drag-reflow])
   .workspace-pane
   > .workspace-pane-header,
 .workspace[data-split-flipping] .workspace-pane > .workspace-pane-body {
   will-change: transform;
 }
 
-.workspace:is([data-split-flipping], [data-drag-reflow]) .workspace-pane {
+:is(.workspace[data-split-flipping], .split-panes-grid[data-drag-reflow])
+  .workspace-pane {
   box-shadow: inset 0 0 0 1px var(--desktop-rim);
   transition: none;
   /* Opaque while it travels. The resting tint composites the blurred ambient
@@ -123,11 +124,11 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
    The scroller's box stays, so a preview still measures the transcript
    (`drag.mjs`). The fade at its edges is a mask; it waits until the pane
    has landed. */
-.workspace[data-drag-reflow] .workspace-transcript {
+.split-panes-grid[data-drag-reflow] .workspace-transcript {
   mask-image: none;
 }
 
-.workspace[data-drag-reflow] .workspace-transcript-inner {
+.split-panes-grid[data-drag-reflow] .workspace-transcript-inner {
   content-visibility: hidden;
 }
 
@@ -138,7 +139,7 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
   content-visibility: hidden;
 }
 
-.workspace:is([data-split-flipping], [data-drag-reflow])
+:is(.workspace[data-split-flipping], .split-panes-grid[data-drag-reflow])
   .workspace-pane
   .desktop-composer {
   backdrop-filter: none;
@@ -152,7 +153,8 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
  * rests in the corner (`styles.css`), so a pane sliding out of the corner, or
  * into it, would carry it beneath them.
  */
-.workspace:is([data-split-flipping], [data-drag-reflow]) .desktop-header[data-sliver] {
+:is(.workspace[data-split-flipping], .split-panes-grid[data-drag-reflow])
+  .desktop-header[data-sliver] {
   opacity: 0;
   transition: none;
 }

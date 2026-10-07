@@ -467,19 +467,35 @@ it("holds pane bodies out of the frame a cancel lets the preview go, and brings 
   const fake = fakeSource(two())
   const root = await mounted(fake)
   await liftOntoTwo()
-  expect(document.documentElement.hasAttribute(marks.reflow)).toBe(true)
+  // The preview's mark is on the grid. The document keeps pressing, which
+  // already pauses the ambient, and does not take a copy of the mark.
+  const grid = gridOf(host)
+  expect(grid?.hasAttribute(marks.reflow)).toBe(true)
+  expect(grid?.parentElement?.hasAttribute(marks.reflow)).toBe(false)
+  expect(document.documentElement.hasAttribute(marks.reflow)).toBe(false)
+  expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
   pointer("pointerup", 827, 400)
   // The preview's mark drops as the copy flies home, and the bodies are
   // waiting on that turn — one comes back on the frame after.
   await act(async () => {})
-  expect(document.documentElement.hasAttribute(marks.reflow)).toBe(false)
+  expect(grid?.hasAttribute(marks.reflow)).toBe(false)
+  expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
   expect(host.querySelectorAll("[data-drag-settling]").length).toBeGreaterThan(1)
   await act(
     async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
   )
   expect(host.querySelectorAll("[data-drag-settling]").length).toBe(1)
-  await frames()
+  expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
+  // Glass returns on the next frame, and that frame brings no body back.
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(host.querySelectorAll("[data-drag-settling]").length).toBe(1)
+  expect(document.documentElement.hasAttribute(marks.pressing)).toBe(false)
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
   expect(host.querySelector("[data-drag-settling]")).toBeNull()
   expect(fake.state.drops).toEqual([])
   await act(async () => root.unmount())

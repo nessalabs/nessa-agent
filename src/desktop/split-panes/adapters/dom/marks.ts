@@ -39,7 +39,11 @@ export const marks = {
   dragCorner: "data-drag-corner",
   /** On the FLIP root while anything flies. */
   flipping: "data-split-flipping",
-  /** On the drag's root while a preview draws panes away from where they are laid out. */
+  /**
+   * On the grid while a preview draws panes away from where they are laid out.
+   * The sidebar is not in the grid, and the document does not get a copy: the
+   * ambient pause is already held by pressing (`drag.test.tsx`).
+   */
   reflow: "data-drag-reflow",
   /**
    * On the drag's root from the moment a press becomes a drag until a frame

@@ -541,16 +541,26 @@ export function useSplitPanesDrag(
     let waiting: { frame: number; timer: number } | null = null
     /** Bumped whenever glass blur is held or released, so a late release cannot drop a new drag's hold. */
     let glass = 0
+    /**
+     * The next body waits. That frame is the glass coming back, so it does not
+     * also paint a transcript into the sidebar's blur (`drag.test.tsx`).
+     */
+    let revealWaits = false
     const holdGlass = (on: boolean) => {
       const generation = ++glass
       if (on) {
+        revealWaits = false
         reflectMark(scope, marks.pressing, true)
         return
       }
-      // A frame after the preview's own paint is gone, so that frame does not
-      // also rebuild the glass blur (`styles.test.ts`).
+      // The next frame brings the first body back. Glass comes back the frame
+      // after that, and that frame brings no body with it (`drag.test.tsx`).
       requestAnimationFrame(() => {
-        if (generation === glass) reflectMark(scope, marks.pressing, false)
+        if (generation !== glass) return
+        if (scope.querySelector(`[${marks.settling}]`)) revealWaits = true
+        requestAnimationFrame(() => {
+          if (generation === glass) reflectMark(scope, marks.pressing, false)
+        })
       })
     }
     /** Drops the pending commit's frame and its listeners, if a drop is waiting on one. */
@@ -558,10 +568,26 @@ export function useSplitPanesDrag(
 
     /** One pane a frame, so letting the preview go does not lay every transcript out (`drag.test.tsx`). */
     const revealSettling = () => {
+      if (revealWaits) {
+        revealWaits = false
+        if (scope.querySelector(`[${marks.settling}]`))
+          requestAnimationFrame(revealSettling)
+        return
+      }
       const pane = scope.querySelector<HTMLElement>(`[${marks.settling}]`)
       pane?.removeAttribute(marks.settling)
       if (scope.querySelector(`[${marks.settling}]`))
         requestAnimationFrame(revealSettling)
+    }
+
+    /**
+     * The preview's mark, on the grid only. A copy on the workspace or the
+     * document would restyle the sidebar on the same frame (`drag.test.tsx`).
+     */
+    const reflowMark = (on: boolean) => {
+      const grid = gridOf(scope)
+      if (!grid || grid.hasAttribute(marks.reflow) === on) return
+      grid.toggleAttribute(marks.reflow, on)
     }
 
     /**
@@ -570,7 +596,8 @@ export function useSplitPanesDrag(
      * transcript out on that frame (`drag.test.tsx`).
      */
     const releaseReflow = () => {
-      if (!scope.hasAttribute(marks.reflow)) return
+      const grid = gridOf(scope)
+      if (!grid?.hasAttribute(marks.reflow)) return
       const waiting = scope.querySelector(`[${marks.settling}]`) !== null
       if (!waiting) {
         scope.querySelectorAll<HTMLElement>("[data-pane-key]").forEach((pane) => {
@@ -578,7 +605,7 @@ export function useSplitPanesDrag(
         })
         requestAnimationFrame(revealSettling)
       }
-      reflectMark(scope, marks.reflow, false)
+      reflowMark(false)
     }
 
     /**
@@ -778,8 +805,8 @@ export function useSplitPanesDrag(
       )
       if (scope.hasAttribute(marks.takesSpare) !== Boolean(outcome?.takesSpare))
         scope.toggleAttribute(marks.takesSpare, Boolean(outcome?.takesSpare))
-      if (outcome && landing && !scope.hasAttribute(marks.reflow))
-        reflectMark(scope, marks.reflow, true)
+      if (outcome && landing && !gridOf(scope)?.hasAttribute(marks.reflow))
+        reflowMark(true)
       // With less motion too: the panes take their rects at once
       // (`--desktop-base` is 0ms), or a swap's placeholder, under the copy,
       // would be all that showed.
