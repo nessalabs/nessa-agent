@@ -1172,12 +1172,6 @@ async fn proactive_current_warm_up_opens_and_closes_without_a_conversation_or_pr
     // ADR 221: from the moment it is scheduled, before any launch, the warm-up
     // may hold an agent process, so a refused retirement cannot miss it.
     assert!(resolver.warm_up_may_hold_resources());
-    let launch = launched(
-        &root.path().join("workspace/launch-opencode-startup.json"),
-        1,
-    )
-    .await;
-    let pid = i32::try_from(launch["pid"].as_i64().unwrap()).unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         while authority.releases.load(Ordering::SeqCst) != 1 {
             tokio::task::yield_now().await;
@@ -1185,6 +1179,13 @@ async fn proactive_current_warm_up_opens_and_closes_without_a_conversation_or_pr
     })
     .await
     .expect("startup preparation closes its session and managed use");
+    // Preparation may finish before the test observes its process. The release
+    // is authoritative; its durable launch record survives that completion.
+    let launch: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.path().join("workspace/launch-opencode-startup.json")).unwrap(),
+    )
+    .unwrap();
+    let pid = i32::try_from(launch["pid"].as_i64().unwrap()).unwrap();
     assert_process(pid, false);
     tokio::time::timeout(Duration::from_secs(5), async {
         while resolver.warm_up_may_hold_resources() {

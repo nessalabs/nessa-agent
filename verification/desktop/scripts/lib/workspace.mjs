@@ -168,7 +168,7 @@ export function switchLayout(page, layout) {
   )
 }
 
-/** Starts recording the drop zones the drag announces; `take()` returns and clears them. */
+/** Records announced drop zones; one-shot `take()` stops recording and releases its resources. */
 export async function recordZones(page) {
   const recorder = await page.evaluateHandle((sel) => {
     const status = document.querySelector(sel)

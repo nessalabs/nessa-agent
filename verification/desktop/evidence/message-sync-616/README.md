@@ -1,5 +1,7 @@
 # Transcript polling follow-up (#616)
 
+This record is chronological: early failures, diagnostics and later corrected runs remain separate. The latest follow-up is at the end; current merge disposition is on PR #642.
+
 Verified source head `5c5bb19753730ed58410ddc0b3229d3e25c5ad34`, clean tree, which merges main `5a045d9f2251e155e54949eafc7d9b241357d7fe`. Linux x86_64, Intel Xeon, 4 cores, 15 GiB RAM. Playwright 1.63.0 bundled Chromium and WebKit, headed.
 Chromium calibrated 4× CPU, ratio 4.07 (plain 46 ms, throttled 186 ms). A known 120 ms frame measured 116.6 ms and was attributed. WebKit unthrottled.
 The summary stays idle while the retained turn runs with text after send.
@@ -153,3 +155,13 @@ The narrow-pane midpoint regression fails before the final reach cap and passes 
 The zone recorder now owns its observer/listener until one-shot `take`, ignores duplicate coordinates as the model does, and retains observation timestamps. Native duplicate-coordinate probes pass both engines. These timestamps identify mutation observation, not model decision time; delayed observations remain in raw results. Delayed resting transitions pass while an injected moving vertical announcement and a filter revert fail.
 
 The first browser follow-up accidentally reused a development server from another checkout on port 1438. Its results are excluded from this branch’s verification. The corrected run uses this worktree’s explicitly owned server. The performance gate remains open.
+
+The corrected owned-checkout browser matrix holds **40/40** across Chromium/WebKit, both layouts and both sizes: sideways sweep, boundary jitter, midpoint swap, reduced motion, overview drag and sidebar-peek drag. Source tested: `95f393cfd91f4a63cd8c5e75c0c855a5aeec60b2`; the earlier wrong-checkout run is excluded.
+
+The final standard production sweep at source `95f393cf`, with no additional CPU workers or concurrent verification jobs, holds **19/35** including console/calibration (**17/33 interactions**). Chromium 4× calibration ratio 3.88 and the known 120 ms frame measured 114.9 ms with attribution. Sixteen interaction/layout rows exceed the unchanged 50 ms maximum; overall maximum is 216.7 ms on overview opening. Raw medians, maxima, frame samples and attribution are in `final-standard-budget.json` and the machine/configuration ledger. This standard-run failure is independent of the separately retained additional-contention failures. Gate 17 remains open.
+
+Final production delivery at UI source `95f393cf` holds **15/15**, three fresh pages per engine/layout, with no additional stress workers or concurrent verification jobs. Chromium uses calibrated 4× CPU; WebKit is unthrottled and recorded separately. Active and held-summary medians/maxima, frame samples, pacing and screenshots are retained in `final-delivery.json` / `final-delivery-shots`. This passing delivery result does not close the failed standard aggregate frame gate.
+
+A macOS CI test exposed an observation race: proactive warm-up closes its process on success, while its test waited for a currently live PID. The deterministic control waits for managed-use release before using the old live-process observer, which times out. The correction awaits authoritative release and reads the atomic durable launch record, retaining dead-PID and no-held-resource assertions. This is test-only; no gateway runtime behavior changes.
+
+Final scripted gateway repeat: **pass**, all three owners in Chromium/WebKit, with final UI/source and an explicit current-main binary path. `scripted-final-ui/pr-summary.md` holds the short verdict and `scripted-final-ui/` the raw check results/screenshots. The warm-up test correction passes all 23 current-agent composition tests, its isolated repeat, Rust formatting and server Clippy (all targets). The earlier macOS CI failure and deterministic delayed-observer reproduction remain recorded separately.
