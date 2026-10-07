@@ -101,8 +101,9 @@ interface Part {
  * failing is `failed`, not an empty list.
  *
  * A source that repeats an id is taken in once per update: the first copy
- * is kept, and `log` is told once for that update. A later read of the same
- * update does not tell it again.
+ * is kept, and `log` is told once for that update. The joined read is cached
+ * until a source notifies, so a later read of the same update does not tell
+ * it again.
  */
 export function joinSubagentSources(
   parts: readonly Part[],
@@ -115,10 +116,6 @@ export function joinSubagentSources(
   }
 
   const generation = new Map<string, number>()
-  const admitted = new Map<
-    string,
-    Map<string, { readonly generation: number; readonly read: SubagentRead }>
-  >()
   const combined = new Map<
     string,
     { readonly stamp: string; readonly read: SubagentRead }
@@ -127,11 +124,10 @@ export function joinSubagentSources(
 
   // Subscribed for the join's life. Composition holds one join for the
   // window; an update that lands while nobody is listening is still taken
-  // in on the next read, because the generation moved.
+  // in on the next read, because the generation moved and the cache dropped.
   for (const part of parts) {
     part.source.subscribe(() => {
       generation.set(part.key, (generation.get(part.key) ?? 0) + 1)
-      admitted.get(part.key)?.clear()
       combined.clear()
       for (const listener of listeners) listener()
     })
@@ -148,7 +144,7 @@ export function joinSubagentSources(
       const read = combine(
         parts.map((part) => ({
           key: part.key,
-          read: take(part, sessionId, log, generation, admitted),
+          read: admit(part.key, sessionId, part.source.forSession(sessionId), log),
         })),
       )
       combined.set(sessionId, { stamp: now, read })
@@ -172,29 +168,6 @@ export function unreadSubagentSource(): SubagentSource {
       return () => {}
     },
   }
-}
-
-function take(
-  part: Part,
-  sessionId: string,
-  log: SubagentLog,
-  generation: Map<string, number>,
-  admitted: Map<
-    string,
-    Map<string, { readonly generation: number; readonly read: SubagentRead }>
-  >,
-): SubagentRead {
-  const gen = generation.get(part.key) ?? 0
-  let bySession = admitted.get(part.key)
-  if (!bySession) {
-    bySession = new Map()
-    admitted.set(part.key, bySession)
-  }
-  const hit = bySession.get(sessionId)
-  if (hit && hit.generation === gen) return hit.read
-  const read = admit(part.key, sessionId, part.source.forSession(sessionId), log)
-  bySession.set(sessionId, { generation: gen, read })
-  return read
 }
 
 function admit(
