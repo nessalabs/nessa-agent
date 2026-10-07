@@ -25,16 +25,8 @@
     "oauth": "inside scheduled lane at flow initiation through scripted callback/access/refresh, excluding lane scheduling before initiation"
   },
   "fixture": {
-    "root_rows": [
-      0,
-      32,
-      256,
-      2048
-    ],
-    "history_states": [
-      "Open",
-      "Closed"
-    ],
+    "root_rows": [0, 32, 256, 2048],
+    "history_states": ["Open", "Closed"],
     "empty_only_once": true,
     "spawns": 0,
     "restore_validated": true,

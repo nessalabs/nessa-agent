@@ -5,9 +5,7 @@
   "selected_actual_main": "d55de88d9c6f5794b225da05b1055c511b9dba74",
   "restacked_head": "c9720f932ec290bc57fde0d1abc5bd4cf29a4cb2",
   "all_production_test_benchmark_bytes_identical": true,
-  "changed_guarded_paths": [
-    "docs/codebase-structure.md"
-  ],
+  "changed_guarded_paths": ["docs/codebase-structure.md"],
   "reason": "Automatic restack incorporates upstream650 module-map entries; feature source/test/benchmarks are unchanged. Pre-restack probes/timings retain their original identities.",
   "before_sha256": {
     "Cargo.lock": "fc5b9d9d6b4ca09f0418f4b4d92ba9b022ab61686335fcd62f53f48b2887e977",

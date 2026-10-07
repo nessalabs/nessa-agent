@@ -405,7 +405,6 @@ fn originating_runtime_shutdown_is_typed() {
         .unwrap();
     let held = runtime
         .block_on(store.worker.admit())
-        .ok()
         .expect("test held physical admission");
     let later = store.clone();
     let mut future = Box::pin(async move { later.read().await });

@@ -10,7 +10,7 @@
   "crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs": "cba50efecb5d4439d1fffb7cee4a502724f93c5d60ba5f1bf650e3fce7a48521",
   "crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs": null,
   "crates/nessa-sdk/src/infrastructure/session_storage/ownership/physical_tests.rs": null,
-  "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs": "e245bdbf44a08660d91be4b7203507f1e63cda3c6ac52f6c4d3843b1008610b2",
+  "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs": "9594c8c457bb5b3c12b37b8d091f6ca5ab806bea7511d58cc8a2910dacc76b3b",
   "crates/nessa-sdk/tests/infrastructure/session_storage.rs": "0ec5723626be3249abadf0a4d6727430990559048095eb36ae23244e31581d09",
   "crates/nessa-sdk/tests/infrastructure/session_storage/bounded_persistence_benchmark.rs": "224813965172886250ce91430ad6d586363d8d474dc533d768fd49a96186315d",
   "crates/nessa-server/Cargo.toml": "2cac1a1b46dc2efdb32f22854c1301428441b1a73da23856bb669a538cf3a2b2",

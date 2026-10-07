@@ -30,13 +30,7 @@
   "gates": [
     {
       "name": "default-off-test",
-      "command": [
-        "cargo",
-        "test",
-        "-p",
-        "nessa-local-storage",
-        "--offline"
-      ],
+      "command": ["cargo", "test", "-p", "nessa-local-storage", "--offline"],
       "exit": 0,
       "seconds": 18.091367968001578
     },
