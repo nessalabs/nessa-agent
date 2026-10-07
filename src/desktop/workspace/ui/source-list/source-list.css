@@ -90,8 +90,6 @@ html:not(.dark) .workspace-sidebar {
   padding-left: calc(var(--desktop-titlebar-safe-start) - var(--desktop-gutter));
 }
 
-/* Its own layer, so resampling the glass while a pane is carried does not
-   also record this list (`styles.test.ts`). */
 .workspace-sidebar-scroll {
   flex: 1;
   min-width: 200px;
@@ -100,7 +98,6 @@ html:not(.dark) .workspace-sidebar {
   overscroll-behavior: contain;
   padding: 4px 8px 12px;
   scrollbar-width: none;
-  transform: translate3d(0, 0, 0);
 }
 
 .workspace-sidebar-scroll::-webkit-scrollbar {

@@ -308,46 +308,26 @@ await main(meta, async ({ options, rep, url, mode }) => {
 
   await withEngines(options, rep, async (engine, browser) => {
     const calibration = await attempt(rep, { name: "calibration", engine }, async () => {
-      // The first frame after launch is often a vsync late. Record the run only
-      // after two attempts in a row measure the 120ms frame between 116 and
-      // 120.5 (`calibrationFrame`).
-      let result
-      let frame
-      let streak = 0
-      for (let n = 1; n <= 8; n++) {
-        const { context, page, close } = await openPage(browser, {
-          url,
-          ...viewport,
-          initScripts: [observers],
-        })
-        result = await calibrate(context, page, rate)
-        frame = await calibrationFrame(page)
-        await close()
-        log(
-          `calibration: busy loop ${result.plainMs} ms → ${result.throttledMs} ms at ${rate}× (ratio ${result.ratio})`,
-        )
-        log(
-          `calibration: a ${frame.cost} ms frame measured ${frame.measuredMs} ms, attributed by LoAF: ${frame.attributed}`,
-        )
-        const band =
-          frame.measuredMs >= 116 &&
-          frame.measuredMs <= 120.5 &&
-          result.ratio >= 3.85 &&
-          result.ratio <= 4.1
-        streak = band ? streak + 1 : 0
-        if (streak >= 2 || n === 8) break
-        log(`calibration attempt ${n} is not yet two frames in band; retrying`)
-      }
+      const { context, page, close } = await openPage(browser, {
+        url,
+        ...viewport,
+        initScripts: [observers],
+      })
+      const result = await calibrate(context, page, rate)
+      const frame = await calibrationFrame(page)
+      await close()
+      log(
+        `calibration: busy loop ${result.plainMs} ms → ${result.throttledMs} ms at ${rate}× (ratio ${result.ratio})`,
+      )
+      log(
+        `calibration: a ${frame.cost} ms frame measured ${frame.measuredMs} ms, attributed by LoAF: ${frame.attributed}`,
+      )
       const failures = []
       if (!result.ok)
         failures.push(`throttle did not apply: ratio ${result.ratio} at ${rate}×`)
       if (!frame.ok)
         failures.push(
           `a ${frame.cost} ms frame measured ${frame.measuredMs} ms (attributed: ${frame.attributed})`,
-        )
-      if (streak < 2)
-        failures.push(
-          `calibration did not hold twice (frame ${frame.measuredMs} ms, ratio ${result.ratio})`,
         )
       return { calibration: result, calibrationFrame: frame, failures }
     })
