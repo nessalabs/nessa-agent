@@ -1,6 +1,11 @@
 //! Ports the ownership coordinator uses for effects outside a transition.
 #![deny(missing_docs)]
 
+use std::{
+    fmt::{Debug, Formatter, Result as FmtResult},
+    sync::Arc,
+};
+
 use async_trait::async_trait;
 
 use crate::application::agent_execution::agents::OwnedLifetime;
@@ -62,10 +67,10 @@ pub struct BindResourcesFailure {
     /// Typed refusal; no physical resource transfer occurred.
     pub reason: BindResourcesRefusal,
     /// The exact rejected owner, returned without closing or replacing it.
-    pub resources: std::sync::Arc<dyn ChildResources>,
+    pub resources: Arc<dyn ChildResources>,
 }
-impl std::fmt::Debug for BindResourcesFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for BindResourcesFailure {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("BindResourcesFailure")
             .field("reason", &self.reason)
             .finish_non_exhaustive()
@@ -90,7 +95,7 @@ pub struct PrepareRequest {
     /// This is the coordinator's actual child gate, sharing its admission scope
     /// and seal. Preparation failure revokes new attachment authority immediately;
     /// revocation does not prove physical release. Return any unfinished cleanup.
-    pub owned_lifetime: std::sync::Arc<dyn OwnedLifetime>,
+    pub owned_lifetime: Arc<dyn OwnedLifetime>,
     /// Parent lifetime.
     pub parent: AgentLifetimeId,
     /// Child lifetime minted for this binding.
@@ -108,8 +113,8 @@ pub struct PrepareRequest {
     /// Verified origin.
     pub origin: SpawnOrigin,
 }
-impl std::fmt::Debug for PrepareRequest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for PrepareRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("PrepareRequest")
             .field("owned_lifetime", &"<owned lifetime>")
             .field("parent", &self.parent)
@@ -128,9 +133,9 @@ impl std::fmt::Debug for PrepareRequest {
 #[derive(Clone)]
 pub struct PreparedChild {
     /// Cleanup owner, including when later dispatch is refused.
-    pub resources: std::sync::Arc<dyn ChildResources>,
+    pub resources: Arc<dyn ChildResources>,
     /// Initial task submission.
-    pub submit: std::sync::Arc<dyn InitialSubmit>,
+    pub submit: Arc<dyn InitialSubmit>,
 }
 
 /// Factory failure. Any cleanup owner is retained by the coordinator.
@@ -140,7 +145,7 @@ pub struct PrepareFailure {
     /// Whether preparation was refused or uncertain.
     pub failure: PortFailure,
     /// Resources to close when preparation held them.
-    pub cleanup: Option<std::sync::Arc<dyn ChildResources>>,
+    pub cleanup: Option<Arc<dyn ChildResources>>,
 }
 
 /// Prepares an ordinary child. It must not dispatch work.

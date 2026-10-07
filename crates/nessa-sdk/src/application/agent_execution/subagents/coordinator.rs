@@ -1968,9 +1968,9 @@ mod lifetime_races {
     };
     use crate::domain::agent_execution::sessions::SessionId;
     use crate::domain::agent_execution::subagents::{
-        AgentLifetimeId, ApprovalPolicy, EvidenceFact, HostActor, Initiator, LifetimeCause,
-        LifetimeState, OwnershipError, OwnershipEvidence, PhysicalFact, PolicyRead, SpawnOrigin,
-        SpawnRequestId, TaskReceiptId,
+        AgentLifetimeId, ApprovalPolicy, EvidenceFact, HostActor, Initiator, KnownMilestone,
+        LifetimeCause, LifetimeState, OwnershipError, OwnershipEvidence, PhysicalFact, PolicyRead,
+        SpawnOrigin, SpawnProgress, SpawnRequestId, TaskReceiptId,
     };
     use async_trait::async_trait;
     use std::sync::{
@@ -2266,7 +2266,6 @@ mod lifetime_races {
 
     #[tokio::test]
     async fn row_30_already_safety_reconciliation_still_writes_current_fact() {
-        use crate::domain::agent_execution::subagents::{KnownMilestone, SpawnProgress};
         let store = Arc::new(MemoryOwnershipStore::new());
         let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
             store: store.clone(),

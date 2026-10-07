@@ -234,6 +234,13 @@ impl OwnershipPublication {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::agent_execution::{
+        sessions::SessionId,
+        subagents::{
+            ApprovalPolicy, CloseOperationId, EvidenceFact, HostActor, Initiator, LifetimeCause,
+            OwnershipGraph, PhysicalFact, SpawnAdmission, SpawnBinding, SpawnOrigin, TaskDigest,
+        },
+    };
 
     #[test]
     fn row_17_tokens_acknowledge_captured_progress_once_and_refuse_stale_generation() {
@@ -274,14 +281,6 @@ mod tests {
     }
     #[test]
     fn retained_projection_preserves_valid_history_and_referential_closure() {
-        use crate::domain::agent_execution::{
-            sessions::SessionId,
-            subagents::{
-                ApprovalPolicy, CloseOperationId, EvidenceFact, Initiator, LifetimeCause,
-                OwnershipGraph, PhysicalFact, SpawnAdmission, SpawnBinding, SpawnOrigin,
-                TaskDigest,
-            },
-        };
         let root = AgentLifetimeId::new("root").unwrap();
         let child = AgentLifetimeId::new("child").unwrap();
         let private = AgentLifetimeId::new("private").unwrap();
@@ -307,10 +306,7 @@ mod tests {
                     policy: ApprovalPolicy::new("read-only", "ask", "rev").unwrap(),
                     model: None,
                     origin: SpawnOrigin::Host(
-                        crate::domain::agent_execution::subagents::HostActor::new(
-                            "person", "desktop", "request",
-                        )
-                        .unwrap(),
+                        HostActor::new("person", "desktop", "request").unwrap(),
                     ),
                 },
             })

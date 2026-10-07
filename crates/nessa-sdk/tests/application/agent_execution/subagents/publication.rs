@@ -1,4 +1,9 @@
 //! Deterministic #628 ordering matrix: audit gates hold only the selected operation.
+use std::{
+    future::Future,
+    task::{Context, Poll, Waker},
+};
+
 use super::*;
 use nessa_sdk::application::agent_execution::subagents::{BindResourcesRefusal, LiveRoom};
 use nessa_sdk::domain::agent_execution::subagents::{KnownMilestone, OwnershipMeaning};
@@ -80,7 +85,7 @@ fn coordinator(
         room,
     })
 }
-async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
+async fn bounded<T>(future: impl Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(3), future)
         .await
         .expect("deterministic operation completed")
@@ -666,10 +671,6 @@ async fn private_report_does_not_leak_through_unrelated_commit() {
 
 #[tokio::test]
 async fn row_14_queued_success_is_unclaimed_until_open_root_returns_ready() {
-    use std::{
-        future::Future,
-        task::{Context, Poll, Waker},
-    };
     let store = Arc::new(MemoryOwnershipStore::new());
     let audit = IndependentAudit::new();
     let c = coordinator(
