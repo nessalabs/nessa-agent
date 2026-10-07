@@ -749,7 +749,11 @@ handing out an eligible participation gate records possible transfer and blocks
 that claim. A prior claim refuses later external transfers and usable gate
 handoffs. Private lifetimes cannot confer transfer or descendant admission
 authority; eligibility includes the retained ancestor chain. Refused restored
-history may expose only its already-sealed inspection gate. The claim's actual
+history may expose only its already-sealed inspection gate. Active child flights
+refuse public transfers; their accepted PrepareRequest supplies the remembered
+child gate directly to the factory. Preparation Err seals attachment authority
+before fallible publication, without manufacturing Closed or physical release.
+Restore derives that seal from retained nonrunnable progress. The claim's actual
 audit result controls settlement.
 A queued successful send does not transfer root ownership; claiming its internal
 delivery ticket when `open_root` returns Ready does. Eligible or uncertain IDs
@@ -793,9 +797,13 @@ uncertain ports; whole-transaction panic supervision is separate #625 work.
 | 31 | Report is suppressed by a closed parent; suppression audit rejects | Persist suppression as a safety fact and return the actual audit failure. Do not turn a rejected Submitted admission into suppression without a domain close. |
 | 32 | Initial reservation audit is uncertain | Retain request/binding/child identity as Unconfirmed and seal its child lifetime. No runnable external gate or affirmative Reserved grant; retain capacity until authoritative release. |
 
+| 33 | Accepted reservation; factory future held; external binding or participation arrives | The existing admitted child flight owns the transfer slot. Refuse external binding with its unchanged owner and refuse a new external gate. Success and failure.cleanup retain the factory's actual owner; caller drop does not end the owned transaction. Restored vacant children have no replaying flight and permit cleanup binding. |
+| 34 | Accepted reservation/store invokes factory with its typed gate; close races preparation | PrepareRequest carries the already remembered OwnedLifetime gate with the same scope/seal. Record possible transfer under the admission scope; parent close seals the actual installed Agent gate. Public participation cannot bypass the flight. |
+| 35 | Factory returns preparation Err after receiving a gate; safety audit rejects/uncertain; restart | Revoke attachment authority synchronously through that gate before audit/store awaits. Preserve startup progress and cleanup ownership; revocation alone proves no physical release or Closed lifecycle. Rejected+None promises no outstanding attachment/cleanup; Some retains unfinished cleanup. Restore derives the seal from retained nonrunnable startup/safety progress without another durable boolean. |
+
 Enforcers: the public coordinator tests in
 `tests/application/agent_execution/subagents/publication.rs` name rows 1–15,
-18–19 and 21–32. `rejected_close_intent_is_persisted_before_cleanup_can_complete`
+18–19 and 21–35. `rejected_close_intent_is_persisted_before_cleanup_can_complete`
 adds the held-cleanup boundary for row 7. The library's
 `an_older_snapshot_does_not_replace_a_newer_seal` enforces row 16;
 `publication::tests::row_17_tokens_acknowledge_captured_progress_once_and_refuse_stale_generation`
@@ -808,6 +816,13 @@ valid Closed history and prevents child identity retention without its eligible 
 `row_30_already_safety_reconciliation_still_writes_current_fact` checks
 same-state safety reconciliation; the restored cycle test preserves sealed
 inspection-only gates and refuses transfer/dispatch across save/reload.
+The real Agent factory tests `row_34_factory_gate_installs_on_real_agent_and_shared_close_refuses_attachment`
+and `row_35_failed_factory_revokes_stale_real_agent_attachment_authority` enforce
+the accepted typed gate and attachment revocation. `row_35_restored_unfinished_cleanup_accepts_vacant_binding_but_keeps_attachment_sealed`
+preserves cleanup recovery. Open + Ended startup history refuses new transfer;
+Closing with unfinished physical cleanup remains recoverable. Factory inflight
+ownership remains the existing admitted transaction, not a progress-string flag.
+
 Row 8 proves release/capacity ordering, not propagation of every extra
 coordinator cleanup audit/storage failure: that evidence debt is tracked in #646
 with #625 supervision. Report admission uses independently held audit in

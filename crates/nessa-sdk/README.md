@@ -204,7 +204,12 @@ automatic session storage, hooks, invocation, and UI integration.
   absence claim. Private root/child admissions cannot confer external binding,
   participation, or descendant spawn authority before their audit acknowledges.
   Handing out an eligible participation gate records possible ownership transfer
-  and prevents a never-bound absence claim. Captured nonrunnable safety facts use
+  and prevents a never-bound absence claim. Active child flights refuse public
+  transfers; their accepted `PrepareRequest.owned_lifetime` supplies the actual
+  child gate to its factory for Agent installation. Preparation failure seals
+  attachment authority before audit; retained nonrunnable progress preserves
+  this seal after restart. Open + Ended startup history refuses new transfer;
+  unfinished cleanup can regain a vacant owner. Captured safety facts use
   the same snapshot writer even when their audit rejects or is uncertain.
   Never-bound root settlement consumes the actual absence audit result; rejection
   leaves Closing with failed evidence. Restored identities do not prove never-bound

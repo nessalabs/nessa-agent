@@ -1,6 +1,6 @@
 //! Deterministic #628 ordering matrix: audit gates hold only the selected operation.
 use super::*;
-use nessa_sdk::application::agent_execution::subagents::LiveRoom;
+use nessa_sdk::application::agent_execution::subagents::{BindResourcesRefusal, LiveRoom};
 use nessa_sdk::domain::agent_execution::subagents::{KnownMilestone, OwnershipMeaning};
 use tokio::sync::oneshot;
 
@@ -822,7 +822,6 @@ fn tracked_owner(drops: &Arc<AtomicUsize>, closes: &Arc<AtomicUsize>) -> Arc<dyn
 #[tokio::test]
 async fn row_21_absence_claim_refuses_late_binding_and_returns_sole_owner_even_after_audit_rejection(
 ) {
-    use nessa_sdk::application::agent_execution::subagents::BindResourcesRefusal;
     let store = Arc::new(MemoryOwnershipStore::new());
     let audit = IndependentAudit::new();
     let c = coordinator(
@@ -877,7 +876,6 @@ async fn row_21_absence_claim_refuses_late_binding_and_returns_sole_owner_even_a
 
 #[tokio::test]
 async fn rows_22_23_binding_wins_and_duplicate_unknown_closed_refusals_preserve_owners() {
-    use nessa_sdk::application::agent_execution::subagents::BindResourcesRefusal;
     let store = Arc::new(MemoryOwnershipStore::new());
     let audit = IndependentAudit::new();
     let c = coordinator(
@@ -912,7 +910,6 @@ async fn rows_22_23_binding_wins_and_duplicate_unknown_closed_refusals_preserve_
 
 #[tokio::test]
 async fn row_23_restored_closing_accepts_owner_before_release_and_refuses_owner_after_release() {
-    use nessa_sdk::application::agent_execution::subagents::BindResourcesRefusal;
     for released_before in [false, true] {
         let store = Arc::new(MemoryOwnershipStore::new());
         let mut graph = OwnershipGraph::new();
@@ -1263,7 +1260,6 @@ async fn row_27_absence_claim_refuses_new_gate_during_rejected_audit_and_after_c
 }
 
 async fn private_child_transfer(accepted: bool) {
-    use nessa_sdk::application::agent_execution::subagents::BindResourcesRefusal;
     let store = Arc::new(MemoryOwnershipStore::new());
     let audit = IndependentAudit::new();
     let factory = ScriptFactory::new();
@@ -1522,4 +1518,218 @@ async fn row_32_uncertain_initial_reservation_retains_sealed_child_and_capacity(
             .state,
         LifetimeState::Closing
     );
+}
+
+async fn held_factory_transfer(failure: Option<PortFailure>, drop_caller: bool) {
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let audit = IndependentAudit::new();
+    let factory = ScriptFactory::new();
+    let release = Arc::new(Notify::new());
+    *factory.release.lock().unwrap() = Some(release.clone());
+    let internal_drops = Arc::new(AtomicUsize::new(0));
+    let internal_closes = Arc::new(AtomicUsize::new(0));
+    if let Some(failure) = failure {
+        *factory.fail.lock().unwrap() = Some(PrepareFailure {
+            failure,
+            cleanup: Some(tracked_owner(&internal_drops, &internal_closes)),
+        });
+    }
+    let c = coordinator(
+        store.clone(),
+        audit,
+        factory.clone(),
+        Arc::new(LiveCapacity::new(1)),
+    );
+    let root = open(&c, "a").await.unwrap();
+    let spawning = tokio::spawn({
+        let c = c.clone();
+        let root = root.clone();
+        async move { c.spawn(command(&root)).await }
+    });
+    bounded(factory.entered.notified()).await;
+    let child = factory.last_child.lock().unwrap().clone().unwrap();
+    let supplied_gate = factory.last_gate.lock().unwrap().clone().unwrap();
+    assert!(!supplied_gate.is_sealed());
+    assert!(c.participation(&child).is_none());
+    let drops = Arc::new(AtomicUsize::new(0));
+    let closes = Arc::new(AtomicUsize::new(0));
+    let refusal = c
+        .bind_resources(child.clone(), tracked_owner(&drops, &closes))
+        .unwrap_err();
+    assert_eq!(refusal.reason, BindResourcesRefusal::FactoryInFlight);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    if !drop_caller {
+        release.notify_one();
+        let result = bounded(spawning).await.unwrap();
+        if let Some(failure) = failure {
+            assert_eq!(result, Err(OwnershipFailure::Startup(failure)));
+        } else {
+            result.unwrap();
+        }
+    } else {
+        spawning.abort();
+        let _ = spawning.await;
+        assert!(c.participation(&child).is_none());
+        release.notify_one();
+        bounded(async {
+            loop {
+                if c.participation(&child).is_some() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+    }
+    let public_gate = c.participation(&child).unwrap();
+    assert!(Arc::ptr_eq(&supplied_gate.seal(), &public_gate.seal()));
+    assert!(Arc::ptr_eq(
+        &supplied_gate.admission_scope(),
+        &public_gate.admission_scope()
+    ));
+    if failure.is_some() {
+        assert!(supplied_gate.is_sealed());
+    }
+    assert_eq!(internal_drops.load(Ordering::SeqCst), 0);
+    close(&c, &root).await.unwrap();
+    assert!(supplied_gate.is_sealed());
+    if failure.is_some() {
+        assert_eq!(internal_closes.load(Ordering::SeqCst), 1);
+    } else {
+        assert_eq!(
+            factory.children.lock().unwrap()[0]
+                .closes
+                .load(Ordering::SeqCst),
+            1
+        );
+    }
+    assert_eq!(closes.load(Ordering::SeqCst), 0);
+    drop(refusal);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn rows_33_34_held_factory_retains_internal_success_owner_and_shared_gate() {
+    held_factory_transfer(None, false).await;
+}
+#[tokio::test]
+async fn rows_33_35_held_factory_retains_failure_cleanup_and_revokes_gate() {
+    held_factory_transfer(Some(PortFailure::Uncertain), false).await;
+}
+#[tokio::test]
+async fn row_33_dropped_factory_waiter_does_not_release_transfer_slot() {
+    held_factory_transfer(None, true).await;
+}
+#[tokio::test]
+async fn row_35_rejected_none_revokes_gate_before_rejected_audit_and_releases_capacity_honestly() {
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let audit = IndependentAudit::new();
+    let factory = ScriptFactory::new();
+    *factory.fail.lock().unwrap() = Some(PrepareFailure {
+        failure: PortFailure::Rejected,
+        cleanup: None,
+    });
+    let (gate, release) = audit.gate(OwnershipMeaning::StartupFailed);
+    let room = Arc::new(LiveCapacity::new(1));
+    let c = coordinator(store.clone(), audit, factory.clone(), room.clone());
+    let root = open(&c, "a").await.unwrap();
+    let spawning = tokio::spawn({
+        let c = c.clone();
+        async move { c.spawn(command(&root)).await }
+    });
+    bounded(gate.entered.notified()).await;
+    let supplied = factory.last_gate.lock().unwrap().clone().unwrap();
+    assert!(supplied.is_sealed());
+    assert!(!room.try_reserve());
+    release.send(Err(PortFailure::Rejected)).unwrap();
+    assert_eq!(
+        bounded(spawning).await.unwrap(),
+        Err(OwnershipFailure::Startup(PortFailure::Rejected))
+    );
+    assert!(room.try_reserve());
+    room.release();
+    let snapshot = store.read().await.unwrap();
+    assert!(matches!(
+        snapshot.spawns[0].progress,
+        SpawnProgress::Ended { .. }
+    ));
+    assert_eq!(
+        snapshot
+            .lifetimes
+            .iter()
+            .find(|r| r.lifetime_id == snapshot.spawns[0].child_lifetime)
+            .unwrap()
+            .state,
+        LifetimeState::Open
+    );
+    assert!(snapshot.settlements.is_empty());
+    let restored = coordinator(
+        store,
+        IndependentAudit::new(),
+        ScriptFactory::new(),
+        Arc::new(LiveCapacity::new(1)),
+    );
+    restored.resume().await.unwrap();
+    let child = snapshot.spawns[0].child_lifetime.clone();
+    assert!(restored.participation(&child).is_none());
+    assert!(c.participation(&child).is_none());
+    let drops = Arc::new(AtomicUsize::new(0));
+    let closes = Arc::new(AtomicUsize::new(0));
+    for coordinator in [&c, &restored] {
+        let refusal = coordinator
+            .bind_resources(child.clone(), tracked_owner(&drops, &closes))
+            .unwrap_err();
+        assert_eq!(refusal.reason, BindResourcesRefusal::Released);
+        assert_eq!(closes.load(Ordering::SeqCst), 0);
+        drop(refusal);
+    }
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
+    assert!(room.try_reserve());
+    room.release();
+}
+
+#[tokio::test]
+async fn row_35_restored_unfinished_cleanup_accepts_vacant_binding_but_keeps_attachment_sealed() {
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let factory = ScriptFactory::new();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let closes = Arc::new(AtomicUsize::new(0));
+    *factory.fail.lock().unwrap() = Some(PrepareFailure {
+        failure: PortFailure::Uncertain,
+        cleanup: Some(tracked_owner(&drops, &closes)),
+    });
+    let c = coordinator(
+        store.clone(),
+        IndependentAudit::new(),
+        factory,
+        Arc::new(LiveCapacity::new(1)),
+    );
+    let root = open(&c, "a").await.unwrap();
+    assert_eq!(
+        c.spawn(command(&root)).await,
+        Err(OwnershipFailure::Startup(PortFailure::Uncertain))
+    );
+    let child = c.children(&root, None, 1).unwrap().children[0]
+        .lifetime
+        .clone();
+    let restored = coordinator(
+        store,
+        IndependentAudit::new(),
+        ScriptFactory::new(),
+        Arc::new(LiveCapacity::new(1)),
+    );
+    restored.resume().await.unwrap();
+    assert!(restored.participation(&child).unwrap().is_sealed());
+    let restored_drops = Arc::new(AtomicUsize::new(0));
+    let restored_closes = Arc::new(AtomicUsize::new(0));
+    restored
+        .bind_resources(
+            child.clone(),
+            tracked_owner(&restored_drops, &restored_closes),
+        )
+        .unwrap();
+    close(&restored, &child).await.unwrap();
+    assert_eq!(restored_closes.load(Ordering::SeqCst), 1);
+    assert_eq!(restored_drops.load(Ordering::SeqCst), 0);
+    close(&c, &root).await.unwrap();
+    assert_eq!(closes.load(Ordering::SeqCst), 1);
 }

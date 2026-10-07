@@ -107,3 +107,160 @@ async fn c18_disposal_seals_without_replacing_the_earlier_attachment_cause() {
     assert_eq!(first.request, SessionCloseRequest::ExecutionFailed);
     assert_eq!(joined.request, SessionCloseRequest::ExecutionFailed);
 }
+
+mod factory_owned_gate {
+    use super::{actor, agent, AgentError, Arc, Mutex, OwnedLifetime};
+    use async_trait::async_trait;
+    use nessa_sdk::application::agent_execution::{
+        agents::{Agent, AttachmentRequest},
+        subagents::{
+            ChildFactory, ChildResources, CloseCommand, InitialSubmit, LiveCapacity,
+            MemoryOwnershipStore, OwnershipAudit, OwnershipCoordinator, OwnershipDependencies,
+            OwnershipFailure, PortFailure, PrepareFailure, PrepareRequest, PreparedChild,
+            ResourceReport, SpawnCommand,
+        },
+    };
+    use nessa_sdk::domain::agent_execution::{
+        sessions::SessionId,
+        subagents::{
+            ApprovalPolicy, EvidenceFact, HostActor, Initiator, LifetimeCause, OwnershipEvidence,
+            PhysicalFact, PolicyRead, SpawnOrigin, SpawnRequestId, TaskReceiptId,
+        },
+    };
+    struct AcceptOwnership;
+    #[async_trait]
+    impl OwnershipAudit for AcceptOwnership {
+        async fn record(&self, _: &OwnershipEvidence) -> Result<(), PortFailure> {
+            Ok(())
+        }
+    }
+    struct AgentResources(Agent);
+    #[async_trait]
+    impl ChildResources for AgentResources {
+        async fn close(&self, _: &LifetimeCause, _: &Initiator) -> ResourceReport {
+            self.0.close(actor()).await.unwrap();
+            ResourceReport {
+                physical: PhysicalFact::Released,
+                evidence: EvidenceFact::Acknowledged,
+            }
+        }
+    }
+    struct Submit;
+    #[async_trait]
+    impl InitialSubmit for Submit {
+        async fn submit(&self, _: &str, _: &SpawnRequestId) -> Result<TaskReceiptId, PortFailure> {
+            Ok(TaskReceiptId::new("accepted-receipt").unwrap())
+        }
+    }
+    struct Factory {
+        child: Mutex<Option<Agent>>,
+        gate: Mutex<Option<Arc<dyn OwnedLifetime>>>,
+        failed: bool,
+    }
+    #[async_trait]
+    impl ChildFactory for Factory {
+        async fn prepare(&self, request: PrepareRequest) -> Result<PreparedChild, PrepareFailure> {
+            let child = agent().await;
+            child
+                .install_owned_lifetime(request.owned_lifetime.clone())
+                .unwrap();
+            *self.gate.lock().unwrap() = Some(request.owned_lifetime);
+            *self.child.lock().unwrap() = Some(child.clone());
+            if self.failed {
+                Err(PrepareFailure {
+                    failure: PortFailure::Uncertain,
+                    cleanup: Some(Arc::new(AgentResources(child))),
+                })
+            } else {
+                Ok(PreparedChild {
+                    resources: Arc::new(AgentResources(child)),
+                    submit: Arc::new(Submit),
+                })
+            }
+        }
+    }
+    async fn actual_factory_gate(failed: bool) {
+        let factory = Arc::new(Factory {
+            child: Mutex::new(None),
+            gate: Mutex::new(None),
+            failed,
+        });
+        let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+            store: Arc::new(MemoryOwnershipStore::new()),
+            audit: Arc::new(AcceptOwnership),
+            factory: factory.clone(),
+            room: Arc::new(LiveCapacity::new(1)),
+        });
+        let root = coordinator
+            .open_root(
+                SessionId::new("parent-session").unwrap(),
+                Initiator::Runtime,
+            )
+            .await
+            .unwrap();
+        let result = coordinator
+            .spawn(SpawnCommand {
+                parent: root.clone(),
+                request_id: SpawnRequestId::new("child").unwrap(),
+                task: "task".into(),
+                policy: PolicyRead::Committed(
+                    ApprovalPolicy::new("read-only", "ask", "revision").unwrap(),
+                ),
+                child_supports_policy: true,
+                model: None,
+                origin: SpawnOrigin::Host(HostActor::new("person", "desktop", "child").unwrap()),
+            })
+            .await;
+        if failed {
+            assert_eq!(
+                result,
+                Err(OwnershipFailure::Startup(PortFailure::Uncertain))
+            );
+        } else {
+            result.unwrap();
+        }
+        let lifetime = coordinator.children(&root, None, 1).unwrap().children[0]
+            .lifetime
+            .clone();
+        let gate = factory.gate.lock().unwrap().clone().unwrap();
+        let public = coordinator.participation(&lifetime).unwrap();
+        assert!(Arc::ptr_eq(&gate.seal(), &public.seal()));
+        assert!(Arc::ptr_eq(
+            &gate.admission_scope(),
+            &public.admission_scope()
+        ));
+        assert_eq!(gate.is_sealed(), failed);
+        if failed {
+            let child = factory.child.lock().unwrap().clone().unwrap();
+            assert!(matches!(
+                child.authorize_attachment(AttachmentRequest::CallerRequested(actor())),
+                Err(AgentError::Closed)
+            ));
+        }
+        coordinator
+            .end_lifetime(CloseCommand {
+                lifetime,
+                cause: LifetimeCause::HostClose,
+                initiator: Initiator::Runtime,
+                external_attachment: false,
+                timeout: None,
+            })
+            .await
+            .unwrap();
+        assert!(gate.is_sealed());
+        let child = factory.child.lock().unwrap().clone().unwrap();
+        assert!(matches!(
+            child.authorize_attachment(AttachmentRequest::CallerRequested(actor())),
+            Err(AgentError::Closed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn row_34_factory_gate_installs_on_real_agent_and_shared_close_refuses_attachment() {
+        actual_factory_gate(false).await;
+    }
+    #[tokio::test]
+    async fn row_35_failed_factory_revokes_stale_real_agent_attachment_authority() {
+        actual_factory_gate(true).await;
+    }
+}

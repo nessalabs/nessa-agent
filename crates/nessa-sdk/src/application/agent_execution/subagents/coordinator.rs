@@ -328,7 +328,7 @@ impl OwnershipCoordinator {
     ///
     /// # Errors
     /// Returns [`BindResourcesFailure`] with the exact rejected owner for an
-    /// unknown/private/Closed identity, occupied slot, or confirmed absence/release.
+    /// unknown/private/Closed identity, active factory flight, occupied slot, or absence/release.
     pub fn bind_resources(
         &self,
         lifetime: AgentLifetimeId,
@@ -362,7 +362,8 @@ impl OwnershipCoordinator {
     /// Gate handoff records possible external resource transfer; it does not prove
     /// physical existence, but it prevents subsequent never-bound absence claims.
     /// Private admissions, Closed history, and confirmed absence/release return
-    /// `None`. Refused restored history retains its already-sealed inspection
+    /// `None`, as do active child flights whose typed factory request owns the gate.
+    /// Refused restored history retains its already-sealed inspection
     /// gate, which cannot authorize attachment. Already-held gates keep their seal for
     /// correlated attachment cleanup reporting after close.
     pub fn participation(&self, lifetime: &AgentLifetimeId) -> Option<Arc<dyn OwnedLifetime>> {
@@ -502,6 +503,22 @@ impl Shared {
                 .lifetime_eligible(graph, lifetime) =>
             {
                 Some(BindResourcesRefusal::UnpublishedLifetime)
+            }
+            Some(LifetimeState::Open)
+                if graph.snapshot().spawns.iter().any(|row| {
+                    &row.child_lifetime == lifetime
+                        && matches!(row.progress, SpawnProgress::Ended { .. })
+                }) =>
+            {
+                Some(BindResourcesRefusal::Released)
+            }
+            _ if self
+                .inflight
+                .lock()
+                .expect("inflight spawns")
+                .contains(lifetime) =>
+            {
+                Some(BindResourcesRefusal::FactoryInFlight)
             }
             _ if self
                 .absence_claimed
@@ -743,9 +760,22 @@ impl Shared {
         command: &SpawnCommand,
         admitted: Admitted,
     ) -> Result<SpawnReceipt, OwnershipFailure> {
+        let owned_lifetime = self.with_graph(|_| {
+            self.bound
+                .lock()
+                .expect("possible transfers")
+                .insert(admitted.child.clone());
+            self.gates
+                .lock()
+                .expect("lifetime gates")
+                .get(&admitted.child)
+                .cloned()
+                .expect("admitted child gate") as Arc<dyn OwnedLifetime>
+        });
         let prepared = self
             .factory
             .prepare(PrepareRequest {
+                owned_lifetime,
                 parent: command.parent.clone(),
                 child: admitted.child.clone(),
                 session: admitted.session.clone(),
@@ -759,6 +789,18 @@ impl Shared {
         let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(failure) => {
+                // Stop new attachment admission before any fallible safety publication.
+                // This revokes permission; it does not prove physical cleanup.
+                self.with_graph(|_| {
+                    if let Some(seal) = self
+                        .seals
+                        .lock()
+                        .expect("lifetime seals")
+                        .get(&admitted.child)
+                    {
+                        seal.store(true, Ordering::Release);
+                    }
+                });
                 if let Some(cleanup) = failure.cleanup {
                     self.bound
                         .lock()
@@ -1009,8 +1051,9 @@ impl Shared {
         })
     }
 
-    /// Audit this evidence, then write the snapshot only when that audit is accepted.
-    /// `unconfirmed_request` marks that spawn unconfirmed when the audit or the store is uncertain.
+    /// Audit captured permission; affirmative milestones become eligible only on acceptance.
+    /// Captured nonrunnable safety facts use the shared writer regardless of audit outcome.
+    /// `unconfirmed_request` conservatively retains a spawn after publication uncertainty.
     pub(super) async fn publish_evidence(
         &self,
         evidence: &OwnershipEvidence,
@@ -1413,7 +1456,22 @@ impl Shared {
                 }
             }
         }
-        let rows = restored.snapshot().lifetimes;
+        let restored_snapshot = restored.snapshot();
+        let nonrunnable_children: HashSet<_> = restored_snapshot
+            .spawns
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row.progress,
+                    SpawnProgress::Unconfirmed { .. }
+                        | SpawnProgress::StartupFailed { .. }
+                        | SpawnProgress::Draining { .. }
+                        | SpawnProgress::Ended { .. }
+                )
+            })
+            .map(|row| row.child_lifetime.clone())
+            .collect();
+        let rows = restored_snapshot.lifetimes;
         let weak = Arc::downgrade(self);
         self.with_graph(|graph| {
             *graph = restored;
@@ -1427,7 +1485,9 @@ impl Shared {
                 self.remember(
                     Weak::clone(&weak),
                     row.lifetime_id.clone(),
-                    refused || row.state != LifetimeState::Open,
+                    refused
+                        || row.state != LifetimeState::Open
+                        || nonrunnable_children.contains(&row.lifetime_id),
                 );
             }
         });
