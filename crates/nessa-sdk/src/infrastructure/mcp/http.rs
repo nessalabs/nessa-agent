@@ -207,8 +207,8 @@ impl HttpSession {
             let mut readers = self.readers.lock().expect("http readers");
             self.closing.store(true, Ordering::SeqCst);
             (
-                readers.post.drain(..).collect(),
-                readers.get.drain(..).collect::<Vec<_>>(),
+                std::mem::take(&mut readers.post),
+                std::mem::take(&mut readers.get),
             )
         };
         for task in &get_task {
