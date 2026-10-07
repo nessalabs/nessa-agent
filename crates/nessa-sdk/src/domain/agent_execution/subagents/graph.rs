@@ -1376,12 +1376,11 @@ fn settlement_summary(proof: &SettlementProof) -> (PhysicalFact, EvidenceFact) {
     match proof {
         SettlementProof::Absence(absence) => (PhysicalFact::Released, absence.acknowledgement),
         SettlementProof::Resource(slots) => {
-            let observation = slots
-                .iter()
-                .rev()
-                .flatten()
-                .next()
-                .expect("resource observation");
+            let Some(observation) = slots.iter().rev().flatten().next() else {
+                // Refused restored history is retained for inspection. Its
+                // missing observation supplies no aggregate readiness.
+                return (PhysicalFact::Pending, EvidenceFact::Pending);
+            };
             let Some(CloseEvidenceDetail::ResourceObservation {
                 physical,
                 provider_evidence,

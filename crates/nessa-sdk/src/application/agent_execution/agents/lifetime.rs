@@ -82,5 +82,8 @@ pub trait OwnedLifetime: Send + Sync {
     /// exercise this producer and observation ordering.
     async fn note_attachment(&self, released: bool, evidence_acknowledged: bool);
     /// Wait for the descendant drain started by seal. Dropping the caller does not cancel it.
+    /// SDK-issued gates register notifications through the shared caller-waker
+    /// boundary, exercised by
+    /// `panicking_gate_join_waker_drop_is_contained_in_owned_publisher`.
     async fn join_descendants(&self) -> Result<(), AgentError>;
 }

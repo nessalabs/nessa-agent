@@ -1,4 +1,5 @@
 //! Ownership graph rows from ADR 329. Each test names the table row it locks.
+//! Settlement children own bounded evidence and public retained-history relationships.
 #![allow(unused_must_use)]
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::agent_execution::subagents::*;

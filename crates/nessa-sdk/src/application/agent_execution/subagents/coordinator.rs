@@ -2216,7 +2216,12 @@ impl OwnedLifetime for LifetimeGate {
 
     async fn join_descendants(&self) -> Result<(), AgentError> {
         let shared = self.inner.upgrade().ok_or(AgentError::Closed)?;
-        shared.wait_drain(&self.lifetime).await.map_err(to_agent)
+        contain_caller_wake(
+            format!("owned gate join {}", self.lifetime.as_str()),
+            shared.wait_drain(&self.lifetime),
+        )
+        .await
+        .map_err(to_agent)
     }
 }
 

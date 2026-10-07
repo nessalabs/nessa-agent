@@ -1,6 +1,7 @@
 //! Ownership coordinator regressions for ADR 329 rows S1–S7, S11, S13, C1, C4–C8, C11, C12, C14, and R1–R5.
 //! Feature children own publication eligibility, supervised effect phases, Ready
-//! transfers, exact settlement generations and live admission absence exclusion.
+//! transfers, exact settlement generations, live admission absence exclusion
+//! and SDK-issued participation-gate notification.
 use std::{
     collections::VecDeque,
     sync::{
