@@ -1,12 +1,15 @@
-//! ADR 392 J1–J9: JSON/initialization progress and replacement cleanup ownership.
+//! ADR 392 J1–J14: JSON/initialization progress and replacement cleanup ownership.
 use super::super::connection::{Connection, Outgoing};
 use super::super::http::{HttpSession, SendOutcome};
 use super::super::{
-    HttpBody, HttpExchange, HttpFailure, HttpMethod, HttpRequest, HttpResponse, McpError,
-    McpServers, NoAuthorization, RemoteMcpServer, RemoteMcpUrl, SessionClaims, INITIALIZE_TIMEOUT,
+    Bearer, HttpBody, HttpExchange, HttpFailure, HttpMethod, HttpRequest, HttpResponse, McpError,
+    McpServers, NoAuthorization, RemoteAuthorization, RemoteMcpServer, RemoteMcpUrl, SessionClaims,
+    INITIALIZE_TIMEOUT,
 };
 use super::post_body::{bounded, Probe};
-use crate::infrastructure::clock::{manual::ManualClock, RuntimeClock};
+use crate::infrastructure::clock::{
+    manual::ManualClock, Clock, ClockInstant, ClockSleep, RuntimeClock,
+};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
@@ -513,8 +516,7 @@ async fn j9_recovery_gate_covers_queued_calls_and_initialized_headers() {
     let finish = tokio::spawn({
         let session = session.clone();
         async move {
-            let result = session.finish_recovery(deadline, &completed).await;
-            let _ = completed.send(Ok(()));
+            let result = session.finish_recovery(deadline, completed).await;
             result
         }
     });
@@ -566,7 +568,7 @@ async fn j9_expired_queued_handoff_cannot_dispatch_initialized() {
     })
     .await;
     assert!(matches!(
-        session.finish_recovery(deadline, &completed).await,
+        session.finish_recovery(deadline, completed).await,
         SendOutcome::End(McpError::Timeout)
     ));
     assert_eq!(
@@ -607,9 +609,8 @@ async fn j9_rejected_initialized_does_not_release_admission() {
     else {
         panic!("owned recovery handoff")
     };
-    let outcome = session.finish_recovery(deadline, &completed).await;
+    let outcome = session.finish_recovery(deadline, completed).await;
     assert!(matches!(outcome, SendOutcome::End(McpError::Malformed(_))));
-    let _ = completed.send(Err(McpError::SessionExpired));
     assert!(matches!(
         call(&session, 3).await,
         SendOutcome::FailCall {
@@ -681,7 +682,7 @@ async fn j6_recovery_publication_then_close_owns_one_retained_delete() {
     assert!(!*done.borrow());
     assert!(!claims.claim("http://127.0.0.1/mcp", "replacement", u64::MAX));
     assert!(matches!(
-        session.finish_recovery(deadline, &completed).await,
+        session.finish_recovery(deadline, completed).await,
         SendOutcome::End(McpError::Closed)
     ));
     drop(session);
@@ -1165,7 +1166,7 @@ async fn j11_accepted_initialized_at_expiry_reports_timeout() {
         panic!("recovery handoff")
     };
     assert!(matches!(
-        session.finish_recovery(deadline, &completed).await,
+        session.finish_recovery(deadline, completed).await,
         SendOutcome::End(McpError::Timeout)
     ));
     assert!(matches!(
@@ -1196,11 +1197,16 @@ async fn j11_completion_loss_preserves_writer_failure() {
     else {
         panic!("recovery handoff")
     };
-    let SendOutcome::End(first) = session.finish_recovery(deadline, &completed).await else {
+    let SendOutcome::End(first) = session.finish_recovery(deadline, completed).await else {
         panic!("rejected initialized")
     };
     assert!(matches!(first, McpError::Malformed(_)));
-    drop(completed);
+    let (lost, receiver) = tokio::sync::oneshot::channel();
+    drop(receiver);
+    let SendOutcome::End(retried) = session.finish_recovery(deadline, lost).await else {
+        panic!("retained first failure")
+    };
+    assert_eq!(retried, first);
     let retained = bounded(async {
         loop {
             if let Some(Err(error)) = incoming.recv().await {
@@ -1211,4 +1217,218 @@ async fn j11_completion_loss_preserves_writer_failure() {
     .await;
     assert_eq!(retained, first);
     stop(&session).await;
+}
+
+#[tokio::test]
+async fn j12_lost_completion_cannot_admit_queued_call() {
+    let gate = Arc::new(Gate::default());
+    let mut peer = Peer::new();
+    peer.initialized_headers = Some(gate.clone());
+    let peer = Arc::new(peer);
+    let (session, _incoming) = transport(peer.clone(), Arc::default());
+    let (writer, mut queue) = mpsc::channel(2);
+    session.set_writer(writer.clone(), Arc::new(RuntimeClock::new()));
+    initialize(&session).await;
+    peer.expire.store(true, Ordering::SeqCst);
+    let _ = call(&session, 2).await;
+    let Outgoing::RecoveryReady {
+        deadline,
+        completed: startup_sender,
+    } = bounded(queue.recv()).await.unwrap()
+    else {
+        panic!("recovery handoff")
+    };
+    // Keep startup alive while the writer's independently controlled delivery
+    // receiver disappears after dispatch began, before its terminal commit.
+    let (completed, receiver) = tokio::sync::oneshot::channel();
+    let finishing = tokio::spawn({
+        let session = session.clone();
+        async move { session.finish_recovery(deadline, completed).await }
+    });
+    gate.reached().await;
+    writer
+        .send(Outgoing::Frame(
+            br#"{"id":3,"method":"tools/list"}"#.to_vec(),
+        ))
+        .await
+        .unwrap();
+    drop(receiver);
+    gate.release();
+    assert!(matches!(
+        bounded(finishing).await.unwrap(),
+        SendOutcome::End(McpError::Unconfirmed)
+    ));
+    let Outgoing::Frame(frame) = queue.recv().await.unwrap() else {
+        panic!("queued ordinary call")
+    };
+    assert!(matches!(
+        session.dispatch(&frame).await,
+        SendOutcome::FailCall {
+            error: McpError::Busy,
+            ..
+        }
+    ));
+    assert_eq!(
+        peer.count(
+            |request| header(request, "Mcp-Session-Id") == Some("replacement")
+                && method(request).as_deref() == Some("tools/list")
+        ),
+        0
+    );
+    drop(startup_sender);
+    stop(&session).await;
+}
+
+/// This clock finishes an already-ready HTTP dispatch during the timer poll,
+/// after the startup operation was polled Pending. The timer then wins that
+/// select even though completion was delivered before the clock advanced.
+#[derive(Default)]
+struct CommitBeforeExpiryClock {
+    now: Arc<ManualClock>,
+    trigger: Arc<Notify>,
+    commit: Arc<Mutex<Option<ExpiryCommit>>>,
+}
+struct ExpiryCommit {
+    session: std::sync::Weak<HttpSession>,
+    deadline: ClockInstant,
+    completed: tokio::sync::oneshot::Sender<Result<(), McpError>>,
+    observed: tokio::sync::oneshot::Sender<SendOutcome>,
+}
+impl Clock for CommitBeforeExpiryClock {
+    fn now(&self) -> ClockInstant {
+        self.now.now()
+    }
+    fn sleep_until(&self, _: ClockInstant) -> ClockSleep {
+        let trigger = self.trigger.clone();
+        let commit = self.commit.clone();
+        let clock = self.now.clone();
+        Box::pin(async move {
+            trigger.notified().await;
+            let commit = commit.lock().unwrap().take().expect("armed expiry race");
+            let session = commit.session.upgrade().unwrap();
+            let mut finishing =
+                Box::pin(session.finish_recovery(commit.deadline, commit.completed));
+            let outcome = std::future::poll_fn(|context| {
+                match std::future::Future::poll(finishing.as_mut(), context) {
+                    std::task::Poll::Ready(outcome) => std::task::Poll::Ready(outcome),
+                    std::task::Poll::Pending => panic!("immediate peer accepts initialized"),
+                }
+            })
+            .await;
+            clock.advance_to(commit.deadline);
+            let _ = commit.observed.send(outcome);
+        })
+    }
+}
+
+#[tokio::test]
+async fn j13_completed_commit_defeats_late_timeout() {
+    let peer = Arc::new(Peer::new());
+    let (session, mut incoming) = transport(peer.clone(), Arc::default());
+    let clock = Arc::new(CommitBeforeExpiryClock::default());
+    let (writer, mut queue) = mpsc::channel(1);
+    session.set_writer(writer, clock.clone());
+    initialize(&session).await;
+    peer.expire.store(true, Ordering::SeqCst);
+    let _ = call(&session, 2).await;
+    let Outgoing::RecoveryReady {
+        deadline,
+        completed,
+    } = bounded(queue.recv()).await.unwrap()
+    else {
+        panic!("recovery handoff")
+    };
+    let (observed, observation) = tokio::sync::oneshot::channel();
+    *clock.commit.lock().unwrap() = Some(ExpiryCommit {
+        session: Arc::downgrade(&session),
+        deadline,
+        completed,
+        observed,
+    });
+    clock.trigger.notify_one();
+    assert!(matches!(
+        bounded(observation).await.unwrap(),
+        SendOutcome::Done
+    ));
+    assert_eq!(clock.now(), deadline);
+    // The startup timer won after delivery. Its late failure is suppressed,
+    // and queued/public admission still sees the committed success.
+    assert!(matches!(call(&session, 3).await, SendOutcome::Done));
+    assert_eq!(
+        peer.count(
+            |request| header(request, "Mcp-Session-Id") == Some("replacement")
+                && method(request).as_deref() == Some("tools/list")
+        ),
+        1
+    );
+    while let Ok(message) = incoming.try_recv() {
+        assert!(message.is_ok());
+    }
+    stop(&session).await;
+}
+
+struct RetryAuthorization {
+    rejected: AtomicUsize,
+}
+#[async_trait]
+impl RemoteAuthorization for RetryAuthorization {
+    async fn bearer(&self, _: Uuid) -> Result<Option<Bearer>, McpError> {
+        Ok(Some(Bearer::new("first", 0)))
+    }
+    async fn rejected(&self, _: Uuid, _: &str) -> Result<Option<Bearer>, McpError> {
+        self.rejected.fetch_add(1, Ordering::SeqCst);
+        Ok(Some(Bearer::new("retry", 1)))
+    }
+    async fn insufficient_scope(&self, _: Uuid, _: &str) {}
+}
+
+#[tokio::test]
+async fn j14_initialized_http_failures_keep_typed_causes() {
+    for (status, expected) in [(503, McpError::Unconfirmed), (401, McpError::Unauthorized)] {
+        let mut peer = Peer::new();
+        peer.initialized_status = status;
+        let peer = Arc::new(peer);
+        let authorization = Arc::new(RetryAuthorization {
+            rejected: AtomicUsize::new(0),
+        });
+        let (session, incoming) = HttpSession::open(
+            Uuid::from_u128(1),
+            RemoteMcpUrl::parse("http://127.0.0.1/mcp").unwrap(),
+            peer.clone(),
+            authorization.clone(),
+            Arc::default(),
+        );
+        let connection =
+            Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+        bounded(connection.call("initialize", None))
+            .await
+            .unwrap()
+            .unwrap();
+        peer.expire.store(true, Ordering::SeqCst);
+        assert_eq!(
+            bounded(connection.call("tools/list", None))
+                .await
+                .unwrap_err(),
+            McpError::SessionExpired
+        );
+        assert_eq!(bounded(connection.ended()).await, expected);
+        assert_eq!(
+            bounded(connection.call("tools/list", None))
+                .await
+                .unwrap_err(),
+            expected
+        );
+        assert_eq!(
+            authorization.rejected.load(Ordering::SeqCst),
+            usize::from(status == 401)
+        );
+        assert_eq!(
+            peer.count(
+                |request| header(request, "Mcp-Session-Id") == Some("replacement")
+                    && method(request).as_deref() == Some("notifications/initialized")
+            ),
+            if status == 401 { 2 } else { 1 }
+        );
+        stop(&session).await;
+    }
 }

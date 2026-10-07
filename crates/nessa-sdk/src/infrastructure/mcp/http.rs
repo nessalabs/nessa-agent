@@ -23,7 +23,7 @@
 //! Streamed POST bodies (JSON and SSE, including initialize) are session-owned
 //! and separately bounded. An SSE request reader
 //! forwards notices/requests until its matching result/error, then drops the body
-//! even if the peer leaves it open (ADR 392 P1–P14/J1–J11,
+//! even if the peer leaves it open (ADR 392 P1–P14/J1–J14,
 //! `tests::post_streams` and `tests::http_progress`).
 //!
 //! Dropping the session aborts its GET and POST streams and asks for the same single
@@ -405,18 +405,8 @@ impl HttpSession {
         if status == 202 {
             return SendOutcome::Done;
         }
-        if status == 401 {
-            return SendOutcome::End(McpError::Unauthorized);
-        }
         if status == 403 {
-            let challenge = response
-                .header("www-authenticate")
-                .unwrap_or("Bearer")
-                .to_owned();
-            self.authorization
-                .insufficient_scope(self.server, &challenge)
-                .await;
-            return SendOutcome::End(McpError::InsufficientScope);
+            return self.refuse_scope(response).await;
         }
         if status == 404 && self.has_session_id() && method != Some("initialize") {
             return self.recover(id, permit);
@@ -424,14 +414,8 @@ impl HttpSession {
         if matches!(status, 400 | 404 | 405) && method == Some("initialize") && !self.is_open() {
             return SendOutcome::Done; // caller enters legacy; unused path
         }
-        if !(200..300).contains(&status) {
-            // 5xx means the server accepted the request. Only `initialize`
-            // is still a definite miss: no session exists to have run anything.
-            if status >= 500 {
-                return server_error(method == Some("initialize"), id);
-            }
-            let error = McpError::Malformed(format!("HTTP {status}"));
-            return if method == Some("initialize") {
+        if let Some(error) = response_failure(status, method == Some("initialize")) {
+            return if status == 401 || method == Some("initialize") {
                 SendOutcome::End(error)
             } else {
                 SendOutcome::FailCall { id, error }
@@ -933,10 +917,12 @@ impl HttpSession {
                 .await
                 .unwrap_or(Err(McpError::Timeout));
             if let Err(error) = result {
-                let error = weak
+                let result = weak
                     .upgrade()
-                    .map_or(error.clone(), |session| session.fail_recovery(error));
-                let _ = inbound.send(Err(error)).await;
+                    .map_or(Err(error.clone()), |session| session.fail_recovery(error));
+                if let Err(error) = result {
+                    let _ = inbound.send(Err(error)).await;
+                }
             }
         });
         readers.post.push(PostReader {
@@ -954,7 +940,7 @@ impl HttpSession {
     pub(crate) async fn finish_recovery(
         &self,
         deadline: ClockInstant,
-        completed: &oneshot::Sender<Result<(), McpError>>,
+        completed: oneshot::Sender<Result<(), McpError>>,
     ) -> SendOutcome {
         let clock = self
             .writer
@@ -964,8 +950,8 @@ impl HttpSession {
             .expect("installed HTTP writer")
             .clock
             .clone();
-        if let Err(error) = self.check_handoff(&*clock, deadline, completed, false) {
-            return SendOutcome::End(error);
+        if let Err(error) = self.check_handoff(&*clock, deadline, &completed) {
+            return self.complete_recovery(&*clock, deadline, completed, Err(error));
         }
         let body =
             serde_json::to_vec(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
@@ -979,8 +965,13 @@ impl HttpSession {
                 Ok(Modern::Response(response)) if response.status == 403 => {
                     self.refuse_scope(response).await
                 }
-                Ok(_) => SendOutcome::End(McpError::Malformed(
-                    "recovery initialized was not accepted".into(),
+                Ok(Modern::Response(response)) => {
+                    SendOutcome::End(response_failure(response.status, false).unwrap_or_else(
+                        || McpError::Malformed("recovery initialized was not accepted".into()),
+                    ))
+                }
+                Ok(Modern::Legacy) => SendOutcome::End(McpError::Malformed(
+                    "recovery initialized selected legacy transport".into(),
                 )),
                 Err(error) => SendOutcome::End(error),
             }
@@ -988,52 +979,78 @@ impl HttpSession {
         let outcome = within(&*clock, deadline, sending)
             .await
             .unwrap_or(SendOutcome::End(McpError::Timeout));
-        match outcome {
-            SendOutcome::Done => match self.check_handoff(&*clock, deadline, completed, true) {
-                Ok(()) => SendOutcome::Done,
-                Err(error) => SendOutcome::End(error),
-            },
-            SendOutcome::End(error) => SendOutcome::End(self.fail_recovery(error)),
-            other => other,
-        }
+        let result = match outcome {
+            SendOutcome::Done => Ok(()),
+            SendOutcome::End(error) | SendOutcome::FailCall { error, .. } => Err(error),
+        };
+        self.complete_recovery(&*clock, deadline, completed, result)
     }
 
-    /// The first failure is retained even when the startup completion channel is lost.
-    fn fail_recovery(&self, error: McpError) -> McpError {
+    /// Startup failure cannot overwrite the writer's committed completion.
+    fn fail_recovery(&self, error: McpError) -> Result<(), McpError> {
         let _readers = self.readers.lock().expect("http readers");
-        let mut phase = self.phase.lock().expect("http phase");
-        if let Recovery::Failed(first) = &phase.recovery {
-            return first.clone();
-        }
-        phase.recovery = Recovery::Failed(error.clone());
-        error
+        recovery_failure(&mut self.phase.lock().expect("http phase"), error)
     }
 
-    /// One liveness policy owns both sides of initialized dispatch and admission.
     fn check_handoff(
         &self,
         clock: &dyn Clock,
         deadline: ClockInstant,
         completed: &oneshot::Sender<Result<(), McpError>>,
-        commit: bool,
     ) -> Result<(), McpError> {
         let _readers = self.readers.lock().expect("http readers");
+        let phase = self.phase.lock().expect("http phase");
+        validate_handoff(
+            &phase,
+            self.closing.load(Ordering::SeqCst),
+            clock.now(),
+            deadline,
+        )?;
+        if completed.is_closed() {
+            Err(McpError::Unconfirmed)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Delivery and admission have one terminal owner and no asynchronous gap.
+    fn complete_recovery(
+        &self,
+        clock: &dyn Clock,
+        deadline: ClockInstant,
+        completed: oneshot::Sender<Result<(), McpError>>,
+        result: Result<(), McpError>,
+    ) -> SendOutcome {
+        let _readers = self.readers.lock().expect("http readers");
         let mut phase = self.phase.lock().expect("http phase");
-        let error = match &phase.recovery {
-            Recovery::Failed(first) => Some(first.clone()),
-            _ if self.closing.load(Ordering::SeqCst) => Some(McpError::Closed),
-            _ if clock.now() >= deadline => Some(McpError::Timeout),
-            Recovery::ReadyForWriter if !completed.is_closed() => None,
-            _ => Some(McpError::Unconfirmed),
+        let result = validate_handoff(
+            &phase,
+            self.closing.load(Ordering::SeqCst),
+            clock.now(),
+            deadline,
+        )
+        .and(result);
+        let error = match result {
+            Ok(()) => {
+                if completed.send(Ok(())).is_ok() {
+                    phase.recovery = Recovery::Completed;
+                    return SendOutcome::Done;
+                }
+                if clock.now() >= deadline {
+                    McpError::Timeout
+                } else {
+                    McpError::Unconfirmed
+                }
+            }
+            Err(error) => {
+                let _ = completed.send(Err(error.clone()));
+                error
+            }
         };
-        if let Some(error) = error {
-            phase.recovery = Recovery::Failed(error.clone());
-            return Err(error);
+        match recovery_failure(&mut phase, error) {
+            Ok(()) => SendOutcome::Done,
+            Err(error) => SendOutcome::End(error),
         }
-        if commit {
-            phase.recovery = Recovery::Completed;
-        }
-        Ok(())
     }
 
     fn has_session_id(&self) -> bool {
@@ -1206,16 +1223,54 @@ enum Modern {
     Legacy,
 }
 
-/// HTTP 5xx. `initialize` still failed before a session existed. A later
-/// request was accepted by the server, so its effect is unconfirmed.
+/// Typed HTTP failures are independent of ordinary or recovery dispatch.
+fn response_failure(status: u16, initialize: bool) -> Option<McpError> {
+    match status {
+        401 => Some(McpError::Unauthorized),
+        500.. => Some(if initialize {
+            McpError::Unreachable
+        } else {
+            McpError::Unconfirmed
+        }),
+        200..=299 => None,
+        _ => Some(McpError::Malformed(format!("HTTP {status}"))),
+    }
+}
+
+/// Legacy dispatch uses the same typed 5xx classifier.
 fn server_error(initialize: bool, id: Option<u64>) -> SendOutcome {
+    let error = response_failure(500, initialize).expect("5xx failure");
     if initialize {
-        SendOutcome::End(McpError::Unreachable)
+        SendOutcome::End(error)
     } else {
-        SendOutcome::FailCall {
-            id,
-            error: McpError::Unconfirmed,
+        SendOutcome::FailCall { id, error }
+    }
+}
+
+/// Both terminal contenders use this transition while holding the registry fence.
+fn recovery_failure(phase: &mut Phase, error: McpError) -> Result<(), McpError> {
+    match &phase.recovery {
+        Recovery::Completed => Ok(()),
+        Recovery::Failed(first) => Err(first.clone()),
+        _ => {
+            phase.recovery = Recovery::Failed(error.clone());
+            Err(error)
         }
+    }
+}
+
+fn validate_handoff(
+    phase: &Phase,
+    closing: bool,
+    now: ClockInstant,
+    deadline: ClockInstant,
+) -> Result<(), McpError> {
+    match &phase.recovery {
+        Recovery::Failed(first) => Err(first.clone()),
+        _ if closing => Err(McpError::Closed),
+        _ if now >= deadline => Err(McpError::Timeout),
+        Recovery::ReadyForWriter => Ok(()),
+        _ => Err(McpError::Unconfirmed),
     }
 }
 

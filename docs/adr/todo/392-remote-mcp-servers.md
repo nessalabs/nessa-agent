@@ -442,6 +442,20 @@ Close alone owns DELETE, retaining the ID claim through the attempt's completion
 | J10 | JSON/SSE private recovery carries another pending call's reply, then ends without its own terminal | Forward the observed neighboring result before SessionExpired; do not claim replacement identity, GET or initialized | `j10_recovery_neighbor_reply_precedes_invalid_initialize` |
 | J11 | Budget expires after initialized acceptance but before admission; stale queued handoff or completion channel loss follows a failure | Retain typed Timeout or first non-timeout failure; actual close is Closed, unknown loss alone is Unconfirmed; no admission from stale handoff | `j11_accepted_initialized_at_expiry_reports_timeout`, `j11_completion_loss_preserves_writer_failure`, `j9_expired_queued_handoff_cannot_dispatch_initialized`, J6 actual-close test |
 
+The completion channel and recovery phase share one terminal owner. The writer
+hands its owned completion sender to `finish_recovery`; under the registry fence,
+validated initialized acceptance, successful synchronous completion delivery and
+Completed publication are one transition. Failed delivery fences calls before the
+writer handles another frame. Completed is terminal: a startup waiter selecting
+its budget after that commit cannot replace success or publish a late timeout.
+Typed HTTP response failures have one classifier shared with ordinary POSTs.
+
+| Row | Trigger/order | Required outcome and ownership | Enforcer |
+| --- | --- | --- | --- |
+| J12 | Completion receiver disappears after initialized acceptance, before completion commit | Failed delivery becomes terminal before any queued ordinary frame; no temporary Completed/admission gap | `j12_lost_completion_cannot_admit_queued_call` |
+| J13 | Successful predeadline completion delivery wins, then startup observes its ready timer; or timeout wins before delivery | Timer selection after predeadline delivery/commit leaves Completed successful with no late Timeout; timer-first Failed Timeout blocks delivery/admission | `j13_completed_commit_defeats_late_timeout`, J9 expired handoff |
+| J14 | Recovery initialized POST receives 5xx or refreshed retry receives 401 | Preserve Unconfirmed or Unauthorized through writer, startup and public pending calls; no admission | `j14_initialized_http_failures_keep_typed_causes` |
+
 The related audit verification correction (#631) pairs inspection requested/outcome
 records by action, phase and operation identity. Millisecond wall-clock observations
 do not order files; equal/backward timestamps and shuffled files exercise that

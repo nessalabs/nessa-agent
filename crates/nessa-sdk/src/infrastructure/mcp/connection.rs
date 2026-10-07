@@ -190,17 +190,7 @@ impl Connection {
                         Outgoing::RecoveryReady {
                             deadline,
                             completed,
-                        } => {
-                            let outcome = session.finish_recovery(deadline, &completed).await;
-                            let result = match &outcome {
-                                SendOutcome::Done => Ok(()),
-                                SendOutcome::End(error) | SendOutcome::FailCall { error, .. } => {
-                                    Err(error.clone())
-                                }
-                            };
-                            let _ = completed.send(result);
-                            outcome
-                        }
+                        } => session.finish_recovery(deadline, completed).await,
                     };
                     match outcome {
                         SendOutcome::Done => {}
