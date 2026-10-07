@@ -22,6 +22,30 @@ pub struct SessionChallenge {
 pub struct ProductClientMetadata {
     pub id: String,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProductSurfaceKind {
+    Panel,
+    Web,
+    Desktop,
+    Cli,
+}
+impl ProductSurfaceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Panel => "panel",
+            Self::Web => "web",
+            Self::Desktop => "desktop",
+            Self::Cli => "cli",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductSurface {
+    pub kind: ProductSurfaceKind,
+    pub instance: String,
+}
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionAuthenticateParams {
@@ -30,6 +54,7 @@ pub struct SessionAuthenticateParams {
     pub nonce: String,
     pub credential: String,
     pub client: ProductClientMetadata,
+    pub surface: ProductSurface,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1892,6 +1917,8 @@ pub const MAX_AUTH_CREDENTIAL_CHARACTERS: usize = 16384;
 /// Published bound from the product schema.
 pub const MAX_PRODUCT_CLIENT_ID_CHARACTERS: usize = 256;
 /// Published bound from the product schema.
+pub const MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS: usize = 256;
+/// Published bound from the product schema.
 pub const MIN_AGENT_INSTALL_REQUEST_ID_CHARACTERS: usize = 1;
 /// Published bound from the product schema.
 pub const MAX_AGENT_INSTALL_REQUEST_ID_BYTES: usize = 256;
@@ -2014,6 +2041,26 @@ pub fn wire_shape_product_client_metadata(value: &Value) -> bool {
         }) && object.keys().all(|key| ["id"].contains(&key.as_str()))
     })
 }
+pub fn wire_shape_product_surface_kind(value: &Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|text| ["panel", "web", "desktop", "cli"].contains(&text))
+}
+pub fn wire_shape_product_surface(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.get("kind").is_some_and(|field| {
+            let _ = field;
+            wire_shape_product_surface_kind(field)
+        }) && object.get("instance").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_str()
+                .is_some_and(|text| text.chars().count() >= 1 && text.chars().count() <= 256)
+        }) && object
+            .keys()
+            .all(|key| ["kind", "instance"].contains(&key.as_str()))
+    })
+}
 pub fn wire_shape_session_authenticate_params(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
         object.get("minVersion").is_some_and(|field| {
@@ -2039,8 +2086,19 @@ pub fn wire_shape_session_authenticate_params(value: &Value) -> bool {
         }) && object.get("client").is_some_and(|field| {
             let _ = field;
             wire_shape_product_client_metadata(field)
+        }) && object.get("surface").is_some_and(|field| {
+            let _ = field;
+            wire_shape_product_surface(field)
         }) && object.keys().all(|key| {
-            ["minVersion", "maxVersion", "nonce", "credential", "client"].contains(&key.as_str())
+            [
+                "minVersion",
+                "maxVersion",
+                "nonce",
+                "credential",
+                "client",
+                "surface",
+            ]
+            .contains(&key.as_str())
         })
     })
 }

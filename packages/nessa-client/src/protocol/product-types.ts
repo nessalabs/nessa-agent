@@ -8,6 +8,8 @@ export type {
   ExistingCredentialResult,
   IssuedCredentialResult,
   ProductClientMetadata,
+  ProductSurface,
+  ProductSurfaceKind,
   ProductCredentialMetadata,
   ProductGrant,
   ProductMembership,

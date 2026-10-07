@@ -95,8 +95,9 @@ Options:
 
 Steps, per engine and layout, in order on one page (--only <names> to pick):
   handshake  on the window's own socket, to the host's endpoint, it
-          authenticated as client nessa-panel and the gateway answered ok with
-          principal surface:nessa-panel: the panel's credential (W4′)
+          authenticated as client nessa-panel, named surface kind desktop,
+          and the gateway answered ok with principal surface:nessa-panel:
+          the panel's credential (W4′)
   lists   connected over the host's endpoint and the panel's credential, the
           window lists the gateway's conversation by its title: no failure
           status, no sample (W1)
@@ -195,9 +196,10 @@ async function startStack(options) {
 
 /**
  * Watches `page`'s sockets for the product handshake, into `seen`: each
- * `session.authenticate` the page sent, with the socket's URL and the client
- * id it named, and the gateway's answer to it. Only those fields are kept:
- * the request carries the credential, and no frame is.
+ * `session.authenticate` the page sent, with the socket's URL, the client
+ * id it named, the surface kind and instance, and the gateway's answer.
+ * Only those fields are kept: the request carries the credential, and no
+ * frame is.
  */
 function watchHandshakes(page, seen) {
   page.on("websocket", (socket) => {
@@ -215,6 +217,10 @@ function watchHandshakes(page, seen) {
       const entry = {
         socket: socket.url(),
         client: frame.params?.client?.id ?? null,
+        surface: {
+          kind: frame.params?.surface?.kind ?? null,
+          instance: frame.params?.surface?.instance ?? null,
+        },
         answer: null,
       }
       asked.set(frame.id, entry)
@@ -285,15 +291,21 @@ function drawn(messages, turn) {
   return failures
 }
 
-/** The handshakes as kept: no more than their socket, client id and answer. */
+/** The handshakes as kept: socket, client id, surface kind and instance, answer. */
 const shown = (handshakes) =>
-  handshakes.map(({ socket, client, answer }) => ({ socket, client, answer }))
+  handshakes.map(({ socket, client, surface, answer }) => ({
+    socket,
+    client,
+    surface,
+    answer,
+  }))
 
 /**
  * Failures for the window's handshakes `seen` (W4′): at least one, and
  * each on a socket to the host's endpoint — not the dev server's `/browser`
- * proxy to the same gateway — authenticated as client nessa-panel and
- * answered ok with principal surface:nessa-panel.
+ * proxy to the same gateway — authenticated as client nessa-panel, naming
+ * surface kind desktop with an instance, and answered ok with principal
+ * surface:nessa-panel.
  */
 function handshakeFailures(seen, stack) {
   const failures = []
@@ -308,6 +320,14 @@ function handshakeFailures(seen, stack) {
     if (each.client !== "nessa-panel")
       failures.push(
         `the window authenticated as ${JSON.stringify(each.client)}, not nessa-panel`,
+      )
+    if (each.surface?.kind !== "desktop")
+      failures.push(
+        `the window's surface is ${JSON.stringify(each.surface ?? null)}, not desktop`,
+      )
+    if (typeof each.surface?.instance !== "string" || each.surface.instance.length === 0)
+      failures.push(
+        `the window's surface instance is ${JSON.stringify(each.surface?.instance ?? null)}`,
       )
     if (!each.answer?.ok || each.answer.principal !== "surface:nessa-panel")
       failures.push(

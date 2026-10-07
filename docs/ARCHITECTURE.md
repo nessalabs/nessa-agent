@@ -953,13 +953,15 @@ only liveness, without product state.
 
 The panel authenticates using its distinct private surface credential loaded by
 the native host; the desktop window connects under the same credential and
-client id (`nessa-panel`), served once the gateway is ready (#419). The
-gateway cannot tell the two windows apart: each authenticates as client
-`nessa-panel` and is answered as principal `surface:nessa-panel`, which
-`gateway-window.mjs`'s handshake checks (W4′) assert of every handshake the
-window makes, and `session.authenticate` has no field for the surface kind the
-client is given (`SessionAuthenticateParams`, generated in
-`packages/nessa-client/src/generated/product.ts`; #447). The SDK supports injected credential storage and a Node file
+client id (`nessa-panel`), served once the gateway is ready (#419). Both are
+answered as principal `surface:nessa-panel`. The handshake also sends the
+surface's kind and instance (`SessionAuthenticateParams.surface`, generated in
+`packages/nessa-client/src/generated/product.ts`), and the gateway records
+those on the session log, so a desktop window (`kind: desktop`) is distinct
+from the panel (`kind: panel`) even though they share the credential.
+`gateway-window.mjs`'s handshake checks (W4′) assert that of every handshake
+the window makes. The surface is metadata: it does not grant permissions and
+does not replace the principal. The SDK supports injected credential storage and a Node file
 source. Composition loads namespace `config.json` and injects registry limits
 and session deadlines. Use the
 [local SDK/CLI guide](guides/local-auth.md) for gateway access and the

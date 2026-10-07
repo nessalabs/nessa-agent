@@ -232,6 +232,9 @@ fn peer(script: impl FnOnce(&mut PeerSocket) + Send + 'static) -> (Endpoint, Pee
         assert_eq!(authentication.method, product_method::SESSION_AUTHENTICATE);
         assert_eq!(authentication.params["nonce"], "nonce");
         assert_eq!(authentication.params["credential"], "credential");
+        assert_eq!(authentication.params["client"]["id"], "example");
+        assert_eq!(authentication.params["surface"]["kind"], "cli");
+        assert_eq!(authentication.params["surface"]["instance"], "example");
         send(
             socket,
             OutgoingMessage::Response(

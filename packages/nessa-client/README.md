@@ -90,6 +90,7 @@ async function run() {
 
 Product authentication is mandatory, including local development. `role`,
 `surface`, and `client` describe the client; they do not grant permissions.
+The handshake sends `surface.kind`, `surface.instance`, and `client.id`.
 Local credentials have no expiry by default. Issuance accepts optional future
 `expiresAt` seconds; session and credential metadata use `null` for no expiry.
 
