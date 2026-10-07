@@ -1,0 +1,44 @@
+✔ negative infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed (2.99142ms)
+✔ init infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed (1.141016ms)
+✔ negative infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child (0.293852ms)
+✔ init infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child (0.105398ms)
+✔ zero selected tests cannot pass (0.43898ms)
+✔ a different negative failure is a harness failure (0.304348ms)
+✔ the negative requires a new adopted zombie (0.2663ms)
+✔ directory retention is required in the negative directory case (0.135754ms)
+✔ positive failures, zombies, retention and timeout cannot pass (0.247543ms)
+✔ four scenarios use distinct containers, same inputs and readonly mounts (1.237431ms)
+✔ removal is attempted after create failure (0.674454ms)
+✔ removal is attempted after start failure (0.204067ms)
+✔ removal is attempted after validation failure (0.122264ms)
+✔ removal is attempted after interrupt failure (0.120241ms)
+✔ supervisor ownership and selected test must agree with scenario (0.212379ms)
+✔ a failed removal prevents acceptance (0.256005ms)
+✔ rejected evidence is saved before removal (0.893805ms)
+✔ malformed output and Docker failure retain diagnostics before removal (0.326291ms)
+✔ evidence failure still removes the container (0.199951ms)
+✔ truncated output cannot be accepted (0.116846ms)
+✔ Docker uses the managed socket, bounded deadline and supplied cancellation (0.55187ms)
+✔ Docker output overflow kills the client and keeps bounded failure diagnostics (0.98398ms)
+✔ libtest output must name the selected test and account for one active test (0.262896ms)
+✔ libtest counts, status and process exit cannot contradict each other (0.614084ms)
+non-reaping: infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed: accepted
+init: infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed: accepted
+non-reaping: infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child: accepted
+init: infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child: accepted
+✔ the complete harness pins the inspected image and records four removed acceptances (22.032597ms)
+✔ missing or nonnumeric negative exit evidence cannot pass (0.484699ms)
+✔ repeated interrupts keep cancellation installed until removal finishes (4.346178ms)
+✔ incomplete proof fields cannot produce a positive or negative acceptance (0.813724ms)
+✔ zombie, directory and package evidence must identify concrete captured resources (0.46532ms)
+✔ captured process identities cannot be reused or contradict the supervisor (0.281133ms)
+✔ image inspection receives interrupt cancellation before any container is created (2.526651ms)
+✔ all captured process entries require typed fields even when they are not zombies (0.293912ms)
+ℹ tests 32
+ℹ suites 0
+ℹ pass 32
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 107.815697

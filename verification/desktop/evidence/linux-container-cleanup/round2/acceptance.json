@@ -1,0 +1,169 @@
+{
+  "image": "sha256:c30a858151fd1f110f5f1639372775425d3ed5602728f97bc288d5d1df273e4a",
+  "imageReference": "nessa-process-cleanup:630",
+  "binary": "/workspace/nessa-agent/target/debug/deps/nessa_sdk-3a9a37445fc631f7",
+  "binarySha256": "932566e1324fb80f9e30d0512e823d04d6c97b375af3a565306e39b88dd6c28d",
+  "manifest": "/workspace/nessa-agent-container-reaping/crates/nessa-sdk",
+  "reports": [
+    {
+      "container": "nessa-cleanup-360ffc27-0e4c-4e7f-9129-0e11b7b5ea48",
+      "init": false,
+      "test": "infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed",
+      "accepted": true,
+      "output": "{\"test\": \"infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed\", \"supervisor_pid\": 1, \"supervisor_ppid\": 0, \"initial_processes\": [{\"pid\": 1, \"state\": \"R\", \"ppid\": 0, \"pgid\": 1}], \"pid1_executable\": \"/usr/bin/python3.13\", \"test_pid\": 7, \"test_exit\": 101, \"timed_out\": false, \"output\": \"\\nrunning 1 test\\ntest infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed ... \\nthread 'infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed' (8) panicked at crates/nessa-sdk/src/infrastructure/../../tests/infrastructure/process.rs:69:10:\\ncalled `Result::unwrap()` on an `Err` value: CleanupUncertain\\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\\nFAILED\\n\\nfailures:\\n\\nfailures:\\n    infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed\\n\\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 966 filtered out; finished in 4.08s\\n\\n\", \"output_truncated\": false, \"new_orphans\": [{\"pid\": 10, \"state\": \"Z\", \"ppid\": 1, \"pgid\": 9}], \"retained_directories\": [\"/tmp/nessa-agent-EbolMH\"], \"packages\": {\"ca-certificates\": \"20250419\", \"libgcc-s1\": \"14.2.0-19\", \"python3-minimal\": \"3.13.5-1\"}}\n",
+      "report": {
+        "test": "infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed",
+        "supervisor_pid": 1,
+        "supervisor_ppid": 0,
+        "initial_processes": [
+          {
+            "pid": 1,
+            "state": "R",
+            "ppid": 0,
+            "pgid": 1
+          }
+        ],
+        "pid1_executable": "/usr/bin/python3.13",
+        "test_pid": 7,
+        "test_exit": 101,
+        "timed_out": false,
+        "output": "\nrunning 1 test\ntest infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed ... \nthread 'infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed' (8) panicked at crates/nessa-sdk/src/infrastructure/../../tests/infrastructure/process.rs:69:10:\ncalled `Result::unwrap()` on an `Err` value: CleanupUncertain\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nFAILED\n\nfailures:\n\nfailures:\n    infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 966 filtered out; finished in 4.08s\n\n",
+        "output_truncated": false,
+        "new_orphans": [
+          {
+            "pid": 10,
+            "state": "Z",
+            "ppid": 1,
+            "pgid": 9
+          }
+        ],
+        "retained_directories": [
+          "/tmp/nessa-agent-EbolMH"
+        ],
+        "packages": {
+          "ca-certificates": "20250419",
+          "libgcc-s1": "14.2.0-19",
+          "python3-minimal": "3.13.5-1"
+        }
+      }
+    },
+    {
+      "container": "nessa-cleanup-a76af8d9-c727-402d-a4e5-1806850630b2",
+      "init": true,
+      "test": "infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed",
+      "accepted": true,
+      "output": "{\"test\": \"infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed\", \"supervisor_pid\": 7, \"supervisor_ppid\": 1, \"initial_processes\": [{\"pid\": 1, \"state\": \"S\", \"ppid\": 0, \"pgid\": 1}, {\"pid\": 7, \"state\": \"R\", \"ppid\": 1, \"pgid\": 7}], \"pid1_executable\": \"/usr/sbin/docker-init\", \"test_pid\": 8, \"test_exit\": 0, \"timed_out\": false, \"output\": \"\\nrunning 1 test\\ntest infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed ... ok\\n\\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 966 filtered out; finished in 0.09s\\n\\n\", \"output_truncated\": false, \"new_orphans\": [], \"retained_directories\": [], \"packages\": {\"ca-certificates\": \"20250419\", \"libgcc-s1\": \"14.2.0-19\", \"python3-minimal\": \"3.13.5-1\"}}\n",
+      "report": {
+        "test": "infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed",
+        "supervisor_pid": 7,
+        "supervisor_ppid": 1,
+        "initial_processes": [
+          {
+            "pid": 1,
+            "state": "S",
+            "ppid": 0,
+            "pgid": 1
+          },
+          {
+            "pid": 7,
+            "state": "R",
+            "ppid": 1,
+            "pgid": 7
+          }
+        ],
+        "pid1_executable": "/usr/sbin/docker-init",
+        "test_pid": 8,
+        "test_exit": 0,
+        "timed_out": false,
+        "output": "\nrunning 1 test\ntest infrastructure::process::tests::private_directory_is_removed_only_after_process_cleanup_is_confirmed ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 966 filtered out; finished in 0.09s\n\n",
+        "output_truncated": false,
+        "new_orphans": [],
+        "retained_directories": [],
+        "packages": {
+          "ca-certificates": "20250419",
+          "libgcc-s1": "14.2.0-19",
+          "python3-minimal": "3.13.5-1"
+        }
+      }
+    },
+    {
+      "container": "nessa-cleanup-57376a49-2e87-45fd-8711-3f5c0d2f5438",
+      "init": false,
+      "test": "infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child",
+      "accepted": true,
+      "output": "{\"test\": \"infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child\", \"supervisor_pid\": 1, \"supervisor_ppid\": 0, \"initial_processes\": [{\"pid\": 1, \"state\": \"R\", \"ppid\": 0, \"pgid\": 1}], \"pid1_executable\": \"/usr/bin/python3.13\", \"test_pid\": 7, \"test_exit\": 101, \"timed_out\": false, \"output\": \"\\nrunning 1 test\\ntest infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child ... \\nthread 'infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child' (8) panicked at crates/nessa-sdk/src/infrastructure/acp/../../../tests/infrastructure/acp/contracts/shutdown.rs:188:10:\\ncalled `Result::unwrap()` on an `Err` value: CleanupUncertain\\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\\nFAILED\\n\\nfailures:\\n\\nfailures:\\n    infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child\\n\\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 966 filtered out; finished in 8.18s\\n\\n\", \"output_truncated\": false, \"new_orphans\": [{\"pid\": 10, \"state\": \"Z\", \"ppid\": 1, \"pgid\": 9}], \"retained_directories\": [], \"packages\": {\"ca-certificates\": \"20250419\", \"libgcc-s1\": \"14.2.0-19\", \"python3-minimal\": \"3.13.5-1\"}}\n",
+      "report": {
+        "test": "infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child",
+        "supervisor_pid": 1,
+        "supervisor_ppid": 0,
+        "initial_processes": [
+          {
+            "pid": 1,
+            "state": "R",
+            "ppid": 0,
+            "pgid": 1
+          }
+        ],
+        "pid1_executable": "/usr/bin/python3.13",
+        "test_pid": 7,
+        "test_exit": 101,
+        "timed_out": false,
+        "output": "\nrunning 1 test\ntest infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child ... \nthread 'infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child' (8) panicked at crates/nessa-sdk/src/infrastructure/acp/../../../tests/infrastructure/acp/contracts/shutdown.rs:188:10:\ncalled `Result::unwrap()` on an `Err` value: CleanupUncertain\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nFAILED\n\nfailures:\n\nfailures:\n    infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 966 filtered out; finished in 8.18s\n\n",
+        "output_truncated": false,
+        "new_orphans": [
+          {
+            "pid": 10,
+            "state": "Z",
+            "ppid": 1,
+            "pgid": 9
+          }
+        ],
+        "retained_directories": [],
+        "packages": {
+          "ca-certificates": "20250419",
+          "libgcc-s1": "14.2.0-19",
+          "python3-minimal": "3.13.5-1"
+        }
+      }
+    },
+    {
+      "container": "nessa-cleanup-2fb9df33-5a0e-4a1b-b00f-5652ade1db43",
+      "init": true,
+      "test": "infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child",
+      "accepted": true,
+      "output": "{\"test\": \"infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child\", \"supervisor_pid\": 7, \"supervisor_ppid\": 1, \"initial_processes\": [{\"pid\": 1, \"state\": \"S\", \"ppid\": 0, \"pgid\": 1}, {\"pid\": 7, \"state\": \"R\", \"ppid\": 1, \"pgid\": 7}], \"pid1_executable\": \"/usr/sbin/docker-init\", \"test_pid\": 8, \"test_exit\": 0, \"timed_out\": false, \"output\": \"\\nrunning 1 test\\ntest infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child ... ok\\n\\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 966 filtered out; finished in 2.06s\\n\\n\", \"output_truncated\": false, \"new_orphans\": [], \"retained_directories\": [], \"packages\": {\"ca-certificates\": \"20250419\", \"libgcc-s1\": \"14.2.0-19\", \"python3-minimal\": \"3.13.5-1\"}}\n",
+      "report": {
+        "test": "infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child",
+        "supervisor_pid": 7,
+        "supervisor_ppid": 1,
+        "initial_processes": [
+          {
+            "pid": 1,
+            "state": "S",
+            "ppid": 0,
+            "pgid": 1
+          },
+          {
+            "pid": 7,
+            "state": "R",
+            "ppid": 1,
+            "pgid": 7
+          }
+        ],
+        "pid1_executable": "/usr/sbin/docker-init",
+        "test_pid": 8,
+        "test_exit": 0,
+        "timed_out": false,
+        "output": "\nrunning 1 test\ntest infrastructure::acp::tests::contracts::shutdown::force_closes_a_term_resistant_parent_and_reaps_its_child ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 966 filtered out; finished in 2.06s\n\n",
+        "output_truncated": false,
+        "new_orphans": [],
+        "retained_directories": [],
+        "packages": {
+          "ca-certificates": "20250419",
+          "libgcc-s1": "14.2.0-19",
+          "python3-minimal": "3.13.5-1"
+        }
+      }
+    }
+  ]
+}
