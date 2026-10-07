@@ -193,7 +193,19 @@ automatic session storage, hooks, invocation, and UI integration.
   explicitly.
 - `application/agent_execution/`: `agents` exposes `Agent` and its errors,
   `subagents` the ownership coordinator that reserves, prepares, and closes
-  ordinary child agents and keeps snapshot writes in copy order, `providers`
+  ordinary child agents. Its private `publication` module projects audit-eligible
+  identities/progress plus live safety facts; `root` owns admissions through
+  synchronous ID delivery and reconciles failed or unclaimed eligible roots.
+  Snapshot revisions and the write fence preserve copy order. The read-only
+  `active_root_for_session` exposes eligible Open/Closing roots for explicit
+  reconciliation without making `open_root` an idempotent retry.
+  `bind_resources` now returns a typed refusal plus the unchanged owner when
+  transfer is refused; it does not replace an occupied owner or bind after an
+  absence claim. Never-bound root settlement consumes the actual absence audit
+  result; rejection leaves
+  Closing with failed evidence. Restored identities do not prove never-bound
+  absence. Whole-transaction panic supervision (#625) and production gateway
+  child composition remain separate work. `providers`
   injected execution ports, `sessions`
   automatic snapshot management and the streaming commit clock port,
   `hooks` typed callbacks registered on Agent,

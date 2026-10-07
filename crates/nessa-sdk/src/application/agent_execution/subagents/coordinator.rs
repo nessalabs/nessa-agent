@@ -1,6 +1,6 @@
 //! Supervises spawn, tree close, and recovery around [`OwnershipGraph`](crate::domain::agent_execution::subagents::OwnershipGraph).
 //!
-//! Snapshot publication copies the graph under the admission lock, then writes
+//! Snapshot publication projects audit-eligible graph state under the admission lock, then writes
 //! that copy. A copy that lost the race to a newer acknowledged copy is not
 //! written. The store still replaces one body; this fence is the coordinator's.
 #![deny(missing_docs)]
@@ -23,9 +23,10 @@ use uuid::Uuid;
 use super::{
     failure::OwnershipFailure,
     ports::{
-        ChildFactory, ChildResources, LiveRoom, OwnershipAudit, OwnershipStore, PortFailure,
-        PrepareRequest,
+        BindResourcesFailure, BindResourcesRefusal, ChildFactory, ChildResources, LiveRoom,
+        OwnershipAudit, OwnershipStore, PortFailure, PrepareRequest,
     },
+    publication::{OwnershipPublication, PublicationTarget, PublicationToken, PublishedState},
 };
 use crate::application::agent_execution::{
     agents::{AgentError, OwnedLifetime},
@@ -106,11 +107,15 @@ pub struct OwnershipCoordinator {
     inner: Arc<Shared>,
 }
 
-struct Shared {
+pub(super) struct Shared {
+    pub(super) publication: Mutex<OwnershipPublication>,
+    /// IDs that have ever accepted a physical cleanup owner.
+    pub(super) bound: Mutex<HashSet<AgentLifetimeId>>,
+    pub(super) absence_claimed: Mutex<HashSet<AgentLifetimeId>>,
     scope: Arc<Mutex<()>>,
     graph: Mutex<OwnershipGraph>,
     store: Arc<dyn OwnershipStore>,
-    audit: Arc<dyn OwnershipAudit>,
+    pub(super) audit: Arc<dyn OwnershipAudit>,
     factory: Arc<dyn ChildFactory>,
     room: Arc<dyn LiveRoom>,
     resources: Mutex<HashMap<AgentLifetimeId, Arc<dyn ChildResources>>>,
@@ -177,6 +182,9 @@ impl OwnershipCoordinator {
             inner: Arc::new(Shared {
                 scope: Arc::new(Mutex::new(())),
                 graph: Mutex::new(OwnershipGraph::new()),
+                publication: Mutex::new(OwnershipPublication::default()),
+                bound: Mutex::new(HashSet::new()),
+                absence_claimed: Mutex::new(HashSet::new()),
                 store: dependencies.store,
                 audit: dependencies.audit,
                 factory: dependencies.factory,
@@ -213,29 +221,37 @@ impl OwnershipCoordinator {
 
     /// Open a root lifetime. A session that already has an open or closing root is refused.
     /// Closing the previous root and calling this again mints a new lifetime.
+    /// The owned admission task survives caller cancellation. Ownership transfers
+    /// when this future returns `Ready(Ok(id))`; an unclaimed queued success seals
+    /// and reconciles its root. Audit uncertainty or failed eligible publication
+    /// retains the identity in a nonrunnable shape; definite preeligible audit
+    /// rejection removes only that private root.
+    ///
+    /// # Errors
+    /// Returns a domain refusal, audit rejection/uncertainty, or store failure.
+    /// Use [`Self::active_root_for_session`] to find a retained active identity.
     pub async fn open_root(
         &self,
         session: SessionId,
         initiator: Initiator,
     ) -> Result<AgentLifetimeId, OwnershipFailure> {
-        let lifetime = mint_lifetime();
-        let weak = Arc::downgrade(&self.inner);
-        let evidence = self.inner.with_graph(|graph| {
-            let evidence = graph
-                .open_root(session, lifetime.clone(), initiator)
-                .map_err(OwnershipFailure::Domain)?;
-            self.inner.remember(weak, lifetime.clone(), false);
-            Ok(evidence)
-        })?;
-        if let Err(error) = self.inner.publish_evidence(&evidence, None).await {
-            // The caller does not receive the id on this path, so a failed
-            // publication must not leave an open root that the next open cannot
-            // replace. Nothing else can name this id until publication succeeds.
-            // Other sessions' roots stay in the graph.
-            self.inner.drop_unpublished_root(&lifetime);
-            return Err(error);
-        }
-        Ok(lifetime)
+        super::root::open(Arc::clone(&self.inner), session, initiator).await
+    }
+
+    /// Read an audit-eligible Open or Closing root for a session.
+    /// Private admissions and Closed history are excluded. This supports explicit
+    /// reconciliation after a failed opening; calling `open_root` still refuses
+    /// an existing active root.
+    pub fn active_root_for_session(&self, session: &SessionId) -> Option<AgentLifetimeId> {
+        self.inner.with_graph(|graph| {
+            let id = graph.root_lifetime_for_session(session)?;
+            self.inner
+                .publication
+                .lock()
+                .expect("ownership publication")
+                .root_eligible(id)
+                .then(|| id.clone())
+        })
     }
 
     /// Reserve, prepare, and admit one child. Identical retries do not call the factory again.
@@ -303,13 +319,56 @@ impl OwnershipCoordinator {
         }
     }
 
-    /// Attach a cleanup owner for a lifetime the factory did not prepare, such as the root.
-    pub fn bind_resources(&self, lifetime: AgentLifetimeId, resources: Arc<dyn ChildResources>) {
-        self.inner
-            .resources
-            .lock()
-            .expect("child resources")
-            .insert(lifetime, resources);
+    /// Transfer a cleanup owner for an admitted lifetime, such as the root.
+    /// `resources` remains the caller's responsibility until this returns success.
+    /// A successful transfer is retained for close even if later audit/storage fails.
+    /// Binding and never-bound absence claims serialize under the admission scope.
+    /// An existing owner is not replaced; Closing recovery may accept a vacant
+    /// owner slot only before physical release or an absence claim.
+    ///
+    /// # Errors
+    /// Returns [`BindResourcesFailure`] with the exact rejected owner for an
+    /// unknown/Closed identity, occupied slot, or previously confirmed absence/release.
+    pub fn bind_resources(
+        &self,
+        lifetime: AgentLifetimeId,
+        resources: Arc<dyn ChildResources>,
+    ) -> Result<(), BindResourcesFailure> {
+        let result = self.inner.with_graph(|graph| {
+            let mut owned = self.inner.resources.lock().expect("child resources");
+            let refusal = match graph.lifetime_state(&lifetime) {
+                None => Some(BindResourcesRefusal::UnknownLifetime),
+                Some(LifetimeState::Closed) => Some(BindResourcesRefusal::Closed),
+                _ if owned.contains_key(&lifetime) => Some(BindResourcesRefusal::AlreadyBound),
+                _ if self
+                    .inner
+                    .absence_claimed
+                    .lock()
+                    .expect("absence claims")
+                    .contains(&lifetime)
+                    || graph.snapshot().settlements.iter().any(|row| {
+                        row.target == lifetime && row.physical == PhysicalFact::Released
+                    }) =>
+                {
+                    Some(BindResourcesRefusal::Released)
+                }
+                _ => None,
+            };
+            if let Some(reason) = refusal {
+                return Err(BindResourcesFailure { reason, resources });
+            }
+            self.inner
+                .bound
+                .lock()
+                .expect("bound lifetimes")
+                .insert(lifetime.clone());
+            owned.insert(lifetime, resources);
+            Ok(())
+        });
+        if result.is_ok() {
+            self.inner.notify.notify_waiters();
+        }
+        result
     }
 
     /// Gate for an admitted lifetime. Install it on that lifetime's Agent.
@@ -378,28 +437,39 @@ impl OwnershipCoordinator {
         child: &AgentLifetimeId,
         parent: &AgentLifetimeId,
     ) -> Result<DeliveryState, OwnershipFailure> {
-        let evidence = self.inner.with_graph(|graph| {
-            graph
+        let (evidence, token) = self.inner.with_graph(|graph| {
+            let evidence = graph
                 .admit_report(report.clone(), child, parent)
-                .map_err(OwnershipFailure::Domain)
+                .map_err(OwnershipFailure::Domain)?;
+            let state = graph.report_state(&report).expect("admitted report");
+            let token = self
+                .inner
+                .publication
+                .lock()
+                .expect("ownership publication")
+                .begin(
+                    PublicationTarget::Report(report.clone()),
+                    PublishedState::Report(state),
+                );
+            Ok::<_, OwnershipFailure>((evidence, token))
         })?;
         let state = self
             .inner
             .with_graph(|graph| graph.report_state(&report))
             .ok_or(OwnershipFailure::Domain(OwnershipError::UnknownChild))?;
-        self.inner.publish_evidence(&evidence, None).await?;
+        self.inner.publish_evidence(&evidence, &token, None).await?;
         Ok(state)
     }
 }
 
 impl Shared {
-    fn with_graph<T>(&self, body: impl FnOnce(&mut OwnershipGraph) -> T) -> T {
+    pub(super) fn with_graph<T>(&self, body: impl FnOnce(&mut OwnershipGraph) -> T) -> T {
         let _scope = self.scope.lock().expect("tree admission");
         let mut graph = self.graph.lock().expect("ownership graph");
         body(&mut graph)
     }
 
-    fn remember(&self, inner: Weak<Shared>, lifetime: AgentLifetimeId, sealed: bool) {
+    pub(super) fn remember(&self, inner: Weak<Shared>, lifetime: AgentLifetimeId, sealed: bool) {
         let flag = Arc::new(AtomicBool::new(sealed));
         let gate = Arc::new(LifetimeGate {
             inner,
@@ -417,26 +487,27 @@ impl Shared {
             .insert(lifetime, gate);
     }
 
-    fn drop_unpublished_root(&self, lifetime: &AgentLifetimeId) {
-        // Same lock order as `remember`: tree scope, graph, then seal maps.
+    pub(super) fn drop_unpublished_root(&self, lifetime: &AgentLifetimeId) -> bool {
         self.with_graph(|graph| {
-            self.seals.lock().expect("lifetime seals").remove(lifetime);
-            self.gates.lock().expect("lifetime gates").remove(lifetime);
-            let mut snapshot = graph.snapshot();
-            snapshot
-                .lifetimes
-                .retain(|row| &row.lifetime_id != lifetime);
-            snapshot.spawns.retain(|row| {
-                &row.child_lifetime != lifetime && &row.binding.parent_lifetime != lifetime
-            });
-            snapshot
-                .settlements
-                .retain(|row| &row.close_lifetime != lifetime && &row.target != lifetime);
-            snapshot
-                .reports
-                .retain(|row| &row.child_lifetime != lifetime && &row.parent_lifetime != lifetime);
-            *graph = OwnershipGraph::restore(snapshot);
-        });
+            let mut publication = self.publication.lock().expect("ownership publication");
+            if publication.root_eligible(lifetime)
+                || self
+                    .bound
+                    .lock()
+                    .expect("bound lifetimes")
+                    .contains(lifetime)
+            {
+                return false;
+            }
+            if graph.discard_private_root(lifetime).is_ok() {
+                publication.discard_root(lifetime);
+                self.seals.lock().expect("lifetime seals").remove(lifetime);
+                self.gates.lock().expect("lifetime gates").remove(lifetime);
+                true
+            } else {
+                false
+            }
+        })
     }
 
     fn lookup(&self, command: &SpawnCommand) -> Option<Result<SpawnReceipt, OwnershipFailure>> {
@@ -513,7 +584,11 @@ impl Shared {
             id: admitted.child.clone(),
         };
         if let Err(error) = self
-            .publish_evidence(&admitted.evidence, Some(&command.request_id))
+            .publish_evidence(
+                &admitted.evidence,
+                &admitted.token,
+                Some(&command.request_id),
+            )
             .await
         {
             // Rejected means the publication did not happen, so this reservation
@@ -574,7 +649,16 @@ impl Shared {
                     .expect("inflight spawns")
                     .insert(child.clone());
                 self.remember(_weak, child.clone(), false);
+                let token = self
+                    .publication
+                    .lock()
+                    .expect("ownership publication")
+                    .begin(
+                        PublicationTarget::Spawn(command.request_id.clone()),
+                        PublishedState::Spawn(SpawnProgress::Reserved),
+                    );
                 Ok(Admitted {
+                    token,
                     child,
                     session,
                     evidence,
@@ -610,6 +694,10 @@ impl Shared {
             Ok(prepared) => prepared,
             Err(failure) => {
                 if let Some(cleanup) = failure.cleanup {
+                    self.bound
+                        .lock()
+                        .expect("bound lifetimes")
+                        .insert(admitted.child.clone());
                     self.resources
                         .lock()
                         .expect("child resources")
@@ -628,6 +716,10 @@ impl Shared {
                 return Err(OwnershipFailure::Startup(failure.failure));
             }
         };
+        self.bound
+            .lock()
+            .expect("bound lifetimes")
+            .insert(admitted.child.clone());
         self.resources
             .lock()
             .expect("child resources")
@@ -787,6 +879,9 @@ impl Shared {
         target: &AgentLifetimeId,
         report: super::ports::ResourceReport,
     ) {
+        if report.physical == PhysicalFact::Released {
+            self.release_slot(target);
+        }
         let evidence = self.with_graph(|graph| {
             graph
                 .apply_report(root, operation, target, report.physical, report.evidence)
@@ -803,12 +898,22 @@ impl Shared {
         request: &SpawnRequestId,
         next: SpawnProgress,
     ) -> Result<(), OwnershipFailure> {
-        let evidence = self.with_graph(|graph| {
-            graph
-                .advance_spawn(request, next)
-                .map_err(OwnershipFailure::Domain)
+        let (evidence, token) = self.with_graph(|graph| {
+            let evidence = graph
+                .advance_spawn(request, next.clone())
+                .map_err(OwnershipFailure::Domain)?;
+            let token = self
+                .publication
+                .lock()
+                .expect("ownership publication")
+                .begin(
+                    PublicationTarget::Spawn(request.clone()),
+                    PublishedState::Spawn(next),
+                );
+            Ok::<_, OwnershipFailure>((evidence, token))
         })?;
-        self.publish_evidence(&evidence, None).await
+        self.publish_evidence(&evidence, &token, Some(request))
+            .await
     }
 
     fn receipt(&self, request: &SpawnRequestId) -> Result<SpawnReceipt, OwnershipFailure> {
@@ -840,14 +945,33 @@ impl Shared {
 
     /// Audit this evidence, then write the snapshot only when that audit is accepted.
     /// `unconfirmed_request` marks that spawn unconfirmed when the audit or the store is uncertain.
-    async fn publish_evidence(
+    pub(super) async fn publish_evidence(
         &self,
         evidence: &OwnershipEvidence,
+        token: &PublicationToken,
         unconfirmed_request: Option<&SpawnRequestId>,
     ) -> Result<(), OwnershipFailure> {
         match self.audit.record(evidence).await {
-            Ok(()) => {}
+            Ok(()) => {
+                self.with_graph(|_| {
+                    self.publication
+                        .lock()
+                        .expect("ownership publication")
+                        .acknowledge(token)
+                });
+            }
             Err(PortFailure::Rejected) => {
+                if let Some(request) = unconfirmed_request {
+                    let eligible = self.with_graph(|_| {
+                        self.publication
+                            .lock()
+                            .expect("ownership publication")
+                            .spawn_eligible(request)
+                    });
+                    if eligible {
+                        self.mark_unconfirmed(request).await;
+                    }
+                }
                 return Err(OwnershipFailure::Audit(PortFailure::Rejected));
             }
             Err(PortFailure::Uncertain) => {
@@ -875,10 +999,16 @@ impl Shared {
     /// that lose the race return success: the newer copy includes this graph
     /// unless a later transition removed rows. The store is not asked to keep
     /// history; it still replaces the one retained body.
-    async fn commit_snapshot(&self) -> Result<(), PortFailure> {
+    pub(super) async fn commit_snapshot(&self) -> Result<(), PortFailure> {
         let (revision, snapshot) = self.with_graph(|graph| {
             let revision = self.publication_revision.fetch_add(1, Ordering::AcqRel) + 1;
-            (revision, graph.snapshot())
+            (
+                revision,
+                self.publication
+                    .lock()
+                    .expect("ownership publication")
+                    .project(graph),
+            )
         });
         #[cfg(test)]
         self.pause_before_publish().await;
@@ -903,6 +1033,10 @@ impl Shared {
 
     async fn mark_unconfirmed(&self, request: &SpawnRequestId) {
         let evidence = self.with_graph(|graph| {
+            self.publication
+                .lock()
+                .expect("ownership publication")
+                .retain_spawn(request);
             let progress = graph.spawn_progress(request)?.clone();
             graph
                 .advance_spawn(
@@ -921,7 +1055,10 @@ impl Shared {
 
     /// Write the snapshot even when the audit port rejects the record.
     /// Close intent and an interrupted cascade stay durable across that rejection.
-    async fn persist_evidence(&self, evidence: &OwnershipEvidence) -> Result<(), OwnershipFailure> {
+    pub(super) async fn persist_evidence(
+        &self,
+        evidence: &OwnershipEvidence,
+    ) -> Result<(), OwnershipFailure> {
         let audit = self.audit.record(evidence).await;
         let stored = self.commit_snapshot().await;
         match (audit, stored) {
@@ -931,7 +1068,7 @@ impl Shared {
         }
     }
 
-    fn seal_now(
+    pub(super) fn seal_now(
         &self,
         lifetime: &AgentLifetimeId,
         operation: CloseOperationId,
@@ -955,7 +1092,7 @@ impl Shared {
         })
     }
 
-    fn start_drain(self: &Arc<Self>, root: AgentLifetimeId, external: bool) {
+    pub(super) fn start_drain(self: &Arc<Self>, root: AgentLifetimeId, external: bool) {
         // Closing is decided before the drains lock. Nothing holds the tree
         // scope and then takes `drains`, so holding `drains` across the later
         // graph read cannot cycle. The running-slot check and the insert share
@@ -1037,6 +1174,7 @@ impl Shared {
         root: AgentLifetimeId,
         external: Arc<AtomicBool>,
     ) -> Result<(), OwnershipFailure> {
+        let mut absence_attempted = false;
         loop {
             // Register before inspecting, so a spawn that finishes during this
             // pass still wakes the next wait. `notify_waiters` does not store
@@ -1053,6 +1191,19 @@ impl Shared {
                     continue;
                 }
                 let Some(resources) = self.claim(target) else {
+                    if target == &root
+                        && !absence_attempted
+                        && self
+                            .publication
+                            .lock()
+                            .expect("ownership publication")
+                            .root_eligible(target)
+                        && !self.bound.lock().expect("bound lifetimes").contains(target)
+                    {
+                        absence_attempted = true;
+                        super::root::settle_never_bound(self, target).await?;
+                        closed_any = true;
+                    }
                     continue;
                 };
                 closed_any = true;
@@ -1119,6 +1270,7 @@ impl Shared {
 
     async fn resume_from_store(self: &Arc<Self>) -> Result<(), OwnershipFailure> {
         let snapshot = self.store.read().await.map_err(OwnershipFailure::Store)?;
+        let publication = OwnershipPublication::restored(&snapshot);
         let mut restored = OwnershipGraph::restore(snapshot);
         let recovery = restored.recovery_records().to_vec();
         let refused = restored.refusal().is_some();
@@ -1153,6 +1305,12 @@ impl Shared {
         let weak = Arc::downgrade(self);
         self.with_graph(|graph| {
             *graph = restored;
+            *self.publication.lock().expect("ownership publication") = publication;
+            // A restored identity cannot prove never-bound absence.
+            self.bound
+                .lock()
+                .expect("bound lifetimes")
+                .extend(rows.iter().map(|r| r.lifetime_id.clone()));
             for row in &rows {
                 self.remember(
                     Weak::clone(&weak),
@@ -1183,6 +1341,7 @@ impl Shared {
 }
 
 struct Admitted {
+    token: PublicationToken,
     child: AgentLifetimeId,
     session: SessionId,
     evidence: OwnershipEvidence,
@@ -1254,7 +1413,7 @@ fn task_digest(task: &str) -> Result<TaskDigest, OwnershipError> {
     TaskDigest::new(HEXLOWER.encode(&hash))
 }
 
-fn mint_lifetime() -> AgentLifetimeId {
+pub(super) fn mint_lifetime() -> AgentLifetimeId {
     AgentLifetimeId::new(format!("life-{}", Uuid::new_v4().simple())).expect("lifetime id")
 }
 
@@ -1262,7 +1421,7 @@ fn mint_session() -> SessionId {
     SessionId::new(format!("sess-{}", Uuid::new_v4().simple())).expect("session id")
 }
 
-fn mint_close() -> CloseOperationId {
+pub(super) fn mint_close() -> CloseOperationId {
     CloseOperationId::new(format!("close-{}", Uuid::new_v4().simple())).expect("close id")
 }
 
@@ -1358,6 +1517,9 @@ impl OwnedLifetime for LifetimeGate {
                 )
                 .ok()
         });
+        if released {
+            shared.release_slot(&self.lifetime);
+        }
         if let Some(evidence) = recorded {
             let _ = shared.audit.record(&evidence).await;
             let _ = shared.commit_snapshot().await;
@@ -1511,7 +1673,9 @@ mod process_cleanup {
             .open_root(SessionId::new("root-session").unwrap(), Initiator::Runtime)
             .await
             .unwrap();
-        coordinator.bind_resources(root.clone(), Arc::new(ReleasedRoot));
+        coordinator
+            .bind_resources(root.clone(), Arc::new(ReleasedRoot))
+            .unwrap();
         coordinator
             .spawn(SpawnCommand {
                 parent: root.clone(),
@@ -1680,7 +1844,9 @@ mod lifetime_races {
         let root = coordinator
             .inner
             .with_graph(|graph| graph.snapshot().lifetimes[0].lifetime_id.clone());
-        coordinator.bind_resources(root.clone(), Arc::new(Released));
+        coordinator
+            .bind_resources(root.clone(), Arc::new(Released))
+            .unwrap();
         coordinator
             .end_lifetime(CloseCommand {
                 lifetime: root.clone(),
@@ -1723,7 +1889,9 @@ mod lifetime_races {
             .open_root(SessionId::new("root-session").unwrap(), Initiator::Runtime)
             .await
             .unwrap();
-        coordinator.bind_resources(root.clone(), Arc::new(Released));
+        coordinator
+            .bind_resources(root.clone(), Arc::new(Released))
+            .unwrap();
         coordinator.spawn(command(root.clone())).await.unwrap();
         let first = {
             let coordinator = coordinator.clone();

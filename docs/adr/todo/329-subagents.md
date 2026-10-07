@@ -704,6 +704,96 @@ acknowledged, an older copy is not written. The store still replaces one body.
 A newer write that fails does not record that acknowledgement, so an older copy
 can still be written afterward.
 
+### SDK audit eligibility and owned root delivery (#628)
+
+The SDK implementation uses one live `OwnershipGraph`. Application publication
+metadata selects durable identities and the last audit-acknowledged affirmative
+spawn/report state. Snapshot writers copy this projection and its revision under
+the admission scope; audit and store ports run outside that scope. The existing
+write fence orders copied projections. This SDK behavior does not implement the
+proposed gateway child composition above.
+
+```mermaid
+flowchart LR
+  Transition[Graph transition under admission scope] --> Token[Immutable target and generation token]
+  Token --> Audit[Audit outside scope]
+  Audit --> Ack[Validate token and acknowledge captured state under scope]
+  Ack --> Projection[Eligible projection plus live safety facts]
+  Projection --> Fence[Revision and write-order fence]
+  Fence --> Store[Ownership store]
+```
+
+```mermaid
+stateDiagram-v2
+  [*] --> Private: owned root transaction admits
+  Private --> Removed: definite audit rejection
+  Private --> RetainedClosing: audit uncertainty
+  Private --> Eligible: audit acceptance
+  Eligible --> Delivered: caller claims delivery ticket before returning Ready
+  Eligible --> RetainedClosing: failed store or unclaimed ticket
+  RetainedClosing --> ClosingEvidenceFailed: never-bound absence audit rejects
+  ClosingEvidenceFailed --> RetainedClosing: explicit close retry
+  RetainedClosing --> Closed: absence or cleanup evidence acknowledged
+```
+
+Closing/Closed lifetime rows, physical release, and nonrunnable spawn safety
+states override pending permission milestones. A safety state's KnownMilestone
+preserves a returned task receipt and actual physical preparation; an unaudited
+Attached permission retains Prepared in the nonrunnable shape. Normal pending
+affirmative rows retain their last eligible milestone. These milestones do not
+assert resource absence. Transferred resources retain their actual cleanup owner.
+Only a once-bound marker plus the domain's root identity check authorizes the
+explicit never-bound absence transition. Its real audit result controls settlement.
+A queued successful send does not transfer root ownership; claiming its internal
+delivery ticket when `open_root` returns Ready does. Eligible or uncertain IDs
+remain retained; only a definite preeligible audit rejection removes its target.
+
+The table shares ordering requirements with #625. #628 verifies rejected and
+uncertain ports; whole-transaction panic supervision is separate #625 work.
+
+| # | Ordering | Required result |
+|---|---|---|
+| 1 | A inserts private root; A audit held; B root audit accepts and stores | B completes; durable view includes B, excludes A and A dependents. |
+| 2 | Row 1; A audit rejects; restart | Remove only private A; restart has no A ghost; opening A succeeds. B and unrelated history unchanged. |
+| 3 | A private reservation audit held; B unrelated commit | No private reservation/child/dependents appear in B snapshot; factory A has not run. |
+| 4 | A Prepared acknowledged; Attached audit held; B commits | A snapshot remains Prepared, retains A child/resource relation. |
+| 5 | A Attached acknowledged; TaskAdmitted audit held; B commits | A snapshot remains Attached; no unaudited affirmative task receipt. |
+| 6 | A transition audit accepts after close has sealed A | Token may acknowledge captured eligibility, but projected/live A remains Closing/Closed; never reopen or dispatch. |
+| 7 | A close intent mutates graph; its audit rejects; B or A stores | Coherent Closing rows/cause/operation persist; no new open/reservation permission leaks. |
+| 8 | Cleanup reports Released; cleanup audit/store rejects or panics | Physical Released recorded and capacity reconciled before fallible ports; close evidence may remain failed/pending, never fake acknowledgement. |
+| 9 | Initial root audit accepts; store definitively rejects | ID already eligible: preserve ID, seal/reconcile root; return Store(Rejected). Do not delete eligible ID. |
+|10 | Initial root store writes then returns Uncertain; later reconcile/restart | Preserve same ID, seal/reconcile and persist conservative close state; never erase uncertain landed ID. |
+|11 | Initial root audit is Uncertain | No affirmative Open grant; preserve identity in conservative Closing retention; return typed audit uncertainty and own reconciliation. |
+|12 | Caller drops while root audit held; audit later rejects | Owned transaction completes; definitely preeligible private target removed only; no root ghost. |
+|13 | Caller drops while root audit held; audit later accepts/store succeeds | Owner detects unclaimed result and seals/reconciles eligible ID. No orphan Open root. |
+|14 | Success queued, caller drops before claiming delivery | Delivery-ticket Drop invokes same reconciliation; successful send alone does not transfer ownership. |
+|15 | Caller drops during eligible root store/reconciliation | Root owner remains alive and keeps/reconciles eligible ID; other sessions can complete. |
+|16 | Older copied snapshot waits; newer eligible snapshot writes; older resumes | Existing revision fence skips older write; eligible IDs and last acknowledged progress were included in newer projection. |
+|17 | Older token completes after target settled or newer transition generation exists | Token cannot overwrite newer metadata or graph lifecycle; no reopening or stale progress substitution. |
+|18 | Resource-free root was never bound, needs reconciliation | Explicit unbound-root transition proves absent resources, performs truthful settlement audit, and settles only with actual evidence acknowledgement. Empty drain is not success. |
+|19 | Row 18 settlement audit rejects | Root remains nonrunnable Closing with honest physical absence/evidence failure; eligible root lookup enables explicit retry. No fabricated ResourceReport. |
+|20 | Restore snapshots containing neighbors/history/private rejection cleanup | Preserve previous report states, close operations and spawn milestones; no incidental recovery changes to unrelated live graph caused by removal. |
+|21 | Never-bound absence claim wins admission scope; resource binding arrives while its audit is held or rejected | Reject binding and return the unchanged physical owner to the caller. Keep the absence claim through failure and evidence-only retry. |
+|22 | Resource binding wins admission scope before absence claim | Retain that owner and the once-bound fact; normal close drains it. No never-bound proof may be inferred. |
+|23 | Binding names unknown/Closed/released lifetime, or replaces an occupied resource slot | Return typed refusal plus the rejected owner; preserve any previous owner. Restored Closing may bind only before physical release or absence claim. |
+|24 | Initial root audit rejects after another operation sealed it or transferred a cleanup owner | Targeted deletion refuses; retain and reconcile the same identity and its real safety/ownership facts. |
+|25 | Task submission returned its receipt; TaskAdmitted audit is held; close seals/settles child and stores before audit accepts or rejects | Domain-derived nonrunnable Unconfirmed retention includes the actual receipt while its permission is pending. Preserve Closing/Closed cause, terminal safety progress, and the receipt through resume without prepare or resubmit. |
+
+Enforcers: the public coordinator tests in
+`tests/application/agent_execution/subagents/publication.rs` name rows 1–15,
+18–19 and 21–25. `rejected_close_intent_is_persisted_before_cleanup_can_complete`
+adds the held-cleanup boundary for row 7. The library's
+`an_older_snapshot_does_not_replace_a_newer_seal` enforces row 16;
+`publication::tests::row_17_tokens_acknowledge_captured_progress_once_and_refuse_stale_generation`
+and the domain's `unbound_absence_token_refuses_child_closed_history_and_stale_completion`
+enforce row 17. Domain
+`row_20_private_root_discard_preserves_neighbors_closed_history_reports_and_recovery`
+checks targeted removal without re-running recovery. Publication's
+`retained_projection_preserves_valid_history_and_referential_closure` checks
+valid Closed history. Report admission uses independently held audit in
+`private_report_does_not_leak_through_unrelated_commit`. These SDK tests do not
+claim the proposed gateway wiring or #625 panic supervision is implemented.
+
 Validate retained ownership before allowing child dispatch on startup:
 
 - An acknowledged child of an open parent lifetime can become eligible for normal

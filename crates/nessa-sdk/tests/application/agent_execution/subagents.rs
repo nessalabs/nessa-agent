@@ -205,17 +205,19 @@ impl World {
     }
 
     fn bind_root(&self, lifetime: &AgentLifetimeId) {
-        self.coordinator.bind_resources(
-            lifetime.clone(),
-            Arc::new(ScriptResources {
-                closes: AtomicUsize::new(0),
-                report: ResourceReport {
-                    physical: PhysicalFact::Released,
-                    evidence: EvidenceFact::Acknowledged,
-                },
-                hold: None,
-            }),
-        );
+        self.coordinator
+            .bind_resources(
+                lifetime.clone(),
+                Arc::new(ScriptResources {
+                    closes: AtomicUsize::new(0),
+                    report: ResourceReport {
+                        physical: PhysicalFact::Released,
+                        evidence: EvidenceFact::Acknowledged,
+                    },
+                    hold: None,
+                }),
+            )
+            .unwrap();
     }
 
     fn command(&self, parent: &AgentLifetimeId, request: &str, task: &str) -> SpawnCommand {
@@ -1466,3 +1468,6 @@ fn spawn_row(child: &AgentLifetimeId, parent: &AgentLifetimeId, request: &str) -
         progress: SpawnProgress::Reserved,
     }
 }
+
+#[path = "subagents/publication.rs"]
+mod publication;
