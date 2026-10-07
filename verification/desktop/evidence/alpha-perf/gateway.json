@@ -1,8 +1,8 @@
 {
   "check": "alpha-perf",
   "ok": true,
-  "started": "2026-10-07T03:07:20.117Z",
-  "finished": "2026-10-07T03:07:54.691Z",
+  "started": "2026-10-07T08:56:54.376Z",
+  "finished": "2026-10-07T08:57:51.426Z",
   "target": {
     "url": null,
     "mode": "prod"
@@ -13,280 +13,659 @@
       "failures": [],
       "name": "console",
       "harmless": [
-        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:33571/favicon.ico)"
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:33289/favicon.ico)"
       ]
     },
     {
       "ok": true,
       "failures": [],
-      "name": "gateway",
+      "name": "gateway-startup",
       "engine": "chromium",
       "layout": "columns",
-      "gatewayMs": 503,
-      "previewMs": 18245,
       "cold": [
         {
-          "readyMs": 1302,
+          "readyMs": 1069,
           "cache": "disabled",
           "navigation": {
-            "durationMs": 98.79999999981374,
-            "responseEndMs": 6.7000000001862645,
-            "domContentLoadedMs": 98.70000000018626,
-            "loadEventMs": 98.79999999981374,
-            "transferBytes": 4321,
+            "durationMs": 92.09999999962747,
+            "responseEndMs": 4.099999999627471,
+            "domContentLoadedMs": 92,
+            "loadEventMs": 92.09999999962747,
+            "transferBytes": 4320,
             "decodedBytes": 12681,
             "type": "navigate"
           },
           "paints": {
-            "firstPaintMs": 56,
-            "firstContentfulPaintMs": 56
+            "firstPaintMs": 52,
+            "firstContentfulPaintMs": 52
           },
-          "heapUsed": 6827064,
-          "heapTotal": 9822208,
-          "nodes": 309,
+          "heapUsed": 7580488,
+          "heapTotal": 10870784,
+          "nodes": 397,
           "documents": 6,
-          "layoutCount": 7,
-          "recalcStyleCount": 37,
-          "scriptDuration": 0.098458,
-          "layoutDuration": 0.060447,
-          "taskDuration": 0.534265,
-          "dom": 201,
+          "layoutCount": 9,
+          "recalcStyleCount": 41,
+          "scriptDuration": 0.108946,
+          "layoutDuration": 0.051559,
+          "taskDuration": 0.49172699999999997,
+          "dom": 255,
           "frames": {
-            "fps": 22.399999999999995,
-            "frames": 28,
-            "spanMs": 1250.0000000000002,
-            "maxGapMs": 116.80000000000001
-          },
-          "longTasks": {
-            "count": 2,
-            "maxMs": 101
-          },
-          "loaf": {
-            "count": 7,
-            "maxMs": 105.59999999962747
-          },
-          "endpointAskMs": 170.8999999994412,
-          "startup": false
-        },
-        {
-          "readyMs": 1312,
-          "cache": "disabled",
-          "navigation": {
-            "durationMs": 100.79999999981374,
-            "responseEndMs": 4.2999999998137355,
-            "domContentLoadedMs": 98.29999999981374,
-            "loadEventMs": 100.79999999981374,
-            "transferBytes": 4321,
-            "decodedBytes": 12681,
-            "type": "navigate"
-          },
-          "paints": {
-            "firstPaintMs": 112,
-            "firstContentfulPaintMs": 112
-          },
-          "heapUsed": 6802520,
-          "heapTotal": 9822208,
-          "nodes": 309,
-          "documents": 6,
-          "layoutCount": 7,
-          "recalcStyleCount": 36,
-          "scriptDuration": 0.094048,
-          "layoutDuration": 0.042385,
-          "taskDuration": 0.5317470000000001,
-          "dom": 201,
-          "frames": {
-            "fps": 20.001600128010242,
-            "frames": 25,
-            "spanMs": 1249.8999999999999,
-            "maxGapMs": 133.3
+            "fps": 25.57544757033248,
+            "frames": 26,
+            "spanMs": 1016.6000000000001,
+            "maxGapMs": 100
           },
           "longTasks": {
             "count": 3,
-            "maxMs": 114
+            "maxMs": 91
           },
           "loaf": {
-            "count": 6,
-            "maxMs": 121.40000000037253
+            "count": 3,
+            "maxMs": 92.20000000018626
           },
-          "endpointAskMs": 145.69999999925494,
+          "endpointAskMs": 144.40000000037253,
           "startup": false
         },
         {
-          "readyMs": 1241,
+          "readyMs": 963,
           "cache": "disabled",
           "navigation": {
-            "durationMs": 90.59999999962747,
-            "responseEndMs": 3.099999999627471,
-            "domContentLoadedMs": 90.5,
-            "loadEventMs": 90.59999999962747,
-            "transferBytes": 4321,
+            "durationMs": 94.80000000074506,
+            "responseEndMs": 3.2000000001862645,
+            "domContentLoadedMs": 90.90000000037253,
+            "loadEventMs": 94.80000000074506,
+            "transferBytes": 4320,
             "decodedBytes": 12681,
             "type": "navigate"
           },
           "paints": {
-            "firstPaintMs": 48,
-            "firstContentfulPaintMs": 48
+            "firstPaintMs": 104,
+            "firstContentfulPaintMs": 104
           },
-          "heapUsed": 6817840,
-          "heapTotal": 9297920,
-          "nodes": 309,
+          "heapUsed": 7594100,
+          "heapTotal": 11132928,
+          "nodes": 397,
           "documents": 6,
-          "layoutCount": 7,
-          "recalcStyleCount": 39,
-          "scriptDuration": 0.100844,
-          "layoutDuration": 0.049897,
-          "taskDuration": 0.479925,
-          "dom": 201,
+          "layoutCount": 8,
+          "recalcStyleCount": 34,
+          "scriptDuration": 0.098367,
+          "layoutDuration": 0.03608,
+          "taskDuration": 0.510961,
+          "dom": 255,
           "frames": {
-            "fps": 24.166666666666668,
-            "frames": 29,
-            "spanMs": 1200,
-            "maxGapMs": 83.4
+            "fps": 21.924763443341796,
+            "frames": 19,
+            "spanMs": 866.6,
+            "maxGapMs": 150
           },
           "longTasks": {
-            "count": 2,
-            "maxMs": 95
+            "count": 4,
+            "maxMs": 104
           },
           "loaf": {
             "count": 5,
-            "maxMs": 104.90000000037253
+            "maxMs": 131.80000000074506
           },
-          "endpointAskMs": 136.09999999962747,
+          "endpointAskMs": 133.80000000074506,
+          "startup": false
+        },
+        {
+          "readyMs": 1062,
+          "cache": "disabled",
+          "navigation": {
+            "durationMs": 87.80000000074506,
+            "responseEndMs": 5,
+            "domContentLoadedMs": 87.70000000018626,
+            "loadEventMs": 87.80000000074506,
+            "transferBytes": 4320,
+            "decodedBytes": 12681,
+            "type": "navigate"
+          },
+          "paints": {
+            "firstPaintMs": 104,
+            "firstContentfulPaintMs": 104
+          },
+          "heapUsed": 7620460,
+          "heapTotal": 11395072,
+          "nodes": 397,
+          "documents": 6,
+          "layoutCount": 8,
+          "recalcStyleCount": 39,
+          "scriptDuration": 0.090632,
+          "layoutDuration": 0.037226,
+          "taskDuration": 0.47930999999999996,
+          "dom": 255,
+          "frames": {
+            "fps": 25.57544757033248,
+            "frames": 26,
+            "spanMs": 1016.6000000000001,
+            "maxGapMs": 100
+          },
+          "longTasks": {
+            "count": 3,
+            "maxMs": 96
+          },
+          "loaf": {
+            "count": 6,
+            "maxMs": 106.29999999981374
+          },
+          "endpointAskMs": 124.80000000074506,
           "startup": false
         }
       ],
       "warm": [
         {
-          "readyMs": 1162,
+          "readyMs": 946,
           "cache": "enabled",
           "navigation": {
-            "durationMs": 109.29999999981374,
-            "responseEndMs": 10.200000000186265,
-            "domContentLoadedMs": 106.70000000018626,
-            "loadEventMs": 109.29999999981374,
-            "transferBytes": 4321,
+            "durationMs": 61.5,
+            "responseEndMs": 3.400000000372529,
+            "domContentLoadedMs": 61.40000000037253,
+            "loadEventMs": 61.5,
+            "transferBytes": 4320,
             "decodedBytes": 12681,
             "type": "reload"
           },
           "paints": {
-            "firstPaintMs": 344,
-            "firstContentfulPaintMs": 344
+            "firstPaintMs": 108,
+            "firstContentfulPaintMs": 108
           },
-          "heapUsed": 15189332,
-          "heapTotal": 20553728,
-          "nodes": 907,
-          "documents": 10,
-          "layoutCount": 0,
-          "recalcStyleCount": 3,
-          "scriptDuration": 0.005105000000000002,
-          "layoutDuration": 0.00022000000000000144,
-          "taskDuration": 0.04763200000000001,
-          "dom": 201,
-          "frames": {
-            "fps": 20.323236233426883,
-            "frames": 21,
-            "spanMs": 1033.3000000000002,
-            "maxGapMs": 116.69999999999999
-          },
-          "longTasks": {
-            "count": 3,
-            "maxMs": 99
-          },
-          "loaf": {
-            "count": 6,
-            "maxMs": 121.5
-          },
-          "endpointAskMs": 124.5,
-          "startup": false
-        },
-        {
-          "readyMs": 1092,
-          "cache": "enabled",
-          "navigation": {
-            "durationMs": 68.20000000018626,
-            "responseEndMs": 5.300000000745058,
-            "domContentLoadedMs": 67.80000000074506,
-            "loadEventMs": 68.20000000018626,
-            "transferBytes": 4321,
-            "decodedBytes": 12681,
-            "type": "reload"
-          },
-          "paints": {
-            "firstPaintMs": 96,
-            "firstContentfulPaintMs": 96
-          },
-          "heapUsed": 15021844,
-          "heapTotal": 20291584,
-          "nodes": 898,
+          "heapUsed": 16044752,
+          "heapTotal": 22126592,
+          "nodes": 1164,
           "documents": 10,
           "layoutCount": null,
           "recalcStyleCount": null,
           "scriptDuration": null,
-          "layoutDuration": 0.0008300000000000009,
-          "taskDuration": null,
-          "dom": 201,
+          "layoutDuration": null,
+          "taskDuration": 0.073436,
+          "dom": 255,
           "frames": {
-            "fps": 18.095238095238095,
-            "frames": 19,
-            "spanMs": 1050,
-            "maxGapMs": 166.7
+            "fps": 26.03577088521621,
+            "frames": 23,
+            "spanMs": 883.4,
+            "maxGapMs": 133.29999999999998
           },
           "longTasks": {
-            "count": 3,
-            "maxMs": 95
+            "count": 2,
+            "maxMs": 126
           },
           "loaf": {
-            "count": 5,
-            "maxMs": 135
+            "count": 4,
+            "maxMs": 127.70000000018626
           },
-          "endpointAskMs": 81.90000000037253,
+          "endpointAskMs": 67.1000000005588,
           "startup": false
         },
         {
-          "readyMs": 1091,
+          "readyMs": 913,
           "cache": "enabled",
           "navigation": {
-            "durationMs": 59.200000000186265,
-            "responseEndMs": 4,
-            "domContentLoadedMs": 59.09999999962747,
-            "loadEventMs": 59.200000000186265,
-            "transferBytes": 4321,
+            "durationMs": 56,
+            "responseEndMs": 2.599999999627471,
+            "domContentLoadedMs": 53.39999999944121,
+            "loadEventMs": 56,
+            "transferBytes": 4320,
             "decodedBytes": 12681,
             "type": "reload"
           },
           "paints": {
-            "firstPaintMs": 60,
-            "firstContentfulPaintMs": 60
+            "firstPaintMs": 76,
+            "firstContentfulPaintMs": 76
           },
-          "heapUsed": 14927884,
-          "heapTotal": 20553728,
-          "nodes": 897,
+          "heapUsed": 15527664,
+          "heapTotal": 22126592,
+          "nodes": 1161,
           "documents": 10,
-          "layoutCount": 0,
-          "recalcStyleCount": 0,
-          "scriptDuration": null,
-          "layoutDuration": null,
-          "taskDuration": null,
-          "dom": 201,
+          "layoutCount": 1,
+          "recalcStyleCount": null,
+          "scriptDuration": 0.085143,
+          "layoutDuration": 0.004594000000000001,
+          "taskDuration": 0.006624000000000019,
+          "dom": 255,
           "frames": {
-            "fps": 21.904761904761905,
-            "frames": 23,
-            "spanMs": 1050,
-            "maxGapMs": 150.00000000000003
+            "fps": 22.352941176470587,
+            "frames": 19,
+            "spanMs": 850,
+            "maxGapMs": 150
           },
           "longTasks": {
             "count": 3,
             "maxMs": 108
           },
           "loaf": {
-            "count": 5,
-            "maxMs": 129.8999999994412
+            "count": 4,
+            "maxMs": 126.09999999962747
           },
-          "endpointAskMs": 64.8999999994412,
+          "endpointAskMs": 69.69999999925494,
+          "startup": false
+        },
+        {
+          "readyMs": 991,
+          "cache": "enabled",
+          "navigation": {
+            "durationMs": 61.39999999944121,
+            "responseEndMs": 3.099999999627471,
+            "domContentLoadedMs": 58.799999999813735,
+            "loadEventMs": 61.39999999944121,
+            "transferBytes": 4320,
+            "decodedBytes": 12681,
+            "type": "reload"
+          },
+          "paints": {
+            "firstPaintMs": 80,
+            "firstContentfulPaintMs": 80
+          },
+          "heapUsed": 16070672,
+          "heapTotal": 21602304,
+          "nodes": 1161,
+          "documents": 10,
+          "layoutCount": null,
+          "recalcStyleCount": null,
+          "scriptDuration": null,
+          "layoutDuration": 0.0026739999999999993,
+          "taskDuration": null,
+          "dom": 255,
+          "frames": {
+            "fps": 25.7124491107778,
+            "frames": 24,
+            "spanMs": 933.4,
+            "maxGapMs": 100.10000000000002
+          },
+          "longTasks": {
+            "count": 2,
+            "maxMs": 97
+          },
+          "loaf": {
+            "count": 3,
+            "maxMs": 119.3999999994412
+          },
+          "endpointAskMs": 83.09999999962747,
           "startup": false
         }
       ],
-      "note": "scripted gateway, no conversation created; not a catalogue walk (#607 does not merge)"
+      "note": "scripted gateway; ready when the long conversation is listed"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "gateway-panes",
+      "engine": "chromium",
+      "layout": "columns",
+      "panes": 4,
+      "cap": 4,
+      "dom": 501,
+      "heapUsed": 10719220,
+      "nodes": 1062,
+      "frames": {
+        "maxFrame": 66.69999999999982,
+        "over": 1,
+        "frames": 24,
+        "slow": [
+          {
+            "at": -63,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 68,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          }
+        ],
+        "noLoaf": false
+      },
+      "unmeasured": null,
+      "overBudget": true,
+      "note": "split refused at paneLimits.maxPanes on the scripted gateway"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "gateway-transcript",
+      "engine": "chromium",
+      "layout": "columns",
+      "scrolled": {
+        "found": true,
+        "overflow": true,
+        "scrollTop": 4334,
+        "scrollHeight": 5154,
+        "clientHeight": 820
+      },
+      "dom": 255,
+      "heapUsed": 7454864,
+      "nodes": 397,
+      "frames": {
+        "maxFrame": 49.899999999999864,
+        "over": 0,
+        "frames": 18,
+        "slow": [],
+        "noLoaf": false
+      },
+      "unmeasured": null,
+      "overBudget": false
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "gateway-startup",
+      "engine": "webkit",
+      "layout": "columns",
+      "cold": [
+        {
+          "readyMs": 1185,
+          "cache": null,
+          "navigation": {
+            "durationMs": 142,
+            "responseEndMs": 4,
+            "domContentLoadedMs": 114,
+            "loadEventMs": 142,
+            "transferBytes": 4337,
+            "decodedBytes": 12681,
+            "type": "navigate"
+          },
+          "paints": {
+            "firstPaintMs": null,
+            "firstContentfulPaintMs": 78
+          },
+          "heapUsed": null,
+          "heapTotal": null,
+          "nodes": null,
+          "documents": null,
+          "layoutCount": null,
+          "recalcStyleCount": null,
+          "scriptDuration": null,
+          "layoutDuration": null,
+          "taskDuration": null,
+          "dom": 255,
+          "frames": {
+            "fps": 3.6396724294813465,
+            "frames": 4,
+            "spanMs": 1099,
+            "maxGapMs": 446
+          },
+          "longTasks": {
+            "count": 0,
+            "maxMs": null
+          },
+          "loaf": {
+            "count": 0,
+            "maxMs": null
+          },
+          "endpointAskMs": 166,
+          "startup": false
+        },
+        {
+          "readyMs": 1248,
+          "cache": null,
+          "navigation": {
+            "durationMs": 125,
+            "responseEndMs": 3,
+            "domContentLoadedMs": 116,
+            "loadEventMs": 125,
+            "transferBytes": 4337,
+            "decodedBytes": 12681,
+            "type": "navigate"
+          },
+          "paints": {
+            "firstPaintMs": null,
+            "firstContentfulPaintMs": 129
+          },
+          "heapUsed": null,
+          "heapTotal": null,
+          "nodes": null,
+          "documents": null,
+          "layoutCount": null,
+          "recalcStyleCount": null,
+          "scriptDuration": null,
+          "layoutDuration": null,
+          "taskDuration": null,
+          "dom": 255,
+          "frames": {
+            "fps": 3.5938903863432166,
+            "frames": 4,
+            "spanMs": 1113,
+            "maxGapMs": 502
+          },
+          "longTasks": {
+            "count": 0,
+            "maxMs": null
+          },
+          "loaf": {
+            "count": 0,
+            "maxMs": null
+          },
+          "endpointAskMs": 129,
+          "startup": false
+        },
+        {
+          "readyMs": 1298,
+          "cache": null,
+          "navigation": {
+            "durationMs": 119,
+            "responseEndMs": 2,
+            "domContentLoadedMs": 101,
+            "loadEventMs": 119,
+            "transferBytes": 4337,
+            "decodedBytes": 12681,
+            "type": "navigate"
+          },
+          "paints": {
+            "firstPaintMs": null,
+            "firstContentfulPaintMs": 70
+          },
+          "heapUsed": null,
+          "heapTotal": null,
+          "nodes": null,
+          "documents": null,
+          "layoutCount": null,
+          "recalcStyleCount": null,
+          "scriptDuration": null,
+          "layoutDuration": null,
+          "taskDuration": null,
+          "dom": 255,
+          "frames": {
+            "fps": 3.276003276003276,
+            "frames": 4,
+            "spanMs": 1221,
+            "maxGapMs": 593
+          },
+          "longTasks": {
+            "count": 0,
+            "maxMs": null
+          },
+          "loaf": {
+            "count": 0,
+            "maxMs": null
+          },
+          "endpointAskMs": 149,
+          "startup": false
+        }
+      ],
+      "warm": [
+        {
+          "readyMs": 988,
+          "cache": null,
+          "navigation": {
+            "durationMs": 138,
+            "responseEndMs": 8,
+            "domContentLoadedMs": 113,
+            "loadEventMs": 138,
+            "transferBytes": 4337,
+            "decodedBytes": 12681,
+            "type": "reload"
+          },
+          "paints": {
+            "firstPaintMs": null,
+            "firstContentfulPaintMs": 240
+          },
+          "heapUsed": null,
+          "heapTotal": null,
+          "nodes": null,
+          "documents": null,
+          "layoutCount": null,
+          "recalcStyleCount": null,
+          "scriptDuration": null,
+          "layoutDuration": null,
+          "taskDuration": null,
+          "dom": 255,
+          "frames": {
+            "fps": 2.680965147453083,
+            "frames": 2,
+            "spanMs": 746,
+            "maxGapMs": 466
+          },
+          "longTasks": {
+            "count": 0,
+            "maxMs": null
+          },
+          "loaf": {
+            "count": 0,
+            "maxMs": null
+          },
+          "endpointAskMs": 146,
+          "startup": false
+        },
+        {
+          "readyMs": 1016,
+          "cache": null,
+          "navigation": {
+            "durationMs": 104,
+            "responseEndMs": 2,
+            "domContentLoadedMs": 72,
+            "loadEventMs": 104,
+            "transferBytes": 4337,
+            "decodedBytes": 12681,
+            "type": "reload"
+          },
+          "paints": {
+            "firstPaintMs": null,
+            "firstContentfulPaintMs": 62
+          },
+          "heapUsed": null,
+          "heapTotal": null,
+          "nodes": null,
+          "documents": null,
+          "layoutCount": null,
+          "recalcStyleCount": null,
+          "scriptDuration": null,
+          "layoutDuration": null,
+          "taskDuration": null,
+          "dom": 255,
+          "frames": {
+            "fps": 4.237288135593221,
+            "frames": 4,
+            "spanMs": 944,
+            "maxGapMs": 470
+          },
+          "longTasks": {
+            "count": 0,
+            "maxMs": null
+          },
+          "loaf": {
+            "count": 0,
+            "maxMs": null
+          },
+          "endpointAskMs": 113,
+          "startup": false
+        },
+        {
+          "readyMs": 1011,
+          "cache": null,
+          "navigation": {
+            "durationMs": 91,
+            "responseEndMs": 2,
+            "domContentLoadedMs": 82,
+            "loadEventMs": 91,
+            "transferBytes": 4337,
+            "decodedBytes": 12681,
+            "type": "reload"
+          },
+          "paints": {
+            "firstPaintMs": null,
+            "firstContentfulPaintMs": 67
+          },
+          "heapUsed": null,
+          "heapTotal": null,
+          "nodes": null,
+          "documents": null,
+          "layoutCount": null,
+          "recalcStyleCount": null,
+          "scriptDuration": null,
+          "layoutDuration": null,
+          "taskDuration": null,
+          "dom": 255,
+          "frames": {
+            "fps": 4.278074866310161,
+            "frames": 4,
+            "spanMs": 935,
+            "maxGapMs": 465
+          },
+          "longTasks": {
+            "count": 0,
+            "maxMs": null
+          },
+          "loaf": {
+            "count": 0,
+            "maxMs": null
+          },
+          "endpointAskMs": 116,
+          "startup": false
+        }
+      ],
+      "note": "scripted gateway; ready when the long conversation is listed"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "gateway-panes",
+      "engine": "webkit",
+      "layout": "columns",
+      "panes": 4,
+      "cap": 4,
+      "dom": 501,
+      "heapUsed": null,
+      "nodes": null,
+      "frames": null,
+      "unmeasured": null,
+      "overBudget": null,
+      "note": "split refused at paneLimits.maxPanes on the scripted gateway"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "gateway-transcript",
+      "engine": "webkit",
+      "layout": "columns",
+      "scrolled": {
+        "found": true,
+        "overflow": true,
+        "scrollTop": 4334,
+        "scrollHeight": 5154,
+        "clientHeight": 820
+      },
+      "dom": 255,
+      "heapUsed": null,
+      "nodes": null,
+      "frames": null,
+      "unmeasured": null,
+      "overBudget": null
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "gateway-seed",
+      "gatewayMs": 294,
+      "previewMs": 15326,
+      "conversations": 4,
+      "turns": 4,
+      "characters": 4000,
+      "listComplete": true,
+      "listedCount": 4,
+      "truncated": false,
+      "messageCount": 4,
+      "note": "scripted gateway; conversation.list complete; the catalogue walk is not measured"
     }
   ]
 }
