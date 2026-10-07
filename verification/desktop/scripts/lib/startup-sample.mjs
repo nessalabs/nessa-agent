@@ -9,14 +9,16 @@
  */
 import { median } from "./perf.mjs"
 
-/** CDP metric names this sample keeps. Anything else is left out. */
-export const cdpMetricNames = [
+/** Gauges: the value now. Counters: work since the sample's own baseline. */
+export const cdpGauges = [
   "JSHeapUsedSize",
   "JSHeapTotalSize",
   "Nodes",
   "Documents",
   "Frames",
   "JSEventListeners",
+]
+export const cdpCounters = [
   "LayoutCount",
   "RecalcStyleCount",
   "LayoutDuration",
@@ -24,6 +26,8 @@ export const cdpMetricNames = [
   "ScriptDuration",
   "TaskDuration",
 ]
+/** CDP metric names this sample keeps. Anything else is left out. */
+export const cdpMetricNames = [...cdpGauges, ...cdpCounters]
 
 /**
  * Durations on the navigation entry's clock. A missing entry is null.
@@ -73,6 +77,26 @@ export function cdpMetrics(list) {
   return table
 }
 
+/**
+ * Gauges stay at their later reading. Counters become the difference, so a
+ * warm sample does not include the cold load or the cache-fill reload.
+ * A counter missing from the baseline counts from zero.
+ */
+export function metricsSince(before, after) {
+  const start = cdpMetrics(before)
+  const end = cdpMetrics(after)
+  const table = {}
+  for (const name of cdpGauges) {
+    if (Object.hasOwn(end, name)) table[name] = end[name]
+  }
+  for (const name of cdpCounters) {
+    if (!Object.hasOwn(end, name)) continue
+    const from = Object.hasOwn(start, name) ? start[name] : 0
+    table[name] = end[name] - from
+  }
+  return table
+}
+
 /** One owned metric, or null when the table does not have that name. */
 export function metric(table, name) {
   if (!table || !Object.hasOwn(table, name)) return null
@@ -81,9 +105,8 @@ export function metric(table, name) {
 }
 
 /**
- * Frames per second from rAF gaps `[end, duration]`. The span is the sum of
- * the durations, so a gap that began before the sample still counts its full
- * length. An empty list is null.
+ * Frames per second from the rAF gaps `[end, duration]` the caller kept.
+ * The span is the sum of those durations. An empty list is null.
  */
 export function fpsFromGaps(gaps) {
   if (!Array.isArray(gaps) || gaps.length === 0) return null
@@ -129,7 +152,7 @@ export function endpointAskMs(navigation, asks) {
  * `performance.memory` when that exists.
  */
 export function summarizeStartup(raw) {
-  const metrics = cdpMetrics(raw.metrics)
+  const metrics = raw.metricTable ?? cdpMetrics(raw.metrics)
   const memory = raw.memory
   const heapFromMemory =
     memory && typeof memory.usedJSHeapSize === "number" ? memory.usedJSHeapSize : null

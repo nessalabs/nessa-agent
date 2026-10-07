@@ -50,10 +50,11 @@ does not replace `workspace-load.mjs`.
   stored and does not fail the row. A pane past the cap, a short fill, or
   a transcript that does not overflow, fails the row.
   _Check:_ `alpha-perf.mjs` (`panes`, `transcript`).
-- [ ] **A scripted gateway's empty window is timed only with `--with-gateway`.**
-  No conversation is created. This is not a catalogue walk. `#607` does not
-  merge, so the desktop still cannot observe a stored count above
-  `conversation.list`'s 500 through this script.
+- [ ] **A scripted gateway's empty window is timed only with `--with-gateway`,
+  in Chromium.** No conversation is created, and the session list stays
+  empty. This is not a catalogue walk. `#607` does not merge, so the
+  desktop still cannot observe a stored count above `conversation.list`'s
+  500 through this script.
   _Check:_ `alpha-perf.mjs --with-gateway` (`gateway`).
 - [ ] **Overview, drag, and split budgets stay in `perf-budget.mjs`.** A number
   there that misses 50 ms and matches `#588` / `#606` is that known result.

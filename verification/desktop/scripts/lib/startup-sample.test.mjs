@@ -12,6 +12,7 @@ import {
   endpointAskMs,
   fpsFromGaps,
   metric,
+  metricsSince,
   navigationDurations,
   paintStarts,
   series,
@@ -80,6 +81,29 @@ describe("startup sample", () => {
     assert.equal(metric(table, "UnknownMetric"), null)
     assert.equal(metric(table, "TaskDuration"), null)
     assert.equal(Object.hasOwn(table, "UnknownMetric"), false)
+  })
+
+  it("keeps gauges and subtracts counters from the sample baseline", () => {
+    const table = metricsSince(
+      [
+        { name: "LayoutCount", value: 10 },
+        { name: "JSHeapUsedSize", value: 100 },
+        { name: "ScriptDuration", value: 4 },
+      ],
+      [
+        { name: "LayoutCount", value: 14 },
+        { name: "JSHeapUsedSize", value: 250 },
+        { name: "ScriptDuration", value: 9 },
+        { name: "Nodes", value: 3 },
+        { name: "TaskDuration", value: 8 },
+      ],
+    )
+    assert.equal(table.LayoutCount, 4)
+    assert.equal(table.ScriptDuration, 5)
+    assert.equal(table.JSHeapUsedSize, 250)
+    assert.equal(table.Nodes, 3)
+    assert.equal(table.TaskDuration, 8)
+    assert.equal(metric(table, "LayoutCount"), 4)
   })
 
   it("computes frames per second from the rAF gaps", () => {

@@ -29,8 +29,8 @@ import { main } from "./lib/run.mjs"
 import { css, keys } from "./lib/selectors.mjs"
 import { withSeeded } from "./lib/seeded-load.mjs"
 import { target } from "./lib/server.mjs"
-import { series, summarizeStartup } from "./lib/startup-sample.mjs"
-import { openPanes, paneCount, paneCountIs, settled } from "./lib/workspace.mjs"
+import { metricsSince, series, summarizeStartup } from "./lib/startup-sample.mjs"
+import { openPanes, paneCount, settled } from "./lib/workspace.mjs"
 
 register()
 const { paneLimits } =
@@ -89,7 +89,9 @@ Startup readyMs is the harness clock from just before navigation until
 the pane (or, for the gateway, the workspace after its index) is settled.
 Navigation Timing and paint are the document's own clock. Startup is not
 CPU-throttled. Neither clock is a budget. The table's median is the same
-upper-middle median as the frame budget's.
+upper-middle median as the frame budget's. maxFrameMs is the largest of
+each run's longest rAF gap, not a median. WebKit leaves cache null.
+The transcript phase uses the columns session list.
 
 Panes fill to paneLimits.maxPanes (the layout's own cap) with the
 switcher, then one more split is pressed. That split must not add a pane.
@@ -158,17 +160,38 @@ async function chromiumSession(context, page, cacheDisabled) {
   return cdp
 }
 
-async function sampleOf(page, cdp, readyMs, cache) {
+async function readMetrics(cdp) {
+  if (!cdp) return null
+  const result = await cdp.send("Performance.getMetrics").catch(() => null)
+  return result?.metrics ?? null
+}
+
+/** `baseline` is the CDP reading at the start of this load. Counters are the difference. */
+async function sampleOf(page, cdp, readyMs, cache, baseline) {
   const raw = await page.evaluate(readDocumentSample, css.startupScreen)
-  let metrics = null
-  if (cdp) {
-    const result = await cdp.send("Performance.getMetrics").catch(() => null)
-    metrics = result?.metrics ?? null
-  }
+  const after = await readMetrics(cdp)
+  const metricTable = after ? metricsSince(baseline, after) : undefined
   return {
-    ...summarizeStartup({ ...raw, metrics, readyMs, cache }),
+    ...summarizeStartup({ ...raw, metricTable, readyMs, cache }),
     startup: raw.startup,
   }
+}
+
+/** Counts a capture-phase ⌘⇧N, the split-beside chord, so a missed key is not a refusal. */
+async function armSplitChord(page) {
+  await page.evaluate(() => {
+    window.__alphaSplitChord = 0
+    if (window.__alphaSplitListening) return
+    window.__alphaSplitListening = true
+    window.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.code === "KeyN" && event.shiftKey && event.metaKey)
+          window.__alphaSplitChord += 1
+      },
+      true,
+    )
+  })
 }
 
 async function shot(page, shots, name) {
@@ -211,6 +234,7 @@ async function coldAndWarm(
 ) {
   let started = 0
   let cdp = null
+  let baseline = null
   const opened = await openPage(browser, {
     url,
     layout,
@@ -220,7 +244,10 @@ async function coldAndWarm(
     initScripts: [observers, ...(prepare?.initScripts ?? [])],
     beforeLoad: prepare?.beforeLoad,
     preparePage: async (page, context) => {
-      if (engine === "chromium") cdp = await chromiumSession(context, page, true)
+      if (engine === "chromium") {
+        cdp = await chromiumSession(context, page, true)
+        baseline = await readMetrics(cdp)
+      }
       started = Date.now()
     },
   })
@@ -229,7 +256,8 @@ async function coldAndWarm(
       opened.page,
       cdp,
       Date.now() - started,
-      engine === "chromium" ? "disabled" : "default",
+      engine === "chromium" ? "disabled" : null,
+      baseline,
     )
     await shot(opened.page, shots, shotName)
     if (engine === "chromium" && cdp)
@@ -237,6 +265,7 @@ async function coldAndWarm(
     await opened.page.reload({ waitUntil: "domcontentloaded" })
     await opened.page.waitForSelector(ready, { timeout: prepare?.readyTimeout ?? 30_000 })
     await waitUntilSettled(opened.page, prepare?.readyTimeout ?? 30_000)
+    if (cdp) baseline = await readMetrics(cdp)
     const warmStart = Date.now()
     await opened.page.reload({ waitUntil: "domcontentloaded" })
     await opened.page.waitForSelector(ready, { timeout: prepare?.readyTimeout ?? 30_000 })
@@ -245,7 +274,8 @@ async function coldAndWarm(
       opened.page,
       cdp,
       Date.now() - warmStart,
-      engine === "chromium" ? "enabled" : "reload",
+      engine === "chromium" ? "enabled" : null,
+      baseline,
     )
     return { opened, cold, warm }
   } catch (error) {
@@ -348,10 +378,19 @@ await main(
                 initScripts: [observers],
               })
               try {
-                await openPanes(opened.page, paneLimits.maxPanes)
+                // A short fill is this row failing, not "could not run".
+                try {
+                  await openPanes(opened.page, paneLimits.maxPanes)
+                } catch (error) {
+                  if (!(error instanceof CannotRun)) throw error
+                }
                 const filled = await paneCount(opened.page)
                 let frames = null
                 let cdp = null
+                await armSplitChord(opened.page)
+                const chordBefore = await opened.page.evaluate(
+                  () => window.__alphaSplitChord ?? 0,
+                )
                 if (engine === "chromium") {
                   cdp = await throttle(opened.context, opened.page, 4)
                   try {
@@ -367,8 +406,11 @@ await main(
                   }
                 } else {
                   await opened.page.keyboard.press(keys.newSessionBeside)
-                  await paneCountIs(opened.page, filled, 5_000)
+                  await settled(opened.page)
                 }
+                const chordAfter = await opened.page.evaluate(
+                  () => window.__alphaSplitChord ?? 0,
+                )
                 const after = await paneCount(opened.page)
                 const surface = await sampleOf(opened.page, cdp, null, null)
                 if (engine === "chromium")
@@ -378,6 +420,8 @@ await main(
                   failures.push(
                     `opened ${filled} panes, the layout caps at ${paneLimits.maxPanes}`,
                   )
+                if (chordAfter === chordBefore)
+                  failures.push("the split chord did not reach the page")
                 if (after !== filled)
                   failures.push(
                     `a split past the cap left ${after} panes, the cap is ${paneLimits.maxPanes}`,
@@ -399,7 +443,7 @@ await main(
             })
           }
 
-          if (want("transcript")) {
+          if (want("transcript") && layout === "columns") {
             await attempt(rep, { name: "transcript", engine, layout }, async () => {
               const opened = await openPage(browser, {
                 url: withSeeded(url, transcriptSpec),
@@ -409,15 +453,32 @@ await main(
                 initScripts: [observers],
               })
               try {
-                // Index 0 is the long transcript (`load-` plus five digits). The
-                // window opens on that channel's newest session, which is this one.
-                const row = opened.page.locator(
-                  `${css.sessionItem}[data-session-row="load-00000"]`,
-                )
-                await row.waitFor({ state: "visible", timeout: 30_000 })
-                await row.click()
-                await settled(opened.page, 15_000)
+                const report = await opened.page.evaluate(() => {
+                  const raw = document.documentElement.dataset.seededReport
+                  if (!raw) return null
+                  try {
+                    return JSON.parse(raw)
+                  } catch {
+                    return null
+                  }
+                })
+                const field = (name) =>
+                  report && Object.hasOwn(report, name) ? report[name] : null
+                // Index 0 is the long transcript. The columns list owns the row.
+                const openedLong = await opened.page
+                  .locator(css.sessionListRow)
+                  .evaluateAll((rows) => {
+                    const row = rows.find(
+                      (element) =>
+                        element.getAttribute("data-session-row") === "load-00000",
+                    )
+                    if (!row) return false
+                    row.click()
+                    return true
+                  })
+                if (openedLong) await settled(opened.page, 15_000)
                 await opened.page.waitForSelector(css.transcript, { timeout: 30_000 })
+                const plain = await opened.page.locator(css.transcript).innerText()
                 let frames = null
                 let cdp = null
                 let scrolled
@@ -442,9 +503,28 @@ await main(
                 if (engine === "chromium")
                   await shot(opened.page, shots, `transcript-${layout}.jpg`)
                 const failures = []
+                if (!report) failures.push("the page published no seeded report")
+                if (field("sessions") !== transcriptSpec.sessions)
+                  failures.push(
+                    `seeded sessions ${field("sessions")}, asked ${transcriptSpec.sessions}`,
+                  )
+                if (field("messages") !== transcriptSpec.messages)
+                  failures.push(
+                    `long transcript messages ${field("messages")}, asked ${transcriptSpec.messages}`,
+                  )
+                if (field("longPlainTextCharacters") !== transcriptSpec.messageCharacters)
+                  failures.push(
+                    `long plain part ${field("longPlainTextCharacters")} characters, asked ${transcriptSpec.messageCharacters}`,
+                  )
+                if (!openedLong)
+                  failures.push("the long transcript is not in the session list")
+                if ((plain?.length ?? 0) < transcriptSpec.messageCharacters)
+                  failures.push("the open transcript is shorter than the long plain part")
                 if (!scrolled?.found) failures.push("no transcript to scroll")
                 if (scrolled?.found && !scrolled.overflow)
                   failures.push("the long transcript did not overflow its scroller")
+                if (scrolled?.overflow && !(scrolled.scrollTop > 0))
+                  failures.push("the scroll did not move")
                 return {
                   failures,
                   spec: transcriptSpec,
@@ -481,6 +561,7 @@ await main(
             browser = await launch("chromium", options)
             const colds = []
             const warms = []
+            const listed = []
             const origin = new URL(stack.url).origin
             for (let run = 0; run < runs; run++) {
               const pair = await coldAndWarm(browser, {
@@ -497,12 +578,17 @@ await main(
               })
               colds.push(pair.cold)
               warms.push(pair.warm)
+              listed.push(await pair.opened.page.locator(css.sessionListRow).count())
               if (run === 0) await shot(pair.opened.page, shots, "gateway-warm.jpg")
               await pair.opened.close()
             }
             const failures = [...colds, ...warms].flatMap(startupFailures)
             if (colds.some((sample) => sample.endpointAskMs == null))
               failures.push("the page did not ask the host for the gateway endpoint")
+            if (listed.some((count) => count !== 0))
+              failures.push(
+                `the gateway window listed sessions (${listed.join(" ")}); none were created`,
+              )
             rows.push(
               {
                 engine: "chromium",
