@@ -54,7 +54,9 @@ does not replace `workspace-load.mjs`.
 - [ ] **A scripted gateway is stressed only with `--with-gateway`, in
   Chromium and WebKit, columns.** The gateway stores `paneLimits.maxPanes`
   conversations. One of them has four copies of a 4,000-character user
-  message; the scripted agent answers each with text. Cold and warm each
+  message; the scripted agent answers each with text. The scroll is
+  recorded only after those replies are on the page. A transcript of the
+  user lines alone fails the row. Cold and warm each
   ask the host for the endpoint, and the ready mark is that long
   conversation's session row, so the clock includes the list. The same
   window fills the pane cap and scrolls that transcript. `conversation.list`

@@ -2,7 +2,8 @@
  * The gateway stress `alpha-perf.mjs` seeds and then judges.
  *
  * A scripted gateway, `paneLimits.maxPanes` conversations, and one of them
- * holding several copies of a long user message. `conversation.list` has to
+ * holding several copies of a long user message, each answered with the
+ * scenario's text. `conversation.list` has to
  * be complete before a page is opened: an incomplete list is the catalogue
  * walk, and this measurement does not time that walk. The client refuses a
  * message over its own byte bound; this text stays on the ASCII sentence the
@@ -12,6 +13,7 @@ import { randomUUID } from "node:crypto"
 import { setTimeout as sleep } from "node:timers/promises"
 
 import { turnEnded } from "../../../../scripts/mcp-test-server/evidence.mjs"
+import { turnFor } from "../../../../scripts/mcp-test-server/scripted-scenario.mjs"
 import { CannotRun, log } from "./cli.mjs"
 
 export const gatewayStress = {
@@ -29,6 +31,27 @@ export function longUserText() {
   const { marker, sentence, characters } = gatewayStress
   const body = sentence.repeat(Math.ceil(characters / sentence.length))
   return (marker + body).slice(0, characters)
+}
+
+/**
+ * The text the stress scenario answers every prompt with. The scenario file
+ * is the only copy; a turn that does not say text is not a stress to measure.
+ */
+export function scriptedReplyText(scenario) {
+  const turn = turnFor(scenario, longUserText())
+  const step = turn?.steps?.find((each) => each.do === "text")
+  const text = Array.isArray(step?.chunks) ? step.chunks.join("") : ""
+  if (text === "") throw new CannotRun("the stress scenario does not answer with text")
+  return text
+}
+
+/** Visible agent prose on one stored turn: text parts, in order. Thoughts are not drawn. */
+export function storedReplyText(message) {
+  const parts = Array.isArray(message?.parts) ? message.parts : []
+  return parts
+    .filter((part) => part?.kind === "text")
+    .map((part) => part.text)
+    .join("")
 }
 
 /**
@@ -67,6 +90,15 @@ export function seedHeld(seed) {
     )
   if (seed.viewHasLongText !== true)
     failures.push("conversation.read does not contain the long user text")
+  if (typeof seed.replyText !== "string" || seed.replyText === "")
+    failures.push("the stress scenario does not answer with text")
+  const replies = Array.isArray(seed.replies) ? seed.replies : []
+  if (replies.length !== seed.turns)
+    failures.push(
+      `conversation.read has ${replies.length} agent replies, seeded ${seed.turns}`,
+    )
+  if (replies.some((text) => text !== seed.replyText))
+    failures.push("an agent reply is not the scripted text")
   return failures
 }
 
@@ -101,13 +133,16 @@ export function scrollHeld(scrolled) {
 
 /**
  * The open transcript is the seeded conversation, on screen, each user
- * bubble the seeded text, and the scroller moved. `userTexts` are those
- * bubbles' `textContent`, not a shorter visible slice.
+ * bubble the seeded text, each agent bubble the scripted reply, and the
+ * scroller moved. `userTexts` and `agentTexts` are those bubbles'
+ * `textContent`, not a shorter visible slice.
  */
 export function transcriptHeld({
   turns,
   longText,
+  replyText,
   userTexts,
+  agentTexts,
   openId,
   longId,
   scrolled,
@@ -122,6 +157,11 @@ export function transcriptHeld({
     failures.push(`the transcript shows ${texts.length} user messages, seeded ${turns}`)
   if (texts.some((text) => text !== longText))
     failures.push("a user message is not the seeded text")
+  const replies = Array.isArray(agentTexts) ? agentTexts : []
+  if (replies.length !== turns)
+    failures.push(`the transcript shows ${replies.length} agent replies, seeded ${turns}`)
+  if (replies.some((text) => text !== replyText))
+    failures.push("an agent reply is not the scripted text")
   failures.push(...scrollHeld(scrolled))
   return failures
 }
@@ -157,9 +197,11 @@ async function say(client, conversationId, text, agent, create) {
  * Resolves with the seed `seedHeld` accepts, or throws `CannotRun` when the
  * gateway did not store that seed.
  */
-export async function seedGatewayStress(client, agent, paneCount, gateway) {
+export async function seedGatewayStress(client, agent, paneCount, gateway, replyText) {
   if (!Number.isInteger(paneCount) || paneCount < 1)
     throw new CannotRun(`pane cap ${paneCount} cannot seed a stress`)
+  if (typeof replyText !== "string" || replyText === "")
+    throw new CannotRun("the stress scenario does not answer with text")
   const longText = longUserText()
   const ids = []
   let longView
@@ -196,6 +238,8 @@ export async function seedGatewayStress(client, agent, paneCount, gateway) {
       viewHasLongText: longView.messages.every(
         (message) => message.userText === longText,
       ),
+      replyText,
+      replies: longView.messages.map((message) => storedReplyText(message)),
     }
     const failures = seedHeld(seed)
     if (failures.length > 0) throw new CannotRun(failures[0])

@@ -17,17 +17,31 @@ import {
   capHeld,
   listedOnPage,
   longUserText,
+  scriptedReplyText,
   scrollHeld,
   seedHeld,
   sessionRowSelector,
+  storedReplyText,
   transcriptHeld,
 } from "./alpha-gateway.mjs"
 
 const id = "11111111-1111-4111-8111-111111111111"
 const other = "22222222-2222-4222-8222-222222222222"
 
+function scenario() {
+  return parseScenario(
+    JSON.parse(
+      readFileSync(
+        new URL("../../fixtures/alpha-stress/reply.json", import.meta.url),
+        "utf8",
+      ),
+    ),
+  )
+}
+
 function seed(overrides = {}) {
   const longText = longUserText()
+  const replyText = scriptedReplyText(scenario())
   return {
     ids: [id, other],
     longId: id,
@@ -41,6 +55,8 @@ function seed(overrides = {}) {
     truncated: false,
     messageCount: gatewayStress.turns,
     viewHasLongText: true,
+    replyText,
+    replies: Array.from({ length: gatewayStress.turns }, () => replyText),
     ...overrides,
   }
 }
@@ -78,6 +94,12 @@ it("refuses a clipped or short long read", () => {
   assert.match(seedHeld(seed({ truncated: true }))[0], /truncated/)
   assert.match(seedHeld(seed({ messageCount: 1 }))[0], /1 messages/)
   assert.match(seedHeld(seed({ viewHasLongText: false }))[0], /does not contain/)
+  assert.match(seedHeld(seed({ replies: [] }))[0], /0 agent replies/)
+  assert.match(
+    seedHeld(seed({ replies: Array.from({ length: gatewayStress.turns }, () => "") }))[0],
+    /not the scripted text/,
+  )
+  assert.match(seedHeld(seed({ replyText: "" }))[0], /does not answer with text/)
 })
 
 it("holds a filled cap whose extra split arrived and added nothing", () => {
@@ -97,13 +119,16 @@ it("requires every seeded conversation on the session list", () => {
 
 it("requires the open session's seeded bubbles, on screen, and a scroll that moved", () => {
   const text = longUserText()
+  const replyText = scriptedReplyText(scenario())
   const held = {
     turns: gatewayStress.turns,
     longText: text,
+    replyText,
     longId: id,
     openId: id,
     onScreen: true,
     userTexts: Array.from({ length: gatewayStress.turns }, () => text),
+    agentTexts: Array.from({ length: gatewayStress.turns }, () => replyText),
     scrolled: { found: true, overflow: true, scrollTop: 400 },
   }
   assert.deepEqual(transcriptHeld(held), [])
@@ -123,6 +148,14 @@ it("requires the open session's seeded bubbles, on screen, and a scroll that mov
     }).join("\n"),
     /not the seeded text/,
   )
+  assert.match(transcriptHeld({ ...held, agentTexts: [] }).join("\n"), /0 agent replies/)
+  assert.match(
+    transcriptHeld({
+      ...held,
+      agentTexts: held.agentTexts.map(() => `${replyText} extra`),
+    }).join("\n"),
+    /not the scripted text/,
+  )
   assert.match(
     transcriptHeld({
       ...held,
@@ -135,20 +168,28 @@ it("requires the open session's seeded bubbles, on screen, and a scroll that mov
 })
 
 it("the stress scenario answers a later long prompt", () => {
-  const scenario = parseScenario(
-    JSON.parse(
-      readFileSync(
-        new URL("../../fixtures/alpha-stress/reply.json", import.meta.url),
-        "utf8",
-      ),
-    ),
-  )
+  const loaded = scenario()
   const prompt = longUserText()
-  const first = turnFor(scenario, prompt)
-  const again = turnFor(scenario, prompt)
+  const first = turnFor(loaded, prompt)
+  const again = turnFor(loaded, prompt)
   assert.equal(again, first)
+  assert.equal(scriptedReplyText(loaded), first.steps[0].chunks.join(""))
+  assert.equal(
+    storedReplyText({
+      parts: [
+        { kind: "text", text: "Ready" },
+        { kind: "thought", text: "hidden" },
+        { kind: "text", text: "." },
+      ],
+    }),
+    "Ready.",
+  )
+  assert.throws(
+    () => scriptedReplyText({ turns: [{ steps: [{ do: "end" }] }] }),
+    /does not answer/,
+  )
   assert.equal(again.steps.at(-1).do, "end")
-  assert.equal(turnFor(scenario, "Alpha stress pane 2").steps[0].do, "text")
+  assert.equal(turnFor(loaded, "Alpha stress pane 2").steps[0].do, "text")
 })
 
 it("run-all does not run alpha-perf", () => {

@@ -18,15 +18,17 @@
  * stored. The sample workspace above is the fixture path.
  */
 import { execSync } from "node:child_process"
-import { mkdirSync } from "node:fs"
+import { mkdirSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { register } from "tsx/esm/api"
+import { parseScenario } from "../../../scripts/mcp-test-server/scripted-scenario.mjs"
 import {
   capHeld,
   listedOnPage,
   scrollHeld,
+  scriptedReplyText,
   seedGatewayStress,
   sessionRowSelector,
   transcriptHeld,
@@ -395,13 +397,15 @@ function sessionIds(page) {
     )
 }
 
-function userMessageTexts(page) {
+function messageTexts(page, role) {
   return page
     .locator(css.message)
-    .evaluateAll((rows) =>
-      rows
-        .filter((row) => row.getAttribute("data-role") === "user")
-        .map((row) => row.textContent),
+    .evaluateAll(
+      (rows, wanted) =>
+        rows
+          .filter((row) => row.getAttribute("data-role") === wanted)
+          .map((row) => row.textContent),
+      role,
     )
 }
 
@@ -415,19 +419,34 @@ function openSessionId(page) {
 
 /**
  * True when the long conversation is the open session-list row, its
- * transcript has a box, and every user bubble is the seeded text.
- * Evaluated in the page: it closes over nothing.
+ * transcript has a box, every user bubble is the seeded text, and every
+ * agent bubble is the scripted reply. Evaluated in the page: it closes
+ * over nothing.
  */
-function transcriptOnScreen({ transcript, message, turns, longText, longId, openRow }) {
+function transcriptOnScreen({
+  transcript,
+  message,
+  turns,
+  longText,
+  replyText,
+  longId,
+  openRow,
+}) {
   const scroller = document.querySelector(transcript)
   if (!scroller || scroller.getClientRects().length === 0) return false
   const open = document.querySelector(openRow)
   if (!open || open.getAttribute("data-session-row") !== longId) return false
-  const bubbles = [...scroller.querySelectorAll(message)].filter(
-    (row) => row.getAttribute("data-role") === "user",
-  )
+  const bubbles = (role) =>
+    [...scroller.querySelectorAll(message)].filter(
+      (row) => row.getAttribute("data-role") === role,
+    )
+  const users = bubbles("user")
+  const agents = bubbles("agent")
   return (
-    bubbles.length === turns && bubbles.every((bubble) => bubble.textContent === longText)
+    users.length === turns &&
+    users.every((bubble) => bubble.textContent === longText) &&
+    agents.length === turns &&
+    agents.every((bubble) => bubble.textContent === replyText)
   )
 }
 
@@ -656,13 +675,17 @@ await main(
     if (want("gateway")) {
       if (!options.layouts.includes("columns"))
         throw new CannotRun("gateway stress uses the columns session list")
+      const scenarioPath = join(here, "../fixtures/alpha-stress/reply.json")
+      const replyText = scriptedReplyText(
+        parseScenario(JSON.parse(readFileSync(scenarioPath, "utf8"))),
+      )
       await attempt(rep, { name: "gateway-seed" }, async () => {
         const stack = await startGatewayStack(
           { ...options, mode: "prod", verbose: options.verbose },
           "alpha-perf",
           {
             as: "panel",
-            scenario: join(here, "../fixtures/alpha-stress/reply.json"),
+            scenario: scenarioPath,
           },
         )
         try {
@@ -671,6 +694,7 @@ await main(
             options.agent,
             paneLimits.maxPanes,
             stack.gateway,
+            replyText,
           )
           const endpoint = stack.gateway.url.replace(/^http/, "ws")
           const credential = panelCredential(stack.gateway)
@@ -795,6 +819,7 @@ await main(
                         message: css.message,
                         turns: seed.turns,
                         longText: seed.longText,
+                        replyText: seed.replyText,
                         longId: seed.longId,
                         openRow: `${css.sessionList} [data-session-row][data-open]`,
                       },
@@ -834,7 +859,9 @@ await main(
                     failures: transcriptHeld({
                       turns: seed.turns,
                       longText: seed.longText,
-                      userTexts: await userMessageTexts(opened.page),
+                      replyText: seed.replyText,
+                      userTexts: await messageTexts(opened.page, "user"),
+                      agentTexts: await messageTexts(opened.page, "agent"),
                       openId: await openSessionId(opened.page),
                       longId: seed.longId,
                       scrolled,
