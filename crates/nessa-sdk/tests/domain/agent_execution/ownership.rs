@@ -2108,6 +2108,19 @@ fn unbound_absence_token_refuses_child_closed_history_and_stale_completion() {
             Initiator::Runtime,
         )
         .unwrap();
+    let before = graph.snapshot();
+    assert_eq!(
+        graph
+            .note_unbound_root(&life("root"), &close_id("wrong-close"))
+            .unwrap_err(),
+        OwnershipError::StaleOutcome
+    );
+    assert_eq!(graph.snapshot(), before);
+    assert_eq!(graph.physical(&life("root"), &life("root")), None);
+    assert_eq!(
+        graph.close_cause(&life("root")),
+        Some(&LifetimeCause::HostClose)
+    );
     let token = graph
         .note_unbound_root(&life("root"), &close_id("close"))
         .unwrap();
@@ -2134,6 +2147,59 @@ fn unbound_absence_token_refuses_child_closed_history_and_stale_completion() {
         graph.snapshot().settlements[0].evidence,
         EvidenceFact::Acknowledged
     );
+}
+
+#[test]
+fn unbound_absence_admission_refuses_child_and_stale_operation_without_mutating_history() {
+    let mut graph = OwnershipGraph::new();
+    root(&mut graph, "parent");
+    admit(&mut graph, "parent", "child", "request");
+    graph
+        .begin_close(
+            &life("parent"),
+            close_id("original"),
+            LifetimeCause::HostClose,
+            Initiator::Runtime,
+        )
+        .unwrap();
+    let before = graph.snapshot();
+    assert_eq!(
+        graph
+            .note_unbound_root(&life("child"), &close_id("original"))
+            .unwrap_err(),
+        OwnershipError::StaleOutcome
+    );
+    assert_eq!(graph.snapshot(), before);
+    assert_eq!(
+        graph
+            .note_unbound_root(&life("parent"), &close_id("stale"))
+            .unwrap_err(),
+        OwnershipError::StaleOutcome
+    );
+    assert_eq!(graph.snapshot(), before);
+    let token = graph
+        .note_unbound_root(&life("parent"), &close_id("original"))
+        .unwrap();
+    graph
+        .acknowledge_unbound_root(token, EvidenceFact::Failed)
+        .unwrap();
+    let rejected = graph.snapshot();
+    assert_eq!(
+        graph
+            .note_unbound_root(&life("parent"), &close_id("stale-again"))
+            .unwrap_err(),
+        OwnershipError::StaleOutcome
+    );
+    assert_eq!(graph.snapshot(), rejected);
+    assert_eq!(
+        graph.physical(&life("parent"), &life("parent")),
+        Some(PhysicalFact::Released)
+    );
+    assert_eq!(
+        graph.lifetime_state(&life("parent")),
+        Some(LifetimeState::Closing)
+    );
+    assert_eq!(rejected.settlements[0].evidence, EvidenceFact::Failed);
 }
 
 #[test]
