@@ -47,7 +47,7 @@
   --icon-button-rest: var(--desktop-ink-2);
 }
 
-.desktop-icon-button:hover,
+.desktop-icon-button:hover:not(:disabled),
 .desktop-icon-button[data-state="open"] {
   color: var(--foreground);
   background: var(--desktop-hover-strong);

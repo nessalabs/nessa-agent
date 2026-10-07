@@ -25,7 +25,7 @@ Checks, per engine and layout:
              classes (workspace-icon-button, desktop-titlebar-button,
              desktop-footer-button, desktop-header-tool) is on the page
   hover      the pointer over one fills it with the window's stronger hover
-  focus      Tab onto one draws an outline`,
+  focus      keyboard focus on one draws an outline`,
   },
   async ({ options, rep, url }) => {
     await withEngines(options, rep, async (engine, browser) => {
@@ -102,24 +102,24 @@ Checks, per engine and layout:
           const { page, close } = await openPage(browser, { url, layout })
           try {
             await need(page, ".desktop-icon-button:visible", "an icon button")
-            let outline = null
-            for (let step = 0; step < 40 && outline === null; step++) {
-              await page.keyboard.press("Tab")
-              outline = await page.evaluate(() => {
-                const element = document.activeElement
-                if (!element?.matches(".desktop-icon-button")) return null
-                const style = getComputedStyle(element)
-                return {
-                  label: element.getAttribute("aria-label"),
-                  style: style.outlineStyle,
-                  width: style.outlineWidth,
-                  focusVisible: element.matches(":focus-visible"),
-                }
-              })
-            }
+            // A key press first, so the focus is the keyboard's (`:focus-visible`);
+            // WebKit's Tab skips a button with no tabindex, so it is focused by name.
+            await page.keyboard.press("Shift")
+            await page.locator(".desktop-icon-button:visible").first().focus()
+            const outline = await page.evaluate(() => {
+              const element = document.activeElement
+              if (!element?.matches(".desktop-icon-button")) return null
+              const style = getComputedStyle(element)
+              return {
+                label: element.getAttribute("aria-label"),
+                style: style.outlineStyle,
+                width: style.outlineWidth,
+                focusVisible: element.matches(":focus-visible"),
+              }
+            })
             const failures =
               outline === null
-                ? ["Tab never reached an icon button"]
+                ? ["an icon button could not be focused"]
                 : outline.style === "none" || parseFloat(outline.width) === 0
                   ? [`focused icon button draws no outline (${JSON.stringify(outline)})`]
                   : []

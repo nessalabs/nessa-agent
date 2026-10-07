@@ -1,6 +1,6 @@
 /*
- * The workspace's frame and the small pieces every part of it uses: icon
- * buttons, agent tiles, status glyphs, resize edges, pill buttons and menus.
+ * The workspace's frame and the small pieces every part of it uses: agent
+ * tiles, status glyphs, resize edges, pill buttons and menus.
  * Every value comes from the `--desktop-*` scales in `styles.css`.
  */
 

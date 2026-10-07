@@ -820,7 +820,7 @@ pointer, and outlined by `--desktop-focus-outline` under the keyboard.
   `--layout classic` for the classic shell). Rule: `ui/icon-button.css`.
 - [ ] **The pointer fills it with the stronger hover.** _Check:_
   `icon-buttons.mjs` (`hover`).
-- [ ] **Tab onto one draws an outline.** _Check:_ `icon-buttons.mjs`
+- [ ] **Keyboard focus on one draws an outline.** _Check:_ `icon-buttons.mjs`
   (`focus`). At the base commit the workspace's resets left these with none.
 
 ## Menus and tooltips
