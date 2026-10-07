@@ -6,6 +6,7 @@ import { inMemorySource, type Schedule } from "./in-memory-source"
 import {
   maxMessageCharacters,
   seededWorkspace,
+  seededWorkspaceSpec,
   SeededWorkspaceRefusal,
   type SeededWorkspaceSpec,
 } from "./seeded-workspace"
@@ -122,6 +123,11 @@ describe("seeded workspace", () => {
     expect(built.report.sessions).toBe(10_000)
     expect(built.report.channels).toBe(4)
     expect(built.report.largestChannelSessions).toBe(2_500)
+    expect(built.report.channelSessions["load-desktop"]).toBe(2_500)
+    expect(built.report.channelSessions["load-release"]).toBe(2_500)
+    expect(built.report.channelSessions["load-reading"]).toBe(2_500)
+    expect(built.report.channelSessions["load-home"]).toBe(2_500)
+    expect(built.report.channelNames["load-desktop"]).toBe("desktop")
     expect(built.report.generator).toBe("seeded-workspace")
     expect(built.report.algorithm).toBe("mulberry32")
     expect(built.report.longTranscripts).toBe(1)
@@ -253,5 +259,66 @@ describe("seeded workspace", () => {
         (session, index) => session.title !== first.index.sessions[index]?.title,
       ),
     ).toBe(true)
+  })
+
+  it("reads the dry-run query and refuses a field that is not a whole decimal", () => {
+    const query =
+      "?seeded=590&now=1700000000000&sessions=10000&longTranscripts=1&messages=8&messageCharacters=4000"
+    expect(seededWorkspaceSpec(query)).toEqual({
+      seed: 590,
+      now: 1_700_000_000_000,
+      sessions: 10_000,
+      longTranscripts: 1,
+      messages: 8,
+      messageCharacters: 4_000,
+    })
+    expect(seededWorkspaceSpec("")).toBeNull()
+    expect(seededWorkspaceSpec("?gateway=1")).toBeNull()
+    const refused = (search: string) => {
+      try {
+        seededWorkspaceSpec(search)
+      } catch (error) {
+        if (error instanceof SeededWorkspaceRefusal) return error.reason
+        throw error
+      }
+      throw new Error("the query was accepted")
+    }
+    expect(refused("?seeded")).toBe("seed")
+    expect(
+      refused(
+        "?seeded=01&now=1&sessions=0&longTranscripts=0&messages=0&messageCharacters=0",
+      ),
+    ).toBe("seed")
+    expect(refused("?seeded=590")).toBe("now")
+    expect(
+      refused(
+        "?seeded=590&now=1e20&sessions=0&longTranscripts=0&messages=0&messageCharacters=0",
+      ),
+    ).toBe("now")
+    expect(
+      refused(
+        "?seeded=590&now=1700000000000&sessions=1&longTranscripts=2&messages=2&messageCharacters=1",
+      ),
+    ).toBe("longTranscripts")
+    const repeated =
+      "&now=1700000000000&sessions=0&longTranscripts=0&messages=0&messageCharacters=0"
+    expect(refused(`?seeded=01&seeded=590${repeated}`)).toBe("seed")
+    expect(refused(`?seeded=590&seeded=01${repeated}`)).toBe("seed")
+    expect(refused(`?seeded=590&seeded=590${repeated}`)).toBe("seed")
+    expect(
+      refused(
+        "?seeded=590&now=1700000000000&sessions=10000&sessions=1&longTranscripts=1&messages=8&messageCharacters=4000",
+      ),
+    ).toBe("sessions")
+    expect(
+      refused(
+        "?seeded=590&now=1700000000000&sessions=1&sessions=10000&longTranscripts=1&messages=8&messageCharacters=4000",
+      ),
+    ).toBe("sessions")
+    expect(
+      seededWorkspaceSpec(
+        "??seeded=590&now=1700000000000&sessions=0&longTranscripts=0&messages=0&messageCharacters=0",
+      ),
+    ).toBeNull()
   })
 })

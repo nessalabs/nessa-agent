@@ -237,7 +237,7 @@ writing the full defaults on first launch is buying.
   with `testing.ts` the fake source, the store, and the animation frames its
   tests share. The window has its own store (`src/desktop/store.ts`) and composition
   (`src/desktop/dependencies.ts`). Where its workspace comes from is the
-  window's too: the host's gateway, a browser's, or the sample, by
+  window's too: the host's gateway, a browser's, a seeded run, or the sample, by
   `src/desktop/model/workspace-backend.ts`, with the desktop app's connection
   in `src/desktop/adapters/host-gateway.ts`. How the window's keys are matched and
   written on this platform is the window's, not the workspace's:

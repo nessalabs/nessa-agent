@@ -14,6 +14,7 @@ import { StartupMounted } from "../startup/ui/mounted-signal"
 import { createDesktopDependencies } from "./dependencies"
 import { hostGateway } from "./adapters/host-gateway"
 import { workspaceBackend, type WorkspaceBackend } from "./model/workspace-backend"
+import { seededWindow } from "./seeded-window"
 import { LinkedDevicesProvider, McpServersProvider } from "./settings"
 import { makeDesktopStore } from "./store"
 import { DesktopIconFamilyProvider } from "./ui/icons"
@@ -32,10 +33,13 @@ document.documentElement.dataset.nessaModule = "started"
 // the window's life. Where the workspace comes from is `workspaceBackend`'s
 // to say: the desktop app's own gateway, over the credential its host hands
 // the panel (`adapters/host-gateway.ts`); a browser preview opened
-// with `?gateway`, over the session this origin signed in to; otherwise the
-// sample (`model/workspace-backend.ts`).
+// with `?gateway`, over the session this origin signed in to; a browser
+// page whose query names a seeded run, on that in-memory workspace
+// (`seeded-window.ts`); otherwise the sample (`model/workspace-backend.ts`).
 const environment = environmentFromVite()
-const gateway = windowGateway(workspaceBackend(host.kind, window.location.search))
+const backend = workspaceBackend(host.kind, window.location.search)
+const seeded = backend === "seeded" ? seededWindow(window.location.search) : undefined
+const gateway = seeded ? undefined : windowGateway(backend)
 
 function windowGateway(
   backend: WorkspaceBackend,
@@ -63,6 +67,7 @@ function windowGateway(
         }).then((session) => session.client)
     }
     case "sample":
+    case "seeded":
       return undefined
   }
 }
@@ -70,6 +75,8 @@ const dependencies = createDesktopDependencies({
   signInToProvider,
   providerLoginAvailable,
   gateway,
+  workspace: seeded?.workspace,
+  now: seeded?.now,
   apps: {
     sandbox: sandboxFor(host.kind, document, sandboxSchemeRegistered()),
     platform: platformFor(host.kind),
