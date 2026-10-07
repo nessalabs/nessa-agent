@@ -420,22 +420,34 @@ it("gives a carried session the composer of a new session's home it would open b
   expect(copy?.querySelector(".desktop-greeting")).toBeNull()
 })
 
-it("draws the copy in the frame the drag begins, and what the zone would do in the next", async () => {
+it("draws the copy in the frame the drag begins, and moves the zone the frame after its styles", async () => {
   const { root } = await mounted()
   await press(60, 16, header(1))
   const queued: FrameRequestCallback[] = []
   const request = window.requestAnimationFrame
   window.requestAnimationFrame = (callback) => queued.push(callback)
   const frame = () => act(async () => queued.splice(0).forEach((run) => run(0)))
-  pointer("pointermove", 830, 400)
-  pointer("pointermove", 827, 400)
-  expect(host.querySelector(`.${classes.ghost}`)?.hasAttribute(marks.waiting)).toBe(false)
-  await frame()
-  expect(host.querySelector(`.${classes.placeholder}`)).toBeNull()
-  await frame()
-  expect(host.querySelector(`.${classes.placeholder}`)).not.toBeNull()
-  window.requestAnimationFrame = request
-  pointer("pointerup", 830, 400)
+  try {
+    pointer("pointermove", 830, 400)
+    pointer("pointermove", 827, 400)
+    expect(host.querySelector(`.${classes.ghost}`)?.hasAttribute(marks.waiting)).toBe(
+      false,
+    )
+    await frame()
+    expect(host.querySelector(`.${classes.placeholder}`)).toBeNull()
+    // The preview's styles land here. The placeholder and the panes' move
+    // wait so this frame does not also promote them (`drag.test.tsx`).
+    await frame()
+    expect(host.querySelector(`.${classes.placeholder}`)).toBeNull()
+    expect(document.documentElement.hasAttribute(marks.reflow)).toBe(true)
+    expect(document.documentElement.hasAttribute(marks.promoted)).toBe(false)
+    await frame()
+    expect(host.querySelector(`.${classes.placeholder}`)).not.toBeNull()
+    expect(document.documentElement.hasAttribute(marks.promoted)).toBe(true)
+    pointer("pointerup", 830, 400)
+  } finally {
+    window.requestAnimationFrame = request
+  }
   await act(async () => root.unmount())
 })
 

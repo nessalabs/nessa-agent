@@ -231,6 +231,8 @@ const frames = () =>
         ),
       ),
   )
+const oneFrame = () =>
+  act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
 const pointer = (type: string, x: number, y: number, target: EventTarget = window) =>
   target.dispatchEvent(
     new PointerEvent(type, {
@@ -468,20 +470,50 @@ it("holds pane bodies out of the frame a cancel lets the preview go, and brings 
   const root = await mounted(fake)
   await liftOntoTwo()
   expect(document.documentElement.hasAttribute(marks.reflow)).toBe(true)
+  expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
   pointer("pointerup", 827, 400)
   // The preview's mark drops as the copy flies home, and the bodies are
-  // waiting on that turn — one comes back on the frame after.
+  // waiting on that turn — one comes back on the frame after. The glass
+  // stays off until the frame after the last of them.
   await act(async () => {})
   expect(document.documentElement.hasAttribute(marks.reflow)).toBe(false)
+  // The style frame's layers stay for this turn and drop on the next.
+  expect(document.documentElement.hasAttribute(marks.promoted)).toBe(true)
   expect(host.querySelectorAll("[data-drag-settling]").length).toBeGreaterThan(1)
-  await act(
-    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
-  )
+  expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
+  await oneFrame()
+  expect(document.documentElement.hasAttribute(marks.promoted)).toBe(false)
   expect(host.querySelectorAll("[data-drag-settling]").length).toBe(1)
-  await frames()
+  expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
+  await oneFrame()
   expect(host.querySelector("[data-drag-settling]")).toBeNull()
+  expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
+  await oneFrame()
+  expect(document.documentElement.hasAttribute(marks.pressing)).toBe(false)
   expect(fake.state.drops).toEqual([])
+  await act(async () => root.unmount())
+})
+
+it("applies a preview's styles the frame before it promotes the panes and moves them", async () => {
+  const fake = fakeSource(two())
+  const root = await mounted(fake)
+  await press(60, 16, element('[data-drag-pane="1"]'))
+  pointer("pointermove", 90, 40)
+  pointer("pointermove", 827, 400)
+  const paneMoved = () =>
+    animated.some(({ element: of }) => of.hasAttribute("data-pane-key"))
+  let styled = false
+  for (let step = 0; step < 8 && !styled; step++) {
+    await oneFrame()
+    styled = document.documentElement.hasAttribute(marks.reflow)
+  }
+  expect(styled).toBe(true)
+  expect(document.documentElement.hasAttribute(marks.promoted)).toBe(false)
+  expect(paneMoved()).toBe(false)
+  await oneFrame()
+  expect(document.documentElement.hasAttribute(marks.promoted)).toBe(true)
+  expect(paneMoved()).toBe(true)
   await act(async () => root.unmount())
 })
 

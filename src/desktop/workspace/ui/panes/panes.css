@@ -101,9 +101,12 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
  * flight changes no style. A pane's two parts are named rather than matched
  * as `> *`: a rule whose subject is any element makes the browser restyle
  * every element in every pane as a flight begins; named, two per pane.
+ *
+ * Promotion waits a frame (`data-drag-promoted`). The frame that applies the
+ * preview's styles does not also promote the panes (`drag.test.tsx`).
  */
-.workspace:is([data-split-flipping], [data-drag-reflow]) .workspace-pane,
-.workspace:is([data-split-flipping], [data-drag-reflow])
+.workspace:is([data-split-flipping], [data-drag-promoted]) .workspace-pane,
+.workspace:is([data-split-flipping], [data-drag-promoted])
   .workspace-pane
   > .workspace-pane-header,
 .workspace[data-split-flipping] .workspace-pane > .workspace-pane-body {

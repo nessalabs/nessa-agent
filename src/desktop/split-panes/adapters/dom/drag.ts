@@ -541,17 +541,26 @@ export function useSplitPanesDrag(
     let waiting: { frame: number; timer: number } | null = null
     /** Bumped whenever glass blur is held or released, so a late release cannot drop a new drag's hold. */
     let glass = 0
+    /**
+     * Set when a release is waiting for the last waiting body. The frame that
+     * brings that body back does not also restore the glass (`drag.test.tsx`).
+     */
+    let glassAfterReveal: number | null = null
     const holdGlass = (on: boolean) => {
       const generation = ++glass
       if (on) {
+        glassAfterReveal = null
         reflectMark(scope, marks.pressing, true)
         return
       }
-      // A frame after the preview's own paint is gone, so that frame does not
-      // also rebuild the glass blur (`styles.test.ts`).
-      requestAnimationFrame(() => {
-        if (generation === glass) reflectMark(scope, marks.pressing, false)
-      })
+      glassAfterReveal = generation
+      // No body is waiting: the glass comes back on the next frame, which
+      // then does not also lay a transcript out (`drag.test.tsx`).
+      if (!scope.querySelector(`[${marks.settling}]`)) {
+        requestAnimationFrame(() => {
+          if (generation === glass) reflectMark(scope, marks.pressing, false)
+        })
+      }
     }
     /** Drops the pending commit's frame and its listeners, if a drop is waiting on one. */
     let releaseDrop: (() => void) | null = null
@@ -560,15 +569,32 @@ export function useSplitPanesDrag(
     const revealSettling = () => {
       const pane = scope.querySelector<HTMLElement>(`[${marks.settling}]`)
       pane?.removeAttribute(marks.settling)
-      if (scope.querySelector(`[${marks.settling}]`))
+      if (scope.querySelector(`[${marks.settling}]`)) {
         requestAnimationFrame(revealSettling)
+        return
+      }
+      const generation = glassAfterReveal
+      if (generation === null) return
+      glassAfterReveal = null
+      // The glass waits until this body is back, then returns on the frame
+      // after it (`drag.test.tsx`).
+      requestAnimationFrame(() => {
+        if (generation === glass) reflectMark(scope, marks.pressing, false)
+      })
     }
 
-    /**
-     * Drops the preview's mark. Bodies are already waiting, or start waiting
-     * now, and return one a frame: clearing the mark alone lays every
-     * transcript out on that frame (`drag.test.tsx`).
-     */
+    /** Bumped when a preview's promotion is dropped, so a late drop leaves a newer one (`drag.test.tsx`). */
+    let promotedTicket = 0
+    const dropPromotion = () => {
+      const ticket = ++promotedTicket
+      // The frame that restores the preview's styles keeps the layers, and
+      // the next drops them (`drag.test.tsx`).
+      requestAnimationFrame(() => {
+        if (ticket !== promotedTicket) return
+        if (scope.hasAttribute(marks.reflow)) return
+        reflectMark(scope, marks.promoted, false)
+      })
+    }
     const releaseReflow = () => {
       if (!scope.hasAttribute(marks.reflow)) return
       const waiting = scope.querySelector(`[${marks.settling}]`) !== null
@@ -579,6 +605,7 @@ export function useSplitPanesDrag(
         requestAnimationFrame(revealSettling)
       }
       reflectMark(scope, marks.reflow, false)
+      dropPromotion()
     }
 
     /**
@@ -761,8 +788,37 @@ export function useSplitPanesDrag(
       drawing.outline = element
     }
 
+    /**
+     * Bumped when a newer preview supersedes one waiting to move. The waiting
+     * one then leaves the panes where they are (`drag.test.tsx`).
+     */
+    let previewTicket = 0
     /** Shows what dropping at `aim` would do, or — with nothing offered — nothing. It only writes. */
     const preview = (made: Made, outcome: DropOutcome | null, aim: Aim | null) => {
+      const layout = layoutNow()
+      if (!layout) return
+      const { grid, room } = made
+      const spare = outcome?.takesSpare ? (room?.spare ?? 0) : 0
+      const landing = outcome ? boxes(outcome.layout, landingGrid(grid, spare)) : null
+      // The first frame only applies the preview's styles. Moving and
+      // promoting the panes is the frame after, so one frame does not do
+      // both (`drag.test.tsx`).
+      if (outcome && landing && !scope.hasAttribute(marks.reflow)) {
+        reflectMark(scope, marks.reflow, true)
+        const ticket = ++previewTicket
+        requestAnimationFrame(() => {
+          if (ticket !== previewTicket) return
+          if (!ownsDragResources(phase, made)) return
+          paintPreview(made, outcome, aim)
+          followCopy(made)
+        })
+        return true
+      }
+      ++previewTicket
+      paintPreview(made, outcome, aim)
+      return false
+    }
+    const paintPreview = (made: Made, outcome: DropOutcome | null, aim: Aim | null) => {
       const layout = layoutNow()
       if (!layout) return
       const { grid, room } = made
@@ -778,8 +834,7 @@ export function useSplitPanesDrag(
       )
       if (scope.hasAttribute(marks.takesSpare) !== Boolean(outcome?.takesSpare))
         scope.toggleAttribute(marks.takesSpare, Boolean(outcome?.takesSpare))
-      if (outcome && landing && !scope.hasAttribute(marks.reflow))
-        reflectMark(scope, marks.reflow, true)
+      if (scope.hasAttribute(marks.reflow)) reflectMark(scope, marks.promoted, true)
       // With less motion too: the panes take their rects at once
       // (`--desktop-base` is 0ms), or a swap's placeholder, under the copy,
       // would be all that showed.
@@ -827,11 +882,15 @@ export function useSplitPanesDrag(
         aim && layout ? dropOutcome(layout, what, aim.target, aim.zone, made.room) : null
       if (outcome === drawing.outcome) return
       drawing.outcome = outcome
-      preview(made, outcome, aim)
-      // The copy takes the shape of the slot it would land in, or — with
-      // nothing offered — its own, its centre still on the pointer.
-      const shape = copyShape(made.size, drawing.landing)
-      if (!sameSize(shape, drawing.shape.to)) reshape(made, shape)
+      // A first preview applies its styles and moves on the frame after.
+      // The copy takes its shape on that same frame, once the slot is known
+      // (`split-panes-drag.test.tsx`).
+      if (!preview(made, outcome, aim)) followCopy(made)
+    }
+    /** The copy takes the shape of the slot it would land in, or — with nothing offered — its own. */
+    const followCopy = (made: Made) => {
+      const shape = copyShape(made.size, made.drawing.landing)
+      if (!sameSize(shape, made.drawing.shape.to)) reshape(made, shape)
     }
 
     // ——— The copy ———

@@ -361,6 +361,17 @@ it("skips pane bodies on the frame a drop commits them", () => {
     )
     .split("}")[0]
   expect(travelling).toMatch(/background:\s*var\(--background\)/)
+  expect(travelling).not.toMatch(/will-change/)
+  // Promotion is the frame after those styles (`drag.test.tsx`).
+  const promoted = sheet
+    .slice(
+      sheet.indexOf(
+        ".workspace:is([data-split-flipping], [data-drag-promoted]) .workspace-pane,",
+      ),
+    )
+    .split("}")[0]
+  expect(promoted).toMatch(/will-change:\s*transform/)
+  expect(promoted).not.toMatch(/data-drag-reflow/)
 })
 
 it("keeps the list and the panes under the Agents overview laid out", () => {
