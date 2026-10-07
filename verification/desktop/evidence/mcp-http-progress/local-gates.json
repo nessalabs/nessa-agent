@@ -1,0 +1,44 @@
+[
+  {
+    "gate": "six-mcp",
+    "exit": 0,
+    "seconds": 51.7,
+    "log": "/tmp/nessa-http-final-six-mcp.log"
+  },
+  {
+    "gate": "six-clippy",
+    "exit": 0,
+    "seconds": 52.5,
+    "log": "/tmp/nessa-http-final-six-clippy.log"
+  },
+  {
+    "gate": "sdk-docs",
+    "exit": 0,
+    "seconds": 2.9,
+    "log": "/tmp/nessa-http-final-sdk-docs.log"
+  },
+  {
+    "gate": "architecture-tests",
+    "exit": 0,
+    "seconds": 0.4,
+    "log": "/tmp/nessa-http-final-architecture-tests.log"
+  },
+  {
+    "gate": "architecture",
+    "exit": 0,
+    "seconds": 0.6,
+    "log": "/tmp/nessa-http-final-architecture.log"
+  },
+  {
+    "gate": "fmt",
+    "exit": 0,
+    "seconds": 3.5,
+    "log": "/tmp/nessa-http-final-fmt.log"
+  },
+  {
+    "gate": "diff",
+    "exit": 0,
+    "seconds": 0.0,
+    "log": "/tmp/nessa-http-final-diff.log"
+  }
+]

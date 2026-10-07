@@ -1,0 +1,50 @@
+[
+  {
+    "probe": "terminal_policy",
+    "test": "j3_public_open_held_initialize_dispatches_initialized_list_and_ping",
+    "failed_as_expected": true,
+    "exit": 101,
+    "seconds": 14.3,
+    "log": "/tmp/nessa-http-progress-probes-round3/terminal_policy.log"
+  },
+  {
+    "probe": "neighbor_forwarding",
+    "test": "j10_recovery_neighbor_reply_precedes_invalid_initialize",
+    "failed_as_expected": true,
+    "exit": 101,
+    "seconds": 11.2,
+    "log": "/tmp/nessa-http-progress-probes-round3/neighbor_forwarding.log"
+  },
+  {
+    "probe": "typed_stale",
+    "test": "j9_expired_queued_handoff_cannot_dispatch_initialized",
+    "failed_as_expected": true,
+    "exit": 101,
+    "seconds": 11.0,
+    "log": "/tmp/nessa-http-progress-probes-round3/typed_stale.log"
+  },
+  {
+    "probe": "post_dispatch_expiry",
+    "test": "j11_accepted_initialized_at_expiry_reports_timeout",
+    "failed_as_expected": true,
+    "exit": 101,
+    "seconds": 9.3,
+    "log": "/tmp/nessa-http-progress-probes-round3/post_dispatch_expiry.log"
+  },
+  {
+    "probe": "first_failure",
+    "test": "j11_completion_loss_preserves_writer_failure",
+    "failed_as_expected": true,
+    "exit": 101,
+    "seconds": 9.0,
+    "log": "/tmp/nessa-http-progress-probes-round3/first_failure.log"
+  },
+  {
+    "probe": "audit_semantics",
+    "test": "audit_inspection_pair_does_not_depend_on_file_or_timestamp_order",
+    "failed_as_expected": true,
+    "exit": 101,
+    "seconds": 21.2,
+    "log": "/tmp/nessa-http-progress-probes-round3/audit_semantics.log"
+  }
+]
