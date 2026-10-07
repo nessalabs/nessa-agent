@@ -1,5 +1,6 @@
 {
   "uncompressed-csv-sha256.json": "262a2c48aeddd84fa186201df9f31e4d20c6664c9b3368e6682935813c4bf3a8",
+  "candidate-source-sha256.json": "5f4cd0207884292cee0e145410e34b3a947622cee2ed78eae880461a4d4fe7b9",
   "provenance-notes.json": "bb4e8d8bc57509975d6c5ddbe39db02e395b49e16f18bb41a3c70107d6b56d68",
   "current-shared-helper-plan.md": "c38bd6b150e02f3cab873fc2d6f63fa95666a285cd16282871940e1c32fa06b1",
   "historical-393-readme.md": "5cefc7b544a5693d2509b81353db13fda4cae9a3cb2793bdfd9fb9ba05cac7bf",
@@ -13,6 +14,7 @@
   "table-render-proof.json": "59f95ef0b2f99adf3bd6225d11f52582f808b07c915700453a373cc5c3f27f79",
   "final-doc-validation.log": "dd02513fde55f0b8fa2fa3746e4a273257e554dd3e9f6fc9855589772644fba6",
   "pre-restack-source-sha256.json": "16d85f52aae6037e0f67406c2c8f2036052c9670ca01948838515f479776a820",
+  "restack-agreement.json": "87a95ba08d6b37f4fda1c1cd1f0179da2e60ad5875cb07c5890a6c9082b59f20",
   "doc-validator.py": "70897e67b4da8d353e3f76b0e2458d4e2d926552868a591f86a23436f944c62d",
   "table-render-after.html": "3a74b1fd86e3d13201579eeeca045872202fa6299ca1add81e843224aaea3627",
   "final-table-render-proof.json": "7b4c73e861d3938eb594cf310ab33182ef1c34ff7ef540626a4fccecb60e0a0b",
