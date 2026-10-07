@@ -207,7 +207,7 @@
 }
 
 .workspace-link-button:focus-visible {
-  outline: 1.5px solid var(--desktop-focus-ring);
+  outline: var(--desktop-focus-outline);
   outline-offset: 2px;
   border-radius: 3px;
 }
@@ -356,7 +356,8 @@ html:not(.dark) .workspace-diff del {
   color: var(--desktop-muted);
   -webkit-user-select: none;
   user-select: none;
-  animation: workspace-message-in var(--desktop-slow) var(--desktop-out) 120ms both;
+  animation: workspace-message-in var(--desktop-slow) var(--desktop-out)
+    var(--desktop-fast) both;
 }
 
 .workspace-shimmer {

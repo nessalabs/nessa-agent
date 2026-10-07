@@ -118,7 +118,7 @@ html:not(.dark) .desktop-thinking {
   gap: 4px;
   margin-right: -7px;
   padding: 0 9px 0 7px;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   color: var(--desktop-muted);
   font: 500 var(--desktop-text-footnote) / 16px var(--nessa-font-sans);
   transition:
@@ -137,7 +137,7 @@ html:not(.dark) .desktop-thinking {
 }
 
 .desktop-thinking-fast:focus-visible {
-  outline: 2px solid var(--desktop-focus-ring);
+  outline: var(--desktop-focus-outline);
   outline-offset: 1px;
 }
 
@@ -259,7 +259,7 @@ html:not(.dark) .desktop-thinking {
   left: 0;
   height: 3px;
   margin-top: -1.5px;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
 }
 
 .desktop-thinking-rest {
@@ -412,7 +412,7 @@ html:not(.dark) .desktop-thinking-glow {
 }
 
 .desktop-thinking-knob:focus-visible {
-  outline: 1.5px solid var(--desktop-focus-ring);
+  outline: var(--desktop-focus-outline);
   outline-offset: 2.5px;
 }
 

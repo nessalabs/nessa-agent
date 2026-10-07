@@ -185,7 +185,7 @@
 }
 
 .desktop-popover[role="menu"][data-state="closed"] {
-  animation: desktop-menu-out 120ms ease-out forwards;
+  animation: desktop-menu-out var(--desktop-fast) ease-out forwards;
   pointer-events: none;
 }
 
