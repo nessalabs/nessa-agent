@@ -24,7 +24,7 @@ use super::{
     failure::OwnershipFailure,
     ports::{
         BindResourcesFailure, BindResourcesRefusal, ChildFactory, ChildResources, LiveRoom,
-        OwnershipAudit, OwnershipStore, PortFailure, PrepareRequest,
+        OwnershipAudit, OwnershipStore, PortFailure, PrepareFailure, PrepareRequest,
     },
     publication::{OwnershipPublication, PublicationTarget, PublicationToken, PublishedState},
     supervision::{effect, synchronous},
@@ -303,23 +303,19 @@ impl OwnershipCoordinator {
                 |result| result,
             )
             .await;
-            let result = match observed.output {
-                Some(Err(error)) => Err(error),
-                Some(Ok(value)) if !observed.faulted => Ok(value),
-                _ => {
-                    let _ = effect(
-                        "spawn_recovery",
-                        || async {
-                            let closing = shared.revoke_request(&request);
-                            shared.persist_revocation(closing).await;
-                            shared.mark_unconfirmed(&request).await;
-                        },
-                        |_| (),
-                    )
-                    .await;
-                    Err(OwnershipFailure::Startup(PortFailure::Uncertain))
-                }
-            };
+            if observed.faulted && !matches!(&observed.output, Some(Err(_))) {
+                let _ = effect(
+                    "spawn_recovery",
+                    || async {
+                        let closing = shared.revoke_request(&request);
+                        shared.persist_revocation(closing).await;
+                        shared.mark_unconfirmed(&request).await;
+                    },
+                    |_| (),
+                )
+                .await;
+            }
+            let result = observed.result(OwnershipFailure::Startup(PortFailure::Uncertain));
             shared.publish_flight(&request, result);
         });
         contain_caller_wake(waiter, await_watch(&mut watch)).await
@@ -981,7 +977,10 @@ impl Shared {
                 .await;
             return Err(OwnershipFailure::Startup(PortFailure::Uncertain));
         }
-        let prepared = observed.output.expect("captured factory output");
+        let prepared = observed.result(PrepareFailure {
+            failure: PortFailure::Uncertain,
+            cleanup: None,
+        });
         let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(failure) => {
@@ -1088,7 +1087,7 @@ impl Shared {
             self.mark_unconfirmed(&command.request_id).await;
             return Err(OwnershipFailure::Submission(PortFailure::Uncertain));
         }
-        match submitted.output.expect("captured submit output") {
+        match submitted.result(PortFailure::Uncertain) {
             Ok(installed) => {
                 let (evidence, token) = installed?;
                 self.publish_evidence(&evidence, &token, Some(&command.request_id))
@@ -1164,11 +1163,7 @@ impl Shared {
         )
         .await;
         self.notify.notify_waiters();
-        let report = match observed.output {
-            Some(Err(error)) => return Err(error),
-            Some(Ok(report)) if !observed.faulted => report,
-            _ => return Err(OwnershipFailure::Incomplete),
-        };
+        let report = observed.result(OwnershipFailure::Incomplete)?;
         if report.physical != PhysicalFact::Released
             || report.evidence != EvidenceFact::Acknowledged
         {
@@ -1278,11 +1273,7 @@ impl Shared {
                 },
             )
             .await;
-            let result = match observed.output {
-                Some(Err(error)) => Err(error),
-                Some(Ok(value)) if !observed.faulted => Ok(value),
-                _ => Err(OwnershipFailure::Audit(PortFailure::Uncertain)),
-            };
+            let result = observed.result(OwnershipFailure::Audit(PortFailure::Uncertain));
             if let Err(error) = result {
                 failure.get_or_insert(error);
             }
@@ -1331,11 +1322,7 @@ impl Shared {
                 },
             )
             .await;
-            let result = match observed.output {
-                Some(Err(error)) => Err(error),
-                Some(Ok(value)) if !observed.faulted => Ok(value),
-                _ => Err(OwnershipFailure::Audit(PortFailure::Uncertain)),
-            };
+            let result = observed.result(OwnershipFailure::Audit(PortFailure::Uncertain));
             if let Err(error) = result {
                 let _ = self.commit_snapshot().await;
                 return Err(error);
@@ -1353,11 +1340,7 @@ impl Shared {
             |result| result,
         )
         .await;
-        match observed.output {
-            Some(Err(error)) => Err(error),
-            Some(Ok(value)) if !observed.faulted => Ok(value),
-            _ => Err(PortFailure::Uncertain),
-        }
+        observed.result(PortFailure::Uncertain)
     }
 
     async fn advance(
@@ -1438,11 +1421,7 @@ impl Shared {
             },
         )
         .await;
-        let audit = match audit.output {
-            Some(Err(error)) => Err(error),
-            Some(Ok(value)) if !audit.faulted => Ok(value),
-            _ => Err(PortFailure::Uncertain),
-        };
+        let audit = audit.result(PortFailure::Uncertain);
         match audit {
             Ok(()) => {
                 self.with_graph(|_| {
@@ -1529,11 +1508,7 @@ impl Shared {
             },
         )
         .await;
-        match observed.output {
-            Some(Err(error)) => Err(error),
-            Some(Ok(value)) if !observed.faulted => Ok(value),
-            _ => Err(PortFailure::Uncertain),
-        }
+        observed.result(PortFailure::Uncertain)
     }
 
     #[cfg(test)]
@@ -1652,11 +1627,7 @@ impl Shared {
             },
         )
         .await;
-        let audit = match observed.output {
-            Some(Err(error)) => Err(error),
-            Some(Ok(value)) if !observed.faulted => Ok(value),
-            _ => Err(PortFailure::Uncertain),
-        };
+        let audit = observed.result(PortFailure::Uncertain);
         if audit.is_ok() {
             if let Some(token) = token {
                 self.with_graph(|_| {
@@ -1820,11 +1791,7 @@ impl Shared {
                 |result| result,
             )
             .await;
-            let result = match observed.output {
-                Some(Err(error)) => Err(error),
-                Some(Ok(value)) if !observed.faulted => Ok(value),
-                _ => Err(OwnershipFailure::Incomplete),
-            };
+            let result = observed.result(OwnershipFailure::Incomplete);
             sender.send_replace(Some(result));
         });
         Some(selected)

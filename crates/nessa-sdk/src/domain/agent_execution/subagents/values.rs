@@ -493,6 +493,17 @@ pub enum EvidenceFact {
     Failed,
 }
 
+impl EvidenceFact {
+    /// Actual acknowledgement is absorbing for the same exact audit record.
+    pub(super) fn observe_acknowledgement(self, observed: Self) -> Self {
+        if self == Self::Acknowledged {
+            self
+        } else {
+            observed
+        }
+    }
+}
+
 /// Meaning named in an ownership evidence record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OwnershipMeaning {

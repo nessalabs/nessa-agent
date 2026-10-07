@@ -8,6 +8,7 @@ parent: "nessa"
 sources:
   - "crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs"
   - "crates/nessa-sdk/src/domain/agent_execution/subagents/graph/settlement.rs"
+  - "crates/nessa-sdk/src/domain/agent_execution/subagents/values.rs"
   - "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/lifecycle.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/scheduling.rs"
@@ -67,6 +68,8 @@ coordinator; this adapter lifetime is separate from submission scheduling.
 
 The [ownership graph](../../../../crates/nessa-sdk/src/domain/agent_execution/subagents/graph/settlement.rs)
 owns exact resource observation debt, actual absence proof and first close scope.
+Its [evidence values](../../../../crates/nessa-sdk/src/domain/agent_execution/subagents/values.rs)
+provide the shared exact acknowledgement transition.
 The [coordinator](../../../../crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs)
 owns one drain generation and ordered snapshot writes. The ordering contract and
 regression names live in [ADR329](../../../adr/todo/329-subagents.md#owned-settlement-and-supervision-625-646-649).

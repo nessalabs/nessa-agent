@@ -255,7 +255,11 @@ public wait passes it the caller's waker and its own identity. It polls the
 wait with a waker of its own, which calls the caller's waker inside
 `catch_unwind`. A panic is logged with the wait's identity and goes no further. A
 second panic from dropping the panic payload is also caught; that payload is
-leaked rather than dropped. None of the publishers behind the waits in this
+leaked rather than dropped. The same owner contains destruction of its cloned
+caller waker, which can occur on the publisher's task after notification. Its
+`Drop` catches that destructor panic and forgets the fault payload without
+dropping it, so a payload destructor cannot escape into the publisher or runtime.
+None of the publishers behind the waits in this
 table catches a notification panic itself, and nothing resets `running` or
 repairs lifecycle state after one.
 
@@ -284,6 +288,18 @@ runs only in a child process because tracing caches callsite interest
 process-wide, so concurrent tests can hide an event from a thread-local
 subscriber.
 
+The owned coordinator rows use tests under
+`application::agent_execution::subagents`. The small
+`effects::panicking_caller_waker_and_payload_do_not_strand_other_close_waiters`
+fixture checks retained close progress, but sender destruction can rescue its
+notification when an uncontained wake unwinds; that fixture alone does not
+prove containment. The destructor fixture
+`effects::panicking_caller_waker_drop_does_not_strand_registered_close_waiters`
+keeps the pending public wait alive after releasing the caller's original waker
+references. Its counters assert that the last waker destructor runs in the SDK
+publisher task and that the fault payload is never dropped, alongside completion
+of the healthy waiter and exactly one physical close.
+
 | Public wait | Published or released by | What each owner keeps when the caller's waker panics | Test |
 | --- | --- | --- | --- |
 | `QueuedInvocation::wait` (and `QueueAdmission::wait`), after normal completion | The queue runner | The stored result, scheduling evidence and slot/work retirement are unchanged. The runner continues to the next queued item | `panicking_receipt_consumer_preserves_independent_queued_work`: the independent tail dispatches (two dispatches) and settles `Completed`, and both stored records end `Settled` |
@@ -300,6 +316,8 @@ subscriber.
 | `close` and the other spawn-and-join operations, plain panic | Tokio's task completion, inside its own `catch_unwind` | Close completes; the Agent can attach and invoke again | `panicking_close_waiter_does_not_interrupt_close`, which also passes without the wrapper |
 | Each spawn-and-join operation, panic whose payload drop also panics | Tokio's task completion, which drops the payload outside its catch | The panic stays in the wrapper, which logs the operation's own wait identity, and the operation completes. No warning is logged on the clean pass | `panicking_payload_waiter_of_each_joined_operation_is_contained`, one child process per operation running `joined_operation_child` on a current-thread runtime, where the owner cannot run before the first poll. Without an operation's wrapper its case fails by name: the payload's drop panic unwinds out of `block_on` |
 | `close`, panic whose payload drop also panics, on a multi-thread runtime | Tokio's task completion, which drops the payload outside its catch | The runtime keeps running; close completes and the Agent can attach and invoke again | `panicking_payload_close_waiter_does_not_abort_the_runtime`, which runs `double_fault_close_waiter_child` in a child process so an abort fails the test. Without the wrapper the child aborts with SIGABRT |
+| `OwnershipCoordinator::spawn` | The coordinator's admitted spawn worker, via its retained result watch | Caller loss leaves the admitted worker running. Its terminal result remains cached for joined and identical retries; a factory poll fault returns `OwnershipFailure::Startup(PortFailure::Uncertain)` without a second factory call | `subagents::supervision::dropped_spawn_caller_and_two_joiners_receive_one_cached_factory_failure` (caller loss and immutable cache); the common waker destructor boundary is exercised by the close fixture below |
+| `OwnershipCoordinator::end_lifetime` | The selected close-generation worker, via its result watch | Cleanup and publication continue independently of the caller. Joined waiters keep that generation's typed result: `OwnershipFailure::Audit(PortFailure::Rejected)` remains their result after a later explicit retry succeeds, without physically closing a released owner again | `subagents::settlement::joined_close_waiters_keep_failed_generation_after_successful_retry_and_caller_loss`; `subagents::effects::panicking_caller_waker_and_payload_do_not_strand_other_close_waiters`; `subagents::effects::panicking_caller_waker_drop_does_not_strand_registered_close_waiters` |
 | `McpServers::open`, `call_tool`, `read_app_resource`; `McpSession::list_tools`, `read_ui_resource` | The connection's reader task, via a oneshot, or `stop`'s watch while it holds the live-session lock | The reader keeps serving the next call. `stop` returns and a later open is `Stopped`; the live-session lock is not poisoned | `caller_wakes` in `tests/infrastructure/mcp/` |
 | `McpSession::serve` | The connection's reader task, via a oneshot, and then `close`'s process reaper (`child.wait`) when the harness ends | The reader keeps serving a later call on that connection | `panicking_serve_waiter_leaves_the_reader_serving` |
 | `McpSession::close` | The process reaper, via `child.wait` inside `ServerProcess::stop` | A second session's close still finishes | `panicking_close_waiter_does_not_stop_the_process_reaper` |
@@ -330,8 +348,6 @@ statement.
 
 Not covered:
 
-- A panic from *dropping* the caller's waker. The wrapper owns a clone of it,
-  and that clone can be dropped on the publisher's task.
 - `Agent::prepare`, `SessionManager::open` and `SessionSnapshot::load_saved`.
   They await caller-supplied provider and storage ports. Those ports' tasks,
   when the port is this SDK's record storage, are the rows above. A port the

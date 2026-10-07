@@ -11,6 +11,18 @@ pub(super) struct Observed<T> {
     pub(super) faulted: bool,
 }
 
+impl<T, E> Observed<Result<T, E>> {
+    /// A captured refusal stays primary; faulted success or missing output uses
+    /// the operation owner's conservative typed failure.
+    pub(super) fn result(self, uncertain: E) -> Result<T, E> {
+        match self.output {
+            Some(Err(error)) => Err(error),
+            Some(Ok(value)) if !self.faulted => Ok(value),
+            _ => Err(uncertain),
+        }
+    }
+}
+
 pub(super) fn synchronous<T>(operation: impl FnOnce() -> T) -> Option<T> {
     match catch_unwind(AssertUnwindSafe(operation)) {
         Ok(value) => Some(value),

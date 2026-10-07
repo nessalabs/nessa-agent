@@ -174,9 +174,7 @@ impl OwnershipGraph {
             }
             _ => return Err(OwnershipError::StaleOutcome),
         };
-        if *acknowledgement != EvidenceFact::Acknowledged {
-            *acknowledgement = outcome;
-        }
+        *acknowledgement = acknowledgement.observe_acknowledgement(outcome);
         refresh_summary(row);
         Ok(())
     }
@@ -235,9 +233,7 @@ impl OwnershipGraph {
         if fact.record != token.record {
             return Err(OwnershipError::StaleOutcome);
         }
-        if fact.acknowledgement != EvidenceFact::Acknowledged {
-            fact.acknowledgement = outcome;
-        }
+        fact.acknowledgement = fact.acknowledgement.observe_acknowledgement(outcome);
         if fact.acknowledgement == EvidenceFact::Acknowledged {
             let owned: Vec<_> = self
                 .lifetimes
