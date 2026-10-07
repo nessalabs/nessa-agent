@@ -4,7 +4,7 @@
   "pull_request": 652,
   "source_head": "616a5fb9b07b81e30f23ff3282c1c60722fbb306",
   "base": "d55de88d9c6f5794b225da05b1055c511b9dba74",
-  "status": "FreshR2 approved exact616; all11 localgates passed; currenthostedplatformCI and externalreview pending",
+  "status": "All current checks and review dispositions complete; ready to merge",
   "completed": false,
   "gate_records": {
     "original209": "Full isolated SDK and exact six-package tests passed; all14 central cases named. One later cfg(test) .ok removal is separately recorded.",
@@ -114,5 +114,16 @@
     "root_verified_source_paths": 30,
     "source_mismatches": []
   },
-  "measurement_scope": "Original26mutants and66000percall/5250batchrows are pre-R1 helper evidence; two newmutants helper58b... before finalrustfmt8634... diff archived. No exact616 performance replay claimed."
+  "measurement_scope": "Original26mutants and66000percall/5250batchrows are pre-R1 helper evidence; two newmutants helper58b... before finalrustfmt8634... diff archived. No exact616 performance replay claimed.",
+  "current_head_hosted_ci": {
+    "run": 37675120022,
+    "all_10_jobs": "SUCCESS",
+    "portable_tests_per_os": 15,
+    "domain_coverage": "100%: 6552 regions, 703 functions, 5216 lines; zero uncovered"
+  },
+  "external_review_disposition": {
+    "Codex": "Completed 2026-10-07T20:02:01.418784Z, exact616; no findings; bot +1 reaction552137429",
+    "CodeRabbit": "Declined: 304 files exceeds300. Fresh R2 local fallback, not pass.",
+    "Greptile": "Declined: trial expired. Fresh R2 local fallback, not pass."
+  }
 }
