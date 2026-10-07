@@ -257,8 +257,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: corepack enable
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/pnpm-install
+        with:
+          save: ${{ github.ref == 'refs/heads/main' }}
       - run: pnpm build
       - run: cargo check -p nessa-app --release --all-targets
   frontend:
@@ -270,8 +271,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: corepack enable
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/pnpm-install
+        with:
+          save: ${{ github.ref == 'refs/heads/main' }}
       # `frontend:check` owns the repository's top-level script tests, including
       # `scripts/mcp-test-server` through `pnpm scripts:test` (#476). They are
       # not run again from another job. Two of the script tests execute the
@@ -389,11 +391,11 @@ jobs:
       - name: Install native desktop WebDriver
         if: runner.os == 'Linux'
         run: cargo install tauri-driver --version 2.0.6 --locked
+      # The frontend job is the Ubuntu writer for this store key. A second save
+      # from this step races it on the same run.
       - name: Install native desktop smoke dependencies
         if: runner.os == 'Linux'
-        run: |
-          corepack enable
-          pnpm install --frozen-lockfile
+        uses: ./.github/actions/pnpm-install
       - name: Exercise the native desktop window
         if: runner.os == 'Linux'
         env:

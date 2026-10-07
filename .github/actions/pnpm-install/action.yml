@@ -1,0 +1,56 @@
+name: Install pnpm dependencies
+description: >-
+  Enable the pinned pnpm and install from the lockfile. Restores the store
+  cache written on main. A pull request never saves, so it cannot evict that
+  entry. The vendored UI build inside preinstall still runs; the cache is the
+  registry fetch, not that build.
+
+inputs:
+  save:
+    description: Save the store when this lockfile key is not already cached.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Enable pinned pnpm
+      shell: bash
+      run: corepack enable
+
+    - name: Choose the pnpm store cache key
+      id: store
+      shell: bash
+      run: |
+        set -euo pipefail
+        if command -v sha256sum >/dev/null 2>&1; then
+          hash="$(sha256sum pnpm-lock.yaml | awk '{print $1}')"
+        else
+          hash="$(shasum -a 256 pnpm-lock.yaml | awk '{print $1}')"
+        fi
+        echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+        echo "key=pnpm-store-${RUNNER_OS}-${hash}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the pnpm store
+      id: cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.store.outputs.path }}
+        key: ${{ steps.store.outputs.key }}
+        restore-keys: |
+          pnpm-store-${{ runner.os }}-
+
+    - name: Install from the lockfile
+      shell: bash
+      run: pnpm install --frozen-lockfile --prefer-offline
+
+    # Two jobs on one operating system can both miss and then both save. The
+    # loser finds the key taken. That is not a failed install, so it must not
+    # fail the job. A hit on the primary key does not save again.
+    - name: Save the pnpm store
+      if: inputs.save == 'true' && steps.cache.outputs.cache-hit != 'true'
+      continue-on-error: true
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.store.outputs.path }}
+        key: ${{ steps.store.outputs.key }}
