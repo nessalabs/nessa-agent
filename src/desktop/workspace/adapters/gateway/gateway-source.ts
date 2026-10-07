@@ -741,6 +741,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       !last ||
       refresh.has(sessionId) ||
       rows.get(sessionId)?.running ||
+      last.view.messages.some(
+        (turn) => turn.status === "running" || turn.status === "queued",
+      ) ||
       last.transcript.approval ||
       last.transcript.activity ||
       appCalls.has(sessionId),

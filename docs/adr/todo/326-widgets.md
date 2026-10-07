@@ -205,6 +205,12 @@ gateway's, and remaining.
 | unshowable | yes | "Can't show this here" | the same line, with close |
 | — | no | "Can't show this here" | the same line, with close |
 
+An inline widget keeps its mounted view across surrounding message-part changes,
+keyed by widget identity and its occurrence among that identity (#616,
+`message-widget.test.tsx`). Repeated references remain distinct siblings. Removing
+or inserting indistinguishable occurrences does not promise per-occurrence state
+retention; that would require an occurrence identity in the source contract.
+
 Nothing is retried by the host and nothing pretends to be live (gate 7, gate
 16); a source that reads again answers `useWidget` again.
 

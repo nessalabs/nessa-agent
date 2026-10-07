@@ -1,0 +1,12 @@
+{
+  "fixedSourceSha256": {
+    "src/desktop/workspace/ui/transcript/message.tsx": "8bb297659727ee95e10f5a78885df35ec848a2afac53d3676d683f5c21a36c59",
+    "src/desktop/split-panes/model/drag.ts": "ba4b43f9c752228368c1a48a37d7764486fcfdfff99fbf8fd2ff26408463c15d",
+    "src/desktop/split-panes/adapters/dom/drag.ts": "7a66f8f73f8fc5b79d10f710f3b75f25789edb89c44db2b0a8492545839ce87d"
+  },
+  "restoration": "exact source bytes asserted",
+  "widgetBefore": "both engines replace frame and lose document state on both prefix changes",
+  "dragBefore": "both engines leave one returning copy during resize",
+  "frontendTestsPassed": 3753,
+  "frontendTestFiles": 276
+}

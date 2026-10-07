@@ -264,6 +264,11 @@ serialization, removal/relisting and call-deadline fences. A subscription
 generation fences both summary and transcript answers. Source disposal fences
 late work through the existing injected clock and read lifecycle.
 
+The #616 follow-up keeps running/queued retained turns eligible even when the
+summary is idle or absent and the latest text hides presentation activity. Its
+[production runner and source-revert evidence](../../verification/desktop/evidence/message-sync-616/README.md)
+records the stale-summary reproduction and both engines/layouts.
+
 | Row | Ordering | Intended behavior | Regression |
 | --- | --- | --- | --- |
 | F1 | Ready active text and a read eligible at the next tick | Read on that active tick, without a list | F1 |
@@ -272,6 +277,7 @@ late work through the existing injected clock and read lifecycle.
 | F3 | Unsubscribe/resubscribe before answer | Earlier answer discarded; new generation reads | F3 |
 | F4 | Active read fails | Next successful summary emits resync | F4 |
 | F5 | Send against idle transcript; then turn rests | Invalidate on send, read fast, stop at rest | F5 |
+| F13 | Send with idle/missing summary, then running/queued text without presentation activity | Retained turn status keeps fast reads until rest, before the summary catches up | F13 (four combinations, #616) |
 | F6 | Dispose before answer | Discard answer and stop both scheduling timers | F6 |
 | F8 | Send invalidation read crosses a subscription change or failure | Retain invalidation until a live successful read | F8 |
 | F9 | Summary answer crosses subscription change | Discard prior generation's list | F9 |

@@ -2,7 +2,9 @@
 /**
  * Runs every desktop check and summarises them. The functional checks share
  * one page (the dev server by default); perf-budget builds and previews
- * production itself, as its budget requires. Takes minutes — run it before
+ * production itself, as its budget requires. In prod, message-sync previews
+ * its dedicated fixture build instead of sharing the ordinary app build.
+ * Takes minutes — run it before
  * handing off UI work, not on every change; while iterating, run the check
  * that covers the change with `--quick` (one engine, layout and size).
  */
@@ -64,6 +66,7 @@ Usage: node verification/desktop/scripts/run-all.mjs [options]
   --skip-perf      Leave out perf-budget (the production build and its runs).
   --runs <n>       Passed to perf-budget.
 
+In prod, message-sync builds its own fixture preview.
 --url / --mode apply to the functional checks; perf-budget always measures a
 production build unless --url is given. --mode prod leaves out the checks
 that need the dev server (${devServerOnlyChecks.join(", ")}) and names them
@@ -136,12 +139,14 @@ try {
 }
 const scheduled = checksUnder(options.mode, checks)
 const leftOutSet = new Set(scheduled.leftOut)
+const sharesPage = (check) =>
+  functional.includes(check) && !(check === "message-sync" && options.mode === "prod")
 const dir = mkdtempSync(join(tmpdir(), "nessa-desktop-verify-all-"))
 const summary = []
 const documents = {}
 let page
 try {
-  if (scheduled.run.some((c) => functional.includes(c))) {
+  if (scheduled.run.some(sharesPage)) {
     try {
       page = await target(options)
     } catch (error) {
@@ -158,15 +163,16 @@ try {
       summary.push({ check, status: DEV_SERVER_ONLY, held: "—", seconds: 0 })
       continue
     }
-    if (functional.includes(check) && !page) {
+    if (sharesPage(check) && !page) {
       summary.push({ check, status: "COULD NOT RUN", held: "0/0", seconds: 0 })
       continue
     }
     const out = join(dir, `${check}.json`)
     const args = [...passThrough(), "--out", out]
-    if (check === "perf-budget") {
+    if (!sharesPage(check)) {
       if (options.url) args.push("--url", options.url)
       if (options.runs) args.push("--runs", options.runs)
+      if (check === "message-sync") args.push("--mode", options.mode)
     } else {
       args.push("--url", page.url)
       // The shared page is already started. The child must still hear prod,
