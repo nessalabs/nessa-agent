@@ -89,6 +89,7 @@ fn complete(graph: &mut OwnershipGraph, root: &AgentLifetimeId) {
 
 #[path = "ownership/settlement.rs"]
 mod settlement;
+mod settlement_relationships;
 
 #[test]
 fn identity_and_policy_values_reject_blank_and_oversized_input() {

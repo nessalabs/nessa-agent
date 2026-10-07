@@ -1868,6 +1868,7 @@ fn spawn_row(child: &AgentLifetimeId, parent: &AgentLifetimeId, request: &str) -
 }
 
 mod effects;
+mod gate_waiters;
 mod inflight_absence;
 #[path = "subagents/publication.rs"]
 mod publication;
