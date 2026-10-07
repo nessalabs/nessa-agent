@@ -1,0 +1,279 @@
+{
+  "head": "1bf09a5ef83f2a4183f3dfbc05e057d5e0138a31",
+  "cases": [
+    {
+      "name": "admitted_error_leaves_graph_and_gate_open",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "469926123fcf404440b4bd2affbc040ed5c73926360ac2a83ef6fa9fcbdeab18",
+      "mutated_sha256": "80935ab11f2df4d4de99877c94891a811d3b4560b466c321397650fadaa8c8a8",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "row_38_publication_error_matrix"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "eligible_error_revoked_only_after_fallback_await",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "469926123fcf404440b4bd2affbc040ed5c73926360ac2a83ef6fa9fcbdeab18",
+      "mutated_sha256": "8814a3344100c4ad6451b8d09fad38597ac125ecbc8a55655061d39bd7314604",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "row_38_known_failure"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "factory_failure_gate_revocation_waits_for_outer_return",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "469926123fcf404440b4bd2affbc040ed5c73926360ac2a83ef6fa9fcbdeab18",
+      "mutated_sha256": "f343a50fa7c1058f2ca7102db58cc6ccd34dd3f6fb3228a999e34a3dba446a1a",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "row_35_rejected_none"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "uncertain_submit_revocation_waits_for_fallback",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "469926123fcf404440b4bd2affbc040ed5c73926360ac2a83ef6fa9fcbdeab18",
+      "mutated_sha256": "999f591aa6457fc0e3d51e170d5135964ec3d516b1b2ef5044792fd1cf7a82c9",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "row_38_uncertain_submission"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "outer_admitted_error_hook_skipped",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "469926123fcf404440b4bd2affbc040ed5c73926360ac2a83ef6fa9fcbdeab18",
+      "mutated_sha256": "cb92ae22387e15cf5b5eb971ea6b5c0c2f1ff2ab60ba4da8fb14807fc0fb6033",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "row_38_factory_and_submission"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "definite_store_rejection_returns_unsealed_child",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "469926123fcf404440b4bd2affbc040ed5c73926360ac2a83ef6fa9fcbdeab18",
+      "mutated_sha256": "5363e1b31357fa03adbff2abc54ece585199d5a70905dd5ac74d6b9dcbf16dd8",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "row_38_publication_error_matrix"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "private_audit_rejection_child_not_revoked",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "469926123fcf404440b4bd2affbc040ed5c73926360ac2a83ef6fa9fcbdeab18",
+      "mutated_sha256": "1c73c3d0ac9b5b689c79d4ae1a274d7cbf5932e94134c2fbf91f0c4c0cc3a903",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "row_38_publication_error_matrix"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "joined_error_fabricates_another_first_close",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "469926123fcf404440b4bd2affbc040ed5c73926360ac2a83ef6fa9fcbdeab18",
+      "mutated_sha256": "5e6dc5eaebfc0f6053c86c5040936f2a2e9498cb94c9dc663e70153191a25b28",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "row_38_known_failure"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "legacy_open_completed_startup_accepts_new_owner",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "469926123fcf404440b4bd2affbc040ed5c73926360ac2a83ef6fa9fcbdeab18",
+      "mutated_sha256": "561619c52d676d27710a5a0cb50e09da5a04ae1165ddef1f472f3a112afd4a9c",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "row_38_legacy_open_ended"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "unknown_sealed_progress_query_panics",
+      "path": "crates/nessa-sdk/src/domain/agent_execution/subagents/graph.rs",
+      "original_sha256": "4ab472cd6b4d074eb0307ecdbbb7fecedd6a42f0bf3b64127da236b47abfa0a2",
+      "mutated_sha256": "693fbb089b69a08fd5fc452cd6ac6708ae860f4eb8aa49d7f91da83d1e4b4db0",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "domain",
+        "sealed_progress_retains_actual"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "lookup_conflict_revokes_another_operation",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "469926123fcf404440b4bd2affbc040ed5c73926360ac2a83ef6fa9fcbdeab18",
+      "mutated_sha256": "07b1973c9d632a82f939f945f80334a4ed9d8aa250985cfc18c62dcff974e2b8",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "row_38_conflict_and_pre_admission"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    },
+    {
+      "name": "fallback_replaces_original_audit_failure",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+      "original_sha256": "469926123fcf404440b4bd2affbc040ed5c73926360ac2a83ef6fa9fcbdeab18",
+      "mutated_sha256": "9f544b2b13d1cc4ee1cc5789044fdea8efd2a07d7fd033fb0997fcf90a4451d3",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "row_38_known_failure"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    }
+  ],
+  "source_relationship": {
+    "probe_git_parent": "1bf09a5ef83f2a4183f3dfbc05e057d5e0138a31",
+    "probe_tree_was_dirty": true,
+    "corrected_clean_checkpoint": "4db970d5e38b9a5afa118bee14539729dc2a3d2b",
+    "restored_source_sha256": {
+      "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs": "469926123fcf404440b4bd2affbc040ed5c73926360ac2a83ef6fa9fcbdeab18",
+      "crates/nessa-sdk/src/domain/agent_execution/subagents/graph.rs": "4ab472cd6b4d074eb0307ecdbbb7fecedd6a42f0bf3b64127da236b47abfa0a2"
+    },
+    "all_restored_digests_verified": true
+  }
+}

@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -808,7 +808,7 @@
+             Err(failure) => {
+                 // Stop new attachment admission before any fallible safety publication.
+                 // This revokes permission; it does not prove physical cleanup.
+-                let closing = self.revoke_child(&admitted.child);
++                let closing = None;
+                 if let Some(cleanup) = failure.cleanup {
+                     self.bound
+                         .lock()

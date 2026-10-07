@@ -1,0 +1,14 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -1112,9 +1112,8 @@
+         match self.commit_snapshot().await {
+             Ok(()) => Ok(()),
+             Err(PortFailure::Rejected) => {
+-                if let Some(request) = unconfirmed_request {
+-                    let closing = self.revoke_request(request);
+-                    self.persist_revocation(closing).await;
++                if let Some(_request) = unconfirmed_request {
++                    self.persist_revocation(None).await;
+                 }
+                 Err(OwnershipFailure::Store(PortFailure::Rejected))
+             }

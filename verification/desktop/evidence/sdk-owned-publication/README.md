@@ -26,3 +26,7 @@ Panic supervision #625, mandatory cleanup publication debt #646, failed-startup 
 ## Preserved final 1bf CI outcome
 
 Run37622329149 is completed FAILED: Linux and Windows passed; macOS failed an existing desktop-stop ordering assertion (expected provider openings2, observed1), and domain coverage failed as above. Required-check aggregate failed. The metadata and exact failure excerpt are retained. Issue651 tracks the independently reachable reference-count-versus-actual-FIFO-admission gap; exact historical scheduling cause remains unproven. Its small verification correction is being prepared in an isolated worktree for inclusion in PR650 before final gates and fresh cumulative R1 review. No review round has started.
+
+## Typed-error revocation checkpoint
+
+`4db970d5e38b9a5afa118bee14539729dc2a3d2b` is preserved on `codex/628-proof-error-revocation-4db`. Twelve additional one-rule mutations compile and fail actual runtime assertions; the manifest records dirty corrected bytes over parent1bf and verifies restored hashes against committed4db. The retained historical total is49. These probes cover early graph/gate revocation, fallback await ordering, factory/submission failure, private rejected admission, admitted-only scope, preserving original errors, no duplicate first-close evidence on joins, legacy Open+Ended binding precision, and unknown sealed-progress query refusal. Restored focused application80/domain37/join tests pass. Exact-source domain coverage and the cumulative candidate are still pending.

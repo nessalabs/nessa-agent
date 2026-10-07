@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -1211,7 +1211,7 @@
+             let close = graph
+                 .child_lifetime(request)
+                 .cloned()
+-                .and_then(|child| self.revoke_child_in_graph(graph, &child));
++                .and_then(|child| if self.publication.lock().unwrap().spawn_eligible(request) { None } else { self.revoke_child_in_graph(graph, &child) });
+             self.publication
+                 .lock()
+                 .expect("ownership publication")

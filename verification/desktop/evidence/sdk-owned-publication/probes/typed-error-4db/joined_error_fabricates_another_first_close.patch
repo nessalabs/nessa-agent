@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -1170,7 +1170,7 @@
+         graph: &mut OwnershipGraph,
+         child: &AgentLifetimeId,
+     ) -> Option<OwnershipEvidence> {
+-        let first_close = graph.lifetime_state(child) == Some(LifetimeState::Open);
++        let first_close = true;
+         let evidence = self
+             .seal_in_graph(
+                 graph,

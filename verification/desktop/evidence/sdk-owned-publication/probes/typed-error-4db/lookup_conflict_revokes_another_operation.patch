@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -272,6 +272,8 @@
+         if !is_leader {
+             let watched = await_watch(&mut watch).await;
+             if let Some(found) = self.inner.lookup(&command) {
++                let closing = self.inner.revoke_request(&command.request_id);
++                self.inner.persist_revocation(closing).await;
+                 return found;
+             }
+             return watched;

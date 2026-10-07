@@ -1,0 +1,11 @@
+--- crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -1100,7 +1100,7 @@
+                         self.persist_revocation(closing).await;
+                     }
+                 }
+-                return Err(OwnershipFailure::Audit(PortFailure::Rejected));
++                return Err(OwnershipFailure::Audit(PortFailure::Uncertain));
+             }
+             Err(PortFailure::Uncertain) => {
+                 if let Some(request) = unconfirmed_request {
