@@ -717,7 +717,8 @@ proposed gateway child composition above.
 flowchart LR
   Transition[Graph transition under admission scope] --> Token[Immutable target and generation token]
   Token --> Audit[Audit outside scope]
-  Audit --> Ack[Validate token and acknowledge captured state under scope]
+  Audit -->|accepted| Ack[Validate token and acknowledge captured state under scope]
+  Audit -->|rejected or uncertain safety transition| Projection
   Ack --> Projection[Eligible projection plus live safety facts]
   Projection --> Fence[Revision and write-order fence]
   Fence --> Store[Ownership store]
@@ -726,7 +727,7 @@ flowchart LR
 ```mermaid
 stateDiagram-v2
   [*] --> Private: owned root transaction admits
-  Private --> Removed: definite audit rejection
+  Private --> Removed: definite rejection with no retained safety/dependents
   Private --> RetainedClosing: audit uncertainty
   Private --> Eligible: audit acceptance
   Eligible --> Delivered: caller claims delivery ticket before returning Ready
@@ -742,8 +743,14 @@ preserves a returned task receipt and actual physical preparation; an unaudited
 Attached permission retains Prepared in the nonrunnable shape. Normal pending
 affirmative rows retain their last eligible milestone. These milestones do not
 assert resource absence. Transferred resources retain their actual cleanup owner.
-Only a once-bound marker plus the domain's root identity check authorizes the
-explicit never-bound absence transition. Its real audit result controls settlement.
+The absence of any recorded transfer, together with the domain's root identity
+check, permits an atomic never-bound absence claim. Binding a resource owner or
+handing out an eligible participation gate records possible transfer and blocks
+that claim. A prior claim refuses later external transfers and usable gate
+handoffs. Private lifetimes cannot confer transfer or descendant admission
+authority; eligibility includes the retained ancestor chain. Refused restored
+history may expose only its already-sealed inspection gate. The claim's actual
+audit result controls settlement.
 A queued successful send does not transfer root ownership; claiming its internal
 delivery ticket when `open_root` returns Ready does. Eligible or uncertain IDs
 remain retained; only a definite preeligible audit rejection removes its target.
