@@ -308,6 +308,15 @@ it("drops the composer's blur while a drag is carried, and leaves the sidebar's 
   expect(quiet).not.toMatch(/font-weight/)
 })
 
+it("puts the sidebar list on its own layer", () => {
+  const sheet = readFileSync(
+    new URL("./workspace/ui/source-list/source-list.css", import.meta.url),
+    "utf8",
+  )
+  const body = sheet.slice(sheet.indexOf(".workspace-sidebar-scroll {")).split("}")[0]
+  expect(body).toMatch(/transform:\s*translate3d\(0,\s*0,\s*0\)/)
+})
+
 it("lays the grain on as a flat veil, not an overlay blend", () => {
   const body = styles.slice(styles.indexOf(".desktop-grain {")).split("}")[0]
   expect(body).toMatch(/mix-blend-mode:\s*normal/)
