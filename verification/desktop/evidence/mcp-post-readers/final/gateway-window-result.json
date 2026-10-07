@@ -1,0 +1,287 @@
+{
+  "check": "gateway-window",
+  "ok": true,
+  "started": "2026-10-07T06:44:23.859Z",
+  "finished": "2026-10-07T06:44:58.345Z",
+  "target": {
+    "url": "http://127.0.0.1:36337/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "setup",
+      "seen": {
+        "title": "Wd52cebda: reply with exactly that word and noth"
+      },
+      "timings": {
+        "gatewayMs": 285,
+        "devServerMs": 4349,
+        "agentTurnMs": 1182
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "handshake",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1825,
+      "seen": [
+        {
+          "socket": "ws://127.0.0.1:45165/session",
+          "client": "nessa-panel",
+          "answer": {
+            "ok": true,
+            "principal": "surface:nessa-panel"
+          }
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "lists",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2078,
+      "seen": {
+        "listed": true,
+        "status": null,
+        "sample": 0,
+        "asked": {
+          "load_gateway_endpoint": 1,
+          "load_surface_credential": 1
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "opens",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2087,
+      "seen": {
+        "messages": [
+          {
+            "role": "user",
+            "text": "Wd52cebda: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          }
+        ]
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "live",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2923,
+      "seen": {
+        "before": 2,
+        "messages": [
+          {
+            "role": "user",
+            "text": "Wd52cebda: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          },
+          {
+            "role": "user",
+            "text": "Wd27f10ab: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          }
+        ],
+        "reloaded": false
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "apps",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2834,
+      "seen": {
+        "state": "live",
+        "heading": "Review rows (nessa-test)",
+        "frames": 1
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "handshakes",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": [
+        {
+          "socket": "ws://127.0.0.1:45165/session",
+          "client": "nessa-panel",
+          "answer": {
+            "ok": true,
+            "principal": "surface:nessa-panel"
+          }
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "handshake",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 1851,
+      "seen": [
+        {
+          "socket": "ws://127.0.0.1:45165/session",
+          "client": "nessa-panel",
+          "answer": {
+            "ok": true,
+            "principal": "surface:nessa-panel"
+          }
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "lists",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 1642,
+      "seen": {
+        "listed": true,
+        "status": null,
+        "sample": 0,
+        "asked": {
+          "load_gateway_endpoint": 1,
+          "load_surface_credential": 1
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "opens",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 3116,
+      "seen": {
+        "messages": [
+          {
+            "role": "user",
+            "text": "Wd52cebda: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          },
+          {
+            "role": "user",
+            "text": "Wd27f10ab: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          }
+        ]
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "live",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 2659,
+      "seen": {
+        "before": 4,
+        "messages": [
+          {
+            "role": "user",
+            "text": "Wd52cebda: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          },
+          {
+            "role": "user",
+            "text": "Wd27f10ab: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          },
+          {
+            "role": "user",
+            "text": "W2fbd8d8a: reply with exactly that word and nothing else, using no tools.",
+            "inside": true
+          },
+          {
+            "role": "agent",
+            "text": "Ready.",
+            "inside": true
+          }
+        ],
+        "reloaded": false
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "apps",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 3658,
+      "seen": {
+        "state": "live",
+        "heading": "Review rows (nessa-test)",
+        "frames": 1
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "handshakes",
+      "engine": "webkit",
+      "layout": "columns",
+      "seen": [
+        {
+          "socket": "ws://127.0.0.1:45165/session",
+          "client": "nessa-panel",
+          "answer": {
+            "ok": true,
+            "principal": "surface:nessa-panel"
+          }
+        }
+      ]
+    }
+  ]
+}
