@@ -7,7 +7,7 @@
 import { act, useState } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { WidgetHost } from "../../widgets/ui/plugin"
 import type { OpenPlace } from "../../widgets/model/widget-state"
 import { ClockProvider } from "../../workspace/adapters/dom/clock"
@@ -52,7 +52,18 @@ beforeEach(() => {
     },
     onchange: null,
   })) as unknown as typeof window.matchMedia
-  localStorage.removeItem("nessa.desktop.subagents")
+  const stored = new Map<string, string>()
+  // Bind the browser seam explicitly; Node may expose unavailable Web Storage.
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => stored.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      stored.set(key, value)
+    },
+    removeItem: (key: string) => {
+      stored.delete(key)
+    },
+  } satisfies Pick<Storage, "getItem" | "setItem" | "removeItem">)
+  window.localStorage.removeItem("nessa.desktop.subagents")
   host = document.createElement("div")
   document.body.append(host)
   root = createRoot(host)
@@ -63,6 +74,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
   clearSubagentChoices()
+  vi.unstubAllGlobals()
 })
 
 function child(id: string, activity: Subagent["activity"] = "working"): Subagent {
@@ -306,7 +318,7 @@ describe("the subagents plugin's answer", () => {
     )
     expect(host.textContent).toBe("missing")
 
-    localStorage.setItem("nessa.desktop.subagents", "off")
+    window.localStorage.setItem("nessa.desktop.subagents", "off")
     await act(async () =>
       root.render(
         <Provider store={store}>
@@ -317,6 +329,6 @@ describe("the subagents plugin's answer", () => {
       ),
     )
     expect(host.textContent).toBe("off")
-    localStorage.removeItem("nessa.desktop.subagents")
+    window.localStorage.removeItem("nessa.desktop.subagents")
   })
 })
