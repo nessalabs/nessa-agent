@@ -64,6 +64,13 @@ export interface Tree {
 
 export type LoadStatus = "loading" | "ready" | "failed"
 
+/**
+ * Whether the workspace lists a conversation: unread until the index is
+ * read (`status === "ready"`; a failed index stays unread), then listed or
+ * absent. The subagents panel's answer reads this (`selectSessionListing`).
+ */
+export type SessionListing = "unread" | "listed" | "absent"
+
 /** A read of the index on its way, and the sessions the stream brought since it was asked. */
 export interface IndexRead {
   readonly read: string

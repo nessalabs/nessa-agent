@@ -67,6 +67,30 @@ function seed([prefs, mac, surface]) {
 }
 
 /**
+ * The page has its fonts and its opening motion has finished. Infinite
+ * animations (the ambient grain, a spinner that does not stop) do not hold
+ * this open. Passed to `page.waitForFunction`, so it cannot close over the
+ * module.
+ */
+export function documentSettled() {
+  return (
+    document.fonts.status === "loaded" &&
+    !document
+      .getAnimations()
+      .some(
+        (animation) =>
+          (animation.playState === "running" || animation.playState === "pending") &&
+          animation.effect?.getTiming?.().iterations !== Infinity,
+      )
+  )
+}
+
+/** Waits until `documentSettled` holds. `timeout` is the same bound `openPage` uses. */
+export async function waitUntilSettled(page, timeout = 30_000) {
+  await page.waitForFunction(documentSettled, null, { timeout, polling: "raf" })
+}
+
+/**
  * Opens the desktop page in a fresh context.
  *
  * @param {import("playwright").Browser} browser
@@ -77,6 +101,9 @@ function seed([prefs, mac, surface]) {
  * @param {"reduce"|"no-preference"} [o.reducedMotion]
  * @param {Record<string,string>} [o.prefs] extra localStorage entries
  * @param {Array<Function|[Function, unknown]>} [o.initScripts] extra init scripts
+ * @param {(page: import("playwright").Page, context: import("playwright").BrowserContext) => Promise<void>} [o.preparePage]
+ *        Runs after the page exists and before navigation, so a CDP session
+ *        can disable the cache or enable performance metrics for that load.
  */
 export async function openPage(browser, o) {
   const context = await browser.newContext({
@@ -104,6 +131,7 @@ export async function openPage(browser, o) {
     // answers or the clock it holds.
     await o.beforeLoad?.(context)
     page = await context.newPage()
+    if (o.preparePage) await o.preparePage(page, context)
   } catch (error) {
     // The setup's error is the one reported: a close that fails too is
     // swallowed, so it cannot take its place.
@@ -176,19 +204,7 @@ export async function openPage(browser, o) {
   // Ready once its fonts are in and its opening motion has run: a condition,
   // not a guess at how long that takes.
   try {
-    await page.waitForFunction(
-      () =>
-        document.fonts.status === "loaded" &&
-        !document
-          .getAnimations()
-          .some(
-            (a) =>
-              (a.playState === "running" || a.playState === "pending") &&
-              a.effect?.getTiming?.().iterations !== Infinity,
-          ),
-      null,
-      { timeout: o.readyTimeout ?? 30_000, polling: "raf" },
-    )
+    await waitUntilSettled(page, o.readyTimeout ?? 30_000)
   } catch (error) {
     await abandon(
       `the desktop page never settled at ${o.url}: ${error.message.split("\n")[0]}`,

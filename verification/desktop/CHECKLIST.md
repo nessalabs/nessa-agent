@@ -29,6 +29,38 @@ Opt-in. Not part of `run-all`. The contract is
   `lib/perf.mjs` at 4× after calibration. A frame over 50 ms is a finding,
   not a failure of this check. WebKit runs the journeys without that throttle.
 
+## Alpha startup and stress
+
+Opt-in. Not part of `run-all`. It does not change the frame budget and it
+does not replace `workspace-load.mjs`.
+
+- [ ] **Cold and warm startup are measured on the sample workspace**, in
+  Chromium and WebKit, production build. Cold is a fresh context (Chromium
+  disables the HTTP cache). Warm is the second reload after a cache fill.
+  The row keeps ready time, Navigation Timing, first contentful paint, heap
+  when the browser exposes it, and the longest rAF gap. A missing navigation
+  entry or a startup screen still up fails the row. There is no startup
+  budget.
+  _Check:_ `alpha-perf.mjs` (`startup`).
+- [ ] **The layout's pane cap is filled, and one long seeded transcript
+  scrolls.** The cap is `paneLimits.maxPanes`. One further split does not
+  add a pane. The long transcript is 24 sessions, one transcript of 24
+  messages, 4,000 ASCII characters in the plain part. Chromium records the
+  refused split and the scroll at 4× CPU throttle. A frame over 50 ms is
+  stored and does not fail the row. A pane past the cap, a short fill, a
+  split chord that does not arrive, or a transcript that does not overflow,
+  fails the row. A missing frame sample does not replace that result.
+  _Check:_ `alpha-perf.mjs` (`panes`, `transcript`).
+- [ ] **A scripted gateway's empty window is timed only with `--with-gateway`,
+  in Chromium.** No conversation is created, and the session list stays
+  empty. Cold and warm each ask the host for the gateway endpoint. This is
+  not a catalogue walk. `#607` is on main. This script does not time
+  `conversation.observe`. A browser timing of that walk is a follow-up.
+  _Check:_ `alpha-perf.mjs --with-gateway` (`gateway`).
+- [ ] **Overview, drag, and split budgets stay in `perf-budget.mjs`.** A number
+  there that misses 50 ms and matches `#588` / `#606` is that known result.
+  The 10,000-session dry run stays in `workspace-load.mjs`.
+
 ## Performance budget
 
 _ADR 238 › Context_: "Calm means no dropped frames" — no frame over 50 ms, in a
@@ -385,6 +417,24 @@ scripts drive the sample plugin the sample workspace registers
   it, the body with room. _Check:_ `widgets.mjs --only narrow-short` (1000 ×
   560, three panes).
 
+## Subagents
+
+The read-only sample panel (ADR 329, #330, #331): a conversation's widget
+opens a list of the agents it put to work, and one child's conversation.
+The sample fills the retry-budget session only. No composer, no header
+accessory.
+
+- [ ] **The card opens a pane beside the conversation**, the list in activity
+  order with a closed child called closed, and a child opens on its
+  transcript. Focus stays in the panel. _Check:_ `subagents.mjs --only panel`.
+- [ ] **The transcript follows a new line while it is at the end, and stays
+  put when scrolled up.** _Check:_ `subagents.mjs --only panel`.
+- [ ] **Escape steps back to the list.** In a pane a second Escape changes
+  nothing more; in the window it returns to the panes. _Check:_
+  `subagents.mjs --only panel`.
+- [ ] **The list fits a narrow pane in a short window.** _Check:_
+  `subagents.mjs --only narrow` (1000 × 560).
+
 ## MCP Apps
 
 _ADR 344_ ([`docs/adr/todo/344-mcp-ui.md`](../../docs/adr/todo/344-mcp-ui.md)),
@@ -635,8 +685,9 @@ phone's scanner is not this screen.
   only". _Check:_ unit test `settings-view.test.tsx` (per layout).
 - [ ] **Advanced › Experimental is the home of previews**: Advanced sits just
   before About with its flask in both icon families; its one tab,
-  Experimental, shows "Nothing to try right now." and no control while no
-  preview is on offer; General has no Experimental tab; search finds it as
+  Experimental, offers the subagents preview as a switch (on unless turned
+  off) and shows "Nothing to try right now." only while no preview is on
+  offer; General has no Experimental tab; search finds the tab as
   "advanced", "experimental", "labs" or "preview". _Check:_ `smoke.mjs`
   (`settings`); unit tests `settings-view.test.tsx`,
   `settings-catalogue.test.ts`, `icon-provider.test.tsx`; the flask by eye in

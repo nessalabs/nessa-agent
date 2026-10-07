@@ -306,8 +306,9 @@ its top in both workspace layouts, and ⌘0 open it, with no preference to
 turn on (`layouts.test.tsx`). It began as a preview behind a setting; that
 setting is gone, and with it the sidebar's separate "Needs you" and "Running"
 views, which the overview holds — the session list shows one channel's
-sessions (`SessionView`). Previews to come are offered under Settings ›
-Advanced › Experimental, which says so while it has none. Its groups are
+sessions (`SessionView`). Previews are offered under Settings ›
+Advanced › Experimental. The subagents preview is on offer there; the page
+says it has nothing to try only while none is. The overview's groups are
 shown only while they hold something, "Needs you" too — nothing waiting
 leaves no empty section — and its one quiet line ("Nothing needs you") shows
 only when it lists nothing at all (`overview.test.tsx`). **Each count in its
@@ -662,8 +663,9 @@ index derived from it, in `src/desktop/settings/model/`, rendered generically
 by `src/desktop/settings/ui/` (`src/desktop/settings/index.ts` is its map).
 A category's page shows its tabs when it has several, or one named other than
 the category (`showsTabs`): Advanced, just before About, holds one tab,
-Experimental, the home of previews, which shows a calm empty state and no
-control while none is on offer; search finds it as "advanced",
+Experimental, the home of previews. The subagents preview is offered there
+as a switch; the page shows a calm empty state and no control only while
+none is on offer. Search finds the tab as "advanced",
 "experimental", "labs" or "preview" (`settings-catalogue.test.ts`,
 `settings-view.test.tsx`).
 Preferences stay host-side adapters that notify other readers in the same
