@@ -24,8 +24,11 @@ Checks, per engine and layout:
              text plus its shortcut in parentheses, and none of the replaced
              classes (workspace-icon-button, desktop-titlebar-button,
              desktop-footer-button, desktop-header-tool) is on the page
-  hover      the pointer over one fills it with the window's stronger hover
-  focus      keyboard focus on one draws an outline`,
+  hover      the pointer over each enabled one fills it with the window's stronger hover
+  focus      keyboard focus on each enabled one draws an outline
+
+Only what is mounted on load is covered: the titlebar, pane actions, session\n  list and the sidebar's footer. The header picture's zoom tools mount while a
+  picture is being adjusted, and are covered by responsive.mjs --only header-picture.`,
   },
   async ({ options, rep, url }) => {
     await withEngines(options, rep, async (engine, browser) => {
@@ -43,6 +46,14 @@ Checks, per engine and layout:
                 if (box.width === 0 && box.height === 0) continue
                 const name = button.getAttribute("aria-label") ?? ""
                 const want = expected[button.dataset.size]
+                if (want === undefined) {
+                  failures.push(`${name}: unknown size ${button.dataset.size}`)
+                  continue
+                }
+                if (!["rounded", "pill"].includes(button.dataset.shape)) {
+                  failures.push(`${name}: unknown shape ${button.dataset.shape}`)
+                  continue
+                }
                 if (Math.abs(box.width - want) > 0.5 || Math.abs(box.height - want) > 0.5)
                   failures.push(
                     `${name}: ${box.width}x${box.height}, not ${want} (${button.dataset.size})`,
@@ -77,22 +88,36 @@ Checks, per engine and layout:
           const { page, close } = await openPage(browser, { url, layout })
           try {
             await need(page, ".desktop-icon-button:visible", "an icon button")
-            const button = page.locator(".desktop-icon-button:visible").first()
-            await button.hover()
-            await page.waitForTimeout(300)
-            const result = await button.evaluate((element) => {
-              const probe = document.createElement("div")
-              probe.style.background = "var(--desktop-hover-strong)"
-              element.parentElement.append(probe)
-              const want = getComputedStyle(probe).backgroundColor
-              probe.remove()
-              return { got: getComputedStyle(element).backgroundColor, want }
-            })
-            const failures =
-              result.got === result.want
-                ? []
-                : [`hover fills ${result.got}, not ${result.want}`]
-            return { failures, measured: result }
+            // A resting button (Back/Forward with no history) answers nothing, on purpose.
+            const buttons = page.locator(
+              ".desktop-icon-button:visible:not(:disabled):not([aria-disabled]):not([aria-hidden=true])",
+            )
+            const count = await buttons.count()
+            const failures = []
+            const seen = []
+            for (let index = 0; index < count; index++) {
+              const button = buttons.nth(index)
+              await button.hover()
+              await page.waitForTimeout(250)
+              const result = await button.evaluate((element) => {
+                const probe = document.createElement("div")
+                probe.style.background = "var(--desktop-hover-strong)"
+                element.parentElement.append(probe)
+                const want = getComputedStyle(probe).backgroundColor
+                probe.remove()
+                return {
+                  label: element.getAttribute("aria-label"),
+                  got: getComputedStyle(element).backgroundColor,
+                  want,
+                }
+              })
+              seen.push(result.label)
+              if (result.got !== result.want)
+                failures.push(
+                  `${result.label}: hover fills ${result.got}, not ${result.want}`,
+                )
+            }
+            return { failures, measured: { buttons: seen } }
           } finally {
             await close().catch(() => {})
           }
@@ -102,28 +127,35 @@ Checks, per engine and layout:
           const { page, close } = await openPage(browser, { url, layout })
           try {
             await need(page, ".desktop-icon-button:visible", "an icon button")
-            // A key press first, so the focus is the keyboard's (`:focus-visible`);
-            // WebKit's Tab skips a button with no tabindex, so it is focused by name.
-            await page.keyboard.press("Shift")
-            await page.locator(".desktop-icon-button:visible").first().focus()
-            const outline = await page.evaluate(() => {
-              const element = document.activeElement
-              if (!element?.matches(".desktop-icon-button")) return null
-              const style = getComputedStyle(element)
-              return {
-                label: element.getAttribute("aria-label"),
-                style: style.outlineStyle,
-                width: style.outlineWidth,
-                focusVisible: element.matches(":focus-visible"),
+            const buttons = page.locator(
+              ".desktop-icon-button:visible:not(:disabled):not([aria-hidden=true])",
+            )
+            const count = await buttons.count()
+            const failures = []
+            const seen = []
+            for (let index = 0; index < count; index++) {
+              // A key press first, so the focus is the keyboard's (`:focus-visible`);
+              // WebKit's Tab skips a button with no tabindex, so it is focused by name.
+              await page.keyboard.press("Shift")
+              await buttons.nth(index).focus()
+              const outline = await page.evaluate(() => {
+                const element = document.activeElement
+                if (!element?.matches(".desktop-icon-button")) return null
+                const style = getComputedStyle(element)
+                return {
+                  label: element.getAttribute("aria-label"),
+                  style: style.outlineStyle,
+                  width: style.outlineWidth,
+                }
+              })
+              if (outline === null) failures.push(`button ${index} could not be focused`)
+              else {
+                seen.push(outline.label)
+                if (outline.style === "none" || parseFloat(outline.width) === 0)
+                  failures.push(`${outline.label}: focused, draws no outline`)
               }
-            })
-            const failures =
-              outline === null
-                ? ["an icon button could not be focused"]
-                : outline.style === "none" || parseFloat(outline.width) === 0
-                  ? [`focused icon button draws no outline (${JSON.stringify(outline)})`]
-                  : []
-            return { failures, measured: outline }
+            }
+            return { failures, measured: { buttons: seen } }
           } finally {
             await close().catch(() => {})
           }

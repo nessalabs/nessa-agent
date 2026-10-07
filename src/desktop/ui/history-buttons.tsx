@@ -1,3 +1,5 @@
+import { isMac } from "../adapters/platform"
+import { chordLabel, type Chord } from "../model/keyboard"
 import { IconButton, type IconButtonSize } from "./icon-button"
 
 /**
@@ -18,9 +20,9 @@ export interface History {
 
 /** What the two say, and the chords reserved for them. */
 export const historyActions = {
-  back: { label: "Go Back", shortcut: "⌘[" },
-  forward: { label: "Go Forward", shortcut: "⌘]" },
-} as const
+  back: { label: "Go Back", chord: { code: "BracketLeft", command: true } },
+  forward: { label: "Go Forward", chord: { code: "BracketRight", command: true } },
+} as const satisfies Record<string, { label: string; chord: Chord }>
 
 export function HistoryButtons({
   size,
@@ -34,13 +36,13 @@ export function HistoryButtons({
     enabled: boolean,
     go: (() => void) | undefined,
   ) => {
-    const { label, shortcut } = historyActions[direction]
+    const { label, chord } = historyActions[direction]
     const usable = enabled && go !== undefined
     return (
       <IconButton
         icon={direction}
         label={label}
-        shortcut={shortcut}
+        shortcut={chordLabel(chord, isMac)}
         size={size}
         // Resting, not disabled: its tooltip still says what it will do.
         aria-disabled={!usable || undefined}
