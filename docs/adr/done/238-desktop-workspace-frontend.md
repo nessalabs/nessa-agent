@@ -309,6 +309,12 @@ missed (the button let go outside the window) is taken as one at the next
 enter or leave with no button held, or when the window loses focus, so a
 lost release never leaves it frozen.
 
+The modern workspace sidebar keeps its tint, rim and resting shadow without a
+live backdrop blur. The ambient light is already softened; resampling the
+changing pane region through the sidebar adds paint work to pane and overview
+transitions. Its edge peek uses an opaque tinted fill so the underlying
+transcript stays out of the revealed list.
+
 **What fills the content region** is workspace state (`content`: the panes,
 or the Agents overview), so an agent can move it too. The overview is part of
 the workspace (`ui/overview/`, `model/overview/`): its selection and filter

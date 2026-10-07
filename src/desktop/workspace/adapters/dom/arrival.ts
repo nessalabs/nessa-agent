@@ -53,10 +53,14 @@ export function useArrival(
     const glide = motionToken(composer, "--desktop-glide") ?? "linear"
     const ease = motionToken(composer, "--desktop-ease") ?? "linear"
     const to = composer.getBoundingClientRect()
+    const landed = bubble.getBoundingClientRect()
+    const travel = durationToken(composer, "--desktop-arrival")
+    const headingDuration = durationToken(title, "--desktop-slow")
+    const headingDelay = durationToken(title, "--desktop-stagger")
+    // Read the landing boxes and timing before any animation writes styles.
     const scale = from.composer.width / to.width
     const dx = from.composer.left + from.composer.width / 2 - (to.left + to.width / 2)
     const dy = from.composer.top + from.composer.height / 2 - (to.top + to.height / 2)
-    const travel = durationToken(composer, "--desktop-arrival")
     const moving = composer.animate(
       [
         { transform: `translate(${dx}px, ${dy}px) scale(${scale})` },
@@ -72,7 +76,6 @@ export function useArrival(
         duration: travel,
         easing: "ease-out",
       })
-    const landed = bubble.getBoundingClientRect()
     const rising = bubble.animate(
       [
         {
@@ -90,8 +93,8 @@ export function useArrival(
         { opacity: 1, transform: "none" },
       ],
       {
-        duration: durationToken(title, "--desktop-slow"),
-        delay: durationToken(title, "--desktop-stagger"),
+        duration: headingDuration,
+        delay: headingDelay,
         easing: ease,
         fill: "backwards",
       },

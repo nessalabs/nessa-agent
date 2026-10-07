@@ -349,8 +349,7 @@ html:not(.dark) [data-surface] {
 }
 
 /* The composer's blur would be sampled again on every frame the copy moves.
-   The sidebar keeps its blur and its resting shadow: turning the blur off
-   and back on, or swapping the shadow for a hairline, was a long frame
+   The sidebar's tint and resting shadow stay unchanged through the gesture
    (`styles.test.ts`). */
 :root[data-drag-pressing] .desktop-composer {
   backdrop-filter: none;

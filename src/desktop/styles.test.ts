@@ -271,13 +271,13 @@ it("holds the ambient blur still while panes travel", () => {
   expect(body).toMatch(/animation-play-state:\s*paused/)
 })
 
-it("drops the composer's blur while a drag is carried, and leaves the sidebar's blur up", () => {
+it("drops the composer's blur while a drag is carried and keeps the sidebar treatment stable", () => {
   const selector = ":root[data-drag-pressing] .desktop-composer {"
   expect(styles).toContain(selector)
   const body = styles.slice(styles.indexOf(selector)).split("}")[0]
   expect(body).toMatch(/backdrop-filter:\s*none/)
   expect(body).toMatch(/background:\s*var\(--background\)/)
-  // Turning the sidebar's blur off and back on was a long frame. It stays.
+  // The sidebar's treatment does not change on each gesture.
   expect(styles).not.toContain(":root[data-drag-pressing]\n  :is(.workspace-sidebar")
   expect(styles).not.toContain(
     ".workspace[data-overview-glass]\n  :is(.workspace-sidebar",
@@ -286,8 +286,7 @@ it("drops the composer's blur while a drag is carried, and leaves the sidebar's 
     .slice(styles.indexOf(":root[data-drag-pressing] .desktop-grain {"))
     .split("}")[0]
   expect(grain).toMatch(/visibility:\s*hidden/)
-  // The resting shadow stays. A hairline in its place rastered a new blur
-  // on the release.
+  // The resting shadow stays rather than changing on release.
   expect(styles).not.toContain(":root[data-drag-pressing] .workspace-sidebar {")
   const rows = readFileSync(
     new URL("./workspace/ui/source-list/source-list.css", import.meta.url),
