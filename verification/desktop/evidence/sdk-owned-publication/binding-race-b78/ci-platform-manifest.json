@@ -1,7 +1,7 @@
 {
   "head": "b78bf641825d77c8be2e88f9ac76b1f14ed2a8dc",
   "run": 37653154842,
-  "required_aggregator": "pending",
+  "required_aggregator": "success",
   "platforms": [
     {
       "platform": "linux",
@@ -23,5 +23,6 @@
   "synthetic_merge_sha": "3801f3cf1e5e251f4cca9c06ba4c411f8e267eba",
   "integration_base": "3d81cbaf1a98b2d27ec6a7bf24277d52ceab5646",
   "checkout_proof": "Linux raw checkout log: HEAD is now at3801f3c Merge b78bf641 into3d81cbaf",
-  "head_note": "Run targets exact b78 PR head; actions/checkout tests the synthetic integration merge, not a head-only checkout. Base gained unrelated #639 verification harness after original f168 branch base."
+  "head_note": "Run targets exact b78 PR head; actions/checkout tests the synthetic integration merge, not a head-only checkout. Base gained unrelated #639 verification harness after original f168 branch base.",
+  "windows": "success; full log retained in ci-final-full.log.gz"
 }

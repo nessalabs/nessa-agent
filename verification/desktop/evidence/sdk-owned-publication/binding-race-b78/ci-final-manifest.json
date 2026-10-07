@@ -1,0 +1,12 @@
+{
+  "head": "b78bf641825d77c8be2e88f9ac76b1f14ed2a8dc",
+  "run": 37653154842,
+  "conclusion": "success",
+  "all10_jobs_pass": true,
+  "synthetic_merge_sha": "3801f3cf1e5e251f4cca9c06ba4c411f8e267eba",
+  "integration_base": "3d81cbaf1a98b2d27ec6a7bf24277d52ceab5646",
+  "raw_log_bytes": 7729055,
+  "raw_log_sha256": "3741490a5fc2eae3239c30a9d6e8ab5f5eb536d8143ac8048cc29f375bc59404",
+  "compressed_log": "ci-final-full.log.gz",
+  "compressed_sha256": "aecf0c1787aee3b7f6cb76877a89b693d10269fb62b118f7e9826d0a1f0f686b"
+}
