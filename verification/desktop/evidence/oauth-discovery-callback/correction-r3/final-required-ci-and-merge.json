@@ -1,0 +1,116 @@
+{
+  "headRefOid": "7e295565931c8f156e9069221fc079d0a63a1f73",
+  "mergeCommit": {
+    "oid": "f1682e8a763646c6c3e73dee73c1c47987e2cbae"
+  },
+  "mergedAt": "2026-10-07T12:18:06Z",
+  "statusCheckRollup": [
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-07T11:49:17Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/nessalabs/nessa-agent/actions/runs/37616663696/job/112776536257",
+      "name": "Workflow files are valid",
+      "startedAt": "2026-10-07T11:49:09Z",
+      "status": "COMPLETED",
+      "workflowName": "Local authentication platforms"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-07T11:49:18Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/nessalabs/nessa-agent/actions/runs/37616663696/job/112776535894",
+      "name": "What this change needs",
+      "startedAt": "2026-10-07T11:49:10Z",
+      "status": "COMPLETED",
+      "workflowName": "Local authentication platforms"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-07T11:51:18Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/nessalabs/nessa-agent/actions/runs/37616663696/job/112776606834",
+      "name": "gateway-contract",
+      "startedAt": "2026-10-07T11:49:56Z",
+      "status": "COMPLETED",
+      "workflowName": "Local authentication platforms"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-07T11:51:37Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/nessalabs/nessa-agent/actions/runs/37616663696/job/112776606570",
+      "name": "Desktop app compiles in release profile",
+      "startedAt": "2026-10-07T11:49:26Z",
+      "status": "COMPLETED",
+      "workflowName": "Local authentication platforms"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-07T11:54:54Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/nessalabs/nessa-agent/actions/runs/37616663696/job/112776606692",
+      "name": "frontend",
+      "startedAt": "2026-10-07T11:49:21Z",
+      "status": "COMPLETED",
+      "workflowName": "Local authentication platforms"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-07T12:13:03Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/nessalabs/nessa-agent/actions/runs/37616663696/job/112776606781",
+      "name": "local-auth (windows-latest)",
+      "startedAt": "2026-10-07T11:49:21Z",
+      "status": "COMPLETED",
+      "workflowName": "Local authentication platforms"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-07T12:06:07Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/nessalabs/nessa-agent/actions/runs/37616663696/job/112776606734",
+      "name": "local-auth (ubuntu-latest)",
+      "startedAt": "2026-10-07T11:49:21Z",
+      "status": "COMPLETED",
+      "workflowName": "Local authentication platforms"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-07T12:01:27Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/nessalabs/nessa-agent/actions/runs/37616663696/job/112776606933",
+      "name": "local-auth (macos-latest)",
+      "startedAt": "2026-10-07T11:49:26Z",
+      "status": "COMPLETED",
+      "workflowName": "Local authentication platforms"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-07T11:58:13Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/nessalabs/nessa-agent/actions/runs/37616663696/job/112776606644",
+      "name": "SDK domain coverage",
+      "startedAt": "2026-10-07T11:49:21Z",
+      "status": "COMPLETED",
+      "workflowName": "Local authentication platforms"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-07T12:13:12Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/nessalabs/nessa-agent/actions/runs/37616663696/job/112785642739",
+      "name": "Required checks passed",
+      "startedAt": "2026-10-07T12:13:07Z",
+      "status": "COMPLETED",
+      "workflowName": "Local authentication platforms"
+    },
+    {
+      "__typename": "StatusContext",
+      "context": "CodeRabbit",
+      "startedAt": "2026-10-07T11:56:01Z",
+      "state": "SUCCESS",
+      "targetUrl": ""
+    }
+  ]
+}
