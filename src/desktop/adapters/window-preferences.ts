@@ -14,7 +14,10 @@ import { storedPreference } from "./stored-preference"
  * - **running first** — the session list keeps running sessions in a group
  *   above the rest; off, they are listed with the rest, newest first;
  * - **picture in conversations** — a sliver of the header picture, or the
- *   night scene, at the top of each conversation pane (`HeaderSliver`).
+ *   night scene, at the top of each conversation pane (`HeaderSliver`);
+ * - **subagents** — the panel of agents a conversation put to work, offered
+ *   under Settings › Advanced › Experimental. Off, the widget says so; the
+ *   source is unchanged.
  */
 const flag = (key: string, event: string) =>
   storedPreference({
@@ -39,6 +42,8 @@ export const usePictureInConversationsPreference = flag(
   "picture-in-conversations",
   "desktop-picture-in-conversations",
 ).usePreference
+
+export const useSubagentsPreview = flag("subagents", "desktop-subagents").usePreference
 
 /** Keeps the root's `data-drift` to the drifting-light preference. Mounted once, by the window. */
 export function useDriftInEffect(): void {

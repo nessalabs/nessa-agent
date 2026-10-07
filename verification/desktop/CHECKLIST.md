@@ -385,6 +385,24 @@ scripts drive the sample plugin the sample workspace registers
   it, the body with room. _Check:_ `widgets.mjs --only narrow-short` (1000 ×
   560, three panes).
 
+## Subagents
+
+The read-only sample panel (ADR 329, #330, #331): a conversation's widget
+opens a list of the agents it put to work, and one child's conversation.
+The sample fills the retry-budget session only. No composer, no header
+accessory.
+
+- [ ] **The card opens a pane beside the conversation**, the list in activity
+  order with a closed child called closed, and a child opens on its
+  transcript. Focus stays in the panel. _Check:_ `subagents.mjs --only panel`.
+- [ ] **The transcript follows a new line while it is at the end, and stays
+  put when scrolled up.** _Check:_ `subagents.mjs --only panel`.
+- [ ] **Escape steps back to the list.** In a pane a second Escape changes
+  nothing more; in the window it returns to the panes. _Check:_
+  `subagents.mjs --only panel`.
+- [ ] **The list fits a narrow pane in a short window.** _Check:_
+  `subagents.mjs --only narrow` (1000 × 560).
+
 ## MCP Apps
 
 _ADR 344_ ([`docs/adr/todo/344-mcp-ui.md`](../../docs/adr/todo/344-mcp-ui.md)),
@@ -634,8 +652,9 @@ phone's scanner is not this screen.
   only". _Check:_ unit test `settings-view.test.tsx` (per layout).
 - [ ] **Advanced › Experimental is the home of previews**: Advanced sits just
   before About with its flask in both icon families; its one tab,
-  Experimental, shows "Nothing to try right now." and no control while no
-  preview is on offer; General has no Experimental tab; search finds it as
+  Experimental, offers the subagents preview as a switch (on unless turned
+  off) and shows "Nothing to try right now." only while no preview is on
+  offer; General has no Experimental tab; search finds the tab as
   "advanced", "experimental", "labs" or "preview". _Check:_ `smoke.mjs`
   (`settings`); unit tests `settings-view.test.tsx`,
   `settings-catalogue.test.ts`, `icon-provider.test.tsx`; the flask by eye in

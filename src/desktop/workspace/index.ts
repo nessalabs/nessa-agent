@@ -76,13 +76,17 @@ export {
   type GatewayClient,
   type GatewaySource,
 } from "./adapters/gateway/gateway-source"
-export { sampleAppSession, sampleWidgetSession } from "./adapters/in-memory/sample-labs"
+export {
+  retryBudgetSession,
+  sampleAppSession,
+  sampleWidgetSession,
+} from "./adapters/in-memory/sample-labs"
 export { workspaceEffects } from "./adapters/store/effects"
 export { initialWorkspaceFrom, workspaceReducer } from "./adapters/store/slice"
 export { rememberedFilter } from "./adapters/storage/remembered-filter"
 export * from "./adapters/store/commands"
 export { useWorkspaceDispatch, useWorkspaceSelector } from "./adapters/store/hooks"
-export { selectSessionListChosen } from "./adapters/store/selectors"
+export { selectSessionListChosen, selectSessionListing } from "./adapters/store/selectors"
 export { WorkspaceSourceError } from "./application/ports"
 export type {
   OutgoingMessage,
@@ -92,3 +96,5 @@ export type {
   WorkspaceUpdate,
 } from "./application/ports"
 export type { WorkspaceFailureReason } from "./model/failure"
+export { elapsed, sessionTime } from "./model/time-labels"
+export { ReadOnlyTranscript } from "./ui/transcript/read-only-transcript"

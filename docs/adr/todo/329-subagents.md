@@ -783,6 +783,13 @@ have separate lifetimes.
 
 ## Desktop implementation
 
+The read-only sample panel is the desktop slice that can be seen: the model,
+the joined source, the list, and one child's conversation (`#330`, `#331`).
+It does not spawn, close, or message a child, and it does not draw a
+parent-header accessory (`#332`). A window whose workspace is not the sample
+keeps the source unread and does not register the plugin, so the sample does
+not stand in for a source that has not been read. This decision stays proposed.
+
 `src/desktop/subagents/` owns model, port, panel and session accessory. It imports
 workspace transcript exports and the widget contract. Workspace imports no
 subagents; experiments imports this vertical's barrel. The existing
