@@ -362,8 +362,12 @@ overview is drawn in a layer over the session list and the panes, which stay
 laid out beneath it, unseen and out of reach: the room a pane command
 measures is the panes' own whether the overview is open or not, and the
 layer's width — whether the peek fits beside the list — is known before it
-opens, so its first frame is laid out once. Opened, the keyboard lands on the
-current row; left — by Escape, or by any command that brings the panes back,
+opens, so its first frame is laid out once. The keyboard lands on the
+current row only after that row is painted. The overview makes its content
+group inert; a folded list keeps its own inert state independently. Sidebar
+current-page metadata follows this workspace's completed list paint, with
+its subscription and pending frames owned by that workspace and root.
+Left — by Escape, or by any command that brings the panes back,
 one that changed nothing else included — it goes back to the focused pane's
 composer (its body, for a pane showing a widget: ADR 326); an answer given in it — by key or click — moves it to the next
 request. ⌘R puts the caret in the reply pill of the session the keyboard is

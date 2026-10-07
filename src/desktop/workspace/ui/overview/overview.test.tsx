@@ -42,6 +42,7 @@ import type { ApprovalAsk, ApprovalOption, ApprovalOrigin } from "../../model/tr
 import type { WorkspaceIndex } from "../../model/workspace-index"
 import { failureCopy, readFailureCopy } from "../failure-copy"
 import { OverviewRow } from "../source-list/overview-row"
+import { OverviewQuietProvider } from "../source-list/overview-quiet"
 import { answerPause } from "../../model/overview/walk"
 import { peekParts } from "../../model/overview/peek"
 import { OverviewLayer } from "./overview-layer"
@@ -183,27 +184,29 @@ async function mount({
   const scope = { current: host }
   const tree = (
     <Provider store={store}>
-      <ClockProvider now={() => 1000}>
-        <nav>
-          <OverviewRow />
-        </nav>
-        {/* The focused pane, as the shell draws it: its composer is where the caret goes back. */}
-        <div className="workspace-content">
-          {listClosed !== undefined ? (
-            <section
-              className="workspace-list"
-              inert={listClosed}
-              aria-hidden={listClosed}
-            />
-          ) : null}
-          <main className="workspace-chat" {...{ [focusedPaneAttribute]: "" }}>
-            <div className="desktop-composer">
-              <textarea aria-label="Message" />
-            </div>
-          </main>
-        </div>
-        {wrap(<OverviewLayer root={scope} />)}
-      </ClockProvider>
+      <OverviewQuietProvider store={store} root={scope}>
+        <ClockProvider now={() => 1000}>
+          <nav>
+            <OverviewRow />
+          </nav>
+          {/* The focused pane, as the shell draws it: its composer is where the caret goes back. */}
+          <div className="workspace-content">
+            {listClosed !== undefined ? (
+              <section
+                className="workspace-list"
+                inert={listClosed}
+                aria-hidden={listClosed}
+              />
+            ) : null}
+            <main className="workspace-chat" {...{ [focusedPaneAttribute]: "" }}>
+              <div className="desktop-composer">
+                <textarea aria-label="Message" />
+              </div>
+            </main>
+          </div>
+          {wrap(<OverviewLayer root={scope} />)}
+        </ClockProvider>
+      </OverviewQuietProvider>
     </Provider>
   )
   await act(async () => root.render(strict ? <StrictMode>{tree}</StrictMode> : tree))

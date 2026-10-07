@@ -261,6 +261,11 @@ writing the full defaults on first launch is buying.
   `ui/linked-devices-tab.tsx`, which composes the UI kit's settings rows,
   switch, pairing code, fingerprint and orbs. See
   [adr/done/238-desktop-workspace-frontend.md](adr/done/238-desktop-workspace-frontend.md).
+  `ui/source-list/overview-quiet.ts` owns delayed sidebar metadata for one
+  workspace store and DOM root; `WorkspaceShell` supplies that pair through
+  `OverviewQuietProvider`. The overview owns interaction suppression on
+  `.workspace-content`, leaving each region’s independent state intact.
+
 - Widgets are the desktop window's vertical for what a plugin draws
   ([ADR 326](adr/todo/326-widgets.md)): `src/desktop/widgets/` (its map is
   `index.ts`) owns the reference (`model/widget-ref.ts`), the states and

@@ -87,6 +87,7 @@ import { PaneGrid } from "../panes/pane-grid"
 import { QuickSwitcher, type SwitcherMode } from "../quick-switcher/quick-switcher"
 import { SessionList } from "../session-list/session-list"
 import { SourceList } from "../source-list/source-list"
+import { OverviewQuietProvider } from "../source-list/overview-quiet"
 import {
   ListedChannelProvider,
   SidebarPeekProvider,
@@ -362,97 +363,99 @@ export function WorkspaceShell({
     [region.sidebar.variant, compose, composeShortcut],
   )
   return (
-    <WorkspaceFrameProvider value={frame}>
-      <EscapeScopesProvider value={escapeScopes}>
-        <ListedChannelProvider value={listOpen ? view.channelId : null}>
-          <SidebarPeekProvider value={peek}>
-            <FlipScope shape={shape} root={root}>
-              <div
-                ref={root}
-                className="workspace"
-                data-workspace
-                data-host={hostKind}
-                data-surface={browserSurface ? "browser" : "window"}
-                data-desktop-theme={theme}
-                data-peek={(peek.shown && !peek.handedOff) || undefined}
-                data-sidebar={sidebarOpen ? "open" : "closed"}
-                data-list={
-                  region.sessionList ? (listOpen ? "open" : "closed") : undefined
-                }
-                data-panes-alone={(!sidebarOpen && !listOpen) || undefined}
-                style={
-                  {
-                    "--workspace-sidebar-width": `${sidebarWidth}px`,
-                    ...(region.sessionList
-                      ? { "--workspace-list-width": `${listWidth}px` }
-                      : {}),
-                  } as CSSProperties
-                }
-              >
-                <div className="desktop-ambient" aria-hidden="true">
-                  <span className="desktop-grain" />
-                </div>
-                {sidebarOpen ? null : (
-                  <EdgePeekStrip
-                    peek={peek}
-                    onDragOut={() => dispatch(toggleSidebar({ open: true }))}
-                  />
-                )}
-                <WorkspaceTitlebar>
-                  <IconButton
-                    icon="sidebar"
-                    label={`${sidebarOpen ? "Hide" : "Show"} Sidebar`}
-                    shortcut={frame.shortcut("toggleSidebar")}
-                    aria-expanded={sidebarOpen}
-                    aria-controls="workspace-sidebar"
-                    onClick={() => dispatch(toggleSidebar())}
-                  />
-                  <HistoryButtons className="workspace-icon-button" />
-                  {region.sessionList ? (
-                    <IconButton
-                      icon="sessionList"
-                      label={`${listOpen ? "Hide" : "Show"} Session List`}
-                      shortcut={frame.shortcut("toggleSessionList")}
-                      aria-expanded={listOpen}
-                      onClick={() => dispatch(toggleSessionList())}
-                    />
-                  ) : (
-                    <IconButton
-                      className="workspace-titlebar-compose"
-                      icon="newSession"
-                      label="New Session"
-                      shortcut={composeShortcut}
-                      tabIndex={sidebarOpen ? -1 : 0}
-                      aria-hidden={sidebarOpen || undefined}
-                      onClick={compose}
+    <OverviewQuietProvider store={store} root={root}>
+      <WorkspaceFrameProvider value={frame}>
+        <EscapeScopesProvider value={escapeScopes}>
+          <ListedChannelProvider value={listOpen ? view.channelId : null}>
+            <SidebarPeekProvider value={peek}>
+              <FlipScope shape={shape} root={root}>
+                <div
+                  ref={root}
+                  className="workspace"
+                  data-workspace
+                  data-host={hostKind}
+                  data-surface={browserSurface ? "browser" : "window"}
+                  data-desktop-theme={theme}
+                  data-peek={(peek.shown && !peek.handedOff) || undefined}
+                  data-sidebar={sidebarOpen ? "open" : "closed"}
+                  data-list={
+                    region.sessionList ? (listOpen ? "open" : "closed") : undefined
+                  }
+                  data-panes-alone={(!sidebarOpen && !listOpen) || undefined}
+                  style={
+                    {
+                      "--workspace-sidebar-width": `${sidebarWidth}px`,
+                      ...(region.sessionList
+                        ? { "--workspace-list-width": `${listWidth}px` }
+                        : {}),
+                    } as CSSProperties
+                  }
+                >
+                  <div className="desktop-ambient" aria-hidden="true">
+                    <span className="desktop-grain" />
+                  </div>
+                  {sidebarOpen ? null : (
+                    <EdgePeekStrip
+                      peek={peek}
+                      onDragOut={() => dispatch(toggleSidebar({ open: true }))}
                     />
                   )}
-                </WorkspaceTitlebar>
-                <ContentMark root={root} />
-                <Columns
-                  region={region}
-                  root={root}
-                  sidebarOpen={sidebarOpen}
-                  listOpen={listOpen}
-                  sidebarWidth={sidebarWidth}
-                  listWidth={listWidth}
-                  top={top}
-                  splitPanes={splitPanes}
-                />
-                <OverviewLayer root={root} />
-                {switcher ? (
-                  <SwitcherHost
-                    mode={switcher}
-                    onClose={() => setSwitcher(null)}
-                    onPick={pick}
+                  <WorkspaceTitlebar>
+                    <IconButton
+                      icon="sidebar"
+                      label={`${sidebarOpen ? "Hide" : "Show"} Sidebar`}
+                      shortcut={frame.shortcut("toggleSidebar")}
+                      aria-expanded={sidebarOpen}
+                      aria-controls="workspace-sidebar"
+                      onClick={() => dispatch(toggleSidebar())}
+                    />
+                    <HistoryButtons className="workspace-icon-button" />
+                    {region.sessionList ? (
+                      <IconButton
+                        icon="sessionList"
+                        label={`${listOpen ? "Hide" : "Show"} Session List`}
+                        shortcut={frame.shortcut("toggleSessionList")}
+                        aria-expanded={listOpen}
+                        onClick={() => dispatch(toggleSessionList())}
+                      />
+                    ) : (
+                      <IconButton
+                        className="workspace-titlebar-compose"
+                        icon="newSession"
+                        label="New Session"
+                        shortcut={composeShortcut}
+                        tabIndex={sidebarOpen ? -1 : 0}
+                        aria-hidden={sidebarOpen || undefined}
+                        onClick={compose}
+                      />
+                    )}
+                  </WorkspaceTitlebar>
+                  <ContentMark root={root} />
+                  <Columns
+                    region={region}
+                    root={root}
+                    sidebarOpen={sidebarOpen}
+                    listOpen={listOpen}
+                    sidebarWidth={sidebarWidth}
+                    listWidth={listWidth}
+                    top={top}
+                    splitPanes={splitPanes}
                   />
-                ) : null}
-              </div>
-            </FlipScope>
-          </SidebarPeekProvider>
-        </ListedChannelProvider>
-      </EscapeScopesProvider>
-    </WorkspaceFrameProvider>
+                  <OverviewLayer root={root} />
+                  {switcher ? (
+                    <SwitcherHost
+                      mode={switcher}
+                      onClose={() => setSwitcher(null)}
+                      onPick={pick}
+                    />
+                  ) : null}
+                </div>
+              </FlipScope>
+            </SidebarPeekProvider>
+          </ListedChannelProvider>
+        </EscapeScopesProvider>
+      </WorkspaceFrameProvider>
+    </OverviewQuietProvider>
   )
 }
 

@@ -522,6 +522,7 @@ const alwaysStripped = [
   marks.carrying,
   marks.lifted,
   marks.waiting,
+  marks.settling,
 ]
 
 /**
@@ -551,29 +552,52 @@ export function useSplitPanesDrag(
 
     /** The press's frame, then the task after it, that make what a drag needs. */
     let waiting: { frame: number; timer: number } | null = null
+    let active = true
+    let glassFrame: number | null = null
+    let revealFrame: number | null = null
+    let revealGeneration = 0
+    const stopReveal = () => {
+      revealGeneration++
+      if (revealFrame !== null) cancelAnimationFrame(revealFrame)
+      revealFrame = null
+    }
     /** Bumped whenever glass blur is held or released, so a late release cannot drop a new drag's hold. */
     let glass = 0
     const holdGlass = (on: boolean) => {
+      if (!active) return
+      if (glassFrame !== null) cancelAnimationFrame(glassFrame)
+      glassFrame = null
       const generation = ++glass
       if (on) {
+        stopReveal()
         reflectMark(scope, marks.pressing, true)
         return
       }
       // A frame after the preview's own paint is gone, so that frame does not
       // also rebuild the glass blur (`styles.test.ts`).
-      requestAnimationFrame(() => {
-        if (generation === glass) reflectMark(scope, marks.pressing, false)
+      glassFrame = requestAnimationFrame(() => {
+        if (!active || generation !== glass) return
+        glassFrame = null
+        reflectMark(scope, marks.pressing, false)
       })
     }
     /** Drops the pending commit's frame and its listeners, if a drop is waiting on one. */
     let releaseDrop: (() => void) | null = null
 
     /** One pane a frame, so letting the preview go does not lay every transcript out (`drag.test.tsx`). */
-    const revealSettling = () => {
+    const revealSettling = (owner: number) => {
+      if (!active || owner !== revealGeneration) return
+      revealFrame = null
       const pane = scope.querySelector<HTMLElement>(`[${marks.settling}]`)
       pane?.removeAttribute(marks.settling)
       if (scope.querySelector(`[${marks.settling}]`))
-        requestAnimationFrame(revealSettling)
+        revealFrame = requestAnimationFrame(() => revealSettling(owner))
+    }
+    const startReveal = () => {
+      if (active && revealFrame === null) {
+        const owner = revealGeneration
+        revealFrame = requestAnimationFrame(() => revealSettling(owner))
+      }
     }
 
     /**
@@ -588,8 +612,8 @@ export function useSplitPanesDrag(
         scope.querySelectorAll<HTMLElement>("[data-pane-key]").forEach((pane) => {
           pane.setAttribute(marks.settling, "")
         })
-        requestAnimationFrame(revealSettling)
       }
+      startReveal()
       reflectMark(scope, marks.reflow, false)
     }
 
@@ -1313,7 +1337,7 @@ export function useSplitPanesDrag(
             pane.setAttribute(marks.settling, "")
           })
           source.commitDrop({ carried: what, target: aim.target, zone: aim.zone, room })
-          requestAnimationFrame(revealSettling)
+          startReveal()
           return
         }
         // The preview was the arrangement this frame is not committing.
@@ -1569,6 +1593,10 @@ export function useSplitPanesDrag(
     window.addEventListener("keydown", onKeyDown, true)
     document.addEventListener("selectstart", onSelectStart)
     return () => {
+      active = false
+      stopReveal()
+      if (glassFrame !== null) cancelAnimationFrame(glassFrame)
+      glassFrame = null
       unsubscribe()
       inert.disconnect()
       scope.removeEventListener("pointerdown", onPointerDown)
@@ -1583,6 +1611,11 @@ export function useSplitPanesDrag(
       releaseDrop?.()
       const made = phase.kind === "idle" ? null : phase.made
       if (made) releaseMade(made)
+      scope
+        .querySelectorAll(`[${marks.settling}]`)
+        .forEach((pane) => pane.removeAttribute(marks.settling))
+      reflectMark(scope, marks.reflow, false)
+      reflectMark(scope, marks.pressing, false)
       phase = idle
       announcer.remove()
     }

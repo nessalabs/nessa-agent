@@ -607,6 +607,76 @@ it("does not commit a drop whose frame was cancelled by unmount", async () => {
   expect(fake.state.subscribed).toBe(0)
 })
 
+it.each([
+  { kind: "bodies", rebind: true },
+  { kind: "glass", rebind: true },
+  { kind: "bodies", rebind: false },
+] as const)(
+  "rejects old $kind restoration callbacks (rebound owner: $rebind)",
+  async ({ kind, rebind }) => {
+    const first = fakeSource(two())
+    const root = await mounted(first)
+    await liftOntoTwo()
+    const request = window.requestAnimationFrame
+    const cancel = window.cancelAnimationFrame
+    const queued = new Map<number, FrameRequestCallback>()
+    let next = 10000
+    const control = () => {
+      window.requestAnimationFrame = (callback) => {
+        const id = next++
+        queued.set(id, callback)
+        return id
+      }
+      window.cancelAnimationFrame = (id) => {
+        queued.delete(id)
+      }
+    }
+    try {
+      control()
+      await act(async () =>
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        ),
+      )
+      const obsolete = [...queued.values()]
+      expect(obsolete.length).toBeGreaterThan(0)
+      if (rebind) {
+        const second = fakeSource(two())
+        await act(async () => root.render(<Host fake={second} options={options()} />))
+        obsolete.push(...queued.values())
+      }
+      queued.clear()
+      window.requestAnimationFrame = request
+      window.cancelAnimationFrame = cancel
+      layOut()
+      await liftOntoTwo()
+      expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
+      control()
+      if (kind === "bodies") {
+        pointer("pointerup", 827, 400)
+        await act(async () => {
+          for (const [id, callback] of [...queued]) {
+            queued.delete(id)
+            callback(performance.now())
+          }
+        })
+        expect(host.querySelectorAll(`[${marks.settling}]`)).toHaveLength(2)
+      }
+      await act(async () => obsolete.forEach((callback) => callback(performance.now())))
+      if (kind === "bodies")
+        expect(host.querySelectorAll(`[${marks.settling}]`)).toHaveLength(2)
+      else expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
+    } finally {
+      await act(async () => root.unmount())
+      window.requestAnimationFrame = request
+      window.cancelAnimationFrame = cancel
+      queued.clear()
+      document.documentElement.removeAttribute(marks.pressing)
+      document.documentElement.removeAttribute(marks.reflow)
+    }
+  },
+)
+
 it("with less motion, previews a swap at once — the other pane drawn where the drop puts it — and lets it go as the drop lands", async () => {
   // As the person's window is set: Settings › Appearance › Motion, Reduced (#286).
   document.documentElement.dataset.motion = "reduced"
