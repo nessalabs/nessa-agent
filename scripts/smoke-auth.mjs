@@ -270,6 +270,7 @@ try {
             nonce: JSON.parse(challenge.toString()).payload.nonce,
             credential: "",
             client: { id: "browser-smoke" },
+            surface: { kind: "web", instance: "browser-smoke" },
           },
         }),
       )

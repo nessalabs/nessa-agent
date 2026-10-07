@@ -11,7 +11,8 @@ use nessa_protocol::pairing::{
     EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES,
 };
 use nessa_protocol::product::generated::{
-    ProductClientMetadata, SessionAuthenticateParams, PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
+    ProductClientMetadata, ProductSurface, ProductSurfaceKind, SessionAuthenticateParams,
+    PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
 };
 use nessa_protocol::product::passive_read::encode_request;
 use serde::Serialize;
@@ -189,6 +190,10 @@ impl WireClient {
             credential,
             client: ProductClientMetadata {
                 id: "boundary-probe".into(),
+            },
+            surface: ProductSurface {
+                kind: ProductSurfaceKind::Cli,
+                instance: "boundary-probe".into(),
             },
         };
         let ready = client.call(PRODUCT_HANDSHAKE_METHOD, &params);

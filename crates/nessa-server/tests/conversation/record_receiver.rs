@@ -231,7 +231,7 @@ impl ProductSource {
         let mut source = Self { socket, next: 0 };
         let challenge = source.json();
         let nonce = challenge["payload"]["nonce"].as_str().unwrap();
-        let reply = source.call("session.authenticate", json!({"minVersion":1,"maxVersion":1,"nonce":nonce,"credential":"secret","client":{"id":"receiver"}}));
+        let reply = source.call("session.authenticate", json!({"minVersion":1,"maxVersion":1,"nonce":nonce,"credential":"secret","client":{"id":"receiver"},"surface":{"kind":"cli","instance":"receiver"}}));
         assert_eq!(reply["ok"], true, "{reply}");
         source
     }
