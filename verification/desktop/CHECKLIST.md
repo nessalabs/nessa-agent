@@ -943,7 +943,7 @@ says why where the conversations would be.
   `conversation.read` holds, inside the chat area; and a turn sent from
   another surface under the same credential, once the gateway holds it, is
   drawn in the open transcript as its last two messages, the page not
-  reloaded (the gateway source's poller).   Every handshake the window makes,
+  reloaded (the gateway source's poller). Every handshake the window makes,
   each reconnect's too, is the first's: the host's endpoint, client
   `nessa-panel`, surface kind `desktop` with an instance, principal
   `surface:nessa-panel`. No console error, page error

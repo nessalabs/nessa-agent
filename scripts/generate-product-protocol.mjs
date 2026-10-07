@@ -28,7 +28,9 @@ const commonDefs = JSON.parse(
 ).$defs
 const productKinds = schema.$defs?.ProductSurfaceKind
 const commonKinds =
-  commonDefs && Object.hasOwn(commonDefs, "SurfaceKind") ? commonDefs.SurfaceKind : undefined
+  commonDefs && Object.hasOwn(commonDefs, "SurfaceKind")
+    ? commonDefs.SurfaceKind
+    : undefined
 if (
   !productKinds ||
   !Array.isArray(productKinds.enum) ||
