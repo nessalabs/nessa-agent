@@ -23,7 +23,7 @@
 //! Streamed POST bodies (JSON and SSE, including initialize) are session-owned
 //! and separately bounded. An SSE request reader
 //! forwards notices/requests until its matching result/error, then drops the body
-//! even if the peer leaves it open (ADR 392 P1–P14/J1–J9,
+//! even if the peer leaves it open (ADR 392 P1–P14/J1–J11,
 //! `tests::post_streams` and `tests::http_progress`).
 //!
 //! Dropping the session aborts its GET and POST streams and asks for the same single
@@ -103,20 +103,20 @@ struct Phase {
 }
 
 /// Identity publication and replacement call admission are distinct transitions.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum Recovery {
     Available,
     Initializing,
     ReadyForWriter,
     Completed,
-    Failed,
+    Failed(McpError),
 }
 
 impl Recovery {
-    fn blocks_requests(self) -> bool {
+    fn blocks_requests(&self) -> bool {
         match self {
             Self::Available | Self::Completed => false,
-            Self::Initializing | Self::ReadyForWriter | Self::Failed => true,
+            Self::Initializing | Self::ReadyForWriter | Self::Failed(_) => true,
         }
     }
 }
@@ -462,8 +462,7 @@ impl HttpSession {
                 match consume_body(
                     response,
                     event_stream,
-                    request_id,
-                    initialize,
+                    BodyPurpose::public(request_id, initialize),
                     &weak,
                     &inbound,
                 )
@@ -490,8 +489,7 @@ impl HttpSession {
         match consume_body(
             response,
             event_stream,
-            method.and(id),
-            method == Some("initialize"),
+            BodyPurpose::public(method.and(id), method == Some("initialize")),
             &self.weak,
             &self.inbound,
         )
@@ -734,30 +732,18 @@ impl HttpSession {
         SendOutcome::End(McpError::InsufficientScope)
     }
 
-    fn note_response(
+    fn publish_initialize(
         &self,
-        body: &[u8],
-        method: Option<&str>,
-        request_id: Option<u64>,
+        result: &Value,
         session_header: Option<&str>,
-    ) -> Result<bool, McpError> {
-        if method != Some("initialize") {
-            return Ok(false);
-        }
-        let message: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-        if !request_id.is_some_and(|id| is_response_to(&message, id))
-            || message.get("result").is_none()
-        {
-            return Ok(false);
-        }
+    ) -> Result<(), McpError> {
         let mut readers = self.readers.lock().expect("http readers");
         if self.closing.load(Ordering::SeqCst) {
             return Err(McpError::Closed);
         }
         if self.phase.lock().expect("http phase").open {
-            return Ok(true);
+            return Ok(());
         }
-        let result = &message["result"];
         wire::initialized(result)?;
         let version = result["protocolVersion"].as_str().map(str::to_owned);
         let Some(session_id) = session_header.filter(|id| !id.is_empty()) else {
@@ -766,7 +752,7 @@ impl HttpSession {
             phase.open = true;
             drop(phase);
             self.start_get(None, &mut readers);
-            return Ok(true);
+            return Ok(());
         };
         if session_id.len() > 1024 {
             return Err(McpError::TooLarge("Mcp-Session-Id"));
@@ -781,7 +767,7 @@ impl HttpSession {
         phase.open = true;
         drop(phase);
         self.start_get(Some(session_id.to_owned()), &mut readers);
-        Ok(true)
+        Ok(())
     }
 
     fn start_get(&self, session_id: Option<String>, readers: &mut ReaderTasks) {
@@ -911,13 +897,18 @@ impl HttpSession {
                 if !event_stream && content_type.is_some() && !sse::is_json(content_type) {
                     return Err(McpError::SessionExpired);
                 }
-                if !consume_body(response, event_stream, Some(0), true, &weak, &inbound)
-                    .await
-                    .map_err(|error| match error {
-                        McpError::Unconfirmed => McpError::SessionExpired,
-                        other => other,
-                    })?
-                {
+                if !consume_body(
+                    response,
+                    event_stream,
+                    BodyPurpose::RecoveryInitialize,
+                    &weak,
+                    &inbound,
+                )
+                .await
+                .map_err(|error| match error {
+                    McpError::Unconfirmed => McpError::SessionExpired,
+                    other => other,
+                })? {
                     return Err(McpError::SessionExpired);
                 }
                 {
@@ -935,17 +926,16 @@ impl HttpSession {
                         completed,
                     })
                     .await
-                    .map_err(|_| McpError::Closed)?;
-                completion.await.map_err(|_| McpError::Closed)?
+                    .map_err(|_| McpError::Unconfirmed)?;
+                completion.await.map_err(|_| McpError::Unconfirmed)?
             };
             let result = within(&*clock, deadline, startup)
                 .await
                 .unwrap_or(Err(McpError::Timeout));
             if let Err(error) = result {
-                if let Some(session) = weak.upgrade() {
-                    let _readers = session.readers.lock().expect("http readers");
-                    session.phase.lock().expect("http phase").recovery = Recovery::Failed;
-                }
+                let error = weak
+                    .upgrade()
+                    .map_or(error.clone(), |session| session.fail_recovery(error));
                 let _ = inbound.send(Err(error)).await;
             }
         });
@@ -966,12 +956,6 @@ impl HttpSession {
         deadline: ClockInstant,
         completed: &oneshot::Sender<Result<(), McpError>>,
     ) -> SendOutcome {
-        if self.closing.load(Ordering::SeqCst)
-            || completed.is_closed()
-            || self.phase.lock().expect("http phase").recovery != Recovery::ReadyForWriter
-        {
-            return SendOutcome::End(McpError::Closed);
-        }
         let clock = self
             .writer
             .lock()
@@ -980,8 +964,8 @@ impl HttpSession {
             .expect("installed HTTP writer")
             .clock
             .clone();
-        if clock.now() >= deadline {
-            return SendOutcome::End(McpError::Timeout);
+        if let Err(error) = self.check_handoff(&*clock, deadline, completed, false) {
+            return SendOutcome::End(error);
         }
         let body =
             serde_json::to_vec(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
@@ -1004,19 +988,52 @@ impl HttpSession {
         let outcome = within(&*clock, deadline, sending)
             .await
             .unwrap_or(SendOutcome::End(McpError::Timeout));
-        if matches!(outcome, SendOutcome::Done) {
-            let _readers = self.readers.lock().expect("http readers");
-            let mut phase = self.phase.lock().expect("http phase");
-            if self.closing.load(Ordering::SeqCst)
-                || completed.is_closed()
-                || phase.recovery != Recovery::ReadyForWriter
-                || clock.now() >= deadline
-            {
-                return SendOutcome::End(McpError::Closed);
-            }
+        match outcome {
+            SendOutcome::Done => match self.check_handoff(&*clock, deadline, completed, true) {
+                Ok(()) => SendOutcome::Done,
+                Err(error) => SendOutcome::End(error),
+            },
+            SendOutcome::End(error) => SendOutcome::End(self.fail_recovery(error)),
+            other => other,
+        }
+    }
+
+    /// The first failure is retained even when the startup completion channel is lost.
+    fn fail_recovery(&self, error: McpError) -> McpError {
+        let _readers = self.readers.lock().expect("http readers");
+        let mut phase = self.phase.lock().expect("http phase");
+        if let Recovery::Failed(first) = &phase.recovery {
+            return first.clone();
+        }
+        phase.recovery = Recovery::Failed(error.clone());
+        error
+    }
+
+    /// One liveness policy owns both sides of initialized dispatch and admission.
+    fn check_handoff(
+        &self,
+        clock: &dyn Clock,
+        deadline: ClockInstant,
+        completed: &oneshot::Sender<Result<(), McpError>>,
+        commit: bool,
+    ) -> Result<(), McpError> {
+        let _readers = self.readers.lock().expect("http readers");
+        let mut phase = self.phase.lock().expect("http phase");
+        let error = match &phase.recovery {
+            Recovery::Failed(first) => Some(first.clone()),
+            _ if self.closing.load(Ordering::SeqCst) => Some(McpError::Closed),
+            _ if clock.now() >= deadline => Some(McpError::Timeout),
+            Recovery::ReadyForWriter if !completed.is_closed() => None,
+            _ => Some(McpError::Unconfirmed),
+        };
+        if let Some(error) = error {
+            phase.recovery = Recovery::Failed(error.clone());
+            return Err(error);
+        }
+        if commit {
             phase.recovery = Recovery::Completed;
         }
-        outcome
+        Ok(())
     }
 
     fn has_session_id(&self) -> bool {
@@ -1038,8 +1055,7 @@ impl Drop for HttpSession {
 async fn consume_body(
     response: HttpResponse,
     event_stream: bool,
-    request_id: Option<u64>,
-    initialize: bool,
+    purpose: BodyPurpose,
     weak: &Weak<HttpSession>,
     inbound: &mpsc::Sender<Result<Vec<u8>, McpError>>,
 ) -> Result<bool, McpError> {
@@ -1054,25 +1070,13 @@ async fn consume_body(
                 }
                 super::http_exchange::BodyRead::Closed => McpError::Unconfirmed,
             })?;
-        let accepted = if initialize {
-            weak.upgrade().ok_or(McpError::Closed)?.note_response(
-                &bytes,
-                Some("initialize"),
-                request_id,
-                header.as_deref(),
-            )?
-        } else {
-            false
+        return match receive_message(bytes, purpose, header.as_deref(), weak, inbound).await? {
+            MessageOutcome::Terminal { initialized } => Ok(initialized),
+            MessageOutcome::Continue => {
+                completed_body(purpose.request_id(), false)?;
+                Ok(false)
+            }
         };
-        let matched = response_in(&bytes, request_id);
-        if request_id != Some(0) || !initialize {
-            inbound
-                .send(Ok(bytes))
-                .await
-                .map_err(|_| McpError::ServerGone)?;
-        }
-        completed_body(request_id, matched)?;
-        return Ok(accepted);
     }
     let mut stream = match response.body {
         super::http_exchange::HttpBody::Stream(stream) => stream,
@@ -1084,7 +1088,7 @@ async fn consume_body(
     let mut parser = SseParser::bounded();
     loop {
         let Some(chunk) = stream.next().await.map_err(|_| McpError::Unconfirmed)? else {
-            completed_body(request_id, false)?;
+            completed_body(purpose.request_id(), false)?;
             return Ok(false);
         };
         let mut chunk = chunk.as_slice();
@@ -1099,25 +1103,16 @@ async fn consume_body(
             if event.data.is_empty() {
                 continue;
             }
-            let matched = response_in(event.data.as_bytes(), request_id);
-            let accepted = if initialize {
-                weak.upgrade().ok_or(McpError::Closed)?.note_response(
-                    event.data.as_bytes(),
-                    Some("initialize"),
-                    request_id,
-                    header.as_deref(),
-                )?
-            } else {
-                false
-            };
-            if request_id != Some(0) || !initialize || !matched {
-                inbound
-                    .send(Ok(event.data.into_bytes()))
-                    .await
-                    .map_err(|_| McpError::ServerGone)?;
-            }
-            if matched {
-                return Ok(accepted);
+            if let MessageOutcome::Terminal { initialized } = receive_message(
+                event.data.into_bytes(),
+                purpose,
+                header.as_deref(),
+                weak,
+                inbound,
+            )
+            .await?
+            {
+                return Ok(initialized);
             }
         }
     }
@@ -1141,12 +1136,60 @@ fn completed_body(id: Option<u64>, matched: bool) -> Result<(), McpError> {
     }
 }
 
-/// Parsing does not alter the single terminal/correlation rule below.
-fn response_in(bytes: &[u8], id: Option<u64>) -> bool {
-    id.is_some_and(|id| {
-        serde_json::from_slice::<Value>(bytes)
-            .ok()
-            .is_some_and(|message| is_response_to(&message, id))
+/// Framing hands every message to this policy, regardless of codec or storage.
+#[derive(Clone, Copy)]
+enum BodyPurpose {
+    Protocol(Option<u64>),
+    Initialize(Option<u64>),
+    RecoveryInitialize,
+}
+impl BodyPurpose {
+    fn public(id: Option<u64>, initialize: bool) -> Self {
+        if initialize {
+            Self::Initialize(id)
+        } else {
+            Self::Protocol(id)
+        }
+    }
+    fn request_id(self) -> Option<u64> {
+        match self {
+            Self::Protocol(id) | Self::Initialize(id) => id,
+            Self::RecoveryInitialize => Some(0),
+        }
+    }
+}
+enum MessageOutcome {
+    Continue,
+    Terminal { initialized: bool },
+}
+async fn receive_message(
+    bytes: Vec<u8>,
+    purpose: BodyPurpose,
+    header: Option<&str>,
+    weak: &Weak<HttpSession>,
+    inbound: &mpsc::Sender<Result<Vec<u8>, McpError>>,
+) -> Result<MessageOutcome, McpError> {
+    let message: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    let matched = purpose
+        .request_id()
+        .is_some_and(|id| is_response_to(&message, id));
+    let initialized =
+        matched && !matches!(purpose, BodyPurpose::Protocol(_)) && message.get("result").is_some();
+    if initialized {
+        weak.upgrade()
+            .ok_or(McpError::Closed)?
+            .publish_initialize(&message["result"], header)?;
+    }
+    if !matched || !matches!(purpose, BodyPurpose::RecoveryInitialize) {
+        inbound
+            .send(Ok(bytes))
+            .await
+            .map_err(|_| McpError::ServerGone)?;
+    }
+    Ok(if matched {
+        MessageOutcome::Terminal { initialized }
+    } else {
+        MessageOutcome::Continue
     })
 }
 

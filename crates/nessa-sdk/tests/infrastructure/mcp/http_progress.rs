@@ -62,6 +62,7 @@ struct Peer {
     initialized_headers: Option<Arc<Gate>>,
     delete: Option<Arc<Gate>>,
     initialized_status: u16,
+    initialized_expiry: Option<Arc<ManualClock>>,
     replacement_json: bool,
     call_sse: bool,
 }
@@ -78,6 +79,7 @@ impl Peer {
             initialized_headers: None,
             delete: None,
             initialized_status: 202,
+            initialized_expiry: None,
             replacement_json: false,
             call_sse: false,
         }
@@ -183,6 +185,9 @@ impl HttpExchange for Peer {
                     {
                         if let Some(gate) = &self.initialized_headers {
                             gate.enter().await;
+                        }
+                        if let Some(clock) = &self.initialized_expiry {
+                            clock.advance(INITIALIZE_TIMEOUT);
                         }
                     }
                     return Ok(HttpResponse {
@@ -562,7 +567,7 @@ async fn j9_expired_queued_handoff_cannot_dispatch_initialized() {
     .await;
     assert!(matches!(
         session.finish_recovery(deadline, &completed).await,
-        SendOutcome::End(_)
+        SendOutcome::End(McpError::Timeout)
     ));
     assert_eq!(
         peer.count(|request| method(request).as_deref() == Some("notifications/initialized")),
@@ -1088,4 +1093,122 @@ async fn j8_recovery_server_ping_reply_dispatches_before_initialize_result() {
     );
     stop(&session).await;
     probe.released().await;
+}
+
+#[tokio::test]
+async fn j10_recovery_neighbor_reply_precedes_invalid_initialize() {
+    for sse in [false, true] {
+        for streamed in [false, true] {
+            let (probe, held) = Probe::body();
+            let mut peer = Peer::new();
+            peer.replacement_json = !sse;
+            *peer.replacement.lock().unwrap() = Some(complete_body(
+                json!({"id":2,"result":{"tools":[]}}),
+                sse,
+                streamed,
+            ));
+            peer.bodies.lock().unwrap().push_back(held);
+            let peer = Arc::new(peer);
+            let (session, incoming) = transport(peer.clone(), Arc::default());
+            let connection = Arc::new(Connection::open_http(
+                session.clone(),
+                incoming,
+                Arc::new(RuntimeClock::new()),
+            ));
+            bounded(connection.call("initialize", None))
+                .await
+                .unwrap()
+                .unwrap();
+            let old = tokio::spawn({
+                let connection = connection.clone();
+                async move { connection.call("tools/list", None).await }
+            });
+            probe.polled(1).await;
+            peer.expire.store(true, Ordering::SeqCst);
+            assert_eq!(
+                bounded(connection.call("tools/list", None))
+                    .await
+                    .unwrap_err(),
+                McpError::SessionExpired
+            );
+            assert_eq!(
+                bounded(old).await.unwrap().unwrap().unwrap(),
+                json!({"tools":[]})
+            );
+            assert_eq!(
+                peer.count(|request| header(request, "Mcp-Session-Id") == Some("replacement")),
+                0
+            );
+            stop(&session).await;
+            probe.released().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn j11_accepted_initialized_at_expiry_reports_timeout() {
+    let clock = Arc::new(ManualClock::default());
+    let mut peer = Peer::new();
+    peer.initialized_expiry = Some(clock.clone());
+    let peer = Arc::new(peer);
+    let (session, _incoming) = transport(peer.clone(), Arc::default());
+    let (writer, mut queue) = mpsc::channel(1);
+    session.set_writer(writer, clock);
+    initialize(&session).await;
+    peer.expire.store(true, Ordering::SeqCst);
+    let _ = call(&session, 2).await;
+    let Outgoing::RecoveryReady {
+        deadline,
+        completed,
+    } = bounded(queue.recv()).await.unwrap()
+    else {
+        panic!("recovery handoff")
+    };
+    assert!(matches!(
+        session.finish_recovery(deadline, &completed).await,
+        SendOutcome::End(McpError::Timeout)
+    ));
+    assert!(matches!(
+        call(&session, 3).await,
+        SendOutcome::FailCall {
+            error: McpError::Busy,
+            ..
+        }
+    ));
+    stop(&session).await;
+}
+
+#[tokio::test]
+async fn j11_completion_loss_preserves_writer_failure() {
+    let mut peer = Peer::new();
+    peer.initialized_status = 405;
+    let peer = Arc::new(peer);
+    let (session, mut incoming) = transport(peer.clone(), Arc::default());
+    let (writer, mut queue) = mpsc::channel(1);
+    session.set_writer(writer, Arc::new(RuntimeClock::new()));
+    initialize(&session).await;
+    peer.expire.store(true, Ordering::SeqCst);
+    let _ = call(&session, 2).await;
+    let Outgoing::RecoveryReady {
+        deadline,
+        completed,
+    } = bounded(queue.recv()).await.unwrap()
+    else {
+        panic!("recovery handoff")
+    };
+    let SendOutcome::End(first) = session.finish_recovery(deadline, &completed).await else {
+        panic!("rejected initialized")
+    };
+    assert!(matches!(first, McpError::Malformed(_)));
+    drop(completed);
+    let retained = bounded(async {
+        loop {
+            if let Some(Err(error)) = incoming.recv().await {
+                break error;
+            }
+        }
+    })
+    .await;
+    assert_eq!(retained, first);
+    stop(&session).await;
 }

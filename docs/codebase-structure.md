@@ -767,7 +767,7 @@ server's process group, `wire` for MCP's JSON, and `http` for remote identity,
 bounded JSON/SSE body and recovery ownership over injected `http_exchange`.
 HTTP replacement handoff uses `connection`'s existing bounded writer queue;
 [ADR 392](adr/todo/392-remote-mcp-servers.md) maps its orderings to
-`http_progress`, `post_streams` and their shared `post_body` test fixture), tested in
+`http_progress`, `post_streams` and their shared `post_body` test fixture, tested in
 `tests/infrastructure/mcp/` against in-process and process fixtures. The
 gateway's `src/mcp_servers/` owns the stand-in rules, the session token and
 the resource ticket, and a user's server as stored with the edits made to

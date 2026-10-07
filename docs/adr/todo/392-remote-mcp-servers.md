@@ -407,10 +407,18 @@ replacement initialization. JSON consumption does not run on the frame writer.
 Initialization accepts only its matching result, validated by `wire::initialized`,
 and commits identity/version under the registry fence before GET or readiness.
 An SSE reader retires at that terminal event rather than waiting for EOF.
-Reader tasks keep weak session references only for synchronous commits.
+Reader tasks keep weak session references only for synchronous commits. Two
+review rounds found new cases in duplicated JSON/SSE message policy. The structural
+repair is one per-message owner: typed body purpose, one correlation decision,
+matching initialization publication, forwarding and terminal retirement. JSON/SSE
+codecs only frame messages. Private recovery suppresses only its matching terminal;
+valid neighboring replies remain visible before invalid recovery settles.
 
 The private `Recovery` state is Available, Initializing, ReadyForWriter, Completed
-or Failed. Identity publication does not change call admission. Recovery is
+or Failed with its first typed cause. One handoff check before dispatch and before
+admission distinguishes actual close, retained failure, expired budget and unknown
+owner loss. A lost completion channel cannot replace the writer's observed failure.
+Identity publication does not change call admission. Recovery is
 registered before its initialize exchange. While it is initializing,
 ordinary calls are refused with `Busy`; cancellation and server replies remain
 available. The registered startup owner performs the fresh initialize exchange;
@@ -431,6 +439,13 @@ Close alone owns DELETE, retaining the ID claim through the attempt's completion
 | J7 | DELETE held; duplicate close or a new opening repeats its ID | Finished waits; retained claim refuses collision and prevents DELETE targeting a new owner | `j7_public_open_collision_while_delete_is_held_is_not_deleted`, `j6_j7_close_owns_delete_and_retains_claim_through_completion` |
 | J8 | Session 404; recovery header/body held | Failed call is SessionExpired without replay; recovery is owned before header I/O; ordinary requests Busy while controls remain available | `j8_recovery_owned_before_headers_and_controls_remain_available`, `j8_stalled_recovery_json_is_owned_and_bounded`, `j8_recovery_server_ping_reply_dispatches_before_initialize_result` |
 | J9 | Recovery succeeds, fails, times out, or races close before initialized dispatch | Identity publication is separate from call admission. Gate queued calls before RecoveryReady and while initialized headers are held. One remaining initialization budget covers headers/body, queue handoff and initialized dispatch; writer revalidates its correlated handoff before dispatch and admission. Timeout/close/stale handoff/rejected initialized cannot release admission. Close joins startup and owns any claimed ID | `j9_recovery_gate_covers_queued_calls_and_initialized_headers`, `j9_expired_queued_handoff_cannot_dispatch_initialized`, `j9_saturated_queue_budget_expiry_retains_close_ownership`, `j9_timeout_while_initialized_headers_held_cannot_reopen`, `j9_rejected_initialized_does_not_release_admission`, J6 recovery-close test |
+| J10 | JSON/SSE private recovery carries another pending call's reply, then ends without its own terminal | Forward the observed neighboring result before SessionExpired; do not claim replacement identity, GET or initialized | `j10_recovery_neighbor_reply_precedes_invalid_initialize` |
+| J11 | Budget expires after initialized acceptance but before admission; stale queued handoff or completion channel loss follows a failure | Retain typed Timeout or first non-timeout failure; actual close is Closed, unknown loss alone is Unconfirmed; no admission from stale handoff | `j11_accepted_initialized_at_expiry_reports_timeout`, `j11_completion_loss_preserves_writer_failure`, `j9_expired_queued_handoff_cannot_dispatch_initialized`, J6 actual-close test |
+
+The related audit verification correction (#631) pairs inspection requested/outcome
+records by action, phase and operation identity. Millisecond wall-clock observations
+do not order files; equal/backward timestamps and shuffled files exercise that
+same lookup in `audit_inspection_pair_does_not_depend_on_file_or_timestamp_order`.
 
 ```mermaid
 sequenceDiagram
