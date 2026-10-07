@@ -17,6 +17,20 @@ function report(scenario) {
   return {
     test: scenario.test,
     timed_out: false,
+    output_truncated: false,
+    test_pid: scenario.init ? 8 : 7,
+    pid1_executable: scenario.init ? "/usr/sbin/docker-init" : "/usr/bin/python3.13",
+    initial_processes: scenario.init
+      ? [
+          { pid: 1, ppid: 0, pgid: 1, state: "S" },
+          { pid: 7, ppid: 1, pgid: 7, state: "R" },
+        ]
+      : [{ pid: 1, ppid: 0, pgid: 1, state: "R" }],
+    packages: {
+      "python3-minimal": "3.13.5-1",
+      "libgcc-s1": "14.2.0-19",
+      "ca-certificates": "20250419",
+    },
     supervisor_pid: scenario.init ? 7 : 1,
     supervisor_ppid: scenario.init ? 1 : 0,
     test_exit: scenario.init ? 0 : 101,
@@ -464,4 +478,172 @@ test("repeated interrupts keep cancellation installed until removal finishes", a
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test("incomplete proof fields cannot produce a positive or negative acceptance", () => {
+  for (const scenario of [scenarios[0], scenarios[1]]) {
+    for (const key of [
+      "supervisor_pid",
+      "supervisor_ppid",
+      "test_pid",
+      "timed_out",
+      "output_truncated",
+      "initial_processes",
+      "new_orphans",
+      "retained_directories",
+      "pid1_executable",
+      "packages",
+      "test",
+      "output",
+    ])
+      assert.throws(
+        () => validate({ ...report(scenario), [key]: undefined }, scenario),
+        /Harness failure/,
+        `${scenario.init}: ${key}`,
+      )
+    for (const change of [
+      { supervisor_pid: "7" },
+      { supervisor_pid: null },
+      { supervisor_pid: 0 },
+      { supervisor_ppid: "1" },
+      { test_pid: null },
+      { test_pid: "8" },
+      { test_pid: 0 },
+      { timed_out: null },
+      { output_truncated: 0 },
+      { output: null },
+      { pid1_executable: "" },
+      { initial_processes: {} },
+      { new_orphans: {} },
+      { retained_directories: {} },
+      { packages: {} },
+    ])
+      assert.throws(
+        () => validate({ ...report(scenario), ...change }, scenario),
+        /Harness failure/,
+      )
+  }
+  for (const malformed of [null, [], "report"])
+    assert.throws(() => validate(malformed, scenarios[1]), /Harness failure/)
+})
+
+test("zombie, directory and package evidence must identify concrete captured resources", () => {
+  const negative = report(scenarios[0])
+  for (const new_orphans of [
+    [{ ppid: 1, state: "Z" }],
+    [{ ppid: 1, pgid: 9, state: "Z" }],
+    [{ pid: 10, ppid: 1, state: "Z" }],
+    [{ pid: 10, ppid: 1, pgid: "9", state: "Z" }],
+    [{ pid: 10, ppid: 1, pgid: 9, state: undefined }],
+    [null],
+  ])
+    assert.throws(
+      () => validate({ ...negative, new_orphans }, scenarios[0]),
+      /Harness failure/,
+    )
+  for (const retained_directories of [
+    [{}],
+    [null],
+    ["elsewhere"],
+    ["/tmp/nessa-agent-nested/path"],
+  ])
+    assert.throws(
+      () => validate({ ...negative, retained_directories }, scenarios[0]),
+      /Harness failure/,
+    )
+  assert.throws(
+    () =>
+      validate({ ...negative, packages: Object.create(negative.packages) }, scenarios[0]),
+    /Harness failure/,
+  )
+  for (const name of ["python3-minimal", "libgcc-s1", "ca-certificates"])
+    for (const value of [undefined, "", 3])
+      assert.throws(
+        () =>
+          validate(
+            { ...negative, packages: { ...negative.packages, [name]: value } },
+            scenarios[0],
+          ),
+        /Harness failure/,
+      )
+})
+
+test("captured process identities cannot be reused or contradict the supervisor", () => {
+  const positive = report(scenarios[1])
+  for (const change of [
+    { test_pid: positive.supervisor_pid },
+    { initial_processes: [] },
+    { initial_processes: positive.initial_processes.slice(1) },
+    { initial_processes: [...positive.initial_processes, positive.initial_processes[1]] },
+    { initial_processes: positive.initial_processes.map((p) => ({ ...p, ppid: 3 })) },
+    { new_orphans: [{ pid: positive.test_pid, ppid: 1, pgid: 9, state: "S" }] },
+    { new_orphans: [{ pid: positive.supervisor_pid, ppid: 1, pgid: 9, state: "S" }] },
+    {
+      new_orphans: [
+        { pid: 10, ppid: 1, pgid: 9, state: "S" },
+        { pid: 10, ppid: 1, pgid: 9, state: "S" },
+      ],
+    },
+  ])
+    assert.throws(
+      () => validate({ ...positive, ...change }, scenarios[1]),
+      /Harness failure/,
+    )
+})
+
+test("image inspection receives interrupt cancellation before any container is created", async () => {
+  const root = await mkdtemp(join(tmpdir(), "nessa-cleanup-inspection-"))
+  const initialListeners = process.listenerCount("SIGINT")
+  try {
+    const binary = join(root, "binary")
+    const fixture = join(root, "tests/infrastructure/acp/contracts/fixtures")
+    await writeFile(binary, "library test")
+    await mkdir(fixture, { recursive: true })
+    await writeFile(join(fixture, "claude_acp_test_handler.py"), "fixture")
+    const calls = []
+    await assert.rejects(
+      checkContainers(
+        [binary, root, "image", join(root, "evidence")],
+        async (args, operation) => {
+          calls.push(args[0])
+          assert.equal(args[0], "image")
+          assert.ok(operation.signal instanceof AbortSignal)
+          process.emit("SIGINT")
+          assert.equal(operation.signal.aborted, true)
+          throw new Error("inspection interrupted")
+        },
+      ),
+      /inspection interrupted/,
+    )
+    assert.deepEqual(calls, ["image"])
+    assert.equal(process.listenerCount("SIGINT"), initialListeners)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("all captured process entries require typed fields even when they are not zombies", () => {
+  const positive = report(scenarios[1])
+  for (const process of [
+    { pid: 20, ppid: "1", pgid: 9, state: "S" },
+    { pid: 20, ppid: -1, pgid: 9, state: "S" },
+    { pid: 20, ppid: 1, pgid: 9, state: undefined },
+    { pid: 20, ppid: 1, pgid: 9, state: "SS" },
+  ])
+    assert.throws(
+      () =>
+        validate(
+          { ...positive, initial_processes: [...positive.initial_processes, process] },
+          scenarios[1],
+        ),
+      /Harness failure/,
+    )
+  assert.throws(
+    () =>
+      validate(
+        { ...positive, new_orphans: [{ pid: 20, ppid: 1, pgid: 9, state: undefined }] },
+        scenarios[1],
+      ),
+    /Harness failure/,
+  )
 })

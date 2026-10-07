@@ -21,6 +21,82 @@ export function validate(report, scenario) {
   const fail = (reason) => {
     throw new Error(`Harness failure: ${reason}`)
   }
+  const object = (value) =>
+    value !== null && typeof value === "object" && !Array.isArray(value)
+  const positivePid = (value) => Number.isSafeInteger(value) && value > 0
+  const processEvidence = (value) =>
+    object(value) &&
+    positivePid(value.pid) &&
+    Number.isSafeInteger(value.ppid) &&
+    value.ppid >= 0 &&
+    positivePid(value.pgid) &&
+    typeof value.state === "string" &&
+    value.state.length === 1
+  if (!object(report)) fail("missing supervisor report")
+  if (
+    !positivePid(report.supervisor_pid) ||
+    !Number.isSafeInteger(report.supervisor_ppid) ||
+    report.supervisor_ppid < 0 ||
+    !positivePid(report.test_pid)
+  )
+    fail("missing process identity")
+  if (
+    typeof report.timed_out !== "boolean" ||
+    typeof report.output_truncated !== "boolean"
+  )
+    fail("missing explicit timeout or truncation evidence")
+  if (
+    typeof report.test !== "string" ||
+    typeof report.output !== "string" ||
+    typeof report.pid1_executable !== "string" ||
+    !report.pid1_executable.startsWith("/")
+  )
+    fail("missing test output or PID 1 executable")
+  if (
+    !Array.isArray(report.initial_processes) ||
+    !report.initial_processes.every(processEvidence) ||
+    !Array.isArray(report.new_orphans) ||
+    !report.new_orphans.every(processEvidence)
+  )
+    fail("missing process or zombie identity evidence")
+  if (
+    !Array.isArray(report.retained_directories) ||
+    !report.retained_directories.every(
+      (path) => typeof path === "string" && /^\/tmp\/nessa-agent-[^/\0]+$/.test(path),
+    )
+  )
+    fail("invalid retained directory evidence")
+  if (
+    !object(report.packages) ||
+    !["python3-minimal", "libgcc-s1", "ca-certificates"].every(
+      (name) =>
+        Object.hasOwn(report.packages, name) &&
+        typeof report.packages[name] === "string" &&
+        report.packages[name].trim().length > 0,
+    )
+  )
+    fail("missing prerequisite package versions")
+  const initialPids = new Set(report.initial_processes.map((p) => p.pid))
+  const initialSupervisor = report.initial_processes.find(
+    (p) => p.pid === report.supervisor_pid,
+  )
+  const initialPid1 = report.initial_processes.find((p) => p.pid === 1)
+  if (
+    initialPids.size !== report.initial_processes.length ||
+    !initialSupervisor ||
+    !initialPid1 ||
+    initialPid1.ppid !== 0 ||
+    initialSupervisor.ppid !== report.supervisor_ppid ||
+    initialPids.has(report.test_pid)
+  )
+    fail("contradictory supervisor or test identity")
+  if (
+    new Set(report.new_orphans.map((p) => p.pid)).size !== report.new_orphans.length ||
+    report.new_orphans.some(
+      (p) => initialPids.has(p.pid) || p.pid === report.test_pid || p.ppid !== 1,
+    )
+  )
+    fail("orphan zombie evidence contradicts process identity")
   if (!Number.isInteger(report.test_exit)) fail("missing integer test exit")
   if (report.test !== scenario.test || report.timed_out || report.output_truncated)
     fail("wrong test, timeout or truncated output")
@@ -211,7 +287,9 @@ export async function checkContainers(args, run = docker) {
   process.on("SIGTERM", interrupt)
   const reports = new Map()
   try {
-    const imageInfo = JSON.parse(await run(["image", "inspect", image]))[0]
+    const imageInfo = JSON.parse(
+      await run(["image", "inspect", image], { signal: controller.signal }),
+    )[0]
     const binarySha256 = createHash("sha256")
       .update(await readFile(binary))
       .digest("hex")

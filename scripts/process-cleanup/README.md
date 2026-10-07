@@ -81,6 +81,12 @@ fails the harness. Intentionally unreaped zombies exist only in the disposable
 container PID namespace. Containers have a writable private `/tmp`, no writable
 host mounts, a read-only root and no network.
 
+Supervisor proof fields must be explicit: timeout/truncation booleans, process
+identities and states, retained private-directory paths and prerequisite package
+versions. Initial, test and adopted-process identities must agree; incomplete or
+contradictory evidence fails acceptance. Image inspection receives the same
+interrupt cancellation as container creation and execution.
+
 Libtest output is limited to 64K characters and Docker stdout/stderr to 128 KiB each;
 truncation fails acceptance. Rejected JSON, malformed output and Docker failure
 diagnostics are saved before validation/removal. Evidence-write failure still
@@ -104,16 +110,18 @@ SHA-256 `932566e1324fb80f9e30d0512e823d04d6c97b375af3a565306e39b88dd6c28d`.
 
 | Test | PID 1 | Test exit | New orphan zombie | Retained private directory | Acceptance |
 | --- | --- | --- | --- | --- | --- |
-| Private directory cleanup | Python supervisor | 101 (`CleanupUncertain`) | PID 10, PPID 1, PGID 9, state Z | `/tmp/nessa-agent-7f02ZS` | Passed |
+| Private directory cleanup | Python supervisor | 101 (`CleanupUncertain`) | PID 10, PPID 1, PGID 9, state Z | `/tmp/nessa-agent-EbolMH` | Passed |
 | Private directory cleanup | Docker init | 0 | None | None | Passed |
 | TERM-resistant ACP parent and child | Python supervisor | 101 (`CleanupUncertain`) | PID 10, PPID 1, PGID 9, state Z | None | Passed |
 | TERM-resistant ACP parent and child | Docker init | 0 | None | None | Passed |
 
-The external evidence file was `/tmp/nessa-630-final-evidence/acceptance.json`;
+The external evidence file was `/tmp/nessa-630-r1-evidence/acceptance.json`;
 all four entries recorded `accepted: true`, and all disposable containers were
-removed. Twenty-seven pure orchestration tests and 74 architecture tests passed.
-Thirty-two individual acceptance/orchestration mutations caused test failures;
-restored files received fresh modification times. A real-container supervisor
+removed. Thirty-two pure orchestration tests and 74 architecture tests passed.
+At pre-review head `937610ee85494b53e4591a3b3b2146118f864971`, 32 individual
+acceptance/orchestration mutations caused test failures. The review correction
+added 22 schema/cancellation mutations that also failed tests. Restored files
+received fresh modification times. A real-container supervisor
 mutation that reaped adopted children caused the negative case to fail with
 "no new adopted zombie"; restoring the direct-child-only supervisor restored
 four-case acceptance.
