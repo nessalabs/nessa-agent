@@ -1,10 +1,10 @@
 {
   "check": "message-sync",
   "ok": false,
-  "started": "2026-10-07T02:35:30.244Z",
-  "finished": "2026-10-07T02:36:48.074Z",
+  "started": "2026-10-07T05:28:00.100Z",
+  "finished": "2026-10-07T05:30:22.160Z",
   "target": {
-    "url": "http://127.0.0.1:59039/desktop.html",
+    "url": "http://127.0.0.1:43609/desktop.html",
     "mode": "prod"
   },
   "results": [
@@ -13,7 +13,7 @@
       "failures": [],
       "name": "console",
       "harmless": [
-        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:59039/favicon.ico)"
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:43609/favicon.ico)"
       ]
     },
     {
@@ -23,14 +23,14 @@
       "engine": "chromium",
       "calibration": {
         "rate": 4,
-        "plainMs": 23,
-        "throttledMs": 66,
-        "ratio": 2.9,
+        "plainMs": 47,
+        "throttledMs": 189,
+        "ratio": 4.05,
         "ok": true
       },
       "calibrationFrame": {
         "cost": 120,
-        "measuredMs": 116.60000000000014,
+        "measuredMs": 133.30000000000018,
         "attributed": true,
         "ok": true
       }
@@ -55,37 +55,37 @@
           "slowReads": 5,
           "heldLists": 0,
           "heldReads": 0,
-          "now": 1361.8999999910593,
+          "now": 1479.2000000001863,
           "lastFastRequest": {
-            "at": 1057.199999988079,
+            "at": 1116.2000000001863,
             "revision": "2",
             "text": "Initial answer"
           }
         },
         "after": {
           "lists": 23,
-          "reads": 80,
+          "reads": 59,
           "fastReads": 2,
-          "slowReads": 78,
+          "slowReads": 57,
           "heldLists": 0,
           "heldReads": 0,
-          "now": 22545.39999999106,
+          "now": 22720.5,
           "lastFastRequest": {
-            "at": 1057.199999988079,
+            "at": 1116.2000000001863,
             "revision": "2",
             "text": "Initial answer"
           }
         },
         "stalled": {
           "lists": 24,
-          "reads": 81,
+          "reads": 60,
           "fastReads": 2,
-          "slowReads": 79,
+          "slowReads": 58,
           "heldLists": 1,
           "heldReads": 1,
-          "now": 33711.59999999404,
+          "now": 33846.799999999814,
           "lastFastRequest": {
-            "at": 1057.199999988079,
+            "at": 1116.2000000001863,
             "revision": "2",
             "text": "Initial answer"
           }
@@ -102,9 +102,9 @@
               "slowReads": 5,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 1365,
+              "now": 1486.9000000003725,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
@@ -116,15 +116,15 @@
               "slowReads": 11,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 3366.0999999940395,
+              "now": 3488.4000000003725,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000.699999988079
+            "elapsedMs": 2001
           },
           {
             "marker": "active-1",
@@ -137,29 +137,29 @@
               "slowReads": 11,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 3442.699999988079,
+              "now": 3566.0999999996275,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
               "lists": 6,
-              "reads": 21,
+              "reads": 18,
               "fastReads": 2,
-              "slowReads": 19,
+              "slowReads": 16,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 5443.199999988079,
+              "now": 5567.4000000003725,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000.0999999940395
+            "elapsedMs": 2000.7000000001863
           },
           {
             "marker": "active-2",
@@ -167,34 +167,34 @@
             "visibility": "visible",
             "before": {
               "lists": 6,
-              "reads": 22,
+              "reads": 18,
               "fastReads": 2,
-              "slowReads": 20,
+              "slowReads": 16,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 5592.899999991059,
+              "now": 5719.200000000186,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
               "lists": 8,
-              "reads": 30,
+              "reads": 24,
               "fastReads": 2,
-              "slowReads": 28,
+              "slowReads": 22,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 7593.29999999702,
+              "now": 7720.299999999814,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000.4000000059605
+            "elapsedMs": 2001.199999999255
           },
           {
             "marker": "active-3",
@@ -202,34 +202,34 @@
             "visibility": "visible",
             "before": {
               "lists": 8,
-              "reads": 30,
+              "reads": 25,
               "fastReads": 2,
-              "slowReads": 28,
+              "slowReads": 23,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 7814.399999991059,
+              "now": 7943.5999999996275,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
               "lists": 10,
-              "reads": 35,
+              "reads": 29,
               "fastReads": 2,
-              "slowReads": 33,
+              "slowReads": 27,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 9815.39999999106,
+              "now": 9944.700000000186,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000.8999999910593
+            "elapsedMs": 2000.5999999996275
           },
           {
             "marker": "active-4",
@@ -237,34 +237,34 @@
             "visibility": "visible",
             "before": {
               "lists": 10,
-              "reads": 36,
+              "reads": 29,
               "fastReads": 2,
-              "slowReads": 34,
+              "slowReads": 27,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 9857.09999999404,
+              "now": 9990.700000000186,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
               "lists": 12,
-              "reads": 42,
+              "reads": 34,
               "fastReads": 2,
-              "slowReads": 40,
+              "slowReads": 32,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 11857.29999999702,
+              "now": 11992.700000000186,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000.1000000089407
+            "elapsedMs": 2001
           },
           {
             "marker": "active-5",
@@ -272,34 +272,34 @@
             "visibility": "visible",
             "before": {
               "lists": 12,
-              "reads": 42,
+              "reads": 34,
               "fastReads": 2,
-              "slowReads": 40,
+              "slowReads": 32,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 11973.29999999702,
+              "now": 12110.700000000186,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
               "lists": 14,
-              "reads": 49,
+              "reads": 38,
               "fastReads": 2,
-              "slowReads": 47,
+              "slowReads": 36,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 13974.39999999106,
+              "now": 14112.599999999627,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000.5999999940395
+            "elapsedMs": 2001.4000000003725
           },
           {
             "marker": "active-6",
@@ -307,34 +307,34 @@
             "visibility": "visible",
             "before": {
               "lists": 15,
-              "reads": 50,
+              "reads": 38,
               "fastReads": 2,
-              "slowReads": 48,
+              "slowReads": 36,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 14162.29999999702,
+              "now": 14302.799999999814,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
               "lists": 17,
-              "reads": 57,
+              "reads": 43,
               "fastReads": 2,
-              "slowReads": 55,
+              "slowReads": 41,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 16162.89999999106,
+              "now": 16304.5,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000.0999999940395
+            "elapsedMs": 2001.0999999996275
           },
           {
             "marker": "active-7",
@@ -342,34 +342,34 @@
             "visibility": "visible",
             "before": {
               "lists": 17,
-              "reads": 57,
+              "reads": 43,
               "fastReads": 2,
-              "slowReads": 55,
+              "slowReads": 41,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 16173.59999999404,
+              "now": 16316.200000000186,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
               "lists": 19,
-              "reads": 65,
+              "reads": 48,
               "fastReads": 2,
-              "slowReads": 63,
+              "slowReads": 46,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 18174.59999999404,
+              "now": 18317.5,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000.5999999940395
+            "elapsedMs": 2000.7999999998137
           },
           {
             "marker": "active-8",
@@ -377,34 +377,34 @@
             "visibility": "visible",
             "before": {
               "lists": 19,
-              "reads": 65,
+              "reads": 48,
               "fastReads": 2,
-              "slowReads": 63,
+              "slowReads": 46,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 18258.89999999106,
+              "now": 18404.700000000186,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
               "lists": 21,
-              "reads": 71,
+              "reads": 53,
               "fastReads": 2,
-              "slowReads": 69,
+              "slowReads": 51,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 20259.19999998808,
+              "now": 20406.099999999627,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000.199999988079
+            "elapsedMs": 2000.8999999994412
           },
           {
             "marker": "active-9",
@@ -412,34 +412,34 @@
             "visibility": "visible",
             "before": {
               "lists": 21,
-              "reads": 72,
+              "reads": 54,
               "fastReads": 2,
-              "slowReads": 70,
+              "slowReads": 52,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 20416.39999999106,
+              "now": 20566.599999999627,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
               "lists": 23,
-              "reads": 80,
+              "reads": 58,
               "fastReads": 2,
-              "slowReads": 78,
+              "slowReads": 56,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 22417.79999999702,
+              "now": 22569,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2001.3999999910593
+            "elapsedMs": 2000.699999999255
           },
           {
             "marker": "held-0",
@@ -447,34 +447,34 @@
             "visibility": "visible",
             "before": {
               "lists": 24,
-              "reads": 81,
+              "reads": 59,
               "fastReads": 2,
-              "slowReads": 79,
+              "slowReads": 57,
               "heldLists": 1,
-              "heldReads": 1,
-              "now": 23077.69999998808,
+              "heldReads": 0,
+              "now": 23165.599999999627,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
               "lists": 24,
-              "reads": 81,
+              "reads": 60,
               "fastReads": 2,
-              "slowReads": 79,
+              "slowReads": 58,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 25078.19999998808,
+              "now": 25166.5,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000.4000000059605
+            "elapsedMs": 2000.2000000001863
           },
           {
             "marker": "held-1",
@@ -482,34 +482,34 @@
             "visibility": "visible",
             "before": {
               "lists": 24,
-              "reads": 81,
+              "reads": 60,
               "fastReads": 2,
-              "slowReads": 79,
+              "slowReads": 58,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 25153.89999999106,
+              "now": 25244,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
               "lists": 24,
-              "reads": 81,
+              "reads": 60,
               "fastReads": 2,
-              "slowReads": 79,
+              "slowReads": 58,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 27154.59999999404,
+              "now": 27245.200000000186,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000.7000000029802
+            "elapsedMs": 2000.5
           },
           {
             "marker": "held-2",
@@ -517,34 +517,34 @@
             "visibility": "visible",
             "before": {
               "lists": 24,
-              "reads": 81,
+              "reads": 60,
               "fastReads": 2,
-              "slowReads": 79,
+              "slowReads": 58,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 27303.39999999106,
+              "now": 27394.900000000373,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
               "lists": 24,
-              "reads": 81,
+              "reads": 60,
               "fastReads": 2,
-              "slowReads": 79,
+              "slowReads": 58,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 29303.79999999702,
+              "now": 29395.799999999814,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000.4000000059605
+            "elapsedMs": 2000.2000000001863
           },
           {
             "marker": "held-3",
@@ -552,34 +552,34 @@
             "visibility": "visible",
             "before": {
               "lists": 24,
-              "reads": 81,
+              "reads": 60,
               "fastReads": 2,
-              "slowReads": 79,
+              "slowReads": 58,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 29525.5,
+              "now": 29619.400000000373,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
               "lists": 24,
-              "reads": 81,
+              "reads": 60,
               "fastReads": 2,
-              "slowReads": 79,
+              "slowReads": 58,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 31525.79999999702,
+              "now": 31620.599999999627,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000.2999999970198
+            "elapsedMs": 2000.8999999994412
           },
           {
             "marker": "held-4",
@@ -587,34 +587,34 @@
             "visibility": "visible",
             "before": {
               "lists": 24,
-              "reads": 81,
+              "reads": 60,
               "fastReads": 2,
-              "slowReads": 79,
+              "slowReads": 58,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 31570,
+              "now": 31665.299999999814,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
               "lists": 24,
-              "reads": 81,
+              "reads": 60,
               "fastReads": 2,
-              "slowReads": 79,
+              "slowReads": 58,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 33571,
+              "now": 33667.200000000186,
               "lastFastRequest": {
-                "at": 1057.199999988079,
+                "at": 1116.2000000001863,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000.9000000059605
+            "elapsedMs": 2000.4000000003725
           }
         ]
       }
@@ -633,43 +633,43 @@
         "activeMs": [null, null, null, null, null, null, null, null, null, null],
         "heldMs": [null, null, null, null, null],
         "before": {
-          "lists": 2,
-          "reads": 7,
+          "lists": 13,
+          "reads": 25,
           "fastReads": 2,
-          "slowReads": 5,
+          "slowReads": 23,
           "heldLists": 0,
           "heldReads": 0,
-          "now": 1382,
+          "now": 22611,
           "lastFastRequest": {
-            "at": 1082,
+            "at": 21659,
             "revision": "2",
             "text": "Initial answer"
           }
         },
         "after": {
-          "lists": 23,
-          "reads": 91,
+          "lists": 34,
+          "reads": 68,
           "fastReads": 2,
-          "slowReads": 89,
+          "slowReads": 66,
           "heldLists": 0,
           "heldReads": 0,
-          "now": 22576,
+          "now": 62854,
           "lastFastRequest": {
-            "at": 1082,
+            "at": 21659,
             "revision": "2",
             "text": "Initial answer"
           }
         },
         "stalled": {
-          "lists": 24,
-          "reads": 92,
+          "lists": 36,
+          "reads": 70,
           "fastReads": 2,
-          "slowReads": 90,
+          "slowReads": 68,
           "heldLists": 1,
           "heldReads": 1,
-          "now": 33774,
+          "now": 85932,
           "lastFastRequest": {
-            "at": 1082,
+            "at": 21659,
             "revision": "2",
             "text": "Initial answer"
           }
@@ -680,525 +680,525 @@
             "seen": false,
             "visibility": "visible",
             "before": {
-              "lists": 2,
-              "reads": 7,
+              "lists": 14,
+              "reads": 27,
               "fastReads": 2,
-              "slowReads": 5,
+              "slowReads": 25,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 1390,
+              "now": 24515,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
-              "lists": 4,
-              "reads": 15,
+              "lists": 16,
+              "reads": 31,
               "fastReads": 2,
-              "slowReads": 13,
+              "slowReads": 29,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 3392,
+              "now": 27346,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2002
+            "elapsedMs": 2831
           },
           {
             "marker": "active-1",
             "seen": false,
             "visibility": "visible",
             "before": {
-              "lists": 4,
-              "reads": 15,
+              "lists": 16,
+              "reads": 31,
               "fastReads": 2,
-              "slowReads": 13,
+              "slowReads": 29,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 3470,
+              "now": 28300,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
-              "lists": 6,
-              "reads": 23,
+              "lists": 18,
+              "reads": 35,
               "fastReads": 2,
-              "slowReads": 21,
+              "slowReads": 33,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 5470,
+              "now": 31136,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2001
+            "elapsedMs": 2835
           },
           {
             "marker": "active-2",
             "seen": false,
             "visibility": "visible",
             "before": {
-              "lists": 6,
-              "reads": 24,
+              "lists": 18,
+              "reads": 35,
               "fastReads": 2,
-              "slowReads": 22,
+              "slowReads": 33,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 5620,
+              "now": 32075,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
-              "lists": 8,
-              "reads": 31,
+              "lists": 20,
+              "reads": 39,
               "fastReads": 2,
-              "slowReads": 29,
+              "slowReads": 37,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 7620,
+              "now": 34952,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000
+            "elapsedMs": 2877
           },
           {
             "marker": "active-3",
             "seen": false,
             "visibility": "visible",
             "before": {
-              "lists": 8,
-              "reads": 32,
+              "lists": 20,
+              "reads": 39,
               "fastReads": 2,
-              "slowReads": 30,
+              "slowReads": 37,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 7842,
+              "now": 35903,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
-              "lists": 10,
-              "reads": 40,
+              "lists": 22,
+              "reads": 43,
               "fastReads": 2,
-              "slowReads": 38,
+              "slowReads": 41,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 9843,
+              "now": 38817,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2001
+            "elapsedMs": 2914
           },
           {
             "marker": "active-4",
             "seen": false,
             "visibility": "visible",
             "before": {
-              "lists": 10,
-              "reads": 40,
+              "lists": 22,
+              "reads": 43,
               "fastReads": 2,
-              "slowReads": 38,
+              "slowReads": 41,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 9887,
+              "now": 39776,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
-              "lists": 12,
-              "reads": 48,
+              "lists": 24,
+              "reads": 47,
               "fastReads": 2,
-              "slowReads": 46,
+              "slowReads": 45,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 11888,
+              "now": 42533,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000
+            "elapsedMs": 2757
           },
           {
             "marker": "active-5",
             "seen": false,
             "visibility": "visible",
             "before": {
-              "lists": 12,
-              "reads": 49,
+              "lists": 24,
+              "reads": 47,
               "fastReads": 2,
-              "slowReads": 47,
+              "slowReads": 45,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 12006,
+              "now": 43458,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
-              "lists": 14,
-              "reads": 57,
+              "lists": 26,
+              "reads": 51,
               "fastReads": 2,
-              "slowReads": 55,
+              "slowReads": 49,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 14007,
+              "now": 46201,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2001
+            "elapsedMs": 2742
           },
           {
             "marker": "active-6",
             "seen": false,
             "visibility": "visible",
             "before": {
-              "lists": 15,
-              "reads": 58,
+              "lists": 26,
+              "reads": 51,
               "fastReads": 2,
-              "slowReads": 56,
+              "slowReads": 49,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 14198,
+              "now": 47124,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
-              "lists": 17,
-              "reads": 66,
+              "lists": 28,
+              "reads": 55,
               "fastReads": 2,
-              "slowReads": 64,
+              "slowReads": 53,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 16199,
+              "now": 49938,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2001
+            "elapsedMs": 2814
           },
           {
             "marker": "active-7",
             "seen": false,
             "visibility": "visible",
             "before": {
-              "lists": 17,
-              "reads": 66,
+              "lists": 28,
+              "reads": 55,
               "fastReads": 2,
-              "slowReads": 64,
+              "slowReads": 53,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 16211,
+              "now": 50833,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
-              "lists": 19,
-              "reads": 74,
+              "lists": 30,
+              "reads": 59,
               "fastReads": 2,
-              "slowReads": 72,
+              "slowReads": 57,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 18212,
+              "now": 53609,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2001
+            "elapsedMs": 2776
           },
           {
             "marker": "active-8",
             "seen": false,
             "visibility": "visible",
             "before": {
-              "lists": 19,
-              "reads": 74,
+              "lists": 30,
+              "reads": 59,
               "fastReads": 2,
-              "slowReads": 72,
+              "slowReads": 57,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 18298,
+              "now": 54528,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
-              "lists": 21,
-              "reads": 82,
+              "lists": 32,
+              "reads": 63,
               "fastReads": 2,
-              "slowReads": 80,
+              "slowReads": 61,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 20299,
+              "now": 57288,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2001
+            "elapsedMs": 2761
           },
           {
             "marker": "active-9",
             "seen": false,
             "visibility": "visible",
             "before": {
-              "lists": 21,
-              "reads": 82,
+              "lists": 32,
+              "reads": 63,
               "fastReads": 2,
-              "slowReads": 80,
+              "slowReads": 61,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 20457,
+              "now": 58191,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
-              "lists": 23,
-              "reads": 90,
+              "lists": 34,
+              "reads": 67,
               "fastReads": 2,
-              "slowReads": 88,
+              "slowReads": 65,
               "heldLists": 0,
               "heldReads": 0,
-              "now": 22458,
+              "now": 60953,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2001
+            "elapsedMs": 2761
           },
           {
             "marker": "held-0",
             "seen": false,
             "visibility": "visible",
             "before": {
-              "lists": 24,
-              "reads": 92,
+              "lists": 36,
+              "reads": 70,
               "fastReads": 2,
-              "slowReads": 90,
+              "slowReads": 68,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 23156,
+              "now": 67333,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
-              "lists": 24,
-              "reads": 92,
+              "lists": 36,
+              "reads": 70,
               "fastReads": 2,
-              "slowReads": 90,
+              "slowReads": 68,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 25157,
+              "now": 69998,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2001
+            "elapsedMs": 2665
           },
           {
             "marker": "held-1",
             "seen": false,
             "visibility": "visible",
             "before": {
-              "lists": 24,
-              "reads": 92,
+              "lists": 36,
+              "reads": 70,
               "fastReads": 2,
-              "slowReads": 90,
+              "slowReads": 68,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 25233,
+              "now": 70862,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
-              "lists": 24,
-              "reads": 92,
+              "lists": 36,
+              "reads": 70,
               "fastReads": 2,
-              "slowReads": 90,
+              "slowReads": 68,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 27233,
+              "now": 73487,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000
+            "elapsedMs": 2625
           },
           {
             "marker": "held-2",
             "seen": false,
             "visibility": "visible",
             "before": {
-              "lists": 24,
-              "reads": 92,
+              "lists": 36,
+              "reads": 70,
               "fastReads": 2,
-              "slowReads": 90,
+              "slowReads": 68,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 27382,
+              "now": 74362,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
-              "lists": 24,
-              "reads": 92,
+              "lists": 36,
+              "reads": 70,
               "fastReads": 2,
-              "slowReads": 90,
+              "slowReads": 68,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 29383,
+              "now": 77029,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2001
+            "elapsedMs": 2667
           },
           {
             "marker": "held-3",
             "seen": false,
             "visibility": "visible",
             "before": {
-              "lists": 24,
-              "reads": 92,
+              "lists": 36,
+              "reads": 70,
               "fastReads": 2,
-              "slowReads": 90,
+              "slowReads": 68,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 29605,
+              "now": 77923,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
-              "lists": 24,
-              "reads": 92,
+              "lists": 36,
+              "reads": 70,
               "fastReads": 2,
-              "slowReads": 90,
+              "slowReads": 68,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 31605,
+              "now": 80526,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000
+            "elapsedMs": 2603
           },
           {
             "marker": "held-4",
             "seen": false,
             "visibility": "visible",
             "before": {
-              "lists": 24,
-              "reads": 92,
+              "lists": 36,
+              "reads": 70,
               "fastReads": 2,
-              "slowReads": 90,
+              "slowReads": 68,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 31650,
+              "now": 81400,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "after": {
-              "lists": 24,
-              "reads": 92,
+              "lists": 36,
+              "reads": 70,
               "fastReads": 2,
-              "slowReads": 90,
+              "slowReads": 68,
               "heldLists": 1,
               "heldReads": 1,
-              "now": 33650,
+              "now": 84090,
               "lastFastRequest": {
-                "at": 1082,
+                "at": 21659,
                 "revision": "2",
                 "text": "Initial answer"
               }
             },
             "rendered": ["Synchronize this message", "Initial answer"],
-            "elapsedMs": 2000
+            "elapsedMs": 2690
           }
         ]
       }

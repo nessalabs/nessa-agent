@@ -1,15 +1,19 @@
 {
-  "base": "86cbce1885d998165fa2c3c0cfbcfb37ec6a00cc",
-  "fixedSourceSha256": "55a30b12a6fa90845e987273a060786938f690ee45fb8a38b2023b98c1797a4d",
-  "originalSourceSha256": "a85a0aa005cc9ad023234687d4c91db42d7ed1ab9855207cb223b89c05737f23",
-  "unitBefore": {
+  "head": "5c5bb19753730ed58410ddc0b3229d3e25c5ad34",
+  "base": "5a045d9f2251e155e54949eafc7d9b241357d7fe",
+  "fixedSourceSha256": "bc45bca08530fd6c420a0b428251e59f1b49d462fb37f27e4799bf93d2ec6700",
+  "revertedSourceSha256": "9e994878d6e7fb7afe8d6831d2a84dbf9aa18e4e3a07e14c762a16bfeac53c1f",
+  "unitReverted": {
     "failed": 4,
-    "skipped": 146
+    "passed": 151
   },
-  "unitAfter": {
-    "passed": 150
+  "unitFixed": {
+    "passed": 155
   },
-  "runnerBefore": "could-not-run: message-sync fixture is not served",
-  "browserReverted": "Chromium/WebKit: ten active and five held samples null per engine",
-  "browserRestored": "run-all --mode prod --only message-sync: 5/5 held, Chromium/WebKit columns"
+  "frontend": {
+    "files": 285,
+    "passed": 3793
+  },
+  "browserReverted": "Chromium and WebKit columns, delivery only: ten active and five held samples null per engine",
+  "browserFixed": "message-sync --only delivery, three runs: 4/15 held; Chromium delivery within 600 ms; WebKit samples above 600 ms"
 }

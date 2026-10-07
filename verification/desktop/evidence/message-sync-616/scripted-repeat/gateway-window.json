@@ -1,10 +1,10 @@
 {
   "check": "gateway-window",
-  "ok": false,
-  "started": "2026-10-07T05:31:48.531Z",
-  "finished": "2026-10-07T05:32:16.671Z",
+  "ok": true,
+  "started": "2026-10-07T05:34:20.367Z",
+  "finished": "2026-10-07T05:35:17.196Z",
   "target": {
-    "url": "http://127.0.0.1:45323/desktop.html",
+    "url": "http://127.0.0.1:46639/desktop.html",
     "mode": "dev"
   },
   "results": [
@@ -13,12 +13,12 @@
       "failures": [],
       "name": "setup",
       "seen": {
-        "title": "W603eedcb: reply with exactly that word and noth"
+        "title": "Wdea61959: reply with exactly that word and noth"
       },
       "timings": {
-        "gatewayMs": 292,
-        "devServerMs": 2695,
-        "agentTurnMs": 1224
+        "gatewayMs": 289,
+        "devServerMs": 2620,
+        "agentTurnMs": 1214
       }
     },
     {
@@ -27,10 +27,10 @@
       "name": "handshake",
       "engine": "chromium",
       "layout": "columns",
-      "ms": 1626,
+      "ms": 1612,
       "seen": [
         {
-          "socket": "ws://127.0.0.1:34877/session",
+          "socket": "ws://127.0.0.1:42907/session",
           "client": "nessa-panel",
           "answer": {
             "ok": true,
@@ -45,7 +45,7 @@
       "name": "lists",
       "engine": "chromium",
       "layout": "columns",
-      "ms": 1798,
+      "ms": 30011,
       "seen": {
         "listed": true,
         "status": null,
@@ -62,12 +62,12 @@
       "name": "opens",
       "engine": "chromium",
       "layout": "columns",
-      "ms": 1822,
+      "ms": 2240,
       "seen": {
         "messages": [
           {
             "role": "user",
-            "text": "W603eedcb: reply with exactly that word and nothing else, using no tools.",
+            "text": "Wdea61959: reply with exactly that word and nothing else, using no tools.",
             "inside": true
           },
           {
@@ -84,13 +84,13 @@
       "name": "live",
       "engine": "chromium",
       "layout": "columns",
-      "ms": 2645,
+      "ms": 2263,
       "seen": {
         "before": 2,
         "messages": [
           {
             "role": "user",
-            "text": "W603eedcb: reply with exactly that word and nothing else, using no tools.",
+            "text": "Wdea61959: reply with exactly that word and nothing else, using no tools.",
             "inside": true
           },
           {
@@ -100,7 +100,7 @@
           },
           {
             "role": "user",
-            "text": "W6e887a09: reply with exactly that word and nothing else, using no tools.",
+            "text": "Wf2a28b9a: reply with exactly that word and nothing else, using no tools.",
             "inside": true
           },
           {
@@ -118,7 +118,7 @@
       "name": "apps",
       "engine": "chromium",
       "layout": "columns",
-      "ms": 3006,
+      "ms": 3181,
       "seen": {
         "state": "live",
         "heading": "Review rows (nessa-test)",
@@ -133,7 +133,15 @@
       "layout": "columns",
       "seen": [
         {
-          "socket": "ws://127.0.0.1:34877/session",
+          "socket": "ws://127.0.0.1:42907/session",
+          "client": "nessa-panel",
+          "answer": {
+            "ok": true,
+            "principal": "surface:nessa-panel"
+          }
+        },
+        {
+          "socket": "ws://127.0.0.1:42907/session",
           "client": "nessa-panel",
           "answer": {
             "ok": true,
@@ -143,24 +151,15 @@
       ]
     },
     {
-      "ok": false,
-      "failures": [
-        "requestfailed: http://127.0.0.1:34877/mcp-resources net::ERR_ABORTED"
-      ],
-      "engine": "chromium",
-      "layout": "columns",
-      "name": "console"
-    },
-    {
       "ok": true,
       "failures": [],
       "name": "handshake",
       "engine": "webkit",
       "layout": "columns",
-      "ms": 1252,
+      "ms": 1263,
       "seen": [
         {
-          "socket": "ws://127.0.0.1:34877/session",
+          "socket": "ws://127.0.0.1:42907/session",
           "client": "nessa-panel",
           "answer": {
             "ok": true,
@@ -175,7 +174,7 @@
       "name": "lists",
       "engine": "webkit",
       "layout": "columns",
-      "ms": 1154,
+      "ms": 1241,
       "seen": {
         "listed": true,
         "status": null,
@@ -192,12 +191,12 @@
       "name": "opens",
       "engine": "webkit",
       "layout": "columns",
-      "ms": 1904,
+      "ms": 2227,
       "seen": {
         "messages": [
           {
             "role": "user",
-            "text": "W603eedcb: reply with exactly that word and nothing else, using no tools.",
+            "text": "Wdea61959: reply with exactly that word and nothing else, using no tools.",
             "inside": true
           },
           {
@@ -207,7 +206,7 @@
           },
           {
             "role": "user",
-            "text": "W6e887a09: reply with exactly that word and nothing else, using no tools.",
+            "text": "Wf2a28b9a: reply with exactly that word and nothing else, using no tools.",
             "inside": true
           },
           {
@@ -224,13 +223,13 @@
       "name": "live",
       "engine": "webkit",
       "layout": "columns",
-      "ms": 2196,
+      "ms": 2256,
       "seen": {
         "before": 4,
         "messages": [
           {
             "role": "user",
-            "text": "W603eedcb: reply with exactly that word and nothing else, using no tools.",
+            "text": "Wdea61959: reply with exactly that word and nothing else, using no tools.",
             "inside": true
           },
           {
@@ -240,7 +239,7 @@
           },
           {
             "role": "user",
-            "text": "W6e887a09: reply with exactly that word and nothing else, using no tools.",
+            "text": "Wf2a28b9a: reply with exactly that word and nothing else, using no tools.",
             "inside": true
           },
           {
@@ -250,7 +249,7 @@
           },
           {
             "role": "user",
-            "text": "W0005dfb3: reply with exactly that word and nothing else, using no tools.",
+            "text": "W5846fa41: reply with exactly that word and nothing else, using no tools.",
             "inside": true
           },
           {
@@ -268,7 +267,7 @@
       "name": "apps",
       "engine": "webkit",
       "layout": "columns",
-      "ms": 3041,
+      "ms": 2953,
       "seen": {
         "state": "live",
         "heading": "Review rows (nessa-test)",
@@ -283,7 +282,7 @@
       "layout": "columns",
       "seen": [
         {
-          "socket": "ws://127.0.0.1:34877/session",
+          "socket": "ws://127.0.0.1:42907/session",
           "client": "nessa-panel",
           "answer": {
             "ok": true,
