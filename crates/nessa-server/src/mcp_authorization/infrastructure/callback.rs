@@ -9,6 +9,7 @@ use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{self, Sender};
+use tokio::task::JoinHandle;
 use tokio::time::{timeout, timeout_at, Instant};
 
 use crate::mcp_authorization::application::{CallbackBind, CallbackQuery, ConsentCallback};
@@ -23,16 +24,36 @@ pub struct LoopbackCallback;
 #[async_trait]
 impl ConsentCallback for LoopbackCallback {
     async fn listen(&self, wait_for: Duration) -> Result<CallbackBind, ()> {
+        let (bind, _completion) = self.bind(wait_for).await?;
+        Ok(bind)
+    }
+}
+
+impl LoopbackCallback {
+    // The same task owns the listener and all connection futures. Tests retain
+    // its completion receipt instead of observing OS-specific connect refusal.
+    #[cfg(test)]
+    pub(crate) async fn listen_with_completion(
+        &self,
+        wait_for: Duration,
+    ) -> Result<(CallbackBind, JoinHandle<()>), ()> {
+        self.bind(wait_for).await
+    }
+
+    async fn bind(&self, wait_for: Duration) -> Result<(CallbackBind, JoinHandle<()>), ()> {
         let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|_| ())?;
         let port = listener.local_addr().map_err(|_| ())?.port();
         let (sender, candidates) = mpsc::channel(1);
-        tokio::spawn(async move {
+        let completion = tokio::spawn(async move {
             let _ = timeout(wait_for, serve(listener, sender, CONNECTION_BUDGET)).await;
         });
-        Ok(CallbackBind {
-            redirect_uri: format!("http://127.0.0.1:{port}/mcp-oauth/callback"),
-            candidates,
-        })
+        Ok((
+            CallbackBind {
+                redirect_uri: format!("http://127.0.0.1:{port}/mcp-oauth/callback"),
+                candidates,
+            },
+            completion,
+        ))
     }
 }
 

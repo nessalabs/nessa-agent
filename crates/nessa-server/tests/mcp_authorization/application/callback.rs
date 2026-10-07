@@ -5,6 +5,7 @@ use crate::mcp_authorization::infrastructure::LoopbackCallback;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
+use tokio::task::JoinHandle;
 
 fn callback_owner(
     memory: Arc<MemoryAuthorization>,
@@ -45,14 +46,14 @@ async fn pending(owner: &Arc<AuthorizationOwner>) -> (String, String, u64) {
     )
 }
 
-async fn wait_until(mut check: impl AsyncFnMut() -> bool) {
+async fn wait_until(stage: &str, mut check: impl AsyncFnMut() -> bool) {
     tokio::time::timeout(Duration::from_secs(2), async {
         while !check().await {
             tokio::task::yield_now().await;
         }
     })
     .await
-    .unwrap();
+    .unwrap_or_else(|_| panic!("timed out waiting for {stage}"));
 }
 
 async fn socket_callback(redirect: &str, query: &str) {
@@ -69,6 +70,27 @@ async fn socket_callback(redirect: &str, query: &str) {
     assert!(!String::from_utf8_lossy(&page).contains(query));
 }
 
+struct ObservedLoopback {
+    completion: Mutex<Option<JoinHandle<()>>>,
+}
+#[async_trait]
+impl ConsentCallback for ObservedLoopback {
+    async fn listen(&self, wait_for: Duration) -> Result<CallbackBind, ()> {
+        let (bind, completion) = LoopbackCallback.listen_with_completion(wait_for).await?;
+        *self.completion.lock().await = Some(completion);
+        Ok(bind)
+    }
+}
+impl ObservedLoopback {
+    async fn wait_closed(&self) {
+        let completion = self.completion.lock().await.take().unwrap();
+        tokio::time::timeout(Duration::from_secs(2), completion)
+            .await
+            .expect("timed out waiting for listener supervisor completion before exchange release")
+            .expect("listener supervisor must complete successfully, not panic");
+    }
+}
+
 #[tokio::test]
 async fn a3c_real_listener_wrong_state_then_valid_closes_before_exchange() {
     let memory = Arc::new(MemoryAuthorization::new());
@@ -77,7 +99,10 @@ async fn a3c_real_listener_wrong_state_then_valid_closes_before_exchange() {
         .push_route("https://as.example/token", Ok(token_body("access")))
         .await;
     let http = Arc::new(GatedHttp::new(memory.clone()));
-    let owner = callback_owner(memory.clone(), Arc::new(LoopbackCallback), http.clone());
+    let callback = Arc::new(ObservedLoopback {
+        completion: Mutex::new(None),
+    });
+    let owner = callback_owner(memory.clone(), callback.clone(), http.clone());
     let (state, redirect, _) = pending(&owner).await;
     socket_callback(&redirect, "state=wrong&code=wrong").await;
     assert_eq!(http.entered.load(Ordering::SeqCst), 0);
@@ -85,14 +110,17 @@ async fn a3c_real_listener_wrong_state_then_valid_closes_before_exchange() {
     assert!(matches!(before.phase, Phase::PendingConsent { .. }));
     assert!(!before.attempt.unwrap().consumed);
     socket_callback(&redirect, &format!("state={state}&code=valid")).await;
-    wait_until(async || http.entered.load(Ordering::SeqCst) == 1).await;
-    let url = url::Url::parse(&redirect).unwrap();
-    let host = format!("127.0.0.1:{}", url.port().unwrap());
-    wait_until(async || TcpStream::connect(&host).await.is_err()).await;
+    wait_until("token exchange entry", async || {
+        http.entered.load(Ordering::SeqCst) == 1
+    })
+    .await;
+    // The real listener supervisor owns the socket and scoped readers. Its
+    // successful completion proves release without a refused-connect timer.
+    callback.wait_closed().await;
     assert_eq!(http.entered.load(Ordering::SeqCst), 1);
     http.release.store(true, Ordering::SeqCst);
     drop(owner);
-    wait_until(async || {
+    wait_until("Ready publication after exchange release", async || {
         matches!(
             memory.load(server()).await.unwrap().unwrap().phase,
             Phase::Ready { .. }
@@ -157,8 +185,11 @@ async fn a3e_preloaded_duplicate_candidates_exchange_once() {
     let _ = sender.try_send(query(&state));
     tokio::time::timeout(Duration::from_secs(2), sender.closed())
         .await
-        .unwrap();
-    wait_until(async || owner.facts(server()).await.unwrap().phase == "ready").await;
+        .expect("timed out waiting for duplicate candidate receiver closure");
+    wait_until("Ready after duplicate candidates", async || {
+        owner.facts(server()).await.unwrap().phase == "ready"
+    })
+    .await;
     assert_eq!(
         memory
             .posts()
@@ -202,7 +233,7 @@ async fn a3d_denied_expired_or_terminal_stale_closes_candidates() {
         sender.send(candidate).await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), sender.closed())
             .await
-            .unwrap();
+            .unwrap_or_else(|_| panic!("timed out waiting for {kind} candidate receiver closure"));
         assert!(matches!(
             memory.load(server()).await.unwrap().unwrap().phase,
             Phase::ConsentNeeded
@@ -233,7 +264,7 @@ async fn a3e_changed_resource_candidate_has_no_exchange_and_terminal_revoke_stop
     let _ = sender.try_send(query(&state));
     tokio::time::timeout(Duration::from_secs(2), sender.closed())
         .await
-        .unwrap();
+        .expect("timed out waiting for revoked candidate receiver closure");
     assert!(!memory
         .posts()
         .await
@@ -298,9 +329,9 @@ async fn a3d_accepted_exchange_failures_close_stream_and_keep_typed_phase() {
         sender.send(query(&state)).await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), sender.closed())
             .await
-            .unwrap();
+            .expect("timed out waiting for accepted exchange candidate receiver closure");
         drop(owner);
-        wait_until(async || {
+        wait_until("typed terminal exchange phase", async || {
             let phase = memory.load(server()).await.unwrap().unwrap().phase;
             if incomplete {
                 matches!(phase, Phase::AuthorizationIncomplete { .. })

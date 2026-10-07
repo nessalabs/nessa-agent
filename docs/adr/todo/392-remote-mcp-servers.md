@@ -509,6 +509,7 @@ delivers bounded candidates and does not keep a copy of the expected state.
 | A3e | Concurrent valid candidates, queued candidate during revoke/resource change | Serial domain admission consumes at most one current state; terminal decisions discard queued candidates |
 | A3f | Full candidate channel, connection saturation, slow trickle, receiver drop or whole deadline | Bound active readers and queued candidates; connection deadlines do not reset; receiver closure or the original whole-attempt deadline closes the listener and its scoped readers |
 | A3g | Fixed response write fails or stalls after valid framing | Bound the write, retain the valid candidate, and keep codes/state/request targets out of the response |
+| A3h | Real wrong-state then valid TCP callback while token exchange remains gated | Observe successful completion of the listener's owning task before releasing exchange; task completion drops the listener and scoped connections, without relying on platform-specific refused-connect timing |
 
 The candidate channel has capacity one. Its four scoped connection futures
 include candidates waiting for channel capacity, after their sockets close.
