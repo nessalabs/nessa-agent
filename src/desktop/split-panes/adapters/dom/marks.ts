@@ -42,16 +42,9 @@ export const marks = {
   /** On the drag's root while a preview draws panes away from where they are laid out. */
   reflow: "data-drag-reflow",
   /**
-   * On the drag's root the frame after a preview's styles, while the preview
-   * promotes its panes. The style frame does not also promote them
-   * (`drag.test.tsx`).
-   */
-  promoted: "data-drag-promoted",
-  /**
-   * On the drag's root from the moment a press becomes a drag until the
-   * preview's bodies are back. Glass blur stays off for that span, and the
-   * frame that brings the last body back does not also restore it
-   * (`drag.test.tsx`).
+   * On the drag's root from the moment a press becomes a drag until a frame
+   * after the preview's paint is gone. Glass blur stays off for that span
+   * (`styles.test.ts`).
    */
   pressing: "data-drag-pressing",
   /** On the drag's root while carrying (`pane` or `item`), and on what was pressed. */
