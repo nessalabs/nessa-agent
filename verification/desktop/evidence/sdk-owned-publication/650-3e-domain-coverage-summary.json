@@ -1,0 +1,14 @@
+{
+  "head": "3e65d96e44e27c502a6225ec16e554fe18c4a152",
+  "run": 37637673327,
+  "job": 112848553772,
+  "source": "decoded completed workflow-job logs via GitHub connector; fullrun still inprogress",
+  "summary": [
+    "2026-10-07T14:40:58.6706922Z test result: ok. 957 passed; 0 failed; 13 ignored; 0 measured; 6 filtered out; finished in 320.06s",
+    "2026-10-07T14:41:12.3222303Z test result: ok. 401 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 13.63s",
+    "2026-10-07T14:41:12.8564581Z test result: ok. 212 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s",
+    "2026-10-07T14:43:09.2495815Z test result: ok. 65 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 116.39s",
+    "2026-10-07T14:43:12.6586073Z TOTAL                                                              6552                 0   100.00%         703                 0   100.00%        5216                 0   100.00%           0                 0         -"
+  ],
+  "claim": "100% 6552regions 703functions 5216lines; no uncovered. Does not override open binding-race finding."
+}
