@@ -1,0 +1,366 @@
+{
+  "check": "run-all",
+  "ok": true,
+  "summary": [
+    {
+      "check": "message-sync",
+      "status": "held",
+      "held": "5/5",
+      "seconds": 31
+    }
+  ],
+  "checks": {
+    "message-sync": {
+      "check": "message-sync",
+      "ok": true,
+      "started": "2026-10-07T02:37:00.391Z",
+      "finished": "2026-10-07T02:37:31.571Z",
+      "target": {
+        "url": "http://127.0.0.1:59305/desktop.html",
+        "mode": "prod"
+      },
+      "results": [
+        {
+          "ok": true,
+          "failures": [],
+          "name": "console",
+          "harmless": [
+            "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:59305/favicon.ico)"
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "calibration",
+          "engine": "chromium",
+          "calibration": {
+            "rate": 4,
+            "plainMs": 17,
+            "throttledMs": 63,
+            "ratio": 3.81,
+            "ok": true
+          },
+          "calibrationFrame": {
+            "cost": 120,
+            "measuredMs": 116.59999999999991,
+            "attributed": true,
+            "ok": true
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "delivery",
+          "engine": "chromium",
+          "layout": "columns",
+          "run": 1,
+          "measured": {
+            "timeoutDiagnostics": [],
+            "activeMs": [
+              479.09999999403954, 425.09999999403954, 101.40000000596046,
+              28.700000002980232, 457, 133.80000001192093, 60.1000000089407,
+              239.70000000298023, 166.3999999910593, 93.5
+            ],
+            "activeSummary": {
+              "samples": 10,
+              "medianMs": 166.3999999910593,
+              "maxMs": 479.09999999403954
+            },
+            "heldSummary": {
+              "samples": 5,
+              "medianMs": 100.8999999910593,
+              "maxMs": 456.5
+            },
+            "throttle": 4,
+            "activeFrames": {
+              "maxFrame": 17.800000000000182,
+              "over": 0,
+              "frames": 200,
+              "slow": [],
+              "noLoaf": false
+            },
+            "heldFrames": {
+              "maxFrame": 17.699999999999818,
+              "over": 0,
+              "frames": 98,
+              "slow": [],
+              "noLoaf": false
+            },
+            "heldMs": [
+              30.5, 425.69999998807907, 100.8999999910593, 28.799999997019768, 456.5
+            ],
+            "before": {
+              "lists": 2,
+              "reads": 9,
+              "fastReads": 3,
+              "slowReads": 6,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 1347.5999999940395,
+              "lastFastRequest": {
+                "at": 1300.7000000029802,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 5,
+              "reads": 29,
+              "fastReads": 13,
+              "slowReads": 16,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 4690.20000000298,
+              "lastFastRequest": {
+                "at": 4555.899999991059,
+                "revision": "12",
+                "text": "active-9"
+              }
+            },
+            "stalled": {
+              "lists": 6,
+              "reads": 35,
+              "fastReads": 18,
+              "slowReads": 17,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 6689,
+              "lastFastRequest": {
+                "at": 6558,
+                "revision": "17",
+                "text": "held-4"
+              }
+            },
+            "idle": {
+              "lists": 8,
+              "reads": 37,
+              "fastReads": 19,
+              "slowReads": 18,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 8698.89999999106,
+              "lastFastRequest": {
+                "at": 6808.0999999940395,
+                "revision": "18",
+                "text": "Finished"
+              }
+            },
+            "rested": {
+              "lists": 10,
+              "reads": 37,
+              "fastReads": 19,
+              "slowReads": 18,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 10698,
+              "lastFastRequest": {
+                "at": 6808.0999999940395,
+                "revision": "18",
+                "text": "Finished"
+              }
+            }
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "delivery",
+          "engine": "webkit",
+          "layout": "columns",
+          "run": 1,
+          "measured": {
+            "timeoutDiagnostics": [],
+            "activeMs": [230, 174, 101, 26, 206, 147, 61, 238, 165, 90],
+            "activeSummary": {
+              "samples": 10,
+              "medianMs": 165,
+              "maxMs": 238
+            },
+            "heldSummary": {
+              "samples": 5,
+              "medianMs": 99,
+              "maxMs": 205
+            },
+            "throttle": 1,
+            "activeFrames": {
+              "maxFrame": 19,
+              "over": 0,
+              "frames": 156,
+              "slow": [],
+              "noLoaf": false
+            },
+            "heldFrames": {
+              "maxFrame": 19,
+              "over": 0,
+              "frames": 69,
+              "slow": [],
+              "noLoaf": false
+            },
+            "heldMs": [30, 176, 99, 44, 205],
+            "before": {
+              "lists": 2,
+              "reads": 9,
+              "fastReads": 3,
+              "slowReads": 6,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 1361,
+              "lastFastRequest": {
+                "at": 1326,
+                "revision": "2",
+                "text": "Initial answer"
+              }
+            },
+            "after": {
+              "lists": 4,
+              "reads": 29,
+              "fastReads": 13,
+              "slowReads": 16,
+              "heldLists": 0,
+              "heldReads": 0,
+              "now": 3966,
+              "lastFastRequest": {
+                "at": 3839,
+                "revision": "12",
+                "text": "active-9"
+              }
+            },
+            "stalled": {
+              "lists": 5,
+              "reads": 35,
+              "fastReads": 18,
+              "slowReads": 17,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 5237,
+              "lastFastRequest": {
+                "at": 5099,
+                "revision": "17",
+                "text": "held-4"
+              }
+            },
+            "idle": {
+              "lists": 7,
+              "reads": 37,
+              "fastReads": 19,
+              "slowReads": 18,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 7246,
+              "lastFastRequest": {
+                "at": 5351,
+                "revision": "18",
+                "text": "Finished"
+              }
+            },
+            "rested": {
+              "lists": 9,
+              "reads": 37,
+              "fastReads": 19,
+              "slowReads": 18,
+              "heldLists": 1,
+              "heldReads": 1,
+              "now": 9263,
+              "lastFastRequest": {
+                "at": 5351,
+                "revision": "18",
+                "text": "Finished"
+              }
+            }
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "delivery-statistics",
+          "summaries": [
+            {
+              "engine": "chromium",
+              "layout": "columns",
+              "run": 1,
+              "throttle": 4,
+              "active": {
+                "samples": 10,
+                "medianMs": 166.3999999910593,
+                "maxMs": 479.09999999403954
+              },
+              "held": {
+                "samples": 5,
+                "medianMs": 100.8999999910593,
+                "maxMs": 456.5
+              },
+              "frameMaxMs": 17.800000000000182,
+              "activeMs": [
+                479.09999999403954, 425.09999999403954, 101.40000000596046,
+                28.700000002980232, 457, 133.80000001192093, 60.1000000089407,
+                239.70000000298023, 166.3999999910593, 93.5
+              ],
+              "heldMs": [
+                30.5, 425.69999998807907, 100.8999999910593, 28.799999997019768, 456.5
+              ],
+              "over50": 0
+            },
+            {
+              "engine": "webkit",
+              "layout": "columns",
+              "run": 1,
+              "throttle": 1,
+              "active": {
+                "samples": 10,
+                "medianMs": 165,
+                "maxMs": 238
+              },
+              "held": {
+                "samples": 5,
+                "medianMs": 99,
+                "maxMs": 205
+              },
+              "frameMaxMs": 19,
+              "activeMs": [230, 174, 101, 26, 206, 147, 61, 238, 165, 90],
+              "heldMs": [30, 176, 99, 44, 205],
+              "over50": 0
+            }
+          ],
+          "aggregates": [
+            {
+              "engine": "chromium",
+              "layout": "columns",
+              "runs": 1,
+              "active": {
+                "samples": 10,
+                "medianMs": 166.3999999910593,
+                "maxMs": 479.09999999403954
+              },
+              "held": {
+                "samples": 5,
+                "medianMs": 100.8999999910593,
+                "maxMs": 456.5
+              },
+              "frameMaxMs": 17.800000000000182,
+              "frameRunMedianMs": 17.800000000000182,
+              "over50": 0
+            },
+            {
+              "engine": "webkit",
+              "layout": "columns",
+              "runs": 1,
+              "active": {
+                "samples": 10,
+                "medianMs": 165,
+                "maxMs": 238
+              },
+              "held": {
+                "samples": 5,
+                "medianMs": 99,
+                "maxMs": 205
+              },
+              "frameMaxMs": 19,
+              "frameRunMedianMs": 19,
+              "over50": 0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

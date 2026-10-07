@@ -134,12 +134,13 @@ export const devServerOnlyChecks = [
 
 /**
  * Steps, inside a check that otherwise runs on a production preview, that
- * read the dev server's source modules.
+ * need its source modules or app sandbox listener.
  */
 export const devServerOnlySteps = {
   drag: ["boundary-jitter"],
   widgets: ["off-missing"],
   "mcp-apps": ["departures", "departures-back"],
+  "message-sync": ["retained-app"],
 }
 
 /**

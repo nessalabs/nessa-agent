@@ -57,9 +57,16 @@ export type DragPhase<Made = unknown> =
       readonly aim: Aim | null
       readonly made: Made
     }
-  | { readonly kind: "dropping"; readonly carried: Carried; readonly aim: Aim }
+  | {
+      readonly kind: "dropping"
+      readonly carried: Carried
+      readonly aim: Aim
+      readonly made: Made
+    }
   | {
       readonly kind: "cancelling"
+      readonly carried: Carried
+      readonly made: Made
       /**
        * `home`: nothing around it changed, so the copy flies back to where it
        * was lifted. `at-once`: the room, the panes or the view changed under
@@ -114,9 +121,14 @@ export type DragEvent<Made = unknown> =
    */
   | { readonly kind: "changed" }
   /** The copy's last flight — onto its place, or home — ended. */
-  | { readonly kind: "landed" }
+  | { readonly kind: "landed"; readonly made: Made }
 
 export const idle: DragPhase<never> = { kind: "idle" }
+
+/** Whether this drag still owns the page resources whose flight or cleanup is running. */
+export function ownsDragResources<Made>(phase: DragPhase<Made>, made: Made): boolean {
+  return phase.kind !== "idle" && phase.made === made
+}
 
 /** Whether two aims are the same zone of the same pane. */
 export const sameAim = (a: Aim | null, b: Aim | null) =>
@@ -181,7 +193,13 @@ export function stepDrag<Made>(
       switch (event.kind) {
         case "move": {
           if (event.pointerId !== phase.pointerId) return phase
-          if (event.buttons !== primaryAlone) return { kind: "cancelling", how: "home" }
+          if (event.buttons !== primaryAlone)
+            return {
+              kind: "cancelling",
+              how: "home",
+              carried: phase.carried,
+              made: phase.made,
+            }
           // A move to where it already is is no move: resting is not restarted.
           const last = phase.path.at(-1)
           if (last && last.x === event.at.x && last.y === event.at.y) return phase
@@ -205,19 +223,46 @@ export function stepDrag<Made>(
           // where nothing can be aimed at (off the grid, out of the window,
           // over a side column), or with nothing shown, it goes home.
           return event.shown && inReach(event.at, event.targets)
-            ? { kind: "dropping", carried: phase.carried, aim: event.shown }
-            : { kind: "cancelling", how: "home" }
+            ? {
+                kind: "dropping",
+                carried: phase.carried,
+                aim: event.shown,
+                made: phase.made,
+              }
+            : {
+                kind: "cancelling",
+                how: "home",
+                carried: phase.carried,
+                made: phase.made,
+              }
         case "escape":
         case "lost":
-          return { kind: "cancelling", how: "home" }
+          return {
+            kind: "cancelling",
+            how: "home",
+            carried: phase.carried,
+            made: phase.made,
+          }
         case "changed":
-          return { kind: "cancelling", how: "at-once" }
+          return {
+            kind: "cancelling",
+            how: "at-once",
+            carried: phase.carried,
+            made: phase.made,
+          }
         default:
           return phase
       }
-    case "dropping":
     case "cancelling":
-      return event.kind === "landed" ? idle : phase
+      if (event.kind === "changed" && phase.how === "home")
+        return { ...phase, how: "at-once" }
+      return event.kind === "landed" && ownsDragResources(phase, event.made)
+        ? idle
+        : phase
+    case "dropping":
+      return event.kind === "landed" && ownsDragResources(phase, event.made)
+        ? idle
+        : phase
   }
 }
 

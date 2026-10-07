@@ -89,7 +89,7 @@ export function view(
     title: null,
     questions: [],
     approvalMode: "ask",
-    approvalModes: [],
+    approvalModes: [{ id: "ask", name: "Ask", description: "Ask before tools." }],
     ...change,
   }
 }

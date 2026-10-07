@@ -1,0 +1,3843 @@
+{
+  "status": "interrupted to investigate and fix failures in the same PR",
+  "source": "e10fe67e",
+  "checks": {
+    "focus": {
+      "check": "focus",
+      "ok": true,
+      "started": "2026-10-07T02:41:03.145Z",
+      "finished": "2026-10-07T02:45:20.936Z",
+      "target": { "url": "http://127.0.0.1:60534/desktop.html", "mode": "prod" },
+      "results": [
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-panes",
+          "engine": "chromium",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "\u2318N",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318N (new session beside)",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "2",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "2",
+              "ok": true
+            },
+            {
+              "step": "\u2318\\ and a pick",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318\\ (split down)",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u23181",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "\u23182",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "2",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "2",
+              "ok": true
+            },
+            {
+              "step": "\u23183",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "\u23184",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318]",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318[",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "\u2318W",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u2318K closed without a pick",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "Settings opened and left",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-overview",
+          "engine": "chromium",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "\u23180 then Escape at once",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u23180 opens",
+              "content": "agents",
+              "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u2193 walks",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u23180 again keeps it",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "Escape leaves",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u2318 and the focused pane's number, from the overview",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318[ at the first pane, from the overview",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "\u2303\u2325\u2190 at the left edge, from the overview",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "Escape leaves again",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-mash",
+          "engine": "chromium",
+          "layout": "columns",
+          "after": {
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "19",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "19"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "console",
+          "harmless": [
+            "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:60534/favicon.ico)"
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-answers-overview",
+          "engine": "chromium",
+          "layout": "columns",
+          "trail": [
+            { "step": "held \u2318\u21a9", "before": 6, "after": 5 },
+            { "step": "\u2318\u21a9 twice, 80ms apart", "before": 5, "after": 4 }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-answers-card",
+          "engine": "chromium",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "Allow Once, held \u21a9",
+              "before": 6,
+              "after": 5,
+              "typed": "keep these words"
+            },
+            { "step": "Deny", "before": 5, "after": 4, "typed": "keep these words" },
+            {
+              "step": "Always Allow",
+              "before": 4,
+              "after": 3,
+              "typed": "keep these words"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-row",
+          "engine": "chromium",
+          "layout": "columns",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            { "step": "waiting (row)", "on": "row" },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "\u2193 (or \u2191)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-peek",
+          "engine": "chromium",
+          "layout": "columns",
+          "size": "1000x700",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            { "step": "waiting (peek)", "on": "story" },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "\u2193 (or \u2191)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-away",
+          "engine": "chromium",
+          "layout": "columns",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            { "step": "waiting (away)", "on": "body" },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BODY",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": null,
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-held",
+          "engine": "chromium",
+          "layout": "columns",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            { "step": "waiting (held)", "on": "row" },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "\u2193 (or \u2191)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-moved",
+          "engine": "chromium",
+          "layout": "columns",
+          "trail": [
+            { "step": "moved its row", "row": "gpt6-catalog" },
+            { "step": "after", "on": "row", "row": "gpt6-catalog" },
+            { "step": "scroll", "was": 683.5, "now": 683.5 },
+            { "step": "\u2193 (or \u2191)", "on": "row", "row": "backpressure" }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-moved-pill",
+          "engine": "chromium",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "moved the row being replied to",
+              "session": "retry-budget",
+              "value": "half-way"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-beside",
+          "engine": "chromium",
+          "layout": "columns",
+          "trail": [
+            { "step": "narrowed to 700" },
+            { "step": "after", "on": "row", "row": "retry-budget" },
+            { "step": "\u2193 (or \u2191)", "on": "row", "row": "signing" }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-show-all",
+          "engine": "chromium",
+          "layout": "columns",
+          "trail": [
+            { "step": "Show All" },
+            { "step": "after", "on": "row", "row": "retry-budget" },
+            { "step": "\u2193 (or \u2191)", "on": "row", "row": "signing" }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-home-scene",
+          "engine": "chromium",
+          "layout": "columns",
+          "after": {
+            "content": "panes",
+            "active": "BUTTON",
+            "activeInPane": "1",
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-reply",
+          "engine": "chromium",
+          "layout": "columns",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "\u2193 \u2318R and type",
+              "from": "retry-budget",
+              "session": "signing",
+              "value": "status?"
+            },
+            {
+              "step": "sent",
+              "wasRequest": true,
+              "rowLeftNeedsYou": true,
+              "session": "signing",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-reply",
+          "engine": "chromium",
+          "layout": "columns",
+          "size": "1000x700",
+          "trail": [
+            {
+              "step": "\u2193 \u2318R and type",
+              "from": "retry-budget",
+              "session": "signing",
+              "value": "status?"
+            },
+            {
+              "step": "sent",
+              "wasRequest": true,
+              "rowLeftNeedsYou": true,
+              "session": "signing",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-panes",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "\u2318N",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318N (new session beside)",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "2",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "2",
+              "ok": true
+            },
+            {
+              "step": "\u2318\\ and a pick",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318\\ (split down)",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u23181",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "\u23182",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "2",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "2",
+              "ok": true
+            },
+            {
+              "step": "\u23183",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "\u23184",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318]",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318[",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "\u2318W",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u2318K closed without a pick",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "Settings opened and left",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-overview",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "\u23180 then Escape at once",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u23180 opens",
+              "content": "agents",
+              "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u2193 walks",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u23180 again keeps it",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "Escape leaves",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u2318 and the focused pane's number, from the overview",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318[ at the first pane, from the overview",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "\u2303\u2325\u2190 at the left edge, from the overview",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "Escape leaves again",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-mash",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "after": {
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "19",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "19"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-answers-overview",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "trail": [
+            { "step": "held \u2318\u21a9", "before": 6, "after": 5 },
+            { "step": "\u2318\u21a9 twice, 80ms apart", "before": 5, "after": 4 }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-answers-card",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "Allow Once, held \u21a9",
+              "before": 6,
+              "after": 5,
+              "typed": "keep these words"
+            },
+            { "step": "Deny", "before": 5, "after": 4, "typed": "keep these words" },
+            {
+              "step": "Always Allow",
+              "before": 4,
+              "after": 3,
+              "typed": "keep these words"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-row",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            { "step": "waiting (row)", "on": "row" },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "\u2193 (or \u2191)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-peek",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "size": "1000x700",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            { "step": "waiting (peek)", "on": "story" },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "\u2193 (or \u2191)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-away",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            { "step": "waiting (away)", "on": "body" },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BODY",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": null,
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-held",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            { "step": "waiting (held)", "on": "row" },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "\u2193 (or \u2191)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-moved",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "trail": [
+            { "step": "moved its row", "row": "gpt6-catalog" },
+            { "step": "after", "on": "row", "row": "gpt6-catalog" },
+            { "step": "scroll", "was": 683.5, "now": 683.5 },
+            { "step": "\u2193 (or \u2191)", "on": "row", "row": "backpressure" }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-moved-pill",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "moved the row being replied to",
+              "session": "retry-budget",
+              "value": "half-way"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-beside",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "trail": [
+            { "step": "narrowed to 700" },
+            { "step": "after", "on": "row", "row": "retry-budget" },
+            { "step": "\u2193 (or \u2191)", "on": "row", "row": "signing" }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-show-all",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "trail": [
+            { "step": "Show All" },
+            { "step": "after", "on": "row", "row": "retry-budget" },
+            { "step": "\u2193 (or \u2191)", "on": "row", "row": "signing" }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-home-scene",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "after": {
+            "content": "panes",
+            "active": "BUTTON",
+            "activeInPane": "1",
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-reply",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "\u2193 \u2318R and type",
+              "from": "retry-budget",
+              "session": "signing",
+              "value": "status?"
+            },
+            {
+              "step": "sent",
+              "wasRequest": true,
+              "rowLeftNeedsYou": true,
+              "session": "signing",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-reply",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "size": "1000x700",
+          "trail": [
+            {
+              "step": "\u2193 \u2318R and type",
+              "from": "retry-budget",
+              "session": "signing",
+              "value": "status?"
+            },
+            {
+              "step": "sent",
+              "wasRequest": true,
+              "rowLeftNeedsYou": true,
+              "session": "signing",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-panes",
+          "engine": "webkit",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "\u2318N",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318N (new session beside)",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "2",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "2",
+              "ok": true
+            },
+            {
+              "step": "\u2318\\ and a pick",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318\\ (split down)",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u23181",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "\u23182",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "2",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "2",
+              "ok": true
+            },
+            {
+              "step": "\u23183",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "\u23184",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318]",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318[",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "\u2318W",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u2318K closed without a pick",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "Settings opened and left",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-overview",
+          "engine": "webkit",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "\u23180 then Escape at once",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u23180 opens",
+              "content": "agents",
+              "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u2193 walks",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u23180 again keeps it",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "Escape leaves",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u2318 and the focused pane's number, from the overview",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318[ at the first pane, from the overview",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "\u2303\u2325\u2190 at the left edge, from the overview",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "Escape leaves again",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-mash",
+          "engine": "webkit",
+          "layout": "columns",
+          "after": {
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "17",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "17"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-answers-overview",
+          "engine": "webkit",
+          "layout": "columns",
+          "trail": [
+            { "step": "held \u2318\u21a9", "before": 6, "after": 5 },
+            { "step": "\u2318\u21a9 twice, 80ms apart", "before": 5, "after": 4 }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-answers-card",
+          "engine": "webkit",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "Allow Once, held \u21a9",
+              "before": 6,
+              "after": 5,
+              "typed": "keep these words"
+            },
+            { "step": "Deny", "before": 5, "after": 4, "typed": "keep these words" },
+            {
+              "step": "Always Allow",
+              "before": 4,
+              "after": 3,
+              "typed": "keep these words"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-row",
+          "engine": "webkit",
+          "layout": "columns",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            { "step": "waiting (row)", "on": "row" },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "\u2193 (or \u2191)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-peek",
+          "engine": "webkit",
+          "layout": "columns",
+          "size": "1000x700",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            { "step": "waiting (peek)", "on": "story" },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "\u2193 (or \u2191)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-away",
+          "engine": "webkit",
+          "layout": "columns",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            { "step": "waiting (away)", "on": "body" },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BODY",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": null,
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-held",
+          "engine": "webkit",
+          "layout": "columns",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            { "step": "waiting (held)", "on": "row" },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "\u2193 (or \u2191)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-moved",
+          "engine": "webkit",
+          "layout": "columns",
+          "trail": [
+            { "step": "moved its row", "row": "gpt6-catalog" },
+            { "step": "after", "on": "row", "row": "gpt6-catalog" },
+            { "step": "scroll", "was": 684, "now": 684 },
+            { "step": "\u2193 (or \u2191)", "on": "row", "row": "backpressure" }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-moved-pill",
+          "engine": "webkit",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "moved the row being replied to",
+              "session": "retry-budget",
+              "value": "half-way"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-beside",
+          "engine": "webkit",
+          "layout": "columns",
+          "trail": [
+            { "step": "narrowed to 700" },
+            { "step": "after", "on": "row", "row": "retry-budget" },
+            { "step": "\u2193 (or \u2191)", "on": "row", "row": "signing" }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-show-all",
+          "engine": "webkit",
+          "layout": "columns",
+          "trail": [
+            { "step": "Show All" },
+            { "step": "after", "on": "row", "row": "retry-budget" },
+            { "step": "\u2193 (or \u2191)", "on": "row", "row": "signing" }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-home-scene",
+          "engine": "webkit",
+          "layout": "columns",
+          "after": {
+            "content": "panes",
+            "active": "BUTTON",
+            "activeInPane": "1",
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-reply",
+          "engine": "webkit",
+          "layout": "columns",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "\u2193 \u2318R and type",
+              "from": "retry-budget",
+              "session": "signing",
+              "value": "status?"
+            },
+            {
+              "step": "sent",
+              "wasRequest": true,
+              "rowLeftNeedsYou": true,
+              "session": "signing",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-reply",
+          "engine": "webkit",
+          "layout": "columns",
+          "size": "1000x700",
+          "trail": [
+            {
+              "step": "\u2193 \u2318R and type",
+              "from": "retry-budget",
+              "session": "signing",
+              "value": "status?"
+            },
+            {
+              "step": "sent",
+              "wasRequest": true,
+              "rowLeftNeedsYou": true,
+              "session": "signing",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-panes",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "\u2318N",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318N (new session beside)",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "2",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "2",
+              "ok": true
+            },
+            {
+              "step": "\u2318\\ and a pick",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318\\ (split down)",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u23181",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "\u23182",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "2",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "2",
+              "ok": true
+            },
+            {
+              "step": "\u23183",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "\u23184",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318]",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318[",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "\u2318W",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u2318K closed without a pick",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "Settings opened and left",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-overview",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "\u23180 then Escape at once",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u23180 opens",
+              "content": "agents",
+              "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u2193 walks",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u23180 again keeps it",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "Escape leaves",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "\u2318 and the focused pane's number, from the overview",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "\u21e7\u2318[ at the first pane, from the overview",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "\u2303\u2325\u2190 at the left edge, from the overview",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "Escape leaves again",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-mash",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "after": {
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "17",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "17"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-answers-overview",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "trail": [
+            { "step": "held \u2318\u21a9", "before": 6, "after": 5 },
+            { "step": "\u2318\u21a9 twice, 80ms apart", "before": 5, "after": 4 }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-answers-card",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "Allow Once, held \u21a9",
+              "before": 6,
+              "after": 5,
+              "typed": "keep these words"
+            },
+            { "step": "Deny", "before": 5, "after": 4, "typed": "keep these words" },
+            {
+              "step": "Always Allow",
+              "before": 4,
+              "after": 3,
+              "typed": "keep these words"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-row",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            { "step": "waiting (row)", "on": "row" },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "\u2193 (or \u2191)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-peek",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "size": "1000x700",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            { "step": "waiting (peek)", "on": "story" },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "\u2193 (or \u2191)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-away",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            { "step": "waiting (away)", "on": "body" },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BODY",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": null,
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-held",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            { "step": "waiting (held)", "on": "row" },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "\u2193 (or \u2191)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-moved",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "trail": [
+            { "step": "moved its row", "row": "gpt6-catalog" },
+            { "step": "after", "on": "row", "row": "gpt6-catalog" },
+            { "step": "scroll", "was": 684, "now": 684 },
+            { "step": "\u2193 (or \u2191)", "on": "row", "row": "backpressure" }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-moved-pill",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "moved the row being replied to",
+              "session": "retry-budget",
+              "value": "half-way"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-beside",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "trail": [
+            { "step": "narrowed to 700" },
+            { "step": "after", "on": "row", "row": "retry-budget" },
+            { "step": "\u2193 (or \u2191)", "on": "row", "row": "signing" }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-show-all",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "trail": [
+            { "step": "Show All" },
+            { "step": "after", "on": "row", "row": "retry-budget" },
+            { "step": "\u2193 (or \u2191)", "on": "row", "row": "signing" }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-home-scene",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "after": {
+            "content": "panes",
+            "active": "BUTTON",
+            "activeInPane": "1",
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-reply",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "\u2193 \u2318R and type",
+              "from": "retry-budget",
+              "session": "signing",
+              "value": "status?"
+            },
+            {
+              "step": "sent",
+              "wasRequest": true,
+              "rowLeftNeedsYou": true,
+              "session": "signing",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-reply",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "size": "1000x700",
+          "trail": [
+            {
+              "step": "\u2193 \u2318R and type",
+              "from": "retry-budget",
+              "session": "signing",
+              "value": "status?"
+            },
+            {
+              "step": "sent",
+              "wasRequest": true,
+              "rowLeftNeedsYou": true,
+              "session": "signing",
+              "value": ""
+            }
+          ]
+        }
+      ]
+    },
+    "smoke": {
+      "check": "smoke",
+      "ok": true,
+      "started": "2026-10-07T02:40:49.168Z",
+      "finished": "2026-10-07T02:41:03.009Z",
+      "target": { "url": "http://127.0.0.1:60534/desktop.html", "mode": "prod" },
+      "results": [
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "loads",
+          "panes": 1
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "ambient-grain",
+          "type": "image/png",
+          "width": 160,
+          "height": 160,
+          "opacity": "0.06",
+          "blend": "overlay",
+          "repeat": "repeat"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "draft-unlisted",
+          "rows": { "before": 9, "after": 9 }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "send"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "split",
+          "panes": { "before": 1, "after": 2 }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "settings",
+          "advanced": {
+            "tabs": [{ "name": "Experimental", "selected": true }],
+            "text": "Nothing to try right now.Previews of new features will appear here.",
+            "controls": 0
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "overview"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "columns",
+          "name": "console"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "console",
+          "harmless": [
+            "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:60534/favicon.ico)"
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "sidebar",
+          "name": "loads",
+          "panes": 1
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "sidebar",
+          "name": "ambient-grain",
+          "type": "image/png",
+          "width": 160,
+          "height": 160,
+          "opacity": "0.06",
+          "blend": "overlay",
+          "repeat": "repeat"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "sidebar",
+          "name": "draft-unlisted",
+          "rows": { "before": 12, "after": 12 }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "sidebar",
+          "name": "send"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "sidebar",
+          "name": "split",
+          "panes": { "before": 1, "after": 2 }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "sidebar",
+          "name": "settings",
+          "advanced": {
+            "tabs": [{ "name": "Experimental", "selected": true }],
+            "text": "Nothing to try right now.Previews of new features will appear here.",
+            "controls": 0
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "sidebar",
+          "name": "overview"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "sidebar",
+          "name": "console"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "columns",
+          "name": "loads",
+          "panes": 1
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "columns",
+          "name": "ambient-grain",
+          "type": "image/png",
+          "width": 160,
+          "height": 160,
+          "opacity": "0.06",
+          "blend": "overlay",
+          "repeat": "repeat"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "columns",
+          "name": "draft-unlisted",
+          "rows": { "before": 9, "after": 9 }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "columns",
+          "name": "send"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "columns",
+          "name": "split",
+          "panes": { "before": 1, "after": 2 }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "columns",
+          "name": "settings",
+          "advanced": {
+            "tabs": [{ "name": "Experimental", "selected": true }],
+            "text": "Nothing to try right now.Previews of new features will appear here.",
+            "controls": 0
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "columns",
+          "name": "overview"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "columns",
+          "name": "console"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "sidebar",
+          "name": "loads",
+          "panes": 1
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "sidebar",
+          "name": "ambient-grain",
+          "type": "image/png",
+          "width": 160,
+          "height": 160,
+          "opacity": "0.06",
+          "blend": "overlay",
+          "repeat": "repeat"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "sidebar",
+          "name": "draft-unlisted",
+          "rows": { "before": 12, "after": 12 }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "sidebar",
+          "name": "send"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "sidebar",
+          "name": "split",
+          "panes": { "before": 1, "after": 2 }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "sidebar",
+          "name": "settings",
+          "advanced": {
+            "tabs": [{ "name": "Experimental", "selected": true }],
+            "text": "Nothing to try right now.Previews of new features will appear here.",
+            "controls": 0
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "sidebar",
+          "name": "overview"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "sidebar",
+          "name": "console"
+        }
+      ]
+    },
+    "drag": {
+      "check": "drag",
+      "ok": false,
+      "started": "2026-10-07T02:45:21.077Z",
+      "finished": "2026-10-07T02:54:19.264Z",
+      "target": { "url": "http://127.0.0.1:60534/desktop.html", "mode": "prod" },
+      "results": [
+        {
+          "ok": true,
+          "failures": [],
+          "name": "console",
+          "harmless": [
+            "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:60534/favicon.ico)"
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "sweep-across-zones",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900",
+          "panes": 4,
+          "frames": 184
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "sideways-top",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": false,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900",
+          "name": "boundary-jitter",
+          "skipped": "not run: dev server only"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "rest-settles",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "swap-in-tall-pane",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900",
+          "pane": "352\u00d7884"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "escape-cancels",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "outside-cancels",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "lost-capture-then-move",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "resize-mid-drag",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "command-mid-drag",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "flick",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "chord-right-button",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "docked-columns-no-zone",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900",
+          "columns": [".workspace-sidebar", ".workspace-list"]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "peek-press-while-hiding",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900",
+          "pressedAfterLeaving": 148
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "reduced-motion",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "copy-takes-slot-shape",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900",
+          "own": "708\u00d7884 at 8,8",
+          "below": "1424\u00d7438 at 8,454",
+          "copyTitled": 139
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "preview-panes-take-shape",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900",
+          "zone": "Move below Retry budget for ACP reconnects",
+          "resized": [
+            "1: 354\u00d7438 at 1078,454",
+            "2: 1062\u00d7884 at 8,8",
+            "4: 354\u00d7438 at 1078,8"
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "copy-under-controls",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1440x900",
+          "frames": 47
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "sweep-across-zones",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700",
+          "panes": 4,
+          "frames": 187
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "sideways-top",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": false,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700",
+          "name": "boundary-jitter",
+          "skipped": "not run: dev server only"
+        },
+        {
+          "ok": false,
+          "failures": ["0.5,0.2: no zone after resting 300 ms"],
+          "name": "rest-settles",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "swap-in-tall-pane",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700",
+          "pane": "300\u00d7684"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "escape-cancels",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "outside-cancels",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "lost-capture-then-move",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "resize-mid-drag",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "command-mid-drag",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "flick",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "chord-right-button",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "peek-press-while-hiding",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700",
+          "pressedAfterLeaving": 147
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "reduced-motion",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "copy-takes-slot-shape",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700",
+          "own": "488\u00d7684 at 8,8",
+          "below": "984\u00d7338 at 8,354",
+          "copyTitled": 139
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "preview-panes-take-shape",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700",
+          "zone": "Move below Retry budget for ACP reconnects",
+          "resized": [
+            "1: 302\u00d7338 at 690,354",
+            "2: 674\u00d7684 at 8,8",
+            "4: 302\u00d7338 at 690,8"
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "copy-under-controls",
+          "engine": "chromium",
+          "layout": "columns",
+          "width": "1000x700",
+          "frames": 47
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "sweep-across-zones",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900",
+          "panes": 4,
+          "frames": 184
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "sideways-top",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": false,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900",
+          "name": "boundary-jitter",
+          "skipped": "not run: dev server only"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "rest-settles",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "swap-in-tall-pane",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900",
+          "pane": "352\u00d7884"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "escape-cancels",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "outside-cancels",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "lost-capture-then-move",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "resize-mid-drag",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "command-mid-drag",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "overview-session-drop",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "flick",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "chord-right-button",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "peek-session-no-zone",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "docked-columns-no-zone",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900",
+          "columns": [".workspace-sidebar"]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "peek-press-while-hiding",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900",
+          "pressedAfterLeaving": 149
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "reduced-motion",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "copy-takes-slot-shape",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900",
+          "own": "708\u00d7884 at 8,8",
+          "below": "1424\u00d7438 at 8,454",
+          "copyTitled": 139
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "preview-panes-take-shape",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900",
+          "zone": "Move below Retry budget for ACP reconnects",
+          "resized": [
+            "1: 354\u00d7438 at 1078,454",
+            "2: 1062\u00d7884 at 8,8",
+            "4: 354\u00d7438 at 1078,8"
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "copy-under-controls",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1440x900",
+          "frames": 44
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "sweep-across-zones",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700",
+          "panes": 4,
+          "frames": 188
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "sideways-top",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": false,
+          "failures": [],
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700",
+          "name": "boundary-jitter",
+          "skipped": "not run: dev server only"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "rest-settles",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "swap-in-tall-pane",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700",
+          "pane": "300\u00d7684"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "escape-cancels",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "outside-cancels",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "lost-capture-then-move",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": false,
+          "failures": ["resize: 1 copies right after it"],
+          "name": "resize-mid-drag",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "command-mid-drag",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "overview-session-drop",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "flick",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": false,
+          "failures": [],
+          "name": "chord-right-button",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700",
+          "cannotRun": true,
+          "error": "could not run: no zone was offered before the chord"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "peek-session-no-zone",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "peek-press-while-hiding",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700",
+          "pressedAfterLeaving": 145
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "reduced-motion",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "copy-takes-slot-shape",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700",
+          "own": "488\u00d7684 at 8,8",
+          "below": "984\u00d7338 at 8,354",
+          "copyTitled": 139
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "preview-panes-take-shape",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700",
+          "zone": "Move below Retry budget for ACP reconnects",
+          "resized": [
+            "1: 302\u00d7338 at 690,354",
+            "2: 674\u00d7684 at 8,8",
+            "4: 302\u00d7338 at 690,8"
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "copy-under-controls",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "width": "1000x700",
+          "frames": 44
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "sweep-across-zones",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900",
+          "panes": 4,
+          "frames": 84
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "sideways-top",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": false,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900",
+          "name": "boundary-jitter",
+          "skipped": "not run: dev server only"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "rest-settles",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "swap-in-tall-pane",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900",
+          "pane": "352\u00d7884"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "escape-cancels",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "outside-cancels",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "lost-capture-then-move",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "resize-mid-drag",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "command-mid-drag",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "flick",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "chord-right-button",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "docked-columns-no-zone",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900",
+          "columns": [".workspace-sidebar", ".workspace-list"]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "peek-press-while-hiding",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900",
+          "pressedAfterLeaving": 98
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "reduced-motion",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "copy-takes-slot-shape",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900",
+          "own": "708\u00d7884 at 8,8",
+          "below": "1424\u00d7438 at 8,454",
+          "copyTitled": 157
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "preview-panes-take-shape",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900",
+          "zone": "Move below Retry budget for ACP reconnects",
+          "resized": [
+            "1: 354\u00d7438 at 1078,454",
+            "2: 1062\u00d7884 at 8,8",
+            "4: 354\u00d7438 at 1078,8"
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "copy-under-controls",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1440x900",
+          "frames": 40
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "sweep-across-zones",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1000x700",
+          "panes": 4,
+          "frames": 86
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "sideways-top",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": false,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1000x700",
+          "name": "boundary-jitter",
+          "skipped": "not run: dev server only"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "rest-settles",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "swap-in-tall-pane",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1000x700",
+          "pane": "300\u00d7684"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "escape-cancels",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "outside-cancels",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "lost-capture-then-move",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "resize-mid-drag",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "command-mid-drag",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "flick",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "chord-right-button",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "peek-press-while-hiding",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1000x700",
+          "pressedAfterLeaving": 100
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "reduced-motion",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "copy-takes-slot-shape",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1000x700",
+          "own": "488\u00d7684 at 8,8",
+          "below": "984\u00d7338 at 8,354",
+          "copyTitled": 152
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "preview-panes-take-shape",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1000x700",
+          "zone": "Move below Retry budget for ACP reconnects",
+          "resized": [
+            "1: 302\u00d7338 at 690,354",
+            "2: 674\u00d7684 at 8,8",
+            "4: 302\u00d7338 at 690,8"
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "copy-under-controls",
+          "engine": "webkit",
+          "layout": "columns",
+          "width": "1000x700",
+          "frames": 40
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "sweep-across-zones",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900",
+          "panes": 4,
+          "frames": 86
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "sideways-top",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": false,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900",
+          "name": "boundary-jitter",
+          "skipped": "not run: dev server only"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "rest-settles",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "swap-in-tall-pane",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900",
+          "pane": "352\u00d7884"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "escape-cancels",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "outside-cancels",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "lost-capture-then-move",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "resize-mid-drag",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "command-mid-drag",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "overview-session-drop",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "flick",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "chord-right-button",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "peek-session-no-zone",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "docked-columns-no-zone",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900",
+          "columns": [".workspace-sidebar"]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "peek-press-while-hiding",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900",
+          "pressedAfterLeaving": 80
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "reduced-motion",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "copy-takes-slot-shape",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900",
+          "own": "708\u00d7884 at 8,8",
+          "below": "1424\u00d7438 at 8,454",
+          "copyTitled": 153
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "preview-panes-take-shape",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900",
+          "zone": "Move below Retry budget for ACP reconnects",
+          "resized": [
+            "1: 354\u00d7438 at 1078,454",
+            "2: 1062\u00d7884 at 8,8",
+            "4: 354\u00d7438 at 1078,8"
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "copy-under-controls",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1440x900",
+          "frames": 39
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "sweep-across-zones",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700",
+          "panes": 4,
+          "frames": 86
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "sideways-top",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": false,
+          "failures": [],
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700",
+          "name": "boundary-jitter",
+          "skipped": "not run: dev server only"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "rest-settles",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "swap-in-tall-pane",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700",
+          "pane": "300\u00d7684"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "escape-cancels",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "outside-cancels",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "lost-capture-then-move",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "resize-mid-drag",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "command-mid-drag",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "overview-session-drop",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "flick",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "chord-right-button",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "peek-session-no-zone",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "peek-press-while-hiding",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700",
+          "pressedAfterLeaving": 84
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "reduced-motion",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700"
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "copy-takes-slot-shape",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700",
+          "own": "488\u00d7684 at 8,8",
+          "below": "984\u00d7338 at 8,354",
+          "copyTitled": 92
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "preview-panes-take-shape",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700",
+          "zone": "Move below Retry budget for ACP reconnects",
+          "resized": [
+            "1: 302\u00d7338 at 690,354",
+            "2: 674\u00d7684 at 8,8",
+            "4: 302\u00d7338 at 690,8"
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "copy-under-controls",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "width": "1000x700",
+          "frames": 38
+        }
+      ]
+    }
+  }
+}

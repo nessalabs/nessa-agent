@@ -73,6 +73,7 @@ export const Message = memo(function Message({
     )
   }
   const groups = groupSteps(message.parts)
+  const widgetOccurrences = new Map<string, number>()
   // A reply that has only just begun streaming has nothing to show yet.
   if (
     groups.every((group) => !Array.isArray(group) && group.kind === "text" && !group.text)
@@ -95,15 +96,19 @@ export const Message = memo(function Message({
                 <code>{group.code}</code>
               </pre>
             )
-          if (group.kind === "widget")
+          if (group.kind === "widget") {
+            const identity = paneItemKey(widgetItem(group.widget))
+            const occurrence = widgetOccurrences.get(identity) ?? 0
+            widgetOccurrences.set(identity, occurrence + 1)
             return (
-              // By place and widget: another widget at this place is a card of its own.
+              // Each occurrence keeps its view when surrounding message parts change.
               <MessageWidget
-                key={`${index} ${paneItemKey(widgetItem(group.widget))}`}
+                key={JSON.stringify([identity, occurrence])}
                 sessionId={sessionId}
                 widget={group.widget}
               />
             )
+          }
           if (group.kind === "list")
             return (
               <ul key={index} className="workspace-list-items">

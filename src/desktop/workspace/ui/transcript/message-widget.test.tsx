@@ -61,10 +61,10 @@ const reply = (id: string): MessageValue => ({
   ],
 })
 
-it("draws another widget at the same place in a message afresh", async () => {
+function drawer() {
   const store = testStore()
   const registry = createWidgetRegistry<WidgetPlugin>([plugin])
-  const draw = (message: MessageValue) =>
+  return (message: MessageValue) =>
     act(async () =>
       root.render(
         <Provider store={store}>
@@ -74,9 +74,47 @@ it("draws another widget at the same place in a message afresh", async () => {
         </Provider>,
       ),
     )
+}
+
+it("draws another widget at the same place in a message afresh", async () => {
+  const draw = drawer()
   await draw(reply("first"))
   await act(async () => host.querySelector("button")?.click())
   expect(host.querySelector("button")?.textContent).toBe("first pressed")
   await draw(reply("second"))
   expect(host.querySelector("button")?.textContent).toBe("second")
+})
+
+for (const prefix of ["added", "removed"] as const)
+  it(`keeps the same widget mounted when preceding text is ${prefix}`, async () => {
+    const draw = drawer()
+    await draw(reply("same"))
+    await act(async () => host.querySelector("button")?.click())
+    const held = host.querySelector("button")
+    const message = reply("same")
+    await draw({
+      ...message,
+      parts:
+        prefix === "added"
+          ? [{ kind: "text", text: "Earlier text" }, ...message.parts]
+          : message.parts.slice(1),
+    })
+    expect(host.querySelector("button")).toBe(held)
+    expect(host.querySelector("button")?.textContent).toBe("same pressed")
+  })
+
+it("keeps repeated widget references as distinct mounted siblings across text changes", async () => {
+  const draw = drawer()
+  const first = reply("same")
+  const repeated: MessageValue = { ...first, parts: [...first.parts, first.parts[1]] }
+  await draw(repeated)
+  const held = [...host.querySelectorAll("button")]
+  expect(held).toHaveLength(2)
+  await act(async () => held[0].click())
+  await draw({
+    ...repeated,
+    parts: [{ kind: "text", text: "Earlier" }, ...repeated.parts],
+  })
+  expect([...host.querySelectorAll("button")]).toEqual(held)
+  expect(held.map((button) => button.textContent)).toEqual(["same pressed", "same"])
 })
