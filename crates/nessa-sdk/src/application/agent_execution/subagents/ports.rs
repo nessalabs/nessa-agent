@@ -41,6 +41,8 @@ pub trait ChildResources: Send + Sync {
 pub enum BindResourcesRefusal {
     /// The identity is not present in the graph.
     UnknownLifetime,
+    /// Restoration found contradictory ownership history; transfer is refused.
+    RefusedHistory,
     /// The identity exists privately but its ownership admission is not acknowledged.
     UnpublishedLifetime,
     /// The lifetime already completed closure.

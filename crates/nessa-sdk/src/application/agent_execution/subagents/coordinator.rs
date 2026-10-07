@@ -36,9 +36,10 @@ use crate::domain::agent_execution::{
     sessions::SessionId,
     subagents::{
         select_inherited_policy, AgentLifetimeId, ApprovalPolicy, CloseOperationId, DeliveryState,
-        Dispatch, EvidenceFact, HostActor, Initiator, LifetimeCause, LifetimeState, OwnershipError,
-        OwnershipEvidence, OwnershipGraph, PhysicalFact, PolicyRead, ReportId, SpawnAdmission,
-        SpawnBinding, SpawnOrigin, SpawnProgress, SpawnRequestId, TaskDigest, MAX_READ_PAGE,
+        Dispatch, EvidenceFact, HostActor, Initiator, KnownMilestone, LifetimeCause, LifetimeState,
+        OwnershipError, OwnershipEvidence, OwnershipGraph, PhysicalFact, PolicyRead, ReportId,
+        SpawnAdmission, SpawnBinding, SpawnOrigin, SpawnProgress, SpawnRequestId, TaskDigest,
+        MAX_READ_PAGE,
     },
 };
 
@@ -328,7 +329,8 @@ impl OwnershipCoordinator {
     ///
     /// # Errors
     /// Returns [`BindResourcesFailure`] with the exact rejected owner for an
-    /// unknown/private/Closed identity, active factory flight, occupied slot, or absence/release.
+    /// unknown/private/Closed identity, refused history, active factory flight,
+    /// occupied slot, or confirmed absence/release.
     pub fn bind_resources(
         &self,
         lifetime: AgentLifetimeId,
@@ -496,6 +498,7 @@ impl Shared {
         match graph.lifetime_state(lifetime) {
             None => Some(BindResourcesRefusal::UnknownLifetime),
             Some(LifetimeState::Closed) => Some(BindResourcesRefusal::Closed),
+            _ if graph.refusal().is_some() => Some(BindResourcesRefusal::RefusedHistory),
             _ if !self
                 .publication
                 .lock()
@@ -507,7 +510,12 @@ impl Shared {
             Some(LifetimeState::Open)
                 if graph.snapshot().spawns.iter().any(|row| {
                     &row.child_lifetime == lifetime
-                        && matches!(row.progress, SpawnProgress::Ended { .. })
+                        && matches!(
+                            row.progress,
+                            SpawnProgress::Ended {
+                                known: KnownMilestone::Reserved
+                            }
+                        )
                 }) =>
             {
                 Some(BindResourcesRefusal::Released)

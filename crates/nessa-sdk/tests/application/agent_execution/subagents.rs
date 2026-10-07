@@ -1414,7 +1414,10 @@ async fn r5_a_cycle_stays_readable_and_refuses_dispatch() {
             }),
         )
         .unwrap_err();
-    assert_eq!(refused_owner.reason, nessa_sdk::application::agent_execution::subagents::BindResourcesRefusal::UnpublishedLifetime);
+    assert_eq!(
+        refused_owner.reason,
+        nessa_sdk::application::agent_execution::subagents::BindResourcesRefusal::RefusedHistory
+    );
     assert_eq!(store.read().await.unwrap(), snapshot);
     let reloaded = resumed(store.clone());
     reloaded.coordinator.resume().await.unwrap();
