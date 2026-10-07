@@ -41,6 +41,7 @@ const functional = [
   "conversation-unread",
   "linked-devices",
   "widgets",
+  "subagents",
   "mcp-apps",
   "app-review",
   "message-sync",

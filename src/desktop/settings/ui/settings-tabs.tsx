@@ -7,7 +7,7 @@ import { agentForProvider, composerProviders } from "../../model/composer-option
 import { iconFamilies } from "../../model/icon-family"
 import { chordLabel } from "../../model/keyboard"
 import { isMac } from "../../adapters/platform"
-import type { SettingsTabId } from "../model/settings-catalogue"
+import { settingsEntries, type SettingsTabId } from "../model/settings-catalogue"
 import { desktopThemes } from "../../model/theme"
 import { workspaceLayouts, type WorkspaceLayoutId } from "../../model/workspace-layout"
 import { useWorkspaceLayoutPreference } from "../../adapters/workspace-layout-preference"
@@ -18,6 +18,7 @@ import {
   useGreetingPreference,
   usePictureInConversationsPreference,
   useRunningFirstPreference,
+  useSubagentsPreview,
 } from "../../adapters/window-preferences"
 import { motionChoices } from "../../model/motion"
 import {
@@ -51,7 +52,7 @@ import { LinkedDevicesTab } from "./linked-devices-tab"
 /**
  * What each tab shows. Every setting the window owns is real and
  * remembered: theme, icons, tint, the picture in conversations, greeting,
- * motion, drifting light, layout,
+ * motion, drifting light, layout, the subagents preview,
  * the session list, ⌘-click, running first. What lives outside the window —
  * the host, the gateway, an account — is marked not available yet in the
  * catalogue (`pending`), and its row says so with its control disabled.
@@ -552,17 +553,31 @@ function DataTab() {
 /* ——— Advanced ——— */
 
 /**
- * Previews of features not settled yet. None is on offer now, so the page
- * says so rather than showing a control that does nothing.
+ * Previews of features not settled yet. The subagents preview is on offer.
+ * With none on offer the page says so, rather than showing a control that
+ * does nothing.
  */
 function ExperimentalTab() {
+  const [preview, setPreview] = useSubagentsPreview()
+  const offered = settingsEntries.some((entry) => entry.tab === "experimental")
+  if (!offered)
+    return (
+      <Group>
+        <div className="settings-empty">
+          <DesktopIcon name="advanced" />
+          <p>Nothing to try right now.</p>
+          <p>Previews of new features will appear here.</p>
+        </div>
+      </Group>
+    )
   return (
     <Group>
-      <div className="settings-empty">
-        <DesktopIcon name="advanced" />
-        <p>Nothing to try right now.</p>
-        <p>Previews of new features will appear here.</p>
-      </div>
+      <Row id="subagents-preview">
+        <Toggle
+          checked={preview === "on"}
+          onChange={(on) => setPreview(on ? "on" : "off")}
+        />
+      </Row>
     </Group>
   )
 }

@@ -61,10 +61,13 @@ describe("the settings catalogue", () => {
       label: "Experimental",
     })
     expect(tabsOf("general").map((tab) => tab.id)).not.toContain("experimental")
-    // No experiment is on offer, so Advanced holds no setting.
+    // The subagents preview is the one Advanced offers.
     expect(
-      settingsEntries.filter((entry) => settingsTab(entry.tab).category === "advanced"),
-    ).toEqual([])
+      settingsEntries
+        .filter((entry) => settingsTab(entry.tab).category === "advanced")
+        .map((entry) => entry.id),
+    ).toEqual(["subagents-preview"])
+    expect(setting("subagents-preview").label).toBe("Subagents")
   })
 
   it("shows a category's tabs when it has several, or one named other than itself", () => {
