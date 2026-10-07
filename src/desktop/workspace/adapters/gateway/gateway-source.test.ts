@@ -901,9 +901,37 @@ describe("the connection", () => {
     follow()
     await source.index()
     gateway.setState({ status: "closed", error: new Error("gone") })
+    // The close drops the client and says nothing. The resync is the next
+    // client's, and a person's index would swallow a gap without saying one.
+    expect(updates).toEqual([])
     await source.index()
     expect(attempts).toBe(2)
-    expect(updates).toContainEqual({ kind: "resync" })
+    expect(updates).toEqual([{ kind: "resync" }])
+    expect(next.count("list")).toBe(1)
+  })
+
+  it("C3: a list that answers after a permanent close says nothing until the next client", async () => {
+    const gateway = fakeGateway()
+    const next = fakeGateway()
+    let attempts = 0
+    const { source, updates, follow, advance } = started(gateway, () =>
+      Promise.resolve(++attempts === 1 ? gateway.client : next.client),
+    )
+    follow()
+    await source.index()
+    const held = deferred<{ conversations: []; complete: boolean }>()
+    gateway.once("list", () => held.promise)
+    await advance(timing.pollMs)
+    expect(gateway.count("list")).toBe(2)
+    gateway.setState({ status: "closed", error: new Error("gone") })
+    held.resolve({ conversations: [], complete: true })
+    await flush()
+    // This list already had its client. A gap marked on the close would
+    // resync here; the resync waits for the client that replaces it.
+    expect(updates).toEqual([])
+    await advance(timing.pollMs)
+    expect(attempts).toBe(2)
+    expect(updates).toEqual([{ kind: "resync" }])
     expect(next.count("list")).toBe(1)
   })
 
@@ -2917,6 +2945,8 @@ describe("independent active transcript polling (#532)", () => {
     source.dispose()
   })
   it("F4: active failure resyncs on the next successful summary", async () => {
+    // The poll read's gap, and only that: a failure that is not gone and
+    // not a refusal for good. The next list says resync.
     const { gateway, source, advance, updates, follow, busy } = fast()
     await busy("a")
     await source.index()

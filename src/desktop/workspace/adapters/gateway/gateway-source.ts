@@ -34,8 +34,9 @@
  *   error. The ask is a debug line; the refusal is a warning the dev console
  *   already forwards.
  * - **Resync.** `{ kind: "resync" }` goes out when a connection comes back
- *   (the client reconnected, or a new one was made after the last closed),
- *   and on the first list that answers after a poll or an index read failed.
+ *   (the client reconnected, or a new one was made after the last closed —
+ *   the close itself says nothing, C3), and on the first list that answers
+ *   after a poll, a poll read, or an index read failed (S5; F4, active failure).
  * - **A failed connect is waited out.** For `timing.reconnectRounds` poll
  *   rounds after it, neither the poller nor an MCP App connects again; a
  *   person's call connects at once (S10–S16 on #419).
@@ -364,10 +365,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       if (current?.client !== connected) return
       if (state.status === "connected") resync()
       else if (state.status === "closed") {
-        // Gone for good: the next call connects again.
+        // Gone for good: the next call connects again. That next client
+        // resyncs when one had connected before (C3). The close itself is
+        // not a gap: a list still in flight that answers says nothing
+        // until the new client does.
         current.off()
         current = undefined
-        gap = true
       }
     })
     current = { client: connected, off }
@@ -745,6 +748,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         if (gone(error) || refusedForGood(error)) watched.delete(sessionId)
         else {
           if (invalidated && !takenOut(sessionId)) refresh.add(sessionId)
+          // Any other failure is a gap the next list resyncs (F4, active failure).
           gap = true
         }
       })
