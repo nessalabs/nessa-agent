@@ -14,11 +14,22 @@
  *
  * Every check runs on a fresh page, in each engine and layout.
  */
+import { mkdirSync } from "node:fs"
+import { join } from "node:path"
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { content, css, keys, names } from "./lib/selectors.mjs"
 import { contentIs, frames, paneCount, paneCountIs, settled } from "./lib/workspace.mjs"
+
+/** The panel, cropped, when `--shots` is set. Columns only, so the evidence stays small. */
+async function shot(page, label, file, selector) {
+  if (!label.shots || label.layout !== "columns") return
+  mkdirSync(label.shots, { recursive: true })
+  const target = page.locator(selector).first()
+  if ((await target.count()) === 0) return
+  await target.screenshot({ path: join(label.shots, file) })
+}
 
 const meta = {
   name: "subagents",
@@ -97,7 +108,7 @@ async function scrollGap(page) {
 }
 
 const checks = {
-  panel: async (page) => {
+  panel: async (page, label) => {
     const failures = []
     await openPanel(page, failures)
     const namesInOrder = await page
@@ -114,6 +125,7 @@ const checks = {
     if (!sol.includes("Closed")) failures.push(`Sol's row says "${sol}", not Closed`)
     if (await page.locator(`${css.subagentPanel} textarea`).count())
       failures.push("the panel has a composer")
+    await shot(page, label, `list-${label.engine}.png`, css.subagentPanel)
 
     await page.locator(`${css.subagentRow}[data-subagent-name="Mara"]`).click()
     await need(page, css.subagentDetail, "Mara's conversation")
@@ -123,6 +135,7 @@ const checks = {
       return Boolean(node && node.contains(document.activeElement))
     }, css.subagentDetail)
     if (!focused) failures.push("focus left the open subagent")
+    await shot(page, label, `detail-${label.engine}.png`, css.subagentPanel)
     const before = await scrollGap(page)
     if (!before || before.height <= before.client + 40)
       failures.push(`Mara's transcript does not overflow: ${JSON.stringify(before)}`)
@@ -179,9 +192,10 @@ const checks = {
     return { namesInOrder, summary, failures }
   },
 
-  narrow: async (page) => {
+  narrow: async (page, label) => {
     const failures = []
     await openPanel(page, failures)
+    await shot(page, label, `narrow-${label.engine}.png`, css.widgetPane)
     const fit = await page.evaluate(
       ([pane, panel]) => {
         const box = document.querySelector(pane)?.getBoundingClientRect()
@@ -220,7 +234,11 @@ await main(meta, async ({ options, rep, url }) => {
         let opened
         await attempt(rep, { engine, layout, name }, async () => {
           opened = await onSample(browser, { url, layout, ...size })
-          return checks[name](opened.page)
+          return checks[name](opened.page, {
+            engine,
+            layout,
+            shots: options.shots,
+          })
         }).finally(() => opened?.close())
       }
   })

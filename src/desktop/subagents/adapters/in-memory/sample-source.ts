@@ -127,7 +127,9 @@ function build(now: number, extras: readonly Message[]): SubagentRead {
           "Three of the five cases hold. Two are still running.",
           now - 4 * 60_000,
         ),
-        ...Array.from({ length: 8 }, (_, index) =>
+        // Long enough that the pane's scroller overflows at 1440×900
+        // (`subagents.mjs` measures a gap past 40px before a line arrives).
+        ...Array.from({ length: 18 }, (_, index) =>
           said(
             `mara-pad-${index}`,
             `Case ${index + 1} stays inside the budget.`,

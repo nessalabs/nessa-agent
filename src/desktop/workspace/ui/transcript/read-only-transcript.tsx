@@ -17,10 +17,12 @@ export function ReadOnlyTranscript({
 }) {
   return (
     <div className="workspace-transcript" data-read-only>
-      {messages.map((message) => (
-        <Message key={message.id} sessionId="" message={message} isNew={false} />
-      ))}
-      {activity ? <LiveRow activity={activity} /> : null}
+      <div className="workspace-transcript-inner">
+        {messages.map((message) => (
+          <Message key={message.id} sessionId="" message={message} isNew={false} />
+        ))}
+        {activity ? <LiveRow activity={activity} /> : null}
+      </div>
     </div>
   )
 }
