@@ -1,0 +1,87 @@
+{
+  "base": "f1682e8a763646c6c3e73dee73c1c47987e2cbae",
+  "reviewed_head": "3e65d96e44e27c502a6225ec16e554fe18c4a152",
+  "red_commit": "bb195df38dc9191bb9f73605eace01eab9832b24",
+  "corrected_head": "b78bf641825d77c8be2e88f9ac76b1f14ed2a8dc",
+  "env": {
+    "CARGO_HOME": "/tmp/nessa-cargo",
+    "RUSTUP_HOME": "/tmp/nessa-rustup",
+    "PATH_prefix": "/tmp/nessa-cargo/bin",
+    "CARGO_TARGET_DIR": "/workspace/nessa-agent/target",
+    "CARGO_NET_OFFLINE": "true",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "wrapper": "/tmp/nessa-browser-libs/usr/bin/tini -s --",
+  "focused_command": "cargo test -p nessa-sdk --lib row_22_ -- --nocapture",
+  "red": {
+    "exit_code": 101,
+    "compiled": true,
+    "log": "red.log",
+    "assertion": "accepted cleanup owner must stay owned by the original drain: actual Err(Incomplete), required Ok(())",
+    "control": "gate-only test passed"
+  },
+  "first_green": {
+    "exit_code": 0,
+    "log": "green.log",
+    "passed": 2
+  },
+  "mutation": {
+    "source": "dirty correction tree over bb195df3; only skip result reverted to Err(Incomplete)",
+    "compiled": true,
+    "exit_code": 101,
+    "log": "revert-probe.log",
+    "patch": "mutation-dirty-source.patch",
+    "meaningful_failure": "same public owner-binding assertion; gate-only control passed"
+  },
+  "restored_source": {
+    "before": "restored-before.sha256",
+    "after": "restored-after.sha256",
+    "byte_identical": true,
+    "source_touched_after_restoration": true
+  },
+  "source_sha256": {
+    "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs": "3f44c4504ca5ff532208849ff7a846c22a1916266ef2562c32661df09d37e3eb",
+    "crates/nessa-sdk/src/application/agent_execution/subagents/root.rs": "e308ec3644515ebfb7ceb245dcf19be71263ad7e1d043df276ffa2f4a113fd89",
+    "docs/adr/todo/329-subagents.md": "236978856710b6c8e085c7bfa63890d744d52702fc0865eb210e522afc4fe44f"
+  },
+  "review_budget": "explicit user narrow exception after five review rounds, not review-history reset",
+  "deferred": "accepted absence audit plus failed final snapshot/restart gap remains #625/#646/#649 follow-up; unchanged",
+  "gate_results": {
+    "fmt": 0,
+    "sdk-docs": 0,
+    "architecture-tests": 0,
+    "architecture": 0,
+    "six-clippy": 0,
+    "sdk-full": 0,
+    "six-tests": 0,
+    "rustdoc": 0
+  },
+  "known_findings": "binding-winner P1 corrected and runtime-probed; self-review has no unresolved findings; fresh independent review/CI root-owned",
+  "gate_runner_exit_code": 0,
+  "sdk_full_counts": {
+    "lib_passed": 965,
+    "lib_ignored": 13,
+    "application_passed": 401,
+    "application_ignored": 4,
+    "domain_passed": 212,
+    "infrastructure_passed": 65,
+    "infrastructure_ignored": 2,
+    "doctests_passed": 38
+  },
+  "final_git_status_porcelain": "",
+  "all_source_digests_match_frozen_head": true,
+  "logs_sha256": {
+    "rustdoc.log": "a3dca436c6febbe45dac1ec531dc623e2c085b2dbdb343db7312398779ba0d49",
+    "six-tests.log": "c62d7697b61d01b36e59a1096237cd25e0fd7d6fe8da421d9833ce9cc50a9d2f",
+    "sdk-full.log": "568e82c154f7c946a578b0a457cdf1341d2f04152f980cf0cb0989eef9d7a123",
+    "six-clippy.log": "078608e19044a8c61f7c81282d35f1c23ff80df79cb476b4c70edf06c7d1ff63",
+    "architecture.log": "2a2462c6729eeb5ecb05a41a9fb9ed10f97b1bdb34772bac68dd984b7907a5d8",
+    "architecture-tests.log": "dd42824609f658124f49451a61e04a15efa272c24a3e5289ec2aa49f3bd60204",
+    "sdk-docs.log": "b2d70b714b6ee32d1a5aa0ec61bb5f12fb97ad3068391ac4746e0b3c5da05daf",
+    "fmt.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "revert-probe.log": "fa25b1b3a98236d0cef478d8583d808e01cbebd98997e22ce60044feed858328",
+    "green.log": "b2680b1e6599c30672bbf0b848d8f33955667744e683ae16527e9913013f1da1",
+    "red.log": "5f194d189e6eb37c72edb9bd1a58e4c98f6bcbd8d5a5c33ea24872ac3acebe6c"
+  },
+  "gate_results_note": "All eight final gates completed exit0 on corrected frozen b78bf641; CI/platform/coverage and independent review remain root-owned."
+}

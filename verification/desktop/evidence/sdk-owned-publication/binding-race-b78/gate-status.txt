@@ -1,0 +1,8 @@
+fmt 0
+sdk-docs 0
+architecture-tests 0
+architecture 0
+six-clippy 0
+sdk-full 0
+six-tests 0
+rustdoc 0

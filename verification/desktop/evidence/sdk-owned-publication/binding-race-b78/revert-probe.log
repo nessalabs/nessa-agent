@@ -1,0 +1,22 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-sdk)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.61s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_sdk-3a9a37445fc631f7)
+
+running 2 tests
+
+thread 'application::agent_execution::subagents::coordinator::lifetime_races::row_22_binding_between_absence_inspections_is_drained_without_caller_retry' (503284) panicked at crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs:2178:9:
+assertion `left == right` failed: accepted cleanup owner must stay owned by the original drain
+  left: Err(Incomplete)
+ right: Ok(())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test application::agent_execution::subagents::coordinator::lifetime_races::row_22_gate_between_absence_inspections_retains_closing_incomplete ... ok
+test application::agent_execution::subagents::coordinator::lifetime_races::row_22_binding_between_absence_inspections_is_drained_without_caller_retry ... FAILED
+
+failures:
+
+failures:
+    application::agent_execution::subagents::coordinator::lifetime_races::row_22_binding_between_absence_inspections_is_drained_without_caller_retry
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 976 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-sdk --lib`

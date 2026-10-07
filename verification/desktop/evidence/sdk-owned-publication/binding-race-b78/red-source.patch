@@ -1,0 +1,242 @@
+diff --git a/crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs b/crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+index 2a0ea47a..dfb0fb6b 100644
+--- a/crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ b/crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -138,6 +138,8 @@ pub(super) struct Shared {
+     publish_pause: Mutex<Option<Arc<PublishPause>>>,
+     #[cfg(test)]
+     drain_exclusion: AtomicBool,
++    #[cfg(test)]
++    absence_pause: Mutex<Option<Arc<PublishPause>>>,
+ }
+ 
+ type SpawnFlight = watch::Sender<Option<Result<SpawnReceipt, OwnershipFailure>>>;
+@@ -206,6 +208,8 @@ impl OwnershipCoordinator {
+                 publish_pause: Mutex::new(None),
+                 #[cfg(test)]
+                 drain_exclusion: AtomicBool::new(false),
++                #[cfg(test)]
++                absence_pause: Mutex::new(None),
+             }),
+         }
+     }
+@@ -1435,6 +1439,14 @@ impl Shared {
+                             .root_eligible(target)
+                         && !self.bound.lock().expect("bound lifetimes").contains(target)
+                     {
++                        #[cfg(test)]
++                        {
++                            let pause = self.absence_pause.lock().expect("absence pause").take();
++                            if let Some(pause) = pause {
++                                pause.entered.notify_one();
++                                pause.release.notified().await;
++                            }
++                        }
+                         absence_attempted = true;
+                         super::root::settle_never_bound(self, target).await?;
+                         closed_any = true;
+@@ -1974,9 +1986,14 @@ mod lifetime_races {
+         SpawnOrigin, SpawnProgress, SpawnRequestId, TaskReceiptId,
+     };
+     use async_trait::async_trait;
+-    use std::sync::{
+-        atomic::{AtomicUsize, Ordering},
+-        Arc,
++    use std::{
++        future::Future,
++        sync::{
++            atomic::{AtomicUsize, Ordering},
++            Arc, Mutex,
++        },
++        task::{Context, Poll, Waker},
++        time::Duration,
+     };
+     use tokio::sync::Notify;
+ 
+@@ -2059,6 +2076,160 @@ mod lifetime_races {
+         }
+     }
+ 
++    struct RecordingReleased {
++        closes: AtomicUsize,
++        causes: Mutex<Vec<LifetimeCause>>,
++    }
++
++    #[async_trait]
++    impl ChildResources for RecordingReleased {
++        async fn close(&self, cause: &LifetimeCause, initiator: &Initiator) -> ResourceReport {
++            assert_eq!(initiator, &Initiator::Runtime);
++            self.closes.fetch_add(1, Ordering::SeqCst);
++            self.causes.lock().unwrap().push(cause.clone());
++            ResourceReport {
++                physical: PhysicalFact::Released,
++                evidence: EvidenceFact::Acknowledged,
++            }
++        }
++    }
++
++    async fn unclaimed_root_at_absence_boundary() -> (
++        OwnershipCoordinator,
++        Arc<MemoryOwnershipStore>,
++        AgentLifetimeId,
++        Arc<PublishPause>,
++    ) {
++        let store = Arc::new(MemoryOwnershipStore::new());
++        let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
++            store: store.clone(),
++            audit: Arc::new(AcceptAudit),
++            factory: Arc::new(OnceFactory {
++                resources: Arc::new(Holding {
++                    closes: AtomicUsize::new(0),
++                    hold: Arc::new(Notify::new()),
++                }),
++            }),
++            room: Arc::new(LiveCapacity::new(4)),
++        });
++        let pause = Arc::new(PublishPause {
++            entered: Notify::new(),
++            release: Notify::new(),
++        });
++        *coordinator.inner.absence_pause.lock().unwrap() = Some(pause.clone());
++        let mut opening = Box::pin(coordinator.open_root(
++            SessionId::new("binding-between-inspections").unwrap(),
++            Initiator::Runtime,
++        ));
++        assert!(matches!(
++            opening
++                .as_mut()
++                .poll(&mut Context::from_waker(Waker::noop())),
++            Poll::Pending
++        ));
++        let root = tokio::time::timeout(Duration::from_secs(3), async {
++            loop {
++                if let Some(row) = store.read().await.unwrap().lifetimes.first() {
++                    break row.lifetime_id.clone();
++                }
++                tokio::task::yield_now().await;
++            }
++        })
++        .await
++        .expect("owned admission queued its unclaimed delivery");
++        drop(opening);
++        tokio::time::timeout(Duration::from_secs(3), pause.entered.notified())
++            .await
++            .expect("unclaimed reconciliation reached speculative absence boundary");
++        assert_eq!(
++            coordinator.lifetime_state(&root),
++            Some(LifetimeState::Closing)
++        );
++        assert_eq!(
++            coordinator.close_cause(&root),
++            Some(LifetimeCause::OwnerDisposed)
++        );
++        assert!(!coordinator.inner.bound.lock().unwrap().contains(&root));
++        assert!(!coordinator
++            .inner
++            .absence_claimed
++            .lock()
++            .unwrap()
++            .contains(&root));
++        (coordinator, store, root, pause)
++    }
++
++    #[tokio::test]
++    async fn row_22_binding_between_absence_inspections_is_drained_without_caller_retry() {
++        let (coordinator, store, root, pause) = unclaimed_root_at_absence_boundary().await;
++        let owner = Arc::new(RecordingReleased {
++            closes: AtomicUsize::new(0),
++            causes: Mutex::new(Vec::new()),
++        });
++        coordinator
++            .bind_resources(root.clone(), owner.clone())
++            .unwrap();
++        pause.release.notify_one();
++        // Observe the original owned drain; no end_lifetime call starts a retry.
++        let result =
++            tokio::time::timeout(Duration::from_secs(3), coordinator.inner.wait_drain(&root))
++                .await
++                .expect("original unclaimed-root drain finished");
++        assert_eq!(
++            result,
++            Ok(()),
++            "accepted cleanup owner must stay owned by the original drain"
++        );
++        assert_eq!(owner.closes.load(Ordering::SeqCst), 1);
++        assert_eq!(
++            *owner.causes.lock().unwrap(),
++            vec![LifetimeCause::OwnerDisposed]
++        );
++        assert_eq!(
++            coordinator.lifetime_state(&root),
++            Some(LifetimeState::Closed)
++        );
++        let snapshot = store.read().await.unwrap();
++        assert_eq!(snapshot.lifetimes[0].lifetime_id, root);
++        assert_eq!(snapshot.lifetimes[0].state, LifetimeState::Closed);
++        assert_eq!(snapshot.settlements[0].physical, PhysicalFact::Released);
++        assert_eq!(snapshot.settlements[0].evidence, EvidenceFact::Acknowledged);
++        assert!(!coordinator
++            .inner
++            .absence_claimed
++            .lock()
++            .unwrap()
++            .contains(&root));
++    }
++
++    #[tokio::test]
++    async fn row_22_gate_between_absence_inspections_retains_closing_incomplete() {
++        let (coordinator, store, root, pause) = unclaimed_root_at_absence_boundary().await;
++        let gate = coordinator
++            .participation(&root)
++            .expect("legal Closing gate handoff");
++        assert!(gate.is_sealed());
++        pause.release.notify_one();
++        let result =
++            tokio::time::timeout(Duration::from_secs(3), coordinator.inner.wait_drain(&root))
++                .await
++                .expect("gate-only owned drain finished");
++        assert_eq!(result, Err(OwnershipFailure::Incomplete));
++        assert_eq!(
++            coordinator.lifetime_state(&root),
++            Some(LifetimeState::Closing)
++        );
++        let snapshot = store.read().await.unwrap();
++        assert_eq!(snapshot.lifetimes[0].state, LifetimeState::Closing);
++        assert!(snapshot.settlements.is_empty());
++        assert!(!coordinator
++            .inner
++            .absence_claimed
++            .lock()
++            .unwrap()
++            .contains(&root));
++    }
++
+     #[tokio::test]
+     async fn row_37_retained_root_is_sealed_at_the_admission_scope_boundary() {
+         let resources = Arc::new(Holding {
+diff --git a/docs/adr/todo/329-subagents.md b/docs/adr/todo/329-subagents.md
+index 7c7fda76..bc7f6bc3 100644
+--- a/docs/adr/todo/329-subagents.md
++++ b/docs/adr/todo/329-subagents.md
+@@ -802,7 +802,7 @@ uncertain ports; whole-transaction panic supervision is separate #625 work.
+ |19 | Row 18 settlement audit rejects | Root remains nonrunnable Closing with honest physical absence/evidence failure; eligible root lookup enables explicit retry. No fabricated ResourceReport. |
+ |20 | Restore snapshots containing neighbors/history/private rejection cleanup | Preserve previous report states, close operations and spawn milestones; no incidental recovery changes to unrelated live graph caused by removal. |
+ |21 | Never-bound absence claim wins admission scope; resource binding arrives while its audit is held or rejected | Reject binding and return the unchanged physical owner to the caller. Keep the absence claim through failure and evidence-only retry. |
+-|22 | Resource binding wins admission scope before absence claim | Retain that owner and the once-bound fact; normal close drains it. No never-bound proof may be inferred. |
++|22 | Drain sees no owner and no bound fact; resource binding then wins admission scope before the scoped absence decision | Skip absence and let the existing drain inspect again, retain the accepted owner and once-bound fact, and close that owner without a caller retry, including unclaimed-root reconciliation. No never-bound proof may be inferred. A gate-only handoff at the same boundary retains Closing/Incomplete because it supplies no cleanup owner. |
+ |23 | Binding names unknown/Closed/released lifetime, or replaces an occupied resource slot | Return typed refusal plus the rejected owner; preserve any previous owner. Restored Closing may bind only before physical release or absence claim. |
+ |24 | Initial root audit rejects after another operation sealed it, or eligible publication fails after a cleanup owner transferred | Targeted deletion refuses safety history; retain and reconcile the same identity and its real ownership facts. Private external transfers are refused by row 28. |
+ |25 | Task submission returned its receipt; TaskAdmitted audit is held; close seals/settles child and stores before audit accepts or rejects | Domain-derived nonrunnable Unconfirmed retention includes the actual receipt while its permission is pending. Preserve Closing/Closed cause, terminal safety progress, and the receipt through resume without prepare or resubmit. |
+@@ -843,6 +843,12 @@ checks admitted typed-error revocation across publication/factory/submission,
+ held fallback evidence, original error priority, and non-admitted conflicts.
+ Library `row_38_error_revocation_joins_preserve_first_cause_and_actual_gates_without_new_evidence`
+ checks Closing/Closed joins and the first cause without a new first-close audit.
++Library `row_22_binding_between_absence_inspections_is_drained_without_caller_retry`
++holds the boundary after the speculative owner/bound inspection and before the
++admission-scoped absence decision; public binding supplies the actual owner and
++unclaimed reconciliation closes it once with durable provider acknowledgement.
++`row_22_gate_between_absence_inspections_retains_closing_incomplete` holds the same
++boundary but hands out only a participation gate; it cannot invent settlement.
+ Domain `sealed_progress_retains_actual_receipt_without_inventing_permission_or_terminal_changes`
+ checks the direct unknown/Open/sealed/terminal receipt projection boundaries. Publication's
+ `retained_projection_preserves_valid_history_and_referential_closure` checks

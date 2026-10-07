@@ -1,0 +1,10 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-sdk)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.20s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_sdk-3a9a37445fc631f7)
+
+running 2 tests
+test application::agent_execution::subagents::coordinator::lifetime_races::row_22_binding_between_absence_inspections_is_drained_without_caller_retry ... ok
+test application::agent_execution::subagents::coordinator::lifetime_races::row_22_gate_between_absence_inspections_retains_closing_incomplete ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 976 filtered out; finished in 0.00s
+

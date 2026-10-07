@@ -1,0 +1,102 @@
+diff --git a/crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs b/crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+index dfb0fb6b..3081995f 100644
+--- a/crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ b/crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -1424,7 +1424,7 @@ impl Shared {
+             if targets.is_empty() {
+                 return Ok(());
+             }
+-            let mut closed_any = false;
++            let mut processed_any = false;
+             for target in &targets {
+                 if external.load(Ordering::Acquire) && target == &root {
+                     continue;
+@@ -1449,11 +1449,11 @@ impl Shared {
+                         }
+                         absence_attempted = true;
+                         super::root::settle_never_bound(self, target).await?;
+-                        closed_any = true;
++                        processed_any = true;
+                     }
+                     continue;
+                 };
+-                closed_any = true;
++                processed_any = true;
+                 let (cause, initiator, operation) = self.close_facts(&root);
+                 let (cause, initiator) = (
+                     cause.unwrap_or(LifetimeCause::HostClose),
+@@ -1467,7 +1467,7 @@ impl Shared {
+                     self.release_slot(target);
+                 }
+             }
+-            if closed_any {
++            if processed_any {
+                 self.notify.notify_waiters();
+                 continue;
+             }
+diff --git a/crates/nessa-sdk/src/application/agent_execution/subagents/root.rs b/crates/nessa-sdk/src/application/agent_execution/subagents/root.rs
+index 387f60f2..845aabbe 100644
+--- a/crates/nessa-sdk/src/application/agent_execution/subagents/root.rs
++++ b/crates/nessa-sdk/src/application/agent_execution/subagents/root.rs
+@@ -102,26 +102,29 @@ pub(super) async fn settle_never_bound(
+     shared: &Shared,
+     root: &AgentLifetimeId,
+ ) -> Result<(), OwnershipFailure> {
+-    let token = shared
+-        .with_graph(|graph| {
+-            if shared.bound.lock().expect("bound lifetimes").contains(root) {
+-                return Ok(None);
+-            }
+-            let operation = graph
+-                .close_operation(root)
+-                .cloned()
+-                .ok_or(OwnershipFailure::Incomplete)?;
+-            shared
+-                .absence_claimed
+-                .lock()
+-                .expect("absence claims")
+-                .insert(root.clone());
+-            let token = graph
+-                .note_unbound_root(root, &operation)
+-                .map_err(OwnershipFailure::Domain)?;
+-            Ok::<_, OwnershipFailure>(Some(token))
+-        })?
+-        .ok_or(OwnershipFailure::Incomplete)?;
++    let token = shared.with_graph(|graph| {
++        if shared.bound.lock().expect("bound lifetimes").contains(root) {
++            return Ok(None);
++        }
++        let operation = graph
++            .close_operation(root)
++            .cloned()
++            .ok_or(OwnershipFailure::Incomplete)?;
++        shared
++            .absence_claimed
++            .lock()
++            .expect("absence claims")
++            .insert(root.clone());
++        let token = graph
++            .note_unbound_root(root, &operation)
++            .map_err(OwnershipFailure::Domain)?;
++        Ok::<_, OwnershipFailure>(Some(token))
++    })?;
++    let Some(token) = token else {
++        // Transfer won the admission scope. The existing drain reinspects the
++        // actual owner; a gate-only handoff still supplies no settlement proof.
++        return Err(OwnershipFailure::Incomplete);
++    };
+     let audit = shared.audit.record(token.evidence()).await;
+     shared
+         .with_graph(|graph| {
+diff --git a/docs/adr/todo/329-subagents.md b/docs/adr/todo/329-subagents.md
+index bc7f6bc3..e37aebf7 100644
+--- a/docs/adr/todo/329-subagents.md
++++ b/docs/adr/todo/329-subagents.md
+@@ -747,6 +747,7 @@ stateDiagram-v2
+   Eligible --> RetainedClosing: failed store or unclaimed ticket
+   RetainedClosing --> ClosingEvidenceFailed: never-bound absence audit rejects
+   ClosingEvidenceFailed --> RetainedClosing: explicit close retry
++  RetainedClosing --> RetainedClosing: binding wins scoped absence decision; drain reinspects actual owner
+   RetainedClosing --> Closed: absence or cleanup evidence acknowledged
+ ```
+ 
