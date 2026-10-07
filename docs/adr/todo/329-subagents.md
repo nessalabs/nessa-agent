@@ -276,7 +276,7 @@ stateDiagram-v2
         ParentIdle --> ParentBusy: parent input admitted
         ParentBusy --> ParentIdle: parent execution settled
     }
-    Open --> Closing: close or admitted typed failure / seal tree admission and retain first cause
+    Open --> Closing: close or admitted spawn failure / seal tree admission and retain first cause
     state Closing {
         state ParentCleanup {
             [*] --> ParentPending

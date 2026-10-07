@@ -259,11 +259,12 @@ impl OwnershipCoordinator {
     /// A caller that arrives while the attempt is running joins it. Dropping one waiter
     /// leaves the attempt running.
     ///
-    /// A rejected audit or store publication does not prepare and returns the live
-    /// slot, while the in-memory reservation stays for an identical retry. An
-    /// uncertain publication keeps the slot. A rejected startup that held no
-    /// cleanup owner also returns the slot. A startup that held cleanup returns
-    /// the slot only after that owner reports release.
+    /// The coordinator owns the admitted attempt, its retained cleanup resources,
+    /// and its publication evidence. The installed Agent's shared lifetime gate
+    /// owns attachment and submission admission.
+    ///
+    /// Stage-specific failure, capacity, and sealing semantics and their named
+    /// enforcers are defined by the [ADR329 ordering table](https://github.com/nessalabs/nessa-agent/blob/main/docs/adr/todo/329-subagents.md#sdk-audit-eligibility-and-owned-root-delivery-628).
     pub async fn spawn(&self, command: SpawnCommand) -> Result<SpawnReceipt, OwnershipFailure> {
         if command.task.trim().is_empty() {
             return Err(OwnershipFailure::EmptyTask);
