@@ -1,0 +1,42 @@
+{
+  "head": "3e65d96e44e27c502a6225ec16e554fe18c4a152",
+  "base": "f1682e8a763646c6c3e73dee73c1c47987e2cbae",
+  "logs": {
+    "application_subagents": {
+      "log": "/tmp/628-executor-restored-application.log",
+      "passed": 81,
+      "exit": 0
+    },
+    "library_subagents": {
+      "log": "/tmp/628-executor-restored-library.log",
+      "passed": 10,
+      "exit": 0
+    },
+    "domain_ownership": {
+      "log": "/tmp/628-executor-restored-domain.log",
+      "passed": 39,
+      "exit": 0
+    },
+    "real_agent_owned_lifetime_library": {
+      "log": "/tmp/628-executor-restored-real-gate-library.log",
+      "passed": 5,
+      "exit": 0
+    }
+  },
+  "fmt_sdk": 0,
+  "git_diff_check": 0,
+  "excluded_zero_test_selections": [
+    "/tmp/628-executor-restored-owned-lifetime.log",
+    "/tmp/628-executor-restored-real-gate.log"
+  ],
+  "self_review": {
+    "authority_identity": "Handle::current captured once at first open poll; its clone travels with sole unclaimed delivery obligation. Same executor schedules initial worker and Drop reconcile. SynchronousReady claim takes lifetime and disables Drop scheduling.",
+    "concurrency": "Off-context dropped Send future cannot rely on callerthread executor. Originruntime is live; capturedHandle schedules explicitly. No synchronous await/join or newcontroller inDrop.",
+    "domain_audit_cleanup": "No graph/eligibility/evidence changes. Existing retain_and_seal_root atomically seals thenretains. Actual firstOwnerDisposed cause and durableClosed/Released/Ack observed. Participation never handed out beforeabsence. Existing row37 actualrememberedgate and realAgent5 tests enforce actualseal.",
+    "bounds_representation": "One private Handle clone per successfulqueuedticket, no publicAPI/state/ledger. Handle does not promise runtimekeepalive/shutdownsupervision.",
+    "layer_imports": "Runtime capability belongs private application owner; no domaindependency added, groupedtypeimports.",
+    "enforcer_agreement": "Canonicalrow13/14 written beforecode, actualRED thenmeaningful free-spawnmutation, sourcefreshrestored and focusedsuites pass. Firstgreen causeexpectation correction preserved separately.",
+    "limits": "Runtime shutdown and625adapterpanic supervision not implemented. Other625/646/649 exclusions retained."
+  },
+  "findings": []
+}

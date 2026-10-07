@@ -1,0 +1,231 @@
+<h3>SDK audit eligibility and owned root delivery (#628)</h3>
+<p>The SDK implementation uses one live <code>OwnershipGraph</code>. Application publication
+metadata selects durable identities and the last audit-acknowledged affirmative
+spawn/report state. Snapshot writers copy this projection and its revision under
+the admission scope; audit and store ports run outside that scope. The existing
+write fence orders copied projections. This SDK behavior does not implement the
+proposed gateway child composition above.</p>
+<pre><code class="language-mermaid">flowchart LR
+  Transition[Graph transition under admission scope] --&gt; Token[Immutable target and generation token]
+  Token --&gt; Audit[Audit outside scope]
+  Audit --&gt;|accepted| Ack[Validate token and acknowledge captured state under scope]
+  Audit --&gt;|rejected or uncertain safety transition| Projection
+  Ack --&gt; Projection[Eligible projection plus live safety facts]
+  Projection --&gt; Fence[Revision and write-order fence]
+  Fence --&gt; Store[Ownership store]
+</code></pre>
+<pre><code class="language-mermaid">stateDiagram-v2
+  [*] --&gt; Private: owned root transaction admits
+  Private --&gt; Removed: definite rejection with no retained safety/dependents
+  Private --&gt; RetainedClosing: audit uncertainty
+  Private --&gt; Eligible: audit acceptance
+  Eligible --&gt; Delivered: caller claims delivery ticket before returning Ready
+  Eligible --&gt; RetainedClosing: failed store or unclaimed ticket
+  RetainedClosing --&gt; ClosingEvidenceFailed: never-bound absence audit rejects
+  ClosingEvidenceFailed --&gt; RetainedClosing: explicit close retry
+  RetainedClosing --&gt; Closed: absence or cleanup evidence acknowledged
+</code></pre>
+<p>Closing/Closed lifetime rows, physical release, and nonrunnable spawn safety
+states override pending permission milestones. A safety state's KnownMilestone
+preserves a returned task receipt and actual physical preparation; an unaudited
+Attached permission retains Prepared in the nonrunnable shape. Normal pending
+affirmative rows retain their last eligible milestone. These milestones do not
+assert resource absence. Transferred resources retain their actual cleanup owner.
+The absence of any recorded transfer, together with the domain's root identity
+check, permits an atomic never-bound absence claim. Binding a resource owner or
+handing out an eligible participation gate records possible transfer and blocks
+that claim. A prior claim refuses later external transfers and usable gate
+handoffs. Private lifetimes cannot confer transfer or descendant admission
+authority; eligibility includes the retained ancestor chain. Refused restored
+history may expose only its already-sealed inspection gate. Active child flights
+refuse public transfers; their accepted PrepareRequest supplies the remembered
+child gate directly to the factory. Preparation Err seals attachment authority
+before fallible publication, without manufacturing Closed or physical release.
+The same graph/gate revocation applies to every typed error after this invocation
+admits its own child, before fallback evidence awaits or definite slot return.
+It preserves earlier close cause, factual ownership/receipts and the original
+failure. Lookup, conflict and pre-admission errors cannot revoke another child.
+Restore derives that seal from retained nonrunnable progress. The claim's actual
+audit result controls settlement.
+A queued successful send does not transfer root ownership; claiming its internal
+delivery ticket when <code>open_root</code> returns Ready does. Eligible or uncertain IDs
+remain retained; only a definite preeligible audit rejection removes its target.</p>
+<p>The table shares ordering requirements with #625. #628 verifies rejected and
+uncertain ports; whole-transaction panic supervision is separate #625 work.</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Ordering</th>
+<th>Required result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>A inserts private root; A audit held; B root audit accepts and stores</td>
+<td>B completes; durable view includes B, excludes A and A dependents.</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Row 1; A audit rejects; restart</td>
+<td>Remove only private A; restart has no A ghost; opening A succeeds. B and unrelated history unchanged.</td>
+</tr>
+<tr>
+<td>3</td>
+<td>A private reservation audit held; B unrelated commit</td>
+<td>No private reservation/child/dependents appear in B snapshot; factory A has not run.</td>
+</tr>
+<tr>
+<td>4</td>
+<td>A Prepared acknowledged; Attached audit held; B commits</td>
+<td>A snapshot remains Prepared, retains A child/resource relation.</td>
+</tr>
+<tr>
+<td>5</td>
+<td>A Attached acknowledged; TaskAdmitted audit held; B commits</td>
+<td>A snapshot remains Attached; no unaudited affirmative task receipt.</td>
+</tr>
+<tr>
+<td>6</td>
+<td>A transition audit accepts after close has sealed A</td>
+<td>Token may acknowledge captured eligibility, but projection cannot restore runnable permission and the sealed lifetime remains Closing/Closed. The factory-installed Agent shared gate owns attachment/submission admission; this does not claim a substitute InitialSubmit port is never called.</td>
+</tr>
+<tr>
+<td>7</td>
+<td>A close intent mutates graph; its audit rejects; B or A stores</td>
+<td>Coherent Closing rows/cause/operation persist; no new open/reservation permission leaks.</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Cleanup reports Released; cleanup audit/store rejects or is uncertain</td>
+<td>Physical Released recorded and capacity reconciled before fallible ports; close evidence may remain failed/pending, never fake acknowledgement.</td>
+</tr>
+<tr>
+<td>9</td>
+<td>Initial root audit accepts; store definitively rejects</td>
+<td>ID already eligible: preserve ID, seal/reconcile root; return Store(Rejected). Do not delete eligible ID.</td>
+</tr>
+<tr>
+<td>10</td>
+<td>Initial root store writes then returns Uncertain; later reconcile/restart</td>
+<td>Preserve same ID, seal/reconcile and persist conservative close state; never erase uncertain landed ID.</td>
+</tr>
+<tr>
+<td>11</td>
+<td>Initial root audit is Uncertain</td>
+<td>No affirmative Open grant; preserve identity in conservative Closing retention; return typed audit uncertainty and own reconciliation.</td>
+</tr>
+<tr>
+<td>12</td>
+<td>Caller drops while root audit held; audit later rejects</td>
+<td>Owned transaction completes; definitely preeligible private target removed only; no root ghost.</td>
+</tr>
+<tr>
+<td>13</td>
+<td>Caller drops while root audit held; audit later accepts/store succeeds</td>
+<td>Owner detects unclaimed result and seals/reconciles eligible ID. No orphan Open root.</td>
+</tr>
+<tr>
+<td>14</td>
+<td>Success queued, caller drops before claiming delivery</td>
+<td>Delivery-ticket Drop invokes same reconciliation; successful send alone does not transfer ownership.</td>
+</tr>
+<tr>
+<td>15</td>
+<td>Caller drops during eligible root store/reconciliation</td>
+<td>Root owner remains alive and keeps/reconciles eligible ID; other sessions can complete.</td>
+</tr>
+<tr>
+<td>16</td>
+<td>Older copied snapshot waits; newer eligible snapshot writes; older resumes</td>
+<td>Existing revision fence skips older write; eligible IDs and last acknowledged progress were included in newer projection.</td>
+</tr>
+<tr>
+<td>17</td>
+<td>Older token completes after target settled or newer transition generation exists</td>
+<td>Token cannot overwrite newer metadata or graph lifecycle; no reopening or stale progress substitution.</td>
+</tr>
+<tr>
+<td>18</td>
+<td>Resource-free root was never bound, needs reconciliation</td>
+<td>Explicit unbound-root transition proves absent resources, performs truthful settlement audit, and settles only with actual evidence acknowledgement. A child or stale close operation refuses before mutating physical/evidence facts; a matching token cannot acknowledge against refused restored history. Empty drain is not success.</td>
+</tr>
+<tr>
+<td>19</td>
+<td>Row 18 settlement audit rejects</td>
+<td>Root remains nonrunnable Closing with honest physical absence/evidence failure; eligible root lookup enables explicit retry. No fabricated ResourceReport.</td>
+</tr>
+<tr>
+<td>20</td>
+<td>Restore snapshots containing neighbors/history/private rejection cleanup</td>
+<td>Preserve previous report states, close operations and spawn milestones; no incidental recovery changes to unrelated live graph caused by removal.</td>
+</tr>
+<tr>
+<td>21</td>
+<td>Never-bound absence claim wins admission scope; resource binding arrives while its audit is held or rejected</td>
+<td>Reject binding and return the unchanged physical owner to the caller. Keep the absence claim through failure and evidence-only retry.</td>
+</tr>
+<tr>
+<td>22</td>
+<td>Resource binding wins admission scope before absence claim</td>
+<td>Retain that owner and the once-bound fact; normal close drains it. No never-bound proof may be inferred.</td>
+</tr>
+<tr>
+<td>23</td>
+<td>Binding names unknown/Closed/released lifetime, or replaces an occupied resource slot</td>
+<td>Return typed refusal plus the rejected owner; preserve any previous owner. Restored Closing may bind only before physical release or absence claim.</td>
+</tr>
+<tr>
+<td>24</td>
+<td>Initial root audit rejects after another operation sealed it, or eligible publication fails after a cleanup owner transferred</td>
+<td>Targeted deletion refuses safety history; retain and reconcile the same identity and its real ownership facts. Private external transfers are refused by row 28.</td>
+</tr>
+<tr>
+<td>25</td>
+<td>Task submission returned its receipt; TaskAdmitted audit is held; close seals/settles child and stores before audit accepts or rejects</td>
+<td>Domain-derived nonrunnable Unconfirmed retention includes the actual receipt while its permission is pending. Preserve Closing/Closed cause, terminal safety progress, and the receipt through resume without prepare or resubmit.</td>
+</tr>
+<tr>
+<td>26</td>
+<td>Admitted lifetime gate is handed out before absence is claimed; caller drops or close audit rejects</td>
+<td>Record possible ownership transfer under admission scope. Seal the held gate and retain Closing until real external attachment evidence; gate handoff does not prove physical existence or absence.</td>
+</tr>
+<tr>
+<td>27</td>
+<td>Never-bound absence claim wins before gate handoff</td>
+<td>Refuse a new usable participation gate while audit is held/rejected and after closure; preserve already-held gates and their seals.</td>
+</tr>
+<tr>
+<td>28</td>
+<td>Private reservation/root identity is visible through reads/audit; external bind or participation is requested</td>
+<td>Binding returns UnpublishedLifetime plus the unchanged owner; participation is absent. Read visibility confers no transfer authority. Accepted admission subsequently permits normal transfer.</td>
+</tr>
+<tr>
+<td>29</td>
+<td>Root admission audit held; its observed ID is used as spawn parent</td>
+<td>Refuse UnpublishedParent before capacity reservation, graph rows, or factory effect. Acceptance permits a later spawn; rejection leaves no descendants.</td>
+</tr>
+<tr>
+<td>30</td>
+<td>Unconfirmed/StartupFailed/Ended safety transition audit rejects or is uncertain; graph is already nonrunnable</td>
+<td>Use the shared safety writer. Persist the actual safety fact even when a same-state mark_unconfirmed transition is unnecessary or refused.</td>
+</tr>
+<tr>
+<td>31</td>
+<td>Report is suppressed by a closed parent; suppression audit rejects</td>
+<td>Persist suppression as a safety fact and return the actual audit failure. Do not turn a rejected Submitted admission into suppression without a domain close.</td>
+</tr>
+<tr>
+<td>32</td>
+<td>Initial reservation audit is uncertain</td>
+<td>Retain request/binding/child identity as Unconfirmed and seal its child lifetime. No runnable external gate or affirmative Reserved grant; retain capacity until authoritative release.</td>
+</tr>
+</tbody>
+</table>
+<p>| 33 | Accepted reservation; factory future held; external binding or participation arrives | The existing admitted child flight owns the transfer slot. Refuse external binding with its unchanged owner and refuse a new external gate. Success and failure.cleanup retain the factory's actual owner; caller drop does not end the owned transaction. Restored vacant children have no replaying flight and permit cleanup binding. |
+| 34 | Accepted reservation/store invokes factory with its typed gate; close races preparation | PrepareRequest carries the already remembered OwnedLifetime gate with the same scope/seal. Record possible transfer under the admission scope; parent close seals the actual installed Agent gate. Public participation cannot bypass the flight. |
+| 35 | Factory returns preparation Err after receiving a gate; safety audit rejects/uncertain; restart | Revoke attachment authority synchronously through that gate before audit/store awaits. Preserve startup progress and cleanup ownership; revocation alone proves no physical release or Closed lifecycle. Rejected+None promises no outstanding attachment/cleanup; Some retains unfinished cleanup. Restore derives the seal from retained nonrunnable startup/safety progress without another durable boolean. |</p>
+<p>| 36 | Restored rooted history is contradictory but its IDs remain retained | Return RefusedHistory with the supplied cleanup owner. Only existing sealed inspection gates remain readable; no new transfer/dispatch authority or snapshot rewriting. Save/reload preserves the exact refusal evidence. |</p>
+<p>| 37 | Initial root audit is uncertain, or publication fails after eligibility | Seal the actual root and retain its identity in one admission scope, before retained eligibility becomes observable. Preserve first cause and bound ownership; persist evidence and start the existing drain outside the scope. No retained eligible Open frame may confer attachment or spawn authority. Closing cleanup binding remains legal. |</p>
+<p>| 38 | This invocation admitted a child; initial or milestone publication, factory, or submission returns a typed error | Revoke graph and actual child/descendant gates with TerminalFailure/Runtime synchronously before fallback audit/store awaits, definite slot return, or flight release. Join preserves the first cause and exact original failure. Preserve actual owners/receipts and private rejection exclusion; no physical release or completion inference. Lookup/conflict/pre-admission errors do not revoke another child. Closing vacant cleanup binding remains legal until actual settlement; legacy restored Open+Ended Reserved still refuses transfer. |</p>

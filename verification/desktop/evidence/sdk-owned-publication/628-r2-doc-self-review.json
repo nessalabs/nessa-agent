@@ -1,0 +1,24 @@
+{
+  "parent": "b7180d5983cd55b7c94fc8c6505d099fb79743c2",
+  "changed_paths": [
+    "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs",
+    "docs/adr/todo/329-subagents.md",
+    "docs/codebase-structure.md"
+  ],
+  "coordinator_non_rustdoc_bytes_equal": true,
+  "scan_dispositions": {
+    "coordinator public spawn": "Removed blanket stage/capacity guarantees; concise ownership plus canonical ADR link. open_root comment remains explicitly definite preeligible vs eligible/uncertain; bind/participation reflect exact eligibility, flight, absence and actual cleanup guards.",
+    "ports and failure public API": "Prepare-only ChildFactory obligation and PreparedChild not-yet-dispatched description are at factory return, before coordinator InitialSubmit. PrepareFailure rejectedNone promise covers outstanding attachment/cleanup, not Closed. Startup error before dispatch applies actual factory failure. No stage-wide publication claim.",
+    "domain public graph/values/error": "Dispatch::Drain/ChildUnavailable and ParentClosing/ChildUnavailable describe the immediate post-factory graph check; they do not claim another check after later milestone audit. Ended is spawn operation evidence, not physical settlement. Token acknowledgment explicitly requires graph authority and correlation.",
+    "SDK README": "Stage-independent shared graph/gate revocation under admitted invocation, actual first cause and lookup exclusion match row38. Explicit legacy OpenEndedReserved vs currentClosing649 and legal unfinished cleanup transfer retained. No substitute-port suppression claim.",
+    "SDK agent_execution guides and SDK state runtime guides": "No subagent stage/capacity guarantee duplicates. Ordinary Agent prepare/generation-bound attachment/cleanup contracts are separate and unchanged.",
+    "ADR lifecycle/spawn charts and close steps": "First admitted-spawn failure seal linked to row38; no Ended/slot absence proof. Immediate factory-held-close S5 means dispatch_after_prepare refuses before InitialSubmit, supported by gated factory case. S13 no unowned dispatch means retained attempt ownership, not absent port call. Canonical row6 covers pending audit acceptance permission, not substitute-port call prevention. Rows4/5 affirmative projection vs row25 honest sealed receipt retention remain consistent.",
+    "ownership map": "Removed copied stage rules; links canonical ADR semantics/enforcers, describes graph/gate vs application eligibility owners. Other map Agent close attachment-only distinction unchanged.",
+    "scope": "Proposed gateway composition, first-cause joins, pre-admission nonrevocation, legacyOpenEndedReserved,Closing cleanup and649 completion exclusion retained."
+  },
+  "structural_diagnosis": "Two review rounds exposed copied blanket failure-stage/authority prose across consumers. ADR ordering table is canonical; map and public spawn API now own concise responsibility descriptions and link canonical semantics/enforcers. No second rule/controller added.",
+  "findings": [],
+  "diff_check": "pass",
+  "builds_tests_push": "none",
+  "head": "ee85fe449c321fa6fdc6c104503be4b1cd9bbb34"
+}

@@ -1,0 +1,44 @@
+{
+  "pr": 650,
+  "base": "f1682e8a763646c6c3e73dee73c1c47987e2cbae",
+  "current_head": "3e65d96e44e27c502a6225ec16e554fe18c4a152",
+  "type": "root summary of actual independent source-review reports; not executed reviewer tests",
+  "rounds": [
+    {
+      "round": 1,
+      "head": "06dee44de04faa5d172bcca8fa79eec919bb118d",
+      "findings": "Two minor documentation guarantees overstated failure stages and substitute dispatch suppression; initial clean amended.",
+      "correction": "b7180d5983cd55b7c94fc8c6505d099fb79743c2"
+    },
+    {
+      "round": 2,
+      "head": "b7180d5983cd55b7c94fc8c6505d099fb79743c2",
+      "findings": "Same two minor guarantees persisted in public Rustdoc and map.",
+      "correction": "ee85fe449c321fa6fdc6c104503be4b1cd9bbb34; structural single-owner canonical semantics with links"
+    },
+    {
+      "round": 3,
+      "head": "ee85fe449c321fa6fdc6c104503be4b1cd9bbb34",
+      "findings": "Contracts clean; adversarial nit: rendered canonical table stops after row32.",
+      "correction": "5c5643f561f7c2100bc69bcb27a034ec2c7b565e; actual markdown-it renderer confirms all38rows"
+    },
+    {
+      "round": 4,
+      "head": "5c5643f561f7c2100bc69bcb27a034ec2c7b565e",
+      "findings": "Both reports amended to major: queued root DeliveryTicket drops on contextless stdthread; free tokio spawn panics, root left Open. Initial clean superseded.",
+      "correction": "3e65d96e44e27c502a6225ec16e554fe18c4a152; originating runtime Handle travels with delivery obligation; real red083b and single-rule compiled runtime mutation fail, restored focused checks pass"
+    },
+    {
+      "round": 5,
+      "head": "3e65d96e44e27c502a6225ec16e554fe18c4a152",
+      "findings": "Two fresh independent whole-PR reports: no remaining findings at any priority. Proposed library possessive test-attribution nit considered then withdrawn because enclosing paragraph gives correct application filepath and exact testname; no lib-target assertion.",
+      "reports": [
+        "650-r5-contracts-report.md",
+        "650-r5-adversarial-report.md"
+      ]
+    }
+  ],
+  "next_review_round": null,
+  "budget_reset": false,
+  "limits": "Independent local R5 clean, no budget reset. Root full SDK exacthead passes; combined gates and exact-head CI/external review pending. No merge approval yet."
+}

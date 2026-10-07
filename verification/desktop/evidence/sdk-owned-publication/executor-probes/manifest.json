@@ -1,0 +1,39 @@
+{
+  "head": "083bbedae56354d5482676efd5ab77ab36a5d6b6",
+  "cases": [
+    {
+      "name": "delivery_drop_uses_dropping_thread_context",
+      "path": "crates/nessa-sdk/src/application/agent_execution/subagents/root.rs",
+      "original_sha256": "0367716a9949c8bd5ba1c5b8c5c3fd2342299f4d1dbea15fbc56714f68687834",
+      "mutated_sha256": "2ce1be2f5bfb627ab3f6dc477bd98c1b047614322b119632739f513c501ba82b",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "row_14_queued_root_drop_without_tokio_context"
+      ],
+      "exit_code": 101,
+      "real_test_failure": true,
+      "compile_failure": false
+    }
+  ],
+  "corrected_checkpoint": "3e65d96e44e27c502a6225ec16e554fe18c4a152",
+  "test_only_red_checkpoint": "083bbeda",
+  "original_executable_parent": "5c5643f561f7c2100bc69bcb27a034ec2c7b565e",
+  "red_log": "/tmp/628-off-runtime-red.log",
+  "red_exit": 101,
+  "first_green_attempt": {
+    "log": "/tmp/628-off-runtime-green.log",
+    "exit": 101,
+    "reason": "Existing OwnerDisposed cause mismatched test HostClose expectation; context and settlement assertions had passed. Corrected fixture only; also wait for actual durable snapshot."
+  },
+  "post_probe_delta": "Only explanatory executor field comment and ADR enforcer link added to production probe source; runtime instructions identical. Test cause/durable wait corrected before mutation.",
+  "origin_runtime": "Handle::current captured when open future first polled; its clone travels in DeliveryTicket until synchronousclaim; capturedHandle schedules both initial owner and unclaimed Drop reconcile. Origin runtime required alive; handle capture does not claim shutdown supervision."
+}

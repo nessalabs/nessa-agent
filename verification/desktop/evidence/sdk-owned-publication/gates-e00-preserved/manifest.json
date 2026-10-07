@@ -1,0 +1,83 @@
+{
+  "head": "e00ca7c286477e393b8edf8aa231e2124c6870bf",
+  "environment": {
+    "CARGO_HOME": "/tmp/nessa-cargo",
+    "RUSTUP_HOME": "/tmp/nessa-rustup",
+    "CARGO_TARGET_DIR": "/workspace/nessa-agent/target",
+    "CARGO_NET_OFFLINE": "true",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "gates": [
+    {
+      "name": "format",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "fmt",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-sdk",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 3.39,
+      "log": "/tmp/628651-final-gates/format.log"
+    },
+    {
+      "name": "sdk-full",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline"
+      ],
+      "exit_code": 0,
+      "seconds": 247.41,
+      "log": "/tmp/628651-final-gates/sdk-full.log"
+    },
+    {
+      "name": "ci-six-package-tests",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "node",
+        "scripts/cargo-test-parallel.mjs",
+        "--concurrency",
+        "2",
+        "--",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-sdk"
+      ],
+      "exit_code": 0,
+      "seconds": 568.23,
+      "log": "/tmp/628651-final-gates/ci-six-package-tests.log"
+    }
+  ]
+}

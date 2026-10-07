@@ -1,0 +1,12 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_sdk-3a9a37445fc631f7)
+
+running 5 tests
+test application::agent_execution::agents::coordination::tests::owned_lifetime::c18_disposal_seals_without_replacing_the_earlier_attachment_cause ... ok
+test application::agent_execution::agents::coordination::tests::owned_lifetime::c15_attachment_close_does_not_seal_or_block_reopen ... ok
+test application::agent_execution::agents::coordination::tests::owned_lifetime::c16_owned_close_seals_and_refuses_a_later_attachment ... ok
+test application::agent_execution::agents::coordination::tests::owned_lifetime::factory_owned_gate::row_34_factory_gate_installs_on_real_agent_and_shared_close_refuses_attachment ... ok
+test application::agent_execution::agents::coordination::tests::owned_lifetime::factory_owned_gate::row_35_failed_factory_revokes_stale_real_agent_attachment_authority ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 971 filtered out; finished in 0.00s
+

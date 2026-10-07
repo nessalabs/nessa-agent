@@ -1,0 +1,28 @@
+{
+  "parent": "e00ca7c286477e393b8edf8aa231e2124c6870bf",
+  "head": "06dee44de04faa5d172bcca8fa79eec919bb118d",
+  "paths": {
+    "crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs": {
+      "same_non_import_tokens_after_exact_type_path_and_optional_trailing_comma_normalization": true,
+      "before_sha256": "469926123fcf404440b4bd2affbc040ed5c73926360ac2a83ef6fa9fcbdeab18",
+      "after_sha256": "c7d6d37bf7e9210e82a8847ea7642a4e9a1bc3caaa6e87c39d7feab7b41ee7fc"
+    },
+    "crates/nessa-sdk/src/application/agent_execution/subagents/ports.rs": {
+      "same_non_import_tokens_after_exact_type_path_and_optional_trailing_comma_normalization": true,
+      "before_sha256": "05131d906c664725c185e3b75a700a73b0fda6642e48b19861ce972e7c305647",
+      "after_sha256": "3adab0d53eeb011967578a2296b6f1ce7ba39118f0d35e3f2071ffb2cba830b5"
+    },
+    "crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs": {
+      "same_non_import_tokens_after_exact_type_path_and_optional_trailing_comma_normalization": true,
+      "before_sha256": "c2f5c80b69b751463e336628a15057fc68cd8bbbb256f1952f982e15ea08bc2b",
+      "after_sha256": "9e8a77d2d8b7c2d58499f2e37fdf189cb057439628fd10fb211070be5f2ee4f3"
+    },
+    "crates/nessa-sdk/tests/application/agent_execution/subagents/publication.rs": {
+      "same_non_import_tokens_after_exact_type_path_and_optional_trailing_comma_normalization": true,
+      "before_sha256": "5fe19b244b13a50230b35afa86d1c8cae325a34171c51ab74727e34aaffa245e",
+      "after_sha256": "d35df251afa7155bf42765508fefafe9191cbcd6b39c1bb45aef00c0caa92834"
+    }
+  },
+  "self_review": "Imports resolve to same concrete types; explicit bindings preserve function-local meaning; FmtResult avoids real generic Result collision. Only imports/type path spelling and rustfmt optional trailing comma changed. No behavior, signature concrete type, trait or conditional compilation change.",
+  "no_tests_or_builds_run": true
+}

@@ -1,0 +1,48 @@
+{
+  "head": "5c5643f561f7c2100bc69bcb27a034ec2c7b565e",
+  "prior_head": "ee85fe449c321fa6fdc6c104503be4b1cd9bbb34",
+  "all_production_test_script_manifest_source_byte_identical": true,
+  "structural_disposition": "Canonical failure semantics linked rather than duplicated; real Markdown renderer verifies complete 38-row human-facing table; no runtime change.",
+  "gates": [
+    {
+      "name": "sdk-docs",
+      "command": [
+        "node",
+        "scripts/check-sdk-docs.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.23
+    },
+    {
+      "name": "architecture-tests",
+      "command": [
+        "node",
+        "--test",
+        "scripts/architecture/adr-numbers.test.mjs",
+        "scripts/architecture/composer-budget.test.mjs",
+        "scripts/architecture/desktop-verticals.test.mjs",
+        "scripts/architecture/imported-paths.test.mjs",
+        "scripts/architecture/overlay-placement.test.mjs",
+        "scripts/architecture/platform-boundaries.test.mjs",
+        "scripts/architecture/rust-boundaries.test.mjs",
+        "scripts/architecture/rust-dependency-graphs.test.mjs",
+        "scripts/architecture/setup-gate-placement.test.mjs",
+        "scripts/architecture/split-panes-boundary.test.mjs",
+        "scripts/architecture/stand-down-placement.test.mjs",
+        "scripts/architecture/whole-workspace.test.mjs",
+        "scripts/architecture/without-comments.test.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.39
+    },
+    {
+      "name": "architecture",
+      "command": [
+        "node",
+        "scripts/check-architecture.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.57
+    }
+  ]
+}

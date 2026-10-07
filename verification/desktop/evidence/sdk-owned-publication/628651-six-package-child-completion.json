@@ -1,0 +1,9 @@
+{
+  "head": "e00ca7c286477e393b8edf8aa231e2124c6870bf",
+  "controller_pid": 378941,
+  "child_pid": 385979,
+  "process_state": "Z",
+  "wait_status": 0,
+  "source": "/proc/385979/stat",
+  "note": "Owned controller paused before next command; completed six-package child exit 0 recorded before import-only edits; child will be reaped on controller resume."
+}

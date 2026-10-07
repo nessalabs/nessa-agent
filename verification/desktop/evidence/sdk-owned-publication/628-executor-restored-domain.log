@@ -1,0 +1,47 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-sdk)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.79s
+     Running tests/domain.rs (/workspace/nessa-agent/target/debug/deps/domain-3fb4d9edd6241f66)
+
+running 39 tests
+test domain::agent_execution::ownership::begin_close_of_a_missing_lifetime_is_parent_missing ... ok
+test domain::agent_execution::ownership::apply_report_on_an_open_lifetime_is_stale ... ok
+test domain::agent_execution::ownership::active_root_query_excludes_child_and_closed_history_and_discard_refuses_dependents ... ok
+test domain::agent_execution::ownership::a_closed_child_is_omitted_when_the_parent_seals ... ok
+test domain::agent_execution::ownership::c12_report_follows_parent_lifetime_and_keeps_an_admitted_report ... ok
+test domain::agent_execution::ownership::c1_parent_close_seals_grandchildren_and_keeps_the_root_cause ... ok
+test domain::agent_execution::ownership::c8_direct_child_close_leaves_the_parent_open ... ok
+test domain::agent_execution::ownership::child_pages_use_the_published_bound_and_a_cursor ... ok
+test domain::agent_execution::ownership::cleanup_settles_only_correlated_released_and_acknowledged_targets ... ok
+test domain::agent_execution::ownership::closed_parent_and_second_root_are_refused ... ok
+test domain::agent_execution::ownership::contradictory_child_and_missing_child_row_refuse_dispatch ... ok
+test domain::agent_execution::ownership::every_ownership_error_formats_as_text_and_has_no_source ... ok
+test domain::agent_execution::ownership::identity_and_policy_values_reject_blank_and_oversized_input ... ok
+test domain::agent_execution::ownership::duplicate_spawn_and_report_rows_and_a_deeper_than_limit_chain_are_kept ... ok
+test domain::agent_execution::ownership::dispatch_after_prepare_refuses_a_child_that_is_not_open ... ok
+test domain::agent_execution::ownership::illegal_spawn_steps_and_dispatch_of_terminal_progress_are_refused ... ok
+test domain::agent_execution::ownership::r5_an_open_child_under_a_closed_ancestor_stays_readable ... ok
+test domain::agent_execution::ownership::r3_an_open_descendant_of_a_closing_ancestor_joins_that_close ... ok
+test domain::agent_execution::ownership::restored_settlement_stays_readable ... ok
+test domain::agent_execution::ownership::r5_illegal_history_stays_readable_and_refuses_dispatch ... ok
+test domain::agent_execution::ownership::s12_foreign_missing_and_self_parent_refuse_before_a_child_exists ... ok
+test domain::agent_execution::ownership::row_20_private_root_discard_preserves_neighbors_closed_history_reports_and_recovery ... ok
+test domain::agent_execution::ownership::s1_open_parent_reserves_one_child_before_any_later_progress ... ok
+test domain::agent_execution::ownership::s11_exact_direct_child_depth_and_retained_request_bounds ... ok
+test domain::agent_execution::ownership::s2_identical_retry_returns_the_original_child ... ok
+test domain::agent_execution::ownership::s3_changed_binding_conflicts_and_keeps_the_original ... ok
+test domain::agent_execution::ownership::s4_close_before_reservation_refuses_the_spawn ... ok
+test domain::agent_execution::ownership::s5_reservation_joins_the_drain_and_cannot_dispatch ... ok
+test domain::agent_execution::ownership::s6_startup_failure_retains_the_reservation ... ok
+test domain::agent_execution::ownership::sealed_progress_retains_actual_receipt_without_inventing_permission_or_terminal_changes ... ok
+test domain::agent_execution::ownership::second_physical_release_records_the_previous_release_as_before ... ok
+test domain::agent_execution::ownership::suppressed_report_can_be_confirmed_or_left_in_place ... ok
+test domain::agent_execution::ownership::unbound_absence_admission_refuses_child_and_stale_operation_without_mutating_history ... ok
+test domain::agent_execution::ownership::unbound_absence_completion_refuses_restored_history_despite_matching_token ... ok
+test domain::agent_execution::ownership::unbound_absence_token_refuses_child_closed_history_and_stale_completion ... ok
+test domain::agent_execution::ownership::unconfirmed_lookup_confirms_a_partial_milestone_only ... ok
+test domain::agent_execution::ownership::unconfirmed_same_milestone_and_receipt_round_trip ... ok
+test domain::agent_execution::ownership::unconfirmed_spawn_returns_to_its_milestone_or_joins_a_drain ... ok
+test domain::agent_execution::ownership::retained_request_limit_is_the_published_constant ... ok
+
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 173 filtered out; finished in 0.01s
+

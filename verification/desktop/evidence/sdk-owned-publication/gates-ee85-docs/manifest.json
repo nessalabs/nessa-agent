@@ -1,0 +1,93 @@
+{
+  "head": "ee85fe449c321fa6fdc6c104503be4b1cd9bbb34",
+  "gates": [
+    {
+      "name": "format",
+      "command": [
+        "cargo",
+        "fmt",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-sdk",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 3.92
+    },
+    {
+      "name": "ci-six-package-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-sdk",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 19.2
+    },
+    {
+      "name": "sdk-docs",
+      "command": [
+        "node",
+        "scripts/check-sdk-docs.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 2.82
+    },
+    {
+      "name": "architecture-tests",
+      "command": [
+        "node",
+        "--test",
+        "scripts/architecture/adr-numbers.test.mjs",
+        "scripts/architecture/composer-budget.test.mjs",
+        "scripts/architecture/desktop-verticals.test.mjs",
+        "scripts/architecture/imported-paths.test.mjs",
+        "scripts/architecture/overlay-placement.test.mjs",
+        "scripts/architecture/platform-boundaries.test.mjs",
+        "scripts/architecture/rust-boundaries.test.mjs",
+        "scripts/architecture/rust-dependency-graphs.test.mjs",
+        "scripts/architecture/setup-gate-placement.test.mjs",
+        "scripts/architecture/split-panes-boundary.test.mjs",
+        "scripts/architecture/stand-down-placement.test.mjs",
+        "scripts/architecture/whole-workspace.test.mjs",
+        "scripts/architecture/without-comments.test.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.37
+    },
+    {
+      "name": "architecture",
+      "command": [
+        "node",
+        "scripts/check-architecture.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.58
+    }
+  ]
+}

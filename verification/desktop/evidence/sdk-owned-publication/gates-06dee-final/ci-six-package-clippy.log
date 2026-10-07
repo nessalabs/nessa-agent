@@ -1,0 +1,7 @@
+    Checking nessa-sdk v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-sdk)
+    Checking nessa-protocol v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-protocol)
+    Checking nessa-client-core v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-client-core)
+    Checking nessa-server v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-server)
+    Checking nessa-auth v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-auth)
+    Checking nessa-local-storage v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-local-storage)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 03s

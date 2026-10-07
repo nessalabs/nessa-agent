@@ -1,0 +1,48 @@
+diff --git a/crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs b/crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+index a18156b9..2a0ea47a 100644
+--- a/crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ b/crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -259,11 +259,12 @@ impl OwnershipCoordinator {
+     /// A caller that arrives while the attempt is running joins it. Dropping one waiter
+     /// leaves the attempt running.
+     ///
+-    /// A rejected audit or store publication does not prepare and returns the live
+-    /// slot, while the in-memory reservation stays for an identical retry. An
+-    /// uncertain publication keeps the slot. A rejected startup that held no
+-    /// cleanup owner also returns the slot. A startup that held cleanup returns
+-    /// the slot only after that owner reports release.
++    /// The coordinator owns the admitted attempt, its retained cleanup resources,
++    /// and its publication evidence. The installed Agent's shared lifetime gate
++    /// owns attachment and submission admission.
++    ///
++    /// Stage-specific failure, capacity, and sealing semantics and their named
++    /// enforcers are defined by the [ADR329 ordering table](https://github.com/nessalabs/nessa-agent/blob/main/docs/adr/todo/329-subagents.md#sdk-audit-eligibility-and-owned-root-delivery-628).
+     pub async fn spawn(&self, command: SpawnCommand) -> Result<SpawnReceipt, OwnershipFailure> {
+         if command.task.trim().is_empty() {
+             return Err(OwnershipFailure::EmptyTask);
+diff --git a/docs/adr/todo/329-subagents.md b/docs/adr/todo/329-subagents.md
+index 48c89b4d..b8d2b104 100644
+--- a/docs/adr/todo/329-subagents.md
++++ b/docs/adr/todo/329-subagents.md
+@@ -276,7 +276,7 @@ stateDiagram-v2
+         ParentIdle --> ParentBusy: parent input admitted
+         ParentBusy --> ParentIdle: parent execution settled
+     }
+-    Open --> Closing: close or admitted typed failure / seal tree admission and retain first cause
++    Open --> Closing: close or admitted spawn failure / seal tree admission and retain first cause
+     state Closing {
+         state ParentCleanup {
+             [*] --> ParentPending
+diff --git a/docs/codebase-structure.md b/docs/codebase-structure.md
+index a341dcfe..574d5e04 100644
+--- a/docs/codebase-structure.md
++++ b/docs/codebase-structure.md
+@@ -397,7 +397,7 @@ own current lifecycle and API contracts.
+ | `domain/model_metadata/`, `domain/effective_capabilities/` | Model catalog invariants and immutable admission capabilities. |
+ | `domain/agent_execution/` | Sessions, execution ordering, tools, permissions, prompts, and the subagent lifetime graph; DDD roles beneath each feature. |
+ | `application/agent_execution/agents/` | Public Agent, scheduling, submission retry recovery, and one lifecycle owner for work generations, active work, and shutdown. An installed owned lifetime seals descendant admission; `Agent::close` stays attachment-only. |
+-| `application/agent_execution/subagents/` | Ownership coordinator: reserve a child, prepare it through an injected factory, admit one initial task, and drain descendants when the parent lifetime ends. A rejected publication or a startup that held no cleanup returns the live slot. A child that is already closing is not dispatched. Concurrent closes share one drain. `publication.rs` selects audit-eligible durable identities with their ancestor chain and progress while retaining graph safety facts, and gates external transfers and descendant admission; `root.rs` owns admission until the returned ID is claimed, and reconciles unclaimed delivery. An older projected snapshot does not replace a newer acknowledged one. |
++| `application/agent_execution/subagents/` | Ownership coordinator for admitted child attempts, retained cleanup owners and tree drains. `publication.rs` owns audit eligibility and durable projection through the write fence; `root.rs` owns admission through ID delivery and unclaimed-result reconciliation. Domain graph and actual Agent gates own lifecycle and runnable admission. Stage-specific failure/capacity semantics and named enforcers live in the [ADR329 ordering table](adr/todo/329-subagents.md#sdk-audit-eligibility-and-owned-root-delivery-628). |
+ | `application/agent_execution/providers/`, `hooks/` | Injected execution ports, operation capabilities, and typed invocation callbacks. |
+ | `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, backend-issued load/save bindings and immutable semantic units in `storage/save.rs`, retained attachment resources, snapshot evidence mapped through domain history rules, which apps a message may name (`app_sources.rs`: an MCP tool call of an earlier turn, asked at admission and of restored history), where a steered message stands in its target turn (`steering_position.rs`: target and offset taken at admission and read from saved history in one place), the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
+ | `application/agent_execution/executions/`, `permissions/`, `tools/` | Domain coordination, weak permission authority carriers, attributed decisions, and observation/review projections. |

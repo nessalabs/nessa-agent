@@ -1,0 +1,49 @@
+{
+  "head": "b7180d5983cd55b7c94fc8c6505d099fb79743c2",
+  "initial_invalid_attempt": {
+    "reason": "Root omitted task PATH; cargo child spawn ENOENT. No Cargo compile/test ran. Architecture subset ran but aggregate failed; excluded from proof.",
+    "retained_output": "Tool output retained; no separate original raw file was created."
+  },
+  "gates": [
+    {
+      "name": "sdk-docs",
+      "command": [
+        "node",
+        "scripts/check-sdk-docs.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.19
+    },
+    {
+      "name": "architecture-tests",
+      "command": [
+        "node",
+        "--test",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/adr-numbers.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/composer-budget.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/desktop-verticals.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/imported-paths.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/overlay-placement.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/platform-boundaries.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/rust-boundaries.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/rust-dependency-graphs.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/setup-gate-placement.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/split-panes-boundary.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/stand-down-placement.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/whole-workspace.test.mjs",
+        "/workspace/nessa-agent-owned-publication/scripts/architecture/without-comments.test.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.36
+    },
+    {
+      "name": "architecture",
+      "command": [
+        "node",
+        "scripts/check-architecture.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.58
+    }
+  ]
+}

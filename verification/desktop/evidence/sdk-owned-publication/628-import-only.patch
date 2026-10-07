@@ -1,0 +1,175 @@
+diff --git a/crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs b/crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+index d761453d..a18156b9 100644
+--- a/crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
++++ b/crates/nessa-sdk/src/application/agent_execution/subagents/coordinator.rs
+@@ -1968,9 +1968,9 @@ mod lifetime_races {
+     };
+     use crate::domain::agent_execution::sessions::SessionId;
+     use crate::domain::agent_execution::subagents::{
+-        AgentLifetimeId, ApprovalPolicy, EvidenceFact, HostActor, Initiator, LifetimeCause,
+-        LifetimeState, OwnershipError, OwnershipEvidence, PhysicalFact, PolicyRead, SpawnOrigin,
+-        SpawnRequestId, TaskReceiptId,
++        AgentLifetimeId, ApprovalPolicy, EvidenceFact, HostActor, Initiator, KnownMilestone,
++        LifetimeCause, LifetimeState, OwnershipError, OwnershipEvidence, PhysicalFact, PolicyRead,
++        SpawnOrigin, SpawnProgress, SpawnRequestId, TaskReceiptId,
+     };
+     use async_trait::async_trait;
+     use std::sync::{
+@@ -2266,7 +2266,6 @@ mod lifetime_races {
+ 
+     #[tokio::test]
+     async fn row_30_already_safety_reconciliation_still_writes_current_fact() {
+-        use crate::domain::agent_execution::subagents::{KnownMilestone, SpawnProgress};
+         let store = Arc::new(MemoryOwnershipStore::new());
+         let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+             store: store.clone(),
+diff --git a/crates/nessa-sdk/src/application/agent_execution/subagents/ports.rs b/crates/nessa-sdk/src/application/agent_execution/subagents/ports.rs
+index 2bad03dd..677a031f 100644
+--- a/crates/nessa-sdk/src/application/agent_execution/subagents/ports.rs
++++ b/crates/nessa-sdk/src/application/agent_execution/subagents/ports.rs
+@@ -1,6 +1,11 @@
+ //! Ports the ownership coordinator uses for effects outside a transition.
+ #![deny(missing_docs)]
+ 
++use std::{
++    fmt::{Debug, Formatter, Result as FmtResult},
++    sync::Arc,
++};
++
+ use async_trait::async_trait;
+ 
+ use crate::application::agent_execution::agents::OwnedLifetime;
+@@ -62,10 +67,10 @@ pub struct BindResourcesFailure {
+     /// Typed refusal; no physical resource transfer occurred.
+     pub reason: BindResourcesRefusal,
+     /// The exact rejected owner, returned without closing or replacing it.
+-    pub resources: std::sync::Arc<dyn ChildResources>,
++    pub resources: Arc<dyn ChildResources>,
+ }
+-impl std::fmt::Debug for BindResourcesFailure {
+-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++impl Debug for BindResourcesFailure {
++    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+         f.debug_struct("BindResourcesFailure")
+             .field("reason", &self.reason)
+             .finish_non_exhaustive()
+@@ -90,7 +95,7 @@ pub struct PrepareRequest {
+     /// This is the coordinator's actual child gate, sharing its admission scope
+     /// and seal. Preparation failure revokes new attachment authority immediately;
+     /// revocation does not prove physical release. Return any unfinished cleanup.
+-    pub owned_lifetime: std::sync::Arc<dyn OwnedLifetime>,
++    pub owned_lifetime: Arc<dyn OwnedLifetime>,
+     /// Parent lifetime.
+     pub parent: AgentLifetimeId,
+     /// Child lifetime minted for this binding.
+@@ -108,8 +113,8 @@ pub struct PrepareRequest {
+     /// Verified origin.
+     pub origin: SpawnOrigin,
+ }
+-impl std::fmt::Debug for PrepareRequest {
+-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++impl Debug for PrepareRequest {
++    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+         f.debug_struct("PrepareRequest")
+             .field("owned_lifetime", &"<owned lifetime>")
+             .field("parent", &self.parent)
+@@ -128,9 +133,9 @@ impl std::fmt::Debug for PrepareRequest {
+ #[derive(Clone)]
+ pub struct PreparedChild {
+     /// Cleanup owner, including when later dispatch is refused.
+-    pub resources: std::sync::Arc<dyn ChildResources>,
++    pub resources: Arc<dyn ChildResources>,
+     /// Initial task submission.
+-    pub submit: std::sync::Arc<dyn InitialSubmit>,
++    pub submit: Arc<dyn InitialSubmit>,
+ }
+ 
+ /// Factory failure. Any cleanup owner is retained by the coordinator.
+@@ -140,7 +145,7 @@ pub struct PrepareFailure {
+     /// Whether preparation was refused or uncertain.
+     pub failure: PortFailure,
+     /// Resources to close when preparation held them.
+-    pub cleanup: Option<std::sync::Arc<dyn ChildResources>>,
++    pub cleanup: Option<Arc<dyn ChildResources>>,
+ }
+ 
+ /// Prepares an ordinary child. It must not dispatch work.
+diff --git a/crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs b/crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs
+index 0c511ddc..778a831c 100644
+--- a/crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs
++++ b/crates/nessa-sdk/src/application/agent_execution/subagents/publication.rs
+@@ -234,6 +234,13 @@ impl OwnershipPublication {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    use crate::domain::agent_execution::{
++        sessions::SessionId,
++        subagents::{
++            ApprovalPolicy, CloseOperationId, EvidenceFact, HostActor, Initiator, LifetimeCause,
++            OwnershipGraph, PhysicalFact, SpawnAdmission, SpawnBinding, SpawnOrigin, TaskDigest,
++        },
++    };
+ 
+     #[test]
+     fn row_17_tokens_acknowledge_captured_progress_once_and_refuse_stale_generation() {
+@@ -274,14 +281,6 @@ mod tests {
+     }
+     #[test]
+     fn retained_projection_preserves_valid_history_and_referential_closure() {
+-        use crate::domain::agent_execution::{
+-            sessions::SessionId,
+-            subagents::{
+-                ApprovalPolicy, CloseOperationId, EvidenceFact, Initiator, LifetimeCause,
+-                OwnershipGraph, PhysicalFact, SpawnAdmission, SpawnBinding, SpawnOrigin,
+-                TaskDigest,
+-            },
+-        };
+         let root = AgentLifetimeId::new("root").unwrap();
+         let child = AgentLifetimeId::new("child").unwrap();
+         let private = AgentLifetimeId::new("private").unwrap();
+@@ -307,10 +306,7 @@ mod tests {
+                     policy: ApprovalPolicy::new("read-only", "ask", "rev").unwrap(),
+                     model: None,
+                     origin: SpawnOrigin::Host(
+-                        crate::domain::agent_execution::subagents::HostActor::new(
+-                            "person", "desktop", "request",
+-                        )
+-                        .unwrap(),
++                        HostActor::new("person", "desktop", "request").unwrap(),
+                     ),
+                 },
+             })
+diff --git a/crates/nessa-sdk/tests/application/agent_execution/subagents/publication.rs b/crates/nessa-sdk/tests/application/agent_execution/subagents/publication.rs
+index bf3c2e16..5bc453bf 100644
+--- a/crates/nessa-sdk/tests/application/agent_execution/subagents/publication.rs
++++ b/crates/nessa-sdk/tests/application/agent_execution/subagents/publication.rs
+@@ -1,4 +1,9 @@
+ //! Deterministic #628 ordering matrix: audit gates hold only the selected operation.
++use std::{
++    future::Future,
++    task::{Context, Poll, Waker},
++};
++
+ use super::*;
+ use nessa_sdk::application::agent_execution::subagents::{BindResourcesRefusal, LiveRoom};
+ use nessa_sdk::domain::agent_execution::subagents::{KnownMilestone, OwnershipMeaning};
+@@ -80,7 +85,7 @@ fn coordinator(
+         room,
+     })
+ }
+-async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
++async fn bounded<T>(future: impl Future<Output = T>) -> T {
+     tokio::time::timeout(Duration::from_secs(3), future)
+         .await
+         .expect("deterministic operation completed")
+@@ -666,10 +671,6 @@ async fn private_report_does_not_leak_through_unrelated_commit() {
+ 
+ #[tokio::test]
+ async fn row_14_queued_success_is_unclaimed_until_open_root_returns_ready() {
+-    use std::{
+-        future::Future,
+-        task::{Context, Poll, Waker},
+-    };
+     let store = Arc::new(MemoryOwnershipStore::new());
+     let audit = IndependentAudit::new();
+     let c = coordinator(
