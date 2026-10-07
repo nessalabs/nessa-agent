@@ -167,7 +167,7 @@
 }
 
 .workspace-search-button:hover {
-  background: color-mix(in oklab, var(--foreground) 7.5%, transparent);
+  background: var(--desktop-hover-strong);
   color: var(--desktop-muted) !important;
 }
 

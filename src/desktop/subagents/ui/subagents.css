@@ -73,7 +73,7 @@
 
 .subagent-row:hover,
 .subagent-row:focus-visible {
-  background: color-mix(in oklab, var(--foreground) 6%, transparent);
+  background: var(--desktop-hover);
 }
 
 .subagent-avatar {

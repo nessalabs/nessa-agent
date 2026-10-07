@@ -207,7 +207,7 @@
 }
 
 .workspace-link-button:focus-visible {
-  outline: 1.5px solid var(--desktop-focus-ring);
+  outline: var(--desktop-focus-outline);
   outline-offset: 2px;
   border-radius: 3px;
 }

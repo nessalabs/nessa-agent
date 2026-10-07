@@ -279,3 +279,29 @@ it("moves Settings' sidebar by transform, never by animating its width", () => {
   const body = sheet.slice(sheet.indexOf(".settings-sidebar {")).split("}")[0]
   expect(body).not.toMatch(/transition/)
 })
+
+it("draws a pill, a short fade and a focus ring from the window's tokens, not from literals", () => {
+  // Settings keeps its own sheet until its redesign lands (#632); everything else
+  // names the scale in `styles.css` — `--desktop-radius-pill`, `--desktop-fast`,
+  // `--desktop-medium`, `--desktop-focus-outline` — so a change to how the app
+  // looks is made in one place.
+  const root = fileURLToPath(new URL(".", import.meta.url))
+  const sheets = (dir: string): string[] =>
+    readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name)
+      if (statSync(path).isDirectory()) return name === "settings" ? [] : sheets(path)
+      return name.endsWith(".css") ? [path] : []
+    })
+  // `styles.css` defines the tokens; every other rule uses them.
+  const definition = /^\s*--desktop-[\w-]+:.*$/gm
+  const literals = {
+    pill: /\b999px\b/,
+    fade: /\b(?:120|140|160)ms ease\b/,
+    focus: /outline:\s*[\d.]+px solid/,
+  }
+  for (const path of sheets(root)) {
+    const source = readFileSync(path, "utf8").replace(definition, "")
+    for (const [name, literal] of Object.entries(literals))
+      expect(source, `${relative(root, path)}: ${name}`).not.toMatch(literal)
+  }
+})

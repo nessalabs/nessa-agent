@@ -79,6 +79,8 @@ body {
    */
   /* Motion: three durations for everything, two for the workspace's travel. */
   --desktop-fast: 120ms;
+  /* Between fast and base: a fill or fade on something the pointer rests on. */
+  --desktop-medium: 160ms;
   --desktop-base: 180ms;
   --desktop-slow: 240ms;
   /* A pane travelling to its new place when the layout changes. */
@@ -135,6 +137,7 @@ body {
   --desktop-radius-md: 12px;
   --desktop-radius-lg: 16px;
   --desktop-radius-xl: 20px;
+  --desktop-radius-pill: 999px;
 
   /* Type. */
   --desktop-text-caption: 11px;
@@ -150,10 +153,14 @@ body {
   --desktop-faint: color-mix(in oklab, var(--foreground) 40%, transparent);
   --desktop-fainter: color-mix(in oklab, var(--foreground) 30%, transparent);
   --desktop-hover: color-mix(in oklab, var(--foreground) 5%, transparent);
+  /* A control's hover (icon button, chip); a row's is `--desktop-hover`. */
+  --desktop-hover-strong: color-mix(in oklab, var(--foreground) 8%, transparent);
   --desktop-selected: color-mix(in oklab, var(--foreground) 8.5%, transparent);
   --desktop-press: color-mix(in oklab, var(--foreground) 11%, transparent);
   --desktop-rim: color-mix(in oklab, var(--foreground) 7%, transparent);
   --desktop-focus-ring: color-mix(in oklab, var(--desktop-light-edge) 42%, transparent);
+  /* The one focus recipe; a surface says only its `outline-offset`. */
+  --desktop-focus-outline: 1.5px solid var(--desktop-focus-ring);
   /* What waits on the person, and what is running. */
   --desktop-needs: oklch(0.82 0.13 78);
   --desktop-run: var(--desktop-light-edge);
@@ -243,14 +250,14 @@ html:not(.dark) [data-surface] {
   background: transparent;
   color: color-mix(in oklab, var(--foreground) 45%, transparent);
   transition:
-    color 120ms ease,
-    background-color 120ms ease;
+    color var(--desktop-fast) ease,
+    background-color var(--desktop-fast) ease;
 }
 
 .desktop-footer-button:hover,
 .desktop-footer-button[data-state="open"] {
   color: var(--foreground);
-  background: color-mix(in oklab, var(--foreground) 8%, transparent);
+  background: var(--desktop-hover-strong);
 }
 
 .desktop-footer-button svg {
@@ -343,13 +350,13 @@ html:not(.dark) [data-surface] {
   color: color-mix(in oklab, var(--foreground) 55%, transparent);
   border-radius: var(--desktop-control-radius);
   transition:
-    color 120ms ease,
-    background-color 120ms ease;
+    color var(--desktop-fast) ease,
+    background-color var(--desktop-fast) ease;
 }
 
 .desktop-titlebar-button:hover {
   color: var(--foreground);
-  background: color-mix(in oklab, var(--foreground) 8%, transparent);
+  background: var(--desktop-hover-strong);
 }
 
 .desktop-titlebar-button {
@@ -673,7 +680,7 @@ html:not(.dark) [data-surface] {
   position: absolute;
   left: 50%;
   translate: -50% 0;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: color-mix(in oklab, var(--popover) 62%, transparent);
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
@@ -701,15 +708,15 @@ html:not(.dark) [data-surface] {
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: transparent;
   color: color-mix(in oklab, var(--foreground) 70%, transparent);
   font: inherit;
   font-size: 12.5px;
   font-weight: 500;
   transition:
-    color 140ms ease,
-    background-color 140ms ease;
+    color var(--desktop-fast) ease,
+    background-color var(--desktop-fast) ease;
 }
 
 .desktop-header-tool {
@@ -729,7 +736,7 @@ html:not(.dark) [data-surface] {
 .desktop-header-tool:hover,
 .desktop-header-text-button:hover {
   color: var(--foreground);
-  background: color-mix(in oklab, var(--foreground) 9%, transparent);
+  background: var(--desktop-hover-strong);
 }
 
 .desktop-header-text-button[data-primary] {
@@ -761,7 +768,7 @@ html:not(.dark) [data-surface] {
 
 .desktop-header-zoom::-webkit-slider-runnable-track {
   height: 3px;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: color-mix(in oklab, var(--foreground) 22%, transparent);
 }
 
@@ -769,7 +776,7 @@ html:not(.dark) [data-surface] {
   width: 14px;
   height: 14px;
   margin-top: -5.5px;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   appearance: none;
   background: var(--foreground);
   box-shadow: 0 1px 4px rgb(0 0 0 / 50%);
@@ -777,7 +784,7 @@ html:not(.dark) [data-surface] {
 
 .desktop-header-zoom::-moz-range-track {
   height: 3px;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: color-mix(in oklab, var(--foreground) 22%, transparent);
 }
 
@@ -785,14 +792,14 @@ html:not(.dark) [data-surface] {
   width: 14px;
   height: 14px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: var(--foreground);
 }
 
 .desktop-header-zoom:focus-visible {
-  outline: 2px solid color-mix(in oklab, var(--desktop-light-edge) 60%, transparent);
+  outline: var(--desktop-focus-outline);
   outline-offset: 2px;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
 }
 
 /*
@@ -857,7 +864,7 @@ html:not(.dark) [data-surface] {
   align-items: center;
   gap: 8px;
   opacity: 0;
-  transition: opacity 160ms ease;
+  transition: opacity var(--desktop-medium) ease;
 }
 
 .desktop-header:hover .desktop-header-controls,
@@ -1320,7 +1327,7 @@ html:not(.dark) [data-surface] {
 .desktop-composer-body::-webkit-scrollbar-thumb,
 .desktop-composer textarea::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: color-mix(in oklab, var(--foreground) 20%, transparent) padding-box;
 }
 
@@ -1369,7 +1376,7 @@ html:not(.dark) [data-surface] {
   gap: 6px;
   padding: 0 10px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: transparent;
   color: color-mix(in oklab, var(--foreground) 58%, transparent);
   font: inherit;
@@ -1379,18 +1386,18 @@ html:not(.dark) [data-surface] {
   white-space: nowrap;
   cursor: default;
   transition:
-    color 160ms ease,
-    background-color 160ms ease;
+    color var(--desktop-medium) ease,
+    background-color var(--desktop-medium) ease;
 }
 
 .desktop-chip:hover,
 .desktop-chip[data-state="open"] {
   color: var(--foreground);
-  background: color-mix(in oklab, var(--foreground) 7%, transparent);
+  background: var(--desktop-hover-strong);
 }
 
 .desktop-chip:focus-visible {
-  outline: 2px solid color-mix(in oklab, var(--desktop-light-edge) 60%, transparent);
+  outline: var(--desktop-focus-outline);
   outline-offset: 1px;
 }
 
@@ -1661,7 +1668,7 @@ html:not(.dark) .desktop-tooltip {
 .desktop-model-picker [data-slot="searchable-listbox-option"] {
   padding: 7px 8px;
   border-radius: 10px;
-  transition: background-color 120ms ease;
+  transition: background-color var(--desktop-fast) ease;
 }
 
 /* Highlighted as a menu's rows are: the material's soft fill, no ring. */
@@ -1672,7 +1679,7 @@ html:not(.dark) .desktop-tooltip {
 }
 
 .desktop-model-picker [data-slot="searchable-listbox-option"][data-selected="true"] {
-  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+  background: var(--desktop-hover);
 }
 
 /* The row's icon well steps back so the provider tile carries the colour. */
@@ -1774,12 +1781,12 @@ html:not(.dark) .desktop-tooltip {
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: var(--foreground);
   color: var(--background);
   transition:
-    background-color 160ms ease,
-    color 160ms ease;
+    background-color var(--desktop-medium) ease,
+    color var(--desktop-medium) ease;
 }
 
 .desktop-send:disabled {
@@ -1830,7 +1837,7 @@ html:not(.dark) .desktop-tooltip {
     transparent 100%
   );
   opacity: 0;
-  transition: opacity 140ms ease;
+  transition: opacity var(--desktop-fast) ease;
 }
 
 .desktop-sidebar-edge[data-slot="split-view-separator"]:is(
