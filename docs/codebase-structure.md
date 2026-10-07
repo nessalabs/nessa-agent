@@ -1762,3 +1762,12 @@ for states and the Claude internal-error limitation.
 The panel's causal recovery integration test is
 `src/conversation/adapters/store/authentication-recovery.test.tsx`: local send,
 retry and replacement use cases followed by the real transcript renderer.
+
+## Container process cleanup acceptance
+
+[`scripts/process-cleanup/`](../scripts/process-cleanup/README.md) owns the opt-in
+Linux PID-namespace acceptance harness: pinned runtime image, direct-child
+supervisor, four-case Docker orchestration and its substitute-runner tests.
+The [cleanup state](state/services/sdk/runtime/stop-cancels-owned-work-and-confirms-process-cleanup.md#linux-container-acceptance-630)
+owns its ordering table. Production SDK cleanup remains in
+`crates/nessa-sdk/src/infrastructure/process.rs`.

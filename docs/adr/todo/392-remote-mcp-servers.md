@@ -400,6 +400,20 @@ This slice covers asynchronous non-initialize POST readers, including lists duri
 opening. Stalled JSON body writes (#623) and held initialize handshakes (#626)
 remain separate work; stream release is not confirmation of remote tool stopping.
 
+## Audit verification by recorded meaning (#631)
+
+Gateway inspection verification selects requested/outcome records by action and
+phase, then checks their shared operation identity. Millisecond wall-clock
+observations do not order files. This is a test correction in
+`crates/nessa-server/tests/composition/mcp_servers.rs`; it changes neither audit
+publication nor transport behavior.
+
+| Row | Ordering/input | Required verification | Enforcer |
+| --- | --- | --- | --- |
+| V1 | Files shuffled; observations equal or moving backward; save and inspection records interleaved | Select the inspection's requested/outcome by recorded semantics and confirm one shared operation ID; no positional or timestamp ordering assumption | `audit_inspection_pair_does_not_depend_on_file_or_timestamp_order` |
+| V2 | Shutdown cuts an inspection blocked mid-read | All four audit records exist before stop returns; the inspection pair retains caller-requested intent, gateway-stopping outcome and the same operation ID | `shutdown_cuts_an_inspection_blocked_mid_read_and_records_it_before_the_stop` |
+| V3 | Desired action/phase is missing, or two matching outcomes name different operation IDs | Reject missing or ambiguous evidence rather than return an unrelated transition | `audit_selection_rejects_a_missing_phase`, `audit_selection_rejects_ambiguous_operation_ids` |
+
 ## Authorization statechart
 
 One configured server owns consent and a reusable token record across its sessions.

@@ -857,6 +857,10 @@ owned by the settings catalogue/preferences layer. It controls whether the view
 is offered, not whether the backend executes or closes children. Preview-off
 cannot disable required cleanup.
 
+Linux process cleanup acceptance and its before/after-init ordering table live in
+the [canonical cleanup state](../../state/services/sdk/runtime/stop-cancels-owned-work-and-confirms-process-cleanup.md#linux-container-acceptance-630).
+They exercise existing physical cleanup, not recursive child-Agent ownership.
+
 ## Portable fixtures and live boundary evidence
 
 The capture/replay tooling is
