@@ -14,7 +14,8 @@ use super::{
     ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
     ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
     ConversationRepository, ConversationSummaries, DeletionFailures, ListedConversation,
-    RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
+    ObservationCursor, ObservedConversations, RuntimeReadiness, StopFailure, SubmittedMessage,
+    UnfinishedDeletions,
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink,
@@ -34,9 +35,9 @@ use nessa_protocol::conversation::{
         ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
         ConversationCapabilities, ConversationDisposition, ConversationLifecycle,
         ConversationLifecyclePhase, ConversationList, ConversationListEntry,
-        ConversationReorderOutcome, ConversationRuntime, ConversationSelectionView,
-        ConversationStartupFailure, ConversationStartupFailureCode, ConversationView,
-        SubmissionReceipt,
+        ConversationObservation, ConversationObservationCursor, ConversationReorderOutcome,
+        ConversationRuntime, ConversationSelectionView, ConversationStartupFailure,
+        ConversationStartupFailureCode, ConversationView, SubmissionReceipt,
     },
 };
 use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
@@ -2470,12 +2471,83 @@ impl ConversationService {
             })
             .take(MAX_LISTED_CONVERSATIONS)
             .collect();
-        // Only a conversation that finished opening has anything to say about
-        // running; one still opening, or whose opening failed, is not waited on.
-        // Asked only after the listing has answered, and let go of before the
-        // list is: a list waiting on storage holds nothing live, so it never
-        // keeps a stopped agent, or its history's lease
-        // (`a_list_waiting_on_its_listing_does_not_keep_a_deleted_history_leased`).
+        let running = self.running_ids(&owned).await;
+        Ok(ConversationList {
+            conversations: list_entries(&owned, &running),
+            complete,
+        })
+    }
+    /// One page of every summary this caller owns under `archived`, in
+    /// creation order, from [`ConversationListing::observe`].
+    ///
+    /// The newest-first list stays bounded by [`MAX_LISTED_CONVERSATIONS`].
+    /// This walks the catalogue page instead, and still opens no provider
+    /// (`observing_every_stored_summary_opens_nothing`). A page that is not
+    /// [`ConversationObservation::complete`] is not the whole catalogue. The
+    /// running flag is the same question [`Self::list`] asks, and only for
+    /// the rows this page returns.
+    pub async fn observe(
+        &self,
+        caller: ConversationCaller,
+        archived: bool,
+        cursor: Option<ConversationObservationCursor>,
+    ) -> Result<ConversationObservation, ConversationError> {
+        let _admission = self.admit().await?;
+        caller.actor()?;
+        let cursor = match cursor {
+            None => None,
+            Some(cursor) => Some(ObservationCursor {
+                incarnation: cursor.incarnation,
+                boundary: cursor.boundary,
+                creation: cursor.creation,
+                id: ConversationId::new(&cursor.id).map_err(|_| ConversationError::InvalidInput)?,
+            }),
+        };
+        let observed = self
+            .inner
+            .listing
+            .observe(
+                &caller.organization_id,
+                &caller.principal_id,
+                archived,
+                cursor,
+            )
+            .await?;
+        let ObservedConversations {
+            conversations,
+            complete,
+            cursor,
+        } = observed;
+        let owned: Vec<ListedConversation> = conversations
+            .into_iter()
+            .filter(|listed| {
+                listed
+                    .conversation
+                    .check_access(&caller.organization_id, &caller.principal_id)
+                    .is_ok()
+            })
+            .collect();
+        let running = self.running_ids(&owned).await;
+        Ok(ConversationObservation {
+            conversations: list_entries(&owned, &running),
+            complete,
+            cursor: cursor.map(|cursor| ConversationObservationCursor {
+                incarnation: cursor.incarnation,
+                boundary: cursor.boundary,
+                creation: cursor.creation,
+                id: cursor.id.to_string(),
+            }),
+        })
+    }
+    /// Which of `owned` are open here with a turn under way.
+    ///
+    /// Only a conversation that finished opening has anything to say about
+    /// running; one still opening, or whose opening failed, is not waited on.
+    /// Asked only after the rows are in hand, and let go of before the answer
+    /// is: a list waiting on storage holds nothing live, so it never keeps a
+    /// stopped agent, or its history's lease
+    /// (`a_list_waiting_on_its_listing_does_not_keep_a_deleted_history_leased`).
+    async fn running_ids(&self, owned: &[ListedConversation]) -> HashSet<ConversationId> {
         let live: HashMap<ConversationId, Arc<LiveConversation>> = {
             let owners = self.inner.conversations.lock().await;
             owned
@@ -2494,27 +2566,7 @@ impl ConversationService {
                 running.insert(id);
             }
         }
-        let conversations = owned
-            .into_iter()
-            .map(
-                |ListedConversation {
-                     conversation,
-                     summary,
-                 }| ConversationListEntry {
-                    conversation_id: conversation.id().to_string(),
-                    title: summary.title().map(|title| title.as_str().to_owned()),
-                    preview: summary.preview().map(|preview| preview.as_str().to_owned()),
-                    created_at_ms: conversation.creation_requested_at_ms(),
-                    updated_at_ms: summary.updated_at_ms(),
-                    running: running.contains(conversation.id()),
-                    archived: summary.archived(),
-                },
-            )
-            .collect();
-        Ok(ConversationList {
-            conversations,
-            complete,
-        })
+        running
     }
     /// Record in the conversation's summary that `message` was accepted.
     async fn summarize_message(&self, id: &ConversationId, message: &UserMessage) {
@@ -4595,6 +4647,30 @@ fn carried(
     }
     tracing::warn!(conversation_id = %claim.id, ?failures, "a deletion is left for the next start");
     retries.done(claim);
+}
+
+fn list_entries(
+    owned: &[ListedConversation],
+    running: &HashSet<ConversationId>,
+) -> Vec<ConversationListEntry> {
+    owned
+        .iter()
+        .map(|listed| ConversationListEntry {
+            conversation_id: listed.conversation.id().to_string(),
+            title: listed
+                .summary
+                .title()
+                .map(|title| title.as_str().to_owned()),
+            preview: listed
+                .summary
+                .preview()
+                .map(|preview| preview.as_str().to_owned()),
+            created_at_ms: listed.conversation.creation_requested_at_ms(),
+            updated_at_ms: listed.summary.updated_at_ms(),
+            running: running.contains(listed.conversation.id()),
+            archived: listed.summary.archived(),
+        })
+        .collect()
 }
 
 /// Whether the agent's own record has a turn it selected to run and that has

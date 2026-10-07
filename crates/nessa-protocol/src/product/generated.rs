@@ -639,6 +639,30 @@ pub struct ConversationListResult {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationObserveCursor {
+    pub incarnation: String,
+    pub boundary: String,
+    pub creation: String,
+    pub id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationObserveParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<ConversationObserveCursor>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationObserveResult {
+    pub conversations: Vec<ConversationSummary>,
+    pub complete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<ConversationObserveCursor>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationSendParams {
     pub conversation_id: String,
     pub request_id: String,
@@ -1905,6 +1929,7 @@ pub mod product_method {
     pub const CONVERSATION_RECORDS_HEAD: &str = "conversation.recordsHead";
     pub const CONVERSATION_RECORDS_PAGE: &str = "conversation.recordsPage";
     pub const CONVERSATION_LIST: &str = "conversation.list";
+    pub const CONVERSATION_OBSERVE: &str = "conversation.observe";
     pub const CONVERSATION_SEND: &str = "conversation.send";
     pub const CONVERSATION_STEER: &str = "conversation.steer";
     pub const CONVERSATION_REMOVE: &str = "conversation.remove";
@@ -2100,7 +2125,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 51
+                items.len() <= 52
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -2135,6 +2160,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.recordsHead",
     "conversation.recordsPage",
     "conversation.list",
+    "conversation.observe",
     "conversation.send",
     "conversation.steer",
     "conversation.remove",

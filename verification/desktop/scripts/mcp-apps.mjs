@@ -20,6 +20,7 @@
  *
  * Every check runs on a fresh page, in each engine and layout.
  */
+import { createServer } from "node:http"
 import { attempt, CannotRun, devServerOnlySteps, recordIfLeftOut } from "./lib/cli.mjs"
 import { appFrame } from "./lib/apps.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
@@ -75,10 +76,10 @@ Checks, per engine and layout (--only <names> to pick):
                app's departure, said once, nothing relayed after it; an app
                left alone (which never hears the check, even having patched
                the event APIs), its links to a fragment of any kind and its
-               moves to one by script, a first load held back, an app forging
-               departures, and a third party forging them and the check's
-               answers at every frame, are not; a deadline no timer can wait
-               loads nothing
+               moves to one by script, a first load held by an image the
+               fixture leaves unanswered, an app forging departures, and a
+               third party forging them and the check's answers at every
+               frame, are not; a deadline no timer can wait loads nothing
   departures-back
                on a page of its own: going back across a move to a fragment
                stays in the document, though the frame loads again, and the
@@ -95,6 +96,75 @@ those steps are not run.`,
 
 /** Says hello to the host, as an app would, each time a document of its runs. */
 const hello = `parent.postMessage({ jsonrpc: "2.0", method: "hello-from-app" }, "*");`
+
+/** Path of the image `holds-first-load` leaves unanswered. */
+const holdPath = "/.nessa/hold-first-load"
+
+/** A 1×1 gif, written only after the check has read the proxy. */
+const holdGif = Buffer.from(
+  "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+  "base64",
+)
+
+/**
+ * Listens on 127.0.0.1 and does not answer `holdPath` until `answer`. An
+ * image in the app's document pointed at that URL holds the document's
+ * first load for as long as the socket stays unanswered. `answer` writes
+ * the gif with `connection: close` so the listener can shut without waiting
+ * on a keep-alive the page still holds.
+ */
+function openHeldLoad() {
+  /** @type {import("node:http").ServerResponse[]} */
+  const pending = []
+  let hits = 0
+  const server = createServer((request, response) => {
+    if (request.url?.split("?")[0] !== holdPath) {
+      response.writeHead(404)
+      response.end()
+      return
+    }
+    hits += 1
+    pending.push(response)
+    request.on("close", () => {
+      if (!response.writableEnded) response.destroy()
+    })
+  })
+  return new Promise((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address()
+      const port = typeof address === "object" && address ? address.port : 0
+      resolve({
+        origin: `http://127.0.0.1:${port}`,
+        hits: () => hits,
+        unanswered: () => pending.filter((response) => !response.writableEnded).length,
+        answer() {
+          for (const response of pending) {
+            if (response.writableEnded) continue
+            response.writeHead(200, {
+              "content-type": "image/gif",
+              "content-length": String(holdGif.length),
+              "cache-control": "no-store",
+              connection: "close",
+            })
+            response.end(holdGif)
+          }
+        },
+        close() {
+          return new Promise((done) => {
+            const timer = setTimeout(() => {
+              for (const response of pending) response.socket?.destroy()
+            }, 1000)
+            server.close(() => {
+              clearTimeout(timer)
+              done()
+            })
+          })
+        },
+      })
+    })
+  })
+}
 
 /**
  * After the document loads, follows each link \`[id, fragment]\` names — a
@@ -205,14 +275,25 @@ const departureScenarios = {
     html: `<script>${hello}if (!window.name) { window.name = "reloaded"; location.reload(); }</script>`,
     leaves: true,
   },
-  // A frame of the app's whose document is opened and never closed — while
-  // it is still being parsed, so before it loads — holds the app's first
-  // load back (in Chromium; WebKit loads it anyway): the document is still
-  // the app's, not a departure.
+  // An image the fixture leaves unanswered (`openHeldLoad`) holds this
+  // document's first load: the frame's `load` does not fire, so the proxy
+  // never checks it, and the document stays the app's. `holding` is said
+  // only while `readyState` is not `complete` and the image is not
+  // complete. `loaded` or `not-held` means that hold was not established.
+  // The check counts the socket still unanswered after the wait.
   "holds-first-load": {
-    html: `<script>${hello}addEventListener("load", function () { parent.postMessage({ jsonrpc: "2.0", method: "loaded" }, "*"); })</script><iframe srcdoc="<script>setTimeout(function () { document.open(); document.write('held'); }, 0)</script>${("<p>" + "x".repeat(200) + "</p>").repeat(10000)}"></iframe>`,
+    html: `<script>${hello}addEventListener("load", function () { parent.postMessage({ jsonrpc: "2.0", method: "loaded" }, "*"); });
+      var img = document.createElement("img");
+      img.src = "@hold@";
+      document.documentElement.appendChild(img);
+      if (document.readyState !== "complete" && img.complete === false)
+        parent.postMessage({ jsonrpc: "2.0", method: "holding" }, "*");
+      else parent.postMessage({ jsonrpc: "2.0", method: "not-held" }, "*");
+    </script>`,
+    hold: true,
     leaves: false,
-    never: { chromium: ["loaded"] },
+    must: ["hello-from-app", "holding"],
+    never: ["loaded", "not-held"],
   },
   // What the app posts as its document goes, after its reporter's word:
   // never relayed.
@@ -378,84 +459,100 @@ async function departuresOn(page, scenarios) {
   })
   if (!sandboxed) throw new CannotRun("the page names no sandbox it may use")
   const count = Object.keys(scenarios).length
-  const seen = await page
-    .evaluate(
-      async ({ scenarios }) => {
-        const csp = await import("/src/desktop/widgets/app/model/csp.ts")
-        const {
-          sandboxMethods: methods,
-          frameTokenSlot,
-          sandboxPrefix,
-        } = await import("/src/desktop/widgets/app/model/sandbox-methods.ts")
-        const origin =
-          await import("/src/desktop/widgets/app/adapters/dom/sandbox-origin.ts")
-        const { deadlines } =
-          await import("/src/desktop/widgets/app/application/bridge.ts")
-        const sandbox = origin.pageSandbox(document)
-        const named = (html) =>
-          html
-            .replaceAll("@appLeft@", methods.appLeft)
-            .replaceAll("@appCheck@", methods.appCheck)
-            .replaceAll("@reserved@", sandboxPrefix)
-            .replaceAll("@slot@", frameTokenSlot)
-        const applied = csp.appliedCsp({})
-        const policy = csp.cspPolicy(applied)
-        const seen = {}
-        const proxies = []
-        let handed = 0
-        for (const [name, { html, bare, checkWithin }] of Object.entries(scenarios)) {
-          // The host's side: its frame, as the app view makes it, and the
-          // document, policy and deadline the bridge hands over.
-          const proxy = document.createElement("iframe")
-          proxy.setAttribute("sandbox", origin.proxyFrameSandbox)
-          // On screen, as the host's are: an engine may throttle the timers
-          // of a frame it cannot see.
-          proxy.style.cssText = `position:fixed;z-index:9999;left:${(proxies.length % 10) * 42}px;top:${Math.floor(proxies.length / 10) * 32}px;width:40px;height:30px`
-          proxy.src = sandbox.url
-          seen[name] = []
-          addEventListener("message", (event) => {
-            if (event.source !== proxy.contentWindow) return
-            const method = event.data?.method
-            if (method === methods.proxyReady) {
-              proxy.contentWindow.postMessage(
-                {
-                  jsonrpc: "2.0",
-                  method: methods.resourceReady,
-                  params: {
-                    html: bare ? named(html) : csp.appDocument(named(html), applied),
-                    policy,
-                    checkWithin: checkWithin ?? deadlines.initialize,
+  const needsHold = Object.values(scenarios).some((scenario) => scenario.hold === true)
+  // Open before the documents run, and answer only after their messages are
+  // in hand: the unanswered image is the first-load hold.
+  const heldLoad = needsHold ? await openHeldLoad() : undefined
+  /** @type {{ hits: number, unanswered: number } | undefined} */
+  let held
+  let seen
+  try {
+    seen = await page
+      .evaluate(
+        async ({ scenarios, holdOrigin, holdUrl }) => {
+          const csp = await import("/src/desktop/widgets/app/model/csp.ts")
+          const {
+            sandboxMethods: methods,
+            frameTokenSlot,
+            sandboxPrefix,
+          } = await import("/src/desktop/widgets/app/model/sandbox-methods.ts")
+          const origin =
+            await import("/src/desktop/widgets/app/adapters/dom/sandbox-origin.ts")
+          const { deadlines } =
+            await import("/src/desktop/widgets/app/application/bridge.ts")
+          const sandbox = origin.pageSandbox(document)
+          const named = (html) =>
+            html
+              .replaceAll("@appLeft@", methods.appLeft)
+              .replaceAll("@appCheck@", methods.appCheck)
+              .replaceAll("@reserved@", sandboxPrefix)
+              .replaceAll("@slot@", frameTokenSlot)
+              .replaceAll("@hold@", holdUrl)
+          const seen = {}
+          const proxies = []
+          let handed = 0
+          for (const [name, { html, bare, checkWithin, hold }] of Object.entries(
+            scenarios,
+          )) {
+            // The host's side: its frame, as the app view makes it, and the
+            // document, policy and deadline the bridge hands over. A held
+            // first load may fetch the one image origin the fixture owns;
+            // the policy is still the host's (`appliedCsp`, `cspPolicy`).
+            const applied = csp.appliedCsp(
+              hold && holdOrigin ? { csp: { resourceDomains: [holdOrigin] } } : {},
+            )
+            const policy = csp.cspPolicy(applied)
+            const proxy = document.createElement("iframe")
+            proxy.setAttribute("sandbox", origin.proxyFrameSandbox)
+            // On screen, as the host's are: an engine may throttle the timers
+            // of a frame it cannot see.
+            proxy.style.cssText = `position:fixed;z-index:9999;left:${(proxies.length % 10) * 42}px;top:${Math.floor(proxies.length / 10) * 32}px;width:40px;height:30px`
+            proxy.src = sandbox.url
+            seen[name] = []
+            addEventListener("message", (event) => {
+              if (event.source !== proxy.contentWindow) return
+              const method = event.data?.method
+              if (method === methods.proxyReady) {
+                proxy.contentWindow.postMessage(
+                  {
+                    jsonrpc: "2.0",
+                    method: methods.resourceReady,
+                    params: {
+                      html: bare ? named(html) : csp.appDocument(named(html), applied),
+                      policy,
+                      checkWithin: checkWithin ?? deadlines.initialize,
+                    },
                   },
-                },
-                sandbox.origin,
-              )
-              handed += 1
-              return
-            }
-            seen[name].push(method ?? "?")
-          })
-          proxies.push(proxy)
-          document.body.append(proxy)
-        }
-        // Every document handed over, and every app that stays has spoken:
-        // its frame is made.
-        const speaking = Object.entries(scenarios)
-          .filter(([, s]) => !s.bare && s.checkWithin === undefined)
-          .map(([name]) => name)
-        const started = performance.now()
-        while (
-          (handed < proxies.length || speaking.some((name) => seen[name].length === 0)) &&
-          performance.now() - started < 20_000
-        )
-          await new Promise((resolve) => setTimeout(resolve, 100))
-        const spoke = performance.now()
-        // A third party, once every app's frame is made: a frame of the
-        // page's own, on no origin, that forges departures and check
-        // answers at every proxy and every app frame it can reach.
-        const third = document.createElement("iframe")
-        third.setAttribute("sandbox", "allow-scripts")
-        third.style.cssText = "position:fixed;left:-9999px"
-        third.srcdoc = `<script>
+                  sandbox.origin,
+                )
+                handed += 1
+                return
+              }
+              seen[name].push(method ?? "?")
+            })
+            proxies.push(proxy)
+            document.body.append(proxy)
+          }
+          // Every document handed over, and every app that stays has spoken:
+          // its frame is made.
+          const speaking = Object.entries(scenarios)
+            .filter(([, s]) => !s.bare && s.checkWithin === undefined)
+            .map(([name]) => name)
+          const started = performance.now()
+          while (
+            (handed < proxies.length ||
+              speaking.some((name) => seen[name].length === 0)) &&
+            performance.now() - started < 20_000
+          )
+            await new Promise((resolve) => setTimeout(resolve, 100))
+          const spoke = performance.now()
+          // A third party, once every app's frame is made: a frame of the
+          // page's own, on no origin, that forges departures and check
+          // answers at every proxy and every app frame it can reach.
+          const third = document.createElement("iframe")
+          third.setAttribute("sandbox", "allow-scripts")
+          third.style.cssText = "position:fixed;left:-9999px"
+          third.srcdoc = `<script>
           var proxies = 0, apps = 0;
           var forged = [
             { jsonrpc: "2.0", method: ${JSON.stringify(methods.appLeft)}, params: { token: "00000000000000000000000000000000" } },
@@ -473,25 +570,36 @@ async function departuresOn(page, scenarios) {
           }
           parent.postMessage({ proxies: proxies, apps: apps }, "*");
         </script>`
-        let forgedAt = { proxies: 0, apps: 0 }
-        addEventListener("message", (event) => {
-          if (event.source === third.contentWindow) forgedAt = event.data
-        })
-        document.body.append(third)
-        // Then past the proxy's deadline for the latest load it waits on:
-        // the rewrites come a moment after their apps first speak.
-        const wait = deadlines.initialize + 6000
-        await new Promise((resolve) =>
-          setTimeout(resolve, Math.max(0, spoke + wait - performance.now())),
-        )
-        return { seen, appLeft: methods.appLeft, forgedAt, handed }
-      },
-      { scenarios: scenarios },
-    )
-    .catch((error) => {
-      if (crashed) return null
-      throw error
-    })
+          let forgedAt = { proxies: 0, apps: 0 }
+          addEventListener("message", (event) => {
+            if (event.source === third.contentWindow) forgedAt = event.data
+          })
+          document.body.append(third)
+          // Then past the proxy's deadline for the latest load it waits on:
+          // the rewrites come a moment after their apps first speak.
+          const wait = deadlines.initialize + 6000
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.max(0, spoke + wait - performance.now())),
+          )
+          return { seen, appLeft: methods.appLeft, forgedAt, handed }
+        },
+        {
+          scenarios,
+          holdOrigin: heldLoad?.origin ?? "",
+          holdUrl: heldLoad ? `${heldLoad.origin}${holdPath}` : "",
+        },
+      )
+      .catch((error) => {
+        if (crashed) return null
+        throw error
+      })
+    if (heldLoad) held = { hits: heldLoad.hits(), unanswered: heldLoad.unanswered() }
+  } finally {
+    if (heldLoad) {
+      heldLoad.answer()
+      await heldLoad.close()
+    }
+  }
   if (crashed || seen === null) {
     failures.push("the page crashed")
     return { failures }
@@ -531,7 +639,25 @@ async function departuresOn(page, scenarios) {
   }
   if (leaked.length > 0)
     failures.push(`requests reached example.com: ${leaked.join(", ")}`)
-  return { seen: seen.seen, forgedAt: seen.forgedAt, leaked, failures }
+  if (needsHold) {
+    const requests = held?.hits ?? 0
+    const open = held?.unanswered ?? 0
+    if (requests < 1 || open < 1) {
+      const heldNames = Object.entries(scenarios)
+        .filter(([, scenario]) => scenario.hold === true)
+        .map(([name]) => name)
+      failures.push(
+        `${heldNames.join(", ")}: the first load was not held (${requests} requests, ${open} unanswered)`,
+      )
+    }
+  }
+  return {
+    seen: seen.seen,
+    forgedAt: seen.forgedAt,
+    leaked,
+    failures,
+    ...(held ? { held } : {}),
+  }
 }
 
 /** A fresh page on the sample session whose conversation carries the fixture app. */

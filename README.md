@@ -186,6 +186,7 @@ and `just release` there.
 | `pnpm frontend:check` | Run the complete frontend/client formatting, lint, protocol, docs, type, test, and build contract |
 | `pnpm sdk:check` | Run SDK formatting, Clippy, tests, and warnings-denied Rustdoc |
 | `pnpm check` | Run the same frontend, Rust crate, SDK, MCP, and desktop checks composed in CI |
+| `pnpm check:changed` | Run the local scripts that own the files changed since `origin/main`, or `pnpm check` when a path has no narrow owner. Required CI still runs every job |
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm ui:check` | Confirm the vendored UI matches `nessa-ui-revision` (offline, runs before `typecheck`, `dev`, `build`, `test`) |
 | `pnpm ui:types` | Reconcile the vendored UI with `nessa-ui-revision` |

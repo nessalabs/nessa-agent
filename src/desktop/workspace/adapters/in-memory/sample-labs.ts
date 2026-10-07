@@ -29,11 +29,20 @@ export const sampleWidgetSession = "widget-hosts"
  */
 export const sampleAppSession = "mcp-app-host"
 
+/**
+ * The session the sample subagent source fills. Its conversation carries one
+ * widget-only message, which the hosts draw as a title and Open; the peek
+ * drops a message of widgets alone (`model/overview/peek.ts`). The plugin id
+ * is the word the subagents vertical registers. `sample-link.test.ts` holds
+ * the two the same, because this module cannot import that vertical.
+ */
+export const retryBudgetSession = "retry-budget"
+
 const widget = (ref: WidgetRef): Part => ({ kind: "widget", widget: ref })
 
 export const labsSamples: readonly SampleSession[] = [
   {
-    id: "retry-budget",
+    id: retryBudgetSession,
     channelId: "gateway",
     title: "Retry budget for ACP reconnects",
     model: models.astra,
@@ -61,6 +70,8 @@ export const labsSamples: readonly SampleSession[] = [
           ),
         ],
       ],
+      // Widgets alone: the hosts draw Subagents and Open. The peek skips it.
+      ["agent", 21, [widget({ plugin: "subagents", id: retryBudgetSession })]],
       // A long turn — dozens of steps over several messages — so the peek's
       // bound and its cost are seen and measured on something real.
       [

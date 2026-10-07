@@ -15,6 +15,7 @@ import type {
 } from "@nessa/client"
 import { describe, expect, it, vi } from "vitest"
 import { createDesktopDependencies } from "./dependencies"
+import { subagentsPluginId } from "./subagents"
 import {
   appPluginId,
   fixtureServer,
@@ -36,14 +37,24 @@ const settingsParts = {
 
 describe("the window's widget plugins", () => {
   it("are the sample plugin's while the sample workspace is in use", () => {
-    const { widgets } = createDesktopDependencies()
-    expect(widgets.natives().map((plugin) => plugin.id)).toEqual([samplePluginId])
+    const { widgets, subagents } = createDesktopDependencies()
+    expect(widgets.natives().map((plugin) => plugin.id)).toEqual([
+      samplePluginId,
+      subagentsPluginId,
+    ])
+    expect(subagents.forSession("other")).toEqual({
+      kind: "ready",
+      subagents: [],
+      unreadable: [],
+    })
   })
 
   it("are none of the samples' on another source", () => {
-    const { widgets } = createDesktopDependencies({ workspace: fakeSource() })
+    const { widgets, subagents } = createDesktopDependencies({ workspace: fakeSource() })
     expect(widgets.natives()).toEqual([])
     expect(widgets.plugin(samplePluginId)).toBeUndefined()
+    expect(widgets.plugin(subagentsPluginId)).toBeUndefined()
+    expect(subagents.forSession("a")).toEqual({ kind: "unread" })
   })
 
   it("are the ones composition names, and two under one id stop the window", () => {

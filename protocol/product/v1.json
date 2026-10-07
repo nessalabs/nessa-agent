@@ -177,7 +177,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 51,
+          "maxItems": 52,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -1592,6 +1592,81 @@
       },
       "required": ["conversations", "complete"],
       "description": "Conversations the authenticated caller owns, newest first, at most 500, and whether that is all of them."
+    },
+    "ConversationObserveCursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "incarnation": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Catalogue database incarnation captured with this pass. A later pass starts again when it no longer matches.",
+          "x-core-utf8-bound": "id_max_utf8_bytes",
+          "x-utf8MaxBytes": 128
+        },
+        "boundary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "description": "Fixed owner head captured when this pass began. A conversation created after it waits for the next pass."
+        },
+        "creation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "description": "Creation revision of the last descriptor this pass has already returned."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Conversation identity of that last descriptor. Compared only when the creation revision is the same."
+        }
+      },
+      "required": ["incarnation", "boundary", "creation", "id"],
+      "description": "Where an observation pass resumes: the same incarnation and boundary, then the next descriptor after this creation revision and identity."
+    },
+    "ConversationObserveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "archived": {
+          "type": "boolean",
+          "description": "Observe only archived conversations when true; only unarchived ones when false or absent. The same filter as conversation.list."
+        },
+        "cursor": {
+          "$ref": "#/$defs/ConversationObserveCursor",
+          "description": "Absent on the first page. Later pages echo the cursor the previous page returned."
+        }
+      },
+      "required": [],
+      "description": "One page of the caller's conversation catalogue. Opens no provider. Does not raise the 500-row list."
+    },
+    "ConversationObserveResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "conversations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConversationSummary" },
+          "x-core-max-items-bound": "catalogue_max_entries",
+          "maxItems": 256,
+          "description": "Summaries from this catalogue page whose archived flag is the one asked for, creation order. At most one catalogue page. Deleted rows, rows with no summary, and the other archived flag are left out of this array and still advance the cursor. Ownership is applied before the page is returned."
+        },
+        "complete": {
+          "type": "boolean",
+          "description": "True only when this page finishes the pass: every stored summary under the filter, up to the captured head, was returned across the pages. False when further descriptors remain, or when this page cannot say where to resume. A false page is not every stored summary, including when it has no cursor."
+        },
+        "cursor": {
+          "$ref": "#/$defs/ConversationObserveCursor",
+          "description": "Present when complete is false and another page can be asked. Absent when the pass is finished, or when this page cannot resume."
+        }
+      },
+      "required": ["conversations", "complete"],
+      "description": "One catalogue page of the caller's summaries, and whether the pass is finished. The page size is the catalogue bound, not a larger conversation.list."
     },
     "ConversationSendParams": {
       "type": "object",

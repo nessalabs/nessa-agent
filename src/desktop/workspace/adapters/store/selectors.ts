@@ -54,6 +54,7 @@ import {
   type Answer,
   type ContentKind,
   type Chrome,
+  type SessionListing,
   type WorkspaceState,
 } from "../../application/workspace-state"
 import { canClosePane } from "../../application/usecases/panes"
@@ -105,6 +106,16 @@ export const selectSession = (
   state: Root,
   sessionId: string,
 ): SessionSummary | undefined => entry(state.workspace.sessions, sessionId)
+
+/**
+ * Whether the workspace lists `sessionId`. Unread until the index is read
+ * (`status === "ready"`), including while that read failed; then listed or
+ * absent. The subagents plugin answers missing only for absent.
+ */
+export function selectSessionListing(state: Root, sessionId: string): SessionListing {
+  if (state.workspace.status !== "ready") return "unread"
+  return entry(state.workspace.sessions, sessionId) ? "listed" : "absent"
+}
 export const selectDraft = (state: Root, sessionId: string): Draft | undefined =>
   entry(state.workspace.drafts, sessionId)
 export const selectTranscript = (
