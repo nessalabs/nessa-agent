@@ -1,0 +1,14 @@
+--- crates/nessa-sdk/src/domain/agent_execution/subagents/graph.rs
++++ crates/nessa-sdk/src/domain/agent_execution/subagents/graph.rs
+@@ -303,9 +303,10 @@
+         {
+             return Err(OwnershipError::StaleOutcome);
+         }
++        let actual_operation = self.close_operation(root).cloned().unwrap();
+         let evidence = self.apply_report(
+             root,
+-            operation,
++            &actual_operation,
+             root,
+             PhysicalFact::Released,
+             EvidenceFact::Pending,

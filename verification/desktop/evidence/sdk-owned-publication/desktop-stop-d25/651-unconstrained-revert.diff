@@ -1,0 +1,13 @@
+diff --git a/crates/nessa-server/tests/conversation/desktop_stop.rs b/crates/nessa-server/tests/conversation/desktop_stop.rs
+index b2b7b5e6..6b167c1f 100644
+--- a/crates/nessa-server/tests/conversation/desktop_stop.rs
++++ b/crates/nessa-server/tests/conversation/desktop_stop.rs
+@@ -619,7 +619,7 @@ async fn a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock() {
+     );
+     let pending = poll_fn(|cx| {
+         Poll::Ready(
+-            std::pin::pin!(tokio::task::unconstrained(submission.as_mut()))
++            submission.as_mut()
+                 .poll(cx)
+                 .is_pending(),
+         )

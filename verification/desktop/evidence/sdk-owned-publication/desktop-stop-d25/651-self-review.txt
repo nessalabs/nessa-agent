@@ -1,0 +1,29 @@
+Issue651 implementation/self-review
+Checkout /workspace/nessa-agent-desktop-stop-order
+Branch codex/651-desktop-stop-order
+Base f1682e8a763646c6c3e73dee73c1c47987e2cbae
+Head d25cfa7c68c3bec1886e65acfec7dd742679cfef (clean after actual mutation/restoration)
+
+Files inspected/changed: conversation application service.rs and locks.rs, desktop_stop.rs fixture, canonical docs/design/conversation-admission.md. Read AGENTS/CODING_STANDARDS, architecture, codebase structure and DI guidance. No new module/path/public API, dependency or production stop/budget changes.
+
+Semantics: submit_as now constructs the same private owned submission_future and still spawns it independently of caller lifetime. Real submission body and controlled M10 rejection remain together; asked flag and task panic/typed result mapping remain unchanged. Row2 polls this REAL body once under Tokio unconstrained while the close holds mode_changes, and keeps/spawns the same future, preserving its returned receipt (execution_id asserted). Admission RwLock is open/uncontended; mode lock is the next await. Pending plus held-lock reference after this actual unconstrained poll establishes mutex enqueue. Counter3 only waits for stop retention after submission has already queued; it is not FIFO admission proof.
+
+Source-backed Tokio budget premise: installed Tokio task/coop/mod.rs initial Budget(Some(128)); actual multi_thread::block_on delegates to CachedParkThread::block_on, whose poll loop wraps coop::budget (root checked). Test finitely consumes at most128 and asserts exhausted budget; reverting unconstrained therefore cannot mistake cooperative Pending at admission for mode lock Pending. No infinite exhaustion controller/new task.
+
+Deterministic independent counterexample: valid UUID; actual held lock+unpolled owned-lock future report2 retained references. Another actual lock future polled first reports3, then acquires FIRST after holder drops, while the earlier-counted unpolled future waits. Dropping first allows the earlier-counted future to acquire; in_use0 after guards drop. This proves reachable fixture premise gap, not exact historical CI scheduling cause.
+
+Applicable dimensions reviewed: authority/identity (same real task/asked Arc/receipt); domain invariants (unchanged owner resolution/stopping/rejection); admission/concurrency (queue established by actual poll, ordinary supervision unchanged); failure/cleanup (same Halt and TaskFailed mapping; counter guards dropped/in_use0); audit (same controlled rejection/file audit body); resource bounds (no production counters/state/budget changes); public surface/organization (private method, existing source/test/doc owners). Agreement traced receipt id, provider open/close effects and owner current at lock acquisition together. Representation/persistence/restoration/platform/UI behavior unmodified; gate17/browser not applicable. Gates15 table changed first;16 smallest honest reference-vs-queue correction.
+
+Validation on Linux under Tini, CARGO_HOME=/tmp/nessa-cargo RUSTUP_HOME=/tmp/nessa-rustup PATH=/tmp/nessa-cargo/bin:$PATH CARGO_TARGET_DIR=/workspace/nessa-agent/target CARGO_BUILD_JOBS=2:
+- rustfmt edition2021 touched files; git diff --check pass.
+- cargo test -p nessa-server --lib an_unpolled_lock_future_does_not_establish_waiter_order -- --nocapture:1 passed (/tmp/651-counterexample.log).
+- cargo test -p nessa-server --lib desktop_stop_tests -- --nocapture:12 passed,0 failed (/tmp/651-desktop-stop.log).
+- Actual single-rule runtime revert removed only unconstrained: diff /tmp/651-unconstrained-revert.diff, mutant SHA25687fc8ed28ef13ca92ec59fc7529bbe5e346544f3b7da4a9d0e0491a4b89b9ddd. cargo test row2 FAILED exit101,0passed/1failed: retained lock count left1 expected2; Pending occurred before mode-lock retention (/tmp/651-unconstrained-revert.log).
+- Restored file by fresh write from git HEAD, digest dc45383e8b2cbefd62a916cde079ef38b2b412062fcd9da66f8fc134c9bdac24; restored full12 desktop tests pass (/tmp/651-restored-desktop-stop.log).
+- cargo clippy -p nessa-server --all-targets -- -D warnings: pass (/tmp/651-server-clippy.log).
+
+Initial counterexample attempt at093ee had invalid non-UUID fixture and failed before exercising locks. Corrected only fixture UUID at d25c; initial attempt is not mutation or ordering evidence. Initial failure text was observed in tool output; initial log path subsequently reused for corrected run.
+
+Limitations: supported macOS/Windows, combined CI package selection, cumulative whole-server/SDK gates and fresh independent R1 reviews remain root-owned. Historical source1bf09a5/run37622329149/job112795480174 observed open1 expected2; exact scheduling cause UNKNOWN. Original historical failure excerpt /tmp/nessa-651-macos-failed-excerpt.log preserved untouched. No GitHub issue/PR edits, push, integration, merges or other agent worktree changes made.
+
+Findings: no unresolved source/self-review findings. Runtime slot released after Clippy completed.

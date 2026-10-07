@@ -1,0 +1,21 @@
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-desktop-stop-order/crates/nessa-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.95s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-e2f6c708a6cf158b)
+
+running 1 test
+
+thread 'conversation::application::service::desktop_stop_tests::a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock' (371471) panicked at crates/nessa-server/src/conversation/application/../../../tests/conversation/desktop_stop.rs:629:5:
+assertion `left == right` failed: the polled submission retains the held lock
+  left: 1
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test conversation::application::service::desktop_stop_tests::a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock ... FAILED
+
+failures:
+
+failures:
+    conversation::application::service::desktop_stop_tests::a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1975 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

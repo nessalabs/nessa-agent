@@ -1,0 +1,121 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.189
+   Compiling stable_deref_trait v1.2.1
+   Compiling cfg-if v1.0.4
+   Compiling version_check v0.9.5
+   Compiling smallvec v1.16.0
+   Compiling typenum v1.20.1
+   Compiling generic-array v0.14.7
+   Compiling syn v3.0.4
+   Compiling syn v2.0.119
+   Compiling shlex v2.0.1
+   Compiling writeable v0.6.4
+   Compiling litemap v0.8.3
+   Compiling find-msvc-tools v0.1.11
+   Compiling cc v1.4.4
+   Compiling pkg-config v0.3.34
+   Compiling icu_normalizer_data v2.3.0
+   Compiling icu_properties_data v2.3.0
+   Compiling utf8_iter v1.0.4
+   Compiling vcpkg v0.2.15
+   Compiling synstructure v0.13.2
+   Compiling libsqlite3-sys v0.38.2
+   Compiling bitflags v2.13.1
+   Compiling foldhash v0.2.0
+   Compiling getrandom v0.4.3
+   Compiling hashbrown v0.17.1
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling once_cell v1.21.4
+   Compiling serde_core v1.0.229
+   Compiling getrandom v0.3.4
+   Compiling autocfg v1.5.1
+   Compiling num-traits v0.2.19
+   Compiling digest v0.10.7
+   Compiling hashlink v0.12.2
+   Compiling errno v0.3.14
+   Compiling cpufeatures v0.2.17
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling pin-project-lite v0.2.17
+   Compiling zmij v1.0.23
+   Compiling fallible-iterator v0.3.0
+   Compiling rustix v1.1.4
+   Compiling sha2 v0.10.9
+   Compiling signal-hook-registry v1.4.8
+   Compiling tracing-core v0.1.36
+   Compiling socket2 v0.6.5
+   Compiling mio v1.2.2
+   Compiling linux-raw-sys v0.12.1
+   Compiling percent-encoding v2.3.2
+   Compiling serde v1.0.229
+   Compiling bytes v1.12.1
+   Compiling serde_json v1.0.151
+   Compiling form_urlencoded v1.2.2
+   Compiling zerofrom-derive v0.1.7
+   Compiling yoke-derive v0.8.2
+   Compiling zerovec-derive v0.11.6
+   Compiling displaydoc v0.2.7
+   Compiling tokio-macros v2.7.2
+   Compiling zerofrom v0.1.8
+   Compiling yoke v0.8.3
+   Compiling zerovec v0.11.8
+   Compiling potential_utf v0.1.6
+   Compiling serde_derive v1.0.229
+   Compiling tinystr v0.8.4
+   Compiling icu_locale_core v2.3.0
+   Compiling zerotrie v0.2.5
+   Compiling icu_provider v2.3.1
+   Compiling icu_collections v2.3.0
+   Compiling icu_normalizer v2.3.0
+   Compiling icu_properties v2.3.0
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling tokio v1.53.1
+   Compiling async-trait v0.1.92
+   Compiling tracing-attributes v0.1.31
+   Compiling rusqlite v0.40.2
+   Compiling nessa-local-storage v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-local-storage)
+   Compiling uuid v1.26.0
+   Compiling fs2 v0.4.3
+   Compiling itoa v1.0.18
+   Compiling memchr v2.8.3
+   Compiling lazy_static v1.5.0
+   Compiling fastrand v2.5.0
+   Compiling tempfile v3.27.0
+   Compiling event-stream v0.1.0 (https://github.com/nessalabs/event-stream?rev=59624a2#59624a2d)
+   Compiling sharded-slab v0.1.7
+   Compiling nessa-local-database v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-local-database)
+   Compiling chrono v0.4.45
+   Compiling url v2.5.8
+   Compiling nessa-sync v0.1.0 (https://github.com/nessalabs/sync-engine?rev=f2a05ef24fcff66df9d55e508539cec718e2d805#f2a05ef2)
+   Compiling tracing v0.1.44
+   Compiling thread_local v1.1.10
+   Compiling data-encoding v2.11.1
+   Compiling unicode-id v0.3.6
+   Compiling base64 v0.22.1
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-owned-publication/crates/nessa-sdk)
+   Compiling markdown v1.0.0
+   Compiling tracing-subscriber v0.3.23
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 17s
+     Running tests/domain.rs (/tmp/628-domain-probe-target/debug/deps/domain-3fb4d9edd6241f66)
+
+running 1 test
+test domain::agent_execution::ownership::unbound_absence_admission_refuses_child_and_stale_operation_without_mutating_history ... FAILED
+
+failures:
+
+---- domain::agent_execution::ownership::unbound_absence_admission_refuses_child_and_stale_operation_without_mutating_history stdout ----
+
+thread 'domain::agent_execution::ownership::unbound_absence_admission_refuses_child_and_stale_operation_without_mutating_history' (376629) panicked at crates/nessa-sdk/tests/domain/agent_execution/ownership.rs:2176:14:
+called `Result::unwrap_err()` on an `Ok` value: UnboundRootSettlement { root: AgentLifetimeId("parent"), operation: CloseOperationId("stale"), evidence: OwnershipEvidence { parent_lifetime: AgentLifetimeId("parent"), child_lifetime: Some(AgentLifetimeId("parent")), close_operation: Some(CloseOperationId("original")), before: Closing, after: Closing, cause: Some(HostClose), initiator: Runtime } }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    domain::agent_execution::ownership::unbound_absence_admission_refuses_child_and_stale_operation_without_mutating_history
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 210 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-sdk --test domain`

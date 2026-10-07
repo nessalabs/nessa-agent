@@ -1,0 +1,30 @@
+{
+  "assembled_head": "e00ca7c286477e393b8edf8aa231e2124c6870bf",
+  "sdk_coverage_checkpoint": "36e0b7ea17d8e59d58eb18f35f83c75667c57aeb",
+  "desktop_source": "d25cfa7c68c3bec1886e65acfec7dd742679cfef",
+  "desktop_exact_source_equality": [
+    {
+      "path": "crates/nessa-server/src/conversation/application/locks.rs",
+      "sha256": "e0821898210552247497d82376cd3015916ebedb905fc77abc0d7ef2ad91e798",
+      "exact_source_equal": true
+    },
+    {
+      "path": "crates/nessa-server/src/conversation/application/service.rs",
+      "sha256": "f435bf8639cc386c0fa220fefdd88611f99b9d10b38e18598823a73a1cb439f0",
+      "exact_source_equal": true
+    },
+    {
+      "path": "crates/nessa-server/tests/conversation/desktop_stop.rs",
+      "sha256": "dc45383e8b2cbefd62a916cde079ef38b2b412062fcd9da66f8fc134c9bdac24",
+      "exact_source_equal": true
+    },
+    {
+      "path": "docs/design/conversation-admission.md",
+      "sha256": "e5f9276674bbfdfe1f1f60e90f6d7f0d396edb68714d21429ce4f120d5b525f8",
+      "exact_source_equal": true
+    }
+  ],
+  "sdk_source_delta_is_two_rustdoc_lines": true,
+  "sdk_source_delta": "diff --git a/crates/nessa-sdk/src/domain/agent_execution/subagents/graph.rs b/crates/nessa-sdk/src/domain/agent_execution/subagents/graph.rs\nindex da4e5ae0..eac55f5c 100644\n--- a/crates/nessa-sdk/src/domain/agent_execution/subagents/graph.rs\n+++ b/crates/nessa-sdk/src/domain/agent_execution/subagents/graph.rs\n@@ -293,6 +293,7 @@ impl OwnershipGraph {\n     ///\n     /// # Errors\n     /// Returns `StaleOutcome` for child identities or unmatched close operations.\n+    /// Refused restored history returns `Cycle` or `DispatchRefused`.\n     pub fn note_unbound_root(\n         &mut self,\n         root: &AgentLifetimeId,\n@@ -323,6 +324,7 @@ impl OwnershipGraph {\n     ///\n     /// # Errors\n     /// Returns `StaleOutcome` when the close operation or physical absence changed.\n+    /// Refused restored history returns `Cycle` or `DispatchRefused`.\n     pub fn acknowledge_unbound_root(\n         &mut self,\n         token: UnboundRootSettlement,\n",
+  "coverage_claim": "Historical local report at 36e0; exact assembled-head full domain coverage required in CI before merge."
+}

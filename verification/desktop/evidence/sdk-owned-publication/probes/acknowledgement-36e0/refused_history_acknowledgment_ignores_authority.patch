@@ -1,0 +1,10 @@
+--- crates/nessa-sdk/src/domain/agent_execution/subagents/graph.rs
++++ crates/nessa-sdk/src/domain/agent_execution/subagents/graph.rs
+@@ -328,7 +328,6 @@
+         token: UnboundRootSettlement,
+         evidence: EvidenceFact,
+     ) -> Result<(), OwnershipError> {
+-        self.ensure_dispatch()?;
+         if self.lifetime_state(&token.root) != Some(LifetimeState::Closing)
+             || self.close_operation(&token.root) != Some(&token.operation)
+             || self.physical(&token.root, &token.root) != Some(PhysicalFact::Released)

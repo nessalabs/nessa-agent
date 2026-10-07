@@ -1,0 +1,11 @@
+    Checking nessa-local-storage v0.1.0 (/workspace/nessa-agent-desktop-stop-order/crates/nessa-local-storage)
+    Checking nessa-images v0.1.0 (/workspace/nessa-agent-desktop-stop-order/crates/nessa-images)
+    Checking nessa-agent-credentials v0.1.0 (/workspace/nessa-agent-desktop-stop-order/crates/nessa-agent-credentials)
+    Checking nessa-local-database v0.1.0 (/workspace/nessa-agent-desktop-stop-order/crates/nessa-local-database)
+    Checking nessa-auth v0.1.0 (/workspace/nessa-agent-desktop-stop-order/crates/nessa-auth)
+    Checking nessa-sdk v0.1.0 (/workspace/nessa-agent-desktop-stop-order/crates/nessa-sdk)
+    Checking nessa-gateway-endpoint v0.1.0 (/workspace/nessa-agent-desktop-stop-order/crates/nessa-gateway-endpoint)
+    Checking nessa-protocol v0.1.0 (/workspace/nessa-agent-desktop-stop-order/crates/nessa-protocol)
+    Checking nessa-server v0.1.0 (/workspace/nessa-agent-desktop-stop-order/crates/nessa-server)
+    Checking nessa-client-core v0.1.0 (/workspace/nessa-agent-desktop-stop-order/crates/nessa-client-core)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 55.79s

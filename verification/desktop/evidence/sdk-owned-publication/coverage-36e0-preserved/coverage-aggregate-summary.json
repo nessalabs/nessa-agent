@@ -1,0 +1,46 @@
+{
+  "raw_json_sha256": "430cf6db8bcf95e1f7d8d2a995874d39da62583b8e97f08d76644eff2199684d",
+  "raw_json_bytes": 115986262,
+  "type": "llvm.coverage.json.export",
+  "version": "3.1.0",
+  "totals": [
+    {
+      "branches": {
+        "count": 0,
+        "covered": 0,
+        "notcovered": 0,
+        "percent": 0
+      },
+      "functions": {
+        "count": 703,
+        "covered": 703,
+        "percent": 100
+      },
+      "instantiations": {
+        "count": 1541,
+        "covered": 1348,
+        "percent": 87.47566515249838
+      },
+      "lines": {
+        "count": 5216,
+        "covered": 5216,
+        "percent": 100
+      },
+      "mcdc": {
+        "count": 0,
+        "covered": 0,
+        "notcovered": 0,
+        "percent": 0
+      },
+      "regions": {
+        "count": 6552,
+        "covered": 6552,
+        "notcovered": 0,
+        "percent": 100
+      }
+    }
+  ],
+  "raw_json_workspace_path": "/tmp/628-revocation-restored/coverage-final-aggregate.json",
+  "report_source_checkpoint": "36e0b7ea17d8e59d58eb18f35f83c75667c57aeb",
+  "note": "Full raw LLVM function JSON remains in workspace; this checked summary and original text report retain aggregate output."
+}

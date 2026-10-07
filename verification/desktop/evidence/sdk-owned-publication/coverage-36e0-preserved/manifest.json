@@ -1,0 +1,80 @@
+{
+  "head": "4db970d5e38b9a5afa118bee14539729dc2a3d2b",
+  "environment": {
+    "CARGO_HOME": "/tmp/nessa-cargo",
+    "RUSTUP_HOME": "/tmp/nessa-rustup",
+    "CARGO_TARGET_DIR": "/workspace/nessa-agent/target",
+    "CARGO_NET_OFFLINE": "true"
+  },
+  "gates": [
+    {
+      "name": "application-ownership",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "application",
+        "subagents"
+      ],
+      "exit_code": 0,
+      "seconds": 33.71,
+      "log": "/tmp/628-revocation-restored/application-ownership.log"
+    },
+    {
+      "name": "domain-ownership",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--test",
+        "domain",
+        "ownership"
+      ],
+      "exit_code": 0,
+      "seconds": 1.83,
+      "log": "/tmp/628-revocation-restored/domain-ownership.log"
+    },
+    {
+      "name": "library-revocation",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--offline",
+        "--lib",
+        "row_38"
+      ],
+      "exit_code": 0,
+      "seconds": 44.29,
+      "log": "/tmp/628-revocation-restored/library-revocation.log"
+    },
+    {
+      "name": "sdk-domain-coverage",
+      "command": [
+        "/tmp/nessa-browser-libs/usr/bin/tini",
+        "-s",
+        "--",
+        "bash",
+        "scripts/check-sdk-domain-coverage.sh"
+      ],
+      "exit_code": 1,
+      "seconds": 571.56,
+      "log": "/tmp/628-revocation-restored/sdk-domain-coverage.log"
+    }
+  ]
+}
