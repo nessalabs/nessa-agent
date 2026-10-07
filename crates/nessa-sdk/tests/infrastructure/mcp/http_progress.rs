@@ -1384,7 +1384,11 @@ impl RemoteAuthorization for RetryAuthorization {
 
 #[tokio::test]
 async fn j14_initialized_http_failures_keep_typed_causes() {
-    for (status, expected) in [(503, McpError::Unconfirmed), (401, McpError::Unauthorized)] {
+    for (status, expected) in [
+        (503, McpError::Unconfirmed),
+        (401, McpError::Unauthorized),
+        (404, McpError::SessionExpired),
+    ] {
         let mut peer = Peer::new();
         peer.initialized_status = status;
         let peer = Arc::new(peer);
@@ -1428,6 +1432,14 @@ async fn j14_initialized_http_failures_keep_typed_causes() {
                     && method(request).as_deref() == Some("notifications/initialized")
             ),
             if status == 401 { 2 } else { 1 }
+        );
+        assert_eq!(
+            peer.count(|request| method(request).as_deref() == Some("initialize")),
+            2
+        );
+        assert_eq!(
+            peer.count(|request| method(request).as_deref() == Some("tools/list")),
+            1
         );
         stop(&session).await;
     }

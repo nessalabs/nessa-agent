@@ -408,13 +408,15 @@ impl HttpSession {
         if status == 403 {
             return self.refuse_scope(response).await;
         }
-        if status == 404 && self.has_session_id() && method != Some("initialize") {
-            return self.recover(id, permit);
-        }
         if matches!(status, 400 | 404 | 405) && method == Some("initialize") && !self.is_open() {
             return SendOutcome::Done; // caller enters legacy; unused path
         }
-        if let Some(error) = response_failure(status, method == Some("initialize")) {
+        if let Some(error) =
+            response_failure(status, self.response_context(method == Some("initialize")))
+        {
+            if error == McpError::SessionExpired {
+                return self.recover(id, permit);
+            }
             return if status == 401 || method == Some("initialize") {
                 SendOutcome::End(error)
             } else {
@@ -965,11 +967,11 @@ impl HttpSession {
                 Ok(Modern::Response(response)) if response.status == 403 => {
                     self.refuse_scope(response).await
                 }
-                Ok(Modern::Response(response)) => {
-                    SendOutcome::End(response_failure(response.status, false).unwrap_or_else(
+                Ok(Modern::Response(response)) => SendOutcome::End(
+                    response_failure(response.status, self.response_context(false)).unwrap_or_else(
                         || McpError::Malformed("recovery initialized was not accepted".into()),
-                    ))
-                }
+                    ),
+                ),
                 Ok(Modern::Legacy) => SendOutcome::End(McpError::Malformed(
                     "recovery initialized selected legacy transport".into(),
                 )),
@@ -1050,6 +1052,16 @@ impl HttpSession {
         match recovery_failure(&mut phase, error) {
             Ok(()) => SendOutcome::Done,
             Err(error) => SendOutcome::End(error),
+        }
+    }
+
+    fn response_context(&self, initialize: bool) -> ResponseContext {
+        if initialize {
+            ResponseContext::Initialize
+        } else if self.has_session_id() {
+            ResponseContext::SessionBound
+        } else {
+            ResponseContext::Stateless
         }
     }
 
@@ -1223,11 +1235,19 @@ enum Modern {
     Legacy,
 }
 
+#[derive(Clone, Copy)]
+enum ResponseContext {
+    Initialize,
+    SessionBound,
+    Stateless,
+}
+
 /// Typed HTTP failures are independent of ordinary or recovery dispatch.
-fn response_failure(status: u16, initialize: bool) -> Option<McpError> {
+fn response_failure(status: u16, context: ResponseContext) -> Option<McpError> {
     match status {
         401 => Some(McpError::Unauthorized),
-        500.. => Some(if initialize {
+        404 if matches!(context, ResponseContext::SessionBound) => Some(McpError::SessionExpired),
+        500.. => Some(if matches!(context, ResponseContext::Initialize) {
             McpError::Unreachable
         } else {
             McpError::Unconfirmed
@@ -1239,7 +1259,15 @@ fn response_failure(status: u16, initialize: bool) -> Option<McpError> {
 
 /// Legacy dispatch uses the same typed 5xx classifier.
 fn server_error(initialize: bool, id: Option<u64>) -> SendOutcome {
-    let error = response_failure(500, initialize).expect("5xx failure");
+    let error = response_failure(
+        500,
+        if initialize {
+            ResponseContext::Initialize
+        } else {
+            ResponseContext::Stateless
+        },
+    )
+    .expect("5xx failure");
     if initialize {
         SendOutcome::End(error)
     } else {

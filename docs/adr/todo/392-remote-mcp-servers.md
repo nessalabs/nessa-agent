@@ -454,7 +454,7 @@ Typed HTTP response failures have one classifier shared with ordinary POSTs.
 | --- | --- | --- | --- |
 | J12 | Completion receiver disappears after initialized acceptance, before completion commit | Failed delivery becomes terminal before any queued ordinary frame; no temporary Completed/admission gap | `j12_lost_completion_cannot_admit_queued_call` |
 | J13 | Successful predeadline completion delivery wins, then startup observes its ready timer; or timeout wins before delivery | Timer selection after predeadline delivery/commit leaves Completed successful with no late Timeout; timer-first Failed Timeout blocks delivery/admission | `j13_completed_commit_defeats_late_timeout`, J9 expired handoff |
-| J14 | Recovery initialized POST receives 5xx or refreshed retry receives 401 | Preserve Unconfirmed or Unauthorized through writer, startup and public pending calls; no admission | `j14_initialized_http_failures_keep_typed_causes` |
+| J14 | Recovery initialized POST receives 5xx, refreshed retry receives 401, or claimed replacement returns 404 | Preserve Unconfirmed, Unauthorized or SessionExpired through writer, startup and public pending calls; claimed 404 terminates without a second recovery or replay (stateless 404 is Malformed) | `j14_initialized_http_failures_keep_typed_causes` |
 
 The related audit verification correction (#631) pairs inspection requested/outcome
 records by action, phase and operation identity. Millisecond wall-clock observations
