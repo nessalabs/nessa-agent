@@ -303,16 +303,16 @@ ownership. Mandatory audit has its own documented bounded delivery attempts.
 
 ### Owned POST event streams (#622)
 
-`HttpSession` owns non-initialize POST readers separately from pending JSON-RPC
+`HttpSession` owns POST body/startup readers separately from pending JSON-RPC
 calls. Its collection retains at most 256 handles (`MAX_POST_STREAMS`), including
 aborted readers until reaped after completion. The semaphore is the sole capacity
 authority: each retained reader holds its permit beside its task handle through
 reaping or close joining. Initialization identity and GET/POST reader admission share one reader-registry
 lock with close;
 readers own the response and inbound sender, with no reference back to the session.
-Before a non-initialize request POST, a capacity permit is reserved, or the call
-is refused with `Busy` before exchange. JSON/202/failure releases that permit;
-a streamed response holds it through reader teardown. Notification and ping-reply
+Before a request POST (including initialize), a capacity permit is reserved, or the call
+is refused with `Busy` before exchange. Buffered JSON/202/failure releases that permit;
+a streamed JSON or SSE response holds it through reader teardown. Notification and ping-reply
 POSTs bypass request reservation so they can unblock active streams. If those
 POSTs unexpectedly return a stream, they acquire available capacity or end with
 `Unconfirmed` after dropping the excess body. This does not claim cancellation.
@@ -321,7 +321,7 @@ POSTs unexpectedly return a stream, they acquire available capacity or end with
 stateDiagram-v2
     [*] --> Reserved: pre-POST capacity permit
     Reserved --> Reading: response registered with JoinHandle
-    Reserved --> Released: JSON / 202 / exchange failure
+    Reserved --> Released: buffered JSON / 202 / exchange failure
     Reading --> Finished: matching terminal / EOF / body failure
     Reading --> Stopping: caller cancellation / session close (abort)
     Stopping --> Finished: task destruction completes
@@ -396,9 +396,57 @@ handle to run the local joins from an ordinary thread too; the owning runtime mu
 remain running through completion. Runtime shutdown is not fabricated as a
 finished HTTP close observation.
 
-This slice covers asynchronous non-initialize POST readers, including lists during
-opening. Stalled JSON body writes (#623) and held initialize handshakes (#626)
-remain separate work; stream release is not confirmation of remote tool stopping.
+The #622 slice established owned non-initialize POST SSE readers. The #623/#626/#634
+extension below also owns streamed JSON and initialization/recovery startup;
+body release is not confirmation of a remote tool stopping.
+
+### Owned JSON and initialization progress (#623, #626, #634)
+
+The same bounded POST registry owns streamed JSON, streamed initialization and
+replacement initialization. JSON consumption does not run on the frame writer.
+Initialization accepts only its matching result, validated by `wire::initialized`,
+and commits identity/version under the registry fence before GET or readiness.
+An SSE reader retires at that terminal event rather than waiting for EOF.
+Reader tasks keep weak session references only for synchronous commits.
+
+The private `Recovery` state is Available, Initializing, ReadyForWriter, Completed
+or Failed. Identity publication does not change call admission. Recovery is
+registered before its initialize exchange. While it is initializing,
+ordinary calls are refused with `Busy`; cancellation and server replies remain
+available. A private `RecoveryReady` event uses the existing bounded writer queue
+to send initialized; it does not create another frame sender. Recovery is bounded
+by the injected clock's initialization budget, and never replays the failed call.
+Close alone owns DELETE, retaining the ID claim through the attempt's completion.
+
+| Row | Trigger/order | Required outcome and ownership | Enforcer |
+| --- | --- | --- | --- |
+| J1 | JSON headers arrive, body stalls; call times out/drops | Writer can send cancellation and another call; direct cancellation aborts registered body; no replay | `j1_stalled_json_timeout_allows_cancel_and_next_call` |
+| J2 | JSON completion, body failure, oversize, or close | Typed existing outcome; bounded body and retained permit release only after destruction/reaping or joins | `j2_complete_streamed_json_settles_and_releases_body`, `j2_json_read_failure_and_bound_are_typed`, `j2_json_capacity_is_retained_through_physical_destruction` |
+| J3 | Matching initialize SSE result; peer holds body | Commit validated identity/version before GET/readiness, retire body, initialized/list/ping answer dispatch before EOF | `j3_public_open_held_initialize_dispatches_initialized_list_and_ping` |
+| J4 | Initialize has wrong id, request envelope, invalid version, repeated result or bad trailing bytes | Only first matching valid result establishes phase; invalid evidence does not start GET; terminal retirement ignores trailing bytes | `j4_invalid_initialize_version_does_not_claim_or_start_get`, `j4_initialize_terminal_precedes_bad_trailing_bytes`, P12/P13/P14 |
+| J5 | Close wins before initialization publication | Refuse publication/admission, no new claim or GET; owned reader/startup is joined | `j5_close_held_initialize_body_has_no_late_publication`, `j5_drop_initial_reader_does_not_retain_session`, P10 |
+| J6 | Initialization publication wins then close/caller loss | Close owns one DELETE and its completion; no independent cleanup attempt | `j6_recovery_publication_then_close_owns_one_retained_delete`, `j6_j7_close_owns_delete_and_retains_claim_through_completion` |
+| J7 | DELETE held; duplicate close or a new opening repeats its ID | Finished waits; retained claim refuses collision and prevents DELETE targeting a new owner | `j7_public_open_collision_while_delete_is_held_is_not_deleted`, `j6_j7_close_owns_delete_and_retains_claim_through_completion` |
+| J8 | Session 404; recovery header/body held | Failed call is SessionExpired without replay; recovery is owned before header I/O; ordinary requests Busy while controls remain available | `j8_recovery_owned_before_headers_and_controls_remain_available`, `j8_stalled_recovery_json_is_owned_and_bounded` |
+| J9 | Recovery succeeds, fails, times out, or races close before initialized dispatch | Identity publication is separate from call admission. Gate queued calls before RecoveryReady and while initialized headers are held. One remaining initialization budget covers headers/body, queue handoff and initialized dispatch; writer revalidates its correlated handoff before dispatch and admission. Timeout/close/stale handoff/rejected initialized cannot release admission. Close joins startup and owns any claimed ID | `j9_recovery_gate_covers_queued_calls_and_initialized_headers`, `j9_expired_queued_handoff_cannot_dispatch_initialized`, `j9_saturated_queue_budget_expiry_retains_close_ownership`, `j9_timeout_while_initialized_headers_held_cannot_reopen`, `j9_rejected_initialized_does_not_release_admission`, J6 recovery-close test |
+
+```mermaid
+sequenceDiagram
+    participant Writer
+    participant Registry
+    participant Body as Owned body/startup task
+    participant Peer
+    Writer->>Peer: POST
+    Peer-->>Writer: headers and body
+    Writer->>Registry: register body with capacity permit
+    Registry->>Body: consume JSON/SSE off writer
+    Body->>Registry: commit matching validated initialize under close fence
+    Body-->>Writer: RecoveryReady (replacement only, existing queue)
+    Writer->>Peer: notifications/initialized
+    Note over Registry: close fences admission, joins tasks, owns DELETE
+    Registry->>Peer: DELETE claimed ID once
+    Note over Registry: release claim after DELETE observation; finished after joins
+```
 
 ## Audit verification by recorded meaning (#631)
 

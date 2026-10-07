@@ -3,9 +3,10 @@ use super::super::connection::Connection;
 use super::super::framing::MAX_FRAME_BYTES;
 use super::super::http::{HttpSession, SendOutcome, SessionClaims, MAX_POST_STREAMS};
 use super::super::{
-    HttpBody, HttpChunks, HttpExchange, HttpFailure, HttpMethod, HttpRequest, HttpResponse,
-    McpError, NoAuthorization, RemoteMcpUrl,
+    HttpBody, HttpExchange, HttpFailure, HttpMethod, HttpRequest, HttpResponse, McpError,
+    NoAuthorization, RemoteMcpUrl,
 };
+use super::post_body::{bounded, DropGate, Probe, ReleaseOnDrop};
 use crate::infrastructure::clock::RuntimeClock;
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -17,122 +18,6 @@ use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::{mpsc, Notify};
 use uuid::Uuid;
-
-struct DropGate {
-    entered: Notify,
-    released: Mutex<bool>,
-    ready: Condvar,
-}
-
-impl DropGate {
-    fn release(&self) {
-        *self.released.lock().unwrap() = true;
-        self.ready.notify_all();
-    }
-}
-
-struct ReleaseOnDrop(Arc<DropGate>);
-
-impl Drop for ReleaseOnDrop {
-    fn drop(&mut self) {
-        self.0.release();
-    }
-}
-
-struct Body {
-    chunks: mpsc::UnboundedReceiver<Result<Option<Vec<u8>>, HttpFailure>>,
-    dropped: Arc<AtomicUsize>,
-    changed: Arc<Notify>,
-    polled: Arc<AtomicUsize>,
-    polling: Arc<Notify>,
-    drop_gate: Arc<Mutex<Option<Arc<DropGate>>>>,
-}
-
-impl Drop for Body {
-    fn drop(&mut self) {
-        if let Some(gate) = self.drop_gate.lock().unwrap().as_ref() {
-            gate.entered.notify_one();
-            let mut released = gate.released.lock().unwrap();
-            while !*released {
-                released = gate.ready.wait(released).unwrap();
-            }
-        }
-        self.dropped.fetch_add(1, Ordering::SeqCst);
-        self.changed.notify_one();
-    }
-}
-
-#[async_trait]
-impl HttpChunks for Body {
-    async fn next(&mut self) -> Result<Option<Vec<u8>>, HttpFailure> {
-        self.polled.fetch_add(1, Ordering::SeqCst);
-        self.polling.notify_one();
-        self.chunks.recv().await.unwrap_or(Ok(None))
-    }
-}
-
-struct Probe {
-    send: mpsc::UnboundedSender<Result<Option<Vec<u8>>, HttpFailure>>,
-    dropped: Arc<AtomicUsize>,
-    changed: Arc<Notify>,
-    polled: Arc<AtomicUsize>,
-    polling: Arc<Notify>,
-    drop_gate: Arc<Mutex<Option<Arc<DropGate>>>>,
-}
-
-impl Probe {
-    fn body() -> (Self, HttpBody) {
-        let (send, chunks) = mpsc::unbounded_channel();
-        let dropped = Arc::new(AtomicUsize::new(0));
-        let changed = Arc::new(Notify::new());
-        let polled = Arc::new(AtomicUsize::new(0));
-        let polling = Arc::new(Notify::new());
-        let drop_gate = Arc::new(Mutex::new(None));
-        (
-            Self {
-                send,
-                dropped: dropped.clone(),
-                changed: changed.clone(),
-                polled: polled.clone(),
-                polling: polling.clone(),
-                drop_gate: drop_gate.clone(),
-            },
-            HttpBody::Stream(Box::new(Body {
-                chunks,
-                dropped,
-                changed,
-                polled,
-                polling,
-                drop_gate,
-            })),
-        )
-    }
-
-    fn event(&self, value: Value) {
-        self.send
-            .send(Ok(Some(format!("data: {value}\n\n").into_bytes())))
-            .unwrap();
-    }
-
-    async fn polled(&self, count: usize) {
-        bounded(async {
-            while self.polled.load(Ordering::SeqCst) < count {
-                self.polling.notified().await;
-            }
-        })
-        .await;
-    }
-
-    async fn released(&self) {
-        bounded(async {
-            while self.dropped.load(Ordering::SeqCst) == 0 {
-                self.changed.notified().await;
-            }
-        })
-        .await;
-        assert_eq!(self.dropped.load(Ordering::SeqCst), 1);
-    }
-}
 
 struct Peer {
     bodies: Mutex<VecDeque<HttpBody>>,
@@ -198,12 +83,6 @@ fn session(peer: Arc<Peer>) -> (Arc<HttpSession>, mpsc::Receiver<Result<Vec<u8>,
         Arc::new(NoAuthorization),
         Arc::new(SessionClaims::default()),
     )
-}
-
-async fn bounded<T>(future: impl Future<Output = T>) -> T {
-    tokio::time::timeout(Duration::from_secs(3), future)
-        .await
-        .expect("controlled lifecycle completes")
 }
 
 async fn dispatch(session: &HttpSession, id: u64) -> SendOutcome {
@@ -803,6 +682,8 @@ async fn retired_get_reader_remains_close_owned() {
         Arc::new(NoAuthorization),
         Arc::new(SessionClaims::default()),
     );
+    let (writer, _controls) = mpsc::channel(8);
+    session.set_writer(writer, Arc::new(RuntimeClock::new()));
     let initialize = serde_json::to_vec(&json!({"id":1,"method":"initialize"})).unwrap();
     assert!(matches!(
         session.dispatch(&initialize).await,
@@ -1016,13 +897,15 @@ async fn wrong_id_json_recovery_does_not_publish_readiness() {
         initialized: AtomicUsize::new(0),
     });
     let claims = Arc::new(SessionClaims::default());
-    let (session, _incoming) = HttpSession::open(
+    let (session, mut incoming) = HttpSession::open(
         Uuid::from_u128(1),
         RemoteMcpUrl::parse("http://127.0.0.1/mcp").unwrap(),
         exchange.clone(),
         Arc::new(NoAuthorization),
         claims.clone(),
     );
+    let (writer, _controls) = mpsc::channel(8);
+    session.set_writer(writer, Arc::new(RuntimeClock::new()));
     let initialize = serde_json::to_vec(&json!({"id":1,"method":"initialize"})).unwrap();
     assert!(matches!(
         session.dispatch(&initialize).await,
@@ -1031,8 +914,20 @@ async fn wrong_id_json_recovery_does_not_publish_readiness() {
     probe.polled(1).await;
     assert!(matches!(
         dispatch(&session, 2).await,
-        SendOutcome::End(McpError::SessionExpired)
+        SendOutcome::FailCall {
+            id: Some(2),
+            error: McpError::SessionExpired
+        }
     ));
+    bounded(async {
+        loop {
+            if let Some(Err(error)) = incoming.recv().await {
+                assert_eq!(error, McpError::SessionExpired);
+                break;
+            }
+        }
+    })
+    .await;
     assert_eq!(peer.gets.load(Ordering::SeqCst), 1);
     assert_eq!(exchange.initialized.load(Ordering::SeqCst), 0);
     assert!(claims.claim("http://127.0.0.1/mcp", "new-session", u64::MAX));
