@@ -1,0 +1,292 @@
+{
+  "check": "alpha-perf",
+  "ok": true,
+  "started": "2026-10-07T03:07:20.117Z",
+  "finished": "2026-10-07T03:07:54.691Z",
+  "target": {
+    "url": null,
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:33571/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "gateway",
+      "engine": "chromium",
+      "layout": "columns",
+      "gatewayMs": 503,
+      "previewMs": 18245,
+      "cold": [
+        {
+          "readyMs": 1302,
+          "cache": "disabled",
+          "navigation": {
+            "durationMs": 98.79999999981374,
+            "responseEndMs": 6.7000000001862645,
+            "domContentLoadedMs": 98.70000000018626,
+            "loadEventMs": 98.79999999981374,
+            "transferBytes": 4321,
+            "decodedBytes": 12681,
+            "type": "navigate"
+          },
+          "paints": {
+            "firstPaintMs": 56,
+            "firstContentfulPaintMs": 56
+          },
+          "heapUsed": 6827064,
+          "heapTotal": 9822208,
+          "nodes": 309,
+          "documents": 6,
+          "layoutCount": 7,
+          "recalcStyleCount": 37,
+          "scriptDuration": 0.098458,
+          "layoutDuration": 0.060447,
+          "taskDuration": 0.534265,
+          "dom": 201,
+          "frames": {
+            "fps": 22.399999999999995,
+            "frames": 28,
+            "spanMs": 1250.0000000000002,
+            "maxGapMs": 116.80000000000001
+          },
+          "longTasks": {
+            "count": 2,
+            "maxMs": 101
+          },
+          "loaf": {
+            "count": 7,
+            "maxMs": 105.59999999962747
+          },
+          "endpointAskMs": 170.8999999994412,
+          "startup": false
+        },
+        {
+          "readyMs": 1312,
+          "cache": "disabled",
+          "navigation": {
+            "durationMs": 100.79999999981374,
+            "responseEndMs": 4.2999999998137355,
+            "domContentLoadedMs": 98.29999999981374,
+            "loadEventMs": 100.79999999981374,
+            "transferBytes": 4321,
+            "decodedBytes": 12681,
+            "type": "navigate"
+          },
+          "paints": {
+            "firstPaintMs": 112,
+            "firstContentfulPaintMs": 112
+          },
+          "heapUsed": 6802520,
+          "heapTotal": 9822208,
+          "nodes": 309,
+          "documents": 6,
+          "layoutCount": 7,
+          "recalcStyleCount": 36,
+          "scriptDuration": 0.094048,
+          "layoutDuration": 0.042385,
+          "taskDuration": 0.5317470000000001,
+          "dom": 201,
+          "frames": {
+            "fps": 20.001600128010242,
+            "frames": 25,
+            "spanMs": 1249.8999999999999,
+            "maxGapMs": 133.3
+          },
+          "longTasks": {
+            "count": 3,
+            "maxMs": 114
+          },
+          "loaf": {
+            "count": 6,
+            "maxMs": 121.40000000037253
+          },
+          "endpointAskMs": 145.69999999925494,
+          "startup": false
+        },
+        {
+          "readyMs": 1241,
+          "cache": "disabled",
+          "navigation": {
+            "durationMs": 90.59999999962747,
+            "responseEndMs": 3.099999999627471,
+            "domContentLoadedMs": 90.5,
+            "loadEventMs": 90.59999999962747,
+            "transferBytes": 4321,
+            "decodedBytes": 12681,
+            "type": "navigate"
+          },
+          "paints": {
+            "firstPaintMs": 48,
+            "firstContentfulPaintMs": 48
+          },
+          "heapUsed": 6817840,
+          "heapTotal": 9297920,
+          "nodes": 309,
+          "documents": 6,
+          "layoutCount": 7,
+          "recalcStyleCount": 39,
+          "scriptDuration": 0.100844,
+          "layoutDuration": 0.049897,
+          "taskDuration": 0.479925,
+          "dom": 201,
+          "frames": {
+            "fps": 24.166666666666668,
+            "frames": 29,
+            "spanMs": 1200,
+            "maxGapMs": 83.4
+          },
+          "longTasks": {
+            "count": 2,
+            "maxMs": 95
+          },
+          "loaf": {
+            "count": 5,
+            "maxMs": 104.90000000037253
+          },
+          "endpointAskMs": 136.09999999962747,
+          "startup": false
+        }
+      ],
+      "warm": [
+        {
+          "readyMs": 1162,
+          "cache": "enabled",
+          "navigation": {
+            "durationMs": 109.29999999981374,
+            "responseEndMs": 10.200000000186265,
+            "domContentLoadedMs": 106.70000000018626,
+            "loadEventMs": 109.29999999981374,
+            "transferBytes": 4321,
+            "decodedBytes": 12681,
+            "type": "reload"
+          },
+          "paints": {
+            "firstPaintMs": 344,
+            "firstContentfulPaintMs": 344
+          },
+          "heapUsed": 15189332,
+          "heapTotal": 20553728,
+          "nodes": 907,
+          "documents": 10,
+          "layoutCount": 0,
+          "recalcStyleCount": 3,
+          "scriptDuration": 0.005105000000000002,
+          "layoutDuration": 0.00022000000000000144,
+          "taskDuration": 0.04763200000000001,
+          "dom": 201,
+          "frames": {
+            "fps": 20.323236233426883,
+            "frames": 21,
+            "spanMs": 1033.3000000000002,
+            "maxGapMs": 116.69999999999999
+          },
+          "longTasks": {
+            "count": 3,
+            "maxMs": 99
+          },
+          "loaf": {
+            "count": 6,
+            "maxMs": 121.5
+          },
+          "endpointAskMs": 124.5,
+          "startup": false
+        },
+        {
+          "readyMs": 1092,
+          "cache": "enabled",
+          "navigation": {
+            "durationMs": 68.20000000018626,
+            "responseEndMs": 5.300000000745058,
+            "domContentLoadedMs": 67.80000000074506,
+            "loadEventMs": 68.20000000018626,
+            "transferBytes": 4321,
+            "decodedBytes": 12681,
+            "type": "reload"
+          },
+          "paints": {
+            "firstPaintMs": 96,
+            "firstContentfulPaintMs": 96
+          },
+          "heapUsed": 15021844,
+          "heapTotal": 20291584,
+          "nodes": 898,
+          "documents": 10,
+          "layoutCount": null,
+          "recalcStyleCount": null,
+          "scriptDuration": null,
+          "layoutDuration": 0.0008300000000000009,
+          "taskDuration": null,
+          "dom": 201,
+          "frames": {
+            "fps": 18.095238095238095,
+            "frames": 19,
+            "spanMs": 1050,
+            "maxGapMs": 166.7
+          },
+          "longTasks": {
+            "count": 3,
+            "maxMs": 95
+          },
+          "loaf": {
+            "count": 5,
+            "maxMs": 135
+          },
+          "endpointAskMs": 81.90000000037253,
+          "startup": false
+        },
+        {
+          "readyMs": 1091,
+          "cache": "enabled",
+          "navigation": {
+            "durationMs": 59.200000000186265,
+            "responseEndMs": 4,
+            "domContentLoadedMs": 59.09999999962747,
+            "loadEventMs": 59.200000000186265,
+            "transferBytes": 4321,
+            "decodedBytes": 12681,
+            "type": "reload"
+          },
+          "paints": {
+            "firstPaintMs": 60,
+            "firstContentfulPaintMs": 60
+          },
+          "heapUsed": 14927884,
+          "heapTotal": 20553728,
+          "nodes": 897,
+          "documents": 10,
+          "layoutCount": 0,
+          "recalcStyleCount": 0,
+          "scriptDuration": null,
+          "layoutDuration": null,
+          "taskDuration": null,
+          "dom": 201,
+          "frames": {
+            "fps": 21.904761904761905,
+            "frames": 23,
+            "spanMs": 1050,
+            "maxGapMs": 150.00000000000003
+          },
+          "longTasks": {
+            "count": 3,
+            "maxMs": 108
+          },
+          "loaf": {
+            "count": 5,
+            "maxMs": 129.8999999994412
+          },
+          "endpointAskMs": 64.8999999994412,
+          "startup": false
+        }
+      ],
+      "note": "scripted gateway, no conversation created; not a catalogue walk (#607 does not merge)"
+    }
+  ]
+}
