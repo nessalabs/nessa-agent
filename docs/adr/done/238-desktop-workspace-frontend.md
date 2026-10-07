@@ -473,6 +473,24 @@ without a pick, or Settings, gives focus back to what opened it. [ADR
 widget takes the caret in its body rather than a composer, and while the
 window shows a widget, focus that falls away lands in that widget's body.
 
+The pane caret waits for its target's first layout to paint before landing
+(`adapters/dom/focus.ts`, `focus.test.tsx`):
+
+| pending focus | next frame | result |
+| --- | --- | --- |
+| target absent | look again, up to 30 attempts | no geometry or focus read |
+| target found | let this frame paint | retain the target identity |
+| target painted, still current | focus with `preventScroll` | finish |
+| target replaced | find the current target | wait for its paint |
+| modal or inert target, or deliberate focus elsewhere | leave the pending landing | keep that focus |
+| cancelled or owner removed | cancel the pending frame | leave focus alone |
+
+Transcript heading visibility comes from its IntersectionObserver, including
+its first report; mounting does not read rectangles to predict the observer.
+The pane header stays visible until the observer confirms that the transcript
+heading is in view (`transcript.test.tsx`), including a conversation opened at
+its latest message.
+
 **Drag and drop** is carried by the pointer (`split-panes/adapters/dom/drag.ts`), not the
 browser's drag, and a pane's header carries the pane, never the window (no
 drag region in it). What a press becomes is one pure state machine,

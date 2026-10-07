@@ -27,7 +27,7 @@
 import { useEffect, type RefObject } from "react"
 import { gridOf } from "../../../split-panes"
 import { focusedPane } from "../../../split-panes/model/pane-layout"
-import { modalSelector } from "../../../adapters/modal"
+import { inModal } from "../../../adapters/modal"
 import type { DesktopStore } from "../../../store"
 import { widgetBodyAttribute } from "../../../widgets"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
@@ -66,16 +66,34 @@ export function focusInFront(
 ): () => void {
   let frame = 0
   let tries = 0
+  let active = true
   const attempt = () => {
+    if (!active) return
+    if (tries++ >= 30) return done()
     const field = caretTarget(scope)
-    if (field) {
+    if (!field) {
+      frame = requestAnimationFrame(attempt)
+      return
+    }
+    const held = document.activeElement
+    // A pane may have filled on this frame. Let its layout paint before focus
+    // asks the browser for geometry; recheck the target after that paint.
+    frame = requestAnimationFrame(() => {
+      if (!active) return
+      const focus = document.activeElement
+      if (inModal(focus) || field.closest("[inert]")) return done()
+      // A deliberate focus move during the wait belongs to the person.
+      if (focus !== held && focus !== document.body && focus !== field) return done()
+      if (caretTarget(scope) !== field) return attempt()
       field.focus({ preventScroll: true })
       done()
-    } else if (tries++ < 30) frame = requestAnimationFrame(attempt)
-    else done()
+    })
   }
   frame = requestAnimationFrame(attempt)
-  return () => cancelAnimationFrame(frame)
+  return () => {
+    active = false
+    cancelAnimationFrame(frame)
+  }
 }
 
 /**
@@ -127,7 +145,7 @@ export function useFocusFollowsPane(
     const settle = (moved: boolean) => {
       const active = document.activeElement
       const lost = !active || active === document.body
-      if (!lost && active.closest(modalSelector)) return
+      if (inModal(active)) return
       const inFocused = !lost && active.closest(`[${focusedPaneAttribute}]`) !== null
       const grid = gridOf(scope)
       const inOtherPane = !lost && !inFocused && grid?.contains(active) === true
@@ -136,7 +154,7 @@ export function useFocusFollowsPane(
     /** A widget opened in the window: the caret goes into it, from anywhere but a dialog or a menu. */
     const intoWindow = () => {
       const active = document.activeElement
-      if (active && active !== document.body && active.closest(modalSelector)) return
+      if (inModal(active)) return
       follow()
     }
 

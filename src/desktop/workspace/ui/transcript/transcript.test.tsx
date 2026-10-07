@@ -6,7 +6,7 @@
 import { act, StrictMode, createRef } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   loadWorkspace,
   followWorkspace,
@@ -94,7 +94,11 @@ const conversation: TranscriptValue = {
   },
 }
 
-async function shown(source = fakeSource(), shownConversation = conversation) {
+async function shown(
+  source = fakeSource(),
+  shownConversation = conversation,
+  onHeadingVisible: (visible: boolean) => void = () => {},
+) {
   source.transcripts.set("b", shownConversation)
   const store = testStore(source)
   await store.dispatch(loadWorkspace())
@@ -110,7 +114,7 @@ async function shown(source = fakeSource(), shownConversation = conversation) {
               arriving={false}
               scrollRef={createRef()}
               headingRef={createRef()}
-              onHeadingVisible={() => {}}
+              onHeadingVisible={onHeadingVisible}
             />
           </ClockProvider>
         </Provider>
@@ -851,4 +855,50 @@ it("keeps an older failed outbox message from hiding a later observed refusal", 
     await sent
   })
   expect(host.querySelector(".provider-sign-in")).toBeNull()
+})
+
+it("observes heading visibility without forcing the mounting layout", async () => {
+  let visibility: IntersectionObserverCallback | null = null
+  const observed = vi.fn()
+  const disconnected = vi.fn()
+  class HeadingObserver {
+    constructor(callback: IntersectionObserverCallback) {
+      visibility = callback
+    }
+    observe = observed
+    disconnect = disconnected
+  }
+  const previous = globalThis.IntersectionObserver
+  Object.assign(globalThis, { IntersectionObserver: HeadingObserver })
+  const geometry = vi
+    .spyOn(Element.prototype, "getBoundingClientRect")
+    .mockImplementation(() => {
+      throw new Error("forced mounting layout")
+    })
+  const reported = vi.fn()
+  try {
+    await shown(fakeSource(), conversation, reported)
+    expect(reported).not.toHaveBeenCalled()
+    expect(observed).toHaveBeenCalledWith(host.querySelector(".workspace-heading h2"))
+    const notify = visibility as IntersectionObserverCallback | null
+    expect(notify).not.toBeNull()
+    await act(async () =>
+      notify?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      ),
+    )
+    await act(async () =>
+      notify?.(
+        [{ isIntersecting: false } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      ),
+    )
+    expect(reported.mock.calls).toEqual([[true], [false]])
+    await act(async () => root.unmount())
+    expect(disconnected).toHaveBeenCalledTimes(2)
+  } finally {
+    geometry.mockRestore()
+    Object.assign(globalThis, { IntersectionObserver: previous })
+  }
 })

@@ -61,6 +61,7 @@ it("reads the arrival's landing layout before animation writes and cancels on re
     await act(async () => root.unmount())
     expect(cancel).toHaveBeenCalledTimes(4)
   } finally {
+    await act(async () => root.unmount())
     geometry.mockRestore()
     computed.mockRestore()
     if (previousAnimate)

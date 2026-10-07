@@ -8,7 +8,7 @@
  * Folding the sidebar is transform only. A closed sidebar leaves the flow at
  * once, so what is beside it takes its new place in one layout and travels
  * there by transform (FLIP, `split-panes/adapters/dom/flip.tsx`); the sidebar
- * itself slides out on its own, fully opaque so its glass keeps its blur, and
+ * itself slides out on its own without fading, and
  * hides once it is off-screen.
  */
 .workspace-sidebar {

@@ -72,8 +72,6 @@ export const Transcript = memo(function Transcript({
     const scroller = scrollRef.current
     const title = titleRef.current
     if (!scroller || !title) return
-    const top = scroller.getBoundingClientRect().top
-    report.current(title.getBoundingClientRect().bottom > top + 4)
     const observer = new IntersectionObserver(
       ([entry]) => report.current(entry.isIntersecting),
       { root: scroller, rootMargin: "-4px 0px 0px 0px" },

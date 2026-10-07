@@ -29,7 +29,7 @@ import {
   testStore,
   type AnimationFrames,
 } from "../../testing"
-import { focusedPaneAttribute, useFocusFollowsPane } from "./focus"
+import { focusedPaneAttribute, focusInFront, useFocusFollowsPane } from "./focus"
 
 /** Panes as the page draws them, each with a composer, and a list beside them. */
 function Page() {
@@ -202,3 +202,57 @@ it("puts the caret in the focused pane's composer when the panes come back from 
   expect(store.getState().workspace.content).toBe("panes")
   expect(caretIn()).toBe(`Message ${focused}`)
 })
+
+it("lets a newly found composer paint before focus and cancels the pending landing", async () => {
+  host.innerHTML =
+    '<div data-pane-focused><form class="desktop-composer"><textarea aria-label="New" /></form></div>'
+  const stop = focusInFront(host)
+  await act(async () => animation.runFrame())
+  expect(caretIn()).not.toBe("New")
+  stop()
+  await frames()
+  expect(caretIn()).not.toBe("New")
+  focusInFront(host)
+  await act(async () => animation.runFrame())
+  expect(caretIn()).not.toBe("New")
+  await act(async () => animation.runFrame())
+  expect(caretIn()).toBe("New")
+})
+
+it("rechecks a replaced composer before landing the caret", async () => {
+  host.innerHTML =
+    '<div data-pane-focused><form class="desktop-composer"><textarea aria-label="Old" /></form></div>'
+  const old = host.querySelector("textarea")
+  const stop = focusInFront(host)
+  await act(async () => animation.runFrame())
+  host.innerHTML =
+    '<div data-pane-focused><form class="desktop-composer"><textarea aria-label="Replacement" /></form></div>'
+  await act(async () => animation.runFrame())
+  expect(document.activeElement).not.toBe(old)
+  expect(caretIn()).not.toBe("Replacement")
+  await act(async () => animation.runFrame())
+  expect(caretIn()).toBe("Replacement")
+  stop()
+})
+
+it.each(["dialog", "list"])(
+  "keeps %s focus taken during a pending composer landing",
+  async (kind) => {
+    host.innerHTML =
+      '<div data-pane-focused><form class="desktop-composer"><textarea aria-label="Composer" /></form></div>'
+    const stop = focusInFront(host)
+    await act(async () => animation.runFrame())
+    const destination = document.createElement("button")
+    destination.textContent = "Keep focus"
+    if (kind === "dialog") {
+      const dialog = document.createElement("div")
+      dialog.setAttribute("role", "dialog")
+      dialog.append(destination)
+      host.append(dialog)
+    } else host.append(destination)
+    destination.focus()
+    await act(async () => animation.runFrame())
+    expect(document.activeElement).toBe(destination)
+    stop()
+  },
+)
