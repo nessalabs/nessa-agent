@@ -1,0 +1,376 @@
+<h1>Bounded physical persistence (#627)</h1>
+<p>
+  Scope: SqliteOwnershipStore, FileRecords (all five combined-port methods), and
+  FileAuthorizationAudit. Constructors and disk formats stay unchanged.
+</p>
+<pre><code class="language-text">async caller -&gt; await instance Worker::admit -&gt; clone input -&gt; Admission::submit
+                                                             (synchronous handoff)
+                                                job owns input/state then permit
+caller drop ----------------------------------&gt; job continues through physical I/O
+                                                and owned cleanup -&gt; release slot
+next same-instance caller -&gt; waits ------------------------------------^ 
+</code></pre>
+<p>
+  One implementation in <code>nessa-local-storage::physical_operation</code> owns physical
+  admission and captured-cleanup lifetime. Each adapter owns an independent Worker
+  instance and maps interruption into its existing typed port outcome. The optional
+  <code>physical-operation</code> feature is default-off; synchronous consumers do not
+  acquire a Tokio normal dependency.
+</p>
+<p>
+  Admission captures the originating Tokio Handle before waiting for its instance slot.
+  Missing runtime context is typed pre-effect unavailability. A queued Send port future
+  can resume on an ordinary thread using that captured executor. The originating runtime
+  must remain alive for reliable completion; shutdown is a typed conservative worker
+  failure, not runtime-independent persistence. Admission precedes large clones and
+  blocking submission. The owned job holds its permit through operation, input, state and
+  local guard destruction. This is an instance boundary, not a global/path lock or a
+  shutdown-drain API. SQLite read returns empty only for NoRows. Interrupted write returns
+  Uncertain; interrupted secret publication/deletion returns Unknown; read interruption is
+  unavailable. Audit retains its two writes: interruption can leave a partial line.
+  Coordinator revision and settlement authority remain in application/domain code.
+</p>
+<table>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Ordering</th>
+      <th>Required result</th>
+      <th>Regression witness</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1</td>
+      <td>
+        Current-thread runtime; ownership write held in actual adapter before SQLite
+        effect
+      </td>
+      <td>Independent heartbeat/timer advances while write remains held.</td>
+      <td>ownership_write_keeps_current_thread_heartbeat_running</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td>Same for ownership read held at query/decode</td>
+      <td>
+        Heartbeat advances; read result remains pending then validates real snapshot.
+      </td>
+      <td>ownership_read_keeps_current_thread_heartbeat_running</td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td>FileRecords nonsecret load/store held at actual file helper</td>
+      <td>Heartbeat advances; actual JSON/durability path resumes and completes.</td>
+      <td>
+        record_store_keeps_current_thread_heartbeat_running /
+        record_load_keeps_current_thread_heartbeat_running
+      </td>
+    </tr>
+    <tr>
+      <td>4</td>
+      <td>FileRecords secret load/store/delete held at physical helper</td>
+      <td>
+        Heartbeat advances; actual sealing/file/delete operation resumes with existing
+        typed result.
+      </td>
+      <td>
+        secret_store_keeps_current_thread_heartbeat_running /
+        secret_load_keeps_current_thread_heartbeat_running /
+        secret_delete_keeps_current_thread_heartbeat_running
+      </td>
+    </tr>
+    <tr>
+      <td>5</td>
+      <td>FileAuthorizationAudit held at actual append/sync helper</td>
+      <td>
+        Heartbeat advances; real secret-free record appended only after gate release.
+      </td>
+      <td>authorization_audit_keeps_current_thread_heartbeat_running</td>
+    </tr>
+    <tr>
+      <td>6</td>
+      <td>A holds instance worker; B/C wait async admission</td>
+      <td>Only A submitted/started; no growing blocking jobs; heartbeat continues.</td>
+      <td>
+        admission_precedes_owned_input_transfer /
+        canceled_sqlite_write_excludes_following_io / canceled_delete_excludes_replacement
+        / worker_input_drop_keeps_slot
+      </td>
+    </tr>
+    <tr>
+      <td>7</td>
+      <td>B canceled while waiting admission</td>
+      <td>B creates no worker/effect; A completes; next waiter can admit.</td>
+      <td>
+        canceled_sqlite_write_excludes_following_io /
+        canceled_secret_store_excludes_delete_and_load
+      </td>
+    </tr>
+    <tr>
+      <td>8</td>
+      <td>
+        A admitted and queued in blocking pool; A caller drops before closure starts
+      </td>
+      <td>A still owns slot; B cannot start; A executes once when pool permits.</td>
+      <td>queued_canceled_worker_retains_slot</td>
+    </tr>
+    <tr>
+      <td>9</td>
+      <td>A executing actual SQLite write; caller drops; B write/read arrives</td>
+      <td>
+        Permit remains held; B starts only after A physical completion; final snapshot
+        order follows existing coordinator fence.
+      </td>
+      <td>canceled_sqlite_write_excludes_following_io</td>
+    </tr>
+    <tr>
+      <td>10</td>
+      <td>A executing secret write; caller drops; delete/load/replacement arrives</td>
+      <td>
+        All same-instance operations excluded until A ends; no late old publication after
+        the later delete/replacement.
+      </td>
+      <td>canceled_secret_store_excludes_delete_and_load</td>
+    </tr>
+    <tr>
+      <td>11</td>
+      <td>A executing delete; caller drops; replacement secret write arrives</td>
+      <td>
+        Replacement waits for actual delete completion, then publishes; old delete cannot
+        later remove replacement.
+      </td>
+      <td>canceled_delete_excludes_replacement</td>
+    </tr>
+    <tr>
+      <td>12</td>
+      <td>Audit A caller drops mid append; audit B arrives</td>
+      <td>
+        B waits until A physical append/sync ends; successful appends retain existing
+        order and secret-free fields; interruption may leave partial bytes and is reported
+        as failure.
+      </td>
+      <td>canceled_audit_excludes_next_append</td>
+    </tr>
+    <tr>
+      <td>13</td>
+      <td>Worker panics before effect</td>
+      <td>
+        Typed conservative method outcome; permit eventually available; no fake
+        absence/acknowledgement.
+      </td>
+      <td>
+        pre_effect_worker_panic_is_typed_and_landed_effect_is_uncertain /
+        interrupted_record_operations_are_unavailable_or_unknown /
+        interrupted_audit_and_poison_are_failures
+      </td>
+    </tr>
+    <tr>
+      <td>14</td>
+      <td>Worker executes write/publish/delete/append then panics</td>
+      <td>
+        Ownership Uncertain; secret Unknown; delete Unknown; audit failure; recovery/load
+        observes actual disk outcome.
+      </td>
+      <td>
+        pre_effect_worker_panic_is_typed_and_landed_effect_is_uncertain /
+        interrupted_record_operations_are_unavailable_or_unknown /
+        interrupted_audit_and_poison_are_failures
+      </td>
+    </tr>
+    <tr>
+      <td>15</td>
+      <td>Disk/read/decode/lock-poison failure</td>
+      <td>
+        Correct typed failure; no empty snapshot/None invented; no runtime-thread lock
+        wait.
+      </td>
+      <td>storage_read_decode_and_poison_are_typed</td>
+    </tr>
+    <tr>
+      <td>16</td>
+      <td>
+        Ownership newer revision publishes before older snapshot reaches coordinator fence
+      </td>
+      <td>
+        Existing fence skips old copy; worker adapter does not bypass/duplicate fence.
+      </td>
+      <td>
+        existing
+        coordinator::lifetime_races::an_older_snapshot_does_not_replace_a_newer_seal
+      </td>
+    </tr>
+    <tr>
+      <td>17</td>
+      <td>Adapter instance A held; independent instance B/directory operation</td>
+      <td>B can progress; no new global lock/serialization guarantee.</td>
+      <td>independent_instances_progress</td>
+    </tr>
+    <tr>
+      <td>18</td>
+      <td>
+        Panic/caller disappearance while worker state/input cleanup is still physical work
+      </td>
+      <td>
+        Permit covers worker completion; later operation never starts merely because its
+        original waiter exited.
+      </td>
+      <td>worker_input_drop_keeps_slot</td>
+    </tr>
+    <tr>
+      <td>19</td>
+      <td>Port future first polled without a Tokio context</td>
+      <td>
+        Typed pre-effect unavailability; constructor does not need a runtime; no
+        panic/effect/worker submission.
+      </td>
+      <td>no_runtime_first_poll_is_typed</td>
+    </tr>
+    <tr>
+      <td>20</td>
+      <td>
+        Send port future starts waiting for admission in Tokio and resumes on an ordinary
+        thread
+      </td>
+      <td>
+        Admission carries its originating executor; live originating runtime executes the
+        physical job and caller observes actual result.
+      </td>
+      <td>queued_send_future_resumes_on_plain_thread</td>
+    </tr>
+    <tr>
+      <td>21</td>
+      <td>Originating executor shuts down after admission began</td>
+      <td>
+        No promise of runtime-independent completion; failed join stays typed conservative
+        unavailability/uncertainty.
+      </td>
+      <td>originating_runtime_shutdown_is_typed</td>
+    </tr>
+    <tr>
+      <td>22</td>
+      <td>
+        Caller disappears before physical operation panics with a faulting panic payload
+      </td>
+      <td>
+        Physical Job catches call panic while still owning capture; forgets payload
+        without inspection; captured cleanup remains under permit even without caller.
+      </td>
+      <td>
+        detached_caller_faulting_payload_is_contained / central
+        detached_call_fault_payload_is_not_dropped
+      </td>
+    </tr>
+    <tr>
+      <td>23</td>
+      <td>
+        Central queued blocking task is aborted before start with a detached caller;
+        separately an actual adapter resumes after its captured executor stopped and
+        submission is refused, then its capture destructor faults
+      </td>
+      <td>
+        Job::Drop catches/takes captured operation before automatic permit release; next
+        same-instance operation waits through actual input cleanup; payload destructor
+        stays uncalled even without its waiter. The actual rejected-submission witness
+        checks typed interruption and actual captured cleanup. It does not claim detached
+        caller loss during synchronous rejected submission. Runtime shutdown does not
+        cancel an already queued blocking operation.
+      </td>
+      <td>
+        stopped_executor_input_drop_fault_keeps_slot / central
+        queued_abort_capture_cleanup_keeps_slot /
+        queued_abort_fault_payload_is_not_dropped
+      </td>
+    </tr>
+    <tr>
+      <td>24</td>
+      <td>
+        Actual storage effect returns a ready result; owned input destructor then faults,
+        with its caller awaiting or detached
+      </td>
+      <td>
+        Captured-operation Drop is caught separately while permit is held; dispose ready
+        result under a separate catch and report interruption, never
+        acknowledgement/absence.
+      </td>
+      <td>
+        ready_effect_input_drop_fault_is_uncertain /
+        detached_ready_input_drop_fault_is_contained / central
+        ready_capture_fault_downgrades_and_disposes_output_under_slot
+      </td>
+    </tr>
+    <tr>
+      <td>25</td>
+      <td>Admission is acquired but never submitted, then dropped</td>
+      <td>Empty admission releases its instance slot; no operation or capture exists.</td>
+      <td>central unused_admission_releases_slot</td>
+    </tr>
+    <tr>
+      <td>26</td>
+      <td>
+        Synchronous submit returns its awaitable, which is dropped before first poll
+      </td>
+      <td>
+        Job was already handed to the captured executor; operation/capture cleanup remains
+        under the slot through completion.
+      </td>
+      <td>central unpolled_result_drop_retains_physical_slot</td>
+    </tr>
+  </tbody>
+</table>
+<p>
+  Shared mechanism witnesses live beside
+  <code>nessa-local-storage/src/physical_operation.rs</code>; actual adapter I/O, owned
+  clone/capture construction and typed outcomes remain in the SDK/server feature tests.
+  The test-only shared fixture observes real captures and does not implement admission,
+  executor selection or panic containment.
+</p>
+<h2>Local evidence and measurement scope</h2>
+<p>
+  The first red source was dirty over f1682e8a763646c6c3e73dee73c1c47987e2cbae: test-only
+  gates and five representative tests, with production still inline. Independent OS
+  watchdogs released real storage operations after sampling the current-thread heartbeat
+  immediately before release. All five reported 1 -&gt; 1. The
+  <a href="../../verification/bounded-persistence/evidence/first-red-provenance.tar.gz"
+    >initial files and tracked patch</a
+  >
+  include hashes and precise Cargo/direct-binary provenance. The
+  <a href="../../verification/bounded-persistence/README.md">verification manifest</a>
+  distinguishes historical source, current probes, raw measurements and final checked
+  identity. No clean red commit is claimed. The initial worker implementation passes those
+  same five tests. Extended matrices, mutation results and benchmark results are recorded
+  separately.
+</p>
+<p>
+  The current graph has a global 128 retained-request cap. The manual SQLite benchmark
+  therefore measures legal single-store 32/256/2048 root-lifetime rows, with zero spawns,
+  and separately closed-root history and an empty snapshot. Fixtures verify domain
+  restoration. CSV records actual lifetime/spawn/settlement/ report/live counts, encoded
+  body bytes, one adapter instance, concurrency and raw end-to-end nanoseconds. It does
+  not claim 2048 retained reservations. Measurements are local filesystem/runtime results,
+  not production latency or network timings.
+</p>
+<h2>Physical panic boundary</h2>
+<p>
+  The private Job owns a captured operation in Option and the admission permit. It catches
+  the operation call with the capture still owned, then separately catches
+  captured-operation destruction while holding admission. A ready result whose captured
+  cleanup faults is disposed under another catch and becomes typed interruption. Job::Drop
+  also catches remaining capture destruction when a queued blocking job never starts. Each
+  caught panic payload is forgotten without reading or formatting it, so cleanup
+  containment does not depend on the caller still awaiting a JoinHandle. Join failures
+  still map conservatively at the adapter.
+</p>
+<p>
+  These catches do not prevent a process abort caused by two faults in a physical
+  operation's own local guards during unwinding. They do not promise a lifetime for
+  returned-result destructors after Job finishes, whether delivered or discarded after
+  caller loss, or suppress an external panic hook. They introduce no public supervisor,
+  retry, ledger or shutdown drain.
+</p>
+<p>
+  Manual benchmarks live in SDK tests/infrastructure/session_storage and server
+  tests/mcp_authorization/infrastructure as ignored integration tests. They link the
+  production library without private cfg(test) fault/probe instrumentation. Measurements
+  use 1000 samples per scenario (including four scheduled callers) and disclose that
+  limited tail sample size; no CI timing thresholds are added.
+</p>

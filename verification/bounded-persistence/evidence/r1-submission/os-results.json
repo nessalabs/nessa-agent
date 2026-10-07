@@ -1,0 +1,21 @@
+{
+  "binary": "/workspace/nessa-agent/target/debug/deps/nessa_local_storage-9b91eeac6b4e752d",
+  "binary_sha256": "3258b60acf4bd49faee71bd9648269b789a9e00f0ffd4dad9727f63b8fc4afb9",
+  "results": [
+    {
+      "phase": "baseline",
+      "exit": 0,
+      "log_sha256": "459a767a3595212b39196714359963de36088929f7b1dbd4bfc4a09fb787598b"
+    },
+    {
+      "phase": "refusal",
+      "exit": 0,
+      "log_sha256": "436a925ecb8bff5f540b2d9e0aa234cd8322a624e33a607a4b73d994f586d545"
+    },
+    {
+      "phase": "restored",
+      "exit": 0,
+      "log_sha256": "459a767a3595212b39196714359963de36088929f7b1dbd4bfc4a09fb787598b"
+    }
+  ]
+}

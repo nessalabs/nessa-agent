@@ -1,0 +1,35 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-e2f6c708a6cf158b)
+
+running 3 tests
+test mcp_authorization::infrastructure::records::tests::record_store_keeps_current_thread_heartbeat_running ... FAILED
+test mcp_authorization::infrastructure::records::tests::secret_store_keeps_current_thread_heartbeat_running ... FAILED
+test mcp_authorization::infrastructure::audit::tests::authorization_audit_keeps_current_thread_heartbeat_running ... FAILED
+
+failures:
+
+---- mcp_authorization::infrastructure::records::tests::record_store_keeps_current_thread_heartbeat_running stdout ----
+
+thread 'mcp_authorization::infrastructure::records::tests::record_store_keeps_current_thread_heartbeat_running' (443409) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/physical_tests.rs:45:5:
+current-thread heartbeat froze during physical I/O: 1 -> 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- mcp_authorization::infrastructure::records::tests::secret_store_keeps_current_thread_heartbeat_running stdout ----
+
+thread 'mcp_authorization::infrastructure::records::tests::secret_store_keeps_current_thread_heartbeat_running' (443410) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/physical_tests.rs:45:5:
+current-thread heartbeat froze during physical I/O: 1 -> 1
+
+---- mcp_authorization::infrastructure::audit::tests::authorization_audit_keeps_current_thread_heartbeat_running stdout ----
+
+thread 'mcp_authorization::infrastructure::audit::tests::authorization_audit_keeps_current_thread_heartbeat_running' (443408) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/physical_tests.rs:45:5:
+current-thread heartbeat froze during physical I/O: 1 -> 1
+
+
+failures:
+    mcp_authorization::infrastructure::audit::tests::authorization_audit_keeps_current_thread_heartbeat_running
+    mcp_authorization::infrastructure::records::tests::record_store_keeps_current_thread_heartbeat_running
+    mcp_authorization::infrastructure::records::tests::secret_store_keeps_current_thread_heartbeat_running
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 1975 filtered out; finished in 0.12s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

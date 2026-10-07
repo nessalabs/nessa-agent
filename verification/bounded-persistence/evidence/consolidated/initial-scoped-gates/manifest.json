@@ -1,0 +1,93 @@
+{
+  "historical_head": "393042a3b87339b2475e8335047dcbf3ba1cef6d",
+  "dirty_consolidated_source_sha256": {
+    "Cargo.lock": "fc5b9d9d6b4ca09f0418f4b4d92ba9b022ab61686335fcd62f53f48b2887e977",
+    "crates/nessa-local-storage/Cargo.toml": "7fb1b5ff626d0149f59bad9710afee383ce9a0ef839cc0f649c698bf14678914",
+    "crates/nessa-local-storage/README.md": "b3912aaa91c8730fdd8f8aae7daf5df013b12f611ca77aa68d7f463d26e524a3",
+    "crates/nessa-local-storage/src/lib.rs": "5218142b60ba935c11ed754695d74a571d1a0573a071d0257ca5c96c5c72c91f",
+    "crates/nessa-local-storage/src/physical_operation.rs": "ae9e59b06b76759bcb9affeaf71d715c83da638206a1ad3e7647847312b945a7",
+    "crates/nessa-local-storage/src/physical_operation/tests.rs": "7f5e7ef89863272422feda7fa7439884f8d09c95251ed0cc07cacde95c7d1555",
+    "crates/nessa-local-storage/tests/support/physical_operation.rs": "ad61a94e134ef1f6d685ed4df4538e6472afcb7c5f33d91e675070506b572f69",
+    "crates/nessa-sdk/Cargo.toml": "8e5203d3b0bd1514b253b41e7d16e1414f7d778527c15ac69078535c56328f58",
+    "crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs": "c5d17a186bff0427a5f20e7674186da7f880df67f6ac71ed1dc05828ed1cdacd",
+    "crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs": null,
+    "crates/nessa-sdk/src/infrastructure/session_storage/ownership/physical_tests.rs": null,
+    "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs": "972ad5b1e0c13959427bd8f25933a5db9e08638674aee0abe58de968e3070841",
+    "crates/nessa-server/Cargo.toml": "2cac1a1b46dc2efdb32f22854c1301428441b1a73da23856bb669a538cf3a2b2",
+    "crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs": "8b6d036d058d7a3b00fbe061340ba3385690959b44ff470642ad0807b552f3be",
+    "crates/nessa-server/src/mcp_authorization/infrastructure/audit/tests.rs": "56607bd4bd653ccb67592596408e4b22031c894598e8ef6545a7bf23b25633d5",
+    "crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs": null,
+    "crates/nessa-server/src/mcp_authorization/infrastructure/mod.rs": "79f907aebdd8e55558adbafd1710b540b250fca631898dc37b63c74bca947e5b",
+    "crates/nessa-server/src/mcp_authorization/infrastructure/physical_tests.rs": null,
+    "crates/nessa-server/src/mcp_authorization/infrastructure/records.rs": "dd01b2b479de27aa89e43335ae15f36de580bf6924ac2cae24f75c1a053a0179",
+    "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs": "ec40400abc2ebaab67376c050fa27a9edcb7ffb98643cc063718ea93d3b45384",
+    "docs/codebase-structure.md": "d111c57a18b87bbc6f6d89303002fb59e870279df76aaba5b89322a9c1d167f3",
+    "docs/design/bounded-physical-persistence.md": "08bd72dcd3fbba2b420944dee2cfe1d2760f4239b8f5729d5d959a2d21abb04a",
+    "docs/state/services/mcp/README.md": "4bb787562e3ede6b41cde634d0c9954ed06ca25799988f95db14ad82d46c2213",
+    "docs/state/services/storage/README.md": "a6762ae4b8e508b03665bbc2036f7f324806b41ca77ec27f6ea2b9073023af31",
+    "verification/bounded-persistence/README.md": "5cefc7b544a5693d2509b81353db13fda4cae9a3cb2793bdfd9fb9ba05cac7bf"
+  },
+  "gates": [
+    {
+      "name": "default-off-test",
+      "command": ["cargo", "test", "-p", "nessa-local-storage", "--offline"],
+      "exit": 0,
+      "seconds": 18.091367968001578
+    },
+    {
+      "name": "default-off-normal-tree",
+      "command": [
+        "cargo",
+        "tree",
+        "-p",
+        "nessa-local-storage",
+        "-e",
+        "normal",
+        "--offline"
+      ],
+      "exit": 0,
+      "seconds": 0.14087806599854957
+    },
+    {
+      "name": "feature-on-test",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-local-storage",
+        "--features",
+        "physical-operation",
+        "--offline"
+      ],
+      "exit": 0,
+      "seconds": 3.183399280998856
+    },
+    {
+      "name": "sdk-actual-adapter",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::session_storage::ownership::tests",
+        "--",
+        "--nocapture"
+      ],
+      "exit": 101,
+      "seconds": 54.84676932099683
+    }
+  ],
+  "environment_prefix": [
+    "/tmp/nessa-browser-libs/usr/bin/tini",
+    "-s",
+    "--",
+    "env",
+    "CARGO_HOME=/tmp/nessa-cargo",
+    "RUSTUP_HOME=/tmp/nessa-rustup",
+    "PATH=/tmp/nessa-cargo/bin:/home/agent/.local/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin/override:/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/node/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin:/opt/codex/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/agent/.local/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin/fallback",
+    "CARGO_TARGET_DIR=/workspace/nessa-agent/target",
+    "CARGO_NET_OFFLINE=true",
+    "CARGO_BUILD_JOBS=2"
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "mutated_exit": 0,
+  "restored_exit": 0,
+  "restored_sha256": {
+    "crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs": "fad37ae244abcf928e7ad689651f21a20d647a2068e965d29568deefe1697aba"
+  }
+}

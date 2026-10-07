@@ -1,0 +1,28 @@
+import csv,collections,math,json
+from pathlib import Path
+out=Path('/tmp/627-consolidated-benchmarks');result={}
+for name in ['sqlite-current','sqlite-inline','sqlite-current-repeat','oauth-current','oauth-inline','oauth-current-repeat']:
+ p=out/(name+'.csv');groups=collections.defaultdict(list);metadata={}
+ for row in csv.DictReader(p.open()):
+  keys=('roots','closed','concurrency','operation') if name.startswith('sqlite') else ('operation',)
+  key=' / '.join(row[k] for k in keys);groups[key].append(int(row['elapsed_ns']));metadata[key]={k:v for k,v in row.items() if k not in ['sample','elapsed_ns','lane']}
+ result[name]={}
+ for k,v in groups.items():
+  v.sort();result[name][k]={'n':len(v),'median_us':(v[(len(v)-1)//2]+v[len(v)//2])/2000,'p95_us':v[math.ceil(.95*len(v))-1]/1000,'p99_us':v[math.ceil(.99*len(v))-1]/1000,'metadata':metadata[k]}
+for name in ['sqlite-current','sqlite-inline','sqlite-current-repeat']:
+ groups=collections.defaultdict(list);metadata={}
+ for row in csv.DictReader((out/(name+'.csv.batches.csv')).open()):
+  k=' / '.join(row[x] for x in ['roots','closed']);groups[k].append(int(row['wall_elapsed_ns']));metadata[k]={a:b for a,b in row.items() if a not in ['batch','wall_elapsed_ns']}
+ result[name+'-batch-wall']={}
+ for k,v in groups.items():
+  v.sort();result[name+'-batch-wall'][k]={'n_batches':len(v),'scheduled_callers_per_batch':4,'median_us':(v[(len(v)-1)//2]+v[len(v)//2])/2000,'p95_us':v[math.ceil(.95*len(v))-1]/1000,'p99_us':v[math.ceil(.99*len(v))-1]/1000,'metadata':metadata[k]}
+(out/'benchmark-summary.json').write_text(json.dumps(result,indent=2)+'\n')
+lines=['| Scenario | Current median/p95/p99 µs | Inline median/p95/p99 µs | Restored median/p95/p99 µs |','|---|---:|---:|---:|']
+for kind in ['sqlite','oauth','sqlite-batch-wall']:
+ names=[kind+'-'+m for m in ['current','inline','current-repeat']] if kind!='sqlite-batch-wall' else ['sqlite-'+m+'-batch-wall' for m in ['current','inline','current-repeat']]
+ for key in result[names[0]]:
+  vals=[' / '.join(f"{result[n][key][x]:.2f}" for x in ['median_us','p95_us','p99_us']) for n in names]
+  lines.append('| '+kind+' '+key+' | '+' | '.join(vals)+' |')
+(out/'all-scenario-comparison.md').write_text('\n'.join(lines)+'\n')
+print('Original per-call samples:',sum(sum(x['n'] for x in result[n].values()) for n in result if not n.endswith('-batch-wall')))
+print('Independent scheduled batches:',sum(sum(x['n_batches'] for x in result[n].values()) for n in result if n.endswith('-batch-wall')))

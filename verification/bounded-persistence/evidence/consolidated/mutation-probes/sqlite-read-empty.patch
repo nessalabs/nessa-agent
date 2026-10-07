@@ -1,0 +1,11 @@
+--- a/crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs
++++ b/crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs
+@@ -129,7 +129,7 @@
+         permit
+             .submit(operation)
+             .await
+-            .map_err(|_| PortFailure::Uncertain)?
++            .unwrap_or(Ok(OwnershipSnapshot::default()))
+     }
+ }
+ 

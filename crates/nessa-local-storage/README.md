@@ -21,6 +21,9 @@ owns the #324 ordering table and platform evidence boundaries.
 | Path | Responsibility |
 | --- | --- |
 | `src/lib.rs` | Crate documentation, module declarations, path-based private-storage API, and the exact reservation-name syntax classifier. |
+| `src/physical_operation.rs` | Default-off `physical-operation` capability: one-slot Worker admission, synchronous Admission submission and private Job captured cleanup; adapter-owned typed mappings remain with consumers. |
+| `src/physical_operation/tests.rs` | Central admission, executor, cancellation and ordinary call/capture fault contracts. |
+| `tests/support/physical_operation.rs` | Source-included cfg(test)-only actual adapter capture observations and OS watchdog fixtures; no execution/admission policy. |
 | `src/retained_directory.rs` | `PrivateDirectory`, native entry snapshots, origin-bound temporary files, and typed publication evidence. |
 | `src/unix/retained_directory.rs` | Retained directory descriptors through private roots or safe absolute locator ancestry, independent `openat(".")` enumeration cursors, identity checks, exclusive publication, atomic replacement, cleanup, and directory sync. |
 | `src/windows/retained_directory.rs` | Top-down non-delete-sharing directory handles, transient identity probes, handle enumeration, `FileRenameInfo` exclusive publication/replacement, and handle disposition cleanup. |
@@ -78,3 +81,25 @@ Run `cargo test -p nessa-local-storage` and
 platform. Security-sensitive stores use the beneath-root operations so every
 intermediate directory and final publication stays bound to verified directory
 handles. The platform CI workflow also exercises the full auth registry and SDK.
+
+## Optional physical operations
+
+The `physical-operation` feature supplies `Worker`, `Admission` and `Interrupted`
+for native async persistence adapters. It adds Tokio only when selected. A Worker
+is constructed without a runtime and owns one instance slot. Admission captures
+the originating executor before waiting. Synchronous `Admission::submit` transfers
+the operation capture and slot to that executor before returning its awaitable;
+dropping an unpolled awaitable therefore detaches an already-owned job. Executor
+entry unwind returns typed interruption while Tokio may still own a queued job;
+its slot remains owned until actual operation/capture cleanup. See the canonical
+submission ordering and progress limitation below.
+
+The [physical persistence ordering table](../../docs/design/bounded-physical-persistence.md)
+owns lifecycle cases and exclusions. Actual connection/directory/audit state and
+method-specific typed outcomes remain in SDK/server adapters. This capability
+does not choose revisions, OAuth generations or settlement authority.
+
+Verify both `cargo test -p nessa-local-storage` and
+`cargo test -p nessa-local-storage --features physical-operation`. The existing
+combined six-package CI compile selects this feature through SDK/server and runs
+the central mechanic tests in its local-storage test binary.

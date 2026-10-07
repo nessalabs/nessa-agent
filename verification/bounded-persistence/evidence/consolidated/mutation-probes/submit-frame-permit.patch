@@ -1,0 +1,23 @@
+--- a/crates/nessa-local-storage/src/physical_operation.rs
++++ b/crates/nessa-local-storage/src/physical_operation.rs
+@@ -116,9 +116,10 @@
+         F: FnMut() -> R + Send + 'static,
+         R: Send + 'static,
+     {
++        let _submission_permit = self.permit;
+         let job = Job {
+             operation: Some(operation),
+-            _permit: self.permit,
++            _permit: (),
+         };
+         self.executor.spawn_blocking(move || job.run())
+     }
+@@ -128,7 +129,7 @@
+ // queued jobs that never start. Both boundaries have unit mutation witnesses.
+ struct Job<F> {
+     operation: Option<F>,
+-    _permit: OwnedSemaphorePermit,
++    _permit: (),
+ }
+ 
+ fn contained_drop<T>(value: T) -> bool {

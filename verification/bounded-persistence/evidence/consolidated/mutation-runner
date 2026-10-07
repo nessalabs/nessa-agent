@@ -1,0 +1,85 @@
+from pathlib import Path
+import subprocess,os,json,hashlib,time,difflib
+root=Path('/workspace/nessa-agent-bounded-persistence');freeze=Path('/tmp/627-consolidated-review-checkpoint-v2/source');out=Path('/tmp/627-consolidated-mutations');out.mkdir(exist_ok=True)
+helper='crates/nessa-local-storage/src/physical_operation.rs';own='crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs';rec='crates/nessa-server/src/mcp_authorization/infrastructure/records.rs';audit='crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs'
+prefix=['/tmp/nessa-browser-libs/usr/bin/tini','-s','--','env','CARGO_HOME=/tmp/nessa-cargo','RUSTUP_HOME=/tmp/nessa-rustup','PATH=/tmp/nessa-cargo/bin:'+os.environ['PATH'],'CARGO_TARGET_DIR=/workspace/nessa-agent/target','CARGO_NET_OFFLINE=true','CARGO_BUILD_JOBS=2','CARGO_INCREMENTAL=0']
+manifest=json.loads(Path('/tmp/627-consolidated-review-checkpoint-v2/source-manifest.json').read_text());(out/'candidate-source-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');(out/'environment.json').write_text(json.dumps(prefix,indent=2)+'\n')
+def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+def replace(path,a,b):
+ p=root/path;s=p.read_text();assert s.count(a)==1,(path,a,s.count(a));p.write_text(s.replace(a,b,1))
+def method(path,name,change):
+ p=root/path;s=p.read_text();start=s.index('    async fn '+name+'(');end=s.find('\n    async fn ',start+1)
+ if end<0:end=s.index('\n}\n',start)
+ body=s[start:end];mut=change(body);assert mut!=body,(path,name);p.write_text(s[:start]+mut+s[end:])
+def outcome(path,name,old,new):
+ def change(body):assert body.count(old)==1,(name,old);return body.replace(old,new,1)
+ method(path,name,change)
+def clone_early(path,name,var,expr):
+ def change(body):
+  block=f'        #[cfg(not(test))]\n        let {var} = {expr};\n        #[cfg(test)]\n        let {var} = self.probe.clone_input(|| {expr});\n'
+  assert body.count(block)==1,(name,block);body=body.replace(block,'',1);pos=body.index('{')+2;return body[:pos]+block+body[pos:]
+ method(path,name,change)
+def run(name,paths,change,package,test,feature=False):
+ assert all((sha(root/p) if (root/p).is_file() else None)==expected for p,expected in manifest['source_sha256'].items()), 'Candidate source changed'
+ change();patch=''.join(''.join(difflib.unified_diff((freeze/p).read_text().splitlines(True),(root/p).read_text().splitlines(True),fromfile='a/'+p,tofile='b/'+p)) for p in paths)
+ (out/(name+'.patch')).write_text(patch)
+ record={'rule':name,'historical_clean_head':manifest['historical_clean_head'],'dirty_candidate_manifest':'candidate-source-manifest.json','mutated_sha256':{p:sha(root/p) for p in paths}}
+ command=['cargo','test','-p',package]+(['--features','physical-operation'] if feature else [])+['--lib',test,'--','--nocapture'];record['command']=prefix+command
+ print('START',name,flush=True)
+ try:
+  with (out/(name+'.log')).open('w') as log:r=subprocess.run(prefix+command,cwd=root,stdout=log,stderr=subprocess.STDOUT,timeout=240)
+  record['mutated_exit']=r.returncode;record['compiled_runtime_failure']='test result: FAILED' in (out/(name+'.log')).read_text()
+  case=test.split('::')[-1]
+  if package=='nessa-local-storage' and case in ['detached_call_fault_payload_is_not_dropped','queued_abort_fault_payload_is_not_dropped','ready_capture_fault_downgrades_and_disposes_output_under_slot']:
+   child_env={**os.environ,'NESSA_627_CENTRAL_FAULT_CASE':case}
+   with (out/(name+'-child.log')).open('w') as log:
+    child=subprocess.run(prefix+command,cwd=root,env=child_env,stdout=log,stderr=subprocess.STDOUT,timeout=30)
+   record['direct_child_exit']=child.returncode
+
+ finally:
+  for p in paths:(root/p).write_bytes((freeze/p).read_bytes())
+  record['restored_sha256']={p:sha(root/p) for p in paths};record['restored_mtime_ns']={p:(root/p).stat().st_mtime_ns for p in paths}
+ with (out/(name+'-restored.log')).open('w') as log:g=subprocess.run(prefix+command,cwd=root,stdout=log,stderr=subprocess.STDOUT,timeout=240)
+ record['restored_exit']=g.returncode;record['valid']=record.get('mutated_exit',0)!=0 and record.get('compiled_runtime_failure',False) and g.returncode==0
+ (out/(name+'.result.json')).write_text(json.dumps(record,indent=2)+'\n');print('END',name,record['mutated_exit'],g.returncode,'VALID',record['valid'],flush=True)
+ assert record['valid'],name
+
+def central(name,change,test):run(name,[helper],change,'nessa-local-storage','physical_operation::tests::'+test,True)
+central('slot-capacity-two',lambda:replace(helper,'Semaphore::new(1)','Semaphore::new(2)'),'unpolled_result_drop_retains_physical_slot')
+central('global-slot',lambda:replace(helper,'slot: Arc::new(Semaphore::new(1)),','slot: { static SLOT: std::sync::OnceLock<Arc<Semaphore>> = std::sync::OnceLock::new(); SLOT.get_or_init(|| Arc::new(Semaphore::new(1))).clone() },'),'independent_worker_instances_progress')
+def early_permit():
+ replace(helper,'        let job = Job {','        let _submission_permit = self.permit;\n        let job = Job {');replace(helper,'_permit: self.permit,','_permit: (),');replace(helper,'_permit: OwnedSemaphorePermit,','_permit: (),')
+central('submit-frame-permit',early_permit,'unpolled_result_drop_retains_physical_slot')
+central('ambient-executor',lambda:replace(helper,'self.executor.spawn_blocking(move || job.run())','tokio::task::spawn_blocking(move || job.run())'),'queued_send_future_uses_origin')
+central('missing-runtime-panic',lambda:replace(helper,'Handle::try_current().map_err(|_| Interrupted)?','Handle::try_current().expect("mutated missing runtime panic")'),'no_runtime_admission_is_typed')
+central('contention-refused',lambda:replace(helper,'.acquire_owned()\n            .await','.try_acquire_owned()'),'queued_send_future_uses_origin')
+central('deferred-submit',lambda:replace(helper,'        let handle = self.spawn(operation);\n        async move {','        async move {\n            let handle = self.spawn(operation);'),'unpolled_result_drop_retains_physical_slot')
+central('call-uncontained',lambda:replace(helper,'let called = catch_unwind(AssertUnwindSafe(|| {\n            self.operation\n                .as_mut()\n                .expect("owned persistence operation")()\n        }));','let called: Result<R, Box<dyn std::any::Any + Send>> = Ok({\n            self.operation.as_mut().expect("owned persistence operation")()\n        });'),'detached_call_fault_payload_is_not_dropped')
+central('neverstarted-drop-uncontained',lambda:replace(helper,'        let _ = self.drop_operation();','        drop(self.operation.take());'),'queued_abort_fault_payload_is_not_dropped')
+central('capture-drop-uncontained',lambda:replace(helper,'let cleaned = self.drop_operation();','let cleaned = { drop(self.operation.take()); true };'),'ready_capture_fault_downgrades_and_disposes_output_under_slot')
+central('ready-cleanup-acknowledged',lambda:replace(helper,'let result = if cleaned {','let result = if cleaned || output.is_ok() {'),'ready_capture_fault_downgrades_and_disposes_output_under_slot')
+central('call-payload-dropped',lambda:replace(helper,'let output = called.map_err(|payload| {\n            std::mem::forget(payload);','let output = called.map_err(|payload| {\n            drop(payload);'),'detached_call_fault_payload_is_not_dropped')
+central('contained-payload-dropped',lambda:replace(helper,'Err(payload) => {\n            std::mem::forget(payload);','Err(payload) => {\n            drop(payload);'),'queued_abort_fault_payload_is_not_dropped')
+central('ready-disposal-uncontained',lambda:replace(helper,'let _ = contained_drop(output);','drop(output);'),'ready_capture_fault_downgrades_and_disposes_output_under_slot')
+
+run('sqlite-write-ack',[own],lambda:outcome(own,'write','.map_err(|_| PortFailure::Uncertain)?','.unwrap_or(Ok(()))'),'nessa-sdk','pre_effect_worker_panic_is_typed_and_landed_effect_is_uncertain')
+run('sqlite-read-empty',[own],lambda:outcome(own,'read','.map_err(|_| PortFailure::Uncertain)?','.unwrap_or(Ok(OwnershipSnapshot::default()))'),'nessa-sdk','pre_effect_worker_panic_is_typed_and_landed_effect_is_uncertain')
+for rule,name,old,new,test in [
+ ('record-load-absence','load','.map_err(|_| RecordFailure::Unavailable)?','.unwrap_or(Ok(None))','interrupted_record_operations_are_unavailable_or_unknown'),
+ ('record-store-ack','store','.map_err(|_| RecordFailure::Unavailable)?','.unwrap_or(Ok(()))','ready_effect_input_drop_fault_is_uncertain'),
+ ('secret-load-absence','load_secret','.map_err(|_| RecordFailure::Unavailable)?','.unwrap_or(Ok(None))','interrupted_record_operations_are_unavailable_or_unknown'),
+ ('secret-publication-ack','store_secret','.unwrap_or(Ok(Publication::Unknown))','.unwrap_or(Ok(Publication::Acknowledged))','interrupted_record_operations_are_unavailable_or_unknown'),
+ ('secret-delete-failed','delete_secret','.unwrap_or(Ok(Deletion::Unknown))','.unwrap_or(Ok(Deletion::Failed))','interrupted_record_operations_are_unavailable_or_unknown')]:
+ # Load/store each also has an admission map. Select only submit's interruption mapping.
+ def change(name=name,old=old,new=new):
+  def convert(body):
+   pos=body.index('.submit(operation)');assert body[pos:].count(old)==1
+   return body[:pos]+body[pos:].replace(old,new,1)
+  method(rec,name,convert)
+ run(rule,[rec],change,'nessa-server',test)
+run('audit-ack',[audit],lambda:outcome(audit,'record','.map_err(|_| AuditFailure)?\n','.unwrap_or(Ok(()))\n'),'nessa-server','interrupted_audit_and_poison_are_failures')
+run('sqlite-clone-before-admission',[own],lambda:clone_early(own,'write','snapshot','snapshot.clone()'),'nessa-sdk','admission_precedes_owned_input_transfer')
+run('record-clone-before-admission',[rec],lambda:clone_early(rec,'store','auth','auth.clone()'),'nessa-server','admission_precedes_owned_input_transfer')
+run('secret-clone-before-admission',[rec],lambda:clone_early(rec,'store_secret','secret','secret.clone()'),'nessa-server','canceled_delete_excludes_replacement')
+run('audit-clone-before-admission',[audit],lambda:clone_early(audit,'record','record','record.clone()'),'nessa-server','worker_input_drop_keeps_slot')
+print('ALL26 VALID RESTORED',flush=True)

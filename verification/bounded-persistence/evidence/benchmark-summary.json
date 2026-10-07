@@ -1,0 +1,1250 @@
+{
+  "sqlite-worker": {
+    "0 / false / 1 / write": {
+      "n": 1000,
+      "median_us": 72.9905,
+      "p95_us": 126.371,
+      "p99_us": 249.236,
+      "metadata": {
+        "roots": "0",
+        "closed": "false",
+        "lifetimes": "0",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "58",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "0 / false / 1 / read": {
+      "n": 1000,
+      "median_us": 42.134,
+      "p95_us": 70.206,
+      "p99_us": 136.235,
+      "metadata": {
+        "roots": "0",
+        "closed": "false",
+        "lifetimes": "0",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "58",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "0 / false / 4 / write": {
+      "n": 1000,
+      "median_us": 209.7865,
+      "p95_us": 346.433,
+      "p99_us": 441.005,
+      "metadata": {
+        "roots": "0",
+        "closed": "false",
+        "lifetimes": "0",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "58",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "32 / false / 1 / write": {
+      "n": 1000,
+      "median_us": 225.81,
+      "p95_us": 319.222,
+      "p99_us": 470.219,
+      "metadata": {
+        "roots": "32",
+        "closed": "false",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "32",
+        "body_bytes": "4549",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "32 / false / 1 / read": {
+      "n": 1000,
+      "median_us": 157.228,
+      "p95_us": 200.953,
+      "p99_us": 294.459,
+      "metadata": {
+        "roots": "32",
+        "closed": "false",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "32",
+        "body_bytes": "4549",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "32 / false / 4 / write": {
+      "n": 1000,
+      "median_us": 728.127,
+      "p95_us": 1266.08,
+      "p99_us": 2087.731,
+      "metadata": {
+        "roots": "32",
+        "closed": "false",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "32",
+        "body_bytes": "4549",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "32 / true / 1 / write": {
+      "n": 1000,
+      "median_us": 448.2545,
+      "p95_us": 647.322,
+      "p99_us": 1025.069,
+      "metadata": {
+        "roots": "32",
+        "closed": "true",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "32",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "10470",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "32 / true / 1 / read": {
+      "n": 1000,
+      "median_us": 243.344,
+      "p95_us": 352.014,
+      "p99_us": 527.64,
+      "metadata": {
+        "roots": "32",
+        "closed": "true",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "32",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "10470",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "32 / true / 4 / write": {
+      "n": 1000,
+      "median_us": 1256.2905,
+      "p95_us": 2030.871,
+      "p99_us": 2490.307,
+      "metadata": {
+        "roots": "32",
+        "closed": "true",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "32",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "10470",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "256 / false / 1 / write": {
+      "n": 1000,
+      "median_us": 1142.3475,
+      "p95_us": 1418.611,
+      "p99_us": 2303.684,
+      "metadata": {
+        "roots": "256",
+        "closed": "false",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "256",
+        "body_bytes": "36445",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "256 / false / 1 / read": {
+      "n": 1000,
+      "median_us": 602.9195,
+      "p95_us": 798.435,
+      "p99_us": 911.472,
+      "metadata": {
+        "roots": "256",
+        "closed": "false",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "256",
+        "body_bytes": "36445",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "256 / false / 4 / write": {
+      "n": 1000,
+      "median_us": 3295.1025,
+      "p95_us": 5097.882,
+      "p99_us": 6117.384,
+      "metadata": {
+        "roots": "256",
+        "closed": "false",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "256",
+        "body_bytes": "36445",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "256 / true / 1 / write": {
+      "n": 1000,
+      "median_us": 2641.7845,
+      "p95_us": 3211.02,
+      "p99_us": 4252.45,
+      "metadata": {
+        "roots": "256",
+        "closed": "true",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "256",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "84498",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "256 / true / 1 / read": {
+      "n": 1000,
+      "median_us": 1276.425,
+      "p95_us": 1640.778,
+      "p99_us": 2015.692,
+      "metadata": {
+        "roots": "256",
+        "closed": "true",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "256",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "84498",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "256 / true / 4 / write": {
+      "n": 1000,
+      "median_us": 7489.4925,
+      "p95_us": 11078.045,
+      "p99_us": 12023.825,
+      "metadata": {
+        "roots": "256",
+        "closed": "true",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "256",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "84498",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "2048 / false / 1 / write": {
+      "n": 1000,
+      "median_us": 8586.687,
+      "p95_us": 10268.345,
+      "p99_us": 13113.881,
+      "metadata": {
+        "roots": "2048",
+        "closed": "false",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "2048",
+        "body_bytes": "294797",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "2048 / false / 1 / read": {
+      "n": 1000,
+      "median_us": 4558.73,
+      "p95_us": 5790.754,
+      "p99_us": 8290.889,
+      "metadata": {
+        "roots": "2048",
+        "closed": "false",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "2048",
+        "body_bytes": "294797",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "2048 / false / 4 / write": {
+      "n": 1000,
+      "median_us": 23839.1585,
+      "p95_us": 35862.85,
+      "p99_us": 39347.24,
+      "metadata": {
+        "roots": "2048",
+        "closed": "false",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "2048",
+        "body_bytes": "294797",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "2048 / true / 1 / write": {
+      "n": 1000,
+      "median_us": 21190.8945,
+      "p95_us": 27649.982,
+      "p99_us": 37180.554,
+      "metadata": {
+        "roots": "2048",
+        "closed": "true",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "2048",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "684682",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "2048 / true / 1 / read": {
+      "n": 1000,
+      "median_us": 9587.478,
+      "p95_us": 13842.566,
+      "p99_us": 20040.376,
+      "metadata": {
+        "roots": "2048",
+        "closed": "true",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "2048",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "684682",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "2048 / true / 4 / write": {
+      "n": 1000,
+      "median_us": 60315.5375,
+      "p95_us": 89249.403,
+      "p99_us": 100308.157,
+      "metadata": {
+        "roots": "2048",
+        "closed": "true",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "2048",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "684682",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    }
+  },
+  "sqlite-inline": {
+    "0 / false / 1 / write": {
+      "n": 1000,
+      "median_us": 28.503,
+      "p95_us": 92.669,
+      "p99_us": 204.207,
+      "metadata": {
+        "roots": "0",
+        "closed": "false",
+        "lifetimes": "0",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "58",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "0 / false / 1 / read": {
+      "n": 1000,
+      "median_us": 10.456,
+      "p95_us": 22.955,
+      "p99_us": 79.259,
+      "metadata": {
+        "roots": "0",
+        "closed": "false",
+        "lifetimes": "0",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "58",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "0 / false / 4 / write": {
+      "n": 1000,
+      "median_us": 93.2755,
+      "p95_us": 195.455,
+      "p99_us": 352.26,
+      "metadata": {
+        "roots": "0",
+        "closed": "false",
+        "lifetimes": "0",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "58",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "32 / false / 1 / write": {
+      "n": 1000,
+      "median_us": 156.165,
+      "p95_us": 313.572,
+      "p99_us": 543.948,
+      "metadata": {
+        "roots": "32",
+        "closed": "false",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "32",
+        "body_bytes": "4549",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "32 / false / 1 / read": {
+      "n": 1000,
+      "median_us": 80.5965,
+      "p95_us": 161.654,
+      "p99_us": 324.268,
+      "metadata": {
+        "roots": "32",
+        "closed": "false",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "32",
+        "body_bytes": "4549",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "32 / false / 4 / write": {
+      "n": 1000,
+      "median_us": 232.715,
+      "p95_us": 389.026,
+      "p99_us": 574.724,
+      "metadata": {
+        "roots": "32",
+        "closed": "false",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "32",
+        "body_bytes": "4549",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "32 / true / 1 / write": {
+      "n": 1000,
+      "median_us": 346.266,
+      "p95_us": 572.692,
+      "p99_us": 728.466,
+      "metadata": {
+        "roots": "32",
+        "closed": "true",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "32",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "10470",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "32 / true / 1 / read": {
+      "n": 1000,
+      "median_us": 163.386,
+      "p95_us": 255.525,
+      "p99_us": 425.61,
+      "metadata": {
+        "roots": "32",
+        "closed": "true",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "32",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "10470",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "32 / true / 4 / write": {
+      "n": 1000,
+      "median_us": 563.413,
+      "p95_us": 698.231,
+      "p99_us": 1028.318,
+      "metadata": {
+        "roots": "32",
+        "closed": "true",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "32",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "10470",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "256 / false / 1 / write": {
+      "n": 1000,
+      "median_us": 1011.828,
+      "p95_us": 1383.282,
+      "p99_us": 1868.862,
+      "metadata": {
+        "roots": "256",
+        "closed": "false",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "256",
+        "body_bytes": "36445",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "256 / false / 1 / read": {
+      "n": 1000,
+      "median_us": 527.9545,
+      "p95_us": 762.558,
+      "p99_us": 1140.116,
+      "metadata": {
+        "roots": "256",
+        "closed": "false",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "256",
+        "body_bytes": "36445",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "256 / false / 4 / write": {
+      "n": 1000,
+      "median_us": 1155.554,
+      "p95_us": 1964.287,
+      "p99_us": 2127.692,
+      "metadata": {
+        "roots": "256",
+        "closed": "false",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "256",
+        "body_bytes": "36445",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "256 / true / 1 / write": {
+      "n": 1000,
+      "median_us": 2532.0855,
+      "p95_us": 3247.177,
+      "p99_us": 4307.843,
+      "metadata": {
+        "roots": "256",
+        "closed": "true",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "256",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "84498",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "256 / true / 1 / read": {
+      "n": 1000,
+      "median_us": 1221.057,
+      "p95_us": 1579.137,
+      "p99_us": 2390.778,
+      "metadata": {
+        "roots": "256",
+        "closed": "true",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "256",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "84498",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "256 / true / 4 / write": {
+      "n": 1000,
+      "median_us": 4391.2285,
+      "p95_us": 4721.226,
+      "p99_us": 5719.678,
+      "metadata": {
+        "roots": "256",
+        "closed": "true",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "256",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "84498",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "2048 / false / 1 / write": {
+      "n": 1000,
+      "median_us": 8077.4755,
+      "p95_us": 11483.921,
+      "p99_us": 16656.916,
+      "metadata": {
+        "roots": "2048",
+        "closed": "false",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "2048",
+        "body_bytes": "294797",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "2048 / false / 1 / read": {
+      "n": 1000,
+      "median_us": 4241.3725,
+      "p95_us": 6282.834,
+      "p99_us": 9312.871,
+      "metadata": {
+        "roots": "2048",
+        "closed": "false",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "2048",
+        "body_bytes": "294797",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "2048 / false / 4 / write": {
+      "n": 1000,
+      "median_us": 10072.517,
+      "p95_us": 14840.572,
+      "p99_us": 18559.061,
+      "metadata": {
+        "roots": "2048",
+        "closed": "false",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "2048",
+        "body_bytes": "294797",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "2048 / true / 1 / write": {
+      "n": 1000,
+      "median_us": 19043.57,
+      "p95_us": 22145.53,
+      "p99_us": 27118.201,
+      "metadata": {
+        "roots": "2048",
+        "closed": "true",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "2048",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "684682",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "2048 / true / 1 / read": {
+      "n": 1000,
+      "median_us": 9331.4075,
+      "p95_us": 10838.941,
+      "p99_us": 13586.796,
+      "metadata": {
+        "roots": "2048",
+        "closed": "true",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "2048",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "684682",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "2048 / true / 4 / write": {
+      "n": 1000,
+      "median_us": 20530.896,
+      "p95_us": 35735.478,
+      "p99_us": 36436.914,
+      "metadata": {
+        "roots": "2048",
+        "closed": "true",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "2048",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "684682",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    }
+  },
+  "sqlite-worker-repeat": {
+    "0 / false / 1 / write": {
+      "n": 1000,
+      "median_us": 77.757,
+      "p95_us": 115.223,
+      "p99_us": 181.603,
+      "metadata": {
+        "roots": "0",
+        "closed": "false",
+        "lifetimes": "0",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "58",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "0 / false / 1 / read": {
+      "n": 1000,
+      "median_us": 30.997,
+      "p95_us": 69.455,
+      "p99_us": 147.952,
+      "metadata": {
+        "roots": "0",
+        "closed": "false",
+        "lifetimes": "0",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "58",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "0 / false / 4 / write": {
+      "n": 1000,
+      "median_us": 185.675,
+      "p95_us": 357.788,
+      "p99_us": 468.585,
+      "metadata": {
+        "roots": "0",
+        "closed": "false",
+        "lifetimes": "0",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "58",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "32 / false / 1 / write": {
+      "n": 1000,
+      "median_us": 246.371,
+      "p95_us": 350.597,
+      "p99_us": 522.616,
+      "metadata": {
+        "roots": "32",
+        "closed": "false",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "32",
+        "body_bytes": "4549",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "32 / false / 1 / read": {
+      "n": 1000,
+      "median_us": 147.762,
+      "p95_us": 216.656,
+      "p99_us": 271.839,
+      "metadata": {
+        "roots": "32",
+        "closed": "false",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "32",
+        "body_bytes": "4549",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "32 / false / 4 / write": {
+      "n": 1000,
+      "median_us": 690.8195,
+      "p95_us": 1104.652,
+      "p99_us": 1309.716,
+      "metadata": {
+        "roots": "32",
+        "closed": "false",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "32",
+        "body_bytes": "4549",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "32 / true / 1 / write": {
+      "n": 1000,
+      "median_us": 443.4625,
+      "p95_us": 611.536,
+      "p99_us": 788.351,
+      "metadata": {
+        "roots": "32",
+        "closed": "true",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "32",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "10470",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "32 / true / 1 / read": {
+      "n": 1000,
+      "median_us": 240.638,
+      "p95_us": 326.231,
+      "p99_us": 485.821,
+      "metadata": {
+        "roots": "32",
+        "closed": "true",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "32",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "10470",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "32 / true / 4 / write": {
+      "n": 1000,
+      "median_us": 1228.932,
+      "p95_us": 1921.663,
+      "p99_us": 2120.351,
+      "metadata": {
+        "roots": "32",
+        "closed": "true",
+        "lifetimes": "32",
+        "spawns": "0",
+        "settlements": "32",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "10470",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "256 / false / 1 / write": {
+      "n": 1000,
+      "median_us": 1123.837,
+      "p95_us": 1348.529,
+      "p99_us": 1576.613,
+      "metadata": {
+        "roots": "256",
+        "closed": "false",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "256",
+        "body_bytes": "36445",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "256 / false / 1 / read": {
+      "n": 1000,
+      "median_us": 586.3475,
+      "p95_us": 760.965,
+      "p99_us": 884.101,
+      "metadata": {
+        "roots": "256",
+        "closed": "false",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "256",
+        "body_bytes": "36445",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "256 / false / 4 / write": {
+      "n": 1000,
+      "median_us": 3256.545,
+      "p95_us": 4763.615,
+      "p99_us": 5216.221,
+      "metadata": {
+        "roots": "256",
+        "closed": "false",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "256",
+        "body_bytes": "36445",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "256 / true / 1 / write": {
+      "n": 1000,
+      "median_us": 2536.343,
+      "p95_us": 2927.69,
+      "p99_us": 3327.292,
+      "metadata": {
+        "roots": "256",
+        "closed": "true",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "256",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "84498",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "256 / true / 1 / read": {
+      "n": 1000,
+      "median_us": 1228.927,
+      "p95_us": 1477.825,
+      "p99_us": 1596.851,
+      "metadata": {
+        "roots": "256",
+        "closed": "true",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "256",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "84498",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "256 / true / 4 / write": {
+      "n": 1000,
+      "median_us": 7615.1275,
+      "p95_us": 11691.927,
+      "p99_us": 15802.287,
+      "metadata": {
+        "roots": "256",
+        "closed": "true",
+        "lifetimes": "256",
+        "spawns": "0",
+        "settlements": "256",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "84498",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "2048 / false / 1 / write": {
+      "n": 1000,
+      "median_us": 8469.5235,
+      "p95_us": 10213.317,
+      "p99_us": 12275.405,
+      "metadata": {
+        "roots": "2048",
+        "closed": "false",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "2048",
+        "body_bytes": "294797",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "2048 / false / 1 / read": {
+      "n": 1000,
+      "median_us": 4325.066,
+      "p95_us": 5339.645,
+      "p99_us": 6869.655,
+      "metadata": {
+        "roots": "2048",
+        "closed": "false",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "2048",
+        "body_bytes": "294797",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "2048 / false / 4 / write": {
+      "n": 1000,
+      "median_us": 24224.686,
+      "p95_us": 37904.719,
+      "p99_us": 49479.575,
+      "metadata": {
+        "roots": "2048",
+        "closed": "false",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "0",
+        "reports": "0",
+        "live": "2048",
+        "body_bytes": "294797",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    },
+    "2048 / true / 1 / write": {
+      "n": 1000,
+      "median_us": 21225.975,
+      "p95_us": 25845.615,
+      "p99_us": 30163.138,
+      "metadata": {
+        "roots": "2048",
+        "closed": "true",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "2048",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "684682",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "write"
+      }
+    },
+    "2048 / true / 1 / read": {
+      "n": 1000,
+      "median_us": 10121.2105,
+      "p95_us": 12506.609,
+      "p99_us": 16894.472,
+      "metadata": {
+        "roots": "2048",
+        "closed": "true",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "2048",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "684682",
+        "instances": "1",
+        "concurrency": "1",
+        "operation": "read"
+      }
+    },
+    "2048 / true / 4 / write": {
+      "n": 1000,
+      "median_us": 55895.5775,
+      "p95_us": 88657.372,
+      "p99_us": 93818.406,
+      "metadata": {
+        "roots": "2048",
+        "closed": "true",
+        "lifetimes": "2048",
+        "spawns": "0",
+        "settlements": "2048",
+        "reports": "0",
+        "live": "0",
+        "body_bytes": "684682",
+        "instances": "1",
+        "concurrency": "4",
+        "operation": "write"
+      }
+    }
+  },
+  "oauth-worker": {
+    "authorize_callback_bearer_refresh": {
+      "n": 1000,
+      "median_us": 2161.2485,
+      "p95_us": 2778.666,
+      "p99_us": 3038.567,
+      "metadata": {
+        "record_instances": "4",
+        "audit_instances": "4",
+        "concurrency": "4",
+        "scripted_network_ms": "0",
+        "operation": "authorize_callback_bearer_refresh"
+      }
+    }
+  },
+  "oauth-inline": {
+    "authorize_callback_bearer_refresh": {
+      "n": 1000,
+      "median_us": 834.351,
+      "p95_us": 4915.94,
+      "p99_us": 7009.291,
+      "metadata": {
+        "record_instances": "4",
+        "audit_instances": "4",
+        "concurrency": "4",
+        "scripted_network_ms": "0",
+        "operation": "authorize_callback_bearer_refresh"
+      }
+    }
+  },
+  "oauth-worker-repeat": {
+    "authorize_callback_bearer_refresh": {
+      "n": 1000,
+      "median_us": 2341.3805,
+      "p95_us": 3013.534,
+      "p99_us": 3324.452,
+      "metadata": {
+        "record_instances": "4",
+        "audit_instances": "4",
+        "concurrency": "4",
+        "scripted_network_ms": "0",
+        "operation": "authorize_callback_bearer_refresh"
+      }
+    }
+  }
+}

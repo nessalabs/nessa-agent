@@ -1,0 +1,45 @@
+
+running 40 tests
+test mcp_authorization::infrastructure::audit::tests::no_runtime_first_poll_is_typed ... ok
+test mcp_authorization::infrastructure::audit::tests::interrupted_audit_and_poison_are_failures ... ok
+test mcp_authorization::infrastructure::audit::tests::ready_effect_input_drop_fault_is_uncertain ... ok
+test mcp_authorization::infrastructure::audit::tests::authorization_audit_keeps_current_thread_heartbeat_running ... ok
+test mcp_authorization::infrastructure::callback::tests::a3a_fragmentation_at_every_byte_keeps_complete_values ... ok
+test mcp_authorization::infrastructure::callback::tests::a3a_idle_first_and_incomplete_header_do_not_block_second ... ok
+test mcp_authorization::infrastructure::callback::tests::a3b_eof_limit_and_utf8_are_typed ... ok
+test mcp_authorization::infrastructure::callback::tests::a3b_query_shape_refuses_duplicates_and_keeps_valid_neighbors ... ok
+test mcp_authorization::infrastructure::callback::tests::a3b_read_failure_is_typed ... ok
+test mcp_authorization::infrastructure::callback::tests::a3b_unrelated_malformed_and_eof_leave_listener_available ... ok
+test mcp_authorization::infrastructure::callback::tests::a3f_full_candidate_channel_cancels_scoped_handlers ... ok
+test mcp_authorization::infrastructure::audit::tests::operation_panic_input_drop_keeps_slot ... ok
+test mcp_authorization::infrastructure::audit::tests::worker_input_drop_keeps_slot ... ok
+test mcp_authorization::infrastructure::audit::tests::canceled_audit_excludes_next_append ... ok
+test mcp_authorization::infrastructure::https::tests::a_body_past_the_limit_is_not_kept ... ok
+test mcp_authorization::infrastructure::https::tests::a_refused_connection_is_not_sent ... ok
+test mcp_authorization::infrastructure::https::tests::a_refused_io_error_buried_in_the_source_chain_is_refused ... ok
+test mcp_authorization::infrastructure::callback::tests::a3g_response_failure_keeps_framed_candidate ... ok
+test mcp_authorization::infrastructure::https::tests::http_ipv6_loopback_is_allowed_and_other_http_is_not ... ok
+test mcp_authorization::infrastructure::https::tests::windows_connection_refused_code_is_refused_even_when_the_kind_is_not ... ok
+test mcp_authorization::infrastructure::callback::tests::a3f_trickle_does_not_reset_connection_budget ... ok
+test mcp_authorization::infrastructure::records::tests::a_sealed_file_round_trips_and_never_stores_the_token_in_the_clear ... ok
+test mcp_authorization::infrastructure::records::tests::benchmark_scripted_authorize_callback_refresh ... ignored, manual local composed OAuth benchmark; scripted HTTP/callbacks, raw CSV
+test mcp_authorization::infrastructure::records::tests::a_tampered_seal_is_unavailable_and_not_a_token ... ok
+test mcp_authorization::infrastructure::https::tests::a_stalled_peer_returns_within_the_call_timeout ... ok
+test mcp_authorization::infrastructure::callback::tests::a3f_saturation_releases_slots_and_original_deadline_closes_stream ... ok
+test mcp_authorization::infrastructure::records::tests::interrupted_record_operations_are_unavailable_or_unknown ... ok
+test mcp_authorization::infrastructure::records::tests::no_runtime_first_poll_is_typed ... ok
+test mcp_authorization::infrastructure::records::tests::canceled_delete_excludes_replacement ... ok
+test mcp_authorization::infrastructure::records::tests::canceled_secret_store_excludes_delete_and_load ... ok
+test mcp_authorization::infrastructure::records::tests::ready_effect_input_drop_fault_is_uncertain ... ok
+test mcp_authorization::infrastructure::records::tests::record_load_keeps_current_thread_heartbeat_running ... ok
+test mcp_authorization::infrastructure::records::tests::independent_instances_progress ... ok
+test mcp_authorization::infrastructure::records::tests::operation_panic_input_drop_keeps_slot ... ok
+test mcp_authorization::infrastructure::records::tests::queued_send_future_resumes_on_plain_thread ... ok
+test mcp_authorization::infrastructure::records::tests::record_store_keeps_current_thread_heartbeat_running ... ok
+test mcp_authorization::infrastructure::records::tests::secret_delete_keeps_current_thread_heartbeat_running ... ok
+test mcp_authorization::infrastructure::records::tests::secret_load_keeps_current_thread_heartbeat_running ... ok
+test mcp_authorization::infrastructure::records::tests::secret_store_keeps_current_thread_heartbeat_running ... ok
+test mcp_authorization::infrastructure::records::tests::worker_input_drop_keeps_slot ... ok
+
+test result: ok. 39 passed; 0 failed; 1 ignored; 0 measured; 1957 filtered out; finished in 0.91s
+

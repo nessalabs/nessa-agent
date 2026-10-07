@@ -1,0 +1,11 @@
+--- a/crates/nessa-local-storage/src/physical_operation.rs
++++ b/crates/nessa-local-storage/src/physical_operation.rs
+@@ -52,7 +52,7 @@
+     /// Construct an independent one-slot worker without acquiring runtime state.
+     pub fn new() -> Self {
+         Self {
+-            slot: Arc::new(Semaphore::new(1)),
++            slot: Arc::new(Semaphore::new(2)),
+         }
+     }
+ 

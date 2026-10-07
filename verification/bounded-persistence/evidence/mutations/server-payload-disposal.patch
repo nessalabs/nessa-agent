@@ -1,0 +1,11 @@
+--- a/crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs
++++ b/crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs
+@@ -163,7 +163,7 @@
+         // after catching the call fault, so capture Drop is a separate boundary.
+         let called = catch_unwind(AssertUnwindSafe(|| self.call_operation()));
+         let output = called.map_err(|payload| {
+-            std::mem::forget(payload);
++            drop(payload);
+             Interrupted
+         });
+         let cleaned = self.drop_operation();

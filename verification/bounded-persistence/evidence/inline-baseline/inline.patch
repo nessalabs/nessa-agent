@@ -1,0 +1,140 @@
+--- a/crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs
++++ b/crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs
+@@ -89,32 +89,8 @@
+ 
+ #[async_trait]
+ impl OwnershipStore for SqliteOwnershipStore {
+-    async fn write(&self, snapshot: &OwnershipSnapshot) -> Result<(), PortFailure> {
+-        let permit = self
+-            .worker
+-            .admit()
+-            .await
+-            .map_err(|_| PortFailure::Rejected)?;
+-        let state = self.state.clone();
+-        let snapshot = self.worker.input(snapshot.clone());
+-        self.worker
+-            .run(permit, move || state.write(snapshot.get()))
+-            .await
+-            .map_err(|_| PortFailure::Uncertain)?
+-    }
+-
+-    async fn read(&self) -> Result<OwnershipSnapshot, PortFailure> {
+-        let permit = self
+-            .worker
+-            .admit()
+-            .await
+-            .map_err(|_| PortFailure::Rejected)?;
+-        let state = self.worker.input(self.state.clone());
+-        self.worker
+-            .run(permit, move || state.get().read())
+-            .await
+-            .map_err(|_| PortFailure::Uncertain)?
+-    }
++ async fn write(&self, snapshot: &OwnershipSnapshot) -> Result<(), PortFailure> { self.state.write(snapshot) }
++ async fn read(&self) -> Result<OwnershipSnapshot, PortFailure> { self.state.read() }
+ }
+ 
+ impl OwnershipState {
+--- a/crates/nessa-server/src/mcp_authorization/infrastructure/records.rs
++++ b/crates/nessa-server/src/mcp_authorization/infrastructure/records.rs
+@@ -65,76 +65,11 @@
+ 
+ #[async_trait]
+ impl AuthorizationRecords for FileRecords {
+-    async fn load(&self, server: Uuid) -> Result<Option<ServerAuth>, RecordFailure> {
+-        let permit = self
+-            .worker
+-            .admit()
+-            .await
+-            .map_err(|_| RecordFailure::Unavailable)?;
+-        let state = self.worker.input(self.state.clone());
+-        self.worker
+-            .run(permit, move || state.get().load(server))
+-            .await
+-            .map_err(|_| RecordFailure::Unavailable)?
+-    }
+-
+-    async fn store(&self, auth: &ServerAuth) -> Result<(), RecordFailure> {
+-        let permit = self
+-            .worker
+-            .admit()
+-            .await
+-            .map_err(|_| RecordFailure::Unavailable)?;
+-        let state = self.state.clone();
+-        let auth = self.worker.input(auth.clone());
+-        self.worker
+-            .run(permit, move || state.store(auth.get()))
+-            .await
+-            .map_err(|_| RecordFailure::Unavailable)?
+-    }
+-
+-    async fn load_secret(&self, server: Uuid) -> Result<Option<TokenMaterial>, RecordFailure> {
+-        let permit = self
+-            .worker
+-            .admit()
+-            .await
+-            .map_err(|_| RecordFailure::Unavailable)?;
+-        let state = self.worker.input(self.state.clone());
+-        self.worker
+-            .run(permit, move || state.get().load_secret(server))
+-            .await
+-            .map_err(|_| RecordFailure::Unavailable)?
+-    }
+-
+-    async fn store_secret(
+-        &self,
+-        server: Uuid,
+-        secret: &TokenMaterial,
+-    ) -> Result<Publication, RecordFailure> {
+-        let permit = self
+-            .worker
+-            .admit()
+-            .await
+-            .map_err(|_| RecordFailure::Unavailable)?;
+-        let state = self.state.clone();
+-        let secret = self.worker.input(secret.clone());
+-        self.worker
+-            .run(permit, move || state.store_secret(server, secret.get()))
+-            .await
+-            .unwrap_or(Ok(Publication::Unknown))
+-    }
+-
+-    async fn delete_secret(&self, server: Uuid) -> Result<Deletion, RecordFailure> {
+-        let permit = self
+-            .worker
+-            .admit()
+-            .await
+-            .map_err(|_| RecordFailure::Unavailable)?;
+-        let state = self.worker.input(self.state.clone());
+-        self.worker
+-            .run(permit, move || state.get().delete_secret(server))
+-            .await
+-            .unwrap_or(Ok(Deletion::Unknown))
+-    }
++ async fn load(&self, server: Uuid) -> Result<Option<ServerAuth>, RecordFailure> { self.state.load(server) }
++ async fn store(&self, auth: &ServerAuth) -> Result<(), RecordFailure> { self.state.store(auth) }
++ async fn load_secret(&self, server: Uuid) -> Result<Option<TokenMaterial>, RecordFailure> { self.state.load_secret(server) }
++ async fn store_secret(&self, server: Uuid, secret: &TokenMaterial) -> Result<Publication, RecordFailure> { self.state.store_secret(server, secret) }
++ async fn delete_secret(&self, server: Uuid) -> Result<Deletion, RecordFailure> { self.state.delete_secret(server) }
+ }
+ 
+ impl FileRecordState {
+--- a/crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs
++++ b/crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs
+@@ -39,15 +39,7 @@
+ 
+ #[async_trait]
+ impl AuthorizationAudit for FileAuthorizationAudit {
+-    async fn record(&self, record: &AuthAuditRecord) -> Result<(), AuditFailure> {
+-        let permit = self.worker.admit().await.map_err(|_| AuditFailure)?;
+-        let state = self.state.clone();
+-        let record = self.worker.input(record.clone());
+-        self.worker
+-            .run(permit, move || state.record(record.get()))
+-            .await
+-            .map_err(|_| AuditFailure)?
+-    }
++ async fn record(&self, record: &AuthAuditRecord) -> Result<(), AuditFailure> { self.state.record(record) }
+ }
+ 
+ impl AuditState {
