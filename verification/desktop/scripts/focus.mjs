@@ -606,6 +606,8 @@ async function givesBackLostFocus(page, cause) {
   await page.keyboard.press(keys.overview)
   await contentIs(page, content.overview)
   await onOverviewRow(page)
+  if (!(await overviewListed(page)))
+    throw new CannotRun("the overview list did not finish drawing")
   let scrolledTo = null
   if (cause === "moved") {
     // Scrolled away from the focused row, as when reading further down.
@@ -710,6 +712,81 @@ async function givesBackLostFocus(page, cause) {
   return { trail, failures }
 }
 
+async function firstMessageHandoff(page) {
+  const prompt = "one composer through the first message"
+  await page.keyboard.press(keys.newSession)
+  const ready = await until(
+    page,
+    ([pane, home, field]) => {
+      const current = document.querySelector(pane)
+      const input = current?.querySelector(`${home} ${field}`)
+      return input != null && document.activeElement === input
+    },
+    [css.focusedPane, css.paneHome, css.field],
+  )
+  if (!ready) return { failures: ["new-session home did not receive the caret"] }
+  await page.evaluate(
+    ([pane, composer]) => {
+      const current = document.querySelector(pane)
+      const counts = []
+      const sample = () => counts.push(current.querySelectorAll(composer).length)
+      const observer = new MutationObserver(sample)
+      observer.observe(current, { childList: true, subtree: true })
+      sample()
+      window.__focusHomeHandoff = () => {
+        sample()
+        observer.disconnect()
+        delete window.__focusHomeHandoff
+        return counts
+      }
+    },
+    [css.focusedPane, css.composerCard],
+  )
+  let counts
+  const failures = []
+  try {
+    await page.keyboard.type(prompt)
+    await page.keyboard.press(keys.enter)
+    const arrived = await until(
+      page,
+      ([pane, home, dock, field, bubble, text]) => {
+        const current = document.querySelector(pane)
+        const input = current?.querySelector(`${dock} ${field}`)
+        return (
+          input != null &&
+          !current.querySelector(home) &&
+          [...current.querySelectorAll(bubble)].some(
+            (part) => part.textContent.trim() === text,
+          ) &&
+          document.activeElement === input
+        )
+      },
+      [
+        css.focusedPane,
+        css.paneHome,
+        css.conversationDock,
+        css.field,
+        css.bubble,
+        prompt,
+      ],
+    )
+    if (!arrived) failures.push("first message did not arrive with the reply caret")
+    else {
+      await page.keyboard.type("next reply")
+      const value = await page
+        .locator(`${css.focusedPane} ${css.conversationDock} ${css.field}`)
+        .inputValue()
+      if (value !== "next reply") failures.push(`reply draft is ${JSON.stringify(value)}`)
+    }
+  } finally {
+    counts = await page.evaluate(() => window.__focusHomeHandoff?.() ?? [])
+  }
+  if (counts.length === 0) failures.push("handoff had no observed composer counts")
+  if (counts.some((count) => count > 1))
+    failures.push(`overlapping composers during handoff: ${counts.join(" ")}`)
+  return { counts, after: await state(page), failures }
+}
+
 const meta = {
   name: "focus",
   summary:
@@ -750,6 +827,8 @@ Steps (each asserts where the caret is afterwards):
   the caret kept in the pill and the next keys in it; focus in the peek beside the list as the window narrows
   to 700; Show All pressed once nothing is left out → the keyboard is on a
   row, and ↓ walks the list
+  focus-home-handoff: the first message replaces the home with one composer;
+    the reply receives the caret and keeps the next draft.
   focus-home-scene: Customize focused in a new session's home, the window
   shortened so the home takes a small pane's shape → focus stays on Customize`,
 }
@@ -857,6 +936,15 @@ await main(meta, async ({ options, rep, url }) => {
       } finally {
         await opened.close()
       }
+      await attempt(rep, { name: "focus-home-handoff", engine, layout }, async () => {
+        const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
+        try {
+          const result = await firstMessageHandoff(fresh.page)
+          return result
+        } finally {
+          await fresh.close()
+        }
+      })
       for (const [name, answer] of [
         ["focus-answers-overview", answerOnceInOverview],
         ["focus-answers-card", answerOnceOnCard],

@@ -647,6 +647,10 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   position. _ADR 238 › A new session's home takes its pane's shape_.
   _Check:_ `responsive.mjs --only home-shape --shots <dir>`, then look at the
   shots beside the conversation pane.
+- [ ] **First-message handoff has one composer.** Sending from a new-session
+  home replaces it without overlapping composer instances; the reply receives
+  the caret and keeps the next draft.
+  _Check:_ `focus.mjs` (`focus-home-handoff`).
 - [ ] **Focus on Customize survives the home becoming small.** Customize
   focused in a new session's home, the window shortened until the home takes
   a small pane's shape: the header stays, and focus stays on Customize.

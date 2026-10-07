@@ -1,5 +1,5 @@
 import { offersAuthenticationRecovery } from "../../../../provider-authentication/model/recovery"
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from "react"
+import { memo, useLayoutEffect, useMemo, useRef, type RefObject } from "react"
 import { retryTranscript } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
@@ -8,7 +8,6 @@ import {
   selectTranscript,
   selectTranscriptFailure,
 } from "../../adapters/store/selectors"
-import { reducedMotion } from "../../../adapters/motion-preference"
 import { ProviderSignIn } from "./provider-sign-in"
 import { ApprovalCard } from "./approval-card"
 import { LiveRow } from "./live-row"
@@ -35,16 +34,12 @@ const pinnedWithin = 24
  */
 export const Transcript = memo(function Transcript({
   sessionId,
-  arriving,
   scrollRef,
-  headingRef,
   onHeadingVisible,
 }: {
   sessionId: string
   /** Set when this conversation replaces the home that sent its first message. */
-  arriving: boolean
   scrollRef: RefObject<HTMLDivElement | null>
-  headingRef: RefObject<HTMLDivElement | null>
   /** Reports whether the heading's title is in view, so the pane's header need not repeat it. */
   onHeadingVisible: (visible: boolean) => void
 }) {
@@ -60,7 +55,7 @@ export const Transcript = memo(function Transcript({
   const pinned = useRef(true)
   // Messages there when the conversation first showed stay put; later ones rise
   // into place. Messages already on screen before it loaded — sent while it was
-  // read — stay put too; an arriving conversation's first message has its own motion.
+  // read — stay put too.
   const shownBefore = useRef<readonly MessageValue[]>(noMessages)
   // Set once, when the conversation first loads; the same on any render after.
   const stayPut = useRef<ReadonlySet<string> | null>(null)
@@ -80,20 +75,22 @@ export const Transcript = memo(function Transcript({
     return () => observer.disconnect()
   }, [scrollRef])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const scroller = scrollRef.current
     if (!scroller) return
+    let active = true
     const onScroll = () => {
       pinned.current =
         scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < pinnedWithin
     }
     const observer = new ResizeObserver(() => {
-      if (pinned.current) scroller.scrollTop = scroller.scrollHeight
+      if (active && pinned.current) scroller.scrollTop = scroller.scrollHeight
     })
     observer.observe(scroller)
     if (scroller.firstElementChild) observer.observe(scroller.firstElementChild)
     scroller.addEventListener("scroll", onScroll, { passive: true })
     return () => {
+      active = false
       observer.disconnect()
       scroller.removeEventListener("scroll", onScroll)
     }
@@ -105,38 +102,18 @@ export const Transcript = memo(function Transcript({
     () => (outbox.length === 0 ? held : [...held, ...outbox]),
     [held, outbox],
   )
-  const count = messages.length
   if (stayPut.current === null && transcript) {
-    // Held still: all that is there when it loads — or, arriving, what was
-    // already on screen and the first message, which has its own motion.
-    const still = arriving ? [...shownBefore.current, ...messages.slice(0, 1)] : messages
-    stayPut.current = new Set(still.map((message) => message.id))
+    // Initial content and messages already shown while the read was pending
+    // stay put. Later additions have their own entrance.
+    stayPut.current = new Set(
+      [...shownBefore.current, ...messages].map((message) => message.id),
+    )
   }
   // What is on screen, recorded once committed: a render React lets go shows nothing.
   useLayoutEffect(() => {
     shownBefore.current = messages
   }, [messages])
   const loaded = transcript !== undefined
-  // Opening lands on the latest message, before paint; an arrival holds still under its motion.
-  useLayoutEffect(() => {
-    const scroller = scrollRef.current
-    if (!scroller || !loaded || arriving) return
-    scroller.scrollTop = scroller.scrollHeight
-    pinned.current = true
-  }, [loaded, arriving, scrollRef])
-
-  // A new message glides into view for a reader at the end; growth keeps them pinned.
-  const previousCount = useRef(count)
-  useLayoutEffect(() => {
-    const scroller = scrollRef.current
-    const grew = count > previousCount.current
-    previousCount.current = count
-    if (!scroller || !grew || !pinned.current) return
-    scroller.scrollTo({
-      top: scroller.scrollHeight,
-      behavior: reducedMotion() ? "auto" : "smooth",
-    })
-  }, [count, scrollRef])
 
   return (
     <div
@@ -148,8 +125,8 @@ export const Transcript = memo(function Transcript({
       // leaves the body out (`split-panes-drag.ts`).
       data-split-scroll
     >
-      <div className="workspace-transcript-inner" data-arriving={arriving || undefined}>
-        <TranscriptHeading ref={headingRef} sessionId={sessionId} titleRef={titleRef} />
+      <div className="workspace-transcript-inner">
+        <TranscriptHeading sessionId={sessionId} titleRef={titleRef} />
         {failure && !loaded ? (
           <div className="workspace-transcript-note" role="status">
             <p>{readFailureCopy(failure, "conversation")}</p>

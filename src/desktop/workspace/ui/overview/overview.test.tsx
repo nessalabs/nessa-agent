@@ -734,6 +734,11 @@ describe("the agents overview", () => {
     await nextFrame()
     expect(host.querySelector(".workspace-content")?.hasAttribute("inert")).toBe(false)
     await nextFrame()
+    // Finding the composer gives its layout this paint before focus lands.
+    expect(document.activeElement).not.toBe(
+      host.querySelector('textarea[aria-label="Message"]'),
+    )
+    await nextFrame()
     expect(document.activeElement).toBe(
       host.querySelector('textarea[aria-label="Message"]'),
     )
@@ -776,6 +781,8 @@ describe("the agents overview", () => {
     expect(card("first")).toBeNull()
     await nextFrame()
     expect(card("first")).not.toBeNull()
+    expect(document.activeElement).not.toBe(card("first"))
+    await nextFrame()
     expect(document.activeElement).not.toBe(card("first"))
     await nextFrame()
     expect(document.activeElement).toBe(card("first"))
@@ -1981,4 +1988,129 @@ it("asks in its peek with the pane's own approval parts, one component for both"
     "$ security import build.p12",
   )
   expect(peek?.querySelector(".workspace-approval-actions")).not.toBeNull()
+})
+
+it("keeps an early reply's row when it changes group before the list finishes opening", async () => {
+  const originalObserver = globalThis.ResizeObserver
+  class NarrowObserver {
+    constructor(private readonly callback: ResizeObserverCallback) {}
+    observe(target: Element) {
+      this.callback(
+        [{ target, contentRect: { width: 700 } } as ResizeObserverEntry],
+        this as unknown as ResizeObserver,
+      )
+    }
+    disconnect() {}
+  }
+  Object.assign(globalThis, { ResizeObserver: NarrowObserver })
+  try {
+    const index = sampleIndex()
+    const extra = Array.from({ length: 12 }, (_, at) =>
+      summary(`extra-${at}`, "desktop", 190 - at, "needs-you", { title: `Extra ${at}` }),
+    )
+    const { source, store } = await mount({
+      index: { ...index, sessions: [...index.sessions, ...extra] },
+    })
+    store.dispatch(followWorkspace())
+    await act(async () => entry()?.click())
+    await act(async () => settle(10))
+    for (let frame = 0; frame < 10; frame++) await nextFrame()
+    expect(host.querySelector("[data-overview-listed]")).toBeNull()
+    const first = card("first")
+    expect(first).not.toBeNull()
+    await press(first as HTMLElement, "KeyR", { command: true })
+    expect(host.querySelector('[data-reply-for="first"] textarea')).not.toBeNull()
+    await act(async () => {
+      const held = source.transcripts.get("first")
+      if (held) {
+        const next = { ...held, approval: null, revision: held.revision + 1 }
+        source.transcripts.set("first", next)
+        source.emit({ kind: "transcript", transcript: next })
+      }
+      source.emit({
+        kind: "session",
+        session: summary("first", "desktop", 600, "running", {
+          title: "Sign the build",
+          revision: 2,
+        }),
+      })
+      await settle(10)
+    })
+    expect(
+      row("first")?.closest(".agents-overview-group")?.querySelector("h2")?.textContent,
+    ).toBe("Working")
+    const field = host.querySelector('[data-reply-for="first"] textarea')
+    expect(field).not.toBeNull()
+    expect(document.activeElement).toBe(field)
+  } finally {
+    Object.assign(globalThis, { ResizeObserver: originalObserver })
+  }
+})
+
+it("schedules only the next row once the opening peek and caret have painted", async () => {
+  const index = sampleIndex()
+  const extra = Array.from({ length: 12 }, (_, at) =>
+    summary(`extra-${at}`, "desktop", 190 - at, "needs-you", { title: `Extra ${at}` }),
+  )
+  await mount({ index: { ...index, sessions: [...index.sessions, ...extra] } })
+  await act(async () => entry()?.click())
+  await act(async () => settle(10))
+  for (let frame = 0; frame < 10; frame++) await nextFrame()
+  expect(document.activeElement).toBe(card("first"))
+  expect(host.querySelector("[data-overview-listed]")).toBeNull()
+  expect(animation.pending()).toBe(1)
+  await nextFrame()
+  expect(animation.pending()).toBe(1)
+})
+
+it("lands the opening caret before the same frame inserts another row", async () => {
+  await mount()
+  await act(async () => entry()?.click())
+  await act(async () => settle(10))
+  for (let frame = 0; frame < 8; frame++) await nextFrame()
+  const events: string[] = []
+  const focus = HTMLElement.prototype.focus
+  const append = Node.prototype.appendChild
+  const insert = Node.prototype.insertBefore
+  const focused = vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (
+    this: HTMLElement,
+    options,
+  ) {
+    if (this.dataset.overviewItem === "first") events.push("focus")
+    focus.call(this, options)
+  })
+  const appended = vi.spyOn(Node.prototype, "appendChild").mockImplementation(function <
+    T extends Node,
+  >(this: Node, child: T): T {
+    if (
+      host.contains(this) &&
+      child instanceof Element &&
+      (child.matches("[data-overview-item]") ||
+        child.querySelector("[data-overview-item]"))
+    )
+      events.push("row")
+    return append.call(this, child) as T
+  })
+  const inserted = vi.spyOn(Node.prototype, "insertBefore").mockImplementation(function <
+    T extends Node,
+  >(this: Node, child: T, before: Node | null): T {
+    if (
+      host.contains(this) &&
+      child instanceof Element &&
+      (child.matches("[data-overview-item]") ||
+        child.querySelector("[data-overview-item]"))
+    )
+      events.push("row")
+    return insert.call(this, child, before) as T
+  })
+  try {
+    await nextFrame()
+    expect(events).toContain("focus")
+    expect(events).toContain("row")
+    expect(events.indexOf("focus")).toBeLessThan(events.indexOf("row"))
+  } finally {
+    focused.mockRestore()
+    appended.mockRestore()
+    inserted.mockRestore()
+  }
 })

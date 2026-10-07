@@ -111,9 +111,7 @@ async function shown(
           <ClockProvider now={() => 1000}>
             <Transcript
               sessionId="b"
-              arriving={false}
               scrollRef={createRef()}
-              headingRef={createRef()}
               onHeadingVisible={onHeadingVisible}
             />
           </ClockProvider>
@@ -145,13 +143,7 @@ async function failedRead(reason: "unavailable" | "signed-out") {
     root.render(
       <Provider store={store}>
         <ClockProvider now={() => 1000}>
-          <Transcript
-            sessionId="b"
-            arriving={false}
-            scrollRef={createRef()}
-            headingRef={createRef()}
-            onHeadingVisible={() => {}}
-          />
+          <Transcript sessionId="b" scrollRef={createRef()} onHeadingVisible={() => {}} />
         </ClockProvider>
       </Provider>,
     )
@@ -361,9 +353,7 @@ describe("a transcript", () => {
           <ClockProvider now={() => 1000}>
             <Transcript
               sessionId="b"
-              arriving
               scrollRef={createRef()}
-              headingRef={createRef()}
               onHeadingVisible={() => {}}
             />
           </ClockProvider>
@@ -386,11 +376,11 @@ describe("a transcript", () => {
     const rising = [...host.querySelectorAll(".workspace-message[data-new]")].map(
       (message) => message.textContent,
     )
-    // What the source held and was never on screen may rise; what was shown stays put.
+    // The first snapshot and what was already shown stay put.
     expect(rising).not.toContain("one")
     expect(rising).not.toContain("two")
-    // Arriving, what the source says beyond its first message was never on screen: it rises.
-    expect(rising.length).toBeGreaterThan(0)
+    // Later additions rise; the initial snapshot is held still.
+    expect(rising).toHaveLength(0)
     // A reply the source places before a message still pending rises all the same.
     const [one] = store.getState().workspace.outbox.b ?? []
     const reply = {
@@ -900,5 +890,62 @@ it("observes heading visibility without forcing the mounting layout", async () =
   } finally {
     geometry.mockRestore()
     Object.assign(globalThis, { IntersectionObserver: previous })
+  }
+})
+
+it("pins after observed layout, respects scrolling away, and rejects late deliveries", async () => {
+  let notify: ResizeObserverCallback | null = null
+  class LayoutObserver {
+    constructor(callback: ResizeObserverCallback) {
+      notify = callback
+    }
+    observe() {}
+    disconnect() {}
+  }
+  const previous = globalThis.ResizeObserver
+  Object.assign(globalThis, { ResizeObserver: LayoutObserver })
+  let laidOut = false
+  let height = 500
+  const geometry = vi
+    .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+    .mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("workspace-transcript")) {
+        expect(laidOut, "scroll read before observed layout").toBe(true)
+        return height
+      }
+      return 0
+    })
+  let removed = false
+  try {
+    await shown()
+    expect(geometry).not.toHaveBeenCalled()
+    const scroller = host.querySelector<HTMLElement>(".workspace-transcript")
+    expect(scroller).not.toBeNull()
+    if (!scroller) return
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 100 })
+    const deliver = notify as ResizeObserverCallback | null
+    expect(deliver).not.toBeNull()
+    laidOut = true
+    await act(async () => deliver?.([], {} as ResizeObserver))
+    expect(scroller.scrollTop).toBe(500)
+    scroller.scrollTop = 0
+    scroller.dispatchEvent(new Event("scroll"))
+    height = 700
+    await act(async () => deliver?.([], {} as ResizeObserver))
+    expect(scroller.scrollTop).toBe(0)
+    scroller.scrollTop = 600
+    scroller.dispatchEvent(new Event("scroll"))
+    height = 900
+    await act(async () => deliver?.([], {} as ResizeObserver))
+    expect(scroller.scrollTop).toBe(900)
+    await act(async () => root.unmount())
+    removed = true
+    scroller.scrollTop = 10
+    await act(async () => deliver?.([], {} as ResizeObserver))
+    expect(scroller.scrollTop).toBe(10)
+  } finally {
+    if (!removed) await act(async () => root.unmount())
+    geometry.mockRestore()
+    Object.assign(globalThis, { ResizeObserver: previous })
   }
 })

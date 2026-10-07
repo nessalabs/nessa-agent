@@ -11,6 +11,7 @@ import { flushSync } from "react-dom"
 import { reducedMotion } from "../../../adapters/motion-preference"
 import { useNow } from "../../adapters/dom/clock"
 import { durationToken } from "../../../adapters/motion"
+import { focusAfterPaint } from "../../adapters/dom/focus"
 import { useReflow } from "../../adapters/dom/overview-reflow"
 import { isMac } from "../../../adapters/platform"
 import { matchesChord } from "../../../model/keyboard"
@@ -149,23 +150,12 @@ export function AgentsOverview({
   // callback, so the render does not slip into the next row's frame.
   const [peekDrawn, setPeekDrawn] = useState(false)
   useEffect(() => {
-    if (drawn === 0) return
+    if (drawn === 0 || peekDrawn) return
     const frame = requestAnimationFrame(() => {
       flushSync(() => setPeekDrawn(true))
     })
     return () => cancelAnimationFrame(frame)
-  }, [drawn])
-  useEffect(() => {
-    if (!filled || drawn >= rowCount) return
-    // The second row waits until the peek has painted (`overview.test.tsx`).
-    if (drawn === 1 && !peekDrawn) return
-    const frame = requestAnimationFrame(() => {
-      flushSync(() =>
-        setDrawn((current) => Math.min(rowCount, current + rowsPerOpenFrame)),
-      )
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [filled, drawn, rowCount, peekDrawn])
+  }, [drawn, peekDrawn])
   // The workspace keeps a listed session chosen while it lists one (`keepOverviewChoice`).
   const current = selected !== null && order.includes(selected) ? selected : null
   const choose = useCallback(
@@ -249,21 +239,42 @@ export function AgentsOverview({
       column.querySelector(`[data-overview-item="${CSS.escape(id)}"]`) === null
     )
       return
-    let frame = 0
+    let stop = () => {}
     const cancel = () => {
-      cancelAnimationFrame(frame)
+      stop()
       if (cancelLand.current === cancel) cancelLand.current = null
     }
-    // After this paint. The row is already in view, so the land does not scroll.
-    frame = requestAnimationFrame(() => {
-      if (cancelLand.current !== cancel) return
-      cancelLand.current = null
-      if (landed.current) return
-      landed.current = true
-      focusItem(currentNow.current, false)
-    })
+    // Registered before the next row's paint, so focus does not force layout
+    // for a row that another callback just inserted on this same frame.
+    stop = focusAfterPaint(
+      () => {
+        const column = list.current
+        if (!column) return null
+        const id = currentNow.current
+        return id === null
+          ? column
+          : column.querySelector<HTMLElement>(`[data-overview-item="${CSS.escape(id)}"]`)
+      },
+      () => {
+        if (cancelLand.current !== cancel) return
+        cancelLand.current = null
+        landed.current = true
+      },
+    )
     cancelLand.current = cancel
   }, [ready, drawn, peekDrawn, focusItem])
+
+  useEffect(() => {
+    if (!filled || drawn >= rowCount) return
+    // The second row waits until the peek has painted (`overview.test.tsx`).
+    if (drawn === 1 && !peekDrawn) return
+    const frame = requestAnimationFrame(() => {
+      flushSync(() =>
+        setDrawn((current) => Math.min(rowCount, current + rowsPerOpenFrame)),
+      )
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [filled, drawn, rowCount, peekDrawn])
 
   const timers = useRef(new Set<number>())
   useEffect(() => {
@@ -399,7 +410,12 @@ export function AgentsOverview({
         ? (event.target.closest<HTMLElement>("[data-overview-item]")?.dataset
             .overviewItem ?? null)
         : null
-    const to = stepFrom(order, from, step)
+    const visible = [
+      ...(list.current?.querySelectorAll<HTMLElement>("[data-overview-item]") ?? []),
+    ]
+      .map((item) => item.dataset.overviewItem)
+      .filter((id): id is string => id !== undefined)
+    const to = stepFrom(visible, from, step)
     if (to !== null) focusItem(to)
   }
 
@@ -640,7 +656,9 @@ export function AgentsOverview({
               >
                 {ready && (rowCount === 0 || drawn > 0) ? (
                   <Groups
-                    glance={rowCount === 0 ? glance : listedThrough(glance, drawn)}
+                    glance={
+                      rowCount === 0 ? glance : listedThrough(glance, drawn, expanded)
+                    }
                     current={current}
                     selected={split ? current : null}
                     expanded={split ? null : expanded}
@@ -687,12 +705,20 @@ export const splitWidth = 820
  * full glance's. The footer's "outside this view" waits until the prefix is
  * the whole list, so it does not sit in the middle while later rows arrive.
  */
-function listedThrough(glance: AgentsGlance, count: number): AgentsGlance {
+function listedThrough(
+  glance: AgentsGlance,
+  count: number,
+  kept: string | null,
+): AgentsGlance {
   let left = count
   const take = (ids: readonly string[]) => {
     const slice = ids.slice(0, Math.max(0, left))
     left -= slice.length
-    return slice
+    // An opened reply keeps its row when it changes group during the opening.
+    // The normal prefix still grows one row per frame.
+    return kept !== null && ids.includes(kept) && !slice.includes(kept)
+      ? ids.filter((id) => id === kept || slice.includes(id))
+      : slice
   }
   const needsYou = take(glance.needsYou)
   const working = take(glance.working)

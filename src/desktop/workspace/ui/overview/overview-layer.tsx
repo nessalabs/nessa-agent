@@ -37,8 +37,8 @@ import { overviewKeys } from "./overview-keys"
  * the overview in that commit (`overview.test.tsx`).
  *
  * Leaving it — Escape, Open, or going anywhere else — gives the keyboard
- * back to the focused pane's composer, a frame later, once the panes are
- * drawn again.
+ * back to the focused pane's composer after the cover lifts and the target
+ * has had its paint (`focus.ts`, `focus.test.tsx`).
  */
 export function OverviewLayer({ root }: { root: RefObject<HTMLElement | null> }) {
   const dispatch = useWorkspaceDispatch()

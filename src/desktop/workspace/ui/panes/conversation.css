@@ -153,37 +153,6 @@
   }
 }
 
-/*
- * Sending the first message: the home lifts away over the conversation that
- * replaces it. Its composer is already travelling as the conversation's own.
- */
-.workspace-pane-home[data-leaving] {
-  position: absolute;
-  z-index: 2;
-  inset: 0;
-  pointer-events: none;
-}
-
-.workspace-pane-home[data-leaving] .desktop-composer {
-  visibility: hidden;
-}
-
-.workspace-pane-home[data-leaving] .desktop-header,
-.workspace-pane-home[data-leaving] .desktop-greeting {
-  animation: workspace-lift-away var(--desktop-slow) var(--desktop-out) both;
-}
-
-.workspace-pane-home[data-leaving] .desktop-greeting {
-  animation-delay: 30ms;
-}
-
-@keyframes workspace-lift-away {
-  to {
-    opacity: 0;
-    transform: translateY(-16px) scale(0.985);
-  }
-}
-
 .workspace-conversation {
   display: flex;
   flex: 1;
@@ -355,10 +324,4 @@
     flex-wrap: wrap;
     row-gap: 4px;
   }
-}
-
-/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
-:root[data-motion="reduced"] .workspace-pane-home[data-leaving] .desktop-header,
-:root[data-motion="reduced"] .workspace-pane-home[data-leaving] .desktop-greeting {
-  animation: none;
 }

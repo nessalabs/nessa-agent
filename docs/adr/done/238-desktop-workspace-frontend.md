@@ -91,7 +91,7 @@ behaviour set down here is unchanged by the move.
   - `dom/`: what belongs to the page, not the product — FLIP motion, drag and
     drop (`drag.ts`), pointer resizing, keys and Tab order, focus following the
     focused pane (`focus.ts`), the page's measure of the panes' room
-    (`measure.ts`), a first message's arrival, the clock's ticks;
+    (`measure.ts`), post-layout transcript scrolling, the clock's ticks;
   - `storage/`: the overview's filter kept between launches
     (`remembered-filter.ts`, `RememberedFilter`).
 - **`ui/`** holds each component once:
@@ -256,9 +256,10 @@ container around them, which a conversation always is and a home only while
 small, so the dock and the title are each written once. Nothing is
 remounted, so the draft, the caret, the model chosen and a long draft's page
 stay as they were across the threshold; the page still opens in either
-shape. In a small pane the arrival has nowhere to glide — the composer is
-already where the conversation docks it — so only the first message rises
-and the greeting lifts away. Crossing the threshold, as a pane is resized or
+shape. Sending the first message replaces the home directly when the session
+is listed; there is no overlapping home/composer clone or geometry-driven
+arrival animation. The existing workspace focus owner follows the removed
+field and respects focus the person moved elsewhere. Crossing the threshold, as a pane is resized or
 split, the greeting and composer settle into their new places
 (`--desktop-slow`, opacity and transform only) under the panes' own flight;
 with less motion they are simply there. Only a crossing plays it: the
@@ -282,8 +283,22 @@ chosen and an open page — and, where the crossing is a resize that moves
 nothing else, the caret's focus and position. `focus.mjs`
 (`focus-home-scene`) measures that focus on Customize stays there as the home
 becomes small, and `responsive.mjs` (`header-picture`) that a pane's menu
-chooses the picture, takes it back, and says why a file was refused. A first message sent from a small home
-arriving in place is not measured in a browser.
+chooses the picture, takes it back, and says why a file was refused.
+`focus.mjs` measures the first-message handoff, including one composer per
+pane and the reply caret; no separate arrival animation remains.
+
+The first-message and transcript handoff has one focus owner and one scroll
+owner (`focus.ts`, `transcript.tsx`):
+
+| event | view and effect |
+| --- | --- |
+| first send pending | draft home remains while the source creates the session |
+| source lists the session | home is replaced by the conversation; the focus adapter follows a lost field after its target paint |
+| person took focus elsewhere | keep that focus rather than reclaiming it on mount |
+| transcript or viewport layout changes while pinned | ResizeObserver pins the tail after layout, before paint |
+| person scrolls away | resize does not change their scroll position |
+| person returns to the tail | following layout changes keep them pinned |
+| view removed | disconnect observers and reject their late callbacks |
 
 **Side columns: chosen, or folded for room** (`src/desktop/model/side-column.ts`,
 shared by the workspace's sidebar and session list and by Settings' sidebar):
@@ -314,6 +329,14 @@ live backdrop blur. The ambient light is already softened; resampling the
 changing pane region through the sidebar adds paint work to pane and overview
 transitions. Its edge peek uses an opaque tinted fill so the underlying
 transcript stays out of the revealed list.
+
+Opening the overview paints the peek only once, and registers pending focus
+before the following row paint so reads precede that frame's DOM writes.
+Keyboard walking uses the rows currently drawn. A reply opened while the
+list is arriving retains its expanded row when the source moves that session
+to another group; the normal prefix continues growing one row per frame.
+The browser's row-movement and Show All probes wait for the list's published
+completion marker before manipulating the completed list.
 
 **What fills the content region** is workspace state (`content`: the panes,
 or the Agents overview), so an agent can move it too. The overview is part of
@@ -473,12 +496,14 @@ without a pick, or Settings, gives focus back to what opened it. [ADR
 widget takes the caret in its body rather than a composer, and while the
 window shows a widget, focus that falls away lands in that widget's body.
 
-The pane caret waits for its target's first layout to paint before landing
+Programmatic pending focus uses the shared `focusAfterPaint` controller; pane
+focus resolves only the foreground widget or eligible pane body. The pane
+caret waits for its target's first layout to paint before landing
 (`adapters/dom/focus.ts`, `focus.test.tsx`):
 
 | pending focus | next frame | result |
 | --- | --- | --- |
-| target absent | look again, up to 30 attempts | no geometry or focus read |
+| target absent, inert, or pane body waiting for layout | look again, up to 30 attempts | no geometry or focus read |
 | target found | let this frame paint | retain the target identity |
 | target painted, still current | focus with `preventScroll` | finish |
 | target replaced | find the current target | wait for its paint |
@@ -701,7 +726,7 @@ same, but for ⌥⌘S and ⌘F where one has no session list). Where the spike's
 differed, one design was kept for both: the three-column pane chrome and grid
 (which also gives the second layout split down and moving panes), the
 second's richer transcript (step groups with diff counts, code, lists, the
-live activity row and "Always Allow"), and the first's arrival motion.
+live activity row and "Always Allow"), and the first-message handoff.
 **Classic stays**: it is the existing `ui/desktop-app.tsx` shell with a home and
 a right panel, it shares `Home` and the composer rather than duplicating them,
 and removing it is a product decision this work does not make.

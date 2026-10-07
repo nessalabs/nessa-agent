@@ -1,9 +1,8 @@
-import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
+import { memo, useCallback, useRef } from "react"
 import { Composer } from "../../../ui/composer"
 import { chooseModel, sendMessage, setComposerText } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectComposerText, selectNextModel } from "../../adapters/store/selectors"
-import { useArrival, type Arrival } from "../../adapters/dom/arrival"
 import type { ModelRef } from "../../model/workspace-index"
 import { Home } from "../../../ui/home"
 import { Transcript } from "../transcript/transcript"
@@ -80,45 +79,27 @@ export const PaneHome = memo(function PaneHome({
 
 /**
  * A conversation in a pane: the transcript, and a composer docked at its
- * foot. Mounted with an `arrival` when its first message was just sent from
- * the home it replaces, which then plays once.
+ * foot. The workspace's focus owner follows the field removed with a home;
+ * this view does not focus or measure a second composer during that commit.
  */
 export const Conversation = memo(function Conversation({
   sessionId,
-  arrival,
-  takeFocus,
   onHeadingVisible,
 }: {
   sessionId: string
-  arrival: Arrival | null
-  /** Asked once, on mount: whether to take the caret, the person having typed in the home. */
-  takeFocus: () => boolean
   onHeadingVisible: (visible: boolean) => void
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
-  const headingRef = useRef<HTMLDivElement>(null)
-  const dockRef = useRef<HTMLDivElement>(null)
-  // Whether this conversation arrived from a home is fixed at mount.
-  const [arrived] = useState(arrival)
-  useArrival(arrived, { dock: dockRef, scroller: scrollRef, heading: headingRef })
-
-  const focusAtMount = useRef(takeFocus)
-  useLayoutEffect(() => {
-    if (focusAtMount.current())
-      dockRef.current?.querySelector("textarea")?.focus({ preventScroll: true })
-  }, [])
 
   return (
     // Its transcript and its composer are each a part of the pane to a drag's preview.
     <div className="workspace-conversation" data-split-through>
       <Transcript
         sessionId={sessionId}
-        arriving={arrived !== null}
         scrollRef={scrollRef}
-        headingRef={headingRef}
         onHeadingVisible={onHeadingVisible}
       />
-      <div className="workspace-dock" ref={dockRef} data-split-keeps="foot">
+      <div className="workspace-dock" data-split-keeps="foot">
         <DockComposer sessionId={sessionId} />
       </div>
     </div>

@@ -25,7 +25,7 @@
  * handler is the other direction (a click or Tab into a pane focuses it).
  */
 import { useEffect, type RefObject } from "react"
-import { gridOf } from "../../../split-panes"
+import { gridOf, marks } from "../../../split-panes"
 import { focusedPane } from "../../../split-panes/model/pane-layout"
 import { inModal } from "../../../adapters/modal"
 import type { DesktopStore } from "../../../store"
@@ -45,13 +45,17 @@ export const widgetWindowAttribute = "data-widget-window"
  * it is on the page.
  */
 function caretTarget(scope: ParentNode): HTMLElement | null {
+  const windowWidget = scope.querySelector<HTMLElement>(`[${widgetWindowAttribute}]`)
+  const region = windowWidget ?? scope
+  const selector = windowWidget
+    ? `[${widgetBodyAttribute}]`
+    : `[${focusedPaneAttribute}] .desktop-composer textarea, [${focusedPaneAttribute}] [${widgetBodyAttribute}]`
+  const candidates = [...region.querySelectorAll<HTMLElement>(selector)]
   return (
-    scope.querySelector<HTMLElement>(
-      `[${widgetWindowAttribute}] [${widgetBodyAttribute}]`,
-    ) ??
-    scope.querySelector<HTMLElement>(
-      `[${focusedPaneAttribute}] .desktop-composer textarea, [${focusedPaneAttribute}] [${widgetBodyAttribute}]`,
-    )
+    candidates.find(
+      (element) =>
+        element.closest(`[inert], [${marks.settling}], [${marks.reflow}]`) === null,
+    ) ?? null
   )
 }
 
@@ -64,18 +68,26 @@ export function focusInFront(
   scope: ParentNode = document,
   done: () => void = () => {},
 ): () => void {
+  return focusAfterPaint(() => caretTarget(scope), done)
+}
+
+/** Resolves a caller-owned target, waits for its paint, then rechecks focus authority. */
+export function focusAfterPaint(
+  target: () => HTMLElement | null,
+  done: () => void = () => {},
+): () => void {
   let frame = 0
   let tries = 0
   let active = true
+  const held = document.activeElement
   const attempt = () => {
     if (!active) return
     if (tries++ >= 30) return done()
-    const field = caretTarget(scope)
+    const field = target()
     if (!field) {
       frame = requestAnimationFrame(attempt)
       return
     }
-    const held = document.activeElement
     // A pane may have filled on this frame. Let its layout paint before focus
     // asks the browser for geometry; recheck the target after that paint.
     frame = requestAnimationFrame(() => {
@@ -84,7 +96,7 @@ export function focusInFront(
       if (inModal(focus) || field.closest("[inert]")) return done()
       // A deliberate focus move during the wait belongs to the person.
       if (focus !== held && focus !== document.body && focus !== field) return done()
-      if (caretTarget(scope) !== field) return attempt()
+      if (target() !== field) return attempt()
       field.focus({ preventScroll: true })
       done()
     })
