@@ -32,10 +32,13 @@ export function useSubagentsPanel(sessionId: string, host: WidgetHost) {
       : null
   const openId = present?.id ?? null
 
+  // A failed or unread read is not the child leaving. Clear only once the
+  // source is ready and no longer lists the open child.
   useEffect(() => {
-    if (!chosenId || read.kind === "unread") return
-    if (!present) chooseSubagent(sessionId, null)
-  }, [chosenId, present, read.kind, sessionId])
+    if (!chosenId || read.kind !== "ready") return
+    if (!read.subagents.some((subagent) => subagent.id === chosenId))
+      chooseSubagent(sessionId, null)
+  }, [chosenId, read, sessionId])
 
   useEffect(() => {
     if (!openId) return

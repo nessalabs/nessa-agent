@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 /**
  * The panel: the sample list in the model's order, a read-only conversation,
- * Escape and a child that leaves, and opening one from outside the panel.
+ * Escape, a child that leaves, a failed read that keeps the open child, and
+ * opening one from outside the panel.
  */
 import { act, useState } from "react"
 import { createRoot, type Root } from "react-dom/client"
@@ -93,12 +94,18 @@ function memory(
   unreadable: readonly string[] = [],
 ): SubagentSource & {
   set(next: readonly Subagent[]): void
+  fail(): void
 } {
+  const failed: SubagentRead = { kind: "failed", failure: { kind: "unavailable" } }
   let snapshot: SubagentRead = { kind: "ready", subagents: initial, unreadable }
   const listeners = new Set<() => void>()
   return {
     set(next) {
       snapshot = { kind: "ready", subagents: next, unreadable }
+      for (const listener of listeners) listener()
+    },
+    fail() {
+      snapshot = failed
       for (const listener of listeners) listener()
     },
     forSession() {
@@ -214,6 +221,30 @@ describe("the subagents panel", () => {
     expect(host.querySelector("[data-subagent-detail]")).toBeNull()
     expect(host.querySelector("[data-subagent-list]")?.textContent).toContain("idris")
     expect(selectedSubagent("a")).toBeNull()
+  })
+
+  it("keeps the open child across a failed read and shows it again when the source is ready", async () => {
+    const source = memory([child("mara")])
+    await renderPanel("a", source, widgetHost())
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>("[data-subagent-row]")?.click(),
+    )
+    expect(selectedSubagent("a")).toBe("mara")
+
+    await act(async () => {
+      source.fail()
+    })
+    expect(host.textContent).toContain("Subagents could not be read.")
+    expect(host.querySelector("[data-subagent-detail]")).toBeNull()
+    expect(selectedSubagent("a")).toBe("mara")
+
+    await act(async () => {
+      source.set([child("mara")])
+    })
+    expect(host.querySelector("[data-subagent-detail]")?.textContent).toContain(
+      "mara said",
+    )
+    expect(selectedSubagent("a")).toBe("mara")
   })
 })
 

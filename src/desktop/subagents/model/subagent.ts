@@ -79,13 +79,6 @@ export const activityTones = {
   idle: "neutral",
 } as const
 
-const activityOrder: Record<SubagentActivity, number> = {
-  working: 0,
-  planning: 1,
-  stuck: 2,
-  idle: 3,
-}
-
 /**
  * How far `progress` is, from 0 to 1, or 0 when it is absent or its total
  * is not a positive number. Working children with a larger fraction lead
@@ -97,16 +90,19 @@ export function progressFraction(progress: SubagentProgress | undefined): number
 }
 
 /**
- * Subagents in the order the list shows them: working (furthest along
- * first), then planning, stuck, and idle. A tie keeps the order they were
- * given. Lifetime does not reorder them; `rowStatus` says it.
+ * Subagents in the order the list shows them: the index in
+ * `subagentActivities` (working, then planning, stuck, and idle), and among
+ * working children the furthest along first. A tie keeps the order they were
+ * given. Lifetime does not reorder them; `rowStatus` says it. `summaryLine`
+ * walks the same list.
  */
 export function byActivity(subagents: readonly Subagent[]): readonly Subagent[] {
   return subagents
     .map((subagent, index) => ({ subagent, index }))
     .sort((a, b) => {
       const byState =
-        activityOrder[a.subagent.activity] - activityOrder[b.subagent.activity]
+        subagentActivities.indexOf(a.subagent.activity) -
+        subagentActivities.indexOf(b.subagent.activity)
       if (byState !== 0) return byState
       if (a.subagent.activity === "working") {
         const byProgress =

@@ -56,8 +56,9 @@ model and approval mode. Approval-mode changes are serialized with turn
 admission. `conversation_session` is the one mapping from product
 `ConversationId` to SDK `SessionId`.
 
-The desktop widget host, id encoder and transcript views exist. The subagents
-vertical and live parent-child integration are not implemented. The earlier
+The desktop widget host, id encoder and transcript views exist. The read-only
+subagents vertical exists as a sample panel. Live parent-child integration is
+not implemented. The earlier
 prototype (`exp-prototype` at `5bfaa225`) is a visual reference; implementation
 follows the owning modules on current `main`.
 
