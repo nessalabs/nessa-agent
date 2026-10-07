@@ -23,7 +23,7 @@
 //! Streamed POST bodies (JSON and SSE, including initialize) are session-owned
 //! and separately bounded. An SSE request reader
 //! forwards notices/requests until its matching result/error, then drops the body
-//! even if the peer leaves it open (ADR 392 P1–P14/J1–J14,
+//! even if the peer leaves it open (ADR 392 P1–P14/J1–J16,
 //! `tests::post_streams` and `tests::http_progress`).
 //!
 //! Dropping the session aborts its GET and POST streams and asks for the same single
@@ -360,9 +360,10 @@ impl HttpSession {
         } else {
             None
         };
-        match self.post_modern(bytes, method.as_deref(), id).await {
-            Ok(Modern::Response(body)) => {
-                self.deliver_body(body, method.as_deref(), id, permit).await
+        match self.post_modern(bytes).await {
+            Ok(Modern::Response(attempt)) => {
+                self.deliver_body(attempt, method.as_deref(), id, permit)
+                    .await
             }
             Ok(Modern::Accepted) => SendOutcome::Done,
             Ok(Modern::Legacy) => self.enter_legacy(bytes, id).await,
@@ -396,11 +397,12 @@ impl HttpSession {
 
     async fn deliver_body(
         &self,
-        response: HttpResponse,
+        attempt: PostResponse,
         method: Option<&str>,
         id: Option<u64>,
         permit: Option<OwnedSemaphorePermit>,
     ) -> SendOutcome {
+        let PostResponse { response, context } = attempt;
         let status = response.status;
         if status == 202 {
             return SendOutcome::Done;
@@ -408,12 +410,7 @@ impl HttpSession {
         if status == 403 {
             return self.refuse_scope(response).await;
         }
-        if matches!(status, 400 | 404 | 405) && method == Some("initialize") && !self.is_open() {
-            return SendOutcome::Done; // caller enters legacy; unused path
-        }
-        if let Some(error) =
-            response_failure(status, self.response_context(method == Some("initialize")))
-        {
+        if let Some(error) = response_failure(status, context) {
             if error == McpError::SessionExpired {
                 return self.recover(id, permit);
             }
@@ -489,16 +486,12 @@ impl HttpSession {
         }
     }
 
-    async fn post_modern(
-        &self,
-        body: &[u8],
-        method: Option<&str>,
-        id: Option<u64>,
-    ) -> Result<Modern, McpError> {
+    async fn post_modern(&self, body: &[u8]) -> Result<Modern, McpError> {
         let bearer = self.authorization.bearer(self.server).await?;
         let first = self.exchange(body, bearer.as_ref()).await?;
-        if first.status == 401 {
+        if first.response.status == 401 {
             let challenge = first
+                .response
                 .header("www-authenticate")
                 .unwrap_or("Bearer")
                 .to_owned();
@@ -506,45 +499,52 @@ impl HttpSession {
             drop(first);
             if let Some(retry) = self.authorization.rejected(self.server, &challenge).await? {
                 let second = self.exchange(body, Some(&retry)).await?;
-                return self.classify(second, method, id).await;
+                return Ok(Self::classify(second));
             }
             return Err(McpError::Unauthorized);
         }
-        self.classify(first, method, id).await
+        Ok(Self::classify(first))
     }
 
-    async fn classify(
-        &self,
-        response: HttpResponse,
-        method: Option<&str>,
-        _id: Option<u64>,
-    ) -> Result<Modern, McpError> {
-        if matches!(response.status, 400 | 404 | 405)
-            && method == Some("initialize")
-            && !self.is_open()
-            && self.phase.lock().expect("http phase").session_id.is_none()
+    fn classify(attempt: PostResponse) -> Modern {
+        if matches!(attempt.response.status, 400 | 404 | 405)
+            && matches!(
+                attempt.context,
+                ResponseContext::Initialize {
+                    legacy_allowed: true
+                }
+            )
         {
-            return Ok(Modern::Legacy);
+            return Modern::Legacy;
         }
-        if response.status == 202 {
-            return Ok(Modern::Accepted);
+        if attempt.response.status == 202 {
+            Modern::Accepted
+        } else {
+            Modern::Response(attempt)
         }
-        Ok(Modern::Response(response))
     }
 
     async fn exchange(
         &self,
         body: &[u8],
         bearer: Option<&Bearer>,
-    ) -> Result<HttpResponse, McpError> {
+    ) -> Result<PostResponse, McpError> {
         if self.closing.load(Ordering::SeqCst) {
             return Err(McpError::Closed);
         }
-        let (session_id, version) = {
+        let initialize = body_is_initialize(body);
+        let (session_id, version, open) = {
             let phase = self.phase.lock().expect("http phase");
-            (phase.session_id.clone(), phase.version.clone())
+            (phase.session_id.clone(), phase.version.clone(), phase.open)
         };
-        let include_version = version.is_some() && !body_is_initialize(body);
+        let mut context = if initialize {
+            ResponseContext::Initialize {
+                legacy_allowed: !open && session_id.is_none(),
+            }
+        } else {
+            ResponseContext::Stateless
+        };
+        let include_version = version.is_some() && !initialize;
         let mut headers = vec![
             (
                 "Accept".into(),
@@ -558,14 +558,16 @@ impl HttpSession {
             }
         }
         if let Some(session_id) = session_id {
-            if !body_is_initialize(body) {
+            if !initialize {
                 headers.push(("Mcp-Session-Id".into(), session_id));
+                context = ResponseContext::SessionBound;
             }
         }
         if let Some(bearer) = bearer {
             headers.push(("Authorization".into(), format!("Bearer {}", bearer.token())));
         }
-        self.exchange
+        let response = self
+            .exchange
             .exchange(HttpRequest {
                 method: HttpMethod::Post,
                 url: self.url.as_str().to_owned(),
@@ -573,7 +575,8 @@ impl HttpSession {
                 body: body.to_vec(),
             })
             .await
-            .map_err(|_| lost_exchange(body))
+            .map_err(|_| lost_exchange(body))?;
+        Ok(PostResponse { response, context })
     }
 
     async fn enter_legacy(&self, initialize: &[u8], id: Option<u64>) -> SendOutcome {
@@ -959,16 +962,13 @@ impl HttpSession {
             serde_json::to_vec(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
                 .unwrap_or_default();
         let sending = async {
-            match self
-                .post_modern(&body, Some("notifications/initialized"), None)
-                .await
-            {
+            match self.post_modern(&body).await {
                 Ok(Modern::Accepted) => SendOutcome::Done,
-                Ok(Modern::Response(response)) if response.status == 403 => {
-                    self.refuse_scope(response).await
+                Ok(Modern::Response(attempt)) if attempt.response.status == 403 => {
+                    self.refuse_scope(attempt.response).await
                 }
-                Ok(Modern::Response(response)) => SendOutcome::End(
-                    response_failure(response.status, self.response_context(false)).unwrap_or_else(
+                Ok(Modern::Response(attempt)) => SendOutcome::End(
+                    response_failure(attempt.response.status, attempt.context).unwrap_or_else(
                         || McpError::Malformed("recovery initialized was not accepted".into()),
                     ),
                 ),
@@ -1053,24 +1053,6 @@ impl HttpSession {
             Ok(()) => SendOutcome::Done,
             Err(error) => SendOutcome::End(error),
         }
-    }
-
-    fn response_context(&self, initialize: bool) -> ResponseContext {
-        if initialize {
-            ResponseContext::Initialize
-        } else if self.has_session_id() {
-            ResponseContext::SessionBound
-        } else {
-            ResponseContext::Stateless
-        }
-    }
-
-    fn has_session_id(&self) -> bool {
-        self.phase.lock().expect("http phase").session_id.is_some()
-    }
-
-    fn is_open(&self) -> bool {
-        self.phase.lock().expect("http phase").open
     }
 }
 
@@ -1229,15 +1211,21 @@ fn is_response_to(message: &Value, id: u64) -> bool {
         && (message.get("result").is_some() ^ message.get("error").is_some())
 }
 
+/// The response retains the context of its own emitted request headers.
+struct PostResponse {
+    response: HttpResponse,
+    context: ResponseContext,
+}
+
 enum Modern {
-    Response(HttpResponse),
+    Response(PostResponse),
     Accepted,
     Legacy,
 }
 
 #[derive(Clone, Copy)]
 enum ResponseContext {
-    Initialize,
+    Initialize { legacy_allowed: bool },
     SessionBound,
     Stateless,
 }
@@ -1247,7 +1235,7 @@ fn response_failure(status: u16, context: ResponseContext) -> Option<McpError> {
     match status {
         401 => Some(McpError::Unauthorized),
         404 if matches!(context, ResponseContext::SessionBound) => Some(McpError::SessionExpired),
-        500.. => Some(if matches!(context, ResponseContext::Initialize) {
+        500.. => Some(if matches!(context, ResponseContext::Initialize { .. }) {
             McpError::Unreachable
         } else {
             McpError::Unconfirmed
@@ -1262,7 +1250,9 @@ fn server_error(initialize: bool, id: Option<u64>) -> SendOutcome {
     let error = response_failure(
         500,
         if initialize {
-            ResponseContext::Initialize
+            ResponseContext::Initialize {
+                legacy_allowed: false,
+            }
         } else {
             ResponseContext::Stateless
         },

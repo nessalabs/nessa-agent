@@ -428,6 +428,30 @@ initialized; it creates no additional general frame sender. Recovery is bounded
 by the injected clock's initialization budget, and never replays the failed call.
 Close alone owns DELETE, retaining the ID claim through the attempt's completion.
 
+```mermaid
+stateDiagram-v2
+    [*] --> Available
+    Available --> Initializing: session-bound 404 / register startup before header I/O
+    Initializing --> ReadyForWriter: matching validated initialize / publish identity
+    Initializing --> Failed: startup failure or budget / retain first cause
+    ReadyForWriter --> Completed: initialized accepted + valid predeadline delivery / atomic registry commit
+    ReadyForWriter --> Failed: rejection, expiry or failed delivery / retain first cause
+    Completed --> Completed: late startup timeout or failure / no-op
+    Failed --> Failed: later failure / retain first cause
+    note right of Completed
+        Terminal recovery success; ordinary calls admitted.
+        Waiter scheduling cannot reverse the commit.
+    end note
+    note right of Failed
+        Terminal recovery failure; ordinary calls refused.
+        The first typed cause remains authoritative.
+    end note
+```
+
+Close is a separate registry fence, not another Recovery state. It prevents
+publication and completion admission, joins registered owners, and owns DELETE;
+a prior terminal recovery cause remains authoritative during teardown.
+
 | Row | Trigger/order | Required outcome and ownership | Enforcer |
 | --- | --- | --- | --- |
 | J1 | JSON headers arrive, body stalls; call times out/drops | Writer can send cancellation and another call; direct cancellation aborts registered body; no replay | `j1_stalled_json_timeout_allows_cancel_and_next_call` |
@@ -455,6 +479,18 @@ Typed HTTP response failures have one classifier shared with ordinary POSTs.
 | J12 | Completion receiver disappears after initialized acceptance, before completion commit | Failed delivery becomes terminal before any queued ordinary frame; no temporary Completed/admission gap | `j12_lost_completion_cannot_admit_queued_call` |
 | J13 | Successful predeadline completion delivery wins, then startup observes its ready timer; or timeout wins before delivery | Timer selection after predeadline delivery/commit leaves Completed successful with no late Timeout; timer-first Failed Timeout blocks delivery/admission | `j13_completed_commit_defeats_late_timeout`, J9 expired handoff |
 | J14 | Recovery initialized POST receives 5xx, refreshed retry receives 401, or claimed replacement returns 404 | Preserve Unconfirmed, Unauthorized or SessionExpired through writer, startup and public pending calls; claimed 404 terminates without a second recovery or replay (stateless 404 is Malformed) | `j14_initialized_http_failures_keep_typed_causes` |
+
+Response classification owns immutable evidence of the actual POST attempt. The
+same branch that emits `Mcp-Session-Id` records SessionBound; omission records
+Stateless, while initialize retains its method purpose and captured initial-only
+legacy eligibility. Each refreshed retry captures its own emitted headers. The
+response travels with this context; neither consumer consults a later phase to
+infer which request produced it.
+
+| Row | Trigger/order | Required outcome and ownership | Enforcer |
+| --- | --- | --- | --- |
+| J15 | Stateless control waits on headers; private initialize publishes replacement; control returns 404 | Classify actual stateless attempt as Malformed FailCall(None), preserve queued Ready and successful subsequent replacement call; no second initialize/replay | `j15_control_response_uses_its_actual_request_context` |
+| J16 | Stateless control returns 401 after replacement publication; refreshed retry emits replacement ID and returns 404 | Classify final bound attempt as SessionExpired, end without second recovery/replay; capture context separately for each real attempt | `j16_refreshed_control_retry_uses_its_own_bound_context` |
 
 The related audit verification correction (#631) pairs inspection requested/outcome
 records by action, phase and operation identity. Millisecond wall-clock observations

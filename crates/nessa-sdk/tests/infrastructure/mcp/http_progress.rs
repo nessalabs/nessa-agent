@@ -1,4 +1,4 @@
-//! ADR 392 J1–J14: JSON/initialization progress and replacement cleanup ownership.
+//! ADR 392 J1–J16: JSON/initialization progress and replacement cleanup ownership.
 use super::super::connection::{Connection, Outgoing};
 use super::super::http::{HttpSession, SendOutcome};
 use super::super::{
@@ -65,6 +65,7 @@ struct Peer {
     initialized_headers: Option<Arc<Gate>>,
     delete: Option<Arc<Gate>>,
     initialized_status: u16,
+    controls: Mutex<VecDeque<(u16, Option<Arc<Gate>>)>>,
     initialized_expiry: Option<Arc<ManualClock>>,
     replacement_json: bool,
     call_sse: bool,
@@ -82,6 +83,7 @@ impl Peer {
             initialized_headers: None,
             delete: None,
             initialized_status: 202,
+            controls: Mutex::new(VecDeque::new()),
             initialized_expiry: None,
             replacement_json: false,
             call_sse: false,
@@ -182,6 +184,23 @@ impl HttpExchange for Peer {
                     return Ok(response);
                 }
                 if message.get("method").is_none() || message.get("id").is_none() {
+                    let control = if method(&request).as_deref() == Some("notifications/cancelled")
+                        || message.get("method").is_none()
+                    {
+                        self.controls.lock().unwrap().pop_front()
+                    } else {
+                        None
+                    };
+                    if let Some((status, gate)) = control {
+                        if let Some(gate) = gate {
+                            gate.enter().await;
+                        }
+                        return Ok(HttpResponse {
+                            status,
+                            headers: vec![],
+                            body: HttpBody::Buffered(vec![]),
+                        });
+                    }
                     let recovering = header(&request, "mcp-session-id") == Some("replacement");
                     if recovering
                         && method(&request).as_deref() == Some("notifications/initialized")
@@ -1442,5 +1461,211 @@ async fn j14_initialized_http_failures_keep_typed_causes() {
             1
         );
         stop(&session).await;
+    }
+}
+
+/// Each mode drives the same actual exchange: public serialized writer and
+/// direct dispatch seam (which additionally exposes the control's typed outcome).
+async fn control_context_ordering(retry: bool, public_writer: bool) {
+    let gate = Arc::new(Gate::default());
+    let (probe, body) = Probe::body();
+    let peer = Peer::new();
+    *peer.replacement.lock().unwrap() = Some(body);
+    peer.controls
+        .lock()
+        .unwrap()
+        .push_back((if retry { 401 } else { 404 }, Some(gate.clone())));
+    if retry {
+        peer.controls.lock().unwrap().push_back((404, None));
+    }
+    let peer = Arc::new(peer);
+    let authorization = Arc::new(RetryAuthorization {
+        rejected: AtomicUsize::new(0),
+    });
+    let (session, incoming) = HttpSession::open(
+        Uuid::from_u128(1),
+        RemoteMcpUrl::parse("http://127.0.0.1/mcp").unwrap(),
+        peer.clone(),
+        authorization.clone(),
+        Arc::default(),
+    );
+    let connection = if public_writer {
+        Some(Connection::open_http(
+            session.clone(),
+            incoming,
+            Arc::new(RuntimeClock::new()),
+        ))
+    } else {
+        None
+    };
+    let (writer, mut queue) = mpsc::channel(2);
+    if let Some(connection) = &connection {
+        bounded(connection.call("initialize", None))
+            .await
+            .unwrap()
+            .unwrap();
+    } else {
+        session.set_writer(writer, Arc::new(RuntimeClock::new()));
+        initialize(&session).await;
+    }
+    peer.expire.store(true, Ordering::SeqCst);
+    if let Some(connection) = &connection {
+        assert_eq!(
+            bounded(connection.call("tools/call", None))
+                .await
+                .unwrap_err(),
+            McpError::SessionExpired
+        );
+    } else {
+        assert!(matches!(
+            session.dispatch(br#"{"id":2,"method":"tools/call"}"#).await,
+            SendOutcome::FailCall {
+                error: McpError::SessionExpired,
+                ..
+            }
+        ));
+    }
+    probe.polled(1).await;
+    let direct = if let Some(connection) = &connection {
+        connection
+            .notify("notifications/cancelled", Some(json!({"requestId":2})))
+            .await
+            .unwrap();
+        None
+    } else {
+        Some(tokio::spawn({
+            let session = session.clone();
+            async move {
+                session
+                    .dispatch(br#"{"method":"notifications/cancelled","params":{"requestId":2}}"#)
+                    .await
+            }
+        }))
+    };
+    gate.reached().await;
+    assert_eq!(
+        peer.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| method(request).as_deref() == Some("notifications/cancelled"))
+            .count(),
+        1
+    );
+    assert!(peer
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|request| method(request).as_deref() == Some("notifications/cancelled"))
+        .all(|request| header(request, "Mcp-Session-Id").is_none()));
+    probe.event(json!({"id":0,"result":{"protocolVersion":"2025-06-18"}}));
+    peer.observed(|request| {
+        request.method == HttpMethod::Get
+            && header(request, "Mcp-Session-Id") == Some("replacement")
+    })
+    .await;
+    gate.release();
+    if let Some(direct) = direct {
+        let outcome = bounded(direct).await.unwrap();
+        if retry {
+            assert!(matches!(
+                outcome,
+                SendOutcome::End(McpError::SessionExpired)
+            ));
+        } else {
+            assert!(
+                matches!(outcome, SendOutcome::FailCall { id: None, error: McpError::Malformed(ref text) } if text == "HTTP 404")
+            );
+        }
+        let Outgoing::RecoveryReady {
+            deadline,
+            completed,
+        } = bounded(queue.recv()).await.unwrap()
+        else {
+            panic!("queued recovery handoff")
+        };
+        if retry {
+            drop(completed);
+        } else {
+            assert!(matches!(
+                session.finish_recovery(deadline, completed).await,
+                SendOutcome::Done
+            ));
+            assert!(matches!(call(&session, 3).await, SendOutcome::Done));
+        }
+    } else if retry {
+        let connection = connection.as_ref().unwrap();
+        assert_eq!(bounded(connection.ended()).await, McpError::SessionExpired);
+        assert_eq!(
+            bounded(connection.call("tools/list", None))
+                .await
+                .unwrap_err(),
+            McpError::SessionExpired
+        );
+    } else {
+        peer.observed(|request| method(request).as_deref() == Some("notifications/initialized"))
+            .await;
+        assert_eq!(
+            bounded(connection.as_ref().unwrap().call("tools/list", None))
+                .await
+                .unwrap()
+                .unwrap(),
+            json!({"tools":[]})
+        );
+    }
+    {
+        let requests = peer.seen.lock().unwrap();
+        let controls: Vec<_> = requests
+            .iter()
+            .filter(|request| method(request).as_deref() == Some("notifications/cancelled"))
+            .collect();
+        assert_eq!(controls.len(), if retry { 2 } else { 1 });
+        assert!(header(controls[0], "Mcp-Session-Id").is_none());
+        if retry {
+            assert_eq!(header(controls[1], "Mcp-Session-Id"), Some("replacement"));
+            assert_eq!(header(controls[1], "Authorization"), Some("Bearer retry"));
+        }
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| method(request).as_deref() == Some("initialize"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| method(request).as_deref() == Some("tools/call"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| method(request).as_deref() == Some("notifications/initialized"))
+                .count(),
+            usize::from(!retry)
+        );
+    }
+    assert_eq!(
+        authorization.rejected.load(Ordering::SeqCst),
+        usize::from(retry)
+    );
+    stop(&session).await;
+    probe.released().await;
+}
+
+#[tokio::test]
+async fn j15_control_response_uses_its_actual_request_context() {
+    for public_writer in [false, true] {
+        control_context_ordering(false, public_writer).await;
+    }
+}
+
+#[tokio::test]
+async fn j16_refreshed_control_retry_uses_its_own_bound_context() {
+    for public_writer in [false, true] {
+        control_context_ordering(true, public_writer).await;
     }
 }
