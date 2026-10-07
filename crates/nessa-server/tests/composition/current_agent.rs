@@ -8,7 +8,8 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         mpsc, Arc, Mutex,
     },
-    time::Duration,
+    thread,
+    time::{Duration, Instant},
 };
 
 use super::*;
@@ -930,37 +931,57 @@ fn assert_process(pid: i32, alive: bool) {
     assert_eq!(unsafe { libc::kill(pid, 0) } == 0, alive);
 }
 
+fn live_launch(
+    directory: &Path,
+    prefix: &str,
+    minimum_launches: usize,
+) -> Option<serde_json::Value> {
+    let launches = std::fs::read_dir(directory)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry.file_name().to_string_lossy().starts_with(prefix)
+                && entry
+                    .path()
+                    .extension()
+                    .is_some_and(|value| value == "json")
+        })
+        .filter_map(|entry| std::fs::read(entry.path()).ok())
+        .filter_map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .collect::<Vec<_>>();
+    if launches.len() < minimum_launches {
+        return None;
+    }
+    launches.into_iter().find(|launch| {
+        let pid = i32::try_from(launch["pid"].as_i64().unwrap()).unwrap();
+        unsafe { libc::kill(pid, 0) == 0 }
+    })
+}
+
+/// The wrapper's launch file is the handshake. A thread waits for it on the
+/// wall clock and wakes this task once; a runtime timer would lose to the
+/// stall that kept the task from being polled.
 async fn launched(path: &Path, minimum_launches: usize) -> serde_json::Value {
     let prefix = format!("{}-", path.file_stem().unwrap().to_string_lossy());
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let launches = std::fs::read_dir(path.parent().unwrap())
-                .into_iter()
-                .flatten()
-                .filter_map(Result::ok)
-                .filter(|entry| {
-                    entry.file_name().to_string_lossy().starts_with(&prefix)
-                        && entry
-                            .path()
-                            .extension()
-                            .is_some_and(|value| value == "json")
-                })
-                .filter_map(|entry| std::fs::read(entry.path()).ok())
-                .filter_map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-                .collect::<Vec<_>>();
-            if launches.len() >= minimum_launches {
-                for launch in launches {
-                    let pid = i32::try_from(launch["pid"].as_i64().unwrap()).unwrap();
-                    if unsafe { libc::kill(pid, 0) } == 0 {
-                        return launch;
-                    }
-                }
+    let directory = path.parent().unwrap().to_path_buf();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let found = loop {
+            if let Some(launch) = live_launch(&directory, &prefix, minimum_launches) {
+                break Some(launch);
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("managed ACP fixture launched")
+            if Instant::now() >= deadline {
+                break None;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        let _ = tx.send(found);
+    });
+    rx.await
+        .expect("launch watcher stayed up")
+        .expect("managed ACP fixture launched")
 }
 
 fn service(root: &Path, resolver: Arc<CurrentAgentResolver>) -> ConversationService {
