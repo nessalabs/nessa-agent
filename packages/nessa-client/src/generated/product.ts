@@ -651,6 +651,33 @@ export interface ConversationListResult {
   /** True when `conversations` names every conversation the caller has under this list's filter. False when the 500 bound left some out, or when a stored record or summary of the caller's own cannot be read back, which lasts until an operator repairs it. Nobody else's conversations are read to answer a list, so nobody else's damage makes it false. A conversation missing from a complete list is not there under that filter: deleted, listed under the other filter, or one the gateway has no summary for (nothing was said in it, or its summary was never written). */
   complete: boolean
 }
+/** Where an observation pass resumes: the same incarnation and boundary, then the next descriptor after this creation revision and identity. */
+export interface ConversationObserveCursor {
+  /** Catalogue database incarnation captured with this pass. A later pass starts again when it no longer matches. */
+  incarnation: string
+  /** Fixed owner head captured when this pass began. A conversation created after it waits for the next pass. */
+  boundary: string
+  /** Creation revision of the last descriptor this pass has already returned. */
+  creation: string
+  /** Conversation identity of that last descriptor. Compared only when the creation revision is the same. */
+  id: string
+}
+/** One page of the caller's conversation catalogue. Opens no provider. Does not raise the 500-row list. */
+export interface ConversationObserveParams {
+  /** Observe only archived conversations when true; only unarchived ones when false or absent. The same filter as conversation.list. */
+  archived?: boolean
+  /** Absent on the first page. Later pages echo the cursor the previous page returned. */
+  cursor?: ConversationObserveCursor
+}
+/** One catalogue page of the caller's summaries, and whether the pass is finished. The page size is the catalogue bound, not a larger conversation.list. */
+export interface ConversationObserveResult {
+  /** Summaries from this catalogue page whose archived flag is the one asked for, creation order. At most one catalogue page. Deleted rows, rows with no summary, and the other archived flag are left out of this array and still advance the cursor. Ownership is applied before the page is returned. */
+  conversations: ConversationSummary[]
+  /** True only when this page finishes the pass: every stored summary under the filter, up to the captured head, was returned across the pages. False when further descriptors remain, or when this page cannot say where to resume. A false page is not every stored summary, including when it has no cursor. */
+  complete: boolean
+  /** Present when complete is false and another page can be asked. Absent when the pass is finished, or when this page cannot resume. */
+  cursor?: ConversationObserveCursor
+}
 /** Submit one input; execution and request IDs stay fixed across retries. */
 export interface ConversationSendParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
@@ -1983,7 +2010,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 51,
+  maxReadyMethods: 52,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxPhysicalRecordPayloadBytes: 65546,
@@ -2016,6 +2043,7 @@ export const bounds = {
   minRecordPayloadEncodedCharacters: 4,
   maxRecordPayloadEncodedCharacters: 87396,
   maxListedConversations: 500,
+  maxCataloguePageEntries: 256,
   maxToolStructuredContentBytes: 16384,
   maxMcpNameBytes: 128,
   maxUiResourceUriBytes: 2048,
@@ -2050,6 +2078,7 @@ export const ProductMethod = {
   ConversationRecordsHead: "conversation.recordsHead",
   ConversationRecordsPage: "conversation.recordsPage",
   ConversationList: "conversation.list",
+  ConversationObserve: "conversation.observe",
   ConversationSend: "conversation.send",
   ConversationSteer: "conversation.steer",
   ConversationRemove: "conversation.remove",
@@ -2109,6 +2138,7 @@ export const productReadyMethods = [
   "conversation.recordsHead",
   "conversation.recordsPage",
   "conversation.list",
+  "conversation.observe",
   "conversation.send",
   "conversation.steer",
   "conversation.remove",

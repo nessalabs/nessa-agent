@@ -4,10 +4,12 @@ import {
 } from "../application/conversation-mutation-error.js"
 import type { RequestDeadline, RpcRequester } from "../application/session-port.js"
 import { conversationDeleteTimeoutMs } from "../application/agent-budgets.js"
-import { ProductMethod } from "../generated/product.js"
+import { bounds, ProductMethod } from "../generated/product.js"
 import type {
   ConversationCreateResult,
   ConversationListResult,
+  ConversationObserveCursor,
+  ConversationObserveResult,
   ConversationView,
   ConversationReceipt,
   ConversationMutationResult,
@@ -26,6 +28,7 @@ import {
   conversationId,
   conversationIdPattern,
   conversationList,
+  conversationObserve,
   conversationView,
   conversationReceipt,
   conversationCommandReceipt,
@@ -33,11 +36,20 @@ import {
   conversationReorder,
   conversationApprovalMode,
 } from "../protocol/conversation-validate.js"
+import { decimal } from "../protocol/passive-read-validate.js"
 
 /** Which of the caller's conversations `list()` returns. */
 export type ConversationListOptions = {
   /** True for archived conversations only; false or omitted for the rest. */
   archived?: boolean
+}
+
+/** One page of `observe()`. */
+export type ConversationObserveOptions = {
+  /** True for archived conversations only; false or omitted for the rest. */
+  archived?: boolean
+  /** Absent on the first page. Later pages echo the cursor the previous page returned. */
+  cursor?: ConversationObserveCursor
 }
 
 /** Optional caller-managed action identity. The client generates it when omitted. */
@@ -90,6 +102,14 @@ export type ConversationApi = {
    * they. Listing opens no provider, so it is cheap to call when a list is shown.
    */
   list: (options?: ConversationListOptions) => Promise<ConversationListResult>
+  /**
+   * Read one catalogue page of the conversations `list()` would name.
+   * Walk the cursor until `complete` is true to see every stored summary
+   * under that filter. A page with `complete: false` is not that set,
+   * including when it has no cursor. The page holds at most one catalogue
+   * page, not a larger list. Observing opens no provider.
+   */
+  observe: (options?: ConversationObserveOptions) => Promise<ConversationObserveResult>
   /**
    * Queue a message for this conversation without waiting for provider
    * attachment: text, images, linked files, or any combination of them.
@@ -215,6 +235,10 @@ const utf8 = new TextEncoder()
 function boundedText(value: string, name: string, maxBytes: number): string {
   if (!value.trim() || utf8.encode(value).byteLength > maxBytes)
     throw new TypeError(`${name} must contain 1-${maxBytes} UTF-8 bytes`)
+  return value
+}
+function observeDecimal(value: string): string {
+  if (!decimal(value)) throw new TypeError("Invalid observation cursor")
   return value
 }
 function validConversationId(value: string): string {
@@ -374,6 +398,30 @@ export function createConversationApi(
         ),
         options.archived ?? false,
       ),
+    observe: async (options = {}) => {
+      const cursor =
+        options.cursor === undefined
+          ? {}
+          : {
+              cursor: {
+                incarnation: boundedText(
+                  options.cursor.incarnation,
+                  "Incarnation",
+                  bounds.maxSyncIdBytes,
+                ),
+                boundary: observeDecimal(options.cursor.boundary),
+                creation: observeDecimal(options.cursor.creation),
+                id: validConversationId(options.cursor.id),
+              },
+            }
+      return conversationObserve(
+        await session.request(ProductMethod.ConversationObserve, {
+          ...(options.archived === undefined ? {} : { archived: options.archived }),
+          ...cursor,
+        }),
+        options.archived ?? false,
+      )
+    },
     read: async (id) =>
       conversationView(
         await session.request(ProductMethod.ConversationRead, {

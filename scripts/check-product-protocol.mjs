@@ -195,6 +195,62 @@ for (const invalid of [{ archived: "yes" }, { archived: true, cursor: "x" }]) {
   if (validateListParams(invalid))
     throw new Error("Product conversation list accepts invalid params")
 }
+// Observation pages are the catalogue bound, not a larger list. A page that
+// omits `complete`, or that carries more rows than the schema allows, is not
+// a pass. An unfinished page may omit its cursor; that is not exhaustion.
+const validateObserve = ajv.getSchema(`${schema.$id}#/$defs/ConversationObserveResult`)
+const validateObserveParams = ajv.getSchema(
+  `${schema.$id}#/$defs/ConversationObserveParams`,
+)
+const pageMax = schema.$defs.ConversationObserveResult.properties.conversations.maxItems
+const observeCursor = {
+  incarnation: "a".repeat(32),
+  boundary: "7",
+  creation: "7",
+  id: row.conversationId,
+}
+if (
+  !validateObserve({ conversations: [row], complete: false, cursor: observeCursor }) ||
+  !validateObserve({ conversations: [row], complete: false }) ||
+  !validateObserve({ conversations: [], complete: true }) ||
+  !validateObserve({
+    conversations: Array.from({ length: pageMax }, () => row),
+    complete: false,
+    cursor: observeCursor,
+  })
+)
+  throw new Error("Product conversation observe rejects a catalogue page")
+for (const invalid of [
+  { conversations: [row] },
+  { conversations: [row], complete: "yes" },
+  {
+    conversations: Array.from({ length: pageMax + 1 }, () => row),
+    complete: false,
+    cursor: observeCursor,
+  },
+  {
+    conversations: [row],
+    complete: false,
+    cursor: { ...observeCursor, boundary: "01" },
+  },
+  {
+    conversations: [row],
+    complete: false,
+    cursor: { ...observeCursor, id: "not-a-uuid" },
+  },
+]) {
+  if (validateObserve(JSON.parse(JSON.stringify(invalid))))
+    throw new Error("Product conversation observe accepts an ill-formed page")
+}
+if (
+  !validateObserveParams({}) ||
+  !validateObserveParams({ archived: false, cursor: observeCursor })
+)
+  throw new Error("Product conversation observe rejects a pass request")
+if (
+  validateObserveParams({ archived: true, cursor: { ...observeCursor, creation: "01" } })
+)
+  throw new Error("Product conversation observe accepts an ill-formed cursor")
 for (const [name, fixture] of [
   ["ConversationArchiveParams", read("fixtures.json").ConversationArchiveParams],
   ["ConversationDeleteParams", read("fixtures.json").ConversationDeleteParams],

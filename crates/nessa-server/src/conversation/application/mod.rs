@@ -148,7 +148,8 @@ pub use ports::{
     ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
     ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
     ConversationRepository, ConversationSummaries, ListedConversation, ListedConversations,
-    RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage, UnfinishedDeletions,
+    ObservationCursor, ObservedConversations, RuntimeReadiness, SubmittedFile, SubmittedImage,
+    SubmittedMessage, UnfinishedDeletions,
 };
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
