@@ -1950,3 +1950,188 @@ fn r5_an_open_child_under_a_closed_ancestor_stays_readable() {
         Err(OwnershipError::DispatchRefused)
     );
 }
+
+#[test]
+fn row_20_private_root_discard_preserves_neighbors_closed_history_reports_and_recovery() {
+    let mut graph = OwnershipGraph::new();
+    root(&mut graph, "private");
+    root(&mut graph, "neighbor");
+    root(&mut graph, "history");
+    admit(&mut graph, "neighbor", "child", "request");
+    graph
+        .advance_spawn(&spawn_id("request"), SpawnProgress::Prepared)
+        .unwrap();
+    graph
+        .admit_report(report("retained-report"), &life("child"), &life("neighbor"))
+        .unwrap();
+    graph
+        .begin_close(
+            &life("history"),
+            close_id("history-close"),
+            LifetimeCause::Deletion,
+            Initiator::Host(actor("history-close")),
+        )
+        .unwrap();
+    graph
+        .apply_report(
+            &life("history"),
+            &close_id("history-close"),
+            &life("history"),
+            PhysicalFact::Released,
+            EvidenceFact::Acknowledged,
+        )
+        .unwrap();
+    graph
+        .begin_close(
+            &life("neighbor"),
+            close_id("neighbor-close"),
+            LifetimeCause::HostClose,
+            Initiator::Runtime,
+        )
+        .unwrap();
+    let mut expected = graph.snapshot();
+    expected
+        .lifetimes
+        .retain(|r| r.lifetime_id != life("private"));
+    graph.discard_private_root(&life("private")).unwrap();
+    assert_eq!(graph.snapshot(), expected);
+    assert!(graph.recovery_records().is_empty());
+    // A live rollback via restore would change this interrupted-cascade neighbor.
+    // Preserve an intentionally open descendant without invoking restoration.
+    let mut snapshot = graph.snapshot();
+    snapshot
+        .lifetimes
+        .iter_mut()
+        .find(|r| r.lifetime_id == life("child"))
+        .unwrap()
+        .state = LifetimeState::Open;
+    snapshot
+        .lifetimes
+        .iter_mut()
+        .find(|r| r.lifetime_id == life("child"))
+        .unwrap()
+        .close_operation = None;
+    snapshot
+        .lifetimes
+        .iter_mut()
+        .find(|r| r.lifetime_id == life("child"))
+        .unwrap()
+        .cause = None;
+    snapshot
+        .lifetimes
+        .iter_mut()
+        .find(|r| r.lifetime_id == life("child"))
+        .unwrap()
+        .initiator = None;
+    snapshot
+        .lifetimes
+        .iter_mut()
+        .find(|r| r.lifetime_id == life("child"))
+        .unwrap()
+        .cascaded_from = None;
+    let mut restored = OwnershipGraph::restore(snapshot);
+    let recovery = restored.recovery_records().to_vec();
+    assert!(!recovery.is_empty());
+    root(&mut restored, "private-again");
+    let mut expected = restored.snapshot();
+    expected
+        .lifetimes
+        .retain(|r| r.lifetime_id != life("private-again"));
+    restored
+        .discard_private_root(&life("private-again"))
+        .unwrap();
+    assert_eq!(restored.snapshot(), expected);
+    assert_eq!(restored.recovery_records(), recovery);
+}
+
+#[test]
+fn active_root_query_excludes_child_and_closed_history_and_discard_refuses_dependents() {
+    let mut graph = OwnershipGraph::new();
+    root(&mut graph, "root");
+    admit(&mut graph, "root", "child", "request");
+    assert_eq!(
+        graph.root_lifetime_for_session(&session("root")),
+        Some(&life("root"))
+    );
+    assert!(graph.root_lifetime_for_session(&session("child")).is_none());
+    assert_eq!(
+        graph.discard_private_root(&life("root")),
+        Err(OwnershipError::StaleOutcome)
+    );
+    assert_eq!(
+        graph.discard_private_root(&life("child")),
+        Err(OwnershipError::StaleOutcome)
+    );
+    root(&mut graph, "history");
+    graph
+        .begin_close(
+            &life("history"),
+            close_id("close"),
+            LifetimeCause::HostClose,
+            Initiator::Runtime,
+        )
+        .unwrap();
+    assert_eq!(
+        graph.root_lifetime_for_session(&session("history")),
+        Some(&life("history"))
+    );
+    let token = graph
+        .note_unbound_root(&life("history"), &close_id("close"))
+        .unwrap();
+    graph
+        .acknowledge_unbound_root(token, EvidenceFact::Acknowledged)
+        .unwrap();
+    assert!(graph
+        .root_lifetime_for_session(&session("history"))
+        .is_none());
+    assert_eq!(
+        graph.discard_private_root(&life("history")),
+        Err(OwnershipError::StaleOutcome)
+    );
+    assert_eq!(
+        graph
+            .note_unbound_root(&life("child"), &close_id("close"))
+            .unwrap_err(),
+        OwnershipError::StaleOutcome
+    );
+}
+
+#[test]
+fn unbound_absence_token_refuses_child_closed_history_and_stale_completion() {
+    let mut graph = OwnershipGraph::new();
+    root(&mut graph, "root");
+    graph
+        .begin_close(
+            &life("root"),
+            close_id("close"),
+            LifetimeCause::HostClose,
+            Initiator::Runtime,
+        )
+        .unwrap();
+    let token = graph
+        .note_unbound_root(&life("root"), &close_id("close"))
+        .unwrap();
+    graph
+        .apply_report(
+            &life("root"),
+            &close_id("close"),
+            &life("root"),
+            PhysicalFact::Released,
+            EvidenceFact::Acknowledged,
+        )
+        .unwrap();
+    assert_eq!(
+        graph.acknowledge_unbound_root(token, EvidenceFact::Failed),
+        Err(OwnershipError::StaleOutcome)
+    );
+    assert_eq!(
+        graph
+            .note_unbound_root(&life("root"), &close_id("close"))
+            .unwrap_err(),
+        OwnershipError::StaleOutcome
+    );
+    assert_eq!(
+        graph.snapshot().settlements[0].evidence,
+        EvidenceFact::Acknowledged
+    );
+}

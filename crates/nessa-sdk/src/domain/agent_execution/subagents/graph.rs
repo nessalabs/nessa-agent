@@ -68,6 +68,22 @@ pub struct CloseAdmission {
     pub targets: Vec<AgentLifetimeId>,
 }
 
+/// Correlated physical absence awaiting its real ownership-audit outcome.
+/// Produced only for a root; application supplies proof it was never bound.
+#[derive(Debug)]
+#[must_use = "record the absence evidence and apply its real audit outcome"]
+pub struct UnboundRootSettlement {
+    root: AgentLifetimeId,
+    operation: CloseOperationId,
+    evidence: OwnershipEvidence,
+}
+impl UnboundRootSettlement {
+    /// Audit record for confirmed physical absence while the root stays Closing.
+    pub fn evidence(&self) -> &OwnershipEvidence {
+        &self.evidence
+    }
+}
+
 /// Whether a prepared child may be dispatched.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dispatch {
@@ -186,6 +202,34 @@ impl OwnershipGraph {
         self.spawns.get(id).map(|spawn| &spawn.row.child_lifetime)
     }
 
+    /// Derive receipt retention for a sealed child whose permission publication is pending.
+    /// `eligible` is the application's last acknowledged spawn progress. A
+    /// provider-acknowledged task receipt remains factual under Closing/Closed,
+    /// represented as Unconfirmed rather than a new affirmative permission.
+    /// Existing terminal safety progress and lifetime state are not changed.
+    /// Returns `None` when ordinary eligibility selection is sufficient.
+    pub fn sealed_spawn_progress(
+        &self,
+        request: &SpawnRequestId,
+        eligible: &SpawnProgress,
+    ) -> Option<SpawnProgress> {
+        let spawn = self.spawns.get(request)?;
+        if self.lifetime_state(&spawn.row.child_lifetime) == Some(LifetimeState::Open) {
+            return None;
+        }
+        let known = spawn.row.progress.known();
+        if !matches!(known, KnownMilestone::TaskAdmitted { .. }) || known == eligible.known() {
+            return None;
+        }
+        Some(match &spawn.row.progress {
+            SpawnProgress::Ended { .. }
+            | SpawnProgress::Draining { .. }
+            | SpawnProgress::StartupFailed { .. }
+            | SpawnProgress::Unconfirmed { .. } => spawn.row.progress.clone(),
+            _ => SpawnProgress::Unconfirmed { known },
+        })
+    }
+
     /// Report position.
     pub fn report_state(&self, id: &ReportId) -> Option<DeliveryState> {
         self.reports.get(id).map(|report| report.state)
@@ -200,6 +244,103 @@ impl OwnershipGraph {
         self.settlements
             .get(&(close_lifetime.clone(), target.clone()))
             .map(|settlement| settlement.physical)
+    }
+
+    /// Find an active root for a session, excluding child identities and closed history.
+    /// This read does not grant dispatch or change the refusal of `open_root`.
+    pub fn root_lifetime_for_session(&self, session: &SessionId) -> Option<&AgentLifetimeId> {
+        self.lifetimes
+            .iter()
+            .find(|(id, lifetime)| {
+                &lifetime.row.session_id == session
+                    && lifetime.row.state != LifetimeState::Closed
+                    && !self.child_request.contains_key(*id)
+            })
+            .map(|(id, _)| id)
+    }
+
+    /// Remove one untransferred private root without restoring neighboring history.
+    /// The application must establish that this identity never became audit eligible
+    /// and never transferred resources. Descendants or close facts refuse deletion.
+    ///
+    /// # Errors
+    /// Returns `StaleOutcome` for a child, non-open root, or root with dependents.
+    pub fn discard_private_root(&mut self, id: &AgentLifetimeId) -> Result<(), OwnershipError> {
+        if self.child_request.contains_key(id)
+            || self.lifetime_state(id) != Some(LifetimeState::Open)
+            || self
+                .spawns
+                .values()
+                .any(|s| &s.row.binding.parent_lifetime == id)
+            || self
+                .settlements
+                .keys()
+                .any(|(root, target)| root == id || target == id)
+            || self
+                .reports
+                .values()
+                .any(|r| &r.parent_lifetime == id || &r.child_lifetime == id)
+        {
+            return Err(OwnershipError::StaleOutcome);
+        }
+        self.lifetimes.remove(id);
+        Ok(())
+    }
+
+    /// Record physical absence on a never-bound root without acknowledging audit.
+    /// Application owns proof that no resource transfer occurred. The returned
+    /// token correlates the evidence and later audit result to this close.
+    ///
+    /// # Errors
+    /// Returns `StaleOutcome` for child identities or unmatched close operations.
+    pub fn note_unbound_root(
+        &mut self,
+        root: &AgentLifetimeId,
+        operation: &CloseOperationId,
+    ) -> Result<UnboundRootSettlement, OwnershipError> {
+        if self.child_request.contains_key(root)
+            || self.lifetime_state(root) != Some(LifetimeState::Closing)
+        {
+            return Err(OwnershipError::StaleOutcome);
+        }
+        let evidence = self.apply_report(
+            root,
+            operation,
+            root,
+            PhysicalFact::Released,
+            EvidenceFact::Pending,
+        )?;
+        Ok(UnboundRootSettlement {
+            root: root.clone(),
+            operation: operation.clone(),
+            evidence,
+        })
+    }
+
+    /// Consume the actual audit result for previously confirmed root absence.
+    /// Physical release remains true on rejection; closure requires acknowledgment.
+    /// This completion is authorized by the evidence carried by the token.
+    ///
+    /// # Errors
+    /// Returns `StaleOutcome` when the close operation or physical absence changed.
+    pub fn acknowledge_unbound_root(
+        &mut self,
+        token: UnboundRootSettlement,
+        evidence: EvidenceFact,
+    ) -> Result<(), OwnershipError> {
+        self.ensure_dispatch()?;
+        if self.lifetime_state(&token.root) != Some(LifetimeState::Closing)
+            || self.close_operation(&token.root) != Some(&token.operation)
+            || self.physical(&token.root, &token.root) != Some(PhysicalFact::Released)
+        {
+            return Err(OwnershipError::StaleOutcome);
+        }
+        self.settlements
+            .get_mut(&(token.root.clone(), token.root.clone()))
+            .expect("correlated absence")
+            .evidence = evidence;
+        self.settle_if_ready(&token.root);
+        Ok(())
     }
 
     /// Open a root lifetime for a session that has no open or closing lifetime.

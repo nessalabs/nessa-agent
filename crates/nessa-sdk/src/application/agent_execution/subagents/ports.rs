@@ -34,6 +34,36 @@ pub trait ChildResources: Send + Sync {
     async fn close(&self, cause: &LifetimeCause, initiator: &Initiator) -> ResourceReport;
 }
 
+/// Why a lifetime did not accept a cleanup owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BindResourcesRefusal {
+    /// The identity is not present in the graph.
+    UnknownLifetime,
+    /// The lifetime already completed closure.
+    Closed,
+    /// A cleanup owner is already retained; it cannot be replaced.
+    AlreadyBound,
+    /// Physical absence or release was confirmed before this binding.
+    Released,
+}
+
+/// Failed resource transfer. The caller retains responsibility for this owner.
+/// Inspect `reason`, recover `resources`, and close or retain it explicitly.
+#[must_use = "a refused cleanup owner remains the caller's responsibility"]
+pub struct BindResourcesFailure {
+    /// Typed refusal; no physical resource transfer occurred.
+    pub reason: BindResourcesRefusal,
+    /// The exact rejected owner, returned without closing or replacing it.
+    pub resources: std::sync::Arc<dyn ChildResources>,
+}
+impl std::fmt::Debug for BindResourcesFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BindResourcesFailure")
+            .field("reason", &self.reason)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The child's initial task submission. Retries use the spawn request id.
 #[async_trait]
 pub trait InitialSubmit: Send + Sync {
