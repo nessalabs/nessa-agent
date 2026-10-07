@@ -6,6 +6,7 @@
 //! stand_in -> McpSession::serve -> Connection -> fixture
 //! forwarded -> McpSession::serve -> ForwardedResults (the grant's)
 //! sessions -> McpServers::open / tool_ui / stop -> FixtureLauncher
+//! post_streams -> HttpSession / Connection -> gated HttpChunks (ADR 392 P1–P14)
 //! process  -> McpServers -> ProcessLauncher -> fixtures/server.py
 //! ```
 //! Arrows show what each file drives.
@@ -14,6 +15,7 @@ mod caller_wakes;
 mod fixture;
 mod forwarded;
 mod http;
+mod post_streams;
 mod process;
 mod protocol;
 mod sessions;

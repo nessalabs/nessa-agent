@@ -674,6 +674,22 @@ async fn an_open_sse_reply_does_not_block_the_next_post() {
 }
 
 #[tokio::test]
+async fn settled_post_body_is_released_by_public_session_close() {
+    let peer = Peer::new(Behavior::HoldFirstList);
+    let session = open(peer.clone()).await.unwrap();
+    session.list_tools().await.unwrap();
+    session.close().await;
+    assert!(peer
+        .log
+        .lock()
+        .unwrap()
+        .legacy
+        .as_ref()
+        .unwrap()
+        .is_closed());
+}
+
+#[tokio::test]
 async fn recovery_initialize_sse_keeps_the_new_session_id() {
     let peer = Peer::new(Behavior::ExpireSse);
     let session = open(peer.clone()).await.unwrap();

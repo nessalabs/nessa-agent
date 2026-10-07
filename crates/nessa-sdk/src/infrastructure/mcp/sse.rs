@@ -47,8 +47,21 @@ impl SseParser {
 
     /// Take complete events out of `chunk`. A partial event stays here.
     pub(crate) fn push(&mut self, chunk: &[u8]) -> Result<Vec<SseEvent>, SseError> {
+        let mut chunk = chunk;
         let mut events = Vec::new();
-        for byte in chunk {
+        while let Some(event) = self.next_event(&mut chunk)? {
+            events.push(event);
+        }
+        Ok(events)
+    }
+
+    /// Consume through one complete event, leaving trailing bytes in `chunk`.
+    /// Partial input remains in this parser; comments are skipped. This lets a
+    /// POST reader stop at its terminal event before interpreting later bytes
+    /// (`post_terminal_precedes_bad_trailing_event`, ADR 392 P9).
+    pub(crate) fn next_event(&mut self, chunk: &mut &[u8]) -> Result<Option<SseEvent>, SseError> {
+        while let Some((byte, rest)) = chunk.split_first() {
+            *chunk = rest;
             if self.pending.len() >= self.limit {
                 self.pending.clear();
                 return Err(SseError::TooLarge);
@@ -57,11 +70,11 @@ impl SseParser {
             if self.pending.ends_with(b"\n\n") || self.pending.ends_with(b"\r\n\r\n") {
                 let raw = std::mem::take(&mut self.pending);
                 if let Some(event) = parse_event(&raw)? {
-                    events.push(event);
+                    return Ok(Some(event));
                 }
             }
         }
-        Ok(events)
+        Ok(None)
     }
 }
 
