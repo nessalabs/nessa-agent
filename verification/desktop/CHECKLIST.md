@@ -54,9 +54,8 @@ does not replace `workspace-load.mjs`.
 - [ ] **A scripted gateway's empty window is timed only with `--with-gateway`,
   in Chromium.** No conversation is created, and the session list stays
   empty. Cold and warm each ask the host for the gateway endpoint. This is
-  not a catalogue walk. `#607` does not merge, so the
-  desktop still cannot observe a stored count above `conversation.list`'s
-  500 through this script.
+  not a catalogue walk. `#607` is on main. This script does not time
+  `conversation.observe`. A browser timing of that walk is a follow-up.
   _Check:_ `alpha-perf.mjs --with-gateway` (`gateway`).
 - [ ] **Overview, drag, and split budgets stay in `perf-budget.mjs`.** A number
   there that misses 50 ms and matches `#588` / `#606` is that known result.

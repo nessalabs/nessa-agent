@@ -3,9 +3,9 @@
  * Opt-in alpha sample: cold and warm startup, a handful of panes, and one
  * long seeded transcript. Not part of run-all. Not a frame-budget gate —
  * those rows stay in perf-budget.mjs (sample workspace, #588 / #606). Not a
- * 10,000-chat run — that stays workspace-load.mjs (#595). The observe walk
- * (#596 / #607) is not on this tree, so a large gateway catalogue is not
- * measured here.
+ * 10,000-chat run — that stays workspace-load.mjs (#595). The observe
+ * walk is on main (#607). This script does not time it. A browser
+ * timing of that catalogue is a follow-up.
  *
  * Chromium records CDP Performance metrics, Long Animation Frames, and long
  * tasks. WebKit records Navigation Timing, paint, and rAF gaps, without
@@ -640,7 +640,7 @@ await main(
               previewMs: stack.timings.devServerMs,
               cold: colds,
               warm: warms,
-              note: "scripted gateway, no conversation created; not a catalogue walk (#607 does not merge)",
+              note: "scripted gateway, no conversation created; not a catalogue walk (#607 observe is on main; this script does not time it)",
             }
           } finally {
             await browser?.close()
