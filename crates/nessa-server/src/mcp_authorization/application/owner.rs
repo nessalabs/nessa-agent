@@ -30,6 +30,49 @@ enum Recalled {
     Unavailable,
 }
 
+/// Attempt and resource captured before the token POST. The reply is
+/// stored only when this pair is still the live one.
+struct Reply {
+    attempt: u64,
+    resource: String,
+    refresh: Option<u64>,
+}
+
+/// Token-endpoint inputs captured with the callback, so a later URL
+/// replace cannot send this code to the replacement authorization server.
+struct PendingExchange {
+    reply: Reply,
+    endpoint: Option<String>,
+    verifier: Option<String>,
+    redirect: Option<String>,
+    client_id: Option<String>,
+}
+
+impl Reply {
+    fn exchange(attempt: u64, resource: String) -> Self {
+        Self {
+            attempt,
+            resource,
+            refresh: None,
+        }
+    }
+
+    fn refresh(generation: u64, resource: String) -> Self {
+        Self {
+            attempt: 0,
+            resource,
+            refresh: Some(generation),
+        }
+    }
+
+    fn current(&self, auth: &ServerAuth) -> bool {
+        match self.refresh {
+            Some(generation) => auth.refresh_reply_current(generation, &self.resource),
+            None => auth.exchange_reply_current(self.attempt, &self.resource),
+        }
+    }
+}
+
 struct Slot {
     auth: ServerAuth,
     verifier: Option<String>,
@@ -236,15 +279,28 @@ impl AuthorizationOwner {
             Recalled::Unavailable => return AuthorizeAnswer::AuthorizationIncomplete,
         };
         let now = self.clock.now_ms();
-        let decision = {
+        let configured = self.resources.resource(server);
+        let (decision, prepared) = {
             let mut guard = slot.lock().await;
+            let resource = configured.unwrap_or_else(|| guard.auth.resource.clone());
             let decision = guard.auth.step(Command::Callback {
                 state: query.state,
                 now_ms: now,
                 denied: query.denied || query.code.is_none(),
+                resource,
             });
             guard.auth = decision.auth.clone();
-            decision
+            let prepared = match decision.auth.phase {
+                Phase::Exchanging { attempt } => Some(PendingExchange {
+                    reply: Reply::exchange(attempt, decision.auth.resource.clone()),
+                    endpoint: guard.token_endpoint.clone(),
+                    verifier: guard.verifier.clone(),
+                    redirect: guard.redirect_uri.clone(),
+                    client_id: guard.auth.client_id.clone(),
+                }),
+                _ => None,
+            };
+            (decision, prepared)
         };
         if let Some(refusal) = decision.refusal {
             let _ = self.persist(&slot).await;
@@ -259,18 +315,21 @@ impl AuthorizationOwner {
                 _ => self.refusal_now(&slot).await,
             };
         }
+        let Some(prepared) = prepared else {
+            return self.refusal_now(&slot).await;
+        };
         if self.persist(&slot).await.is_err() {
             return AuthorizeAnswer::AuthorizationIncomplete;
         }
         if self.audit_slot(&slot, "exchange", true).await.is_err() {
-            let _ = self.apply(&slot, Command::ExchangeUncertain).await;
-            let _ = self.persist(&slot).await;
-            return AuthorizeAnswer::AuthorizationIncomplete;
+            return self
+                .exchange_stopped(&slot, &prepared.reply, Command::ExchangeUncertain, false)
+                .await;
         }
         let Some(code) = query.code else {
             return self.refusal_now(&slot).await;
         };
-        self.exchange(&slot, &code).await
+        self.exchange(&slot, &code, prepared).await
     }
 
     pub async fn revoke(&self, server: Uuid) -> RevokeAnswer {
@@ -283,9 +342,10 @@ impl AuthorizationOwner {
     }
 
     /// Fence a configured remote whose stored resource is not the URL it
-    /// would be called on. A matching binding is left alone. Called at
-    /// startup, before the process accepts a session, so a URL written
-    /// while this process was down is not called with the previous token.
+    /// would be called on, and resume a revoke that was still unfinished.
+    /// Called at startup, before the process accepts a session, so a URL
+    /// written while this process was down is not called with the previous
+    /// token.
     pub async fn revalidate(&self, remotes: &[(Uuid, String)]) -> Result<(), FenceRefusal> {
         for (id, url) in remotes {
             let slot = match self.existing(*id).await {
@@ -293,16 +353,29 @@ impl AuthorizationOwner {
                 Recalled::Absent => continue,
                 Recalled::Unavailable => return Err(FenceRefusal),
             };
-            let bound = slot.lock().await.auth.resource.clone();
-            if bound == *url {
+            let (bound, resume) = {
+                let guard = slot.lock().await;
+                let resume = matches!(
+                    guard.auth.phase,
+                    Phase::Revoking { .. } | Phase::RevocationIncomplete { .. }
+                );
+                (guard.auth.resource.clone(), resume)
+            };
+            if bound != *url {
+                self.fence(&[BindingChange::ResourceChanged {
+                    id: *id,
+                    previous_url: bound,
+                    url: url.clone(),
+                }])
+                .await?;
                 continue;
             }
-            self.fence(&[BindingChange::ResourceChanged {
-                id: *id,
-                previous_url: bound,
-                url: url.clone(),
-            }])
-            .await?;
+            if resume {
+                let answer = self.revoke(*id).await;
+                if !answer.settled {
+                    return Err(FenceRefusal);
+                }
+            }
         }
         Ok(())
     }
@@ -365,27 +438,30 @@ impl AuthorizationOwner {
             .map_err(|_| ())
     }
 
-    async fn exchange(&self, slot: &Arc<Mutex<Slot>>, code: &str) -> AuthorizeAnswer {
-        let (endpoint, verifier, redirect, client_id, resource) = {
-            let guard = slot.lock().await;
-            (
-                guard.token_endpoint.clone(),
-                guard.verifier.clone(),
-                guard.redirect_uri.clone(),
-                guard.auth.client_id.clone(),
-                guard.auth.resource.clone(),
-            )
-        };
+    async fn exchange(
+        &self,
+        slot: &Arc<Mutex<Slot>>,
+        code: &str,
+        prepared: PendingExchange,
+    ) -> AuthorizeAnswer {
+        let reply = prepared.reply;
+        let (endpoint, verifier, redirect, client_id) = (
+            prepared.endpoint,
+            prepared.verifier,
+            prepared.redirect,
+            prepared.client_id,
+        );
         let (Some(endpoint), Some(verifier), Some(redirect), Some(client_id)) =
             (endpoint, verifier, redirect, client_id)
         else {
-            let _ = self.apply(slot, Command::ExchangeUncertain).await;
-            let _ = self.persist(slot).await;
-            return AuthorizeAnswer::AuthorizationIncomplete;
+            return self
+                .exchange_stopped(slot, &reply, Command::ExchangeUncertain, false)
+                .await;
         };
         if !discovery::https_url(&endpoint) {
-            let _ = self.apply(slot, Command::ExchangeRefused).await;
-            return AuthorizeAnswer::DiscoveryFailed;
+            return self
+                .exchange_stopped(slot, &reply, Command::ExchangeRefused, true)
+                .await;
         }
         let body = discovery::form(&[
             ("grant_type", "authorization_code"),
@@ -393,33 +469,59 @@ impl AuthorizationOwner {
             ("redirect_uri", &redirect),
             ("client_id", &client_id),
             ("code_verifier", &verifier),
-            ("resource", &resource),
+            ("resource", &reply.resource),
         ]);
         let response = match self.http.post_form(&endpoint, &body).await {
             Ok(response) => response,
             Err(OAuthCallFailure::NotSent) => {
-                let _ = self.apply(slot, Command::ExchangeRefused).await;
-                let _ = self.persist(slot).await;
-                return AuthorizeAnswer::DiscoveryFailed;
+                return self
+                    .exchange_stopped(slot, &reply, Command::ExchangeRefused, true)
+                    .await;
             }
             Err(OAuthCallFailure::Lost) => {
-                let _ = self.apply(slot, Command::ExchangeUncertain).await;
-                let _ = self.persist(slot).await;
-                return AuthorizeAnswer::AuthorizationIncomplete;
+                return self
+                    .exchange_stopped(slot, &reply, Command::ExchangeUncertain, false)
+                    .await;
             }
         };
-        self.publish_token(slot, &response.body, false).await
+        self.publish_token(slot, &response.body, &reply).await
+    }
+
+    /// Apply `command` only while `reply` is still the live attempt. A
+    /// replacement authorize keeps its own phase.
+    async fn exchange_stopped(
+        &self,
+        slot: &Arc<Mutex<Slot>>,
+        reply: &Reply,
+        command: Command,
+        refused: bool,
+    ) -> AuthorizeAnswer {
+        if self.reply_current(slot, reply).await {
+            let _ = self.apply(slot, command).await;
+            let _ = self.persist(slot).await;
+        }
+        if refused {
+            AuthorizeAnswer::DiscoveryFailed
+        } else {
+            AuthorizeAnswer::AuthorizationIncomplete
+        }
     }
 
     async fn publish_token(
         &self,
         slot: &Arc<Mutex<Slot>>,
         body: &str,
-        refresh: bool,
+        reply: &Reply,
     ) -> AuthorizeAnswer {
+        if !self.reply_current(slot, reply).await {
+            return AuthorizeAnswer::AuthorizationIncomplete;
+        }
         let parsed = parse_token(body);
         if parsed.error.as_deref() == Some("invalid_grant") {
-            if refresh {
+            if !self.reply_current(slot, reply).await {
+                return AuthorizeAnswer::AuthorizationIncomplete;
+            }
+            if reply.refresh.is_some() {
                 let answer = self.revoke_slot(slot, Command::InvalidGrant).await;
                 return if answer.settled {
                     AuthorizeAnswer::DiscoveryFailed
@@ -427,12 +529,15 @@ impl AuthorizationOwner {
                     AuthorizeAnswer::AuthorizationIncomplete
                 };
             }
-            let _ = self.apply(slot, Command::ExchangeRefused).await;
-            let _ = self.persist(slot).await;
-            return AuthorizeAnswer::DiscoveryFailed;
+            return self
+                .exchange_stopped(slot, reply, Command::ExchangeRefused, true)
+                .await;
         }
         let Some(access) = parsed.access else {
-            let command = if refresh {
+            if !self.reply_current(slot, reply).await {
+                return AuthorizeAnswer::AuthorizationIncomplete;
+            }
+            let command = if reply.refresh.is_some() {
                 Command::RefreshLost
             } else {
                 Command::ExchangeUncertain
@@ -441,11 +546,13 @@ impl AuthorizationOwner {
             let _ = self.persist(slot).await;
             return AuthorizeAnswer::AuthorizationIncomplete;
         };
-        let generation = {
-            let guard = slot.lock().await;
-            if refresh {
-                guard.auth.generation + 1
-            } else {
+        if !self.reply_current(slot, reply).await {
+            return AuthorizeAnswer::AuthorizationIncomplete;
+        }
+        let generation = match reply.refresh {
+            Some(generation) => generation + 1,
+            None => {
+                let guard = slot.lock().await;
                 guard.auth.generation.max(1)
             }
         };
@@ -455,42 +562,47 @@ impl AuthorizationOwner {
                 .saturating_add(seconds.saturating_mul(1000))
         });
         let material = TokenMaterial {
-            access_token: access,
+            access_token: access.clone(),
             refresh_token: parsed.refresh,
             generation,
         };
-        let publication = match self
-            .records
-            .store_secret(server_of(slot).await, &material)
-            .await
-        {
+        let server = server_of(slot).await;
+        let publication = match self.records.store_secret(server, &material).await {
             Ok(publication) => publication,
             Err(RecordFailure::Unavailable) => Publication::Unknown,
         };
-        let from = {
-            let guard = slot.lock().await;
-            guard.auth.generation
-        };
-        let command = if refresh {
-            Command::RefreshPublication {
-                from_generation: from,
+        let wrote = publication == Publication::Acknowledged;
+        if !self.reply_current(slot, reply).await {
+            if wrote {
+                self.discard_written(server, &access, generation).await;
+            }
+            return AuthorizeAnswer::AuthorizationIncomplete;
+        }
+        let command = match reply.refresh {
+            Some(from_generation) => Command::RefreshPublication {
+                from_generation,
                 publication,
                 expires_at_ms,
-            }
-        } else {
-            Command::SecretPublication {
+                resource: reply.resource.clone(),
+            },
+            None => Command::SecretPublication {
                 publication,
                 generation,
                 expires_at_ms,
-            }
+                attempt: reply.attempt,
+                resource: reply.resource.clone(),
+            },
         };
         let decision = self.apply(slot, command).await;
-        if decision
-            .effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::DeleteCandidate))
-        {
-            let _ = self.records.delete_secret(server_of(slot).await).await;
+        let stale = decision.refusal == Some(Refusal::Stale)
+            || decision
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::DeleteCandidate));
+        if stale {
+            if wrote {
+                self.discard_written(server, &access, generation).await;
+            }
             return AuthorizeAnswer::AuthorizationIncomplete;
         }
         let acked = self.audit_slot(slot, "store", false).await.is_ok();
@@ -512,6 +624,17 @@ impl AuthorizationOwner {
         }
     }
 
+    /// Remove the token this reply stored when that reply is no longer current.
+    /// A different generation is a replacement and stays.
+    async fn discard_written(&self, server: Uuid, access_token: &str, generation: u64) {
+        let Ok(Some(current)) = self.records.load_secret(server).await else {
+            return;
+        };
+        if current.access_token == access_token && current.generation == generation {
+            let _ = self.records.delete_secret(server).await;
+        }
+    }
+
     async fn revoke_slot(&self, slot: &Arc<Mutex<Slot>>, command: Command) -> RevokeAnswer {
         let running = {
             let mut guard = slot.lock().await;
@@ -528,7 +651,10 @@ impl AuthorizationOwner {
             guard.revoke_running.clone()
         };
         let _release = ReleaseRevoke(running);
-        let _ = self.persist(slot).await;
+        let carried = match self.seal_revoke(slot).await {
+            Ok(carried) => carried,
+            Err(()) => return snapshot(slot).await,
+        };
         let _ = self.audit_slot(slot, "revoke", true).await;
         let name = {
             let guard = slot.lock().await;
@@ -536,7 +662,7 @@ impl AuthorizationOwner {
         };
         self.sessions.drain(&name).await;
         self.apply(slot, Command::LocalDrained).await;
-        let observation = self.revoke_remote(slot).await;
+        let observation = self.revoke_remote(slot, carried).await;
         self.apply(slot, Command::RemoteObserved(observation)).await;
         let deletion = match self.records.delete_secret(server_of(slot).await).await {
             Ok(deletion) => deletion,
@@ -549,7 +675,36 @@ impl AuthorizationOwner {
         snapshot(slot).await
     }
 
-    async fn revoke_remote(&self, slot: &Arc<Mutex<Slot>>) -> RemoteObservation {
+    /// Write the revoking record, or delete the secret, before the remote
+    /// call. Restart then refuses the token this revoke was already retiring.
+    /// The deleted token is returned so that call can still name it.
+    async fn seal_revoke(&self, slot: &Arc<Mutex<Slot>>) -> Result<Option<TokenMaterial>, ()> {
+        if self.persist(slot).await.is_ok() {
+            return Ok(None);
+        }
+        let server = server_of(slot).await;
+        let secret = self.records.load_secret(server).await.ok().flatten();
+        let deletion = match self.records.delete_secret(server).await {
+            Ok(deletion) => deletion,
+            Err(RecordFailure::Unavailable) => Deletion::Unknown,
+        };
+        if deletion != Deletion::Deleted {
+            return Err(());
+        }
+        self.apply(slot, Command::SecretDeletion { deletion }).await;
+        let _ = self.persist(slot).await;
+        Ok(secret)
+    }
+
+    async fn reply_current(&self, slot: &Arc<Mutex<Slot>>, reply: &Reply) -> bool {
+        reply.current(&slot.lock().await.auth)
+    }
+
+    async fn revoke_remote(
+        &self,
+        slot: &Arc<Mutex<Slot>>,
+        carried: Option<TokenMaterial>,
+    ) -> RemoteObservation {
         let (endpoint, server) = {
             let guard = slot.lock().await;
             (guard.revocation_endpoint.clone(), guard.auth.server)
@@ -557,7 +712,11 @@ impl AuthorizationOwner {
         let Some(endpoint) = endpoint.filter(|url| discovery::https_url(url)) else {
             return RemoteObservation::Unsupported;
         };
-        let Some(secret) = self.records.load_secret(server).await.ok().flatten() else {
+        let loaded = match carried {
+            Some(secret) => Some(secret),
+            None => self.records.load_secret(server).await.ok().flatten(),
+        };
+        let Some(secret) = loaded else {
             return RemoteObservation::Unconfirmed;
         };
         let token = secret
@@ -652,20 +811,19 @@ impl AuthorizationOwner {
         slot: Arc<Mutex<Slot>>,
         flight: Arc<RefreshFlight>,
     ) {
+        let (reply, endpoint, client_id) = {
+            let guard = slot.lock().await;
+            (
+                Reply::refresh(guard.auth.generation, guard.auth.resource.clone()),
+                guard.token_endpoint.clone(),
+                guard.auth.client_id.clone(),
+            )
+        };
         if self.audit_slot(&slot, "refresh", true).await.is_err() {
-            self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched)
+            self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched, &reply)
                 .await;
             return;
         }
-        let (endpoint, client_id, resource, generation) = {
-            let guard = slot.lock().await;
-            (
-                guard.token_endpoint.clone(),
-                guard.auth.client_id.clone(),
-                guard.auth.resource.clone(),
-                guard.auth.generation,
-            )
-        };
         let refresh_token = self
             .records
             .load_secret(server)
@@ -674,21 +832,27 @@ impl AuthorizationOwner {
             .flatten()
             .and_then(|secret| secret.refresh_token);
         let Some(endpoint) = endpoint.filter(|url| discovery::https_url(url)) else {
-            self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched)
+            self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched, &reply)
                 .await;
             return;
         };
         let Some(refresh_token) = refresh_token else {
-            self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched)
+            self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched, &reply)
                 .await;
             return;
         };
         {
             let mut guard = slot.lock().await;
+            if !reply.current(&guard.auth) {
+                drop(guard);
+                self.settle_flight(server, &flight, Err(AdmissionRefusal::Unauthorized))
+                    .await;
+                return;
+            }
             guard.auth.refresh_dispatched = true;
         }
         if self.persist(&slot).await.is_err() {
-            self.finish_refresh(&slot, &flight, Command::RefreshLost)
+            self.finish_refresh(&slot, &flight, Command::RefreshLost, &reply)
                 .await;
             return;
         }
@@ -696,45 +860,62 @@ impl AuthorizationOwner {
             ("grant_type", "refresh_token"),
             ("refresh_token", &refresh_token),
             ("client_id", client_id.as_deref().unwrap_or("")),
-            ("resource", &resource),
+            ("resource", &reply.resource),
         ]);
-        let _ = generation;
         let outcome = match self.http.post_form(&endpoint, &body).await {
             Err(OAuthCallFailure::NotSent) => {
-                self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched)
+                self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched, &reply)
                     .await;
                 return;
             }
             Err(OAuthCallFailure::Lost) => {
-                self.finish_refresh(&slot, &flight, Command::RefreshLost)
+                self.finish_refresh(&slot, &flight, Command::RefreshLost, &reply)
                     .await;
                 return;
             }
             Ok(response) => response,
         };
-        let answer = self.publish_token(&slot, &outcome.body, true).await;
+        let answer = self.publish_token(&slot, &outcome.body, &reply).await;
         let result = match answer {
             AuthorizeAnswer::Ready { generation } => {
                 self.release_bearer(&slot, server, generation).await
             }
             _ => Err(AdmissionRefusal::Unauthorized),
         };
-        *flight.result.lock().await = Some(result);
-        self.flights.lock().await.remove(&server);
-        flight.notify.notify_waiters();
+        self.settle_flight(server, &flight, result).await;
     }
 
     async fn finish_refresh(
         &self,
         slot: &Arc<Mutex<Slot>>,
-        flight: &RefreshFlight,
+        flight: &Arc<RefreshFlight>,
         command: Command,
+        reply: &Reply,
     ) {
-        self.apply(slot, command).await;
-        let _ = self.persist(slot).await;
-        *flight.result.lock().await = Some(Err(AdmissionRefusal::Unauthorized));
+        if self.reply_current(slot, reply).await {
+            self.apply(slot, command).await;
+            let _ = self.persist(slot).await;
+        }
         let server = server_of(slot).await;
-        self.flights.lock().await.remove(&server);
+        self.settle_flight(server, flight, Err(AdmissionRefusal::Unauthorized))
+            .await;
+    }
+
+    async fn settle_flight(
+        &self,
+        server: Uuid,
+        flight: &Arc<RefreshFlight>,
+        result: Result<Option<AdmittedToken>, AdmissionRefusal>,
+    ) {
+        *flight.result.lock().await = Some(result);
+        let mut flights = self.flights.lock().await;
+        if flights
+            .get(&server)
+            .is_some_and(|current| Arc::ptr_eq(current, flight))
+        {
+            flights.remove(&server);
+        }
+        drop(flights);
         flight.notify.notify_waiters();
     }
 
