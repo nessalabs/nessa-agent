@@ -346,19 +346,17 @@ it("skips pane bodies on the frame a drop commits them", () => {
   // While the preview moves, the conversation is not painted. The scroller
   // keeps its box (`drag.mjs`).
   const quiet = sheet
-    .slice(
-      sheet.indexOf(".split-panes-grid[data-drag-reflow] .workspace-transcript-inner {"),
-    )
+    .slice(sheet.indexOf(".workspace[data-drag-reflow] .workspace-transcript-inner {"))
     .split("}")[0]
   expect(quiet).toMatch(/content-visibility:\s*hidden/)
   const mask = sheet
-    .slice(sheet.indexOf(".split-panes-grid[data-drag-reflow] .workspace-transcript {"))
+    .slice(sheet.indexOf(".workspace[data-drag-reflow] .workspace-transcript {"))
     .split("}")[0]
   expect(mask).toMatch(/mask-image:\s*none/)
   const travelling = sheet
     .slice(
       sheet.indexOf(
-        ":is(.workspace[data-split-flipping], .split-panes-grid[data-drag-reflow])\n  .workspace-pane {",
+        ".workspace:is([data-split-flipping], [data-drag-reflow]) .workspace-pane {",
       ),
     )
     .split("}")[0]
@@ -454,7 +452,7 @@ it("paints nothing of a pane under the window's controls: its content below the 
   expect(
     body(
       panes,
-      ":is(.workspace[data-split-flipping], .split-panes-grid[data-drag-reflow])\n  .desktop-header[data-sliver] {",
+      ".workspace:is([data-split-flipping], [data-drag-reflow]) .desktop-header[data-sliver] {",
     ),
   ).toMatch(/opacity:\s*0/)
 })

@@ -338,9 +338,9 @@ html:not(.dark) [data-surface] {
 }
 
 /* While panes travel, the blur holds still. Drifting it would raster the
-   blur again on every frame of the drag (`styles.test.ts`). Pressing and a
-   flight set their mark on the document (`marks.ts`). A drag's preview sets
-   its mark on the grid, not the document (`drag.test.tsx`). */
+   blur again on every frame of the drag (`styles.test.ts`). The mark is on
+   the document as well as the workspace, so the shell's blur is held too
+   (`marks.ts`). */
 :root:is([data-drag-pressing], [data-drag-reflow], [data-split-flipping])
   .desktop-ambient::before,
 :root:is([data-drag-pressing], [data-drag-reflow], [data-split-flipping])

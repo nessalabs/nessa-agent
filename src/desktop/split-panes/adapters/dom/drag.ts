@@ -565,23 +565,12 @@ export function useSplitPanesDrag(
     }
 
     /**
-     * The preview's mark, on the grid only. A copy on the workspace or the
-     * document would restyle the sidebar on the same frame (`drag.test.tsx`).
-     */
-    const reflowMark = (on: boolean) => {
-      const grid = gridOf(scope)
-      if (!grid || grid.hasAttribute(marks.reflow) === on) return
-      grid.toggleAttribute(marks.reflow, on)
-    }
-
-    /**
      * Drops the preview's mark. Bodies are already waiting, or start waiting
      * now, and return one a frame: clearing the mark alone lays every
      * transcript out on that frame (`drag.test.tsx`).
      */
     const releaseReflow = () => {
-      const grid = gridOf(scope)
-      if (!grid?.hasAttribute(marks.reflow)) return
+      if (!scope.hasAttribute(marks.reflow)) return
       const waiting = scope.querySelector(`[${marks.settling}]`) !== null
       if (!waiting) {
         scope.querySelectorAll<HTMLElement>("[data-pane-key]").forEach((pane) => {
@@ -589,7 +578,7 @@ export function useSplitPanesDrag(
         })
         requestAnimationFrame(revealSettling)
       }
-      reflowMark(false)
+      reflectMark(scope, marks.reflow, false)
     }
 
     /**
@@ -789,8 +778,8 @@ export function useSplitPanesDrag(
       )
       if (scope.hasAttribute(marks.takesSpare) !== Boolean(outcome?.takesSpare))
         scope.toggleAttribute(marks.takesSpare, Boolean(outcome?.takesSpare))
-      if (outcome && landing && !gridOf(scope)?.hasAttribute(marks.reflow))
-        reflowMark(true)
+      if (outcome && landing && !scope.hasAttribute(marks.reflow))
+        reflectMark(scope, marks.reflow, true)
       // With less motion too: the panes take their rects at once
       // (`--desktop-base` is 0ms), or a swap's placeholder, under the copy,
       // would be all that showed.
