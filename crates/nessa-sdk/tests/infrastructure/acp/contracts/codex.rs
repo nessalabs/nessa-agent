@@ -512,6 +512,70 @@ async fn codex_steers_by_queue_although_its_adapter_offers_the_extension() {
 }
 
 #[tokio::test]
+async fn codex_startup_and_restoration_continue_when_native_hook_suppression_is_unsupported() {
+    // The fixture accepts the launch only after it has seen `features.hooks:
+    // false` and `notify: []`. That request is not the effective setting.
+    // The negotiated fact stays unsupported, and both the first open and the
+    // restored open still run a prompt.
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_codex_binding("echo", 16);
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .expect("unsupported hook suppression must not refuse the first open");
+    let capabilities = opened.session.operation_capabilities();
+    assert!(capabilities.negotiated());
+    assert_eq!(
+        capabilities.native_hook_suppression(),
+        NativeHookSuppressionCapability::Unsupported
+    );
+    assert_eq!(
+        opened
+            .session
+            .execute(prompt("with hooks unproven"))
+            .await
+            .into_result()
+            .expect("a prompt must run while hook suppression is unsupported"),
+        ExecutionOutcome::Completed
+    );
+    let id = opened.session.id().clone();
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+
+    let restored = binding
+        .open(ProviderOpenRequest::without_startup_control(Some(id)))
+        .await
+        .expect("unsupported hook suppression must not refuse restoration");
+    let restored_capabilities = restored.session.operation_capabilities();
+    assert!(restored_capabilities.negotiated());
+    assert_eq!(
+        restored_capabilities.native_hook_suppression(),
+        NativeHookSuppressionCapability::Unsupported
+    );
+    assert_eq!(
+        restored
+            .session
+            .execute(prompt("restored with hooks unproven"))
+            .await
+            .into_result()
+            .expect("a restored prompt must run while hook suppression is unsupported"),
+        ExecutionOutcome::Completed
+    );
+    restored
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
+    assert!(root.path().join("resumed").is_file());
+}
+
+#[tokio::test]
 async fn a_restored_codex_session_is_configured_again_before_it_is_used() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_codex_binding("echo", 16);

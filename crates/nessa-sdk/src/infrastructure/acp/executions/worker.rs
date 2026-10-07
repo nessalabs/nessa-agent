@@ -1057,6 +1057,10 @@ impl<P: AcpProfile> Worker<P> {
             thought_level::offered(&settled, &self.capabilities, self.profile.effort_option())?;
         self.configured = true;
         let profile_capabilities = self.profile.operation_capabilities(&init);
+        // Native hook suppression is published with the other negotiated facts.
+        // Unsupported does not fail this open or the same publish on
+        // restoration. Codex holds that with
+        // `codex_startup_and_restoration_continue_when_native_hook_suppression_is_unsupported`.
         self.operation_capabilities
             .send_replace(ProviderOperationCapabilities {
                 negotiated: true,

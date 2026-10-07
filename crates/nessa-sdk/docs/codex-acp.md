@@ -97,11 +97,14 @@ same code the Claude binding runs on. What differs is behind `AcpProfile`:
   Provider builtin cleanup is a separate lifecycle path and is not disabled to
   make the request look complete. A negotiated session therefore reports native
   hook suppression as unsupported. The binding does not claim Nessa owns Codex's
-  hook boundary, and it does not refuse startup: the harness has no stronger
-  switch, and refusing every session would drop the binding the request is
-  meant to constrain. Establishing effective suppression before work, including
-  against that legacy managed layer, remains the contract in
-  [ADR 0014](../../../docs/adr/todo/0014-nessa-owned-policy-hooks.md).
+  hook boundary. Startup and restoration still complete, and a prompt is
+  accepted, while that fact stays unsupported: the harness has no stronger
+  switch, and refusing the session would drop the binding the request
+  constrains. Proof of the effective setting, including against that legacy
+  managed layer, is what a supported report would require. It is not a startup
+  gate. That contract is
+  [ADR 0014](../../../docs/adr/todo/0014-nessa-owned-policy-hooks.md) and
+  `codex_startup_and_restoration_continue_when_native_hook_suppression_is_unsupported`.
 
 `AcpConfig.environment` carries `CODEX_HOME` as this agent's noncredential
 context selector; `credential_environment` carries `CODEX_API_KEY` and
@@ -178,7 +181,8 @@ being declined although the adapter offers it, the instructions reaching the
 provider through its own configuration rather than the session request, and the
 hook request (`features.hooks` false, `notify` empty) being present in
 `CODEX_CONFIG` while the negotiated session reports native hook suppression as
-unsupported.
+unsupported, on the first open and again after restoration, with a prompt
+accepted both times.
 Resource-link content is covered by the wire-mapping unit tests rather than
 through a subprocess.
 

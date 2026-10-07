@@ -91,6 +91,7 @@ fn negotiated_provider_unsupported_is_preserved() {
     let capabilities = OperationCapabilities::resolve(ProviderOperationCapabilities {
         negotiated: true,
         permission_denial: PermissionDenialCapability::Unsupported,
+        native_hook_suppression: NativeHookSuppressionCapability::Unsupported,
         permission_deferral: ProviderPermissionDeferralCapability::Unsupported,
         elicitation_forwarding: ElicitationForwardingCapability::SupportedWithCorrelatedRoundTrip,
         ..ProviderOperationCapabilities::default()
@@ -98,6 +99,10 @@ fn negotiated_provider_unsupported_is_preserved() {
     assert_eq!(
         capabilities.permission_denial(),
         PermissionDenialCapability::Unsupported
+    );
+    assert_eq!(
+        capabilities.native_hook_suppression(),
+        NativeHookSuppressionCapability::Unsupported
     );
     assert_eq!(
         capabilities.permission_deferral(),
