@@ -39,6 +39,23 @@ again.
 
 ## Decision
 
+### Startup warm-up verification (#648)
+
+Launch-history evidence and current process liveness answer different questions.
+The composition fixture retains each launch record after its process exits.
+Its proactive warm-up test requires that history and the existing typed
+completion record for the actual configured runtime, after cleanup settles;
+conversation tests still require a live launch. History alone cannot establish
+successful initialization, session configuration or close.
+
+| Observation or ordering | Verification result |
+| --- | --- |
+| Startup warm-up launches and closes before the first watcher scan | Recorded observation accepts persistent history; the warm-up's exact runtime completion record and released ownership establish success |
+| No launch history, or fewer records than required | Neither Recorded nor Live observation accepts the missing evidence |
+| Only an already completed process has history | Recorded observation accepts it; Live observation refuses it |
+| Completed and live process histories meet the required count | Live observation selects the live PID, preserving conversation tests' liveness requirement |
+| Wrapper writes history then exits before ACP initialization | After cleanup settles, history exists but the typed completion port remains false; the proactive success test must refuse this outcome |
+
 ### 1. Setup always opens a window
 
 `HostDependencies::assemble` and the plugin registrations in `setup` return a
