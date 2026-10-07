@@ -50,7 +50,7 @@
   ],
   "next_review_round": null,
   "budget_reset": false,
-  "limits": "All eight current-head local gates and required CI run37653154842 passed; clean fresh authorized R6 reports; current-head Codex request running. PR marked ready, not merged yet. Adjacent durable settlement debt remains tracked.",
+  "limits": "Merged after clean authorized R6, all8 local gates, all10 required CI jobs, current-head CodeRabbitSUCCESS and Codex completed17:09:22 with bot+1 at17:09:26. Greptile current-head review declined (trial expired); fresh local fallback linked. #628/#651 closed. Adjacent settlement debt remains #625/#646/#649.",
   "external_codex_adjudication": {
     "comment": 4208337174,
     "head": "3e65d96e44e27c502a6225ec16e554fe18c4a152",
@@ -62,5 +62,13 @@
     "scope": "Confirmed binding race only, deterministic RED/correction and one fresh independent follow-up round; adjacent settlement work excluded",
     "user_reply": "Allow the exception and finish both PRs",
     "github_scope_comment": 6041117516
+  },
+  "merge": {
+    "sha": "d55de88d9c6f5794b225da05b1055c511b9dba74",
+    "merged_at": "2026-10-07T17:11:24Z",
+    "issues_closed": [
+      628,
+      651
+    ]
   }
 }
