@@ -65,9 +65,8 @@ impl<T> Future for OutputFuture<T> {
 impl<T> Drop for OutputFuture<T> {
     fn drop(&mut self) {
         self.drops.fetch_add(1, Ordering::SeqCst);
-        match self.fault {
-            Fault::ReadyDrop => fault(false),
-            _ => {}
+        if let Fault::ReadyDrop = self.fault {
+            fault(false);
         }
     }
 }

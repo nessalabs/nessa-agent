@@ -5,11 +5,11 @@ use super::*;
 #[serde(tag = "kind", deny_unknown_fields)]
 pub(super) enum ProofDto {
     Resource {
-        observations: [Option<ObservationDto>; 3],
+        observations: Box<[Option<ObservationDto>; 3]>,
     },
     Absence {
         proof: AbsenceDto,
-        record: EvidenceDto,
+        record: Box<EvidenceDto>,
         acknowledgement: String,
     },
 }
@@ -180,17 +180,17 @@ impl From<&SettlementProof> for ProofDto {
         match proof {
             SettlementProof::Absence(a) => Self::Absence {
                 proof: AbsenceDto::from(a.proof()),
-                record: EvidenceDto::from(a.record()),
+                record: Box::new(EvidenceDto::from(a.record())),
                 acknowledgement: evidence_name(a.acknowledgement()),
             },
             SettlementProof::Resource(slots) => Self::Resource {
-                observations: slots.clone().map(|a| {
-                    a.map(|a| ObservationDto {
+                observations: Box::new(std::array::from_fn(|index| {
+                    slots[index].as_ref().map(|a| ObservationDto {
                         record: EvidenceDto::from(a.record()),
                         acknowledgement: evidence_name(a.acknowledgement()),
                         provider_acknowledged: a.provider_acknowledged(),
                     })
-                }),
+                })),
             },
         }
     }
@@ -205,12 +205,12 @@ impl TryFrom<ProofDto> for SettlementProof {
                 acknowledgement,
             } => Self::Absence(AbsenceAudit::from_parts(
                 proof.try_into()?,
-                record.try_into()?,
+                (*record).try_into()?,
                 parse_evidence(&acknowledgement)?,
             )),
             ProofDto::Resource { observations } => {
                 let mut slots = [None, None, None];
-                for (slot, a) in observations.into_iter().enumerate() {
+                for (slot, a) in (*observations).into_iter().enumerate() {
                     if let Some(a) = a {
                         slots[slot] = Some(ResourceObservationAudit::from_parts(
                             a.record.try_into()?,
@@ -219,7 +219,7 @@ impl TryFrom<ProofDto> for SettlementProof {
                         ));
                     }
                 }
-                Self::Resource(slots)
+                Self::Resource(Box::new(slots))
             }
         })
     }

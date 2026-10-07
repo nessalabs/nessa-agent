@@ -137,17 +137,24 @@ impl OwnershipAudit for DebtAudit {
                     ..
                 })
             )
-            && self
-                .reject_failed
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
-                    remaining.checked_sub(1)
-                })
-                .is_ok()
+            && take_rejection(&self.reject_failed)
         {
             return Err(PortFailure::Rejected);
         }
         Ok(())
     }
+}
+
+fn take_rejection(counter: &AtomicUsize) -> bool {
+    let mut remaining = counter.load(Ordering::SeqCst);
+    while remaining != 0 {
+        match counter.compare_exchange(remaining, remaining - 1, Ordering::SeqCst, Ordering::SeqCst)
+        {
+            Ok(_) => return true,
+            Err(actual) => remaining = actual,
+        }
+    }
+    false
 }
 
 struct PhaseStore {

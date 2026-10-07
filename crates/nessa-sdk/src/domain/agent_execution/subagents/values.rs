@@ -689,7 +689,7 @@ pub struct AbsenceAudit {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SettlementProof {
     /// At most three immutable first observations and scoped provider witnesses.
-    Resource([Option<ResourceObservationAudit>; 3]),
+    Resource(Box<[Option<ResourceObservationAudit>; 3]>),
     /// Actual correlated absence, with no provider field.
     Absence(AbsenceAudit),
 }

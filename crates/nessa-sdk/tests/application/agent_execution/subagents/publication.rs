@@ -15,14 +15,13 @@ struct AuditGate {
     evidence: Mutex<Option<OwnershipEvidence>>,
     result: Mutex<Option<oneshot::Receiver<Result<(), PortFailure>>>>,
 }
+type SelectedAuditGate = (
+    OwnershipMeaning,
+    Option<nessa_sdk::domain::agent_execution::subagents::CloseEvidenceDetail>,
+    Arc<AuditGate>,
+);
 struct IndependentAudit {
-    next: Mutex<
-        Option<(
-            OwnershipMeaning,
-            Option<nessa_sdk::domain::agent_execution::subagents::CloseEvidenceDetail>,
-            Arc<AuditGate>,
-        )>,
-    >,
+    next: Mutex<Option<SelectedAuditGate>>,
     records: Mutex<Vec<OwnershipEvidence>>,
     failures: Mutex<VecDeque<(OwnershipMeaning, PortFailure)>>,
 }

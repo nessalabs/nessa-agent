@@ -352,7 +352,7 @@ impl OwnershipCoordinator {
                     Some(duration) => {
                         match tokio::time::timeout(duration, wait_generation(generation)).await {
                             Ok(result) => result,
-                            Err(_) => return Err(OwnershipFailure::Incomplete),
+                            Err(_) => Err(OwnershipFailure::Incomplete),
                         }
                     }
                     None => wait_generation(generation).await,
@@ -2412,6 +2412,19 @@ mod process_cleanup {
     }
 }
 
+async fn wait_generation(
+    mut receiver: watch::Receiver<Option<Result<(), OwnershipFailure>>>,
+) -> Result<(), OwnershipFailure> {
+    loop {
+        if let Some(result) = receiver.borrow().clone() {
+            return result;
+        }
+        if receiver.changed().await.is_err() {
+            return Err(OwnershipFailure::Incomplete);
+        }
+    }
+}
+
 #[cfg(test)]
 mod lifetime_races {
     use super::{
@@ -2995,18 +3008,5 @@ mod lifetime_races {
             .unwrap()
             .unwrap();
         assert_eq!(resources.closes.load(Ordering::SeqCst), 1);
-    }
-}
-
-async fn wait_generation(
-    mut receiver: watch::Receiver<Option<Result<(), OwnershipFailure>>>,
-) -> Result<(), OwnershipFailure> {
-    loop {
-        if let Some(result) = receiver.borrow().clone() {
-            return result;
-        }
-        if receiver.changed().await.is_err() {
-            return Err(OwnershipFailure::Incomplete);
-        }
     }
 }

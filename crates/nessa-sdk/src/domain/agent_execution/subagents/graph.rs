@@ -683,7 +683,7 @@ impl OwnershipGraph {
                 target: target.clone(),
                 physical,
                 evidence,
-                proof: SettlementProof::Resource([None, None, None]),
+                proof: SettlementProof::Resource(Box::new([None, None, None])),
             },
         });
         let SettlementProof::Resource(slots) = &mut settlement.row.proof else {
@@ -832,8 +832,8 @@ impl OwnershipGraph {
                 .collect(),
             settlements: self
                 .settlements
-                .iter()
-                .map(|(_, settlement)| settlement.row.clone())
+                .values()
+                .map(|settlement| settlement.row.clone())
                 .collect(),
             reports: self.reports.values().cloned().collect(),
         }
@@ -932,14 +932,13 @@ impl OwnershipGraph {
             if lifetime.row.state == LifetimeState::Open && lifetime.row.cascaded_from.is_some() {
                 note_refusal(&mut refusal, OwnershipError::Contradictory);
             }
-            if lifetime.row.state == LifetimeState::Closed {
-                if !graph
+            if lifetime.row.state == LifetimeState::Closed
+                && !graph
                     .close_owner(id)
                     .and_then(|owner| graph.close_completions.get(&owner))
                     .is_some_and(|row| row.acknowledgement == EvidenceFact::Acknowledged)
-                {
-                    note_refusal(&mut refusal, OwnershipError::Contradictory);
-                }
+            {
+                note_refusal(&mut refusal, OwnershipError::Contradictory);
             }
         }
         for row in snapshot.reports {
