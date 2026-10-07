@@ -4,8 +4,8 @@
   "pull_request": 652,
   "source_head": "616a5fb9b07b81e30f23ff3282c1c60722fbb306",
   "base": "d55de88d9c6f5794b225da05b1055c511b9dba74",
-  "status": "All current checks and review dispositions complete; ready to merge",
-  "completed": false,
+  "status": "Merged and issue627 closed",
+  "completed": true,
   "gate_records": {
     "original209": "Full isolated SDK and exact six-package tests passed; all14 central cases named. One later cfg(test) .ok removal is separately recorded.",
     "corrected_a8": "Seven local commands have observed exit0: fmt, SDK21, six-package all-targetClippy, SDKdocs, architecturetests, architecturechecker, frontendformat.",
@@ -125,5 +125,12 @@
     "Codex": "Completed 2026-10-07T20:02:01.418784Z, exact616; no findings; bot +1 reaction552137429",
     "CodeRabbit": "Declined: 304 files exceeds300. Fresh R2 local fallback, not pass.",
     "Greptile": "Declined: trial expired. Fresh R2 local fallback, not pass."
+  },
+  "merge": {
+    "commit": "10a5f67f41da6cd3acbea42daa3ccdd328685afd",
+    "at": "2026-10-07T20:04:26Z",
+    "PR": 652,
+    "issue": 627,
+    "comment": 6045850886
   }
 }
