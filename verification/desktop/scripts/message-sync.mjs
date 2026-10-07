@@ -4,9 +4,16 @@ import { resolve } from "node:path"
 import { mkdirSync } from "node:fs"
 import { target, startPreview, repoRoot } from "./lib/server.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
-import { attempt, CannotRun } from "./lib/cli.mjs"
+import {
+  attempt,
+  CannotRun,
+  chosen,
+  recordIfLeftOut,
+  devServerOnlySteps,
+} from "./lib/cli.mjs"
 import { main } from "./lib/run.mjs"
-import { css, messageSync } from "./lib/selectors.mjs"
+import { appFrame } from "./lib/apps.mjs"
+import { css, messageSync, selectorFor } from "./lib/selectors.mjs"
 import {
   calibrate,
   calibrationFrame,
@@ -21,10 +28,11 @@ const meta = {
   summary: "active delivery, held list/read independence and idle cost",
   defaults: { engine: "chromium,webkit", mode: "prod" },
   options: {
+    only: { type: "string" },
     runs: { type: "string", default: "3" },
     throttle: { type: "string", default: "4" },
   },
-  help: "Three fresh-page runs per engine/layout; calibrated 4x Chromium, unthrottled WebKit. Ten active replacements and five with a held summary/list. Asserts 600 ms delivery and idle request pacing; controlled transport, no provider startup.",
+  help: "--only retained-app|delivery. retained-app requires the dev sandbox and preserves the exact app frame across text changes. Three fresh-page runs per engine/layout; calibrated 4x Chromium, unthrottled WebKit. Ten active replacements and five with a held summary/list. Asserts 600 ms delivery and idle request pacing; controlled transport, no provider startup.",
 }
 const stats = (samples) => ({
   samples: samples.length,
@@ -101,17 +109,20 @@ const fixtureTarget = (options) =>
 
 await main(
   meta,
-  async ({ options, rep, url }) => {
+  async ({ options, rep, url, mode }) => {
     const html = await fetch(new URL(messageSync.page, url)).then((r) => r.text())
     if (!html.includes(messageSync.title))
       throw new CannotRun("message-sync fixture is not served")
+    const selected = options.only
+      ? chosen(options.only, ["retained-app", "delivery"], options.list)
+      : ["retained-app", "delivery"]
     const runs = Number(options.runs)
     const rate = Number(options.throttle)
     if (!Number.isInteger(runs) || runs < 1 || !Number.isFinite(rate) || rate < 1)
       throw new CannotRun("runs must be a positive integer and throttle at least one")
     const summaries = []
     await withEngines(options, rep, async (engine, browser) => {
-      if (engine === "chromium") {
+      if (engine === "chromium" && selected.includes("delivery")) {
         const calibration = await attempt(
           rep,
           { name: "calibration", engine },
@@ -138,6 +149,81 @@ await main(
         )
         if (!calibration.ok) return
       }
+      for (const layout of options.layouts) {
+        if (!selected.includes("retained-app")) continue
+        if (
+          recordIfLeftOut(rep, mode, "retained-app", devServerOnlySteps["message-sync"], {
+            engine,
+            layout,
+          })
+        )
+          continue
+        await attempt(rep, { name: "retained-app", engine, layout }, async () => {
+          const opened = await openPage(browser, {
+            url: new URL(messageSync.page, url).href,
+            layout,
+          })
+          try {
+            const { page } = opened
+            await page
+              .locator(css.sessionRow, { hasText: messageSync.session })
+              .first()
+              .click()
+            await page.evaluate(() => window.__messageSync.app("before"))
+            const held = await appFrame(page, "inline")
+            await held.app.waitForSelector(selectorFor.fixtureState("live"))
+            await held.app.click(selectorFor.fixtureControl("call-allowed"))
+            await held.app.waitForFunction(
+              (selector) =>
+                document.querySelector(selector)?.textContent.startsWith("ok:"),
+              selectorFor.fixtureOutput("call"),
+            )
+            await held.app.evaluate(() => {
+              window.__retainedWidget = "kept"
+            })
+            const failures = []
+            for (const prefix of ["added", "removed"]) {
+              await page.evaluate((prefix) => window.__messageSync.app(prefix), prefix)
+              await page.waitForFunction(
+                ([message, prefix]) => {
+                  const text = [...document.querySelectorAll(message)]
+                    .map((element) => element.textContent)
+                    .join(" ")
+                  return prefix === "added"
+                    ? text.includes("More text")
+                    : !text.includes("Earlier text") && !text.includes("More text")
+                },
+                [css.message, prefix],
+              )
+              const now = await appFrame(page, "inline")
+              if (
+                now.app !== held.app ||
+                now.proxy !== held.proxy ||
+                held.app.isDetached()
+              )
+                failures.push(`${prefix} text replaced the existing app frame`)
+              if ((await now.app.evaluate(() => window.__retainedWidget)) !== "kept")
+                failures.push(`${prefix} text lost the app's document state`)
+            }
+            if (options.shots) {
+              mkdirSync(options.shots, { recursive: true })
+              await page
+                .locator(css.surface)
+                .first()
+                .screenshot({
+                  path: resolve(options.shots, `${engine}-${layout}-retained-app.jpg`),
+                  type: "jpeg",
+                  quality: 70,
+                  scale: "css",
+                })
+            }
+            return { failures }
+          } finally {
+            await opened.close()
+          }
+        })
+      }
+      if (!selected.includes("delivery")) return
       for (const layout of options.layouts)
         for (let run = 1; run <= runs; run++)
           await attempt(rep, { name: "delivery", engine, layout, run }, async () => {
@@ -304,7 +390,8 @@ await main(
           over50: group.reduce((sum, row) => sum + row.over50, 0),
         })
       }
-    rep.add({ name: "delivery-statistics", summaries, aggregates, failures: [] })
+    if (selected.includes("delivery"))
+      rep.add({ name: "delivery-statistics", summaries, aggregates, failures: [] })
   },
   fixtureTarget,
 )

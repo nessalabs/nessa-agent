@@ -1068,3 +1068,89 @@ it("offers no zone while the overview covers the panes: a session carried there 
   nothingLeft()
   await act(async () => root.unmount())
 })
+
+it("removes a returning copy immediately when the room changes after pointer loss", async () => {
+  const { root } = await mounted()
+  await press(60, 16, header(1))
+  pointer("pointermove", 830, 400)
+  pointer("pointermove", 827, 400)
+  await frames()
+  let finish!: () => void
+  const finished = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  Element.prototype.animate = function () {
+    return { cancel() {}, finished, id: "" } as unknown as Animation
+  }
+  window.dispatchEvent(new Event("blur"))
+  expect(carrier()).not.toBeNull()
+  window.dispatchEvent(new Event("resize"))
+  expect(carrier()).toBeNull()
+  finish()
+  await frames()
+  await act(async () => root.unmount())
+})
+
+it("an obsolete return settling leaves the next drag's copy and preview owned", async () => {
+  const { root } = await mounted()
+  await press(60, 16, header(1))
+  pointer("pointermove", 830, 400)
+  pointer("pointermove", 827, 400)
+  await frames()
+  const animate = Element.prototype.animate
+  let finish!: () => void
+  const finished = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  Element.prototype.animate = () =>
+    ({ cancel() {}, finished, id: "" }) as unknown as Animation
+  window.dispatchEvent(new Event("blur"))
+  window.dispatchEvent(new Event("resize"))
+  expect(carrier()).toBeNull()
+  const cancellations: ReturnType<typeof vi.fn>[] = []
+  Element.prototype.animate = function (keyframes, options) {
+    const animation = animate.call(this, keyframes, options)
+    const cancel = vi.fn()
+    cancellations.push(cancel)
+    return { ...animation, cancel } as unknown as Animation
+  }
+  await press(60, 16, header(1))
+  pointer("pointermove", 830, 400)
+  pointer("pointermove", 827, 400)
+  await frames()
+  const held = carrier()
+  expect(held).not.toBeNull()
+  const counts = cancellations.map((cancel) => cancel.mock.calls.length)
+  finish()
+  await frames()
+  expect(carrier()).toBe(held)
+  expect(cancellations.map((cancel) => cancel.mock.calls.length)).toEqual(counts)
+  pointer("pointerup", 827, 400)
+  await frames()
+  await act(async () => root.unmount())
+})
+
+for (const ending of ["return", "drop"] as const)
+  it(`unmount releases the retained ${ending} flight before later settlement effects`, async () => {
+    const { root } = await mounted()
+    await press(60, 16, header(1))
+    pointer("pointermove", 830, 400)
+    pointer("pointermove", 827, 400)
+    await frames()
+    let finish!: () => void
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    const cancel = vi.fn()
+    const animate = vi.fn(() => ({ cancel, finished, id: "" }) as unknown as Animation)
+    Element.prototype.animate = animate
+    if (ending === "return") window.dispatchEvent(new Event("blur"))
+    else pointer("pointerup", 827, 400)
+    expect(carrier()).not.toBeNull()
+    await act(async () => root.unmount())
+    expect(cancel).toHaveBeenCalled()
+    const calls = animate.mock.calls.length
+    finish()
+    await frames()
+    expect(animate).toHaveBeenCalledTimes(calls)
+  })

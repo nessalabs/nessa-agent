@@ -28,3 +28,32 @@ node verification/desktop/scripts/run-all.mjs --mode prod --only message-sync --
 The measured boundary is controlled ready text to DOM replacement plus two animation-frame opportunities. Native compositor paint, provider startup and production gateway payload/CPU cost are unmeasured. Historical #532 evidence and limitations remain in its original directory and report.
 
 Scripted gateway verification: complete repeat passes all three checks in both engines. Initial run failed only Chromium MCP denial with `frame.evaluate: Frame was detached`; following steps did not run. Both original and repeat results are retained. Cause is not established; a repeat pass is not proof that the intermittent failure is fixed. Tracked in #617.
+
+
+## Retained UI resources
+
+At the user's request, the additional fixes remain on PR #618. The separate
+#617/#620 reports were closed as consolidated, without claiming the original
+intermittent symptoms' causes were established.
+
+- Same-widget prefix changes and distinct repeated references retain their views.
+  The real iframe check is functional verification in dev (the sandbox listener
+  is absent from an ordinary production preview); production delivery remains
+  separately calibrated. Four engine/layout combinations pass, plus console.
+- A returning drag copy is removed in the resize event's turn in both engines
+  and layouts: 5/5 held. The suspended flight is an actual Web Animation paused
+  by the browser driver. Old source leaves one copy in both engines.
+- Reverting only widget key retention replaces its proxy/app frame and loses
+  document state on added/removed prefixes in Chromium and WebKit. Exact fixed
+  source restoration is asserted in the probe driver.
+- Source keeps its made resources through drop/cancellation, correlates terminal
+  events, joins instant flights with deferred preview release, guards obsolete
+  callbacks before effects, and releases retained resources on unmount. Regression
+  tests cover stale settlement and both unmount phases.
+- Full frontend tests on the expanded fixed tree: 276 files / 3,753 tests pass.
+  TypeScript, full lint, format, architecture and verifier-library checks pass.
+- The baseline production sweep was interrupted to investigate its failures,
+  and is recorded as partial, not passing. Its missing-zone/chord symptoms and
+  the one MCP detach remain causally unestablished. Eleven repeated pre-fix MCP
+  core runs and isolated pre-fix drag checks passed; the reproducible ownership
+  defects above have their own failing-before / passing-after guards.

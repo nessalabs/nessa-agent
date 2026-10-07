@@ -1049,3 +1049,11 @@ or clocks.
   uses calibrated 4x CPU throttling and checks the 50 ms frame budget through
   `lib/perf.mjs`; WebKit delivery is reported separately without CPU throttling.
   DOM plus frame opportunities do not measure transport, provider startup or compositor paint.
+
+### Retained widget and drag resources (#616)
+
+- [ ] The same inline widget keeps its proxy/app document and local state when
+  surrounding transcript parts are added or removed (`message-sync.mjs`, retained-app).
+- [ ] Resize removes a suspended returning drag copy in the resize event's turn,
+  including a blur followed by resize (`drag.mjs`, return-interrupted).
+  [ADR 238](../../docs/adr/done/238-desktop-workspace-frontend.md) owns the flight ordering.

@@ -57,6 +57,7 @@ import {
   copyShape,
   idle,
   keyToDrag,
+  ownsDragResources,
   sameAim,
   stepDrag,
   type DragEvent,
@@ -372,6 +373,8 @@ interface Made {
     pointer: { x: number; y: number }
     /** The copy's glide, from where it was grabbed to its centre under the pointer. */
     glide: Animation | null
+    /** The drop's final fade, retained until its resources are released. */
+    fade: Animation | null
     /** The size the copy is laid out at: the last shape it was asked to take. */
     laid: Size
     /** The copy's change of shape, from the size it was drawn at to `laid`. */
@@ -1036,6 +1039,7 @@ export function useSplitPanesDrag(
         drawing: {
           pointer: { x, y },
           glide: null,
+          fade: null,
           laid: size,
           shape: { from: size, to: size, motion: null, counter: null },
           frame: 0,
@@ -1121,14 +1125,34 @@ export function useSplitPanesDrag(
         announcer.textContent = ""
       }
       // A frame after the one that commits the drop.
-      if (later) requestAnimationFrame(() => requestAnimationFrame(unmark))
+      if (later)
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            if (ownsDragResources(phase, made)) unmark()
+          }),
+        )
       else unmark()
+    }
+
+    /** Releases the copy and preview resources retained by this drag. */
+    const releaseMade = (made: Made) => {
+      made.drawing.fade?.cancel()
+      made.drawing.glide?.cancel()
+      made.drawing.shape.motion?.cancel()
+      made.drawing.shape.counter?.cancel()
+      ;[...previewed.keys()].forEach(letGo)
+      letGoOfDragPreview(scope)
+      previewed.clear()
+      scope.removeAttribute(marks.takesSpare)
+      tidy(made)
+      made.layer.remove()
     }
 
     /** The copy's last flight ended: the drag is over. */
     const landed = (made: Made) => {
-      made.layer.remove()
-      send({ kind: "landed" })
+      if (!ownsDragResources(phase, made)) return
+      releaseMade(made)
+      send({ kind: "landed", made })
     }
 
     /**
@@ -1139,28 +1163,14 @@ export function useSplitPanesDrag(
      */
     const cancel = (made: Made, how: "home" | "at-once") => {
       if (how === "at-once") {
-        made.drawing.glide?.cancel()
-        made.drawing.shape.motion?.cancel()
-        made.drawing.shape.counter?.cancel()
-        ;[...previewed.keys()].forEach(letGo)
-        scope.removeAttribute(marks.takesSpare)
-        tidy(made)
         landed(made)
         return
       }
       preview(made, null, null)
       const back = flyTo(made, made.home, true)
-      const panes = [...previewed.keys()]
       scope.removeAttribute(marks.takesSpare)
       tidy(made)
-      void back.finished
-        .catch(() => undefined)
-        .then(() => {
-          panes.forEach(letGo)
-          // Back where they were: blur and shadows return, unless a drag began meanwhile.
-          if (!carried()) scope.removeAttribute(marks.reflow)
-          landed(made)
-        })
+      void back.finished.catch(() => undefined).then(() => landed(made))
     }
 
     /** Let go with a zone shown: the copy flies, and what is shown is committed on the next frame. */
@@ -1199,6 +1209,7 @@ export function useSplitPanesDrag(
       })
       const frame = requestAnimationFrame(() => {
         release()
+        if (!ownsDragResources(phase, made)) return
         if (accept && previewHolds()) {
           source.commitDrop({ carried: what, target: aim.target, zone: aim.zone, room })
           return
@@ -1217,22 +1228,30 @@ export function useSplitPanesDrag(
       releaseDrop = release
       // Whatever `FlipScope` did not measure through — a drop that changed no
       // arrangement — lets go a frame on.
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => {
-          // The host's preview of taking its spare room, measured through by the commit, goes now.
-          scope.removeAttribute(marks.takesSpare)
-          letGoOfDragPreview(scope)
-          previewed.clear()
-        }),
-      )
-      // Landed, it hands over to the real pane.
-      void (flight?.finished ?? Promise.resolve())
-        .catch(() => undefined)
+      const previewReleased = new Promise<void>((resolve) => {
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            if (ownsDragResources(phase, made)) {
+              scope.removeAttribute(marks.takesSpare)
+              letGoOfDragPreview(scope)
+              previewed.clear()
+            }
+            resolve()
+          }),
+        )
+      })
+      // The owner stays through the commit's frame even when its flight is instant.
+      void Promise.all([
+        (flight?.finished ?? Promise.resolve()).catch(() => undefined),
+        previewReleased,
+      ])
         .then(() => {
+          if (!ownsDragResources(phase, made)) return
           const fade = ghost.animate([{ opacity: 0.85 }, { opacity: 0 }], {
             duration: reducedMotion() ? 0 : 120,
             fill: "forwards",
           })
+          drawing.fade = fade
           return fade.finished.catch(() => undefined)
         })
         .then(() => landed(made))
@@ -1261,7 +1280,7 @@ export function useSplitPanesDrag(
       const live = next.kind === "pressed" || next.kind === "carrying"
       if (!live) {
         stopWaiting()
-        inert.disconnect()
+        if (next.kind !== "cancelling" || next.how !== "home") inert.disconnect()
       }
       // A press that ends before its copy was shown takes away what was made for it.
       if (was.kind === "pressed" && next.kind === "idle") was.made?.layer.remove()
@@ -1281,8 +1300,7 @@ export function useSplitPanesDrag(
           drawing.frame = requestAnimationFrame(show)
       } else if (was.kind === "carrying" && next.kind === "dropping")
         drop(was.made, next.carried, next.aim)
-      else if (was.kind === "carrying" && next.kind === "cancelling")
-        cancel(was.made, next.how)
+      else if (next.kind === "cancelling") cancel(next.made, next.how)
     }
 
     const sample = (event: PointerEvent): PointerSample => ({
@@ -1293,7 +1311,7 @@ export function useSplitPanesDrag(
 
     /** Whether what the drag read still holds: the panes and what the host watches, as the press found them, and the item carried. */
     const unchanged = () => {
-      if (phase.kind !== "pressed" && phase.kind !== "carrying") return true
+      if (phase.kind === "idle" || phase.kind === "dropping") return true
       const watched = source.watched()
       if (
         layoutNow()?.columns !== seen.columns ||
@@ -1414,7 +1432,7 @@ export function useSplitPanesDrag(
     const onLost = () => send({ kind: "lost" })
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (phase.kind !== "pressed" && phase.kind !== "carrying") return
+      if (phase.kind === "idle" || phase.kind === "dropping") return
       // Under something modal the keys are its own, its Escape included.
       if (scope.closest("[inert]")) return
       const said = keyToDrag(event.key)
@@ -1453,10 +1471,8 @@ export function useSplitPanesDrag(
       document.removeEventListener("selectstart", onSelectStart)
       stopWaiting()
       releaseDrop?.()
-      if (phase.kind === "pressed" || phase.kind === "carrying") {
-        phase.made?.layer.remove()
-        if (phase.made) tidy(phase.made)
-      }
+      const made = phase.kind === "idle" ? null : phase.made
+      if (made) releaseMade(made)
       phase = idle
       announcer.remove()
     }

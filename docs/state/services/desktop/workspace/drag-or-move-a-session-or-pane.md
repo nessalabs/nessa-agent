@@ -35,9 +35,10 @@ stateDiagram-v2
     Carrying --> Dropping: release [shown target and in reach] / commit admissible drop
     Carrying --> CancellingHome: release [no shown target] or Escape or lost
     Carrying --> CancellingNow: changed layout or room or modal ownership
-    Dropping --> Idle: landed / finish flight and cleanup
-    CancellingHome --> Idle: landed / discard preview
-    CancellingNow --> Idle: landed / discard preview at once
+    Dropping --> Idle: owned flight and preview release finish / cleanup
+    CancellingHome --> CancellingNow: room or view changes / release retained copy
+    CancellingHome --> Idle: owned flight lands / discard preview
+    CancellingNow --> Idle: owned copy released / discard preview at once
     note right of Carrying
         Projection of stepDrag's typed phases.
         Commit uses the preview the person saw.

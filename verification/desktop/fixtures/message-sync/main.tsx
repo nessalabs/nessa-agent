@@ -20,7 +20,18 @@ import {
   row,
   view,
 } from "../../../../src/desktop/workspace/adapters/gateway/fake-gateway"
-import { gatewaySource } from "../../../../src/desktop/workspace/adapters/gateway/gateway-source"
+import {
+  gatewaySource,
+  type GatewayClock,
+} from "../../../../src/desktop/workspace/adapters/gateway/gateway-source"
+import { fixtureAppPlugin } from "../../../../src/desktop/widgets/app/fixture/fixture-plugin"
+import {
+  fixtureCallIdentity,
+  fixtureResourceUri,
+  fixtureServer,
+} from "../../../../src/desktop/widgets/app/fixture/fixture-widgets"
+import { pageSandbox } from "../../../../src/desktop/widgets/app/adapters/dom/sandbox-origin"
+import { readPageContext } from "../../../../src/desktop/widgets/app/adapters/dom/page-context"
 import "@fontsource-variable/geist"
 import "@fontsource-variable/geist-mono"
 import "../../../../src/desktop/styles.css"
@@ -28,6 +39,7 @@ import "../../../../src/desktop/styles.css"
 const fast = "fast",
   slow = "slow"
 const gateway = fakeGateway()
+const approvalModes = view(fast).approvalModes
 let revision = 1,
   holdList = false,
   holdRead = false
@@ -45,7 +57,7 @@ function changed(text: string, running = true) {
     conversationView(
       view(fast, {
         revision: String(revision++),
-        approvalModes: [{ id: "ask", name: "Ask", description: "Ask before tools." }],
+        approvalModes,
         messages: [
           {
             executionId: "turn",
@@ -104,23 +116,87 @@ const client = {
     },
   },
 }
-const source = gatewaySource({
-  connect: () => Promise.resolve(client),
-  clock: {
-    now: () => performance.now(),
-    after(ms, run) {
-      const timer = window.setTimeout(run, ms)
-      return () => window.clearTimeout(timer)
-    },
+const clock: GatewayClock = {
+  now: () => performance.now(),
+  after(ms, run) {
+    const timer = window.setTimeout(run, ms)
+    return () => window.clearTimeout(timer)
   },
-})
+}
+const source = gatewaySource({ connect: () => Promise.resolve(client), clock })
 await source.transcript(slow)
 const dependencies = createDesktopDependencies({ workspace: source })
+dependencies.widgets.register(
+  fixtureAppPlugin({
+    sessionId: fast,
+    sandbox: pageSandbox(document),
+    timers: clock,
+    newId: () => crypto.randomUUID(),
+    page: () => readPageContext(document, "web"),
+  }),
+)
 const store = makeDesktopStore(dependencies)
 store.dispatch(followWorkspace())
 void store.dispatch(loadWorkspace())
 Object.assign(window, {
   __messageSync: {
+    async app(prefix: "before" | "added" | "removed") {
+      const text = {
+        offset: 0,
+        kind: "text" as const,
+        text: "Earlier text",
+        toolId: "",
+        noticeId: "",
+      }
+      const part = {
+        offset: 2,
+        kind: "tool" as const,
+        toolId: fixtureCallIdentity.toolId,
+        text: "",
+        noticeId: "",
+      }
+      gateway.views.set(
+        fast,
+        conversationView(
+          view(fast, {
+            revision: String(revision++),
+            approvalModes,
+            messages: [
+              {
+                executionId: fixtureCallIdentity.executionId,
+                userText: "Keep this app",
+                attachments: [],
+                files: [],
+                status: "completed",
+                parts:
+                  prefix === "removed"
+                    ? [part]
+                    : prefix === "added"
+                      ? [text, { ...text, offset: 1, text: "More text" }, part]
+                      : [text, part],
+              },
+            ],
+            tools: [
+              {
+                ...fixtureCallIdentity,
+                title: "show_fixture",
+                kind: "other",
+                status: "completed",
+                details: "Three rows",
+                input: "{}",
+                mcp: {
+                  server: fixtureServer,
+                  tool: "show_fixture",
+                  resourceUri: fixtureResourceUri,
+                },
+              },
+            ],
+          }),
+          fast,
+        ),
+      )
+      await source.transcript(fast)
+    },
     async start() {
       changed("Initial answer")
       await source.send({

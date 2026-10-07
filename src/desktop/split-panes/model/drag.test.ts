@@ -100,7 +100,7 @@ describe("a press", () => {
       { kind: "escape" },
       { kind: "lost" },
       { kind: "changed" },
-      { kind: "landed" },
+      { kind: "landed", made: "the copy" },
     ] as const)
       expect(stepDrag<Made>(idle, event)).toBe(idle)
   })
@@ -189,6 +189,8 @@ describe("carrying", () => {
     expect(over).toMatchObject({ kind: "carrying", aim: null })
     expect(run([release(null)], over)).toEqual({
       kind: "cancelling",
+      carried: pane,
+      made: "the copy",
       how: "home",
     })
   })
@@ -207,6 +209,8 @@ describe("carrying", () => {
     expect(run([{ kind: "still", t: 1000, targets: null }], blind)).toBe(blind)
     expect(run([release(middleOf2, 827, 400, null)], blind)).toEqual({
       kind: "cancelling",
+      carried: pane,
+      made: "the copy",
       how: "home",
     })
   })
@@ -258,6 +262,7 @@ describe("carrying", () => {
     expect(run([release()], carrying())).toEqual({
       kind: "dropping",
       carried: pane,
+      made: "the copy",
       aim: middleOf2,
     })
   })
@@ -280,18 +285,20 @@ describe("carrying", () => {
     expect(run([release(right, 880, 400, targets, 30 + restAfter + 5)], fast)).toEqual({
       kind: "dropping",
       carried: pane,
+      made: "the copy",
       aim: right,
     })
     // Let go before the next zone was drawn: the one on the page drops.
     expect(run([move(1090, 400, 40), release(middleOf2, 1090)], carrying())).toEqual({
       kind: "dropping",
       carried: pane,
+      made: "the copy",
       aim: middleOf2,
     })
   })
 
   it("release with nothing shown, or where nothing can be aimed at, goes home", () => {
-    const home = { kind: "cancelling", how: "home" }
+    const home = { kind: "cancelling", how: "home", carried: pane, made: "the copy" }
     // A flick: lifted and let go over a zone before any preview was shown.
     expect(
       run([press(), ready, move(90, 40, 10), move(827, 400, 12), release(null)]),
@@ -320,9 +327,17 @@ describe("carrying", () => {
       { kind: "lost" },
     ] as const) {
       const after = run([end], carrying())
-      expect(after).toEqual({ kind: "cancelling", how: "home" })
+      expect(after).toEqual({
+        kind: "cancelling",
+        how: "home",
+        carried: pane,
+        made: "the copy",
+      })
       // Lost, then a move and a release over a zone.
-      const later = run([move(827, 400, 600), release(), { kind: "landed" }], after)
+      const later = run(
+        [move(827, 400, 600), release(), { kind: "landed", made: "the copy" }],
+        after,
+      )
       expect(later).toBe(idle)
       expect(run([move(827, 400, 700), release()], later)).toBe(idle)
     }
@@ -331,6 +346,8 @@ describe("carrying", () => {
   it("a change — a command key, a resize, the store, Settings — ends it at once", () => {
     expect(run([{ kind: "changed" }], carrying())).toEqual({
       kind: "cancelling",
+      carried: pane,
+      made: "the copy",
       how: "at-once",
     })
     expect(keyToDrag("w")).toEqual({ kind: "changed" })
@@ -353,9 +370,9 @@ describe("dropping and cancelling", () => {
   it("the drop's own change, a press, or any other event changes nothing until it lands", () => {
     const dropping = run([release()], carrying())
     const home = run([{ kind: "escape" }], carrying())
+    expect(stepDrag(dropping, { kind: "changed" })).toBe(dropping)
     for (const phase of [dropping, home])
       for (const event of [
-        { kind: "changed" },
         press(),
         ready,
         move(100, 100, 600),
@@ -367,9 +384,31 @@ describe("dropping and cancelling", () => {
         expect(stepDrag(phase, event)).toBe(phase)
   })
 
+  it("a room change removes a returning copy at once and keeps its owner", () => {
+    const home = run([{ kind: "lost" }], carrying())
+    const changed = stepDrag(home, { kind: "changed" })
+    expect(changed).toEqual({
+      kind: "cancelling",
+      how: "at-once",
+      carried: pane,
+      made: "the copy",
+    })
+    expect(stepDrag(changed, { kind: "changed" })).toBe(changed)
+  })
+
+  it("another copy's landing cannot end the current flight", () => {
+    for (const phase of [
+      run([release()], carrying()),
+      run([{ kind: "lost" }], carrying()),
+    ])
+      expect(stepDrag(phase, { kind: "landed", made: "old copy" })).toBe(phase)
+  })
+
   it("its flight landing ends it", () => {
-    expect(run([release(), { kind: "landed" }], carrying())).toBe(idle)
-    expect(run([{ kind: "changed" }, { kind: "landed" }], carrying())).toBe(idle)
+    expect(run([release(), { kind: "landed", made: "the copy" }], carrying())).toBe(idle)
+    expect(
+      run([{ kind: "changed" }, { kind: "landed", made: "the copy" }], carrying()),
+    ).toBe(idle)
   })
 })
 

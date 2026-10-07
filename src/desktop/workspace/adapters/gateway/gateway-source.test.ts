@@ -14,6 +14,7 @@ import {
   type ConversationPermission,
 } from "@nessa/client"
 import { describe, expect, it, vi } from "vitest"
+import { conversationView } from "../../../../../packages/nessa-client/src/protocol/conversation-validate"
 import { HostRefusalError } from "../../../../host/startup-refusals"
 import { SessionHealthError } from "../../../../session/adapters/client/dev-session"
 import { WorkspaceSourceError, type WorkspaceUpdate } from "../../application/ports"
@@ -120,6 +121,9 @@ const running = (id = "turn") => ({
 })
 
 describe("reads", () => {
+  it("the default gateway fixture conforms to the client view contract", () => {
+    expect(conversationView(view("a"), "a")).toEqual(view("a"))
+  })
   it("C1, R1: connected, lists every conversation in one section and channel, each at its first revision", async () => {
     const { gateway, source } = started()
     gateway.rows.set("a", row("a", { running: true }))

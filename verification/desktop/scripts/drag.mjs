@@ -764,6 +764,65 @@ const checks = {
       failures.push(`the release after the loss dropped: ${before} → ${after}`)
     return { failures }
   },
+  "return-interrupted": async (page, layout, _fresh, { shots, tag }) => {
+    const size = page.viewportSize()
+    const list = await threeColumns(page, layout)
+    const target = list[2]
+    await lift(page, 0)
+    await page.mouse.move(target.x + target.w / 2, target.y + target.h / 2, { steps: 10 })
+    if (!(await zoneSays(page, zoneSaid.any)))
+      throw new CannotRun("no zone before the return flight")
+    const paused = await page.evaluate(
+      ([ghost, carrier]) => {
+        window.__verifyResizeCopies = null
+        addEventListener(
+          "resize",
+          () => {
+            window.__verifyResizeCopies = document.querySelectorAll(ghost).length
+          },
+          { once: true },
+        )
+        dispatchEvent(new Event("blur"))
+        const flights =
+          document.querySelector(carrier)?.getAnimations({ subtree: true }) ?? []
+        flights.forEach((flight) => flight.pause())
+        return {
+          flights: flights.length,
+          copies: document.querySelectorAll(ghost).length,
+        }
+      },
+      [css.dragGhost, css.dragCarrier],
+    )
+    if (paused.flights === 0 || paused.copies !== 1)
+      throw new CannotRun("no owned return flight to interrupt")
+    if (shots) {
+      mkdirSync(shots, { recursive: true })
+      await page.screenshot({
+        path: join(shots, `${tag}-returning-copy.jpg`),
+        type: "jpeg",
+        quality: 70,
+        scale: "css",
+      })
+    }
+    await page.setViewportSize({ width: size.width - 100, height: size.height - 50 })
+    await page.waitForFunction(() => window.__verifyResizeCopies !== null)
+    const copies = await page.evaluate(() => window.__verifyResizeCopies)
+    if (shots)
+      await page.screenshot({
+        path: join(shots, `${tag}-resize-cleared-copy.jpg`),
+        type: "jpeg",
+        quality: 70,
+        scale: "css",
+      })
+    await page.mouse.up()
+    await page.setViewportSize(size)
+    return {
+      paused,
+      copiesAfterResize: copies,
+      failures:
+        copies === 0 ? [] : [`resize left ${copies} returning copies in its event turn`],
+    }
+  },
   "resize-mid-drag": async (page, layout) => {
     const size = page.viewportSize()
     const failures = await changeMidDrag(
