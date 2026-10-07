@@ -1,0 +1,26 @@
+[
+  {
+    "probe": "late_phase_context",
+    "test": "j15_control_response_uses_its_actual_request_context",
+    "failed_as_expected": true,
+    "exit": 101,
+    "seconds": 11.7,
+    "log": "/tmp/nessa-http-context-probes/late_phase_context.log"
+  },
+  {
+    "probe": "reuse_first_context",
+    "test": "j16_refreshed_control_retry_uses_its_own_bound_context",
+    "failed_as_expected": true,
+    "exit": 101,
+    "seconds": 11.7,
+    "log": "/tmp/nessa-http-context-probes/reuse_first_context.log"
+  },
+  {
+    "probe": "initial_legacy_context",
+    "test": "c2_legacy_follows_only_400_404_405",
+    "failed_as_expected": true,
+    "exit": 101,
+    "seconds": 11.8,
+    "log": "/tmp/nessa-http-context-probes/initial_legacy_context.log"
+  }
+]

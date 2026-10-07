@@ -1,0 +1,10 @@
+[
+  {
+    "probe": "typed_404",
+    "test": "j14_initialized_http_failures_keep_typed_causes",
+    "failed_as_expected": false,
+    "exit": 0,
+    "seconds": 11.7,
+    "log": "/tmp/nessa-http-atomic-probes/typed_404.log"
+  }
+]
