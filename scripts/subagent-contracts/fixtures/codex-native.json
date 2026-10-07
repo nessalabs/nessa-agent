@@ -4,7 +4,7 @@
     "adapter": "@agentclientprotocol/codex-acp@1.12.0",
     "adapterSha256": "f45a64dc3a994556ebdb688dc8d59b86945a9b2f940a3e3e545739dd265a7cc5",
     "lockSha256": "e3bf37b4b3b373ec6d45cd23d564f0df271ebe8411d1cba75abefe073bb4f141",
-    "probeSha256": "5fd359bdabcfbed029254f84d48244af02e859ba51040a9774c46e8592bea5ab",
+    "probeSha256": "4c6536c3941370780ea349d163396bf9a01ca1ea53f310071aa8cfc53e3876db",
     "sessionSha256": "4f7c19259ccf1fea81d3e86077af3b35d30c6a2785fc9c514b7393538c54290b",
     "processSha256": "2102b0dea3d53154490f0cc910bf81b3725a90f52cf5e0810cd9193914e52046",
     "selectorSha256": "b287a27a24ea2bb02871a6c91a116750b25ae2a50480f11058075c752a07ffad",
