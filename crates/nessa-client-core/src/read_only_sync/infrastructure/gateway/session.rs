@@ -29,10 +29,10 @@ use nessa_protocol::product::generated::{
     product_event, product_method, wire_shape_product_session_ready,
     wire_shape_session_authenticate_params, wire_shape_session_challenge, ChangeWatchId,
     ConversationChanged, ConversationWatchEnded, ConversationWatchRecordsParams,
-    ConversationWatchResult, ProductClientMetadata, ProductSessionReady, SessionAuthenticateParams,
-    SessionChallenge, CHANGE_WATCH_ID_PATTERN, MAX_AUTH_CREDENTIAL_CHARACTERS,
-    MAX_CHANGE_WATCH_ID_BYTES, MAX_PRODUCT_CLIENT_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD,
-    PRODUCT_VERSION,
+    ConversationWatchResult, ProductClientMetadata, ProductSessionReady, ProductSurface,
+    ProductSurfaceKind, SessionAuthenticateParams, SessionChallenge, CHANGE_WATCH_ID_PATTERN,
+    MAX_AUTH_CREDENTIAL_CHARACTERS, MAX_CHANGE_WATCH_ID_BYTES, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
+    MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
 };
 use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
 use nessa_protocol::product::passive_read::{encode_request, ReadEncodeError};
@@ -226,9 +226,13 @@ impl Session {
         policy: GatewayPolicy,
     ) -> Result<Self, GatewayError> {
         // Refuse oversized borrowed fields before allocating their owned DTO copies.
+        // The surface instance is this client id, so it has to fit that ceiling too.
         for (value, ceiling) in [
             (device.credential, MAX_AUTH_CREDENTIAL_CHARACTERS),
-            (client_id, MAX_PRODUCT_CLIENT_ID_CHARACTERS),
+            (
+                client_id,
+                MAX_PRODUCT_CLIENT_ID_CHARACTERS.min(MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS),
+            ),
         ] {
             if value.chars().take(ceiling + 1).count() > ceiling {
                 return Err(GatewayError::InvalidCredential);
@@ -291,6 +295,10 @@ impl Session {
             credential: device.credential.to_owned(),
             client: ProductClientMetadata {
                 id: client_id.to_owned(),
+            },
+            surface: ProductSurface {
+                kind: ProductSurfaceKind::Cli,
+                instance: client_id.to_owned(),
             },
         };
         if !wire_shape_session_authenticate_params(

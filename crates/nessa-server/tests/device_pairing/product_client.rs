@@ -23,6 +23,7 @@ impl ProductClient {
                 "nonce": challenge["payload"]["nonce"],
                 "credential": credential,
                 "client": {"id": "nessa-cli"},
+                "surface": {"kind": "cli", "instance": "nessa-cli"},
             }),
         );
         assert_eq!(ready["ok"], true, "{ready}");

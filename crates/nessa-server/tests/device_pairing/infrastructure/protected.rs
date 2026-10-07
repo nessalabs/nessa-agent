@@ -266,7 +266,7 @@ impl Probe {
         self.call(
             "session.authenticate",
             json!({"minVersion":1,"maxVersion":1,"nonce":nonce,"credential":credential,
-                "client":{"id":"probe"}}),
+                "client":{"id":"probe"},"surface":{"kind":"cli","instance":"probe"}}),
         )
     }
     fn catalogue_head(&mut self, receiver: &str, epoch: u64) -> Option<Value> {

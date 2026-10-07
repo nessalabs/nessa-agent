@@ -9,7 +9,8 @@ use crate::conversation::infrastructure::DISCOVERY_STEPS_PER_READ;
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 use nessa_protocol::product::generated::{
-    MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_RECORD_RESPONSE_BYTES,
+    MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
+    MAX_RECORD_RESPONSE_BYTES,
 };
 use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
 use std::collections::BTreeMap;
@@ -45,6 +46,12 @@ fn catalogue() -> &'static [Limit] {
             tier: "fixed",
             owner: "protocol/product/v1.json ProductClientMetadata.id maxLength",
             meaning: "a client id longer than this is refused at the handshake",
+        },
+        Limit {
+            id: "product.max_surface_instance_characters",
+            tier: "fixed",
+            owner: "protocol/product/v1.json ProductSurface.instance maxLength",
+            meaning: "a surface instance longer than this is refused at the handshake",
         },
         Limit {
             id: "server.requests",
@@ -189,6 +196,10 @@ pub(crate) fn effective_json(
     put(
         "product.max_client_id_characters",
         count(MAX_PRODUCT_CLIENT_ID_CHARACTERS),
+    );
+    put(
+        "product.max_surface_instance_characters",
+        count(MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS),
     );
     put("server.requests", count(limits.requests()));
     put("server.controls", count(limits.controls()));

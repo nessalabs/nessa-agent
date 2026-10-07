@@ -33,6 +33,8 @@ function createScope(
         auth,
         stage: environment.stage,
         clientId: "nessa-browser",
+        // This tab's surface kind. The handshake records it.
+        surfaceKind: "web",
         pageUrl: window.location.href,
       }),
   })

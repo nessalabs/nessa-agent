@@ -24,6 +24,8 @@ fn adapter_rejects_mismatched_request_ids_and_cross_principal_issuance() {
             let auth: Value =
                 serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
             assert_eq!(auth["params"]["client"]["id"], "nessa-cli");
+            assert_eq!(auth["params"]["surface"]["kind"], "cli");
+            assert_eq!(auth["params"]["surface"]["instance"], "nessa-cli");
             assert_eq!(auth["params"]["credential"], "private-token");
             socket.send(Message::Text(json!({"type":"res","id":auth["id"],"ok":true,"payload":{
                 "version":1,"gatewayId":"gateway","organizationId":"org","principalId":"caller","membershipId":"member","credentialId":"cli","audienceId":"gateway","expiresAt":null,"grants":[],"methods":[]

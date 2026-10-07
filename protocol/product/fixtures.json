@@ -12,6 +12,10 @@
     "credential": "synthetic-test-credential",
     "client": {
       "id": "fixture"
+    },
+    "surface": {
+      "kind": "panel",
+      "instance": "fixture-window"
     }
   },
   "ProductSessionReady": {
