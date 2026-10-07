@@ -6,6 +6,7 @@ import {
   selectFailure,
   selectFailureStages,
   selectPaneWidget,
+  selectWindowWidget,
 } from "../../adapters/store/selectors"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
 import { EmptyWorkspace } from "./empty-state"
@@ -25,9 +26,14 @@ import "./panes.css"
 export const PaneGrid = memo(function PaneGrid({ source }: { source: SplitPanesSource }) {
   const failure = useWorkspaceSelector(selectFailure)
   const stages = useWorkspaceSelector(selectFailureStages)
+  const windowWidget = useWorkspaceSelector(selectWindowWidget)
   const renderPane = useCallback((shown: ShownPane) => <ShownPaneOf {...shown} />, [])
   return (
-    <main className="workspace-chat" aria-label="Conversations">
+    <main
+      className="workspace-chat"
+      aria-label="Conversations"
+      data-window-widget={windowWidget ? "" : undefined}
+    >
       <SplitPanes
         source={source}
         renderPane={renderPane}

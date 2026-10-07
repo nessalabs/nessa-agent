@@ -457,7 +457,53 @@ it("previews the outcome of the layout the source holds, and commits it through 
   // Measured once, as the press began.
   expect(fake.state.measured).toBe(1)
   expect(items(fake)).toEqual(["b", "a"])
+  // Bodies were held out of the commit's layout, then brought back.
+  expect(host.querySelector("[data-drag-settling]")).toBeNull()
   expect(carrying()).toBe(false)
+  await act(async () => root.unmount())
+})
+
+it("holds pane bodies out of the frame a cancel lets the preview go, and brings one back each frame after", async () => {
+  const fake = fakeSource(two())
+  const root = await mounted(fake)
+  await liftOntoTwo()
+  expect(document.documentElement.hasAttribute(marks.reflow)).toBe(true)
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
+  pointer("pointerup", 827, 400)
+  // The preview's mark drops as the copy flies home, and the bodies are
+  // waiting on that turn — one comes back on the frame after.
+  await act(async () => {})
+  expect(document.documentElement.hasAttribute(marks.reflow)).toBe(false)
+  expect(host.querySelectorAll("[data-drag-settling]").length).toBeGreaterThan(1)
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(host.querySelectorAll("[data-drag-settling]").length).toBe(1)
+  await frames()
+  expect(host.querySelector("[data-drag-settling]")).toBeNull()
+  expect(fake.state.drops).toEqual([])
+  await act(async () => root.unmount())
+})
+
+it("holds pane bodies out of the commit frame and brings one back each frame after", async () => {
+  const fake = fakeSource(two())
+  const root = await mounted(fake)
+  await liftOntoTwo()
+  pointer("pointerup", 827, 400)
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(host.querySelectorAll("[data-drag-settling]").length).toBeGreaterThan(0)
+  await frames()
+  expect(host.querySelector("[data-drag-settling]")).toBeNull()
+  expect(fake.state.drops).toHaveLength(1)
+  // The copy is gone on that landing. Fading it would blend it with the blur.
+  const handoff = animated.filter(
+    (asked) =>
+      asked.element.classList.contains(classes.ghost) &&
+      asked.keyframes.some((frame) => frame.opacity === 0),
+  )
+  expect(handoff.at(-1)?.duration).toBe(0)
   await act(async () => root.unmount())
 })
 
@@ -582,6 +628,13 @@ it("with less motion, previews a swap at once — the other pane drawn where the
       /^translate\(554px, 0px\) scale\(1, 1\)$/,
     )
     expect(drawnAt(2)?.duration).toBe(0)
+    // The transcript's clip is a style, set once. Keyframes that animate it
+    // lay the transcript out on every frame of the glide.
+    expect(
+      animated.every(({ keyframes }) =>
+        keyframes.every((frame) => frame?.clipPath == null),
+      ),
+    ).toBe(true)
     // Dropped: the panes are laid out where the preview drew them, and the
     // preview is let go as they are — left on, it would draw them moved again.
     const preview = animated.filter(({ element: of }) => of.closest("[data-pane-key]"))

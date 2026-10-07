@@ -13,6 +13,7 @@
 import {
   memo,
   useCallback,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -229,6 +230,15 @@ function useMotionShape(...columns: boolean[]): string {
   return `${panes}|${columns.join(",")}`
 }
 
+/** Sets the workspace's `data-content` from its own subscription (`layouts.test.tsx`). */
+function ContentMark({ root }: { root: RefObject<HTMLElement | null> }) {
+  const contentShown = useWorkspaceSelector(selectContentKind)
+  useLayoutEffect(() => {
+    root.current?.setAttribute("data-content", contentShown)
+  }, [contentShown, root])
+  return null
+}
+
 /** A column's width as laid out — never as a slide draws it — which a drag of its edge starts from. */
 const drawnWidth = (root: HTMLElement | null, selector: string) =>
   root?.querySelector<HTMLElement>(selector)?.offsetWidth ?? 0
@@ -308,8 +318,6 @@ export function WorkspaceShell({
   // Each widget host on the page, by scope, for Escape to find (`widget-escape.ts`).
   const [escapeScopes] = useState<EscapeScopes>(() => new Map())
   useWidgetEscape({ store, root, scopes: escapeScopes })
-  // What fills the content region: the panes, the Agents overview over them, or a widget over the panes.
-  const contentShown = useWorkspaceSelector(selectContentKind)
   const shape = useMotionShape(sidebarOpen, listOpen)
 
   // Beside where the room allows it, in the focused pane's place where not —
@@ -372,7 +380,6 @@ export function WorkspaceShell({
                   region.sessionList ? (listOpen ? "open" : "closed") : undefined
                 }
                 data-panes-alone={(!sidebarOpen && !listOpen) || undefined}
-                data-content={contentShown}
                 style={
                   {
                     "--workspace-sidebar-width": `${sidebarWidth}px`,
@@ -421,6 +428,7 @@ export function WorkspaceShell({
                     />
                   )}
                 </WorkspaceTitlebar>
+                <ContentMark root={root} />
                 <Columns
                   region={region}
                   root={root}
@@ -518,27 +526,31 @@ const Columns = memo(function Columns({
           onMove={dragSidebar}
         />
       ) : null}
-      {region.sessionList ? <SessionList /> : null}
-      {region.sessionList && (listOpen || sidebarOpen) ? (
-        <ResizeEdge
-          label="Resize Session List"
-          className={
-            listOpen ? "workspace-list-edge" : "workspace-list-edge workspace-edge-folded"
-          }
-          value={{
-            now: listOpen ? listWidth : 0,
-            min: sessionListLimits.min,
-            max: sessionListLimits.max,
-          }}
-          onStart={() =>
-            (listFrom.current = listOpen
-              ? drawnWidth(root.current, ".workspace-list")
-              : null)
-          }
-          onMove={dragList}
-        />
-      ) : null}
-      <PaneGrid source={splitPanes} />
+      <div className="workspace-content">
+        {region.sessionList ? <SessionList /> : null}
+        {region.sessionList && (listOpen || sidebarOpen) ? (
+          <ResizeEdge
+            label="Resize Session List"
+            className={
+              listOpen
+                ? "workspace-list-edge"
+                : "workspace-list-edge workspace-edge-folded"
+            }
+            value={{
+              now: listOpen ? listWidth : 0,
+              min: sessionListLimits.min,
+              max: sessionListLimits.max,
+            }}
+            onStart={() =>
+              (listFrom.current = listOpen
+                ? drawnWidth(root.current, ".workspace-list")
+                : null)
+            }
+            onMove={dragList}
+          />
+        ) : null}
+        <PaneGrid source={splitPanes} />
+      </div>
     </>
   )
 })

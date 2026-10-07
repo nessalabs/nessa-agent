@@ -127,13 +127,18 @@ export function recordShapeFrames(sel) {
       panes: [...document.querySelectorAll(sel.pane)]
         .filter((e) => !e.closest(sel.dragGhost))
         .map((e) => {
-          // Its transcript and composer, drawn.
+          // Its transcript and composer, drawn. A transcript not painted
+          // during the preview is not a part the preview positions (`panes.css`).
           const transcript = e.querySelector(sel.transcript)
           const dock = e.querySelector(sel.dock)
+          const inner = transcript?.querySelector(".workspace-transcript-inner")
+          const quiet =
+            inner instanceof Element &&
+            getComputedStyle(inner).contentVisibility === "hidden"
           return {
             key: e.dataset.paneKey,
             ...rect(e),
-            transcript: transcript ? rect(transcript) : null,
+            transcript: transcript && !quiet ? rect(transcript) : null,
             dock: dock ? rect(dock) : null,
           }
         }),

@@ -521,11 +521,10 @@ size, and at rest the box is exactly the rect it would take. The two differ
 in what the content is laid out at, chosen by measurement:
 
 - **The copy is laid out at the slot's size, once per zone change**, so its
-  words, its composer and its foot read as the pane will; at rest nothing in
-  it is scaled. It is one screen of a conversation in a box of its own
-  (`contain: strict`): in Chrome at 4× CPU throttle, four panes, dragged
-  across six zones, the longest frame was 33ms (median 33ms, four runs;
-  drop and cancel alike).
+  title reads as the pane will; at rest nothing in it is scaled. It is the
+  pane's chrome in a box of its own (`contain: strict`). The conversation
+  stays in the copy and is not painted: laying that body out on each shape
+  change misses the frame budget.
 - **A pane keeps its layout and is cut to its would-be shape**: its box
   takes the rect by transform (`overflow: hidden` clips it) and its content,
   scaled back, stays at the size it has, placed as a pane that shape would
@@ -599,12 +598,12 @@ placeholder marks exactly the rect the drop will take — from `dropOutcome`,
 the same outcome the drop's command commits, so nothing jumps
 (`panes.test.ts` holds preview == commit for every zone; every preview rect is
 held inside the grid). A zone the fit rule refuses offers nothing; a session
-already on screen offers "Go to Pane". What is carried is a translucent copy
-of the pane itself — one screen of its conversation, moved to where it was
-scrolled by transform, its composer and chips, in a box of the shape it
-would land in (`contain: strict`); a session from a list is drawn from what the window holds
-of it. Nothing of the page is read after the press's frame: where a preview
-has drawn a pane is known from the preview's own motion, and the preview and
+already on screen offers "Go to Pane". What is carried is an opaque copy
+of the pane's title and chrome, in a box of the shape it would land in
+(`contain: strict`). Its conversation is in the copy and not painted.
+A session from a list is drawn from what the window holds of it. Nothing of
+the page is read after the press's frame: where a preview has drawn a pane is
+known from the preview's own motion, and the preview and
 the drop's command are given the room read as the press began (a resize or a
 side column changing ends the drag, so it is still the room at the release),
 so beginning, previewing, dropping and letting go only write. What is read is
