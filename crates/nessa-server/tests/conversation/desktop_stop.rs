@@ -13,8 +13,10 @@ use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::view::ConversationMessageStatus;
 use nessa_sdk::application::agent_execution::providers::ApprovalMode as ProviderMode;
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
+use std::future::{poll_fn, Future};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex as StdMutex;
+use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
@@ -163,23 +165,6 @@ impl Fixture {
         let live = self.service.wait_for_slot(&self.id, slot).await.unwrap();
         let _ = live.join_attachment_owner().await;
         live
-    }
-
-    /// Wait until the submission lock has a holder and somebody waiting.
-    async fn lock_contended(&self) {
-        tokio::time::timeout(BOUND, async {
-            while self
-                .service
-                .inner
-                .mode_changes
-                .holders_and_waiters(&self.id)
-                < 2
-            {
-                tokio::time::sleep(Duration::from_millis(1)).await;
-            }
-        })
-        .await
-        .expect("one holds the submission lock and the other waits for it");
     }
 
     /// Poll until `Agent::idle_for_approval_change` is true (#563).
@@ -604,8 +589,53 @@ async fn a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock() {
     })
     .await
     .expect("the person's close reaches the agent");
-    let sending = fixture.send("reopens", "Reopens", false);
-    fixture.lock_contended().await;
+    let (_asked, submission) = fixture.service.submission_future(
+        fixture.id.clone(),
+        caller("reopens"),
+        "reopens".into(),
+        SubmittedMessage {
+            text: "Reopens".into(),
+            images: Vec::new(),
+            files: Vec::new(),
+        },
+        SubmissionMode::Queue,
+        Writer::Person,
+    );
+    // The close holds mode_changes. Admission is open and uncontended, so
+    // without Tokio's cooperative yield the first Pending is the held mutex,
+    // not a scheduling yield before its FIFO queue. Keep this same future.
+    // Tokio's multi-thread block_on polls inside coop::budget. Bound exhaustion
+    // and assert it so reverting unconstrained fails at the lock-reference check.
+    let mut submission = Box::pin(submission);
+    for _ in 0..128 {
+        if !tokio::task::coop::has_budget_remaining() {
+            break;
+        }
+        tokio::task::consume_budget().await;
+    }
+    assert!(
+        !tokio::task::coop::has_budget_remaining(),
+        "the controlled poll starts with an exhausted cooperative budget"
+    );
+    let pending = poll_fn(|cx| {
+        Poll::Ready(
+            std::pin::pin!(tokio::task::unconstrained(submission.as_mut()))
+                .poll(cx)
+                .is_pending(),
+        )
+    })
+    .await;
+    assert!(pending, "the submission waits for the close's lock");
+    assert_eq!(
+        fixture
+            .service
+            .inner
+            .mode_changes
+            .holders_and_waiters(&fixture.id),
+        2,
+        "the polled submission retains the held lock"
+    );
+    let sending = tokio::spawn(submission);
     let stopping = fixture.stop();
     tokio::time::timeout(BOUND, async {
         while fixture
@@ -619,10 +649,11 @@ async fn a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock() {
         }
     })
     .await
-    .expect("the stop waits behind the close and the message");
+    .expect("the stop retains the lock after the submission was queued");
     release_close.send(()).unwrap();
     closing.await.unwrap().unwrap();
-    sending.await.unwrap().unwrap();
+    let receipt = sending.await.unwrap().unwrap();
+    assert_eq!(receipt.execution_id, "reopens");
     stopping.await.unwrap().unwrap();
     assert_eq!(
         fixture.provider.open_calls.load(Ordering::SeqCst),

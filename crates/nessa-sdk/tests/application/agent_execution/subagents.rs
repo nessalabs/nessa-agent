@@ -9,7 +9,9 @@ use std::{
 };
 
 use async_trait::async_trait;
-use nessa_sdk::application::agent_execution::agents::{lifetime_disposition, LifetimeDisposition};
+use nessa_sdk::application::agent_execution::agents::{
+    lifetime_disposition, LifetimeDisposition, OwnedLifetime,
+};
 use nessa_sdk::application::agent_execution::providers::SessionCloseRequest;
 use nessa_sdk::application::agent_execution::subagents::{
     ChildFactory, ChildResources, CloseCommand, InitialSubmit, LiveCapacity, MemoryOwnershipStore,
@@ -99,6 +101,7 @@ struct ScriptFactory {
     hold_next: Mutex<Option<Arc<Notify>>>,
     submit_result: Mutex<Result<TaskReceiptId, PortFailure>>,
     last_child: Mutex<Option<AgentLifetimeId>>,
+    last_gate: Mutex<Option<Arc<dyn OwnedLifetime>>>,
 }
 
 impl ScriptFactory {
@@ -114,6 +117,7 @@ impl ScriptFactory {
             hold_next: Mutex::new(None),
             submit_result: Mutex::new(Ok(TaskReceiptId::new("receipt-1").unwrap())),
             last_child: Mutex::new(None),
+            last_gate: Mutex::new(None),
         })
     }
 
@@ -131,6 +135,7 @@ impl ChildFactory for ScriptFactory {
     async fn prepare(&self, request: PrepareRequest) -> Result<PreparedChild, PrepareFailure> {
         self.prepares.fetch_add(1, Ordering::SeqCst);
         *self.last_child.lock().expect("child") = Some(request.child.clone());
+        *self.last_gate.lock().expect("child gate") = Some(request.owned_lifetime.clone());
         self.entered.notify_one();
         let release = self.release.lock().expect("factory").clone();
         if let Some(release) = release {
@@ -205,17 +210,19 @@ impl World {
     }
 
     fn bind_root(&self, lifetime: &AgentLifetimeId) {
-        self.coordinator.bind_resources(
-            lifetime.clone(),
-            Arc::new(ScriptResources {
-                closes: AtomicUsize::new(0),
-                report: ResourceReport {
-                    physical: PhysicalFact::Released,
-                    evidence: EvidenceFact::Acknowledged,
-                },
-                hold: None,
-            }),
-        );
+        self.coordinator
+            .bind_resources(
+                lifetime.clone(),
+                Arc::new(ScriptResources {
+                    closes: AtomicUsize::new(0),
+                    report: ResourceReport {
+                        physical: PhysicalFact::Released,
+                        evidence: EvidenceFact::Acknowledged,
+                    },
+                    hold: None,
+                }),
+            )
+            .unwrap();
     }
 
     fn command(&self, parent: &AgentLifetimeId, request: &str, task: &str) -> SpawnCommand {
@@ -1376,7 +1383,7 @@ async fn r5_a_cycle_stays_readable_and_refuses_dispatch() {
         reports: Vec::new(),
     };
     store.write(&snapshot).await.unwrap();
-    let world = resumed(store);
+    let world = resumed(store.clone());
     world.coordinator.resume().await.unwrap();
     let refused = world
         .coordinator
@@ -1396,6 +1403,40 @@ async fn r5_a_cycle_stays_readable_and_refuses_dispatch() {
         .participation(&left)
         .expect("cycle gate")
         .is_sealed());
+    let refused_owner = world
+        .coordinator
+        .bind_resources(
+            left.clone(),
+            Arc::new(ScriptResources {
+                closes: AtomicUsize::new(0),
+                report: released(),
+                hold: None,
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(
+        refused_owner.reason,
+        nessa_sdk::application::agent_execution::subagents::BindResourcesRefusal::RefusedHistory
+    );
+    assert_eq!(store.read().await.unwrap(), snapshot);
+    let reloaded = resumed(store.clone());
+    reloaded.coordinator.resume().await.unwrap();
+    assert!(reloaded
+        .coordinator
+        .participation(&left)
+        .unwrap()
+        .is_sealed());
+    assert!(matches!(
+        reloaded
+            .coordinator
+            .spawn(reloaded.command(&left, "retry", "task"))
+            .await,
+        Err(OwnershipFailure::Domain(
+            OwnershipError::Cycle | OwnershipError::DispatchRefused
+        ))
+    ));
+    assert_eq!(reloaded.factory.prepares(), 0);
+    assert_eq!(store.read().await.unwrap(), snapshot);
 }
 
 fn resumed(store: Arc<MemoryOwnershipStore>) -> World {
@@ -1466,3 +1507,6 @@ fn spawn_row(child: &AgentLifetimeId, parent: &AgentLifetimeId, request: &str) -
         progress: SpawnProgress::Reserved,
     }
 }
+
+#[path = "subagents/publication.rs"]
+mod publication;

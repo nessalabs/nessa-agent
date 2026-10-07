@@ -193,7 +193,34 @@ automatic session storage, hooks, invocation, and UI integration.
   explicitly.
 - `application/agent_execution/`: `agents` exposes `Agent` and its errors,
   `subagents` the ownership coordinator that reserves, prepares, and closes
-  ordinary child agents and keeps snapshot writes in copy order, `providers`
+  ordinary child agents. Its private `publication` module projects audit-eligible
+  identities/progress plus live safety facts; `root` owns admissions through
+  synchronous ID delivery and reconciles failed or unclaimed eligible roots.
+  Snapshot revisions and the write fence preserve copy order. The read-only
+  `active_root_for_session` exposes eligible Open/Closing roots for explicit
+  reconciliation without making `open_root` an idempotent retry.
+  `bind_resources` now returns a typed refusal plus the unchanged owner when
+  transfer is refused; it does not replace an occupied owner or bind after an
+  absence claim. Private root/child admissions cannot confer external binding,
+  participation, or descendant spawn authority before their audit acknowledges.
+  Handing out an eligible participation gate records possible ownership transfer
+  and prevents a never-bound absence claim. Active child flights refuse public
+  transfers; their accepted `PrepareRequest.owned_lifetime` supplies the actual
+  child gate to its factory for Agent installation. Every typed failure after
+  this invocation admits a child seals its graph lifetime and actual gate before
+  fallback audit/storage or slot return, preserving the first cause and original
+  error. Lookup/conflict/pre-admission errors cannot revoke another operation's
+  child. Restored Closing and nonrunnable progress preserve the seal. Legacy
+  Open + Ended Reserved startup history refuses new transfer; current failed
+  startup is conservatively Closing until authoritative settlement (#649).
+  Other factual milestones and unfinished cleanup can regain a vacant
+  cleanup owner without attachment authority. Captured safety facts use
+  the same snapshot writer even when their audit rejects or is uncertain.
+  Never-bound root settlement consumes the actual absence audit result; rejection
+  leaves Closing with failed evidence. Restored identities do not prove never-bound
+  absence. Additional cleanup audit/storage debt (#646), whole-transaction panic
+  supervision (#625), and production gateway
+  child composition remain separate work. `providers`
   injected execution ports, `sessions`
   automatic snapshot management and the streaming commit clock port,
   `hooks` typed callbacks registered on Agent,
