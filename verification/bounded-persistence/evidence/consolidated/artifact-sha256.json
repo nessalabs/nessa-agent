@@ -1,6 +1,6 @@
 {
   "uncompressed-csv-sha256.json": "262a2c48aeddd84fa186201df9f31e4d20c6664c9b3368e6682935813c4bf3a8",
-  "candidate-source-sha256.json": "b1a3cd1f4811ae3d94f7d9d376ebff67baf858a514ab2c5b7634467da5d90ee3",
+  "candidate-source-sha256.json": "fa5b25310181cc3546639e3eb342cc36ab37dbcdc988397081d021515fa91823",
   "provenance-notes.json": "bb4e8d8bc57509975d6c5ddbe39db02e395b49e16f18bb41a3c70107d6b56d68",
   "current-shared-helper-plan.md": "c38bd6b150e02f3cab873fc2d6f63fa95666a285cd16282871940e1c32fa06b1",
   "lint-fixture-source-provenance.json": "7035d1d89684d3e65d8ddbc5aae8ce62c91665104c02b18b9f1730ffb86b40d6",
@@ -38,7 +38,6 @@
   "strengthened-scoped-gates/server-actual-records.log": "0f2e812f5a5f938d057a2ad55e5ad1db29f0f19801724ce24bb2c55e61040bbc",
   "strengthened-scoped-gates/central-contract.log": "3cde962cf7de1eb56df1ef5c8673c84cb283c3cc943335b507ea3fad98ed60da",
   "strengthened-scoped-gates/manifest.json": "e89258317a67187f10612f374d23403c723d64f5e84d862af43225507d9566b2",
-  "final-gates/manifest.json": "7cd58a02120159acab8c99907c01a27913285766c9bb11d78f1945ed4f875f01",
   "benchmarks/environment.json": "789a2d2510a0be6b426590c4ebd91eaaaabd53b009b3d9ee3077e6b3f5aff736",
   "benchmarks/restored-source-sha256.json": "bd43a0c3376bee46e12ad0937a9aa6c45589da304f1c7f110fb328f7e157e4e4",
   "benchmarks/measurement-environment.json": "b3df35c3facf51e28110974d635f35d68f9c10c6334c9675edf25e3ab5415f3e",

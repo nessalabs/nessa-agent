@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(target_os = "linux")]
+use std::sync::mpsc;
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
@@ -337,4 +339,145 @@ async fn ordinary_pre_and_post_call_faults_release_slot() {
         .submit(probe.wrap(|| ()))
         .await
         .is_err());
+}
+
+struct SubmissionPayload(Arc<AtomicUsize>);
+impl Drop for SubmissionPayload {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        panic!("submission payload destructor fault");
+    }
+}
+
+#[test]
+fn submission_fault_payload_is_not_deferred_to_observer() {
+    isolated(
+        "submission_fault_payload_is_not_deferred_to_observer",
+        || {
+            for poll_observer in [false, true] {
+                let dropped = Arc::new(AtomicUsize::new(0));
+                let payload_counter = dropped.clone();
+                // A name callback panic can poison Tokio's pool. Never run its Drop,
+                // including when a reverted submit lets this test unwind.
+                let runtime = std::mem::ManuallyDrop::new(
+                    tokio::runtime::Builder::new_current_thread()
+                        .thread_name_fn(move || {
+                            std::panic::panic_any(SubmissionPayload(payload_counter.clone()))
+                        })
+                        .build()
+                        .unwrap(),
+                );
+                let worker = Worker::new();
+                let admission = runtime.block_on(worker.admit()).unwrap();
+                let submitted = catch_unwind(AssertUnwindSafe(|| admission.submit(|| ())));
+                let observer = match submitted {
+                    Ok(observer) => observer,
+                    Err(payload) => {
+                        std::mem::forget(payload);
+                        assert_eq!(
+                            dropped.load(Ordering::SeqCst),
+                            0,
+                            "submission payload was destroyed"
+                        );
+                        panic!("submission escaped the typed boundary");
+                    }
+                };
+                assert_eq!(dropped.load(Ordering::SeqCst), 0);
+                assert_eq!(worker.slot.available_permits(), 0);
+                if poll_observer {
+                    assert!(runtime.block_on(observer).is_err());
+                } else {
+                    drop(observer);
+                }
+                assert_eq!(dropped.load(Ordering::SeqCst), 0);
+                runtime.block_on(std::future::poll_fn(|cx| {
+                    let next = worker.admit();
+                    tokio::pin!(next);
+                    assert!(next.poll(cx).is_pending());
+                    std::task::Poll::Ready(())
+                }));
+                // This isolated fixture proves entry containment, not OS recovery,
+                // runtime shutdown drainage, or progress of a poisoned Tokio pool.
+            }
+        },
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "manual initial pthread EAGAIN injection; no shim/compiler CI dependency"]
+fn os_refusal_retains_job_until_origin_kick() {
+    struct Capture {
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+        cleaned: Arc<AtomicUsize>,
+    }
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.entered.send(()).unwrap();
+            self.release.recv_timeout(Duration::from_secs(3)).unwrap();
+            self.cleaned.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    let worker = Worker::new();
+    let effect = Arc::new(AtomicUsize::new(0));
+    let cleaned = Arc::new(AtomicUsize::new(0));
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let capture = Capture {
+        entered: entered_tx,
+        release: release_rx,
+        cleaned: cleaned.clone(),
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("physical-effect");
+    let output_path = path.clone();
+    let operation_effect = effect.clone();
+    let operation = move || {
+        let _capture = &capture;
+        std::fs::write(&output_path, b"landed once").unwrap();
+        assert_eq!(operation_effect.fetch_add(1, Ordering::SeqCst), 0);
+    };
+    // No gate/watchdog threads precede submit: libtest thread #1, first blocking
+    // worker #2. The external probe runner supplies the process watchdog.
+    let mut observer = Some(runtime.block_on(worker.admit()).unwrap().submit(operation));
+    let refused = std::env::var_os("NESSA_627_INITIAL_THREAD_REFUSAL").is_some();
+    if refused {
+        assert!(runtime.block_on(observer.take().unwrap()).is_err());
+        assert_eq!(effect.load(Ordering::SeqCst), 0);
+        assert_eq!(cleaned.load(Ordering::SeqCst), 0);
+        assert!(!path.exists());
+        runtime.block_on(std::future::poll_fn(|cx| {
+            let next = worker.admit();
+            tokio::pin!(next);
+            assert!(next.poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        }));
+    }
+    // The injected refusal is one-shot. This independent same-origin kick can
+    // create its first worker; do not await it while the older capture is held.
+    let kick = runtime.handle().spawn_blocking(|| ());
+    entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(effect.load(Ordering::SeqCst), 1);
+    assert_eq!(std::fs::read(&path).unwrap(), b"landed once");
+    assert_eq!(cleaned.load(Ordering::SeqCst), 0);
+    runtime.block_on(std::future::poll_fn(|cx| {
+        let next = worker.admit();
+        tokio::pin!(next);
+        assert!(next.poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    }));
+    release_tx.send(()).unwrap();
+    if let Some(observer) = observer {
+        runtime.block_on(observer).unwrap();
+    }
+    runtime.block_on(kick).unwrap();
+    let successor = runtime.block_on(worker.admit()).unwrap();
+    assert_eq!(cleaned.load(Ordering::SeqCst), 1);
+    assert_eq!(effect.load(Ordering::SeqCst), 1);
+    drop(successor);
 }

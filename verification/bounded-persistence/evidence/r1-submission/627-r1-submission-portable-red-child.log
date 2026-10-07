@@ -1,0 +1,18 @@
+
+running 1 test
+
+thread 'physical_operation::tests::submission_fault_payload_is_not_deferred_to_observer' (569397) panicked at crates/nessa-local-storage/src/physical_operation/tests.rs:363:29:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'physical_operation::tests::submission_fault_payload_is_not_deferred_to_observer' (569397) panicked at crates/nessa-local-storage/src/physical_operation/tests.rs:380:25:
+submission escaped the typed boundary
+test physical_operation::tests::submission_fault_payload_is_not_deferred_to_observer ... FAILED
+
+failures:
+
+failures:
+    physical_operation::tests::submission_fault_payload_is_not_deferred_to_observer
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 40 filtered out; finished in 0.00s
+

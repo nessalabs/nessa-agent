@@ -102,11 +102,10 @@ impl Admission {
         F: FnMut() -> R + Send + 'static,
         R: Send + 'static,
     {
-        let submitted =
-            catch_unwind(AssertUnwindSafe(|| self.spawn(operation))).map_err(|payload| {
-                std::mem::forget(payload);
-                Interrupted
-            });
+        let submitted = catch_unwind(AssertUnwindSafe(|| self.spawn(operation))).map_err(|payload| {
+            drop(payload);
+            Interrupted
+        });
         async move {
             let handle = submitted?;
             match handle.await {

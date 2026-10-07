@@ -89,7 +89,10 @@ for native async persistence adapters. It adds Tokio only when selected. A Worke
 is constructed without a runtime and owns one instance slot. Admission captures
 the originating executor before waiting. Synchronous `Admission::submit` transfers
 the operation capture and slot to that executor before returning its awaitable;
-dropping an unpolled awaitable therefore detaches an already-owned job.
+dropping an unpolled awaitable therefore detaches an already-owned job. Executor
+entry unwind returns typed interruption while Tokio may still own a queued job;
+its slot remains owned until actual operation/capture cleanup. See the canonical
+submission ordering and progress limitation below.
 
 The [physical persistence ordering table](../../docs/design/bounded-physical-persistence.md)
 owns lifecycle cases and exclusions. Actual connection/directory/audit state and

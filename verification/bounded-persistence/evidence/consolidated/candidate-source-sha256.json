@@ -1,10 +1,10 @@
 {
   "Cargo.lock": "fc5b9d9d6b4ca09f0418f4b4d92ba9b022ab61686335fcd62f53f48b2887e977",
   "crates/nessa-local-storage/Cargo.toml": "7fb1b5ff626d0149f59bad9710afee383ce9a0ef839cc0f649c698bf14678914",
-  "crates/nessa-local-storage/README.md": "b3912aaa91c8730fdd8f8aae7daf5df013b12f611ca77aa68d7f463d26e524a3",
+  "crates/nessa-local-storage/README.md": "1a24ddc865c95b962c9140112ce94fc5603cffe1d5d0282d0fbf4800ce80a87c",
   "crates/nessa-local-storage/src/lib.rs": "5218142b60ba935c11ed754695d74a571d1a0573a071d0257ca5c96c5c72c91f",
-  "crates/nessa-local-storage/src/physical_operation.rs": "ae9e59b06b76759bcb9affeaf71d715c83da638206a1ad3e7647847312b945a7",
-  "crates/nessa-local-storage/src/physical_operation/tests.rs": "7adfd272a9fbefbe8d7ff2c394bc93103bb55fcac310ad843131ee55c364da6c",
+  "crates/nessa-local-storage/src/physical_operation.rs": "8634ffb3ecff99f104015604a2fa2a4df8ad45d64edc6f59d8657cdb0aeaaaa0",
+  "crates/nessa-local-storage/src/physical_operation/tests.rs": "098b64242bd424846b47b605e2115ff07a323a046b5a02658c150c9741861ef9",
   "crates/nessa-local-storage/tests/support/physical_operation.rs": "ad61a94e134ef1f6d685ed4df4538e6472afcb7c5f33d91e675070506b572f69",
   "crates/nessa-sdk/Cargo.toml": "8e5203d3b0bd1514b253b41e7d16e1414f7d778527c15ac69078535c56328f58",
   "crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs": "cba50efecb5d4439d1fffb7cee4a502724f93c5d60ba5f1bf650e3fce7a48521",
@@ -24,9 +24,9 @@
   "crates/nessa-server/tests/mcp_authorization/infrastructure/bounded_persistence_benchmark.rs": "030a36c3f15ba22ebdb2c9d380af882bfdcaf4383600ffe700558469ae295a27",
   "crates/nessa-server/tests/mcp_authorization_benchmark.rs": "a1e3bae0a65283e18f2f2eba6ee7e8290aefec7fd21d51ec12eb1444c8c69a90",
   "docs/codebase-structure.md": "843752825c3f0563d92c5694944f6ee9343afb451247515405fe5921b5e306a0",
-  "docs/design/bounded-physical-persistence.md": "7325133c808675cbb3795d88819b4cfc908d1c571b4e6d944f6ff1a22ee9059f",
+  "docs/design/bounded-physical-persistence.md": "bcbfd5ac36b14a2894041bbee4720966f705f241527185cf189d4caf76bcac45",
   "docs/state/services/mcp/README.md": "4bb787562e3ede6b41cde634d0c9954ed06ca25799988f95db14ad82d46c2213",
   "docs/state/services/sdk/README.md": "c1d3d245f72005c13f988bdaba6badc2ac44a29f1b3f4da2a87c4f45bba1fa3f",
-  "docs/state/services/storage/README.md": "a6762ae4b8e508b03665bbc2036f7f324806b41ca77ec27f6ea2b9073023af31",
-  "verification/bounded-persistence/README.md": "1f4a23853376ec41f4d10ca5c595b128f220eb4e9d71fce1c2806f0a91e2addf"
+  "docs/state/services/storage/README.md": "e2e32b108509a6d6bc0c232cd2d936fe696dd4025bc6c204abc7156aa012e6db",
+  "verification/bounded-persistence/README.md": "cf3e40d8aef62b786ce55443e137c4cf9ab74bc6cb10e329c3ee0e4efbba1d2b"
 }

@@ -61,6 +61,7 @@ stateDiagram-v2
     Admitted --> EndedWithoutSubmission: unused admission dropped
     Admitted --> Submitted: synchronous submit hands off capture
     Submitted --> Running: blocking executor starts job
+    Submitted --> Submitted: worker creation refused; observer interrupted
     Submitted --> CleaningCapture: queued job discarded before start
     Running --> CleaningCapture: operation returns or contained fault
     CleaningCapture --> SlotReleased: capture cleanup finishes or contained fault
@@ -72,7 +73,10 @@ stateDiagram-v2
     end note
 ```
 
-`Submitted` includes a job queued in the blocking pool. Operation interruption
+`Submitted` includes a job queued in the blocking pool even if submission itself
+unwinds and its observer reports interruption. OS thread refusal may leave that
+job owning admission until the origin later starts a worker and runs it; no
+shutdown drain or bounded recovery is promised. Operation interruption
 and captured-input cleanup faults still pass through cleanup before slot release.
 The awaiting caller receives the adapter's conservative typed failure: SQLite
 `Uncertain`, records `Unavailable`, secret publication or deletion `Unknown`, or

@@ -15,6 +15,16 @@ supported tooling API; replay paths require adaptation.
 
 ## Current source and scoped proof
 
+R1 adds synchronous executor-entry containment in the shared helper. Its focused
+[proof](evidence/r1-submission/provenance.json) preserves the original compiled
+RED, two load-bearing one-site mutations, portable fault-payload checks and actual
+Linux pthread EAGAIN recovery witness. These tests exercise the current submission
+boundary; the26 older mutations and66000 caller/5250 batch measurement rows below
+belong to the pre-R1 helper (a8-equivalent production source). Measurements were
+not replayed after adding this exceptional-entry catch, and are supporting evidence
+rather than exact final-source timings. Normal storage/fixture algorithms and
+adapter outcome mappings remain unchanged.
+
 The [v2 manifest](evidence/consolidated/v2-source-checkpoint/source-manifest.json)
 identifies dirty consolidated source over393042a, before restack. Its
 [26-row mapping](evidence/consolidated/v2-source-checkpoint/table-to-test-mapping.json)
@@ -22,8 +32,12 @@ links actual enforcing tests. The [benchmark checkpoint](evidence/consolidated/b
 adds only batch wall observation, a declared Open/Closed fixture assertion and
 conditional shutdown wording; production rules are unchanged. Pre-restack source
 copies remain separately archived. Final source/restack identity and guarded
-checks are recorded in the [guarded final manifest](evidence/consolidated/final-gates/manifest.json) at handoff, without relabeling
-these earlier runs as clean-commit runs.
+checks are recorded in the [maintained review and gate record](https://github.com/nessalabs/nessa-agent/blob/codex/622-verification-evidence/verification/bounded-persistence/evidence/review-and-final-gates/manifest.json).
+Its [exact published a8 checkpoint archive](https://github.com/nessalabs/nessa-agent/tree/0bdec9b9/verification/bounded-persistence/evidence/review-and-final-gates)
+distinguishes original209 full suites, a8 corrected gates, the missing local
+scripts exit and actual hosted replacement. R1 submission-refusal findings and
+subsequent correction/review identities are maintained there; these earlier runs
+are not relabeled as later-head execution.
 
 Default-off local-storage tests and NORMAL dependency tree passed (no Tokio
 normal dependency); explicit opt-in passed14 central mechanic tests. Actual SDK
