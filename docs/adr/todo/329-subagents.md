@@ -802,7 +802,7 @@ uncertain ports; whole-transaction panic supervision is separate #625 work.
 |19 | Row 18 settlement audit rejects | Root remains nonrunnable Closing with honest physical absence/evidence failure; eligible root lookup enables explicit retry. No fabricated ResourceReport. |
 |20 | Restore snapshots containing neighbors/history/private rejection cleanup | Preserve previous report states, close operations and spawn milestones; no incidental recovery changes to unrelated live graph caused by removal. |
 |21 | Never-bound absence claim wins admission scope; resource binding arrives while its audit is held or rejected | Reject binding and return the unchanged physical owner to the caller. Keep the absence claim through failure and evidence-only retry. |
-|22 | Resource binding wins admission scope before absence claim | Retain that owner and the once-bound fact; normal close drains it. No never-bound proof may be inferred. |
+|22 | Drain sees no owner and no bound fact; resource binding then wins admission scope before the scoped absence decision | Skip absence and let the existing drain inspect again, retain the accepted owner and once-bound fact, and close that owner without a caller retry, including unclaimed-root reconciliation. No never-bound proof may be inferred. A gate-only handoff at the same boundary retains Closing/Incomplete because it supplies no cleanup owner. |
 |23 | Binding names unknown/Closed/released lifetime, or replaces an occupied resource slot | Return typed refusal plus the rejected owner; preserve any previous owner. Restored Closing may bind only before physical release or absence claim. |
 |24 | Initial root audit rejects after another operation sealed it, or eligible publication fails after a cleanup owner transferred | Targeted deletion refuses safety history; retain and reconcile the same identity and its real ownership facts. Private external transfers are refused by row 28. |
 |25 | Task submission returned its receipt; TaskAdmitted audit is held; close seals/settles child and stores before audit accepts or rejects | Domain-derived nonrunnable Unconfirmed retention includes the actual receipt while its permission is pending. Preserve Closing/Closed cause, terminal safety progress, and the receipt through resume without prepare or resubmit. |
@@ -843,6 +843,12 @@ checks admitted typed-error revocation across publication/factory/submission,
 held fallback evidence, original error priority, and non-admitted conflicts.
 Library `row_38_error_revocation_joins_preserve_first_cause_and_actual_gates_without_new_evidence`
 checks Closing/Closed joins and the first cause without a new first-close audit.
+Library `row_22_binding_between_absence_inspections_is_drained_without_caller_retry`
+holds the boundary after the speculative owner/bound inspection and before the
+admission-scoped absence decision; public binding supplies the actual owner and
+unclaimed reconciliation closes it once with durable provider acknowledgement.
+`row_22_gate_between_absence_inspections_retains_closing_incomplete` holds the same
+boundary but hands out only a participation gate; it cannot invent settlement.
 Domain `sealed_progress_retains_actual_receipt_without_inventing_permission_or_terminal_changes`
 checks the direct unknown/Open/sealed/terminal receipt projection boundaries. Publication's
 `retained_projection_preserves_valid_history_and_referential_closure` checks
