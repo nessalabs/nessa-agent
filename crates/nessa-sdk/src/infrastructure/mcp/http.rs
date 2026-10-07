@@ -1037,41 +1037,45 @@ impl Drop for HttpSession {
     }
 }
 
-/// Read a POST's event stream off the writer task. Events become inbound
-/// JSON. A read failure ends the connection.
+/// Read a POST's event stream off the writer task. Release its body before
+/// publishing any terminal uncertainty or parse failure to the connection.
 async fn forward_open_sse(
     response: HttpResponse,
     inbound: mpsc::Sender<Result<Vec<u8>, McpError>>,
     request_id: Option<u64>,
 ) {
+    if let Err(error) = consume_open_sse(response, &inbound, request_id).await {
+        let _ = inbound.send(Err(error)).await;
+    }
+}
+
+/// Matching replies settle normally. EOF without a request's reply cannot
+/// establish its outcome; an uncorrelated stream has no pending reply to settle.
+async fn consume_open_sse(
+    response: HttpResponse,
+    inbound: &mpsc::Sender<Result<Vec<u8>, McpError>>,
+    request_id: Option<u64>,
+) -> Result<(), McpError> {
     let mut stream = match response.body {
         super::http_exchange::HttpBody::Stream(stream) => stream,
-        super::http_exchange::HttpBody::Buffered(_) => return,
+        super::http_exchange::HttpBody::Buffered(_) => return Ok(()),
     };
     let mut parser = SseParser::bounded();
     loop {
         let chunk = match stream.next().await {
             Ok(Some(chunk)) => chunk,
-            Ok(None) => return,
-            Err(_) => {
-                let _ = inbound.send(Err(McpError::Unconfirmed)).await;
-                return;
-            }
+            Ok(None) if request_id.is_some() => return Err(McpError::Unconfirmed),
+            Ok(None) => return Ok(()),
+            Err(_) => return Err(McpError::Unconfirmed),
         };
         let mut chunk = chunk.as_slice();
         loop {
             let event = match parser.next_event(&mut chunk) {
                 Ok(Some(event)) => event,
                 Ok(None) => break,
-                Err(SseError::TooLarge) => {
-                    let _ = inbound.send(Err(McpError::TooLarge("an SSE event"))).await;
-                    return;
-                }
+                Err(SseError::TooLarge) => return Err(McpError::TooLarge("an SSE event")),
                 Err(SseError::Utf8) => {
-                    let _ = inbound
-                        .send(Err(McpError::Malformed("an SSE event is not UTF-8".into())))
-                        .await;
-                    return;
+                    return Err(McpError::Malformed("an SSE event is not UTF-8".into()));
                 }
             };
             if event.data.is_empty() {
@@ -1083,7 +1087,7 @@ async fn forward_open_sse(
                     .is_some_and(|message| is_response_to(&message, id))
             });
             if inbound.send(Ok(event.data.into_bytes())).await.is_err() || matched {
-                return;
+                return Ok(());
             }
         }
     }

@@ -345,11 +345,18 @@ and the outgoing queue cannot accept cancellation, a late reader remains bounded
 and close-owned; this slice does not add a cancellation ledger. Completed handles
 are reaped at admission.
 
+Reader termination has one outcome policy: a matching response completes normally;
+request EOF before that response publishes `Unconfirmed`; body/parser faults publish
+their typed error; cancellation/close keep their existing cause; uncorrelated EOF
+releases normally. Resource release alone does not settle a pending request. The
+consuming loop drops its body before the outer reader publishes a failure, including
+when the inbound channel is backpressured.
+
 | Row | State/event/order | Result and ownership | Enforcer |
 | --- | --- | --- | --- |
 | P1 | Active reader receives notices/ping, then matching result/error; peer holds body | Forward preceding events and matching response, release body; repeated successful calls retain bounded readers | `post_result_releases_held_body`, `post_error_releases_held_body`, `post_ping_before_result_remains_live` |
 | P2 | Active reader receives another id's response, same-id server request or nonterminal envelope | Forward it without ending this reader; retain until its own response/EOF/cancel/close | `post_other_response_does_not_retire_reader` |
-| P3 | Active reader reaches EOF or body failure | Release body; failure publishes typed `Unconfirmed` | `post_eof_and_failure_release_body` |
+| P3 | Active reader reaches EOF before its matching response, or body failure | Release body before publishing `Unconfirmed`; a deadline-less request settles explicitly. EOF on an uncorrelated notification/reply stream releases normally | `post_eof_and_failure_release_body`, `post_eof_and_failure_settle_deadline_less_call`, `post_uncorrelated_eof_releases_normally` |
 | P4 | Caller disappears during active read | Abort local reader; best-effort remote notification remains separate | `post_caller_cancellation_releases_body`, `post_cancellation_with_full_outgoing_queue_releases_active_body`, `post_cancellation_during_headers_releases_late_body` |
 | P5 | Close/drop while reader waits (including startup tools/list) or blocked inbound send; drop from an ordinary thread | Fence admission, abort and join owned readers before finished; repeated close shares completion | `post_close_joins_held_and_blocked_readers`, `post_finished_waits_for_reader_destruction`, `post_drop_releases_body`, `post_drop_outside_runtime_context_joins_body` |
 | P6 | POST exchange returns streamed body after close drained readers | Reject late admission with `Closed`, drop body | `post_late_body_after_close_is_dropped` |
@@ -611,7 +618,7 @@ OAuth storage or desktop controls already satisfy these rows.
 | C3 | Optional modern GET returns 405 | Continue supported POST operations without legacy fallback |
 | C4 | Notices/requests precede response, split chunks or keepalive events | Preserve bounded framing, order and request correlation |
 | C5 | Session 404 with calls in flight; recovery races owner close/revoke | Fence expired epoch, preserve old results/uncertainty and start bounded fresh initialize without old id; late recovery joins close; no tool replay |
-| C6 | Stream disconnect before or after reply; optional polling advertised | Do not infer cancellation; retain observed reply or explicit pending uncertainty; report unsupported resumption accurately |
+| C6 | Stream disconnect before or after reply; optional polling advertised | Do not infer cancellation; retain an observed reply. Request POST EOF before its matching reply publishes `Unconfirmed` immediately; uncorrelated EOF releases normally. Report unsupported resumption accurately |
 | C7 | Two conversations use same server; one closes; second initialize repeats an owned session id | Separate local ids/grants and cleanup; survivor remains usable; reject upstream id collision without DELETE of the survivor |
 | C8 | Close during initialize, caller loss or late HTTP result | Fence dispatch, drain owned startup and accepted requests; ignore late readiness for current admission |
 | C9 | DELETE acknowledged, refused 405, fails or times out | Local drain still runs; remote observation remains distinct from physical confirmation |

@@ -325,15 +325,81 @@ async fn post_eof_and_failure_release_body() {
             .unwrap();
         let (session, mut incoming) = session(Peer::new(vec![body]));
         dispatch(&session, 1).await;
-        if failed {
-            assert_eq!(
-                bounded(incoming.recv()).await.unwrap(),
-                Err(McpError::Unconfirmed)
-            );
-        }
+        assert_eq!(
+            bounded(incoming.recv()).await.unwrap(),
+            Err(McpError::Unconfirmed)
+        );
         probe.released().await;
         finish(&session).await;
     }
+}
+
+#[tokio::test]
+async fn post_eof_and_failure_settle_deadline_less_call() {
+    for failed in [false, true] {
+        let (probe, body) = Probe::body();
+        probe
+            .send
+            .send(if failed {
+                Err(HttpFailure::Unreachable)
+            } else {
+                Ok(None)
+            })
+            .unwrap();
+        let (session, incoming) = session(Peer::new(vec![body]));
+        let connection =
+            Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+        // call has no caller deadline: the watchdog only catches a missing EOF outcome.
+        assert_eq!(
+            bounded(connection.call("tools/list", None))
+                .await
+                .unwrap_err(),
+            McpError::Unconfirmed
+        );
+        assert_eq!(probe.dropped.load(Ordering::SeqCst), 1);
+        finish(&session).await;
+    }
+}
+
+#[tokio::test]
+async fn post_matched_response_before_eof_settles_normally() {
+    let (probe, body) = Probe::body();
+    probe.event(json!({"jsonrpc":"2.0","id":1,"result":{"tools":[]}}));
+    probe.send.send(Ok(None)).unwrap();
+    let (session, incoming) = session(Peer::new(vec![body]));
+    let connection =
+        Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+    assert_eq!(
+        bounded(connection.call("tools/list", None))
+            .await
+            .unwrap()
+            .unwrap(),
+        json!({"tools":[]})
+    );
+    probe.released().await;
+    finish(&session).await;
+}
+
+#[tokio::test]
+async fn post_uncorrelated_eof_releases_normally() {
+    let (probe, body) = Probe::body();
+    probe.send.send(Ok(None)).unwrap();
+    let mut peer = Peer::new(vec![body]);
+    Arc::get_mut(&mut peer).unwrap().stream_notifications = true;
+    let (session, mut incoming) = session(peer);
+    assert!(matches!(
+        session
+            .dispatch(br#"{"jsonrpc":"2.0","method":"notifications/test"}"#)
+            .await,
+        SendOutcome::Done
+    ));
+    probe.released().await;
+    // Join the reader before checking that EOF published no failure.
+    finish(&session).await;
+    assert!(matches!(
+        incoming.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
 }
 
 #[tokio::test]
