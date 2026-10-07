@@ -1512,6 +1512,7 @@ fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.setApprovalMode"
         | "conversation.read"
         | "conversation.list"
+        | "conversation.observe"
         | "conversation.send"
         | "conversation.steer"
         | "conversation.stop"
@@ -2395,6 +2396,7 @@ mod tests {
         for method in [
             "conversation.read",
             "conversation.list",
+            "conversation.observe",
             "conversation.send",
             "conversation.answer",
             "conversation.answerQuestion",

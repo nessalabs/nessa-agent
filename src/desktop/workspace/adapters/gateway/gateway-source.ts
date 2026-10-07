@@ -7,7 +7,8 @@
  *
  * - **No push stream.** The gateway sends no conversation events, so the
  *   stream is a poller, running while anyone listens: `conversation.list`
- *   for summaries; independent `conversation.read` calls for conversations the window
+ *   for summaries, and `conversation.observe` when that list is not the whole
+ *   catalogue; independent `conversation.read` calls for conversations the window
  *   has read (`transcript`) that runs, waits on the person, has an app's
  *   call unanswered (`appCall`, #436), or changed since.
  * - **Revisions are minted here.** The gateway's view revision is opaque and
@@ -34,8 +35,10 @@
  *   error. The ask is a debug line; the refusal is a warning the dev console
  *   already forwards.
  * - **Resync.** `{ kind: "resync" }` goes out when a connection comes back
- *   (the client reconnected, or a new one was made after the last closed),
- *   and on the first list that answers after a poll or an index read failed.
+ *   (the client reconnected, or a new one was made after the last closed —
+ *   the close itself does not resync, C3), and on the first list that answers
+ *   after a poll (S5), a poll read (F4, active failure), or an index read
+ *   failed (S9′).
  * - **A failed connect is waited out.** For `timing.reconnectRounds` poll
  *   rounds after it, neither the poller nor an MCP App connects again; a
  *   person's call connects at once (S10–S16 on #419).
@@ -80,6 +83,7 @@ import {
   type ConnectionState,
   type ConversationApi,
   type ConversationListResult,
+  type ConversationObserveCursor,
   type ConversationSummary,
   type ConversationView,
 } from "@nessa/client"
@@ -109,7 +113,7 @@ import {
 export interface GatewayClient {
   readonly conversation: Pick<
     ConversationApi,
-    "list" | "read" | "create" | "send" | "answer" | "archive"
+    "list" | "observe" | "read" | "create" | "send" | "answer" | "archive"
   >
   readonly connectionState: ConnectionState
   onConnectionStateChange(handler: (state: ConnectionState) => void): () => void
@@ -276,10 +280,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     }
   }
 
-  // Polls or index reads failed since the last resync: the next list that
-  // answers says resync. An index read the window did not get is a gap too:
-  // a poll that answers after it, the gateway having come up between them,
-  // would otherwise leave the window on its failure (S9, #419).
+  // A failed poll (S5), poll read (F4, active failure), or index read (S9′)
+  // since the last resync: the next list that answers says resync.
   let gap = false
   const resync = () => {
     gap = false
@@ -364,10 +366,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       if (current?.client !== connected) return
       if (state.status === "connected") resync()
       else if (state.status === "closed") {
-        // Gone for good: the next call connects again.
+        // Gone for good: the next call connects again. That next client
+        // resyncs when one had connected before (C3). The close is not a
+        // gap. A list still in flight is applied and does not resync.
         current.off()
         current = undefined
-        gap = true
       }
     })
     current = { client: connected, off }
@@ -517,9 +520,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   }
 
   /**
-   * Applies a list: each row said again, and — only when the list is complete
-   * — a session it does not name taken out. An incomplete list proves nothing
-   * of what it leaves out.
+   * Applies a list or a finished observation pass: each row said again, and —
+   * only when `complete` is true — a session it does not name taken out. An
+   * incomplete result proves nothing of what it leaves out.
    */
   const applyList = (result: ConversationListResult): void => {
     const listed = new Set<string>()
@@ -535,17 +538,61 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   }
 
   /**
+   * Walks `conversation.observe` after an incomplete list. A page that finishes
+   * the pass replaces the list as membership. A page that cannot resume —
+   * no cursor, or a cursor that is not strictly later in creation order —
+   * keeps every row seen so far and does not claim the catalogue is exhausted.
+   */
+  const observedCatalogue = async (
+    connected: GatewayClient,
+    listed: ConversationListResult,
+    live: () => boolean,
+    caller: () => boolean,
+  ): Promise<ConversationListResult> => {
+    const observed = new Map<string, ConversationSummary>()
+    let cursor: ConversationObserveCursor | undefined
+    for (;;) {
+      if (!live() || !caller()) throw new WorkspaceSourceError("unavailable")
+      const page = await connected.conversation.observe(
+        cursor === undefined ? {} : { cursor },
+      )
+      for (const row of page.conversations) observed.set(row.conversationId, row)
+      if (page.complete) return { conversations: [...observed.values()], complete: true }
+      if (page.cursor === undefined || !cursorAdvances(cursor, page.cursor)) {
+        const merged = new Map(
+          listed.conversations.map((row) => [row.conversationId, row] as const),
+        )
+        for (const [id, row] of observed) merged.set(id, row)
+        return { conversations: [...merged.values()], complete: false }
+      }
+      cursor = page.cursor
+    }
+  }
+
+  /**
    * Lists in turn, applying the answer; the list's own failures are the
-   * caller's. One whose caller was answered — while it waited its turn, or
-   * while its list was on its way — asks nothing more, and applies nothing
-   * (R10).
+   * caller's. When the list is not the whole catalogue, the same call walks
+   * `conversation.observe` until the pass finishes or a page cannot resume.
+   * A finished pass is the membership. An unfinished one is merged and
+   * removes nothing (the order is the table in
+   * `docs/design/ui-workspace-load.md`). One whose caller was answered —
+   * while it waited its turn, while its list was on its way, or before
+   * another observe page — asks nothing more, and applies nothing
+   * (`a listener who leaves during an observe walk is asked no further page`).
    */
   const list = (who: Caller, caller: () => boolean = always): Promise<void> => {
     const { turn, settled } = inTurn(listing, async () => {
       if (!caller()) throw new WorkspaceSourceError("unavailable")
-      const result = await within(async () => (await client(who)).conversation.list(), {
-        subject: "index",
-      })
+      const result = await within(
+        async (live) => {
+          const connected = await client(who)
+          const listed = await connected.conversation.list()
+          if (!live()) throw new WorkspaceSourceError("unavailable")
+          if (listed.complete) return listed
+          return observedCatalogue(connected, listed, live, caller)
+        },
+        { subject: "index" },
+      )
       if (!caller()) throw new WorkspaceSourceError("unavailable")
       applyList(result)
     })
@@ -745,6 +792,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         if (gone(error) || refusedForGood(error)) watched.delete(sessionId)
         else {
           if (invalidated && !takenOut(sessionId)) refresh.add(sessionId)
+          // Any other failure is a gap the next list resyncs (F4, active failure).
           gap = true
         }
       })
@@ -1056,7 +1104,12 @@ function refusedForGood(error: unknown): boolean {
   return error instanceof WorkspaceSourceError && error.reason === "not-supported"
 }
 
-/** Which read the desktop asked for. `index` is `conversation.list`. */
+/**
+ * Which read the desktop asked for. `index` starts with `conversation.list`.
+ * The trace names that method: every index read asks it, and
+ * `gateway-source.test.ts` expects it when the list is refused. An incomplete
+ * list continues as `conversation.observe` inside the same read.
+ */
 type ReadTrace = { subject: "index" | "conversation"; sessionId?: string }
 
 /**
@@ -1096,6 +1149,30 @@ function noteReadRefused(
   } catch {
     // A diagnostic must not change the refusal.
   }
+}
+
+/**
+ * Whether `next` is strictly later than `previous` in one observation pass.
+ * Creation revisions compare as integers. `"10"` is after `"9"`.
+ */
+function cursorAdvances(
+  previous: ConversationObserveCursor | undefined,
+  next: ConversationObserveCursor,
+): boolean {
+  if (previous === undefined) return true
+  if (next.incarnation !== previous.incarnation || next.boundary !== previous.boundary)
+    return false
+  let creation: bigint
+  let earlier: bigint
+  try {
+    creation = BigInt(next.creation)
+    earlier = BigInt(previous.creation)
+  } catch {
+    return false
+  }
+  if (creation > earlier) return true
+  if (creation < earlier) return false
+  return next.id > previous.id
 }
 
 function readTrace(subject: "index" | "conversation", sessionId?: string) {

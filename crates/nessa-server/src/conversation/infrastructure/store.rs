@@ -8,7 +8,8 @@ use crate::conversation::application::{
     ConversationCreation, ConversationCreationDisposition, ConversationError, ConversationFuture,
     ConversationListing, ConversationModeApplication, ConversationModeRequest,
     ConversationModeRequestState, ConversationRepository, ConversationSummaries,
-    ListedConversation, ListedConversations, UnfinishedDeletions, WatchCatalogue,
+    ListedConversation, ListedConversations, ObservationCursor, ObservedConversations,
+    UnfinishedDeletions, WatchCatalogue,
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, DeletionContradiction, ProviderSessionErasure,
@@ -21,12 +22,15 @@ use nessa_local_database::rusqlite::{
 use nessa_local_database::{rusqlite, OpenError, Schema};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
-    ConversationApprovalMode, ConversationId, ConversationModelId, ConversationPreview,
-    ConversationSummary, ConversationTitle,
+    conversation_catalogue_schema, conversation_catalogue_stream, ConversationApprovalMode,
+    ConversationId, ConversationModelId, ConversationPreview, ConversationSummary,
+    ConversationTitle,
 };
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
-use nessa_sync::replication::catalogue::{validate_manifest_request, MAX_CATALOGUE_ENTRIES};
-use nessa_sync::replication::domain::{Id, MAX_ID_BYTES};
+use nessa_sync::replication::catalogue::{
+    validate_manifest_request, CataloguePass, EntryKey, ManifestRequest, MAX_CATALOGUE_ENTRIES,
+};
+use nessa_sync::replication::domain::{Id, Scope, MAX_ID_BYTES};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -1210,6 +1214,156 @@ impl ConversationListing for LocalConversationStore {
                 }
             }
             Ok(listed)
+        })
+    }
+
+    fn observe(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        archived: bool,
+        cursor: Option<ObservationCursor>,
+    ) -> ConversationFuture<'_, ObservedConversations> {
+        let organization = organization.clone();
+        let owner = owner.clone();
+        Box::pin(async move {
+            let head = ConversationCatalogue::head(self, &organization, &owner).await?;
+            // A head of zero has no descriptor to start a pass from. The
+            // catalogue pass refuses a boundary that is not past the
+            // completed revision, and both would be zero here.
+            if head.revision == 0 {
+                return if cursor.is_some() {
+                    Err(ConversationError::CatalogueInvalidRequest)
+                } else {
+                    Ok(ObservedConversations {
+                        conversations: Vec::new(),
+                        complete: true,
+                        cursor: None,
+                    })
+                };
+            }
+            let boundary = cursor
+                .as_ref()
+                .map(|cursor| cursor.boundary)
+                .unwrap_or(head.revision);
+            let incarnation =
+                Id::new(&head.incarnation).map_err(|_| ConversationError::Metadata)?;
+            // Not a device binding. The page reads the incarnation and the
+            // owner; these names exist so the pass can be built at all.
+            let scope = Scope::new(
+                Id::new("observe-receiver").map_err(|_| ConversationError::Metadata)?,
+                Id::new("observe-origin").map_err(|_| ConversationError::Metadata)?,
+                conversation_catalogue_stream(&organization, &owner),
+                incarnation,
+                conversation_catalogue_schema(),
+                Id::new("observe-epoch").map_err(|_| ConversationError::Metadata)?,
+            );
+            let pass_cursor = match &cursor {
+                Some(cursor) if cursor.incarnation != head.incarnation => {
+                    return Err(ConversationError::CatalogueInvalidRequest);
+                }
+                Some(cursor) => Some(EntryKey {
+                    creation: cursor.creation,
+                    id: Id::new(cursor.id.to_string())
+                        .map_err(|_| ConversationError::CatalogueInvalidRequest)?,
+                }),
+                None => None,
+            };
+            // A row that cannot be read, or a page that cannot be asked, is
+            // not the whole catalogue. No cursor: the pass does not skip the
+            // damage and later claim it finished
+            // (`an_unreadable_summary_leaves_the_page_unfinished_and_keeps_the_others`).
+            let page = match ConversationCatalogue::page(
+                self,
+                CataloguePageRequest {
+                    organization: organization.clone(),
+                    owner: owner.clone(),
+                    manifest: ManifestRequest {
+                        pass: CataloguePass {
+                            scope,
+                            completed: 0,
+                            boundary,
+                            cursor: pass_cursor,
+                            generation: 1,
+                        },
+                        max_entries: MAX_CATALOGUE_ENTRIES,
+                    },
+                },
+            )
+            .await
+            {
+                Ok(page) => page,
+                Err(ConversationError::Metadata) => {
+                    return Ok(ObservedConversations {
+                        conversations: Vec::new(),
+                        complete: false,
+                        cursor: None,
+                    });
+                }
+                Err(error) => return Err(error),
+            };
+            let mut conversations = Vec::new();
+            let mut unreadable = false;
+            for entry in &page.entries {
+                if entry.deleted {
+                    continue;
+                }
+                let value = match ConversationCatalogue::resolve(
+                    self,
+                    &organization,
+                    &owner,
+                    head.incarnation.as_str(),
+                    &entry.key.id,
+                )
+                .await
+                {
+                    Ok(value) => value,
+                    Err(ConversationError::Metadata) => {
+                        unreadable = true;
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                let Some(value) = value else {
+                    continue;
+                };
+                if value.descriptor.deleted
+                    || value
+                        .conversation
+                        .check_access(&organization, &owner)
+                        .is_err()
+                {
+                    continue;
+                }
+                let Some(summary) = value.summary else {
+                    continue;
+                };
+                if summary.archived() != archived {
+                    continue;
+                }
+                conversations.push(ListedConversation {
+                    conversation: value.conversation,
+                    summary,
+                });
+            }
+            let next = if unreadable {
+                None
+            } else {
+                page.entries
+                    .last()
+                    .filter(|_| page.has_more)
+                    .map(|last| ObservationCursor {
+                        incarnation: head.incarnation.clone(),
+                        boundary,
+                        creation: last.key.creation,
+                        id: last.key.id.clone(),
+                    })
+            };
+            Ok(ObservedConversations {
+                conversations,
+                complete: !unreadable && !page.has_more && next.is_none(),
+                cursor: next,
+            })
         })
     }
 }

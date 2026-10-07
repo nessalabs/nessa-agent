@@ -9,7 +9,7 @@ use crate::{
     conversation::{
         application::{
             ConversationFuture, ConversationListing, ConversationRepository, ConversationSummaries,
-            ListedConversation, ListedConversations,
+            ListedConversation, ListedConversations, ObservationCursor, ObservedConversations,
         },
         domain::{Conversation, ConversationDeletion},
         infrastructure::LocalConversationStore,
@@ -23,7 +23,7 @@ use crate::{
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_local_database::rusqlite::{params, Connection};
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
-use nessa_protocol::conversation::view::ConversationListEntry;
+use nessa_protocol::conversation::view::{ConversationListEntry, ConversationObservationCursor};
 use nessa_protocol::{
     agents::AgentId,
     conversation::domain::{ConversationId, ConversationSummary},
@@ -35,7 +35,9 @@ use nessa_sdk::{
     domain::agent_execution::sessions::SessionId,
     infrastructure::session_storage::InMemoryStorage,
 };
+use nessa_sync::replication::catalogue::MAX_CATALOGUE_ENTRIES;
 use std::{
+    collections::HashSet,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -1204,6 +1206,21 @@ impl ConversationListing for AskedLimit {
         self.0.lock().unwrap().push(limit);
         Box::pin(async { Ok(ListedConversations::default()) })
     }
+    fn observe(
+        &self,
+        _: &OrganizationId,
+        _: &PrincipalId,
+        _: bool,
+        _: Option<ObservationCursor>,
+    ) -> ConversationFuture<'_, ObservedConversations> {
+        Box::pin(async {
+            Ok(ObservedConversations {
+                conversations: Vec::new(),
+                complete: true,
+                cursor: None,
+            })
+        })
+    }
 }
 
 #[tokio::test]
@@ -1259,6 +1276,26 @@ impl ConversationListing for Answering {
             Ok(ListedConversations {
                 conversations,
                 unreadable: 0,
+            })
+        })
+    }
+    fn observe(
+        &self,
+        _: &OrganizationId,
+        _: &PrincipalId,
+        _: bool,
+        cursor: Option<ObservationCursor>,
+    ) -> ConversationFuture<'_, ObservedConversations> {
+        let conversations = if cursor.is_some() {
+            Vec::new()
+        } else {
+            self.0.clone()
+        };
+        Box::pin(async move {
+            Ok(ObservedConversations {
+                conversations,
+                complete: true,
+                cursor: None,
             })
         })
     }
@@ -1363,4 +1400,191 @@ async fn an_unreadable_row_inside_a_cut_window_costs_the_list_that_row() {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
     );
+}
+
+#[tokio::test]
+async fn observing_every_stored_summary_opens_nothing() {
+    let count = MAX_LISTED_CONVERSATIONS + MAX_CATALOGUE_ENTRIES + 1;
+    let listing = stored(ConversationLimits::default());
+    assert_eq!(ConversationLimits::default().max_conversations, 32);
+    let mine = stored_many(&listing, "org", "person", count as u64, false, |n| n + 1);
+    let _theirs = stored_many(&listing, "org", "other", 1, false, |_| 9);
+    let listed = listing.service.list(owner(), false).await.unwrap();
+    assert!(!listed.complete);
+    assert_eq!(listed.conversations.len(), MAX_LISTED_CONVERSATIONS);
+    let mut cursor = None;
+    let mut seen = Vec::new();
+    let mut pages = 0usize;
+    loop {
+        let page = listing
+            .service
+            .observe(owner(), false, cursor)
+            .await
+            .unwrap();
+        pages += 1;
+        assert!(page.conversations.len() <= MAX_CATALOGUE_ENTRIES);
+        assert!(page.conversations.iter().all(|entry| !entry.running));
+        seen.extend(page.conversations);
+        if page.complete {
+            assert!(page.cursor.is_none());
+            break;
+        }
+        cursor = Some(
+            page.cursor
+                .expect("an unfinished page names where to resume"),
+        );
+        assert!(pages < count, "the pass did not finish");
+    }
+    assert_eq!(pages, count.div_ceil(MAX_CATALOGUE_ENTRIES));
+    assert_eq!(
+        seen.iter()
+            .map(|entry| entry.conversation_id.clone())
+            .collect::<Vec<_>>(),
+        mine.iter().map(ToString::to_string).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        seen.iter()
+            .map(|entry| entry.conversation_id.clone())
+            .collect::<HashSet<_>>()
+            .len(),
+        count
+    );
+    assert_eq!(listing.provider.open_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(listing.storage.opens.load(Ordering::SeqCst), 0);
+    listing.service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_archived_page_advances_the_pass_without_listing_those_rows() {
+    let listing = stored(ConversationLimits::default());
+    let _archived = stored_many(
+        &listing,
+        "org",
+        "person",
+        MAX_CATALOGUE_ENTRIES as u64,
+        true,
+        |n| n + 1,
+    );
+    let kept = stored_many(&listing, "org", "person", 1, false, |_| 80);
+    let first = listing.service.observe(owner(), false, None).await.unwrap();
+    assert!(first.conversations.is_empty());
+    assert!(!first.complete);
+    let second = listing
+        .service
+        .observe(owner(), false, first.cursor)
+        .await
+        .unwrap();
+    assert!(second.complete);
+    assert!(second.cursor.is_none());
+    assert_eq!(ids(&second.conversations), [kept[0].to_string()]);
+    assert_eq!(listing.provider.open_calls.load(Ordering::SeqCst), 0);
+    listing.service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn observing_takes_no_live_slot_and_reading_still_does() {
+    let listing = stored(ConversationLimits {
+        max_conversations: 1,
+        ..ConversationLimits::default()
+    });
+    let mine = id();
+    stored_put(&listing, &mine, "org", "person", 10).await;
+    stored_say(&listing, &mine, "mine", 15).await;
+    let page = listing.service.observe(owner(), false, None).await.unwrap();
+    assert!(page.complete);
+    assert_eq!(ids(&page.conversations), [mine.to_string()]);
+    assert_eq!(listing.provider.open_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(listing.storage.opens.load(Ordering::SeqCst), 0);
+    // Observing took no live slot: the one slot still opens a new conversation,
+    // and reading that conversation keeps it.
+    let created = id();
+    listing
+        .service
+        .create(
+            created.clone(),
+            owner(),
+            crate::conversation::application::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(listing.provider.open_calls.load(Ordering::SeqCst), 1);
+    listing.service.read(created, owner()).await.unwrap();
+    assert_eq!(listing.provider.open_calls.load(Ordering::SeqCst), 1);
+    listing.service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_unreadable_summary_leaves_the_page_unfinished_and_keeps_the_others() {
+    let listing = stored(ConversationLimits::default());
+    let mine = stored_many(&listing, "org", "person", 3, false, |n| n + 1);
+    damage(
+        &listing,
+        "UPDATE summaries SET title = '' WHERE conversation_id = ?1",
+        &mine[0],
+    );
+    let page = listing.service.observe(owner(), false, None).await.unwrap();
+    assert!(!page.complete);
+    assert!(page.cursor.is_none());
+    assert_eq!(
+        ids(&page.conversations),
+        [mine[1].to_string(), mine[2].to_string()]
+    );
+    let listed = listing.service.list(owner(), false).await.unwrap();
+    assert!(!listed.complete);
+    assert_eq!(listed.conversations.len(), 2);
+    // A descriptor the catalogue page cannot read fails that page. The call
+    // still answers, unfinished, so the list already in hand can be kept.
+    damage(
+        &listing,
+        "UPDATE conversations SET creator_surface = '' WHERE id = ?1",
+        &mine[1],
+    );
+    let page = listing.service.observe(owner(), false, None).await.unwrap();
+    assert!(!page.complete);
+    assert!(page.cursor.is_none());
+    assert!(page.conversations.is_empty());
+    listing.service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_observation_cursor_from_another_catalogue_is_refused() {
+    let listing = stored(ConversationLimits::default());
+    stored_many(&listing, "org", "person", 1, false, |_| 1);
+    let refused = listing
+        .service
+        .observe(
+            owner(),
+            false,
+            Some(ConversationObservationCursor {
+                incarnation: "other-catalogue".into(),
+                boundary: 1,
+                creation: 1,
+                id: id().to_string(),
+            }),
+        )
+        .await;
+    assert!(matches!(
+        refused,
+        Err(ConversationError::CatalogueInvalidRequest)
+    ));
+    let empty = stored(ConversationLimits::default());
+    let refused = empty
+        .service
+        .observe(
+            owner(),
+            false,
+            Some(ConversationObservationCursor {
+                incarnation: "other-catalogue".into(),
+                boundary: 1,
+                creation: 1,
+                id: id().to_string(),
+            }),
+        )
+        .await;
+    assert!(matches!(
+        refused,
+        Err(ConversationError::CatalogueInvalidRequest)
+    ));
+    listing.service.shutdown().await.unwrap();
+    empty.service.shutdown().await.unwrap();
 }

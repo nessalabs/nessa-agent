@@ -659,7 +659,10 @@ send, and a sink already holding different paths for that submission refuses it
 too. See [ADR 0013](adr/done/0013-files-by-path-not-by-payload.md).
 A list of conversations is read without opening one, and without reading anybody
 else's: `conversation.list` asks `ConversationListing` for the caller's own
-conversations, newest first and one past the bound. `LocalConversationStore`
+conversations, newest first and one past the bound. `conversation.observe` asks
+the same store's catalogue, one page at a time in creation order, when that
+list is not the whole catalogue. The page size is the catalogue's. It does not
+raise the list bound, and it does not open a provider. `LocalConversationStore`
 (`infrastructure/store.rs`) answers it, and is the repository and the
 `ConversationSummaries` store too: ownership records, tombstones and summaries are
 tables of one private SQLite file, `conversations/metadata.sqlite3`, defined

@@ -399,6 +399,8 @@ const catalogueDecimalFields = [
   schema.$defs.CataloguePass.properties.boundary,
   schema.$defs.CataloguePass.properties.generation,
   schema.$defs.ConversationCatalogueHeadResult.properties.head,
+  schema.$defs.ConversationObserveCursor.properties.boundary,
+  schema.$defs.ConversationObserveCursor.properties.creation,
 ]
 const bounds = {
   maxOrdinaryResponseBytes,
@@ -478,6 +480,8 @@ const bounds = {
     schema.$defs.RecordWireRecord.properties.payload.maxLength,
   maxListedConversations:
     schema.$defs.ConversationListResult.properties.conversations.maxItems,
+  maxCataloguePageEntries:
+    schema.$defs.ConversationObserveResult.properties.conversations.maxItems,
   maxToolStructuredContentBytes:
     schema.$defs.ConversationTool.properties.structuredContent["x-utf8MaxBytes"],
   maxMcpNameBytes: agreeing("MCP server and tool name bytes", [

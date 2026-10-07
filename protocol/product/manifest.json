@@ -13,6 +13,7 @@
     "conversation.recordsHead": "ConversationRecordsHeadParams",
     "conversation.recordsPage": "ConversationRecordsPageParams",
     "conversation.list": "ConversationListParams",
+    "conversation.observe": "ConversationObserveParams",
     "conversation.send": "ConversationSendParams",
     "conversation.steer": "ConversationSendParams",
     "conversation.remove": "ConversationRemoveParams",

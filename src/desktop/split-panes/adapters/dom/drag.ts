@@ -1326,6 +1326,12 @@ export function useSplitPanesDrag(
             ? { kind: "item", item }
             : null
       if (!what) return
+      // An untrusted press accepted here is cancelled. Chrome, given a scripted
+      // pointerdown that is not, then a move and a lift in that same task, sets
+      // `pointer-events: none` on the body a few frames later (`drag.mjs` flick).
+      // `drag.test.tsx` holds the cancel. A trusted press is left to the browser:
+      // cancelling it would swallow the click a session row is opened by.
+      if (!event.isTrusted) event.preventDefault()
       seen = { columns: layoutNow()?.columns, watched: source.watched() }
       const { clientX: x, clientY: y } = event
       send({

@@ -185,7 +185,7 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   `drag.mjs` (`preview-panes-take-shape`; every drag check's residue).
 - _Harmless, and not a failure:_ a single read of a title's transforms in
   WebKit that mixes two moments. How the two stretch checks read a title is
-  `recordShapes`' (`drag.mjs`), and why, with the runs and probes, is #365.
+  `recordShapeFrames` (`scripts/lib/shape-sampler.mjs`), and why, with the runs and probes, is #365.
   Also harmless: one agreed read of about a percent (both axes within two
   percent of 1, and the two scales within four percent of each other) while
   every running animation on that title shares one start time. That is the
@@ -463,11 +463,12 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   patched the event APIs), its links to a fragment of any kind (`<a>`,
   `<area>`, SVG, in a shadow root, `target="_self"`, a spaced `href`) and its
   moves to one by script (WebKit loads the frame for these), a first load
-  held back, going back across a move to a fragment (on a page of its own,
-  where an answer to an earlier check, coming after a later load, ends no
-  wait), an app forging departures, and a third party forging them and the
-  check's answers at every proxy and app frame, are not; a deadline no
-  timer can wait loads nothing. _#349 design, L32._ _Check:_ `mcp-apps.mjs --only
+  held by an image the fixture leaves unanswered, going back across a move to
+  a fragment (on a page of its own, where an answer to an earlier check,
+  coming after a later load, ends no wait), an app forging departures, and a
+  third party forging them and the check's answers at every proxy and app
+  frame, are not; a deadline no timer can wait loads nothing. _#349 design,
+  L32._ _Check:_ `mcp-apps.mjs --only
   departures,departures-back` (dev server: it imports the host's builder; it
   waits past the initialize deadline).
 - [ ] **It is torn down on close**: a pane's close takes its proxy and app

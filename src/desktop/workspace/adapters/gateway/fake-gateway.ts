@@ -13,7 +13,7 @@ import {
 } from "@nessa/client"
 import type { GatewayClient } from "./gateway-source"
 
-type Method = "list" | "read" | "create" | "send" | "answer" | "archive"
+type Method = "list" | "observe" | "read" | "create" | "send" | "answer" | "archive"
 
 /** How one call is answered instead: given the normal answer, the promise to return. */
 type Behaviour = (normal: () => unknown) => Promise<unknown>
@@ -102,6 +102,19 @@ export interface FakeGateway {
   readonly views: Map<string, ConversationView>
   /** Whether a list names every conversation. */
   complete: boolean
+  /**
+   * When set, `list` returns only this many newest rows and is incomplete
+   * once more are stored. Unset, `list` returns every row.
+   */
+  listLimit: number | null
+  /**
+   * When set, `observe` pages the rows in insertion order, this many at a
+   * time, and the last page is complete. Unset, an incomplete list's observe
+   * returns the current rows with `complete: false` and no cursor.
+   */
+  observePageSize: number | null
+  /** An observe page answers `complete: false` and no cursor, so the pass stops. */
+  observeStops: boolean
   /** The next call of `method` is answered by `behaviour` instead. */
   once(method: Method, behaviour: Behaviour): void
   /** Moves the connection to `state`, telling every observer. */
@@ -120,6 +133,55 @@ export function fakeGateway(): FakeGateway {
   let closed = false
   const fake = {
     complete: true,
+    listLimit: null as number | null,
+    observePageSize: null as number | null,
+    observeStops: false,
+  }
+  const listedRows = () => {
+    const stored = [...rows.values()]
+    if (fake.listLimit === null) return stored
+    return [...stored]
+      .sort(
+        (left, right) =>
+          right.updatedAtMs - left.updatedAtMs ||
+          left.conversationId.localeCompare(right.conversationId),
+      )
+      .slice(0, fake.listLimit)
+  }
+  const observePage = (options: { cursor?: { id: string } } | undefined) => {
+    if (fake.observePageSize === null || fake.observeStops) {
+      const stored = [...rows.values()]
+      const page =
+        fake.observeStops && fake.observePageSize !== null
+          ? stored.slice(0, fake.observePageSize)
+          : stored
+      return { conversations: page, complete: false }
+    }
+    const stored = [...rows.values()]
+    const cursorId = options?.cursor?.id
+    const found =
+      cursorId === undefined
+        ? -1
+        : stored.findIndex((row) => row.conversationId === cursorId)
+    const start = found < 0 && cursorId !== undefined ? stored.length : found + 1
+    const page = stored.slice(start, start + fake.observePageSize)
+    const last = page[page.length - 1]
+    const lastIndex = last === undefined ? -1 : stored.indexOf(last)
+    const more = start + page.length < stored.length
+    return {
+      conversations: page,
+      complete: !more,
+      ...(more && last
+        ? {
+            cursor: {
+              incarnation: "catalogue",
+              boundary: "1",
+              creation: String(9 + lastIndex),
+              id: last.conversationId,
+            },
+          }
+        : {}),
+    }
   }
   const answer = (method: Method, args: readonly unknown[], normal: () => unknown) => {
     calls.push({ method, args })
@@ -133,9 +195,12 @@ export function fakeGateway(): FakeGateway {
     conversation: {
       list: (...args) =>
         answer("list", args, () => ({
-          conversations: [...rows.values()],
-          complete: fake.complete,
+          conversations: listedRows(),
+          complete:
+            fake.listLimit !== null && rows.size > fake.listLimit ? false : fake.complete,
         })) as never,
+      observe: (options) =>
+        answer("observe", [options], () => observePage(options)) as never,
       read: (id) => answer("read", [id], () => views.get(id) ?? notFound()) as never,
       create: (options) =>
         answer("create", [options], () => ({
