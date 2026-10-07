@@ -293,6 +293,7 @@ impl OwnershipGraph {
     ///
     /// # Errors
     /// Returns `StaleOutcome` for child identities or unmatched close operations.
+    /// Refused restored history returns `Cycle` or `DispatchRefused`.
     pub fn note_unbound_root(
         &mut self,
         root: &AgentLifetimeId,
@@ -323,6 +324,7 @@ impl OwnershipGraph {
     ///
     /// # Errors
     /// Returns `StaleOutcome` when the close operation or physical absence changed.
+    /// Refused restored history returns `Cycle` or `DispatchRefused`.
     pub fn acknowledge_unbound_root(
         &mut self,
         token: UnboundRootSettlement,
