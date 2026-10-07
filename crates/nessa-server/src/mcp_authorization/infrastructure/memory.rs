@@ -265,13 +265,13 @@ impl ScriptedCallback {
 #[async_trait]
 impl ConsentCallback for ScriptedCallback {
     async fn listen(&self, _wait_for: std::time::Duration) -> Result<CallbackBind, ()> {
-        let (sender, accepted) = tokio::sync::oneshot::channel();
+        let (sender, candidates) = tokio::sync::mpsc::channel(1);
         if let Some(query) = self.query.lock().await.take() {
-            let _ = sender.send(query);
+            let _ = sender.send(query).await;
         }
         Ok(CallbackBind {
             redirect_uri: "http://127.0.0.1:9/mcp-oauth/callback".to_owned(),
-            accepted,
+            candidates,
         })
     }
 }

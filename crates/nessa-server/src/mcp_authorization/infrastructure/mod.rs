@@ -6,6 +6,11 @@
 //! AuthorizationOwner ──▶ LoopbackCallback / HttpsOAuth / FileRecords
 //! TransportAuthorization ──bearer──▶ HttpSession
 //! ```
+//!
+//! LoopbackCallback owns bounded, concurrently framed socket readers and a
+//! candidate channel. Receiver drop or the supplied whole-attempt deadline
+//! cancels the listener and its scoped readers; consent acceptance is inward
+//! in the domain, not repeated by this adapter.
 mod audit;
 mod callback;
 mod clock;
