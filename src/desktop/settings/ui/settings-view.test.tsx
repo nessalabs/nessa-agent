@@ -181,16 +181,22 @@ describe("Advanced", () => {
     expect(navItem("Advanced")?.querySelector("svg.settings-nav-icon")).not.toBeNull()
   })
 
-  it("shows its Experimental tab, calmly empty, with no control that does nothing", async () => {
+  it("shows its Experimental tab, with the subagents preview on offer", async () => {
     await mount()
     await act(async () => setOpen(true))
     await act(async () => navItem("Advanced")?.click())
     expect(document.querySelector("#settings-heading")?.textContent).toBe("Advanced")
     expect(tabNames()).toEqual(["Experimental"])
     const panel = document.querySelector("#settings-panel")
-    expect(panel?.textContent).toContain("Nothing to try right now.")
-    expect(panel?.textContent).toContain("Previews of new features will appear here.")
-    expect(panel?.querySelectorAll("button, input, [role='switch']").length).toBe(0)
+    expect(panel?.textContent).toContain("Subagents")
+    expect(panel?.textContent).toContain(
+      "A panel of the agents a conversation put to work.",
+    )
+    const toggle = panel?.querySelector<HTMLButtonElement>('[role="switch"]')
+    expect(toggle?.getAttribute("aria-checked")).toBe("true")
+    expect(panel?.querySelectorAll("button, input, [role='switch']").length).toBe(1)
+    await act(async () => toggle?.click())
+    expect(toggle?.getAttribute("aria-checked")).toBe("false")
   })
 
   it("has taken Experimental out of General", async () => {

@@ -10,6 +10,8 @@
  * a way to connect to one (`gateway`), and the in-memory sample otherwise —
  * which is what the verification checks run on, but for an app's review
  * (`verification/desktop/fixtures/app-review/`), which the sample has none of.
+ * The sample subagent source is joined only then; any other window's source
+ * stays unread and the plugin is not registered.
  *
  * Beside a gateway's source, where apps are drawn, real servers' apps are
  * too: the source hands each view it reads to `gatewayApps`, which registers
@@ -47,6 +49,14 @@ import {
   type WidgetPlugin,
 } from "./widgets"
 import {
+  joinSubagentSources,
+  sampleSubagentKey,
+  sampleSubagentSource,
+  subagentsPlugin,
+  unreadSubagentSource,
+  type SubagentSource,
+} from "./subagents"
+import {
   gatewaySource,
   inMemorySource,
   measureWorkspace,
@@ -67,6 +77,12 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly mcpServers: McpServersGateway | undefined
   /** Pairing and linked devices, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly linkedDevices: LinkedDevicesGateway | undefined
+  /**
+   * Where a conversation's subagents are read. The sample source while the
+   * sample workspace is in use; unread otherwise, so a window does not draw
+   * an empty list in place of a source it has not read. Provided by `main.tsx`.
+   */
+  readonly subagents: SubagentSource
 }
 
 export function createDesktopDependencies(
@@ -108,6 +124,12 @@ export function createDesktopDependencies(
   const samples = sample ? inMemorySource({ now, after }) : undefined
   // The fixture app only beside the sample workspace, never beside a gateway,
   // whose servers' apps it could otherwise stand in for.
+  const subagents = sample
+    ? joinSubagentSources(
+        [{ key: sampleSubagentKey, source: sampleSubagentSource({ now, after }) }],
+        { warn: (message) => console.warn(message) },
+      )
+    : unreadSubagentSource()
   const widgets = widgetRegistry(options.widgets, samples, apps, after)
   // The servers are managed on the gateway's own source's client, beside
   // its conversations; a source composition names has no client to give.
@@ -134,6 +156,7 @@ export function createDesktopDependencies(
     // The webview's storage, where the overview's filter is kept between launches.
     overviewFilter: options.overviewFilter ?? rememberedFilter(),
     widgets,
+    subagents,
   }
 }
 
@@ -217,7 +240,7 @@ function widgetRegistry(
   const sample = samples !== undefined
   // The sample plugin only beside the sample workspace, whose session its widgets belong to.
   const registry = createWidgetRegistry<WidgetPlugin>(
-    natives ?? (sample ? [samplePlugin(sampleWidgetSession)] : []),
+    natives ?? (sample ? [samplePlugin(sampleWidgetSession), subagentsPlugin()] : []),
   )
   // And the fixture MCP App beside it; real servers' apps come through the
   // gateway (`gatewayApps`).

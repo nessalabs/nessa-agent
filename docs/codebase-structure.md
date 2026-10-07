@@ -303,6 +303,22 @@ writing the full defaults on first launch is buying.
   import against that direction, in every form of import it reads, and the
   window's composition (`main.tsx`, `dependencies.ts`), which imports them
   all, is outside the rule.
+- Subagents are the desktop window's vertical for the agents a conversation
+  puts to work ([ADR 329](adr/todo/329-subagents.md)): `src/desktop/subagents/`
+  (its map is `index.ts`) owns the child as the panel shows it
+  (`model/subagent.ts`, taglines in `model/tagline.ts`), the read-only source
+  and the join of several (`application/ports.ts`), what the widget answers
+  (`application/widget-state.ts`), and which child a conversation's panel
+  shows (`application/selection.ts`, reached from outside through
+  `useOpenSubagent`). The sample source
+  (`adapters/in-memory/sample-source.ts`) fills the retry-budget sample on
+  the injected clock and is joined under `sample` from composition only
+  while the sample workspace is in use; a window on another source keeps an
+  unread source and does not register the plugin. The panel (`ui/`) is the
+  native `subagents` widget: a list and a read-only transcript, in a pane
+  and in the window. Counts live in `src/desktop/model/counts.ts`. The
+  preview is the window preference `useSubagentsPreview`, offered under
+  Settings › Advanced › Experimental.
 - The shared desktop light's fixed grain tile lives in
   `src/desktop/ui/ambient-grain.png`, drawn by `.desktop-grain` in the desktop
   stylesheet. It is pre-rendered to keep SVG turbulence out of runtime raster

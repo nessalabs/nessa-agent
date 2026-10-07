@@ -152,7 +152,7 @@ await main(meta, async ({ options, rep, url }) => {
           .then(() => true)
           .catch(() => false)
         if (!shown) failures.push(`Settings (${css.settings}) not visible after ⌘,`)
-        // Advanced › Experimental: the home of previews, empty while none is on offer.
+        // Advanced › Experimental: the home of previews. The subagents preview is on offer.
         await page.locator(css.settingsCategory, { hasText: "Advanced" }).click()
         await page
           .locator(css.settingsHeading, { hasText: "Advanced" })
@@ -182,13 +182,15 @@ await main(meta, async ({ options, rep, url }) => {
           failures.push(
             `Advanced's tabs are ${JSON.stringify(advanced.tabs)}, expected Experimental alone, selected`,
           )
-        if (!advanced.text.includes("Nothing to try right now."))
+        if (!advanced.text.includes("Subagents"))
           failures.push(
-            `Experimental's page says "${advanced.text}", not its empty state`,
+            `Experimental's page says "${advanced.text}", not the subagents preview`,
           )
-        if (advanced.controls !== 0)
+        if (advanced.text.includes("Nothing to try right now."))
+          failures.push("Experimental's page still says it has nothing to try")
+        if (advanced.controls !== 1)
           failures.push(
-            `Experimental's page shows ${advanced.controls} controls, expected none`,
+            `Experimental's page shows ${advanced.controls} controls, expected the subagents switch`,
           )
         await leaveSettings(page)
         const gone = await page
