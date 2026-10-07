@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import test from "node:test"
 
-import { changedPaths, plan } from "./check-changed.mjs"
+import { changedPaths, orderCommands, plan } from "./check-changed.mjs"
 import { documentationOnly } from "./documentation-only.mjs"
 
 test("an empty list runs the full local check", () => {
@@ -80,6 +80,20 @@ test("each owned crate maps to the package script CI already runs for it", () =>
   ])
   assert.deepEqual(plan(["scripts/agents/pin-agents.mjs"]).commands, ["agents:check"])
   assert.deepEqual(plan(["docs/generated/client-api.json"]).commands, ["frontend:check"])
+})
+
+test("a dotted path is owned only after it is normalized", () => {
+  assert.equal(plan(["src/../Cargo.lock"]).tier, "full")
+  assert.equal(plan(["scripts/agents/../../Cargo.lock"]).tier, "full")
+  assert.equal(plan(["src/../src-tauri/src/main.rs"]).tier, "full")
+  assert.deepEqual(plan(["./src/panel/ui/app.tsx"]).commands, ["frontend:check"])
+  assert.deepEqual(plan(["src\\panel\\ui\\app.tsx"]).commands, ["frontend:check"])
+})
+
+test("a selected script missing from the check order runs the full local check", () => {
+  assert.deepEqual(orderCommands(new Set(["frontend:check"])), ["frontend:check"])
+  assert.equal(orderCommands(new Set(["desktop:check"])), null)
+  assert.equal(orderCommands(new Set(["images:check", "desktop:check"])), null)
 })
 
 test("a src prefix does not claim src-tauri", () => {

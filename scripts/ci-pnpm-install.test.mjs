@@ -8,6 +8,13 @@ test("workflow installs go through the shared pnpm action", () => {
   assert.match(action, /inputs\.save == 'true'/)
   assert.match(action, /steps\.cache\.outputs\.cache-hit != 'true'/)
   assert.match(action, /continue-on-error: true/)
+  const steps = action.split("\n    - name: ").slice(1)
+  const install = steps.find((step) => step.startsWith("Install from the lockfile"))
+  const save = steps.find((step) => step.startsWith("Save the pnpm store"))
+  assert.ok(install)
+  assert.ok(save)
+  assert.equal(install.includes("continue-on-error"), false)
+  assert.match(save, /continue-on-error: true/)
 
   const localAuth = readFileSync(".github/workflows/local-auth.yml", "utf8")
   const release = readFileSync(".github/workflows/release.yml", "utf8")

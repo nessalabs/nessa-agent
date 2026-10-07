@@ -18,6 +18,7 @@
  * plan is a line on stderr and the selected scripts inherit stdout.
  */
 import { spawnSync } from "node:child_process"
+import path from "node:path"
 import { pathToFileURL } from "node:url"
 
 import { inertPath } from "./documentation-only.mjs"
@@ -81,13 +82,38 @@ function full(reason) {
   return { tier: "full", commands: ["check"], reason }
 }
 
-function commandsFor(path) {
+function commandsFor(changed) {
   for (const group of GROUPS) {
-    const prefix = group.prefixes?.some((item) => path.startsWith(item))
-    const exact = group.exact?.includes(path)
+    const prefix = group.prefixes?.some((item) => changed.startsWith(item))
+    const exact = group.exact?.includes(changed)
     if (prefix || exact) return group.commands
   }
   return null
+}
+
+/**
+ * Git paths are slash-separated. A `--` argument is not, so collapse `.` and
+ * `..` before the prefix table sees them. A path that still leaves the
+ * repository is unowned.
+ */
+export function normalizeChangedPath(input) {
+  const normalized = path.posix.normalize(input.replaceAll("\\", "/"))
+  if (
+    normalized.length === 0 ||
+    normalized === "." ||
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    normalized.startsWith("/")
+  )
+    return null
+  return normalized
+}
+
+/** Selected scripts in `ORDER`, or null when one of them is not in that list. */
+export function orderCommands(selected) {
+  const commands = ORDER.filter((command) => selected.has(command))
+  if (commands.length !== selected.size) return null
+  return commands
 }
 
 /**
@@ -95,7 +121,14 @@ function commandsFor(path) {
  * @returns {{ tier: "docs" | "narrow" | "full", commands: string[], reason: string }}
  */
 export function plan(paths) {
-  const changed = paths.map((path) => path.trim()).filter((path) => path.length > 0)
+  const changed = []
+  for (const raw of paths) {
+    const trimmed = raw.trim()
+    if (trimmed.length === 0) continue
+    const normalized = normalizeChangedPath(trimmed)
+    if (normalized === null) return full(`no narrow check owns ${trimmed}`)
+    changed.push(normalized)
+  }
   if (changed.length === 0) return full("an empty file list is not a narrowed check")
   const substantive = changed.filter((path) => !inertPath(path))
   if (substantive.length === 0) {
@@ -111,8 +144,8 @@ export function plan(paths) {
     if (commands === null) return full(`no narrow check owns ${path}`)
     for (const command of commands) selected.add(command)
   }
-  const commands = ORDER.filter((command) => selected.has(command))
-  if (commands.length !== selected.size)
+  const commands = orderCommands(selected)
+  if (commands === null)
     return full("the narrow plan dropped a script; running the full local check")
   return {
     tier: "narrow",
