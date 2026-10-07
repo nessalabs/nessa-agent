@@ -22,3 +22,7 @@ One admitted-spawn typed-error boundary will revoke graph/shared-gate runnable a
 Closing vacant cleanup binding remains valid until actual Released, absence or Closed evidence refuses it. The legacy Open+Ended{Reserved} guard remains narrow. Historical factory completed-startup refusal evidence must be read against its original source; the current runtime graph-close correction changes that case and needs new regression evidence.
 
 Panic supervision #625, mandatory cleanup publication debt #646, failed-startup parent settlement #649, and blocking adapters #627 remain separate. Final exact-source gates, supported-platform CI, both independent reviews and dispositions will be added before merge.
+
+## Preserved final 1bf CI outcome
+
+Run37622329149 is completed FAILED: Linux and Windows passed; macOS failed an existing desktop-stop ordering assertion (expected provider openings2, observed1), and domain coverage failed as above. Required-check aggregate failed. The metadata and exact failure excerpt are retained. Issue651 tracks the independently reachable reference-count-versus-actual-FIFO-admission gap; exact historical scheduling cause remains unproven. Its small verification correction is being prepared in an isolated worktree for inclusion in PR650 before final gates and fresh cumulative R1 review. No review round has started.

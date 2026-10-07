@@ -1,0 +1,103 @@
+{
+  "run": {
+    "id": 37622329149,
+    "head_sha": "1bf09a5ef83f2a4183f3dfbc05e057d5e0138a31",
+    "status": "completed",
+    "conclusion": "failure",
+    "html_url": "https://github.com/nessalabs/nessa-agent/actions/runs/37622329149",
+    "created_at": "2026-10-07T12:37:26Z",
+    "updated_at": "2026-10-07T12:59:50Z"
+  },
+  "jobs": [
+    {
+      "id": 112795407566,
+      "name": "What this change needs",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/nessalabs/nessa-agent/actions/runs/37622329149/job/112795407566",
+      "started_at": "2026-10-07T12:37:30Z",
+      "completed_at": "2026-10-07T12:37:37Z"
+    },
+    {
+      "id": 112795408195,
+      "name": "Workflow files are valid",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/nessalabs/nessa-agent/actions/runs/37622329149/job/112795408195",
+      "started_at": "2026-10-07T12:37:30Z",
+      "completed_at": "2026-10-07T12:37:40Z"
+    },
+    {
+      "id": 112795480051,
+      "name": "SDK domain coverage",
+      "status": "completed",
+      "conclusion": "failure",
+      "html_url": "https://github.com/nessalabs/nessa-agent/actions/runs/37622329149/job/112795480051",
+      "started_at": "2026-10-07T12:37:41Z",
+      "completed_at": "2026-10-07T12:46:32Z"
+    },
+    {
+      "id": 112795480099,
+      "name": "Desktop app compiles in release profile",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/nessalabs/nessa-agent/actions/runs/37622329149/job/112795480099",
+      "started_at": "2026-10-07T12:37:45Z",
+      "completed_at": "2026-10-07T12:39:36Z"
+    },
+    {
+      "id": 112795480165,
+      "name": "frontend",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/nessalabs/nessa-agent/actions/runs/37622329149/job/112795480165",
+      "started_at": "2026-10-07T12:37:40Z",
+      "completed_at": "2026-10-07T12:42:25Z"
+    },
+    {
+      "id": 112795480174,
+      "name": "local-auth (macos-latest)",
+      "status": "completed",
+      "conclusion": "failure",
+      "html_url": "https://github.com/nessalabs/nessa-agent/actions/runs/37622329149/job/112795480174",
+      "started_at": "2026-10-07T12:37:48Z",
+      "completed_at": "2026-10-07T12:49:56Z"
+    },
+    {
+      "id": 112795480243,
+      "name": "local-auth (ubuntu-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/nessalabs/nessa-agent/actions/runs/37622329149/job/112795480243",
+      "started_at": "2026-10-07T12:37:40Z",
+      "completed_at": "2026-10-07T12:53:52Z"
+    },
+    {
+      "id": 112795480307,
+      "name": "local-auth (windows-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/nessalabs/nessa-agent/actions/runs/37622329149/job/112795480307",
+      "started_at": "2026-10-07T12:37:41Z",
+      "completed_at": "2026-10-07T12:59:42Z"
+    },
+    {
+      "id": 112795480420,
+      "name": "gateway-contract",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/nessalabs/nessa-agent/actions/runs/37622329149/job/112795480420",
+      "started_at": "2026-10-07T12:37:41Z",
+      "completed_at": "2026-10-07T12:39:07Z"
+    },
+    {
+      "id": 112804604484,
+      "name": "Required checks passed",
+      "status": "completed",
+      "conclusion": "failure",
+      "html_url": "https://github.com/nessalabs/nessa-agent/actions/runs/37622329149/job/112804604484",
+      "started_at": "2026-10-07T12:59:45Z",
+      "completed_at": "2026-10-07T12:59:49Z"
+    }
+  ]
+}

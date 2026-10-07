@@ -1,0 +1,29 @@
+Source: 1bf09a5ef83f2a4183f3dfbc05e057d5e0138a31
+Run:37622329149 Job:112795480174
+Exact historical scheduling cause unknown.
+2026-10-07T12:49:46.2372450Z [nessa-server nessa_server] failures:
+2026-10-07T12:49:46.2474550Z [nessa-server nessa_server] 
+2026-10-07T12:49:46.2582320Z [nessa-server nessa_server] ---- conversation::application::service::desktop_stop_tests::a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock stdout ----
+2026-10-07T12:49:46.2685580Z [nessa-server nessa_server] 
+2026-10-07T12:49:46.2788520Z [nessa-server nessa_server] thread 'conversation::application::service::desktop_stop_tests::a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock' (53312) panicked at crates/nessa-server/src/conversation/application/../../../tests/conversation/desktop_stop.rs:627:5:
+2026-10-07T12:49:46.2897840Z [nessa-server nessa_server] assertion `left == right` failed: the message opened the conversation again
+2026-10-07T12:49:46.3015190Z [nessa-server nessa_server]   left: 1
+2026-10-07T12:49:46.3152680Z [nessa-server nessa_server]  right: 2
+2026-10-07T12:49:46.3267190Z [nessa-server nessa_server] 
+2026-10-07T12:49:46.3369020Z [nessa-server nessa_server] 
+2026-10-07T12:49:46.3470360Z [nessa-server nessa_server] failures:
+2026-10-07T12:49:46.3572590Z [nessa-server nessa_server]     conversation::application::service::desktop_stop_tests::a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock
+2026-10-07T12:49:46.3573390Z [nessa-server nessa_server] 
+2026-10-07T12:49:46.3675990Z [nessa-server nessa_server] test result: FAILED. 1965 passed; 1 failed; 9 ignored; 0 measured; 0 filtered out; finished in 171.79s
+2026-10-07T12:49:46.3778190Z [nessa-server nessa_server] 
+2026-10-07T12:49:49.0112130Z [nessa-sdk nessa_sdk] test infrastructure::session_storage::transcript::tests::checkpoint_streams_history_beyond_one_fact_limit ... ok
+2026-10-07T12:49:49.0139500Z [nessa-sdk nessa_sdk] 
+2026-10-07T12:49:49.0244920Z [nessa-sdk nessa_sdk] test result: ok. 962 passed; 0 failed; 13 ignored; 0 measured; 0 filtered out; finished in 294.74s
+2026-10-07T12:49:49.0348810Z nessa-sdk nessa_sdk finished in 294.8s with exit 0
+2026-10-07T12:49:49.0349970Z [nessa-sdk nessa_sdk] 
+2026-10-07T12:49:49.0454130Z nessa-server nessa_server exited with 101
+2026-10-07T12:49:49.0587320Z ##[error]Process completed with exit code 1.
+2026-10-07T12:49:49.1092840Z Post job cleanup.
+2026-10-07T12:49:49.7251510Z Post job cleanup.
+2026-10-07T12:49:49.9184440Z [command]/opt/homebrew/bin/git version
+
