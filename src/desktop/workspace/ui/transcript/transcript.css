@@ -356,7 +356,7 @@ html:not(.dark) .workspace-diff del {
   color: var(--desktop-muted);
   -webkit-user-select: none;
   user-select: none;
-  animation: workspace-message-in var(--desktop-slow) var(--desktop-out) 120ms both;
+  animation: workspace-message-in var(--desktop-slow) var(--desktop-out) var(--desktop-fast) both;
 }
 
 .workspace-shimmer {

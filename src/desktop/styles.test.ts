@@ -289,19 +289,41 @@ it("draws a pill, a short fade and a focus ring from the window's tokens, not fr
   const sheets = (dir: string): string[] =>
     readdirSync(dir).flatMap((name) => {
       const path = join(dir, name)
-      if (statSync(path).isDirectory()) return name === "settings" ? [] : sheets(path)
+      if (statSync(path).isDirectory())
+        return path === join(root, "settings") ? [] : sheets(path)
       return name.endsWith(".css") ? [path] : []
     })
-  // `styles.css` defines the tokens; every other rule uses them.
-  const definition = /^\s*--desktop-[\w-]+:.*$/gm
   const literals = {
-    pill: /\b999px\b/,
-    fade: /\b(?:120|140|160)ms ease\b/,
-    focus: /outline:\s*[\d.]+px solid/,
+    pill: /\b\d*999px\b/,
+    fade: /\b(?:120|140|160)ms\b|\b0?\.1[246]s\b/,
+    focus:
+      /(?<![-\w])outline(?:-width)?:[^;]*\b[\d.]+px\b[^;]*\bsolid\b|(?<![-\w])outline:\s*solid\s+[\d.]+px/,
   }
+  const comments = /\/\*[\s\S]*?\*\//g
+  // `styles.css` defines the tokens; every other rule uses them.
+  const definition = /^\s*--desktop-(?:fast|medium|radius-pill):[^;]*;/gm
   for (const path of sheets(root)) {
-    const source = readFileSync(path, "utf8").replace(definition, "")
+    let source = readFileSync(path, "utf8").replace(comments, "")
+    if (path === join(root, "styles.css")) source = source.replace(definition, "")
     for (const [name, literal] of Object.entries(literals))
       expect(source, `${relative(root, path)}: ${name}`).not.toMatch(literal)
   }
+})
+
+it("defines the scale on :root too, because menus and pickers portal outside every surface", () => {
+  // A `var()` with no value drops its whole declaration: a menu closed without its
+  // fade, and the model picker lost its selected row (#632 review).
+  const scope = styles.match(/(:root,\s*\[data-surface\]\s*\{[^}]*\})/)?.[1] ?? ""
+  for (const token of [
+    "--desktop-fast",
+    "--desktop-medium",
+    "--desktop-radius-pill",
+    "--desktop-hover",
+  ])
+    expect(scope, token).toContain(`${token}:`)
+  const portalled = readFileSync(new URL("./ui/menu/menu.css", import.meta.url), "utf8")
+  for (const [, token] of portalled.matchAll(
+    /var\((--desktop-(?:fast|medium|radius-pill|hover))\)/g,
+  ))
+    expect(scope, token).toContain(`${token}:`)
 })

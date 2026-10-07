@@ -37,6 +37,21 @@ body {
 }
 
 /*
+ * The scale that layers portalled to <body> — menus, the model picker — read
+ * as well as the surfaces: they sit outside every [data-surface], and a
+ * `var()` with no value there drops the whole declaration (a menu then closes
+ * without its fade). Defined once, for both.
+ */
+:root,
+[data-surface] {
+  --desktop-fast: 120ms;
+  /* Between fast and base: a fill or fade on something the pointer rests on. */
+  --desktop-medium: 160ms;
+  --desktop-radius-pill: 999px;
+  --desktop-hover: color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+
+/*
  * Geometry shared by the titlebar and the floating panels. The titlebar sits
  * over the panels, so each panel's content starts below it.
  */
@@ -78,9 +93,6 @@ body {
    * change to this list, not a local token.
    */
   /* Motion: three durations for everything, two for the workspace's travel. */
-  --desktop-fast: 120ms;
-  /* Between fast and base: a fill or fade on something the pointer rests on. */
-  --desktop-medium: 160ms;
   --desktop-base: 180ms;
   --desktop-slow: 240ms;
   /* A pane travelling to its new place when the layout changes. */
@@ -137,7 +149,6 @@ body {
   --desktop-radius-md: 12px;
   --desktop-radius-lg: 16px;
   --desktop-radius-xl: 20px;
-  --desktop-radius-pill: 999px;
 
   /* Type. */
   --desktop-text-caption: 11px;
@@ -152,7 +163,6 @@ body {
   --desktop-muted: color-mix(in oklab, var(--foreground) 56%, transparent);
   --desktop-faint: color-mix(in oklab, var(--foreground) 40%, transparent);
   --desktop-fainter: color-mix(in oklab, var(--foreground) 30%, transparent);
-  --desktop-hover: color-mix(in oklab, var(--foreground) 5%, transparent);
   /* A control's hover (icon button, chip); a row's is `--desktop-hover`. */
   --desktop-hover-strong: color-mix(in oklab, var(--foreground) 8%, transparent);
   --desktop-selected: color-mix(in oklab, var(--foreground) 8.5%, transparent);
