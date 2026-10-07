@@ -1,5 +1,113 @@
 # Bounded physical persistence verification (#627)
 
+The current implementation uses one optional `nessa-local-storage::physical_operation`
+owner and independent adapter instances. The [canonical ordering table](../../docs/design/bounded-physical-persistence.md)
+and [storage atlas](../../docs/state/services/storage/README.md#physical-adapter-work)
+name its boundaries and witnesses. Historical393 private-helper proofs below do
+not validate the consolidated source.
+
+Current review evidence is under [evidence/consolidated](evidence/consolidated/provenance-notes.json).
+Original commands/logs preserve their local paths; published CSV files have the
+same names with `.gz`, and [uncompressed hashes](evidence/consolidated/uncompressed-csv-sha256.json)
+identify their exact raw bytes. [Artifact hashes](evidence/consolidated/artifact-sha256.json)
+identify the published copies. Scripts are executed review artifacts, not a
+supported tooling API; replay paths require adaptation.
+
+## Current source and scoped proof
+
+The [v2 manifest](evidence/consolidated/v2-source-checkpoint/source-manifest.json)
+identifies dirty consolidated source over393042a, before restack. Its
+[26-row mapping](evidence/consolidated/v2-source-checkpoint/table-to-test-mapping.json)
+links actual enforcing tests. The [benchmark checkpoint](evidence/consolidated/benchmark-source-checkpoint/source-manifest.json)
+adds only batch wall observation, a declared Open/Closed fixture assertion and
+conditional shutdown wording; production rules are unchanged. Pre-restack source
+copies remain separately archived. Final source/restack identity and guarded
+checks are recorded in the [guarded final manifest](evidence/consolidated/final-gates/manifest.json) at handoff, without relabeling
+these earlier runs as clean-commit runs.
+
+Default-off local-storage tests and NORMAL dependency tree passed (no Tokio
+normal dependency); explicit opt-in passed14 central mechanic tests. Actual SDK
+matrix passed21; recovered server records20 and audit7 passed. Combined six-package
+execution must itself name all14 central cases; explicit opt-in execution alone
+is not that CI-selection proof. SDK/server declare MSRV1.89; tested rustc1.99 does
+not establish an executed minimum-compiler check.
+
+The initial already-queued shutdown fixture assumption failed and is preserved;
+already queued blocking work can still succeed. Corrected real adapters instead
+exercise stopped-origin submission and typed captured cleanup. Central private
+JoinHandle tests own genuine queued-abort/detached cases. They do not claim an
+actual adapter loses its caller during synchronous rejected submission. A server
+ENOSPC compilation is retained as non-pass; unchanged-source recovery uses
+CARGO_INCREMENTAL=0 after root reclaimed only incremental compiler cache.
+
+[26 mutation records](evidence/consolidated/mutation-probes/candidate-source-manifest.json)
+retain each exact patch, compiled runtime failure and byte-restored focused green
+with fresh mtimes:14 central boundaries,8 distinct typed adapter outcomes and4
+real clone constructors. Grouped filters do not prove untouched duplicate-name
+sites. [Audit probe22](evidence/consolidated/mutation-probes/audit-ack.result.json)
+resumed interrupted orchestration: its actual Ok-vs-AuditFailure runtime assertion
+is retained; original exit101 is reconstructed, not newly observed. Restoration
+hashes and green were actually observed on resumption.
+
+A separate [single shared offload-owner revert](evidence/consolidated/benchmarks/async-runtime-offload-revert.patch)
+failed central1 and all8 real adapter heartbeat cases; exact restoration passed.
+Reconstructed inline adapters also failed SDK2/server6 heartbeats before their
+measurements; restored source passed8 again. These are OS-gated current-thread
+responsiveness witnesses, not timing-quantile claims or8 extra source mutations.
+
+The actual [markdown-it proof](evidence/consolidated/final-table-render-proof.json)
+renders one table with rows1–26; original separator failure remains archived.
+[118-page metadata/source/link checks](evidence/consolidated/final-doc-validation.log)
+pass. External atlas browser/Mermaid rendering is unavailable and unclaimed.
+
+## Current local measurements
+
+[Environment and clocks](evidence/consolidated/benchmarks/measurement-environment.json),
+[commands/source identities](evidence/consolidated/benchmarks/run-manifest.json),
+[raw-data validation](evidence/consolidated/benchmarks/measurement-validation.json),
+and [every scenario median/p95/p99](evidence/consolidated/benchmarks/all-scenario-comparison.md)
+cover current, reconstructed-inline and exact-restored phases. Each has21000
+SQLite per-call rows and1000 scripted OAuth flows (66000 total). Seven legal
+empty/open/closed root-history fixtures have0/32/256/2048 lifetime rows and zero
+spawns; domain restore and declared state are checked. The global128 retained
+request cap is unchanged. Encoded body bytes agree across all phases.
+
+Original caller timers start at port invocation/task first poll and exclude prior
+scheduler wait. The additional wall timer starts before spawning each existing
+four-writer batch and ends after all four complete, before CSV writes. Each of
+seven fixtures has250 batches per phase (1750 per phase;5250 total). These are
+N250 batch samples, not1000 independent wall samples, and four scheduled callers
+are not guaranteed simultaneously ready in a poll. Gathering all four returned
+rows before writing CSV is an observer-only instrumentation adjustment applied
+identically in every phase; per-call clocks and storage operations are unchanged.
+
+Restored medians illustrate the cost: empty write75.18µs versus inline27.91µs;
+2048-open single write8.88ms versus7.68ms; four-caller per-call write24.74ms versus
+7.85ms. Full four-writer batch wall is35.34ms versus16.24ms (N250); scripted OAuth
+is2.47ms versus0.87ms. All tails and scenarios, including regressions, remain in
+the linked table. One admission slot serializes input cloning, validation/encoding,
+physical I/O and captured cleanup. Reconstructed inline calls can perform some
+encoding across two runtime workers before their connection mutex. The measured
+batch regression therefore includes that serialization tradeoff, not merely
+scheduler overhead; components were not timed separately. Responsiveness and
+physical ownership improve while these local caller/batch latencies increase.
+
+These are debug Linux tmpfs/SQLite DELETE-FULL and zero-delay scripted OAuth,
+with two runtime workers/eight blocking workers, not production/network estimates.
+Median averages the middle pair; p95/p99 use nearest rank. Limited sample tails
+and run variation are disclosed; no CI timing threshold or speedup is claimed.
+Output cleanup after Job return, physical/capture-frame double-fault aborts,
+external panic hooks, cross-instance/path exclusion, shutdown drain and atomic
+audit JSON/newline writes remain outside the stated guarantees. Browser scripted
+verification is separate and has not been claimed by these backend measurements.
+
+## Historical393 and earlier evidence
+
+Everything below belongs to the private-helper source at393042a or earlier dirty
+source. Its mutations, timings and partial final gates are historical only.
+
+### Historical private-helper verification (#627)
+
 Candidate base: `f1682e8a763646c6c3e73dee73c1c47987e2cbae`. The handoff provides the clean commit SHA; final gate manifest records its actual tested commit. [Changed implementation/test/docs source hashes](evidence/candidate-source-sha256.json) are computed against this base and exclude verification artifacts. An evidence-only follow-up preserves this source inventory.
 
 Scope: one physical job per SqliteOwnershipStore, FileRecords or FileAuthorizationAudit instance through queued time, I/O and captured input cleanup. Async waiters are not a bounded total caller count. [Design/order table](../../docs/design/bounded-physical-persistence.md), [implementer review](evidence/self-review.md), and [storage atlas](../../docs/state/services/storage/README.md#physical-adapter-work) describe the enforcers and limits.

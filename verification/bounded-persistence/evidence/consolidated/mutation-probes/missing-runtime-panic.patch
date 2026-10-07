@@ -1,0 +1,11 @@
+--- a/crates/nessa-local-storage/src/physical_operation.rs
++++ b/crates/nessa-local-storage/src/physical_operation.rs
+@@ -66,7 +66,7 @@
+     /// # Errors
+     /// Returns [`Interrupted`] if runtime context or admission is unavailable.
+     pub async fn admit(&self) -> Result<Admission, Interrupted> {
+-        let executor = Handle::try_current().map_err(|_| Interrupted)?;
++        let executor = Handle::try_current().expect("mutated missing runtime panic");
+         let permit = self
+             .slot
+             .clone()

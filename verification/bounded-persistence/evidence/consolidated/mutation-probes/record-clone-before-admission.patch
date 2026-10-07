@@ -1,0 +1,23 @@
+--- a/crates/nessa-server/src/mcp_authorization/infrastructure/records.rs
++++ b/crates/nessa-server/src/mcp_authorization/infrastructure/records.rs
+@@ -89,16 +89,16 @@
+     }
+ 
+     async fn store(&self, auth: &ServerAuth) -> Result<(), RecordFailure> {
++        #[cfg(not(test))]
++        let auth = auth.clone();
++        #[cfg(test)]
++        let auth = self.probe.clone_input(|| auth.clone());
+         let permit = self
+             .worker
+             .admit()
+             .await
+             .map_err(|_| RecordFailure::Unavailable)?;
+         let state = self.state.clone();
+-        #[cfg(not(test))]
+-        let auth = auth.clone();
+-        #[cfg(test)]
+-        let auth = self.probe.clone_input(|| auth.clone());
+         let operation = move || state.store(&auth);
+         #[cfg(test)]
+         let operation = self.probe.wrap(operation);

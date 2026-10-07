@@ -1,0 +1,11 @@
+--- a/crates/nessa-local-storage/src/physical_operation.rs
++++ b/crates/nessa-local-storage/src/physical_operation.rs
+@@ -156,7 +156,7 @@
+                 .expect("owned persistence operation")()
+         }));
+         let output = called.map_err(|payload| {
+-            std::mem::forget(payload);
++            drop(payload);
+             Interrupted
+         });
+         let cleaned = self.drop_operation();

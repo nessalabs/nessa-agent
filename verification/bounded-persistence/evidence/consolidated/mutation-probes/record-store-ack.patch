@@ -1,0 +1,11 @@
+--- a/crates/nessa-server/src/mcp_authorization/infrastructure/records.rs
++++ b/crates/nessa-server/src/mcp_authorization/infrastructure/records.rs
+@@ -105,7 +105,7 @@
+         permit
+             .submit(operation)
+             .await
+-            .map_err(|_| RecordFailure::Unavailable)?
++            .unwrap_or(Ok(()))
+     }
+ 
+     async fn load_secret(&self, server: Uuid) -> Result<Option<TokenMaterial>, RecordFailure> {

@@ -1,0 +1,185 @@
+--- a/crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs
++++ b/crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs
+@@ -93,44 +93,8 @@
+ 
+ #[async_trait]
+ impl OwnershipStore for SqliteOwnershipStore {
+-    async fn write(&self, snapshot: &OwnershipSnapshot) -> Result<(), PortFailure> {
+-        let permit = self
+-            .worker
+-            .admit()
+-            .await
+-            .map_err(|_| PortFailure::Rejected)?;
+-        let state = self.state.clone();
+-        #[cfg(not(test))]
+-        let snapshot = snapshot.clone();
+-        #[cfg(test)]
+-        let snapshot = self.probe.clone_input(|| snapshot.clone());
+-        let operation = move || state.write(&snapshot);
+-        #[cfg(test)]
+-        let operation = self.probe.wrap(operation);
+-        permit
+-            .submit(operation)
+-            .await
+-            .map_err(|_| PortFailure::Uncertain)?
+-    }
+-
+-    async fn read(&self) -> Result<OwnershipSnapshot, PortFailure> {
+-        let permit = self
+-            .worker
+-            .admit()
+-            .await
+-            .map_err(|_| PortFailure::Rejected)?;
+-        #[cfg(not(test))]
+-        let state = self.state.clone();
+-        #[cfg(test)]
+-        let state = self.probe.clone_input(|| self.state.clone());
+-        let operation = move || state.read();
+-        #[cfg(test)]
+-        let operation = self.probe.wrap(operation);
+-        permit
+-            .submit(operation)
+-            .await
+-            .map_err(|_| PortFailure::Uncertain)?
+-    }
++ async fn write(&self, snapshot: &OwnershipSnapshot) -> Result<(), PortFailure> { self.state.write(snapshot) }
++ async fn read(&self) -> Result<OwnershipSnapshot, PortFailure> { self.state.read() }
+ }
+ 
+ impl OwnershipState {
+--- a/crates/nessa-server/src/mcp_authorization/infrastructure/records.rs
++++ b/crates/nessa-server/src/mcp_authorization/infrastructure/records.rs
+@@ -69,106 +69,11 @@
+ 
+ #[async_trait]
+ impl AuthorizationRecords for FileRecords {
+-    async fn load(&self, server: Uuid) -> Result<Option<ServerAuth>, RecordFailure> {
+-        let permit = self
+-            .worker
+-            .admit()
+-            .await
+-            .map_err(|_| RecordFailure::Unavailable)?;
+-        #[cfg(not(test))]
+-        let state = self.state.clone();
+-        #[cfg(test)]
+-        let state = self.probe.clone_input(|| self.state.clone());
+-        let operation = move || state.load(server);
+-        #[cfg(test)]
+-        let operation = self.probe.wrap(operation);
+-        permit
+-            .submit(operation)
+-            .await
+-            .map_err(|_| RecordFailure::Unavailable)?
+-    }
+-
+-    async fn store(&self, auth: &ServerAuth) -> Result<(), RecordFailure> {
+-        let permit = self
+-            .worker
+-            .admit()
+-            .await
+-            .map_err(|_| RecordFailure::Unavailable)?;
+-        let state = self.state.clone();
+-        #[cfg(not(test))]
+-        let auth = auth.clone();
+-        #[cfg(test)]
+-        let auth = self.probe.clone_input(|| auth.clone());
+-        let operation = move || state.store(&auth);
+-        #[cfg(test)]
+-        let operation = self.probe.wrap(operation);
+-        permit
+-            .submit(operation)
+-            .await
+-            .map_err(|_| RecordFailure::Unavailable)?
+-    }
+-
+-    async fn load_secret(&self, server: Uuid) -> Result<Option<TokenMaterial>, RecordFailure> {
+-        let permit = self
+-            .worker
+-            .admit()
+-            .await
+-            .map_err(|_| RecordFailure::Unavailable)?;
+-        #[cfg(not(test))]
+-        let state = self.state.clone();
+-        #[cfg(test)]
+-        let state = self.probe.clone_input(|| self.state.clone());
+-        let operation = move || state.load_secret(server);
+-        #[cfg(test)]
+-        let operation = self.probe.wrap(operation);
+-        permit
+-            .submit(operation)
+-            .await
+-            .map_err(|_| RecordFailure::Unavailable)?
+-    }
+-
+-    async fn store_secret(
+-        &self,
+-        server: Uuid,
+-        secret: &TokenMaterial,
+-    ) -> Result<Publication, RecordFailure> {
+-        let permit = self
+-            .worker
+-            .admit()
+-            .await
+-            .map_err(|_| RecordFailure::Unavailable)?;
+-        let state = self.state.clone();
+-        #[cfg(not(test))]
+-        let secret = secret.clone();
+-        #[cfg(test)]
+-        let secret = self.probe.clone_input(|| secret.clone());
+-        let operation = move || state.store_secret(server, &secret);
+-        #[cfg(test)]
+-        let operation = self.probe.wrap(operation);
+-        permit
+-            .submit(operation)
+-            .await
+-            .unwrap_or(Ok(Publication::Unknown))
+-    }
+-
+-    async fn delete_secret(&self, server: Uuid) -> Result<Deletion, RecordFailure> {
+-        let permit = self
+-            .worker
+-            .admit()
+-            .await
+-            .map_err(|_| RecordFailure::Unavailable)?;
+-        #[cfg(not(test))]
+-        let state = self.state.clone();
+-        #[cfg(test)]
+-        let state = self.probe.clone_input(|| self.state.clone());
+-        let operation = move || state.delete_secret(server);
+-        #[cfg(test)]
+-        let operation = self.probe.wrap(operation);
+-        permit
+-            .submit(operation)
+-            .await
+-            .unwrap_or(Ok(Deletion::Unknown))
+-    }
++ async fn load(&self, server: Uuid) -> Result<Option<ServerAuth>, RecordFailure> { self.state.load(server) }
++ async fn store(&self, auth: &ServerAuth) -> Result<(), RecordFailure> { self.state.store(auth) }
++ async fn load_secret(&self, server: Uuid) -> Result<Option<TokenMaterial>, RecordFailure> { self.state.load_secret(server) }
++ async fn store_secret(&self, server: Uuid, secret: &TokenMaterial) -> Result<Publication, RecordFailure> { self.state.store_secret(server, secret) }
++ async fn delete_secret(&self, server: Uuid) -> Result<Deletion, RecordFailure> { self.state.delete_secret(server) }
+ }
+ 
+ impl FileRecordState {
+--- a/crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs
++++ b/crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs
+@@ -43,18 +43,7 @@
+ 
+ #[async_trait]
+ impl AuthorizationAudit for FileAuthorizationAudit {
+-    async fn record(&self, record: &AuthAuditRecord) -> Result<(), AuditFailure> {
+-        let permit = self.worker.admit().await.map_err(|_| AuditFailure)?;
+-        let state = self.state.clone();
+-        #[cfg(not(test))]
+-        let record = record.clone();
+-        #[cfg(test)]
+-        let record = self.probe.clone_input(|| record.clone());
+-        let operation = move || state.record(&record);
+-        #[cfg(test)]
+-        let operation = self.probe.wrap(operation);
+-        permit.submit(operation).await.map_err(|_| AuditFailure)?
+-    }
++ async fn record(&self, record: &AuthAuditRecord) -> Result<(), AuditFailure> { self.state.record(record) }
+ }
+ 
+ impl AuditState {

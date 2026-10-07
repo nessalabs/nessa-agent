@@ -1,0 +1,77 @@
+# Current consolidated single-rule mutation inventory (not yet executed)
+
+Source: review-checkpoint-v2/source-manifest.json; historical clean HEAD393,
+current dirty consolidated candidate, intended f168 base. Every mutation will
+retain exact patch, full changed-file hashes, command/environment, compiled
+runtime failure and fresh-mtime restored-source green. Compile-only rejection,
+timeout without a test assertion, and non-biting variants are not valid counts.
+All commands use the same normal target with CARGO_INCREMENTAL=0. Historical
+26 two-helper variants remain separate and do not count here.
+
+## Shared mechanic owner (14 narrow variants)
+
+1. Slot capacity1 ->2: unpolled_result_drop_retains_physical_slot.
+2. Instance slot -> one process-shared slot: independent_worker_instances_progress
+   has a bounded real asynchronous completion assertion while A retains admission.
+3. Job-owned permit -> submit-frame-owned permit: unpolled_result_drop_retains_physical_slot.
+4. Captured executor -> free ambient spawn_blocking: queued_send_future_uses_origin.
+5. Missing runtime -> panic: no_runtime_admission_is_typed.
+6. Waiting acquire -> immediate try_acquire refusal: queued_send_future_uses_origin.
+7. Synchronous submit -> defer spawn until returned future poll:
+   unpolled_result_drop_retains_physical_slot (actual entry/capture counts, OS gate).
+8. Call containment removed: detached_call_fault_payload_is_not_dropped.
+9. Remaining capture containment in Job::Drop removed:
+   queued_abort_fault_payload_is_not_dropped (private genuine queued abort).
+10. Captured-operation Drop containment removed:
+    ready_capture_fault_downgrades_and_disposes_output_under_slot exercises the
+    chosen separate Job cleanup boundaries; detached real-adapter ready-input-drop
+    witness is available if needed. Do not infer an unaffected site from a grouped
+    mutation. Physical-operation-frame abort exclusions remain explicit.
+11. Ready capture-fault downgrade removed:
+    ready_capture_fault_downgrades_and_disposes_output_under_slot.
+12. Call panic payload forget ->drop: detached_call_fault_payload_is_not_dropped.
+13. Contained capture/output panic payload forget ->drop:
+    queued_abort_fault_payload_is_not_dropped. This targets the shared contained_drop
+    owner, not separate copies or a claim about untouched payload branches.
+14. Ready-disposal catch ->ordinary drop:
+    ready_capture_fault_downgrades_and_disposes_output_under_slot includes a
+    detached result plus actual output/payload counters, not just subprocess status.
+
+## Eight distinct adapter interruption outcomes (8 variants)
+
+15. SQLite write interruption ->ack: pre_effect_worker_panic_is_typed_and_landed_effect_is_uncertain.
+16. SQLite read interruption ->empty: same typed pre-effect witness.
+17. Nonsecret record load interruption ->None:
+    interrupted_record_operations_are_unavailable_or_unknown.
+18. Nonsecret record store interruption ->ack:
+    ready_effect_input_drop_fault_is_uncertain / interrupted_record_operations_are_unavailable_or_unknown.
+19. Secret load interruption ->None: interrupted_record_operations_are_unavailable_or_unknown.
+20. Secret publication interruption ->Acknowledged:
+    interrupted_record_operations_are_unavailable_or_unknown.
+21. Secret deletion interruption ->Failed (rejected root observable-truth choice):
+    interrupted_record_operations_are_unavailable_or_unknown.
+22. Audit interruption ->ack: interrupted_audit_and_poison_are_failures.
+
+## Four actual borrowed clone constructors (4 variants)
+
+Move the constructor (both production and cfg(test) observed forms) before real
+admission, leaving the actual clone/capture effect, port method and held earlier
+operation intact. No independently moved after-clone counter.
+
+23. SDK ownership snapshot: SDK admission_precedes_owned_input_transfer.
+24. Records nonsecret auth: records admission_precedes_owned_input_transfer.
+25. Records secret: canceled_delete_excludes_replacement now asserts actual input
+    constructor count2 at OS release (initial publication + held delete only).
+26. Audit record: worker_input_drop_keeps_slot now asserts actual input constructor
+    count1 at OS release while the previous actual capture cleanup holds the slot.
+
+Responsiveness/offload is separately falsified once at the shared execution owner:
+spawn_blocking ->captured executor async task, with all eight actual adapter OS-gated
+heartbeat witnesses (plus central heartbeat) expected to freeze. This is one
+shared-rule responsiveness comparison, not eight independent source mutations.
+Central private abort and actual stopped-executor submission are explicitly distinct;
+actual stopped-executor tests make no detached-submission caller claim.
+
+All14 central tests and every actual adapter method remain positively exercised.
+Normal combined six-package execution must actually list the central tests in its
+output; explicit feature-on results alone do not establish CI participation.

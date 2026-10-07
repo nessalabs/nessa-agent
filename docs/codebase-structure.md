@@ -402,7 +402,7 @@ own current lifecycle and API contracts.
 | `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, backend-issued load/save bindings and immutable semantic units in `storage/save.rs`, retained attachment resources, snapshot evidence mapped through domain history rules, which apps a message may name (`app_sources.rs`: an MCP tool call of an earlier turn, asked at admission and of restored history), where a steered message stands in its target turn (`steering_position.rs`: target and offset taken at admission and read from saved history in one place), the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
 | `application/agent_execution/executions/`, `permissions/`, `tools/` | Domain coordination, weak permission authority carriers, attributed decisions, and observation/review projections. |
 | `infrastructure/acp/`, `claude_acp/`, `codex_acp/`, `opencode_acp/` | Shared transport lifecycle, and one module per provider for its own configuration and tool translation. Verification shared by more than one provider moves up into `acp/`, as ordered session configuration did once Codex and Opencode both needed it. |
-| `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, shared unpublished-unit/completion lineage codec in `save_group.rs`, explicit evidence serialization, physical source identity/construction, shared framing validation and bounded terminal-discovery progress for sync-engine, chunked semantic checkpoints, shared read/write admission and shutdown ownership, the Tokio streaming commit clock adapter, and the ownership snapshot file `ownership.sqlite3`: `ownership/blocking.rs` owns instance admission and physical job/input cleanup; sibling `ownership/tests.rs` holds queue, cancellation, poison and runtime watchdog regressions. |
+| `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, shared unpublished-unit/completion lineage codec in `save_group.rs`, explicit evidence serialization, physical source identity/construction, shared framing validation and bounded terminal-discovery progress for sync-engine, chunked semantic checkpoints, shared read/write admission and shutdown ownership, the Tokio streaming commit clock adapter, and the ownership snapshot file `ownership.sqlite3`: `nessa-local-storage::physical_operation` owns physical admission and captured cleanup, with an independent Worker per adapter; sibling `ownership/tests.rs` holds queue, cancellation, poison and runtime watchdog regressions. |
 | `infrastructure/json_rpc/`, `process.rs`, `model_metadata_json.rs` | Framing, process supervision, and model catalog parsing. |
 | `infrastructure/clock.rs` | The clock every ACP protocol deadline is measured on: `RuntimeClock` from composition, and `tests/infrastructure/manual_clock.rs` in tests, which moves only when the test moves it. |
 | `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. SDK ownership publication interleavings use independent audit gates in `tests/application/agent_execution/subagents/publication.rs`; pure targeted-discard and absence-token correlation cases remain in `tests/domain/agent_execution/ownership.rs`. Public memory binding/retry/reset observations live in `tests/infrastructure/session_storage/memory.rs`; `record.rs` owns public writer/watch/interruption/retry cases, `record_source.rs` owns publication/restored-extension cases, `discovery.rs` owns bounded query ordering/physical faults, and `save_group.rs` owns emitted checkpoint contradictions. Their boundary fixture module constructs exported immutable data and obtains actual producer receipts. All are rooted from the external public storage integration module; the inherited internal discovery fixture remains separate. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
@@ -492,6 +492,11 @@ the gateway keeps those effects behind its own application port. See the
 `crates/nessa-local-storage` owns native OS private-file mechanics shared by the
 local auth, SDK session storage, and desktop credential adapters. It has no auth/domain policy
 or Tauri dependency; callers inject the resulting adapters through composition.
+Its default-off `physical-operation` feature owns shared Tokio admission and
+captured-cleanup lifetime in `src/physical_operation.rs`. SDK/server adapters own
+independent Worker instances and their typed port conversions. Central mechanic
+tests live beside that source; source-included test-only capture/OS fixtures live
+in `tests/support/physical_operation.rs`.
 Each primitive comes in two forms: a path-based one for a directory whose whole
 path the caller trusts, and a `_beneath` one that walks a relative path down
 from an already-verified root, refusing anything that is not a private
@@ -790,8 +795,9 @@ generation, refresh and revoke (ADR 392): the domain statechart, the
 owner that fences a URL change before the live set is replaced, the
 transport adapter that names an admitted token for the HTTP session, HTTPS
 discovery and token calls, the loopback callback, and the non-secret
-record beside the sealed token files. Private `infrastructure/blocking.rs` serves
-`FileRecords` and `FileAuthorizationAudit` with one physical slot per instance;
+record beside the sealed token files. The optional local-storage
+`physical_operation` capability serves `FileRecords` and `FileAuthorizationAudit`
+with one physical slot per instance;
 `records/tests.rs` and `audit/tests.rs` exercise actual file effects and input cleanup.
 Manual ignored real-file benchmarks live under each crate’s `tests/` owning
 `session_storage` or `mcp_authorization/infrastructure` feature and link production

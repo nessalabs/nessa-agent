@@ -1,0 +1,9 @@
+   Compiling nessa-local-storage v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-local-storage)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.42s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_local_storage-9b91eeac6b4e752d)
+
+running 1 test
+test physical_operation::tests::detached_call_fault_payload_is_not_dropped ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out; finished in 0.21s
+

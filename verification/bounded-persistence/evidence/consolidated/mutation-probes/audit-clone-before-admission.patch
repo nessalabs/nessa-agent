@@ -1,0 +1,17 @@
+--- a/crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs
++++ b/crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs
+@@ -44,12 +44,12 @@
+ #[async_trait]
+ impl AuthorizationAudit for FileAuthorizationAudit {
+     async fn record(&self, record: &AuthAuditRecord) -> Result<(), AuditFailure> {
+-        let permit = self.worker.admit().await.map_err(|_| AuditFailure)?;
+-        let state = self.state.clone();
+         #[cfg(not(test))]
+         let record = record.clone();
+         #[cfg(test)]
+         let record = self.probe.clone_input(|| record.clone());
++        let permit = self.worker.admit().await.map_err(|_| AuditFailure)?;
++        let state = self.state.clone();
+         let operation = move || state.record(&record);
+         #[cfg(test)]
+         let operation = self.probe.wrap(operation);
