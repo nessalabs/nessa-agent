@@ -1,0 +1,10 @@
+--- a/crates/nessa-sdk/src/application/agent_execution/subagents/root.rs
++++ b/crates/nessa-sdk/src/application/agent_execution/subagents/root.rs
+@@ proposed correction, not applied @@
+-        })?
+-        .ok_or(OwnershipFailure::Incomplete)?;
++        })?;
++    let Some(token) = token else {
++        // A binding won the admission scope; the existing drain must reinspect.
++        return Ok(());
++    };
