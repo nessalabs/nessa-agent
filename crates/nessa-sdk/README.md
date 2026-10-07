@@ -231,7 +231,7 @@ automatic session storage, hooks, invocation, and UI integration.
   `hooks` typed callbacks registered on Agent,
   `executions` the request/controller/event projections and mandatory execution audit port,
   `permissions` attribution and answer/cancellation evidence, and `tools` the original review input.
-  The `caller_wake` module keeps a panic from a caller's `Waker` inside the
+  The `caller_wake` module contains caller `Waker` wake and destruction faults inside the
   waits listed in [Caller wakers](docs/agent_execution/lifecycle.md#caller-wakers).
   It is visible inside this crate and is not a public export. Agent waits and
   the infrastructure waits in that table — MCP sessions, process cleanup,

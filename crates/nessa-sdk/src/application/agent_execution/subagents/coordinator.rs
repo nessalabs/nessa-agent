@@ -297,11 +297,18 @@ impl OwnershipCoordinator {
         let waiter = format!("owned spawn {}", command.request_id.as_str());
         let command = command.clone();
         tokio::spawn(async move {
-            let observed = effect(|| shared.drive_spawn(command), |result| result).await;
+            let observed = effect(
+                "spawn_worker",
+                || shared.drive_spawn(command),
+                |result| result,
+            )
+            .await;
             let result = match observed.output {
-                Some(result) if !observed.faulted => result,
+                Some(Err(error)) => Err(error),
+                Some(Ok(value)) if !observed.faulted => Ok(value),
                 _ => {
                     let _ = effect(
+                        "spawn_recovery",
                         || async {
                             let closing = shared.revoke_request(&request);
                             shared.persist_revocation(closing).await;
@@ -879,6 +886,7 @@ impl Shared {
         });
         let mut preparation = None;
         let observed = effect(
+            "child_preparation",
             || {
                 self.factory.prepare(PrepareRequest {
                     owned_lifetime,
@@ -955,7 +963,7 @@ impl Shared {
             },
         )
         .await;
-        if observed.faulted {
+        if observed.faulted && !matches!(&observed.output, Some(Err(_))) {
             let closing = self.revoke_child(&admitted.child);
             self.persist_revocation(closing).await;
             let _ = self
@@ -973,7 +981,7 @@ impl Shared {
                 .await;
             return Err(OwnershipFailure::Startup(PortFailure::Uncertain));
         }
-        let prepared = observed.output.expect("nonfaulted factory output");
+        let prepared = observed.output.expect("captured factory output");
         let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(failure) => {
@@ -1048,6 +1056,7 @@ impl Shared {
         self.advance(&command.request_id, SpawnProgress::Attached)
             .await?;
         let submitted = effect(
+            "initial_submission",
             || prepared.submit.submit(&command.task, &command.request_id),
             |result| {
                 result.map(|receipt| {
@@ -1073,13 +1082,13 @@ impl Shared {
             },
         )
         .await;
-        if submitted.faulted {
+        if submitted.faulted && !matches!(&submitted.output, Some(Err(_))) {
             let closing = self.revoke_child(&admitted.child);
             self.persist_revocation(closing).await;
             self.mark_unconfirmed(&command.request_id).await;
             return Err(OwnershipFailure::Submission(PortFailure::Uncertain));
         }
-        match submitted.output.expect("nonfaulted submit output") {
+        match submitted.output.expect("captured submit output") {
             Ok(installed) => {
                 let (evidence, token) = installed?;
                 self.publish_evidence(&evidence, &token, Some(&command.request_id))
@@ -1146,6 +1155,7 @@ impl Shared {
             return Err(OwnershipFailure::Incomplete);
         };
         let observed = effect(
+            "resource_close",
             || resources.close(&cause, &initiator),
             |report| {
                 self.install_report(&root, &operation, target, report)
@@ -1154,10 +1164,11 @@ impl Shared {
         )
         .await;
         self.notify.notify_waiters();
-        if observed.faulted {
-            return Err(OwnershipFailure::Incomplete);
-        }
-        let report = observed.output.expect("nonfaulted close output")?;
+        let report = match observed.output {
+            Some(Err(error)) => return Err(error),
+            Some(Ok(report)) if !observed.faulted => report,
+            _ => return Err(OwnershipFailure::Incomplete),
+        };
         if report.physical != PhysicalFact::Released
             || report.evidence != EvidenceFact::Acknowledged
         {
@@ -1251,6 +1262,7 @@ impl Shared {
         let mut failure = None;
         for record in records {
             let observed = effect(
+                "close_observation_audit",
                 || self.audit.record(&record),
                 |result| {
                     let acknowledgement = if result.is_ok() {
@@ -1266,10 +1278,10 @@ impl Shared {
                 },
             )
             .await;
-            let result = if observed.faulted {
-                Err(OwnershipFailure::Audit(PortFailure::Uncertain))
-            } else {
-                observed.output.expect("nonfaulted observation output")
+            let result = match observed.output {
+                Some(Err(error)) => Err(error),
+                Some(Ok(value)) if !observed.faulted => Ok(value),
+                _ => Err(OwnershipFailure::Audit(PortFailure::Uncertain)),
             };
             if let Err(error) = result {
                 failure.get_or_insert(error);
@@ -1301,6 +1313,7 @@ impl Shared {
         });
         if !already_acknowledged {
             let observed = effect(
+                "close_completion_audit",
                 || self.audit.record(token.evidence()),
                 |result| {
                     self.with_graph(|graph| {
@@ -1318,11 +1331,12 @@ impl Shared {
                 },
             )
             .await;
-            if observed.faulted {
-                let _ = self.commit_snapshot().await;
-                return Err(OwnershipFailure::Audit(PortFailure::Uncertain));
-            }
-            if let Err(error) = observed.output.expect("nonfaulted completion output") {
+            let result = match observed.output {
+                Some(Err(error)) => Err(error),
+                Some(Ok(value)) if !observed.faulted => Ok(value),
+                _ => Err(OwnershipFailure::Audit(PortFailure::Uncertain)),
+            };
+            if let Err(error) = result {
                 let _ = self.commit_snapshot().await;
                 return Err(error);
             }
@@ -1333,11 +1347,16 @@ impl Shared {
     }
 
     async fn record_audit(&self, evidence: &OwnershipEvidence) -> Result<(), PortFailure> {
-        let observed = effect(|| self.audit.record(evidence), |result| result).await;
-        if observed.faulted {
-            Err(PortFailure::Uncertain)
-        } else {
-            observed.output.expect("nonfaulted audit output")
+        let observed = effect(
+            "ownership_audit",
+            || self.audit.record(evidence),
+            |result| result,
+        )
+        .await;
+        match observed.output {
+            Some(Err(error)) => Err(error),
+            Some(Ok(value)) if !observed.faulted => Ok(value),
+            _ => Err(PortFailure::Uncertain),
         }
     }
 
@@ -1404,6 +1423,7 @@ impl Shared {
             return self.persist_token_evidence(evidence, Some(token)).await;
         }
         let audit = effect(
+            "permission_audit",
             || self.audit.record(evidence),
             |result| {
                 if result.is_ok() {
@@ -1418,10 +1438,10 @@ impl Shared {
             },
         )
         .await;
-        let audit = if audit.faulted {
-            Err(PortFailure::Uncertain)
-        } else {
-            audit.output.expect("nonfaulted permission audit")
+        let audit = match audit.output {
+            Some(Err(error)) => Err(error),
+            Some(Ok(value)) if !audit.faulted => Ok(value),
+            _ => Err(PortFailure::Uncertain),
         };
         match audit {
             Ok(()) => {
@@ -1498,6 +1518,7 @@ impl Shared {
             return Ok(());
         }
         let observed = effect(
+            "ownership_snapshot_write",
             || self.store.write(&snapshot),
             |result| {
                 if result.is_ok() {
@@ -1508,10 +1529,10 @@ impl Shared {
             },
         )
         .await;
-        if observed.faulted {
-            Err(PortFailure::Uncertain)
-        } else {
-            observed.output.expect("nonfaulted store output")
+        match observed.output {
+            Some(Err(error)) => Err(error),
+            Some(Ok(value)) if !observed.faulted => Ok(value),
+            _ => Err(PortFailure::Uncertain),
         }
     }
 
@@ -1614,6 +1635,7 @@ impl Shared {
         token: Option<&PublicationToken>,
     ) -> Result<(), OwnershipFailure> {
         let observed = effect(
+            "close_intent_audit",
             || self.audit.record(evidence),
             |result| {
                 if result.is_ok() {
@@ -1630,10 +1652,10 @@ impl Shared {
             },
         )
         .await;
-        let audit = if observed.faulted {
-            Err(PortFailure::Uncertain)
-        } else {
-            observed.output.expect("nonfaulted safety audit")
+        let audit = match observed.output {
+            Some(Err(error)) => Err(error),
+            Some(Ok(value)) if !observed.faulted => Ok(value),
+            _ => Err(PortFailure::Uncertain),
         };
         if audit.is_ok() {
             if let Some(token) = token {
@@ -1783,6 +1805,7 @@ impl Shared {
         let shared = Arc::clone(self);
         tokio::spawn(async move {
             let observed = effect(
+                "close_worker",
                 || async {
                     let committed = match intent {
                         Some(evidence) => shared.persist_evidence(&evidence).await,
@@ -1797,10 +1820,10 @@ impl Shared {
                 |result| result,
             )
             .await;
-            let result = if observed.faulted {
-                Err(OwnershipFailure::Incomplete)
-            } else {
-                observed.output.expect("nonfaulted drain output")
+            let result = match observed.output {
+                Some(Err(error)) => Err(error),
+                Some(Ok(value)) if !observed.faulted => Ok(value),
+                _ => Err(OwnershipFailure::Incomplete),
             };
             sender.send_replace(Some(result));
         });
@@ -1812,9 +1835,7 @@ impl Shared {
             let pending = graph.physical_targets(root);
             let mut claimed = self.claimed.lock().expect("close claims");
             for id in pending {
-                if graph.physical(root, &id) != Some(PhysicalFact::Released) {
-                    claimed.remove(&id);
-                }
+                claimed.remove(&id);
             }
         });
     }
@@ -1921,9 +1942,8 @@ impl Shared {
 
     fn drain_blocked(&self, root: &AgentLifetimeId, external: &AtomicBool) -> bool {
         let targets = self.with_graph(|graph| graph.physical_targets(root));
-        let external_root = external.load(Ordering::Acquire)
-            && targets.iter().any(|target| target == root)
-            && self.with_graph(|graph| graph.physical(root, root) != Some(PhysicalFact::Released));
+        let external_root =
+            external.load(Ordering::Acquire) && targets.iter().any(|target| target == root);
         if external_root || self.subtree_inflight(root) {
             return true;
         }

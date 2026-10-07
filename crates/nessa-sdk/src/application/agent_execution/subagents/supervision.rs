@@ -22,6 +22,7 @@ pub(super) fn synchronous<T>(operation: impl FnOnce() -> T) -> Option<T> {
 }
 
 pub(super) async fn effect<F: Future, T>(
+    operation: &'static str,
     make: impl FnOnce() -> F,
     install: impl FnOnce(F::Output) -> T,
 ) -> Observed<T> {
@@ -41,6 +42,13 @@ pub(super) async fn effect<F: Future, T>(
     .await;
     let output = ready.and_then(|output| synchronous(|| install(output)));
     let dropped = synchronous(|| drop(future)).is_some();
+    if !dropped {
+        tracing::warn!(
+            operation,
+            phase = "effect_future_drop",
+            "injected effect future destruction panicked; captured output is retained"
+        );
+    }
     Observed {
         faulted: output.is_none() || !dropped,
         output,

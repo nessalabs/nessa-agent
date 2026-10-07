@@ -66,6 +66,9 @@ fn three_first_observations_survive_rejected_audits_and_release_advancement() {
         restored
             .acknowledge_observation(record, EvidenceFact::Acknowledged)
             .unwrap();
+        restored
+            .acknowledge_observation(record, EvidenceFact::Failed)
+            .unwrap();
     }
     assert_eq!(
         restored.lifetime_state(&life("root")),
@@ -129,6 +132,22 @@ fn failed_provider_witness_cannot_acknowledge_release_and_legitimate_improvement
     assert!(graph
         .prepare_completion(&life("root"), &close_id("close"))
         .is_err());
+    let before = graph.snapshot();
+    assert_eq!(
+        graph.apply_report(
+            &life("root"),
+            &close_id("close"),
+            &life("root"),
+            PhysicalFact::Failed,
+            EvidenceFact::Acknowledged
+        ),
+        Err(OwnershipError::StaleOutcome)
+    );
+    assert_eq!(
+        graph.snapshot(),
+        before,
+        "Released cannot move backward while still Closing"
+    );
     let again = observed(
         &mut graph,
         PhysicalFact::Released,
