@@ -198,10 +198,15 @@ export function zonesAt(
   const hold = (side: Side) =>
     side === now ? zoneHold : now === "center" ? -zoneHold : 0
   // A plain heading keeps the pointer out of the sides across it, but does not
-  // throw it out of the one it is in: jitter across a boundary holds.
+  // throw it out of the one it is in: jitter across a boundary holds. The
+  // hold still stops at the midpoint, so a narrow pane's centre offers Swap.
   const candidates = sides.filter(
     (side) =>
-      distance[side] < reach(side) + hold(side) &&
+      distance[side] <
+        Math.min(
+          reach(side) + hold(side),
+          (across[side] === "x" ? size.width : size.height) / 2,
+        ) &&
       (plain === null ||
         across[side] === plain ||
         side === now ||

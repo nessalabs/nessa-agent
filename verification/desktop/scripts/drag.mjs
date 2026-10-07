@@ -60,6 +60,7 @@
  */
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
+import { register } from "tsx/esm/api"
 import {
   attempt,
   CannotRun,
@@ -94,6 +95,9 @@ import {
 } from "./lib/workspace.mjs"
 
 const tolerance = 2
+
+register()
+const { restAfter } = await import("../../../src/desktop/split-panes/model/drop.ts")
 
 /**
  * How long the copy's glide to its centre may take: `--desktop-base`, read
@@ -446,13 +450,21 @@ const checks = {
   "sideways-top": async (page, layout) => {
     const [, middle] = await threeColumns(page, layout)
     const failures = []
+    const observations = []
     for (const dy of [30, 50, 90]) {
       await lift(page, 2)
       await page.mouse.move(middle.x + middle.w + 30, middle.y + dy, { steps: 10 })
       const zones = await recordZones(page)
       await page.mouse.move(middle.x + middle.w * 0.45, middle.y + dy, { steps: 30 })
       await frames(page, 2)
-      const said = await zones.take()
+      const recorded = await zones.take()
+      observations.push({ dy, recorded })
+      // A sweep's direction is judged while moving. A late rendering frame
+      // may arrive after the model's legitimate rest transition at the edge.
+      // These timestamps attribute observation, not the model's decision.
+      const said = recorded
+        .filter((entry) => entry.at - entry.lastMoveAt < restAfter)
+        .map((entry) => entry.said)
       if (!said.length)
         failures.push(`sweeping left at top+${dy}px announced no zone at all`)
       if (said.some((z) => zoneSaid.vertical.test(z)))
@@ -461,7 +473,7 @@ const checks = {
         )
       await letGo(page, { escape: true })
     }
-    return { failures }
+    return { failures, observations }
   },
   "boundary-jitter": async (page, layout) => {
     const list = await fourPanes(page, layout)
@@ -483,7 +495,7 @@ const checks = {
     for (let i = 0; i < 40; i++)
       await page.mouse.move(x + (i % 2 ? 6 : -6), target.y + target.h / 2)
     await frames(page, 2)
-    const said = await zones.take()
+    const said = (await zones.take()).map((entry) => entry.said)
     const current = await page.locator(css.dropAnnouncer).first().textContent()
     await letGo(page, { escape: true })
     if (!said.length && !current)
@@ -747,7 +759,7 @@ const checks = {
       })
       // Past `restAfter`, so a zone would have settled if one were offered.
       await page.waitForTimeout(300)
-      const said = await zones.take()
+      const said = (await zones.take()).map((entry) => entry.said)
       const placeholders = await page.locator(css.dragPlaceholder).count()
       await letGo(page)
       const failures = []
@@ -908,7 +920,7 @@ Object.assign(checks, {
         await page.mouse.move(row.x + 20 + i * 4, row.y + row.h / 2 + i)
       // Past `restAfter`, and past the reveal's own hide delay: pacing, not a wait for state.
       await page.waitForTimeout(500)
-      const said = await zones.take()
+      const said = (await zones.take()).map((entry) => entry.said)
       const placeholders = await page.locator(css.dragPlaceholder).count()
       const carried = (await dragResidue(page)).copies
       const stayed = await peeked()

@@ -145,3 +145,11 @@ omits decoration, and alternates with the unchanged source under two busy
 workers. It is not shipped and does not establish the only source of layout
 cost; all source was exactly restored. All comparisons and unresolved failures
 remain part of the investigation.
+
+## Midpoint and drag-verifier follow-up
+
+The narrow-pane midpoint regression fails before the final reach cap and passes afterward; all 110 model tests and 22 DOM drag tests pass. The complete frontend gate passes 287 files / 3,799 tests and production build. Hysteresis remains bounded by the pane midpoint.
+
+The zone recorder now owns its observer/listener until one-shot `take`, ignores duplicate coordinates as the model does, and retains observation timestamps. Native duplicate-coordinate probes pass both engines. These timestamps identify mutation observation, not model decision time; delayed observations remain in raw results. Delayed resting transitions pass while an injected moving vertical announcement and a filter revert fail.
+
+The first browser follow-up accidentally reused a development server from another checkout on port 1438. Its results are excluded from this branch’s verification. The corrected run uses this worktree’s explicitly owned server. The performance gate remains open.

@@ -170,24 +170,43 @@ export function switchLayout(page, layout) {
 
 /** Starts recording the drop zones the drag announces; `take()` returns and clears them. */
 export async function recordZones(page) {
-  const found = await page.evaluate((sel) => {
+  const recorder = await page.evaluateHandle((sel) => {
     const status = document.querySelector(sel)
-    if (!status) return false
-    window.__verifyZones = []
-    new MutationObserver(() => window.__verifyZones.push(status.textContent)).observe(
-      status,
-      {
-        childList: true,
-        characterData: true,
-        subtree: true,
+    if (!status) return null
+    const records = []
+    let lastMoveAt = performance.now()
+    let position
+    const moved = (event) => {
+      if (position?.x === event.clientX && position?.y === event.clientY) return
+      position = { x: event.clientX, y: event.clientY }
+      lastMoveAt = event.timeStamp
+    }
+    document.addEventListener("pointermove", moved, true)
+    const observer = new MutationObserver(() => {
+      if (status.textContent)
+        records.push({ said: status.textContent, at: performance.now(), lastMoveAt })
+    })
+    observer.observe(status, { childList: true, characterData: true, subtree: true })
+    return {
+      take() {
+        observer.disconnect()
+        document.removeEventListener("pointermove", moved, true)
+        return records.splice(0)
       },
-    )
-    return true
+    }
   }, css.dropAnnouncer)
-  if (!found) throw new CannotRun(`no drop announcer (${css.dropAnnouncer})`)
+  if (!(await recorder.evaluate((value) => value !== null))) {
+    await recorder.dispose()
+    throw new CannotRun(`no drop announcer (${css.dropAnnouncer})`)
+  }
   return {
-    take: () => page.evaluate(() => window.__verifyZones.splice(0).filter(Boolean)),
-    clear: () => page.evaluate(() => (window.__verifyZones = [])),
+    take: async () => {
+      try {
+        return await recorder.evaluate((value) => value.take())
+      } finally {
+        await recorder.dispose()
+      }
+    },
   }
 }
 
