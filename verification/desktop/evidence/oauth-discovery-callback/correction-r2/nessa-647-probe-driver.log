@@ -1,0 +1,12 @@
+MUTATION LANDED persistent-policy 'if (pattern) opened.reclassifyHeld((line) => pattern.test(line), (line) => line)'
+RESULT persistent-policy 1 CAUGHT True
+RESTORED persistent-policy
+MUTATION LANDED live-proof 'void mountState'
+RESULT live-proof 1 CAUGHT True
+RESTORED live-proof
+MUTATION LANDED exact-path '^requestfailed: ${escaped}/\\\\S*mcp-resources'
+RESULT exact-path 1 CAUGHT True
+RESTORED exact-path
+MUTATION LANDED escaped-origin '  const escaped = own'
+RESULT escaped-origin 1 CAUGHT True
+RESTORED escaped-origin

@@ -1,0 +1,95 @@
+▶ recordFailedRequest
+  ✔ a 200 whose content-length was fully delivered is harmless only (#473) (2.202633ms)
+  ✔ a 200 is an error when the body is short, or the size was not reported (0.543287ms)
+  ✔ a later size report moves that same line to harmless, and a short body does not (0.285029ms)
+  ✔ a later size report does not excuse another origin or another error (0.29259ms)
+  ✔ only an unlabelled same-origin /mcp-resources abort is the mount-went-live case (0.413772ms)
+  ✔ #647: the live mount pattern is literal origin and exact endpoint (0.43876ms)
+  ✔ F1′: the window's /browser/check, aborted after a 204 (its body never read), is harmless only (0.168663ms)
+  ✔ a 2xx other than a full 200 or an empty 204 is an error (0.215254ms)
+  ✔ F2: a response never received (aborted before headers) is an error only (0.210647ms)
+  ✔ F3: a response outside 2xx is an error only, at both bounds (0.361333ms)
+  ✔ F4: another origin is an error only (0.18621ms)
+  ✔ F4: any other error text is an error only (0.287122ms)
+  ✔ F4: a page with no origin (about:blank) leaves every failure an error (0.200522ms)
+  ✔ records nothing for the fresh browser's /favicon.ico, as before (0.141613ms)
+✔ recordFailedRequest (7.657055ms)
+▶ settleSizeReports
+  ✔ lets a full-body report leave errors before the caller reads them (0.500222ms)
+  ✔ leaves the line an error when the size report does not arrive (30.892847ms)
+  ✔ a late full body does not excuse a later identical line (31.387572ms)
+  ✔ leaves the line an error when the body is short (0.57159ms)
+✔ settleSizeReports (63.793825ms)
+▶ runAndClose
+  ✔ keeps the body's error when close also rejects (1.535469ms)
+  ✔ resolves the body's value when close rejects (0.162134ms)
+✔ runAndClose (1.801379ms)
+ok    apps
+FAIL  apps
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  console
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  apps
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  console
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  apps
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  console
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  step
+        - an assertion
+        - console.error: during the step
+FAIL  next
+        - console.error: between steps
+FAIL  console [chromium columns]
+        - console.error: after the last step
+ERROR open
+        ! could not run
+ERROR later
+        ! not run: the page did not open
+FAIL  console [webkit]
+        - console.error: while opening
+FAIL  console [chromium]
+        - pageerror: boom
+FAIL  step
+        - console.error: real
+FAIL  release
+        - console.error: real
+FAIL  chromium
+        - console.error: chromium
+FAIL  webkit
+        - console.error: webkit
+✖ #647: live mount proof classifies a late abort before close, keeping rejected neighbors (4.040682ms)
+✔ #647: an absent live mount proof leaves held and late aborts as failures (0.734264ms)
+✔ a page's lines are reported once, on the result that follows them (1.526346ms)
+✔ scripts do not splice a page's line arrays (5.869467ms)
+ℹ tests 24
+ℹ suites 3
+ℹ pass 23
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 483.761701
+
+✖ failing tests:
+
+test at verification/desktop/scripts/lib/page-lines.test.mjs:35:1
+✖ #647: live mount proof classifies a late abort before close, keeping rejected neighbors (4.040682ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  [] !== undefined
+  
+      at TestContext.<anonymous> (file:///workspace/nessa-agent-oauth-callback/verification/desktop/scripts/lib/page-lines.test.mjs:53:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: undefined,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

@@ -1,0 +1,152 @@
+Scope: all 2 workspace projects
+✓ Lockfile passes supply-chain policies (verified 2h ago)
+Lockfile is up to date, resolution step is skipped
+Already up to date
+
+. preinstall$ node scripts/ensure-nessa-ui.mjs
+. preinstall: Scope: 2 of 4 workspace projects
+. preinstall: ✓ Lockfile passes supply-chain policies (verified 2h ago)
+. preinstall: Lockfile is up to date, resolution step is skipped
+. preinstall: Done in 1.4s using pnpm v11.19.0
+. preinstall: $ pnpm clean && tsup && tailwindcss -i ./src/theme.css -o ./dist/theme.css --minify && tailwindcss -i ./src/styles.css -o ./dist/styles.css --minify && tailwindcss -i ./src/app.css -o ./dist/app.css --minify
+. preinstall: $ rimraf dist
+. preinstall: CLI Building entry: src/index.ts
+. preinstall: CLI Using tsconfig: tsconfig.json
+. preinstall: CLI tsup v8.5.1
+. preinstall: CLI Using tsup config: /workspace/nessa-agent/.vendor/nessa_ui/packages/react/tsup.config.ts
+. preinstall: CLI Target: es2022
+. preinstall: ESM Build start
+. preinstall: dist/math-block-F3JJ4LZN.js (1:0): Module level directives cause errors when bundled, "use client" in "dist/math-block-F3JJ4LZN.js" was ignored.
+. preinstall: dist/mermaid-diagram-XPR33DVX.js (1:0): Module level directives cause errors when bundled, "use client" in "dist/mermaid-diagram-XPR33DVX.js" was ignored.
+. preinstall: DTS Build start
+. preinstall: dist/tool-call-diff-surface-HJ5E66UF.js (1:0): Module level directives cause errors when bundled, "use client" in "dist/tool-call-diff-surface-HJ5E66UF.js" was ignored.
+. preinstall: dist/index.js (1:0): Module level directives cause errors when bundled, "use client" in "dist/index.js" was ignored.
+. preinstall: ESM dist/math-block-F3JJ4LZN.js                 174.00 B
+. preinstall: ESM dist/mermaid-diagram-XPR33DVX.js            189.00 B
+. preinstall: ESM dist/chunk-3R55FVQF.js                      10.46 KB
+. preinstall: ESM dist/tool-call-diff-surface-HJ5E66UF.js     765.00 B
+. preinstall: ESM dist/chunk-6YB5C7XV.js                      2.09 KB
+. preinstall: ESM dist/chunk-2LIL3LWJ.js                      33.05 KB
+. preinstall: ESM dist/math-block-F3JJ4LZN.js.map             83.00 B
+. preinstall: ESM dist/index.js                               1.38 MB
+. preinstall: ESM dist/chunk-3R55FVQF.js.map                  38.08 KB
+. preinstall: ESM dist/chunk-6YB5C7XV.js.map                  4.70 KB
+. preinstall: ESM dist/tool-call-diff-surface-HJ5E66UF.js.map 2.22 KB
+. preinstall: ESM dist/chunk-2LIL3LWJ.js.map                  88.17 KB
+. preinstall: ESM dist/mermaid-diagram-XPR33DVX.js.map        88.00 B
+. preinstall: ESM dist/index.js.map                           3.63 MB
+. preinstall: ESM ⚡️ Build success in 1710ms
+. preinstall: DTS ⚡️ Build success in 8758ms
+. preinstall: DTS dist/index.d.ts 615.53 KB
+. preinstall: ≈ tailwindcss v4.3.3
+. preinstall: Done in 52ms
+. preinstall: ≈ tailwindcss v4.3.3
+. preinstall: Done in 182ms
+. preinstall: ≈ tailwindcss v4.3.3
+. preinstall: Done in 179ms
+. preinstall: $ pnpm clean && tsup
+. preinstall: $ rimraf dist
+. preinstall: CLI Building entry: {"index":"src/contract.ts","transcript":"src/transcript/index.ts"}
+. preinstall: CLI Using tsconfig: tsconfig.json
+. preinstall: CLI tsup v8.5.1
+. preinstall: CLI Using tsup config: /workspace/nessa-agent/.vendor/nessa_ui/packages/agent-stream/tsup.config.ts
+. preinstall: CLI Target: es2022
+. preinstall: ESM Build start
+. preinstall: DTS Build start
+. preinstall: ESM dist/chunk-ZBMCOM6W.js     1.86 KB
+. preinstall: ESM dist/transcript.js         14.88 KB
+. preinstall: ESM dist/index.js              243.91 KB
+. preinstall: ESM dist/chunk-ZBMCOM6W.js.map 24.83 KB
+. preinstall: ESM dist/transcript.js.map     43.26 KB
+. preinstall: ESM dist/index.js.map          617.34 KB
+. preinstall: ESM ⚡️ Build success in 452ms
+. preinstall: DTS ⚡️ Build success in 2542ms
+. preinstall: DTS dist/index.d.ts           155.33 KB
+. preinstall: DTS dist/transcript.d.ts      11.81 KB
+. preinstall: DTS dist/events-lkt3ADfL.d.ts 28.21 KB
+. preinstall: Done
+Done in 17.5s using pnpm v11.19.0
+$ node --test scripts/architecture/*.test.mjs && node scripts/check-architecture.mjs
+✔ the leading digits are the number, however many there are (0.838872ms)
+✔ padding is spelling, not identity (1.064802ms)
+✔ an issue-numbered record does not collide with the old block (0.595696ms)
+✔ one number used twice is reported with both files (0.307583ms)
+✔ todo and done share one sequence, so a number survives being implemented (0.143656ms)
+✔ every clash is reported, not the first (0.147151ms)
+✔ the records on disk use each number once (0.269986ms)
+✔ the ceiling holds at every size the window can be (3.738904ms)
+✔ the guess before the host reports a size is the window, not the screen (2.074972ms)
+✔ the shipped stylesheet declares the whole contract (1.784204ms)
+✔ the ways the ceiling is actually lost are all refused (0.657319ms)
+✔ the shorthand the build itself emits is a scrolling box (0.311248ms)
+✔ a comment naming the box is not a rule for it (0.171248ms)
+✔ half the panel, a fixed number, and no ceiling at all are refused (0.325389ms)
+✔ each vertical refuses every later one, in every form of import (4.548342ms)
+✔ each vertical imports every earlier one (1.253846ms)
+✔ a vertical imports itself (0.251508ms)
+✔ what lies outside the four verticals is not this rule's business (0.273181ms)
+✔ an import named in a comment is not an import (0.270246ms)
+✔ every way a module is reached from text is an import (1.812927ms)
+✔ a string that only names a path is not an import (0.251749ms)
+✔ an import written in a comment is documentation, not an import (0.13244ms)
+✔ a `//` or `/*` inside a string, template or regular expression is not a comment (0.46519ms)
+✔ a setup window builder that asks for no position passes (2.598869ms)
+✔ a builder position is rejected however it is spelled (0.455465ms)
+✔ the rule only reads the file that owns the builder (1.747969ms)
+✔ a builder that moves away takes its check with it (0.155163ms)
+✔ the shipped setup window asks the builder for no position (5.783069ms)
+✔ native desktop production boundaries require an immediate active cfg attribute (0.698671ms)
+✔ portable runtime identity rejects every immediate target cfg (0.147352ms)
+✔ domain rejects outward imports, grouped effects and runtime dependencies (2.400952ms)
+✔ domain may use the sync engine's domain values and nothing else of it (0.67155ms)
+✔ application may coordinate async ports but may not construct adapters (0.180782ms)
+✔ documentation and inward imports do not trigger failures (0.154052ms)
+✔ strings, raw strings, and nested block comments cannot forge Rust imports (0.262825ms)
+✔ Windows separators normalize before boundary classification (0.114102ms)
+✔ scanner discovers every Cargo workspace package and Tauri Rust root (54.607423ms)
+✔ domain may import pure address values but no net module or socket effects (0.459702ms)
+✔ an unrelated desktop workspace member does not taint a selected package (1.704304ms)
+✔ a direct desktop framework dependency is rejected (0.306831ms)
+✔ Tauri support and webview framework packages are rejected (0.400372ms)
+✔ a renamed transitive target dependency is resolved by package ID (0.2193ms)
+✔ a missing selected package makes the gate fail explicitly (0.217166ms)
+✔ a package on the selected crate's denylist is rejected, transitively (0.178409ms)
+✔ the device client stays portable and cannot reach the gateway, including renamed transitive edges (0.261143ms)
+✔ the gateway consumes the device client only through dev edges, even when renamed (0.330117ms)
+✔ gateway normal/build paths cannot reach the client transitively, while downstream dev edges are excluded (0.46557ms)
+✔ a first dev path cannot mask a later production path through the same package (0.562346ms)
+✔ a composition that puts the panel inside the gate passes (1.586176ms)
+✔ a composition that renders the panel on its own is rejected (0.714845ms)
+✔ a gate rendered beside the panel rather than around it is rejected (0.242174ms)
+✔ a gate given nothing to hand the choice to is rejected (0.19926ms)
+✔ the composition in this repository satisfies the rule (0.203797ms)
+✔ any other file is not this rule's business (0.101824ms)
+✔ a host imports the barrel, a model file, or — from a test — the testing entry (3.550551ms)
+✔ a host reaching past them is refused, however it imports (0.316156ms)
+✔ split panes import themselves, packages and the desktop's shared parts (0.499392ms)
+✔ split panes import no host (0.765752ms)
+✔ what is not a path into or out of split panes is not this rule's business (0.304308ms)
+✔ a forbidden import after a regular expression that holds `/*` is still caught (0.547434ms)
+✔ the script in this repository satisfies the rule (3.057129ms)
+✔ a process.exit below the entry point is a violation (0.425079ms)
+✔ the exit the entry point itself makes is allowed (0.177527ms)
+✔ an entry point that is not behind the guard is a violation (0.265659ms)
+✔ process.exit is matched on a word boundary (0.175143ms)
+✔ the rule reads only the script it is about (0.152299ms)
+✔ the script's own use of import.meta.url does not open the entry point (0.195073ms)
+✔ a selector returning the whole workspace is refused, however it is written (1.44932ms)
+✔ reading a part of the workspace is not refused (0.872202ms)
+✔ only the desktop window's product code is this rule's business (0.190517ms)
+✔ the desktop window in this repository satisfies the rule (35.515414ms)
+✔ blanks line, block and doc comments, keeping every other character where it was (1.077952ms)
+✔ keeps a `//` or `/*` inside a string, template or regular expression (0.616378ms)
+✔ reads a regular expression after a comment or a condition as one, so a `/*` in it hides nothing (0.469937ms)
+ℹ tests 74
+ℹ suites 0
+ℹ pass 74
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 357.952523
+architecture check passed

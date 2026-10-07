@@ -1,0 +1,287 @@
+{
+  "checkout": "/workspace/nessa-agent-oauth-callback",
+  "branch": "codex/624-629-oauth-callback",
+  "base": "e03e94c50ae025f9922a2f1d201ac0f63309ebcf",
+  "head": "09e2c8238199f03e04082ba1032495de5c94a5f8",
+  "clean": true,
+  "preserved_cff_base_head": "14667c5bc329e7b553463386dd55d7daf4b8ed45",
+  "intent": "Fix RFC8414 issuer-path discovery plus bounded complete loopback callback framing/concurrency; preserve original exact issuer binding and domain-only callback acceptance. Public complete_callback signature/answers unchanged. Adjacent #647 correction retains the proven live-mount abort policy for delayed browser evidence until page close.",
+  "files": [
+    "crates/nessa-server/src/mcp_authorization/application/discovery.rs",
+    "crates/nessa-server/src/mcp_authorization/application/mod.rs",
+    "crates/nessa-server/src/mcp_authorization/application/owner.rs",
+    "crates/nessa-server/src/mcp_authorization/application/ports.rs",
+    "crates/nessa-server/src/mcp_authorization/infrastructure/callback.rs",
+    "crates/nessa-server/src/mcp_authorization/infrastructure/memory.rs",
+    "crates/nessa-server/src/mcp_authorization/infrastructure/mod.rs",
+    "crates/nessa-server/tests/mcp_authorization/application/callback.rs",
+    "crates/nessa-server/tests/mcp_authorization/mod.rs",
+    "docs/adr/todo/392-remote-mcp-servers.md",
+    "verification/desktop/page-lines.md",
+    "verification/desktop/scripts/gateway-window.mjs",
+    "verification/desktop/scripts/lib/browser.mjs",
+    "verification/desktop/scripts/lib/browser.test.mjs",
+    "verification/desktop/scripts/lib/page-lines.test.mjs"
+  ],
+  "source_authorities": {
+    "discovery": "application/discovery.rs owns parsed issuer URL candidates; original identifier compared exactly into issuer_matches, consumed by unchanged domain DiscoveryAccepted",
+    "callback": "domain/machine.rs Command::Callback owns current state/resource/phase/consumption; application/owner.rs private AuthCallbackOutcome maps that same locked Decision and closes candidate receiver before terminal/accepted effects",
+    "bounds": "infrastructure/callback.rs owns four scoped connection futures including waiting candidate sends, one queued candidate, 4096-byte headers, two-second absolute connection budget and unchanged whole-attempt timeout",
+    "effects": "private prepared exchange keeps captured attempt/resource/endpoints; shared effect completion preserves existing typed exchange/publication failures"
+  },
+  "checks": [
+    {
+      "name": "fmt",
+      "result": "PASS",
+      "log": "/tmp/nessa-645-e03-fmt.log",
+      "source_head": "f55c460ee1fb09bd6ceec5e1844c45ae6c049eff",
+      "inheritance": "Rust source/tests/ADR unchanged byte-for-byte at final head (git diff --exit-code f55 HEAD -- crates docs/adr/todo/392-remote-mcp-servers.md PASS)"
+    },
+    {
+      "name": "six-package all-target Clippy -D warnings",
+      "result": "PASS",
+      "log": "/tmp/nessa-645-e03-clippy.log",
+      "source_head": "f55c460ee1fb09bd6ceec5e1844c45ae6c049eff",
+      "inheritance": "Rust source/tests/ADR unchanged byte-for-byte at final head (git diff --exit-code f55 HEAD -- crates docs/adr/todo/392-remote-mcp-servers.md PASS)"
+    },
+    {
+      "name": "architecture 74 tests and check",
+      "result": "PASS",
+      "log": "/tmp/nessa-645-e03-architecture.log",
+      "source_head": "f55c460ee1fb09bd6ceec5e1844c45ae6c049eff",
+      "inheritance": "Rust source/tests/ADR unchanged byte-for-byte at final head (git diff --exit-code f55 HEAD -- crates docs/adr/todo/392-remote-mcp-servers.md PASS)"
+    },
+    {
+      "name": "corrected real owner/listener regression",
+      "result": "PASS initial corrected source and restored final full assembled suite",
+      "log": "/tmp/nessa-645-e03-callback-restored-initial.log",
+      "source_head": "f55c460ee1fb09bd6ceec5e1844c45ae6c049eff",
+      "inheritance": "Rust source/tests/ADR unchanged byte-for-byte at final head (git diff --exit-code f55 HEAD -- crates docs/adr/todo/392-remote-mcp-servers.md PASS)"
+    },
+    {
+      "name": "six-package tests and doctests",
+      "result": "PASS; server1966/7 existing ignored, SDK954/13 existing ignored; complete six-package suite and doctests",
+      "log": "/tmp/nessa-645-e03-tests.log",
+      "source_head": "f55c460ee1fb09bd6ceec5e1844c45ae6c049eff",
+      "inheritance": "Rust source/tests/ADR unchanged byte-for-byte at final head (git diff --exit-code f55 HEAD -- crates docs/adr/todo/392-remote-mcp-servers.md PASS)"
+    },
+    {
+      "name": "Restored targeted browser/page-line Node tests",
+      "result": "24/24 PASS",
+      "log": "/tmp/nessa-647-targeted-restored.log"
+    },
+    {
+      "name": "Restored complete desktop verification Node tests",
+      "result": "147/147 PASS",
+      "log": "/tmp/nessa-647-desktop-node-tests.log"
+    },
+    {
+      "name": "ESLint src/packages/verification",
+      "result": "PASS",
+      "log": "/tmp/nessa-647-lint.log"
+    },
+    {
+      "name": "Prettier all five #647 files",
+      "result": "PASS",
+      "log": "/tmp/nessa-647-format-check.log"
+    },
+    {
+      "name": "Both-engine scripted browser verification",
+      "result": "PASS exit0; Chromium/WebKit MCP Apps16/16, gateway-window13/13, scripted scenarios8/8",
+      "source_head": "09e2c8238199f03e04082ba1032495de5c94a5f8",
+      "log": "/tmp/nessa-645-647-e03-scripted.log",
+      "summary": "/tmp/nessa-645-647-e03-scripted/pr-summary.md"
+    },
+    {
+      "name": "Clean final tree/base/source equality/diff check",
+      "result": "PASS; clean HEAD, merge-base e03, inherited Rust equality and git diff --check",
+      "source_head": "09e2c8238199f03e04082ba1032495de5c94a5f8"
+    }
+  ],
+  "mutation_probes": [
+    {
+      "probe": "oauth-prefix",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-oauth-prefix.log"
+    },
+    {
+      "probe": "exact-issuer",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-exact-issuer.log"
+    },
+    {
+      "probe": "issuer-query",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-issuer-query.log"
+    },
+    {
+      "probe": "lost-metadata",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-lost-metadata.log"
+    },
+    {
+      "probe": "partial-frame",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-partial-frame.log"
+    },
+    {
+      "probe": "header-limit",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-header-limit.log"
+    },
+    {
+      "probe": "duplicate-query",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-duplicate-query.log"
+    },
+    {
+      "probe": "complete-crlf",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-complete-crlf.log"
+    },
+    {
+      "probe": "bounded-connections",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-bounded-connections.log"
+    },
+    {
+      "probe": "connection-deadline",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-connection-deadline.log"
+    },
+    {
+      "probe": "pending-stale-continue",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-pending-stale-continue.log"
+    },
+    {
+      "probe": "terminal-stale-stop",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-terminal-stale-stop.log"
+    },
+    {
+      "probe": "early-receiver-drop",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-early-receiver-drop.log"
+    },
+    {
+      "probe": "response-failure",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-response-failure.log"
+    },
+    {
+      "probe": "receiver-cancellation",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-receiver-cancellation.log"
+    },
+    {
+      "probe": "whole-deadline",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-whole-deadline.log"
+    },
+    {
+      "probe": "fixed-secret-free-page",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-fixed-secret-free-page.log"
+    }
+  ],
+  "mutation_provenance": "Original 17 probes remain preserved at original cff-based implementation (14667c5b) with prior b8/d9 restoration evidence. New delayed-drop probe uses corrected completion-witness source assembled onto e03: actual edit verified, exit101 exact supervisor-completion timeout while exchange gated, restored/touched owner source. Final head differs from pre-probe corrected source only named candidate-close diagnostics/rustfmt; authoritative owner mutation target identical.",
+  "self_review": "Whole expanded 15-file base/head diff self-reviewed against canonical CODING_STANDARDS gates and authority/identity, domain invariants, admission/concurrency, failure/cleanup, input/output, resource bounds, public surface/organization, and field/layer agreement. Prior OAuth domain authority, private typed outcome/admission effects, exact issuer binding and bounded framing unchanged. Successful actual listener task completion proves teardown while exchange gated, with panic rejected. #647 ordering table first; browser.mjs sole exemption matcher; literal canonical origin + exact endpoint, query/fragment retained; registration requires actual apps live proof; existing page owner handles held/late/close once. Regex linear anchored construction, no generic framework/new dependency or production test switch. Four actual source probes catch persistence/live proof/path/origin authority; each restored/touched before final gates. Original17 and corrected delayed-drop evidence retained with source attribution. No unresolved self-review findings.",
+  "limitations": [
+    "Original Windows wait stage remains unknown; refused-connect delay was plausible, unconfirmed. Deterministic normal listener-task completion replaces OS refusal observation; Windows CI remains root release gate.",
+    "Local Linux Cargo evidence inherited from identical f55 Rust source; both-engine browser verification ran final09e source. No live third-party OAuth issuer.",
+    "Existing empty-stream revoke lifetime remains bounded by original whole-attempt timeout.",
+    "Architecture invocation-path ENOENT and initial Node assertion-shape development failure retained/dispositioned. Original f55 browser failure retained and resolved through647; no failed run silently replaced."
+  ],
+  "standards": "/workspace/nessa-agent-oauth-callback/CODING_STANDARDS.md",
+  "release": "Clean local freeze09e/e03. All applicable final gates PASS. No pushes. All owned verification processes complete and code/build slot released. Root assigns fresh whole-PR R2 reviews and owns PR/required CI/merge.",
+  "preserved_prior_candidate": "b8c3df35950c09a7aa59a468b0535099ec3ce9bc, branch codex/624-629-b8-proof",
+  "correction": {
+    "finding": "Windows CI run37606633793 job112743648013 failed the real listener owner test at anonymous wait_until timeout. Original wait stage cannot be identified from available log; delayed refused-connect timing is plausible, unconfirmed.",
+    "change": "ADR A3h written first. Shared private bind/spawn returns actual supervisor completion handle; production ignores it as before, cfg(test) crate-private accessor exposes only receipt. Test-local ConsentCallback retains receipt after real wrong-state/valid TCP callbacks. Require normal task completion before gated token exchange release. Every phase/candidate-close timeout names its stage.",
+    "proof": {
+      "exit": 101,
+      "caught": true,
+      "mutation": "let _ = self.finish_callback(admission).await;\n            drop(candidates);",
+      "log": "/tmp/nessa-645-delayed-drop-probe.log",
+      "assertion": "listener supervisor completion before exchange release",
+      "base": "e03e94c50ae025f9922a2f1d201ac0f63309ebcf",
+      "preserved_head": "b8c3df35950c09a7aa59a468b0535099ec3ce9bc"
+    },
+    "production": "No changed listener budget, whole-attempt deadline, framing/channel/concurrency policy, acceptance authority or public API.",
+    "corrected_files": [
+      "crates/nessa-server/src/mcp_authorization/infrastructure/callback.rs",
+      "crates/nessa-server/tests/mcp_authorization/application/callback.rs",
+      "docs/adr/todo/392-remote-mcp-servers.md"
+    ]
+  },
+  "browser_failure": {
+    "failure": "requestfailed: http://127.0.0.1:46355/mcp-resources net::ERR_ABORTED",
+    "evidence": "/tmp/nessa-645-e03-scripted/gateway-window/result.json",
+    "confirmed": "Chromium apps state live and all named flow/handshake checks pass; only final console entry fails. Existing same-origin mount-live classification occurs at apps step before final close. No request response/body timing is stored.",
+    "hypothesis": "Abort may arrive after apps-step held-line classification; not confirmed, not silently ignored.",
+    "action": "Resolved via #647 persistent proof-backed policy. Original f55 failure and raw evidence retained; new final assembled run PASS. Deterministic late-line source mutation distinguishes old held-only policy from persistent fix."
+  },
+  "issues": [
+    "#624",
+    "#629",
+    "#647"
+  ],
+  "pr": "#645; include Closes #647 in expanded scope",
+  "verification_correction": {
+    "issue": "#647",
+    "canonical_ordering": "verification/desktop/page-lines.md; three rows written before code",
+    "authority": "browser.mjs publishes one anchored escaped canonical-origin/exact /mcp-resources ERR_ABORTED pattern, shared by held matcher and persistent policy. noteLiveMountResourceAbort accepts observed apps state and activates only live proof. gateway-window apps step is the only production registration call. watchLines retains classification; reporter/close ownership unchanged.",
+    "policy_disposition": "Tighten old suffix-path matcher to exact /mcp-resources endpoint per #473 policy; preserve query/fragment suffixes. Reject other origin/path/error, deceptive origin prefixes/userinfo and absent live proof.",
+    "regression": "Real watchLines + reporter test observes held match at apps, then injects late line before close; matching lines harmless and unrelated errors remain failures; close reports once. Absent/loading/failed state counterpart remains errors.",
+    "probes": [
+      {
+        "probe": "persistent-policy",
+        "exit": 1,
+        "caught": true,
+        "log": "/tmp/nessa-647-probe-persistent-policy.log",
+        "mutation": "if (pattern) opened.reclassifyHeld((line) => pattern.test(line), (line) => line)"
+      },
+      {
+        "probe": "live-proof",
+        "exit": 1,
+        "caught": true,
+        "log": "/tmp/nessa-647-probe-live-proof.log",
+        "mutation": "void mountState"
+      },
+      {
+        "probe": "exact-path",
+        "exit": 1,
+        "caught": true,
+        "log": "/tmp/nessa-647-probe-exact-path.log",
+        "mutation": "^requestfailed: ${escaped}/\\\\S*mcp-resources"
+      },
+      {
+        "probe": "escaped-origin",
+        "exit": 1,
+        "caught": true,
+        "log": "/tmp/nessa-647-probe-escaped-origin.log",
+        "mutation": "  const escaped = own"
+      }
+    ],
+    "probe_driver": "/tmp/nessa-647-probe-driver.log",
+    "initial_test_development_failure": "/tmp/nessa-647-targeted-tests.log failed due to asserting undefined failures when reporter success shape is failures: []; corrected assertion to []. Not counted as final pass. Restored target24 and complete147 tests PASS."
+  }
+}

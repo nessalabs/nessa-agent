@@ -1,0 +1,92 @@
+$ node verification/desktop/scripts/scripted-e2e.mjs -- --channel bundled --evidence /tmp/nessa-645-e03-scripted
+building nessa-server…
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-oauth-callback/crates/nessa-server)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 16.14s
+
+mcp-apps-gateway
+starting a dev server of its own on port 41849…
+warmed 469 modules in 4614 ms
+conversation ready: review_rows completed, in 1170 ms
+ok    setup
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    renders [chromium columns]
+ok    hidden [chromium columns]
+ok    allow [chromium columns]
+ok    deny [chromium columns]
+ok    release [chromium columns]
+ok    message [chromium columns]
+ok    context [chromium columns]
+ok    console
+chromium columns: 9784 ms
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    renders [webkit columns]
+ok    hidden [webkit columns]
+ok    allow [webkit columns]
+ok    deny [webkit columns]
+ok    release [webkit columns]
+ok    message [webkit columns]
+ok    context [webkit columns]
+webkit columns: 14919 ms
+wrote /tmp/nessa-645-e03-scripted/mcp-apps-gateway/result.json
+mcp-apps-gateway: 16/16 held
+
+gateway-window
+starting a dev server of its own on port 46135…
+warmed 469 modules in 4620 ms
+conversation ready in 1172 ms
+ok    setup
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    handshake [chromium columns]
+ok    lists [chromium columns]
+ok    opens [chromium columns]
+ok    live [chromium columns]
+ok    apps [chromium columns]
+ok    handshakes [chromium columns]
+FAIL  console [chromium columns]
+        - requestfailed: http://127.0.0.1:46355/mcp-resources net::ERR_ABORTED
+chromium columns: 12798 ms
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    handshake [webkit columns]
+ok    lists [webkit columns]
+ok    opens [webkit columns]
+ok    live [webkit columns]
+ok    apps [webkit columns]
+ok    handshakes [webkit columns]
+webkit columns: 14749 ms
+wrote /tmp/nessa-645-e03-scripted/gateway-window/result.json
+gateway-window: 13/14 held
+
+scripted-scenarios
+starting a dev server of its own on port 35821…
+warmed 469 modules in 4490 ms
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    permission [chromium columns]
+ok    allow [chromium columns]
+ok    fail [chromium columns]
+ok    cancel [chromium columns]
+chromium columns: 14938 ms
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    permission [webkit columns]
+ok    allow [webkit columns]
+ok    fail [webkit columns]
+ok    cancel [webkit columns]
+webkit columns: 15628 ms
+wrote /tmp/nessa-645-e03-scripted/scripted-scenarios/result.json
+scripted-scenarios: 8/8 held
+
+Verdict: fail
+
+| Check | Chromium | WebKit |
+| --- | --- | --- |
+| mcp-apps-gateway | pass | pass |
+| gateway-window | fail | pass |
+| scripted-scenarios | pass | pass |
+
+Relevant log lines:
+
+- console: requestfailed: http://127.0.0.1:41849/browser/check net::ERR_ABORTED (aborted after a 204 response, #485) (harmless)
+- console chromium: requestfailed: http://127.0.0.1:46355/mcp-resources net::ERR_ABORTED
+- 2026-10-07T10:52:25.979448Z ERROR nessa_server::conversation::application::service: conversation agent opening failed conversation_id=4adfef5c-c4c7-4d0c-af08-60c92ebd6c8d error=agent: Unsupported("provider does not support restoring a closed session")
+- 2026-10-07T10:52:42.355838Z ERROR nessa_server::conversation::application::service: conversation agent opening failed conversation_id=48ecf0a4-5f57-48f7-8623-b26777e6d13e error=agent: Unsupported("provider does not support restoring a closed session")
+{"verdict":"fail","evidence":"/tmp/nessa-645-e03-scripted","summary":"/tmp/nessa-645-e03-scripted/pr-summary.md"}
+[ELIFECYCLE] Command failed with exit code 1.

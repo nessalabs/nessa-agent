@@ -1,0 +1,79 @@
+▶ recordFailedRequest
+  ✔ a 200 whose content-length was fully delivered is harmless only (#473) (1.557492ms)
+  ✔ a 200 is an error when the body is short, or the size was not reported (0.421714ms)
+  ✔ a later size report moves that same line to harmless, and a short body does not (0.204027ms)
+  ✔ a later size report does not excuse another origin or another error (0.176966ms)
+  ✔ only an unlabelled same-origin /mcp-resources abort is the mount-went-live case (0.384157ms)
+  ✔ #647: the live mount pattern is literal origin and exact endpoint (0.27285ms)
+  ✔ F1′: the window's /browser/check, aborted after a 204 (its body never read), is harmless only (0.173661ms)
+  ✔ a 2xx other than a full 200 or an empty 204 is an error (0.447033ms)
+  ✔ F2: a response never received (aborted before headers) is an error only (0.40573ms)
+  ✔ F3: a response outside 2xx is an error only, at both bounds (0.51202ms)
+  ✔ F4: another origin is an error only (0.220251ms)
+  ✔ F4: any other error text is an error only (0.354253ms)
+  ✔ F4: a page with no origin (about:blank) leaves every failure an error (0.205579ms)
+  ✔ records nothing for the fresh browser's /favicon.ico, as before (0.14661ms)
+✔ recordFailedRequest (6.77651ms)
+▶ settleSizeReports
+  ✔ lets a full-body report leave errors before the caller reads them (0.545721ms)
+  ✔ leaves the line an error when the size report does not arrive (30.099904ms)
+  ✔ a late full body does not excuse a later identical line (32.071661ms)
+  ✔ leaves the line an error when the body is short (0.382615ms)
+✔ settleSizeReports (63.419932ms)
+▶ runAndClose
+  ✔ keeps the body's error when close also rejects (1.458353ms)
+  ✔ resolves the body's value when close rejects (0.12681ms)
+✔ runAndClose (1.706637ms)
+ok    apps
+FAIL  console [chromium]
+        - requestfailed: http://127.0.0.1:1439/mcp-resources net::ERR_ABORTED
+        - requestfailed: http://127.0.0.1:1438/other/mcp-resources net::ERR_ABORTED
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_FAILED
+        - console.error: real
+FAIL  apps
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  console
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  apps
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  console
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  apps
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  console
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  step
+        - an assertion
+        - console.error: during the step
+FAIL  next
+        - console.error: between steps
+FAIL  console [chromium columns]
+        - console.error: after the last step
+ERROR open
+        ! could not run
+ERROR later
+        ! not run: the page did not open
+FAIL  console [webkit]
+        - console.error: while opening
+FAIL  console [chromium]
+        - pageerror: boom
+FAIL  step
+        - console.error: real
+FAIL  release
+        - console.error: real
+FAIL  chromium
+        - console.error: chromium
+FAIL  webkit
+        - console.error: webkit
+✔ #647: live mount proof classifies a late abort before close, keeping rejected neighbors (2.454841ms)
+✔ #647: an absent live mount proof leaves held and late aborts as failures (0.560283ms)
+✔ a page's lines are reported once, on the result that follows them (1.171953ms)
+✔ scripts do not splice a page's line arrays (3.884502ms)
+ℹ tests 24
+ℹ suites 3
+ℹ pass 24
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 426.32116

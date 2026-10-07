@@ -1,0 +1,102 @@
+▶ recordFailedRequest
+  ✔ a 200 whose content-length was fully delivered is harmless only (#473) (1.656551ms)
+  ✔ a 200 is an error when the body is short, or the size was not reported (0.310878ms)
+  ✔ a later size report moves that same line to harmless, and a short body does not (0.214242ms)
+  ✔ a later size report does not excuse another origin or another error (0.208684ms)
+  ✔ only an unlabelled same-origin /mcp-resources abort is the mount-went-live case (0.32536ms)
+  ✖ #647: the live mount pattern is literal origin and exact endpoint (2.157395ms)
+  ✔ F1′: the window's /browser/check, aborted after a 204 (its body never read), is harmless only (0.167843ms)
+  ✔ a 2xx other than a full 200 or an empty 204 is an error (0.187642ms)
+  ✔ F2: a response never received (aborted before headers) is an error only (0.371689ms)
+  ✔ F3: a response outside 2xx is an error only, at both bounds (0.502386ms)
+  ✔ F4: another origin is an error only (0.356496ms)
+  ✔ F4: any other error text is an error only (0.171328ms)
+  ✔ F4: a page with no origin (about:blank) leaves every failure an error (0.141183ms)
+  ✔ records nothing for the fresh browser's /favicon.ico, as before (0.158509ms)
+✖ recordFailedRequest (8.381494ms)
+▶ settleSizeReports
+  ✔ lets a full-body report leave errors before the caller reads them (0.820253ms)
+  ✔ leaves the line an error when the size report does not arrive (30.982463ms)
+  ✔ a late full body does not excuse a later identical line (31.442745ms)
+  ✔ leaves the line an error when the body is short (0.437718ms)
+✔ settleSizeReports (64.071683ms)
+▶ runAndClose
+  ✔ keeps the body's error when close also rejects (0.582767ms)
+  ✔ resolves the body's value when close rejects (0.342986ms)
+✔ runAndClose (1.089228ms)
+ok    apps
+FAIL  console [chromium]
+        - requestfailed: http://127.0.0.1:1439/mcp-resources net::ERR_ABORTED
+        - requestfailed: http://127.0.0.1:1438/other/mcp-resources net::ERR_ABORTED
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_FAILED
+        - console.error: real
+FAIL  apps
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  console
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  apps
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  console
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  apps
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  console
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  step
+        - an assertion
+        - console.error: during the step
+FAIL  next
+        - console.error: between steps
+FAIL  console [chromium columns]
+        - console.error: after the last step
+ERROR open
+        ! could not run
+ERROR later
+        ! not run: the page did not open
+FAIL  console [webkit]
+        - console.error: while opening
+FAIL  console [chromium]
+        - pageerror: boom
+FAIL  step
+        - console.error: real
+FAIL  release
+        - console.error: real
+FAIL  chromium
+        - console.error: chromium
+FAIL  webkit
+        - console.error: webkit
+✔ #647: live mount proof classifies a late abort before close, keeping rejected neighbors (2.858229ms)
+✔ #647: an absent live mount proof leaves held and late aborts as failures (0.660964ms)
+✔ a page's lines are reported once, on the result that follows them (1.128618ms)
+✔ scripts do not splice a page's line arrays (4.14945ms)
+ℹ tests 24
+ℹ suites 3
+ℹ pass 23
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 421.763179
+
+✖ failing tests:
+
+test at verification/desktop/scripts/lib/browser.test.mjs:175:3
+✖ #647: the live mount pattern is literal origin and exact endpoint (2.157395ms)
+  AssertionError [ERR_ASSERTION]: http://127X0X0X1:1438/mcp-resources
+  
+  true !== false
+  
+      at TestContext.<anonymous> (file:///workspace/nessa-agent-oauth-callback/verification/desktop/scripts/lib/browser.test.mjs:186:14)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Suite.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

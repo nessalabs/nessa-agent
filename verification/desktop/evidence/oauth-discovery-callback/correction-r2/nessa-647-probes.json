@@ -1,0 +1,30 @@
+[
+  {
+    "probe": "persistent-policy",
+    "exit": 1,
+    "caught": true,
+    "log": "/tmp/nessa-647-probe-persistent-policy.log",
+    "mutation": "if (pattern) opened.reclassifyHeld((line) => pattern.test(line), (line) => line)"
+  },
+  {
+    "probe": "live-proof",
+    "exit": 1,
+    "caught": true,
+    "log": "/tmp/nessa-647-probe-live-proof.log",
+    "mutation": "void mountState"
+  },
+  {
+    "probe": "exact-path",
+    "exit": 1,
+    "caught": true,
+    "log": "/tmp/nessa-647-probe-exact-path.log",
+    "mutation": "^requestfailed: ${escaped}/\\\\S*mcp-resources"
+  },
+  {
+    "probe": "escaped-origin",
+    "exit": 1,
+    "caught": true,
+    "log": "/tmp/nessa-647-probe-escaped-origin.log",
+    "mutation": "  const escaped = own"
+  }
+]

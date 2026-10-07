@@ -1,0 +1,9 @@
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-oauth-callback/crates/nessa-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 53.80s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-e2f6c708a6cf158b)
+
+running 1 test
+test mcp_authorization::tests::callback_application::a3c_real_listener_wrong_state_then_valid_closes_before_exchange ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1972 filtered out; finished in 0.00s
+

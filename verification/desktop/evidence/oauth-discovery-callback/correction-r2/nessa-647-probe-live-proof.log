@@ -1,0 +1,95 @@
+▶ recordFailedRequest
+  ✔ a 200 whose content-length was fully delivered is harmless only (#473) (1.644103ms)
+  ✔ a 200 is an error when the body is short, or the size was not reported (0.285068ms)
+  ✔ a later size report moves that same line to harmless, and a short body does not (0.201623ms)
+  ✔ a later size report does not excuse another origin or another error (0.166079ms)
+  ✔ only an unlabelled same-origin /mcp-resources abort is the mount-went-live case (0.375836ms)
+  ✔ #647: the live mount pattern is literal origin and exact endpoint (0.536497ms)
+  ✔ F1′: the window's /browser/check, aborted after a 204 (its body never read), is harmless only (0.200511ms)
+  ✔ a 2xx other than a full 200 or an empty 204 is an error (0.1991ms)
+  ✔ F2: a response never received (aborted before headers) is an error only (0.203006ms)
+  ✔ F3: a response outside 2xx is an error only, at both bounds (0.320882ms)
+  ✔ F4: another origin is an error only (0.221443ms)
+  ✔ F4: any other error text is an error only (0.216386ms)
+  ✔ F4: a page with no origin (about:blank) leaves every failure an error (0.191698ms)
+  ✔ records nothing for the fresh browser's /favicon.ico, as before (0.444369ms)
+✔ recordFailedRequest (6.903001ms)
+▶ settleSizeReports
+  ✔ lets a full-body report leave errors before the caller reads them (0.628235ms)
+  ✔ leaves the line an error when the size report does not arrive (31.176053ms)
+  ✔ a late full body does not excuse a later identical line (31.375013ms)
+  ✔ leaves the line an error when the body is short (0.423466ms)
+✔ settleSizeReports (64.114277ms)
+▶ runAndClose
+  ✔ keeps the body's error when close also rejects (1.716571ms)
+  ✔ resolves the body's value when close rejects (0.13322ms)
+✔ runAndClose (1.951985ms)
+ok    apps
+FAIL  console [chromium]
+        - requestfailed: http://127.0.0.1:1439/mcp-resources net::ERR_ABORTED
+        - requestfailed: http://127.0.0.1:1438/other/mcp-resources net::ERR_ABORTED
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_FAILED
+        - console.error: real
+ok    apps
+FAIL  step
+        - an assertion
+        - console.error: during the step
+FAIL  next
+        - console.error: between steps
+FAIL  console [chromium columns]
+        - console.error: after the last step
+ERROR open
+        ! could not run
+ERROR later
+        ! not run: the page did not open
+FAIL  console [webkit]
+        - console.error: while opening
+FAIL  console [chromium]
+        - pageerror: boom
+FAIL  step
+        - console.error: real
+FAIL  release
+        - console.error: real
+FAIL  chromium
+        - console.error: chromium
+FAIL  webkit
+        - console.error: webkit
+✔ #647: live mount proof classifies a late abort before close, keeping rejected neighbors (2.616956ms)
+✖ #647: an absent live mount proof leaves held and late aborts as failures (2.338988ms)
+✔ a page's lines are reported once, on the result that follows them (1.453976ms)
+✔ scripts do not splice a page's line arrays (5.342214ms)
+ℹ tests 24
+ℹ suites 3
+ℹ pass 23
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 405.605035
+
+✖ failing tests:
+
+test at verification/desktop/scripts/lib/page-lines.test.mjs:76:1
+✖ #647: an absent live mount proof leaves held and late aborts as failures (2.338988ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + []
+  - [
+  -   'requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED'
+  - ]
+  
+      at TestContext.<anonymous> (file:///workspace/nessa-agent-oauth-callback/verification/desktop/scripts/lib/page-lines.test.mjs:91:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [ 'requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
