@@ -1,0 +1,144 @@
+diff --git a/crates/nessa-sdk/tests/application/agent_execution/subagents.rs b/crates/nessa-sdk/tests/application/agent_execution/subagents.rs
+index b0ac618c..642667b0 100644
+--- a/crates/nessa-sdk/tests/application/agent_execution/subagents.rs
++++ b/crates/nessa-sdk/tests/application/agent_execution/subagents.rs
+@@ -214,6 +214,41 @@ struct World {
+     store: Arc<MemoryOwnershipStore>,
+ }
+ 
++struct RejectTerminalRootStore {
++    memory: MemoryOwnershipStore,
++    root: Mutex<Option<AgentLifetimeId>>,
++    rejections: AtomicUsize,
++}
++
++#[async_trait]
++impl OwnershipStore for RejectTerminalRootStore {
++    async fn write(&self, snapshot: &OwnershipSnapshot) -> Result<(), PortFailure> {
++        let rejected = {
++            let mut root = self.root.lock().expect("terminal root");
++            if root.as_ref().is_some_and(|root| {
++                snapshot
++                    .lifetimes
++                    .iter()
++                    .any(|row| &row.lifetime_id == root && row.state == LifetimeState::Closed)
++            }) {
++                root.take();
++                true
++            } else {
++                false
++            }
++        };
++        if rejected {
++            self.rejections.fetch_add(1, Ordering::SeqCst);
++            return Err(PortFailure::Rejected);
++        }
++        self.memory.write(snapshot).await
++    }
++
++    async fn read(&self) -> Result<OwnershipSnapshot, PortFailure> {
++        self.memory.read().await
++    }
++}
++
+ impl World {
+     fn new(slots: usize) -> Self {
+         let factory = ScriptFactory::new();
+@@ -1323,6 +1358,97 @@ async fn c14_close_audit_failure_still_cleans_up() {
+     );
+ }
+ 
++#[tokio::test]
++async fn never_bound_root_terminal_store_rejection_recovers_after_resume() {
++    let store = Arc::new(RejectTerminalRootStore {
++        memory: MemoryOwnershipStore::new(),
++        root: Mutex::new(None),
++        rejections: AtomicUsize::new(0),
++    });
++    let factory = ScriptFactory::new();
++    let audit = ScriptAudit::new();
++    let build = || {
++        OwnershipCoordinator::new(OwnershipDependencies {
++            store: store.clone(),
++            audit: audit.clone(),
++            factory: factory.clone(),
++            room: Arc::new(LiveCapacity::new(1)),
++        })
++    };
++    let coordinator = build();
++    let session = SessionId::new("never-bound-session").unwrap();
++    let root = coordinator
++        .open_root(session.clone(), Initiator::Host(actor("open")))
++        .await
++        .unwrap();
++    *store.root.lock().expect("terminal root") = Some(root.clone());
++    let close = |coordinator: OwnershipCoordinator| {
++        let root = root.clone();
++        async move {
++            coordinator
++                .end_lifetime(CloseCommand {
++                    lifetime: root,
++                    cause: LifetimeCause::HostClose,
++                    initiator: Initiator::Host(actor("close")),
++                    external_attachment: false,
++                    timeout: None,
++                })
++                .await
++        }
++    };
++    let first = tokio::time::timeout(Duration::from_secs(2), close(coordinator.clone()))
++        .await
++        .expect("first close must return the terminal store rejection");
++    assert_eq!(first, Err(OwnershipFailure::Store(PortFailure::Rejected)));
++    assert_eq!(store.rejections.load(Ordering::SeqCst), 1);
++    assert_eq!(
++        coordinator.lifetime_state(&root),
++        Some(LifetimeState::Closed)
++    );
++    let retained = store.read().await.unwrap();
++    assert_eq!(
++        retained
++            .lifetimes
++            .iter()
++            .find(|row| row.lifetime_id == root)
++            .unwrap()
++            .state,
++        LifetimeState::Closing
++    );
++    assert_eq!(factory.prepares(), 0);
++    assert_eq!(factory.submits(), 0);
++    assert!(factory.children.lock().expect("children").is_empty());
++    drop(coordinator);
++
++    // Recovery must consume absence observed and saved by the original close;
++    // a fresh coordinator's empty resource map cannot establish that proof.
++    let resumed = build();
++    tokio::time::timeout(Duration::from_secs(2), resumed.resume())
++        .await
++        .expect("resume must finish")
++        .unwrap();
++    let recovered = tokio::time::timeout(Duration::from_secs(2), close(resumed.clone()))
++        .await
++        .expect("explicit close after resume must finish");
++    assert_eq!(
++        recovered,
++        Ok(()),
++        "observed never-bound absence must survive rejected terminal publication"
++    );
++    assert_eq!(resumed.lifetime_state(&root), Some(LifetimeState::Closed));
++    let reopened = tokio::time::timeout(
++        Duration::from_secs(2),
++        resumed.open_root(session, Initiator::Host(actor("reopen"))),
++    )
++    .await
++    .expect("session reopen must finish")
++    .unwrap();
++    assert_ne!(reopened, root);
++    assert_eq!(factory.prepares(), 0);
++    assert_eq!(factory.submits(), 0);
++    assert!(factory.children.lock().expect("children").is_empty());
++}
++
+ #[tokio::test]
+ async fn r1_r2_resume_does_not_prepare_or_submit_again() {
+     let store = Arc::new(MemoryOwnershipStore::new());

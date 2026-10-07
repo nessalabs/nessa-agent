@@ -1,0 +1,21 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-owned-settlement/crates/nessa-sdk)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.36s
+     Running tests/application.rs (/workspace/nessa-agent/target/debug/deps/application-602976c2950e4911)
+
+running 1 test
+
+thread 'application::agent_execution::subagents::never_bound_root_terminal_store_rejection_recovers_after_resume' (440679) panicked at crates/nessa-sdk/tests/application/agent_execution/subagents.rs:1433:5:
+assertion `left == right` failed: observed never-bound absence must survive rejected terminal publication
+  left: Err(Incomplete)
+ right: Ok(())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test application::agent_execution::subagents::never_bound_root_terminal_store_rejection_recovers_after_resume ... FAILED
+
+failures:
+
+failures:
+    application::agent_execution::subagents::never_bound_root_terminal_store_rejection_recovers_after_resume
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 407 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `-p nessa-sdk --test application`

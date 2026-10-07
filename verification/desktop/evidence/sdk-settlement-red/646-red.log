@@ -1,0 +1,20 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/application.rs (/workspace/nessa-agent/target/debug/deps/application-602976c2950e4911)
+
+running 1 test
+
+thread 'application::agent_execution::subagents::released_child_with_rejected_coordinator_observation_is_not_closed' (440061) panicked at crates/nessa-sdk/tests/application/agent_execution/subagents.rs:1121:5:
+assertion `left == right` failed
+  left: Ok(())
+ right: Err(Audit(Rejected))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test application::agent_execution::subagents::released_child_with_rejected_coordinator_observation_is_not_closed ... FAILED
+
+failures:
+
+failures:
+    application::agent_execution::subagents::released_child_with_rejected_coordinator_observation_is_not_closed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 406 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-sdk --test application`

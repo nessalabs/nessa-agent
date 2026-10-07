@@ -1,0 +1,10 @@
+commit e3077fe2cf9aa7f5b9b0b0c1b0c8934d5bcd2588
+Author:     Saurav Panthee <saurav.panthee@gmail.com>
+AuthorDate: Wed Oct 7 14:46:05 2026 +0000
+Commit:     Saurav Panthee <saurav.panthee@gmail.com>
+CommitDate: Wed Oct 7 14:46:05 2026 +0000
+
+    test(sdk): expose rejected startup and close observation settlement gaps
+
+ .../tests/application/agent_execution/subagents.rs | 206 ++++++++++++++++++++-
+ 1 file changed, 204 insertions(+), 2 deletions(-)

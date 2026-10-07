@@ -1,0 +1,10 @@
+commit db32c230f5d124af87d466c169e18cff40105039
+Author:     Saurav Panthee <saurav.panthee@gmail.com>
+AuthorDate: Wed Oct 7 14:50:31 2026 +0000
+Commit:     Saurav Panthee <saurav.panthee@gmail.com>
+CommitDate: Wed Oct 7 14:50:31 2026 +0000
+
+    test(sdk): expose lost absence proof after terminal store rejection
+
+ .../tests/application/agent_execution/subagents.rs | 126 +++++++++++++++++++++
+ 1 file changed, 126 insertions(+)
