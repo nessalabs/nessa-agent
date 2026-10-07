@@ -4,6 +4,8 @@
  * WKWebView shares). Every page is seeded with preferences before it loads,
  * made to look like the macOS window (so the safe area includes the traffic
  * lights' inset), and has its console and page errors collected.
+ * Request exemptions are owned here; page-lines.mjs retains classification
+ * and reporting, including late lines after live-mount proof (#647).
  */
 import { chromium, webkit } from "playwright"
 
@@ -366,12 +368,38 @@ export function reclassifyDeliveredAbort(request, pageUrl, sizes, { errors, harm
  * @param {string} pageUrl
  */
 export function liveMountResourceAbort(line, pageUrl) {
-  const match = /^requestfailed: (\S+\/mcp-resources(?:[?#]\S*)?) net::ERR_ABORTED$/.exec(
-    line,
-  )
-  if (!match) return false
+  return liveMountResourceAbortPattern(pageUrl)?.test(line) ?? false
+}
+
+/**
+ * The exact same-origin resource endpoint rule shared by held and later lines.
+ * Playwright supplies serialized request URLs; escape the origin as literal
+ * regex text, keeping path and error case-sensitive (#473, #647).
+ *
+ * @param {string} pageUrl
+ * @returns {RegExp | null}
+ */
+export function liveMountResourceAbortPattern(pageUrl) {
   const own = originOf(pageUrl)
-  return own !== "null" && originOf(match[1]) === own
+  if (own === "null") return null
+  const escaped = own.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  return new RegExp(
+    `^requestfailed: ${escaped}/mcp-resources(?:[?#]\\S*)? net::ERR_ABORTED$`,
+  )
+}
+
+/**
+ * Only an observed live app mount establishes this exemption. Its policy
+ * covers lines already held and ones delivered later, until the page closes.
+ * The page's existing line owner retains reporting and close ownership.
+ *
+ * @param {{ page: { url(): string }, noteHarmless(pattern: RegExp): void }} opened
+ * @param {string | undefined} mountState the apps check's observed mount state
+ */
+export function noteLiveMountResourceAbort(opened, mountState) {
+  if (mountState !== "live") return
+  const pattern = liveMountResourceAbortPattern(opened.page.url())
+  if (pattern) opened.noteHarmless(pattern)
 }
 
 /**

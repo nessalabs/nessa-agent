@@ -78,12 +78,16 @@ pub fn protected_resource_urls(resource: &str) -> Vec<String> {
     urls
 }
 
-pub fn authorization_server_urls(issuer: &str) -> Vec<String> {
-    let issuer = issuer.trim_end_matches('/');
-    vec![
-        format!("{issuer}/.well-known/oauth-authorization-server"),
-        format!("{issuer}/.well-known/openid-configuration"),
-    ]
+fn authorization_server_urls(issuer: &str) -> Result<[String; 2], DiscoverFailure> {
+    let mut url = url::Url::parse(issuer).map_err(|_| DiscoverFailure::Binding)?;
+    if !https_url(issuer) || url.query().is_some() {
+        return Err(DiscoverFailure::Binding);
+    }
+    let path = url.path().trim_end_matches('/').to_owned();
+    url.set_path(&format!("/.well-known/oauth-authorization-server{path}"));
+    let oauth = url.to_string();
+    url.set_path(&format!("{path}/.well-known/openid-configuration"));
+    Ok([oauth, url.to_string()])
 }
 
 pub fn https_url(value: &str) -> bool {
@@ -153,16 +157,10 @@ async fn finish(
         .and_then(|servers| servers.first())
         .and_then(Value::as_str)
         .ok_or(DiscoverFailure::Malformed)?;
-    if !https_url(issuer) {
-        return Err(DiscoverFailure::Binding);
-    }
+    let candidates = authorization_server_urls(issuer)?;
     let scopes = strings(document.get("scopes_supported"));
     let mut last = DiscoverFailure::Malformed;
-    for candidate in authorization_server_urls(issuer) {
-        if !https_url(&candidate) {
-            last = DiscoverFailure::Binding;
-            continue;
-        }
+    for candidate in candidates {
         match http.get(&candidate).await {
             Ok(response) if response.status == 200 => {
                 return read_server(resource, resource_matches, issuer, scopes, &response);
@@ -214,7 +212,7 @@ fn read_server(
         pkce_s256,
         scopes,
         resource_matches,
-        issuer_matches: declared.trim_end_matches('/') == issuer.trim_end_matches('/'),
+        issuer_matches: declared == issuer,
     })
 }
 
@@ -270,4 +268,217 @@ fn urlencoding_encode(value: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use std::collections::VecDeque;
+    use tokio::sync::Mutex;
+
+    #[test]
+    fn a2a_issuer_paths_use_distinct_oauth_and_oidc_rules() {
+        for (issuer, authority, path) in [
+            ("https://auth.example", "https://auth.example", ""),
+            ("https://auth.example/", "https://auth.example", ""),
+            (
+                "https://auth.example/tenant/acme/",
+                "https://auth.example",
+                "/tenant/acme",
+            ),
+            (
+                "https://auth.example/tenant/a%2Fb%20c",
+                "https://auth.example",
+                "/tenant/a%2Fb%20c",
+            ),
+            ("https://[::1]:8443/tenant", "https://[::1]:8443", "/tenant"),
+        ] {
+            assert_eq!(
+                authorization_server_urls(issuer).unwrap(),
+                [
+                    format!("{authority}/.well-known/oauth-authorization-server{path}"),
+                    format!("{authority}{path}/.well-known/openid-configuration"),
+                ],
+                "{issuer}"
+            );
+        }
+    }
+
+    #[test]
+    fn a2b_invalid_issuer_policy_is_typed() {
+        for issuer in [
+            "invalid",
+            "http://auth.example",
+            "https://u:p@auth.example",
+            "https://auth.example?x=1",
+            "https://auth.example#x",
+        ] {
+            assert_eq!(
+                authorization_server_urls(issuer),
+                Err(DiscoverFailure::Binding),
+                "{issuer}"
+            );
+        }
+        assert!(https_url("https://auth.example/token?audience=mcp"));
+    }
+
+    struct SequenceHttp {
+        routes: Mutex<VecDeque<(String, Result<OAuthResponse, OAuthCallFailure>)>>,
+    }
+
+    #[async_trait]
+    impl OAuthHttp for SequenceHttp {
+        async fn get(&self, url: &str) -> Result<OAuthResponse, OAuthCallFailure> {
+            let (expected, response) = self
+                .routes
+                .lock()
+                .await
+                .pop_front()
+                .expect("unexpected fetch");
+            assert_eq!(url, expected);
+            response
+        }
+        async fn post_form(&self, _: &str, _: &str) -> Result<OAuthResponse, OAuthCallFailure> {
+            panic!("unexpected POST")
+        }
+        async fn post_json(&self, _: &str, _: &str) -> Result<OAuthResponse, OAuthCallFailure> {
+            panic!("unexpected POST")
+        }
+    }
+
+    fn response(body: String) -> Result<OAuthResponse, OAuthCallFailure> {
+        Ok(OAuthResponse {
+            status: 200,
+            body,
+            www_authenticate: None,
+        })
+    }
+
+    fn server_document(issuer: &str) -> String {
+        serde_json::json!({"issuer":issuer,"authorization_endpoint":"https://auth.example/authorize", "token_endpoint":"https://auth.example/token?audience=mcp", "registration_endpoint":"https://auth.example/register", "code_challenge_methods_supported":["S256"]}).to_string()
+    }
+
+    async fn discovery_with(
+        issuer: &str,
+        results: Vec<(&str, Result<OAuthResponse, OAuthCallFailure>)>,
+    ) -> Result<Discovered, DiscoverFailure> {
+        let mut routes = VecDeque::from([(String::from("https://mcp.example/metadata"), response(serde_json::json!({"resource":"https://mcp.example/mcp", "authorization_servers":[issuer]}).to_string()))]);
+        routes.extend(
+            results
+                .into_iter()
+                .map(|(url, result)| (url.to_owned(), result)),
+        );
+        let sequence = Arc::new(SequenceHttp {
+            routes: Mutex::new(routes),
+        });
+        let http: Arc<dyn OAuthHttp> = sequence.clone();
+        let result = discover(
+            &http,
+            "https://mcp.example/mcp",
+            Some("Bearer resource_metadata=\"https://mcp.example/metadata\""),
+        )
+        .await;
+        assert!(
+            sequence.routes.lock().await.is_empty(),
+            "not all expected fetches made"
+        );
+        result
+    }
+
+    #[tokio::test]
+    async fn a2a_oauth_only_path_issuer_discovers_without_oidc() {
+        let issuer = "https://auth.example/tenant/acme/";
+        let found = discovery_with(
+            issuer,
+            vec![(
+                "https://auth.example/.well-known/oauth-authorization-server/tenant/acme",
+                response(server_document(issuer)),
+            )],
+        )
+        .await
+        .unwrap();
+        assert!(found.issuer_matches && found.resource_matches && found.pkce_s256);
+        assert_eq!(found.issuer, issuer);
+        assert!(found.token_endpoint.ends_with("?audience=mcp"));
+    }
+
+    #[tokio::test]
+    async fn a2c_only_unavailable_oauth_metadata_falls_back() {
+        for first in [
+            Ok(OAuthResponse {
+                status: 404,
+                body: String::new(),
+                www_authenticate: None,
+            }),
+            Err(OAuthCallFailure::NotSent),
+        ] {
+            let issuer = "https://auth.example/tenant";
+            assert!(
+                discovery_with(
+                    issuer,
+                    vec![
+                        (
+                            "https://auth.example/.well-known/oauth-authorization-server/tenant",
+                            first
+                        ),
+                        (
+                            "https://auth.example/tenant/.well-known/openid-configuration",
+                            response(server_document(issuer))
+                        ),
+                    ]
+                )
+                .await
+                .unwrap()
+                .issuer_matches
+            );
+        }
+        for (first, expected) in [
+            (Err(OAuthCallFailure::Lost), DiscoverFailure::Unreachable),
+            (response("{bad".into()), DiscoverFailure::Malformed),
+            (
+                response(server_document("http://auth.example/tenant")),
+                DiscoverFailure::Binding,
+            ),
+        ] {
+            assert_eq!(
+                discovery_with(
+                    "https://auth.example/tenant",
+                    vec![(
+                        "https://auth.example/.well-known/oauth-authorization-server/tenant",
+                        first
+                    )]
+                )
+                .await,
+                Err(expected)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a2b_issuer_query_is_refused_before_server_fetch() {
+        assert_eq!(
+            discovery_with("https://auth.example/tenant?x=1", vec![]).await,
+            Err(DiscoverFailure::Binding)
+        );
+    }
+
+    #[tokio::test]
+    async fn a2d_binding_uses_original_identifier_including_slash() {
+        for declared in [
+            "https://auth.example/tenant/",
+            "https://other.example/tenant",
+        ] {
+            let found = discovery_with(
+                "https://auth.example/tenant",
+                vec![(
+                    "https://auth.example/.well-known/oauth-authorization-server/tenant",
+                    response(server_document(declared)),
+                )],
+            )
+            .await
+            .unwrap();
+            assert!(!found.issuer_matches);
+        }
+    }
 }

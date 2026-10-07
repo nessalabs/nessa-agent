@@ -7,6 +7,10 @@
 //!                   ──▶ OAuthHttp
 //!                   ──▶ ConsentCallback
 //! ```
+//!
+//! ConsentCallback delivers bounded candidates. The owner applies the domain
+//! callback decision once and drops the receiver on acceptance or a terminal
+//! outcome before completing persistence, audit and exchange effects.
 mod discovery;
 mod owner;
 mod ports;

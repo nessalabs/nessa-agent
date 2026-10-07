@@ -40,7 +40,7 @@ import {
   TEXT_REPLY_SCENARIO,
 } from "../../../scripts/mcp-test-server/scenarios.mjs"
 import { appFrame, oneMount } from "./lib/apps.mjs"
-import { liveMountResourceAbort, openPage, withEngines } from "./lib/browser.mjs"
+import { noteLiveMountResourceAbort, openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log, resultOfThrown } from "./lib/cli.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
 import {
@@ -606,15 +606,10 @@ await main(
                 .catch((error) => log(`screenshot ${name}: ${error.message}`))
             }
             await opened.settleRequests()
-            // A fully read `/mcp-resources` can still be reported aborted
-            // with no size. Once this step has seen the inline mount live,
-            // that same-origin line is the delivered fetch (#473). Every
-            // other abort stays a failure.
-            if (name === "apps" && result.seen?.state === "live") {
-              opened.reclassifyHeld(
-                (line) => liveMountResourceAbort(line, opened.page.url()),
-                (line) => `${line} (mount went live, #473)`,
-              )
+            // Live mount proof covers the exact resource abort even if the
+            // browser delivers its line after this step, before close (#647).
+            if (name === "apps") {
+              noteLiveMountResourceAbort(opened, result.seen?.state)
             }
             const entry = rep.add({
               name,

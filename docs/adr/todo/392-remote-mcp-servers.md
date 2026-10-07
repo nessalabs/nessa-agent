@@ -492,6 +492,34 @@ registration mechanisms; it does not claim universal server compatibility.
 
 ### Consent and callback
 
+The discovery and callback boundary corrections in #624 and #629 follow these
+orderings. The domain remains the owner of callback acceptance; the listener
+delivers bounded candidates and does not keep a copy of the expected state.
+
+| Row | Input or ordering | Required result |
+| --- | --- | --- |
+| A2a | Root, nested, trailing-slash, encoded-path or IPv6 issuer | Insert the OAuth well-known prefix before the issuer path; append the OIDC suffix after it; remove terminating slashes only for candidate construction |
+| A2b | Issuer query, fragment, userinfo, malformed URL or non-HTTPS scheme | Refuse before authorization-server requests; endpoint queries remain permitted |
+| A2c | OAuth metadata unavailable versus successful malformed or insecure metadata | Non-200 or definite non-dispatch permits OIDC fallback; lost response or invalid successful metadata stops discovery |
+| A2d | Metadata issuer differs from the original issuer, including trailing slash | Reject exact binding before registration or token exchange |
+| A3a | Idle first socket, valid second socket; fragmented request line/header | Read complete CRLF-framed headers concurrently within four connection slots, 4096 bytes each, and a two-second absolute connection budget; no partial candidate |
+| A3b | EOF, malformed framing/query, unrelated route, oversize or duplicate recognized query field | Release that connection without consuming consent; a later valid callback remains eligible |
+| A3c | Wrong-state candidate while the returned domain decision remains PendingConsent | Continue the bounded candidate stream; preserve the attempt and perform no exchange |
+| A3d | Accepted, denied, expired or stale candidate in a terminal domain phase | Drop the receiver at the admission decision, before persistence/audit/exchange effects; accepted exchange work remains owned by the application |
+| A3e | Concurrent valid candidates, queued candidate during revoke/resource change | Serial domain admission consumes at most one current state; terminal decisions discard queued candidates |
+| A3f | Full candidate channel, connection saturation, slow trickle, receiver drop or whole deadline | Bound active readers and queued candidates; connection deadlines do not reset; receiver closure or the original whole-attempt deadline closes the listener and its scoped readers |
+| A3g | Fixed response write fails or stalls after valid framing | Bound the write, retain the valid candidate, and keep codes/state/request targets out of the response |
+| A3h | Real wrong-state then valid TCP callback while token exchange remains gated | Observe successful completion of the listener's owning task before releasing exchange; task completion drops the listener and scoped connections, without relying on platform-specific refused-connect timing |
+
+The candidate channel has capacity one. Its four scoped connection futures
+include candidates waiting for channel capacity, after their sockets close.
+Framing allocates at most four 4096-byte buffers; decoded candidate values are
+bounded by their originating headers, including spare allocation capacity.
+Receiver closure cancels the scoped futures rather than detaching socket tasks.
+There is no separate empty-stream revoke signal in this correction: a worker
+waiting without a candidate remains bounded by the original whole-attempt
+deadline. A subsequent candidate observes the authoritative domain phase.
+
 Record authorization intent before discovery/registration effects. Bind state,
 PKCE verifier, resource, issuer, client registration, definition revision and a
 10-minute injected deadline to one attempt. State is unpredictable and consumed

@@ -5,6 +5,7 @@ import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 
 import { report } from "./cli.mjs"
+import { noteLiveMountResourceAbort } from "./browser.mjs"
 import {
   applyLines,
   attachLines,
@@ -30,6 +31,73 @@ function page() {
   }
   return opened
 }
+
+test("#647: live mount proof classifies a late abort before close, keeping rejected neighbors", async () => {
+  const rep = report("page-lines-live-mount", {})
+  bindReporter(rep)
+  const lines = watchLines()
+  let closed = 0
+  const opened = {
+    ...lines,
+    page: { url: () => "http://127.0.0.1:1438/desktop.html" },
+    close: async () => {
+      closed += 1
+    },
+  }
+  attachLines(opened, { engine: "chromium" })
+  const abort = "requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED"
+  lines.keep(abort, false)
+  noteLiveMountResourceAbort(opened, "live")
+  rep.add({ name: "apps", seen: { state: "live" } })
+  assert.deepEqual(rep.results[0].harmless, [abort])
+  assert.deepEqual(rep.results[0].failures, [])
+  // Delivered after apps consumed its held lines, before close drains them.
+  lines.keep(abort, false)
+  lines.keep(abort.replace("mcp-resources", "mcp-resources?x=1#mount"), false)
+  const rejected = [
+    abort.replace(":1438", ":1439"),
+    abort.replace("/mcp-resources", "/other/mcp-resources"),
+    abort.replace("ERR_ABORTED", "ERR_FAILED"),
+    "console.error: real",
+  ]
+  for (const line of rejected) lines.keep(line, false)
+  await opened.close()
+  assert.deepEqual(rep.results[1].failures, rejected)
+  assert.deepEqual(rep.results[1].harmless, [
+    abort,
+    abort.replace("mcp-resources", "mcp-resources?x=1#mount"),
+  ])
+  assert.equal(rep.results[1].name, "console")
+  await opened.close()
+  assert.equal(closed, 1)
+  assert.equal(rep.results.length, 2)
+})
+
+test("#647: an absent live mount proof leaves held and late aborts as failures", async () => {
+  for (const state of [undefined, "loading", "failed"]) {
+    const rep = report("page-lines-no-live-mount", {})
+    bindReporter(rep)
+    const lines = watchLines()
+    const opened = {
+      ...lines,
+      page: { url: () => "http://127.0.0.1:1438/desktop.html" },
+      close: async () => {},
+    }
+    attachLines(opened, {})
+    const abort = "requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED"
+    lines.keep(abort, false)
+    noteLiveMountResourceAbort(opened, state)
+    rep.add({ name: "apps" })
+    assert.deepEqual(rep.results[0].failures, [abort], state)
+    lines.keep(abort, false)
+    await opened.close()
+    assert.deepEqual(rep.results[1].failures, [abort], state)
+    assert.equal(
+      rep.results.every((entry) => entry.harmless === undefined),
+      true,
+    )
+  }
+})
 
 test("a page's lines are reported once, on the result that follows them", async () => {
   const rep = report("page-lines", {})
