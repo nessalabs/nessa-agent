@@ -1,5 +1,6 @@
 /** Opt-in acceptance orchestration; no provider, Cargo, or host process probes. */
 import { spawn } from "node:child_process"
+import { StringDecoder } from "node:string_decoder"
 import { createHash, randomUUID } from "node:crypto"
 import { readFile, mkdir, writeFile, realpath, stat } from "node:fs/promises"
 import { dirname, isAbsolute, resolve } from "node:path"
@@ -178,6 +179,52 @@ export class DockerFailure extends Error {
   }
 }
 
+// Both Docker streams retain a decoded prefix under the same byte-budget rule.
+function boundedOutput(limit) {
+  const decoder = new StringDecoder("utf8")
+  let text = "",
+    bytes = 0,
+    overflow = false,
+    ended = false
+  const retain = (decoded) => {
+    if (overflow) return
+    const size = Buffer.byteLength(decoded)
+    if (bytes + size <= limit) {
+      text += decoded
+      bytes += size
+      return
+    }
+    for (const character of decoded) {
+      const size = Buffer.byteLength(character)
+      if (bytes + size > limit) {
+        overflow = true
+        break
+      }
+      text += character
+      bytes += size
+    }
+  }
+  return {
+    append(data) {
+      if (!ended && !overflow) {
+        const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data)
+        // Decode fixed slices so malformed input cannot expand one large chunk
+        // into an unbounded temporary diagnostic string before admission.
+        for (let offset = 0; offset < buffer.length && !overflow; offset += 4096)
+          retain(decoder.write(buffer.subarray(offset, offset + 4096)))
+      }
+      return overflow
+    },
+    finish() {
+      if (!ended) {
+        ended = true
+        retain(decoder.end())
+      }
+      return { text, overflow }
+    },
+  }
+}
+
 export function docker(
   args,
   { signal, timeout = 30000, launch = spawn, environment = process.env } = {},
@@ -198,34 +245,30 @@ export function docker(
       timeout,
       killSignal: "SIGKILL",
     })
-    let stdout = "",
-      stderr = ""
-    const limit = 128 * 1024
-    let overflow = false
-    const append = (current, data) => {
-      const next = current + data
-      if (Buffer.byteLength(next) > limit) {
-        overflow = true
-        child.kill("SIGKILL")
-        return Buffer.from(next).subarray(0, limit).toString()
-      }
-      return next
-    }
+    const stdout = boundedOutput(128 * 1024)
+    const stderr = boundedOutput(128 * 1024)
     child.stdout.on("data", (data) => {
-      stdout = append(stdout, data)
+      if (stdout.append(data)) child.kill("SIGKILL")
     })
     child.stderr.on("data", (data) => {
-      stderr = append(stderr, data)
+      if (stderr.append(data)) child.kill("SIGKILL")
     })
-    child.on("error", (error) => reject(new DockerFailure(error.message, stdout, stderr)))
+    child.on("error", (error) =>
+      reject(
+        new DockerFailure(error.message, stdout.finish().text, stderr.finish().text),
+      ),
+    )
     child.on("close", (code) => {
-      if (code === 0 && !overflow) resolvePromise(stdout)
+      const output = stdout.finish(),
+        diagnostics = stderr.finish()
+      const overflow = output.overflow || diagnostics.overflow
+      if (code === 0 && !overflow) resolvePromise(output.text)
       else
         reject(
           new DockerFailure(
             `docker ${args[0]} ${overflow ? "output exceeded limit" : `exited ${code}`}`,
-            stdout,
-            stderr,
+            output.text,
+            diagnostics.text,
           ),
         )
     })

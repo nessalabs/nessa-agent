@@ -337,6 +337,7 @@ test("Docker output overflow kills the client and keeps bounded failure diagnost
             return true
           }
           child.stdout.emit("data", Buffer.alloc(129 * 1024, 97))
+          child.emit("close", 0)
         },
       ),
     }),
@@ -767,3 +768,122 @@ for (const interruptAt of ["last-removal", "final-write"]) {
     }
   })
 }
+
+test("both Docker streams preserve Unicode split across chunks", async () => {
+  for (const stream of ["stdout", "stderr"]) {
+    const encoded = Buffer.from("before€😀after")
+    const launch = launcher(
+      () => {},
+      (child) => {
+        for (let offset = 0; offset < encoded.length; offset++)
+          child[stream].emit("data", encoded.subarray(offset, offset + 1))
+        child.emit("close", stream === "stdout" ? 0 : 1)
+      },
+    )
+    if (stream === "stdout")
+      assert.equal(await docker(["start"], { launch }), "before€😀after")
+    else
+      await assert.rejects(docker(["start"], { launch }), (error) => {
+        assert.equal(error.stderr, "before€😀after")
+        assert.match(error.message, /exited 1/)
+        return true
+      })
+  }
+})
+
+test("multibyte diagnostics exactly at the byte budget fit on both streams", async () => {
+  const expected = "a".repeat(128 * 1024 - 3) + "€"
+  for (const stream of ["stdout", "stderr"]) {
+    const launch = launcher(
+      () => {},
+      (child) => {
+        child[stream].emit("data", Buffer.from(expected))
+        child.emit("close", stream === "stdout" ? 0 : 1)
+      },
+    )
+    if (stream === "stdout") assert.equal(await docker(["start"], { launch }), expected)
+    else
+      await assert.rejects(docker(["start"], { launch }), (error) => {
+        assert.equal(error.stderr, expected)
+        assert.match(error.message, /exited 1/)
+        return true
+      })
+  }
+})
+
+test("a multibyte character crossing the byte budget rejects and retains a valid prefix", async () => {
+  const prefix = "a".repeat(128 * 1024 - 1)
+  for (const stream of ["stdout", "stderr"]) {
+    let killed = false
+    await assert.rejects(
+      docker(["start"], {
+        launch: launcher(
+          () => {},
+          (child) => {
+            child.kill = () => {
+              killed = true
+              queueMicrotask(() => child.emit("close", 0))
+              return true
+            }
+            child[stream].emit("data", Buffer.from(prefix + "€"))
+            child.emit("close", 0)
+          },
+        ),
+      }),
+      (error) => {
+        assert.match(error.message, /output exceeded/)
+        assert.equal(error[stream], prefix)
+        assert.ok(Buffer.byteLength(error[stream]) <= 128 * 1024)
+        return true
+      },
+    )
+    assert.equal(killed, true)
+  }
+})
+
+test("malformed UTF-8 expansion and unfinished sequences respect diagnostic byte budgets", async () => {
+  for (const stream of ["stdout", "stderr"]) {
+    for (const suffix of [Buffer.from([0xff]), Buffer.from([0xe2, 0x82])]) {
+      const prefix = "a".repeat(128 * 1024 - 2)
+      await assert.rejects(
+        docker(["start"], {
+          launch: launcher(
+            () => {},
+            (child) => {
+              child.kill = () => {
+                queueMicrotask(() => child.emit("close", 0))
+                return true
+              }
+              child[stream].emit("data", Buffer.from(prefix))
+              child[stream].emit("data", suffix)
+              child.emit("close", 0)
+            },
+          ),
+        }),
+        (error) => {
+          assert.match(error.message, /output exceeded/)
+          assert.equal(error[stream], prefix)
+          assert.ok(Buffer.byteLength(error[stream]) <= 128 * 1024)
+          return true
+        },
+      )
+    }
+  }
+})
+
+test("malformed bytes that fit are retained as correctly budgeted replacement characters", async () => {
+  const prefix = "a".repeat(128 * 1024 - 3)
+  const expected = prefix + "\ufffd"
+  const actual = await docker(["start"], {
+    launch: launcher(
+      () => {},
+      (child) => {
+        child.stdout.emit("data", Buffer.from(prefix))
+        child.stdout.emit("data", Buffer.from([0xff]))
+        child.emit("close", 0)
+      },
+    ),
+  })
+  assert.equal(actual, expected)
+  assert.equal(Buffer.byteLength(actual), 128 * 1024)
+})

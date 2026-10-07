@@ -112,6 +112,7 @@ Acceptance publication has one owner, after independent container removal:
 
 | Ordering | Publisher result | Evidence test |
 | --- | --- | --- |
+| Docker output splits a UTF-8 character across chunks, contains malformed bytes, or crosses the retained-output budget | One bounded capture owner preserves incremental decoding and retains at most 128 KiB of diagnostic UTF-8 bytes per stream; overflow rejects | multibyte boundary, split Unicode and malformed-output tests |
 | Selected test panics for another cause; unrelated output mentions `CleanupUncertain` | Reject; the selected panic header and following unwrap error must establish the cause | incidental-token/wrong-panic tests |
 | Interrupt arrives during successful removal, before acceptance is written | Retain diagnostics with `accepted: false`; fail the run | last-removal interrupt test |
 | Interrupt arrives while the acceptance record is being written | Publisher observes cancellation after the write, replaces that entry with rejected diagnostics and fails the run | final-write interrupt test |

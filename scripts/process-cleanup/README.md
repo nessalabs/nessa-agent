@@ -90,7 +90,9 @@ checks cancellation before and after its record write; cancellation observed
 during independent removal or publication leaves rejected diagnostics and fails
 the harness.
 
-Libtest output is limited to 64K characters and Docker stdout/stderr to 128 KiB each;
+Libtest output is limited to 64K characters and Docker stdout/stderr to 128 KiB each after incremental UTF-8 decoding;
+malformed bytes count by their replacement-character UTF-8 cost. Both streams
+use the same bounded prefix capture owner;
 truncation fails acceptance. Rejected JSON, malformed output and Docker failure
 diagnostics are saved before validation/removal. Evidence-write failure still
 triggers removal.
@@ -115,20 +117,22 @@ Final acceptance used the explicit preserved copy
 
 | Test | PID 1 | Test exit | New orphan zombie | Retained private directory | Acceptance |
 | --- | --- | --- | --- | --- | --- |
-| Private directory cleanup | Python supervisor | 101 (`CleanupUncertain`) | PID 10, PPID 1, PGID 9, state Z | `/tmp/nessa-agent-00dvoJ` | Passed |
+| Private directory cleanup | Python supervisor | 101 (`CleanupUncertain`) | PID 10, PPID 1, PGID 9, state Z | `/tmp/nessa-agent-RiEcJQ` | Passed |
 | Private directory cleanup | Docker init | 0 | None | None | Passed |
 | TERM-resistant ACP parent and child | Python supervisor | 101 (`CleanupUncertain`) | PID 10, PPID 1, PGID 9, state Z | None | Passed |
 | TERM-resistant ACP parent and child | Docker init | 0 | None | None | Passed |
 
-The external evidence file was `/tmp/nessa-630-r2-evidence/acceptance.json`;
+The external evidence file was `/tmp/nessa-630-r3-evidence/acceptance.json`;
 all four entries recorded `accepted: true`, and all disposable containers were
-removed. Thirty-seven pure orchestration tests and the architecture checker
+removed. Forty-two pure orchestration tests and the architecture checker
 passed on the final correction; 74 architecture tests passed before that correction.
 At pre-review head `937610ee85494b53e4591a3b3b2146118f864971`, 32 individual
 acceptance/orchestration mutations caused test failures. The review correction
 added 22 schema/cancellation mutations at `9364794177684a846b9071f268b5b870b198036a`
 that also failed tests. The final structural correction added seven targeted
-panic-cause/publication mutations, which each failed tests. Restored files
+panic-cause/publication mutations at `d9ac477436605a5ac4b360d198aa7fedd830b1e0`,
+which each failed tests. The output-capture correction added six targeted UTF-8
+budget/decoding mutations that also failed tests. Restored files
 received fresh modification times. A real-container supervisor
 mutation that reaped adopted children caused the negative case to fail with
 "no new adopted zombie"; restoring the direct-child-only supervisor restored
