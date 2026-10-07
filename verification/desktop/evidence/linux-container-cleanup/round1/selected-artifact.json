@@ -1,0 +1,32 @@
+{
+  "reason": "compiler-artifact",
+  "package_id": "path+file:///workspace/nessa-agent-container-reaping/crates/nessa-sdk#0.1.0",
+  "manifest_path": "/workspace/nessa-agent-container-reaping/crates/nessa-sdk/Cargo.toml",
+  "target": {
+    "kind": [
+      "lib"
+    ],
+    "crate_types": [
+      "lib"
+    ],
+    "name": "nessa_sdk",
+    "src_path": "/workspace/nessa-agent-container-reaping/crates/nessa-sdk/src/lib.rs",
+    "edition": "2021",
+    "doc": true,
+    "doctest": true,
+    "test": true
+  },
+  "profile": {
+    "opt_level": "0",
+    "debuginfo": "line-tables-only",
+    "debug_assertions": true,
+    "overflow_checks": true,
+    "test": true
+  },
+  "features": [],
+  "filenames": [
+    "/workspace/nessa-agent/target/debug/deps/nessa_sdk-3a9a37445fc631f7"
+  ],
+  "executable": "/workspace/nessa-agent/target/debug/deps/nessa_sdk-3a9a37445fc631f7",
+  "fresh": false
+}

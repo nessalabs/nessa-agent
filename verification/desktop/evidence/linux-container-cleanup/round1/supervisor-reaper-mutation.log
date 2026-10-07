@@ -1,0 +1,12 @@
+file:///workspace/nessa-agent-container-reaping/scripts/process-cleanup/check-container.mjs:22
+    throw new Error(`Harness failure: ${reason}`)
+          ^
+
+Error: Harness failure: negative case has no new adopted zombie
+    at fail (file:///workspace/nessa-agent-container-reaping/scripts/process-cleanup/check-container.mjs:22:11)
+    at validate (file:///workspace/nessa-agent-container-reaping/scripts/process-cleanup/check-container.mjs:53:26)
+    at runScenario (file:///workspace/nessa-agent-container-reaping/scripts/process-cleanup/check-container.mjs:167:12)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///workspace/nessa-agent-container-reaping/[eval1]:3:1
+
+Node.js v24.19.0
