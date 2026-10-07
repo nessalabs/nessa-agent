@@ -973,7 +973,7 @@ async fn row_23_restored_closing_accepts_owner_before_release_and_refuses_owner_
 }
 
 #[tokio::test]
-async fn row_24_rejected_root_audit_preserves_close_safety_and_transferred_owner() {
+async fn row_24_rejected_root_audit_preserves_preexisting_close_safety() {
     let store = Arc::new(MemoryOwnershipStore::new());
     let audit = IndependentAudit::new();
     let c = coordinator(
@@ -996,23 +996,72 @@ async fn row_24_rejected_root_audit_preserves_close_safety_and_transferred_owner
         .unwrap()
         .parent_lifetime
         .clone();
+    assert_eq!(
+        bounded(close(&c, &root)).await,
+        Err(OwnershipFailure::Incomplete)
+    );
+    release.send(Err(PortFailure::Rejected)).unwrap();
+    assert_eq!(
+        bounded(opening).await.unwrap(),
+        Err(OwnershipFailure::Audit(PortFailure::Rejected))
+    );
+    bounded(async {
+        loop {
+            if c.lifetime_state(&root) == Some(LifetimeState::Closed) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    let snapshot = store.read().await.unwrap();
+    assert_eq!(snapshot.lifetimes[0].lifetime_id, root);
+    assert_eq!(snapshot.lifetimes[0].state, LifetimeState::Closed);
+    assert_eq!(snapshot.lifetimes[0].cause, Some(LifetimeCause::HostClose));
+}
+
+#[tokio::test]
+async fn row_24_failed_eligible_store_keeps_and_closes_actual_transferred_owner() {
+    let store = ControlledStore::new(Some((PortFailure::Rejected, false)));
+    let release = Arc::new(Notify::new());
+    *store.gate.lock().unwrap() = Some(release.clone());
+    let audit = IndependentAudit::new();
+    let c = coordinator(
+        store.clone(),
+        audit,
+        ScriptFactory::new(),
+        Arc::new(LiveCapacity::new(8)),
+    );
+    let opening = tokio::spawn({
+        let c = c.clone();
+        async move { open(&c, "a").await }
+    });
+    bounded(store.entered.notified()).await;
+    let root = c
+        .active_root_for_session(&SessionId::new("a").unwrap())
+        .unwrap();
     let resources = Arc::new(ScriptResources {
         closes: AtomicUsize::new(0),
         report: released(),
         hold: None,
     });
     c.bind_resources(root.clone(), resources.clone()).unwrap();
-    // Another holder knows the identity through its audit correlation and seals it.
-    bounded(close(&c, &root)).await.unwrap();
-    release.send(Err(PortFailure::Rejected)).unwrap();
+    release.notify_one();
     assert_eq!(
         bounded(opening).await.unwrap(),
-        Err(OwnershipFailure::Audit(PortFailure::Rejected))
+        Err(OwnershipFailure::Store(PortFailure::Rejected))
     );
-    let snapshot = store.read().await.unwrap();
-    assert_eq!(snapshot.lifetimes[0].lifetime_id, root);
-    assert_eq!(snapshot.lifetimes[0].state, LifetimeState::Closed);
+    bounded(async {
+        loop {
+            if c.lifetime_state(&root) == Some(LifetimeState::Closed) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
     assert_eq!(resources.closes.load(Ordering::SeqCst), 1);
+    assert_eq!(store.read().await.unwrap().lifetimes[0].lifetime_id, root);
 }
 
 async fn sealed_pending_receipt(audit_result: Result<(), PortFailure>) {
@@ -1101,4 +1150,376 @@ async fn row_25_close_over_pending_task_ack_retains_actual_receipt_through_resum
 #[tokio::test]
 async fn row_25_close_over_pending_task_rejection_retains_actual_receipt_through_resume() {
     sealed_pending_receipt(Err(PortFailure::Rejected)).await;
+}
+
+#[tokio::test]
+async fn row_26_handed_out_gate_blocks_absence_through_rejected_close_and_remains_sealed() {
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let audit = IndependentAudit::new();
+    let c = coordinator(
+        store.clone(),
+        audit.clone(),
+        ScriptFactory::new(),
+        Arc::new(LiveCapacity::new(8)),
+    );
+    let root = open(&c, "a").await.unwrap();
+    let gate = c.participation(&root).unwrap();
+    audit
+        .failures
+        .lock()
+        .unwrap()
+        .push_back((OwnershipMeaning::Closing, PortFailure::Rejected));
+    assert_eq!(
+        bounded(close(&c, &root)).await,
+        Err(OwnershipFailure::Incomplete)
+    );
+    assert!(gate.is_sealed());
+    let snapshot = store.read().await.unwrap();
+    assert_eq!(snapshot.lifetimes[0].state, LifetimeState::Closing);
+    assert!(snapshot.settlements.is_empty());
+    gate.note_attachment(true, true).await;
+    assert!(gate.is_sealed());
+    assert_eq!(c.lifetime_state(&root), Some(LifetimeState::Closed));
+    assert!(c.participation(&root).is_none());
+}
+
+#[tokio::test]
+async fn row_26_gate_handoff_before_caller_drop_retains_possible_external_owner() {
+    let store = ControlledStore::new(None);
+    let release = Arc::new(Notify::new());
+    *store.gate.lock().unwrap() = Some(release.clone());
+    let c = coordinator(
+        store.clone(),
+        IndependentAudit::new(),
+        ScriptFactory::new(),
+        Arc::new(LiveCapacity::new(8)),
+    );
+    let opening = tokio::spawn({
+        let c = c.clone();
+        async move { open(&c, "a").await }
+    });
+    bounded(store.entered.notified()).await;
+    let root = c
+        .active_root_for_session(&SessionId::new("a").unwrap())
+        .unwrap();
+    let gate = c.participation(&root).unwrap();
+    opening.abort();
+    let _ = opening.await;
+    release.notify_one();
+    bounded(async {
+        loop {
+            if gate.is_sealed() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    bounded(async {
+        loop {
+            if store.read().await.unwrap().lifetimes[0].state == LifetimeState::Closing {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert_eq!(c.lifetime_state(&root), Some(LifetimeState::Closing));
+    assert!(store.read().await.unwrap().settlements.is_empty());
+    gate.note_attachment(true, true).await;
+    assert_eq!(c.lifetime_state(&root), Some(LifetimeState::Closed));
+}
+
+#[tokio::test]
+async fn row_27_absence_claim_refuses_new_gate_during_rejected_audit_and_after_close() {
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let audit = IndependentAudit::new();
+    let c = coordinator(
+        store,
+        audit.clone(),
+        ScriptFactory::new(),
+        Arc::new(LiveCapacity::new(8)),
+    );
+    let root = open(&c, "a").await.unwrap();
+    let (intent, release_intent) = audit.gate(OwnershipMeaning::Closing);
+    let closing = tokio::spawn({
+        let c = c.clone();
+        let root = root.clone();
+        async move { close(&c, &root).await }
+    });
+    bounded(intent.entered.notified()).await;
+    let (absence, release_absence) = audit.gate(OwnershipMeaning::Closing);
+    release_intent.send(Ok(())).unwrap();
+    bounded(absence.entered.notified()).await;
+    assert!(c.participation(&root).is_none());
+    release_absence.send(Err(PortFailure::Rejected)).unwrap();
+    assert_eq!(
+        bounded(closing).await.unwrap(),
+        Err(OwnershipFailure::Audit(PortFailure::Rejected))
+    );
+    assert!(c.participation(&root).is_none());
+    bounded(close(&c, &root)).await.unwrap();
+    assert!(c.participation(&root).is_none());
+}
+
+async fn private_child_transfer(accepted: bool) {
+    use nessa_sdk::application::agent_execution::subagents::BindResourcesRefusal;
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let audit = IndependentAudit::new();
+    let factory = ScriptFactory::new();
+    let room = Arc::new(LiveCapacity::new(1));
+    let c = coordinator(store, audit.clone(), factory.clone(), room.clone());
+    let root = open(&c, "a").await.unwrap();
+    let (gate, release) = audit.gate(OwnershipMeaning::Reserved);
+    let spawning = tokio::spawn({
+        let c = c.clone();
+        let root = root.clone();
+        async move { c.spawn(command(&root)).await }
+    });
+    bounded(gate.entered.notified()).await;
+    let child = c.children(&root, None, 1).unwrap().children[0]
+        .lifetime
+        .clone();
+    assert!(c.participation(&child).is_none());
+    let drops = Arc::new(AtomicUsize::new(0));
+    let closes = Arc::new(AtomicUsize::new(0));
+    let refusal = c
+        .bind_resources(child.clone(), tracked_owner(&drops, &closes))
+        .unwrap_err();
+    assert_eq!(refusal.reason, BindResourcesRefusal::UnpublishedLifetime);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(factory.prepares(), 0);
+    release
+        .send(if accepted {
+            Ok(())
+        } else {
+            Err(PortFailure::Rejected)
+        })
+        .unwrap();
+    let result = bounded(spawning).await.unwrap();
+    if accepted {
+        result.unwrap();
+        assert!(c.participation(&child).is_some());
+        let occupied = c.bind_resources(child, refusal.resources).unwrap_err();
+        assert_eq!(occupied.reason, BindResourcesRefusal::AlreadyBound);
+        drop(occupied);
+    } else {
+        assert_eq!(result, Err(OwnershipFailure::Audit(PortFailure::Rejected)));
+        assert!(c.participation(&child).is_none());
+        assert!(room.try_reserve());
+        room.release();
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        refusal
+            .resources
+            .close(&LifetimeCause::HostClose, &Initiator::Runtime)
+            .await;
+        drop(refusal);
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+    }
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn row_28_private_child_read_cannot_transfer_and_rejection_returns_owner() {
+    private_child_transfer(false).await;
+}
+#[tokio::test]
+async fn row_28_acknowledged_child_subsequently_allows_gate_and_retains_factory_owner() {
+    private_child_transfer(true).await;
+}
+
+async fn private_parent_spawn(accepted: bool) {
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let audit = IndependentAudit::new();
+    let factory = ScriptFactory::new();
+    let room = Arc::new(LiveCapacity::new(1));
+    let c = coordinator(store, audit.clone(), factory.clone(), room.clone());
+    let (gate, release) = audit.gate(OwnershipMeaning::Open);
+    let opening = tokio::spawn({
+        let c = c.clone();
+        async move { open(&c, "a").await }
+    });
+    bounded(gate.entered.notified()).await;
+    let root = gate
+        .evidence
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .parent_lifetime
+        .clone();
+    assert_eq!(
+        c.spawn(command(&root)).await,
+        Err(OwnershipFailure::UnpublishedParent)
+    );
+    assert_eq!(factory.prepares(), 0);
+    assert!(c.children(&root, None, 1).unwrap().children.is_empty());
+    assert!(room.try_reserve());
+    room.release();
+    assert!(c.participation(&root).is_none());
+    release
+        .send(if accepted {
+            Ok(())
+        } else {
+            Err(PortFailure::Rejected)
+        })
+        .unwrap();
+    let result = bounded(opening).await.unwrap();
+    if accepted {
+        result.unwrap();
+        c.spawn(command(&root)).await.unwrap();
+        assert_eq!(factory.prepares(), 1);
+    } else {
+        assert_eq!(result, Err(OwnershipFailure::Audit(PortFailure::Rejected)));
+        assert_eq!(
+            c.spawn(command(&root)).await,
+            Err(OwnershipFailure::UnpublishedParent)
+        );
+        assert_eq!(factory.prepares(), 0);
+    }
+}
+#[tokio::test]
+async fn row_29_private_parent_spawns_refused_until_audit_accepts() {
+    private_parent_spawn(true).await;
+}
+#[tokio::test]
+async fn row_29_private_parent_rejection_keeps_descendant_factory_unreachable() {
+    private_parent_spawn(false).await;
+}
+
+#[tokio::test]
+async fn row_30_already_unconfirmed_safety_persists_despite_rejected_or_uncertain_audit() {
+    for failure in [PortFailure::Rejected, PortFailure::Uncertain] {
+        let store = Arc::new(MemoryOwnershipStore::new());
+        let audit = IndependentAudit::new();
+        let factory = ScriptFactory::new();
+        let c = coordinator(
+            store.clone(),
+            audit.clone(),
+            factory.clone(),
+            Arc::new(LiveCapacity::new(8)),
+        );
+        let root = open(&c, "a").await.unwrap();
+        *factory.fail.lock().unwrap() = Some(PrepareFailure {
+            failure: PortFailure::Uncertain,
+            cleanup: None,
+        });
+        audit
+            .failures
+            .lock()
+            .unwrap()
+            .push_back((OwnershipMeaning::Unconfirmed, failure));
+        assert_eq!(
+            c.spawn(command(&root)).await,
+            Err(OwnershipFailure::Startup(PortFailure::Uncertain))
+        );
+        assert_eq!(
+            store.read().await.unwrap().spawns[0].progress,
+            SpawnProgress::Unconfirmed {
+                known: KnownMilestone::Reserved
+            }
+        );
+    }
+}
+#[tokio::test]
+async fn row_30_ended_startup_safety_persists_when_both_safety_audits_reject() {
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let audit = IndependentAudit::new();
+    let factory = ScriptFactory::new();
+    let c = coordinator(
+        store.clone(),
+        audit.clone(),
+        factory.clone(),
+        Arc::new(LiveCapacity::new(8)),
+    );
+    let root = open(&c, "a").await.unwrap();
+    *factory.fail.lock().unwrap() = Some(PrepareFailure {
+        failure: PortFailure::Rejected,
+        cleanup: None,
+    });
+    audit.failures.lock().unwrap().extend([
+        (OwnershipMeaning::StartupFailed, PortFailure::Rejected),
+        (OwnershipMeaning::Ended, PortFailure::Rejected),
+    ]);
+    assert_eq!(
+        c.spawn(command(&root)).await,
+        Err(OwnershipFailure::Startup(PortFailure::Rejected))
+    );
+    assert_eq!(
+        store.read().await.unwrap().spawns[0].progress,
+        SpawnProgress::Ended {
+            known: KnownMilestone::Reserved
+        }
+    );
+}
+#[tokio::test]
+async fn row_31_suppressed_report_survives_rejected_safety_audit() {
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let audit = IndependentAudit::new();
+    let c = coordinator(
+        store.clone(),
+        audit.clone(),
+        ScriptFactory::new(),
+        Arc::new(LiveCapacity::new(8)),
+    );
+    let root = open(&c, "a").await.unwrap();
+    let child = c.spawn(command(&root)).await.unwrap().child;
+    bounded(close(&c, &root)).await.unwrap();
+    audit
+        .failures
+        .lock()
+        .unwrap()
+        .push_back((OwnershipMeaning::Suppressed, PortFailure::Rejected));
+    assert_eq!(
+        c.deliver_report(ReportId::new("suppressed").unwrap(), &child, &root)
+            .await,
+        Err(OwnershipFailure::Audit(PortFailure::Rejected))
+    );
+    assert_eq!(
+        store.read().await.unwrap().reports[0].state,
+        DeliveryState::Suppressed
+    );
+}
+#[tokio::test]
+async fn row_32_uncertain_initial_reservation_retains_sealed_child_and_capacity() {
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let audit = IndependentAudit::new();
+    let room = Arc::new(LiveCapacity::new(1));
+    let c = coordinator(
+        store.clone(),
+        audit.clone(),
+        ScriptFactory::new(),
+        room.clone(),
+    );
+    let root = open(&c, "a").await.unwrap();
+    audit
+        .failures
+        .lock()
+        .unwrap()
+        .push_back((OwnershipMeaning::Reserved, PortFailure::Uncertain));
+    assert_eq!(
+        c.spawn(command(&root)).await,
+        Err(OwnershipFailure::Audit(PortFailure::Uncertain))
+    );
+    let child = c.children(&root, None, 1).unwrap().children[0]
+        .lifetime
+        .clone();
+    assert_eq!(c.lifetime_state(&child), Some(LifetimeState::Closing));
+    assert!(c.participation(&child).unwrap().is_sealed());
+    assert!(!room.try_reserve());
+    let snapshot = store.read().await.unwrap();
+    assert_eq!(
+        snapshot.spawns[0].progress,
+        SpawnProgress::Unconfirmed {
+            known: KnownMilestone::Reserved
+        }
+    );
+    assert_eq!(
+        snapshot
+            .lifetimes
+            .iter()
+            .find(|r| r.lifetime_id == child)
+            .unwrap()
+            .state,
+        LifetimeState::Closing
+    );
 }
