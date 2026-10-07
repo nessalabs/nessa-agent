@@ -1697,3 +1697,6 @@ async fn a_restart_resumes_a_stranded_revocation() {
         Err(AdmissionRefusal::Unauthorized)
     );
 }
+
+#[path = "application/callback.rs"]
+mod callback_application;

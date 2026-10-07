@@ -8,7 +8,8 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         mpsc, Arc, Mutex,
     },
-    time::Duration,
+    thread,
+    time::{Duration, Instant},
 };
 
 use super::*;
@@ -26,7 +27,11 @@ use crate::{
         },
         infrastructure::{host_platform, releases_for},
     },
-    agent_warm_up::infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
+    agent_warm_up::{
+        application::WarmUpRecords,
+        domain::RuntimeFingerprint,
+        infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
+    },
     agents::{
         application::{
             AgentCredential, AgentCredentialFailure, AgentCredentialKind, ReadAgentReadiness,
@@ -930,37 +935,121 @@ fn assert_process(pid: i32, alive: bool) {
     assert_eq!(unsafe { libc::kill(pid, 0) } == 0, alive);
 }
 
-async fn launched(path: &Path, minimum_launches: usize) -> serde_json::Value {
+#[derive(Clone, Copy, Debug)]
+enum LaunchObservation {
+    Recorded,
+    Live,
+}
+
+fn observed_launch(
+    directory: &Path,
+    prefix: &str,
+    minimum_launches: usize,
+    observation: LaunchObservation,
+) -> Option<serde_json::Value> {
+    let launches = std::fs::read_dir(directory)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry.file_name().to_string_lossy().starts_with(prefix)
+                && entry
+                    .path()
+                    .extension()
+                    .is_some_and(|value| value == "json")
+        })
+        .filter_map(|entry| std::fs::read(entry.path()).ok())
+        .filter_map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .collect::<Vec<_>>();
+    if launches.len() < minimum_launches {
+        return None;
+    }
+    match observation {
+        LaunchObservation::Recorded => launches.into_iter().next(),
+        LaunchObservation::Live => launches.into_iter().find(|launch| {
+            let pid = i32::try_from(launch["pid"].as_i64().unwrap()).unwrap();
+            unsafe { libc::kill(pid, 0) == 0 }
+        }),
+    }
+}
+
+/// The wrapper's persistent launch history is evidence of launch, not successful
+/// initialization. Live callers additionally require a running PID. A thread waits on the
+/// wall clock and wakes this task once; a runtime timer would lose to the
+/// stall that kept the task from being polled.
+async fn launched(
+    path: &Path,
+    minimum_launches: usize,
+    observation: LaunchObservation,
+) -> serde_json::Value {
     let prefix = format!("{}-", path.file_stem().unwrap().to_string_lossy());
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let launches = std::fs::read_dir(path.parent().unwrap())
-                .into_iter()
-                .flatten()
-                .filter_map(Result::ok)
-                .filter(|entry| {
-                    entry.file_name().to_string_lossy().starts_with(&prefix)
-                        && entry
-                            .path()
-                            .extension()
-                            .is_some_and(|value| value == "json")
-                })
-                .filter_map(|entry| std::fs::read(entry.path()).ok())
-                .filter_map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-                .collect::<Vec<_>>();
-            if launches.len() >= minimum_launches {
-                for launch in launches {
-                    let pid = i32::try_from(launch["pid"].as_i64().unwrap()).unwrap();
-                    if unsafe { libc::kill(pid, 0) } == 0 {
-                        return launch;
-                    }
-                }
+    let directory = path.parent().unwrap().to_path_buf();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let found = loop {
+            if let Some(launch) =
+                observed_launch(&directory, &prefix, minimum_launches, observation)
+            {
+                break Some(launch);
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("managed ACP fixture launched")
+            if Instant::now() >= deadline {
+                break None;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        let _ = tx.send(found);
+    });
+    rx.await
+        .expect("launch watcher stayed up")
+        .unwrap_or_else(|| {
+            panic!("managed ACP fixture launch observation missing: {observation:?}")
+        })
+}
+
+#[test]
+fn completed_launch_history_is_recorded_but_live_observation_still_requires_a_process() {
+    let root = tempfile::tempdir().unwrap();
+    let history = root.path().join("launch-fixture-completed.json");
+    // The process has written its evidence and exited before the first scan.
+    let mut child = std::process::Command::new("python3")
+        .args([
+            "-c",
+            "import json, os, pathlib, sys; pathlib.Path(sys.argv[1]).write_text(json.dumps({'pid': os.getpid()}))",
+        ])
+        .arg(&history)
+        .spawn()
+        .unwrap();
+    let completed_pid = i32::try_from(child.id()).unwrap();
+    assert!(child.wait().unwrap().success());
+    assert_process(completed_pid, false);
+    let scan = |minimum, observation| {
+        observed_launch(root.path(), "launch-fixture-", minimum, observation)
+    };
+    assert_eq!(
+        scan(1, LaunchObservation::Recorded).unwrap()["pid"],
+        completed_pid
+    );
+    assert!(scan(1, LaunchObservation::Live).is_none());
+    assert!(scan(2, LaunchObservation::Recorded).is_none());
+    assert!(scan(2, LaunchObservation::Live).is_none());
+    assert!(observed_launch(
+        root.path(),
+        "launch-missing-",
+        1,
+        LaunchObservation::Recorded
+    )
+    .is_none());
+    assert!(observed_launch(root.path(), "launch-missing-", 1, LaunchObservation::Live).is_none());
+
+    let live_pid = i32::try_from(std::process::id()).unwrap();
+    std::fs::write(
+        root.path().join("launch-fixture-live.json"),
+        serde_json::json!({"pid": live_pid}).to_string(),
+    )
+    .unwrap();
+    assert_eq!(scan(2, LaunchObservation::Live).unwrap()["pid"], live_pid);
+    assert!(scan(3, LaunchObservation::Live).is_none());
 }
 
 fn service(root: &Path, resolver: Arc<CurrentAgentResolver>) -> ConversationService {
@@ -1066,7 +1155,12 @@ async fn install_refresh_launches_the_managed_fixture_and_live_generation_stays_
         )
         .await
         .unwrap();
-    let first_launch = launched(&root.path().join("workspace/launch-opencode-first.json"), 2).await;
+    let first_launch = launched(
+        &root.path().join("workspace/launch-opencode-first.json"),
+        2,
+        LaunchObservation::Live,
+    )
+    .await;
     assert_eq!(
         first_launch["executable"],
         first_path
@@ -1124,6 +1218,7 @@ async fn install_refresh_launches_the_managed_fixture_and_live_generation_stays_
     let second_launch = launched(
         &root.path().join("workspace/launch-opencode-second.json"),
         2,
+        LaunchObservation::Live,
     )
     .await;
     assert_eq!(
@@ -1148,6 +1243,14 @@ async fn install_refresh_launches_the_managed_fixture_and_live_generation_stays_
     assert_eq!(second_authority.releases.load(Ordering::SeqCst), 2);
 }
 
+fn configured_warm_up_runtime(resolver: &CurrentAgentResolver) -> RuntimeFingerprint {
+    // Observe the actual configured provider without starting preparation.
+    // The completion port owns equality and the successful-preparation fact.
+    let agent = resolver.observe_opencode().provider.unwrap().unwrap();
+    let identity = agent.provider.identity();
+    RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context()).unwrap()
+}
+
 #[tokio::test]
 async fn proactive_current_warm_up_opens_and_closes_without_a_conversation_or_prompt() {
     let root = tempfile::tempdir().unwrap();
@@ -1168,10 +1271,18 @@ async fn proactive_current_warm_up_opens_and_closes_without_a_conversation_or_pr
         HashMap::new(),
     ));
 
+    let runtime = configured_warm_up_runtime(&resolver);
     resolver.start_warm_up();
     // ADR 221: from the moment it is scheduled, before any launch, the warm-up
     // may hold an agent process, so a refused retirement cannot miss it.
     assert!(resolver.warm_up_may_hold_resources());
+    let launch = launched(
+        &root.path().join("workspace/launch-opencode-startup.json"),
+        1,
+        LaunchObservation::Recorded,
+    )
+    .await;
+    let pid = i32::try_from(launch["pid"].as_i64().unwrap()).unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         while authority.releases.load(Ordering::SeqCst) != 1 {
             tokio::task::yield_now().await;
@@ -1179,13 +1290,6 @@ async fn proactive_current_warm_up_opens_and_closes_without_a_conversation_or_pr
     })
     .await
     .expect("startup preparation closes its session and managed use");
-    // Preparation may finish before the test observes its process. The release
-    // is authoritative; its durable launch record survives that completion.
-    let launch: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(root.path().join("workspace/launch-opencode-startup.json")).unwrap(),
-    )
-    .unwrap();
-    let pid = i32::try_from(launch["pid"].as_i64().unwrap()).unwrap();
     assert_process(pid, false);
     tokio::time::timeout(Duration::from_secs(5), async {
         while resolver.warm_up_may_hold_resources() {
@@ -1194,10 +1298,85 @@ async fn proactive_current_warm_up_opens_and_closes_without_a_conversation_or_pr
     })
     .await
     .expect("a released warm-up holds nothing");
+    assert!(
+        FileWarmUpRecords::new(root.path().join("warm-up-records"))
+            .unwrap()
+            .completed(&runtime)
+            .await
+            .unwrap(),
+        "successful startup warm-up completion must be recorded for its exact runtime"
+    );
     assert_eq!(authority.admissions.load(Ordering::SeqCst), 1);
     // No ConversationService or submission exists in this test. The fixture's
     // launch therefore covers initialize, session/new/configuration and close;
     // there is no path that can send session/prompt.
+}
+
+#[tokio::test]
+async fn proactive_failed_initialization_has_launch_history_but_no_completed_warm_up() {
+    let root = tempfile::tempdir().unwrap();
+    let authority = Arc::new(UseAuthority::default());
+    let store = Arc::new(Store::new(StoreAnswer::Missing));
+    let path = fixture_wrapper(
+        root.path(),
+        "opencode-failed-startup",
+        "opencode/minimax-m3",
+    );
+    // Retain the wrapper's real launch history, then fail before ACP initialize.
+    let source = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(source.matches("os.execv(sys.executable,").count(), 1);
+    std::fs::write(
+        &path,
+        source.replace(
+            "os.execv(sys.executable,",
+            "sys.exit(0)\n# os.execv(sys.executable,",
+        ),
+    )
+    .unwrap();
+    store.publish_current(
+        &current_release(),
+        ManagedLaunchSnapshot::new(path, authority.clone()),
+    );
+    let resolver = Arc::new(resolver(
+        root.path(),
+        store,
+        Arc::new(Credentials::new(CredentialAnswer::ApiKey(
+            "synthetic-non-secret".into(),
+        ))),
+        HashMap::new(),
+    ));
+    let runtime = configured_warm_up_runtime(&resolver);
+    resolver.start_warm_up();
+    let launch = launched(
+        &root
+            .path()
+            .join("workspace/launch-opencode-failed-startup.json"),
+        1,
+        LaunchObservation::Recorded,
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while authority.releases.load(Ordering::SeqCst) != 1
+            || resolver.warm_up_may_hold_resources()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("failed startup warm-up reaches terminal cleanup before its outcome is checked");
+    assert_process(
+        i32::try_from(launch["pid"].as_i64().unwrap()).unwrap(),
+        false,
+    );
+    assert_eq!(authority.admissions.load(Ordering::SeqCst), 1);
+    assert!(
+        !FileWarmUpRecords::new(root.path().join("warm-up-records"))
+            .unwrap()
+            .completed(&runtime)
+            .await
+            .unwrap(),
+        "failed initialization must not record successful runtime preparation"
+    );
 }
 
 #[tokio::test]
@@ -1254,6 +1433,7 @@ async fn missing_key_skips_startup_warm_up_and_a_later_key_recovers_on_the_cold_
             .path()
             .join("workspace/launch-opencode-key-recovery.json"),
         2,
+        LaunchObservation::Live,
     )
     .await;
     assert_eq!(launch["credentialPresent"], true);
@@ -1321,6 +1501,7 @@ async fn rotated_key_shares_runtime_preparation_but_the_conversation_uses_fresh_
             .path()
             .join("workspace/launch-opencode-key-rotation.json"),
         2,
+        LaunchObservation::Live,
     )
     .await;
     assert_eq!(launch["credentialPresent"], true);
@@ -1419,6 +1600,7 @@ async fn standalone_explicit_profile_launches_with_captured_environment_and_no_m
             .path()
             .join("workspace/launch-opencode-standalone.json"),
         2,
+        LaunchObservation::Live,
     )
     .await;
     assert_eq!(

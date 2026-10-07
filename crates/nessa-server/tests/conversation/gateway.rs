@@ -377,7 +377,7 @@ mod gateway {
                 &peer,
                 "authenticate",
                 "session.authenticate",
-                json!({"minVersion":1,"maxVersion":1,"nonce":challenge["payload"]["nonce"],"credential":"owner-phone","client":client}),
+                json!({"minVersion":1,"maxVersion":1,"nonce":challenge["payload"]["nonce"],"credential":"owner-phone","client":client,"surface":{"kind":"cli","instance":"probe"}}),
             );
             let reply = response(&mut peer).await;
             if spoof_field {

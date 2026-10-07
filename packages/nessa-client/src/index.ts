@@ -109,6 +109,8 @@ export type {
   IssuedCredentialResult,
   ExistingCredentialResult,
   ProductClientMetadata,
+  ProductSurface,
+  ProductSurfaceKind,
   CredentialListResult,
   CredentialRevokeResult,
 } from "./generated/product.js"

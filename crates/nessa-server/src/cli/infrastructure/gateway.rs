@@ -77,7 +77,7 @@ impl LocalGateway {
         if challenge.min_version > 1 || challenge.max_version < 1 {
             return Err(CliError::Protocol);
         }
-        let ready: ProductSessionReady = result.request("session.authenticate", json!({"minVersion":1,"maxVersion":1,"nonce":challenge.nonce,"credential":credential,"client":{"id":"nessa-cli"}}))?;
+        let ready: ProductSessionReady = result.request("session.authenticate", json!({"minVersion":1,"maxVersion":1,"nonce":challenge.nonce,"credential":credential,"client":{"id":"nessa-cli"},"surface":{"kind":"cli","instance":"nessa-cli"}}))?;
         if ready.version != 1
             || ready.gateway_id.is_empty()
             || ready.organization_id.is_empty()

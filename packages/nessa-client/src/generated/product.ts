@@ -16,6 +16,22 @@ export interface ProductClientMetadata {
   /** Identifier of the connecting client application or instance. */
   id: string
 }
+/** Kind of user-facing surface. The same closed set as protocol/schemas/v1/common.json SurfaceKind; generation refuses a drift. Metadata only: it does not grant permissions. */
+export const ProductSurfaceKind = {
+  Panel: "panel",
+  Web: "web",
+  Desktop: "desktop",
+  Cli: "cli",
+} as const
+export type ProductSurfaceKind =
+  (typeof ProductSurfaceKind)[keyof typeof ProductSurfaceKind]
+/** Surface the handshake names so the gateway can tell connections that share a credential apart. The credential still decides identity. */
+export interface ProductSurface {
+  /** Kind of user-facing surface. */
+  kind: ProductSurfaceKind
+  /** Identifier distinguishing instances of this surface. */
+  instance: string
+}
 /** Wire request for session.authenticate. NessaClient.connect builds this after validating the server challenge; a successful response is ProductSessionReady. */
 export interface SessionAuthenticateParams {
   /** Lowest protocol version supported by this client. */
@@ -28,6 +44,8 @@ export interface SessionAuthenticateParams {
   credential: string
   /** Descriptive client metadata, separate from authenticated identity. */
   client: ProductClientMetadata
+  /** Surface kind and instance. Descriptive only; the credential decides the principal. */
+  surface: ProductSurface
 }
 /** Authenticated connection snapshot returned by the product handshake and auth.session(). Links the principal, organization membership, credential, and gateway. It describes current restrictions; the server checks current authorization again for every command. */
 export interface ProductSessionReady {
@@ -2013,6 +2031,7 @@ export const bounds = {
   maxReadyMethods: 52,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
+  maxProductSurfaceInstanceCharacters: 256,
   maxPhysicalRecordPayloadBytes: 65546,
   maxRecordPageRecords: 16,
   maxRecordPagePayloadBytes: 65546,

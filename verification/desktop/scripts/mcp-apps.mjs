@@ -275,18 +275,17 @@ const departureScenarios = {
     html: `<script>${hello}if (!window.name) { window.name = "reloaded"; location.reload(); }</script>`,
     leaves: true,
   },
-  // An image the fixture leaves unanswered (`openHeldLoad`) holds this
-  // document's first load: the frame's `load` does not fire, so the proxy
-  // never checks it, and the document stays the app's. `holding` is said
-  // only while `readyState` is not `complete` and the image is not
-  // complete. `loaded` or `not-held` means that hold was not established.
-  // The check counts the socket still unanswered after the wait.
+  // An image the fixture leaves unanswered (`openHeldLoad`) is in the
+  // markup, so the parser starts it before the document can finish. A
+  // script that inserts the image can run after Chromium has already
+  // fired `load` for a document that had no outstanding resource; that
+  // load is not a departure, and it is not this hold. `holding` is said
+  // only while `readyState` is not `complete`. `loaded` or `not-held`
+  // means that hold was not established. The check counts the socket
+  // still unanswered after the wait.
   "holds-first-load": {
-    html: `<script>${hello}addEventListener("load", function () { parent.postMessage({ jsonrpc: "2.0", method: "loaded" }, "*"); });
-      var img = document.createElement("img");
-      img.src = "@hold@";
-      document.documentElement.appendChild(img);
-      if (document.readyState !== "complete" && img.complete === false)
+    html: `<img src="@hold@" alt=""><script>${hello}addEventListener("load", function () { parent.postMessage({ jsonrpc: "2.0", method: "loaded" }, "*"); });
+      if (document.readyState !== "complete")
         parent.postMessage({ jsonrpc: "2.0", method: "holding" }, "*");
       else parent.postMessage({ jsonrpc: "2.0", method: "not-held" }, "*");
     </script>`,

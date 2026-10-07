@@ -9,6 +9,7 @@ import { describe, it } from "node:test"
 import {
   enqueueSizeReport,
   liveMountResourceAbort,
+  liveMountResourceAbortPattern,
   reclassifyDeliveredAbort,
   recordFailedRequest,
   runAndClose,
@@ -146,6 +147,10 @@ describe("recordFailedRequest", () => {
       true,
     )
     assert.equal(
+      liveMountResourceAbort(`requestfailed: ${RESOURCE}#mount net::ERR_ABORTED`, PAGE),
+      true,
+    )
+    assert.equal(
       liveMountResourceAbort(
         `requestfailed: http://127.0.0.1:1439/mcp-resources net::ERR_ABORTED`,
         PAGE,
@@ -165,6 +170,34 @@ describe("recordFailedRequest", () => {
       liveMountResourceAbort(`requestfailed: ${RESOURCE} net::ERR_ABORTED`, ""),
       false,
     )
+  })
+
+  it("#647: the live mount pattern is literal origin and exact endpoint", () => {
+    for (const url of [
+      "http://127X0X0X1:1438/mcp-resources",
+      "http://127.0.0.1:1438.evil/mcp-resources",
+      "http://127.0.0.1:1438@evil.example/mcp-resources",
+      "http://evil.example@127.0.0.1:1438/mcp-resources",
+      "http://127.0.0.1:1438%40evil.example/mcp-resources",
+      "http://127.0.0.1:1438/other/mcp-resources",
+      "http://127.0.0.1:1438/mcp-resources/extra",
+      "http://127.0.0.1:1438/MCP-resources",
+    ]) {
+      assert.equal(
+        liveMountResourceAbort(`requestfailed: ${url} net::ERR_ABORTED`, PAGE),
+        false,
+        url,
+      )
+    }
+    const ipv6 = "http://[::1]:1438/mcp-resources"
+    assert.equal(
+      liveMountResourceAbort(
+        `requestfailed: ${ipv6} net::ERR_ABORTED`,
+        "http://[::1]:1438/desktop.html",
+      ),
+      true,
+    )
+    assert.equal(liveMountResourceAbortPattern("data:text/html,test"), null)
   })
 
   it("F1′: the window's /browser/check, aborted after a 204 (its body never read), is harmless only", () => {

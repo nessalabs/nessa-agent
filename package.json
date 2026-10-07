@@ -15,7 +15,7 @@
     "format:check": "prettier --check src scripts packages verification eslint.config.js prettier.config.js",
     "lint": "eslint src packages verification",
     "lint:rules": "node --test scripts/eslint/*.test.mjs",
-    "scripts:test": "node --test scripts/*.test.mjs scripts/mcp-test-server/*.test.mjs scripts/subagent-contracts/*.test.mjs",
+    "scripts:test": "node --test scripts/*.test.mjs scripts/mcp-test-server/*.test.mjs scripts/subagent-contracts/*.test.mjs scripts/process-cleanup/*.test.mjs",
     "frontend:check": "pnpm format:check && pnpm lint && pnpm lint:rules && pnpm scripts:test && pnpm verify:desktop:test && pnpm architecture && pnpm protocol:check && pnpm client:docs:check && pnpm client:typecheck && pnpm typecheck && pnpm test && pnpm build",
     "architecture": "node --test scripts/architecture/*.test.mjs && node scripts/check-architecture.mjs",
     "agents:check": "node --test scripts/agents/*.test.mjs",

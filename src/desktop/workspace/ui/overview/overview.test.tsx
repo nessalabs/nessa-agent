@@ -1704,12 +1704,28 @@ describe("the frame the overview opens on", () => {
     const composer = host.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Message"]',
     )
+    expect(composer).not.toBeNull()
     composer?.focus()
-    // ⌘0's dispatch, and Escape straight after it: no frame has passed.
-    await act(async () => store.dispatch(showContent({ content: "agents" })))
+    // The opening frames stay in this fixture's queue. Escape is this turn.
+    act(() => {
+      store.dispatch(showContent({ content: "agents" }))
+    })
+    expect(animation.pending()).toBeGreaterThan(0)
     expect(selectOverviewOpen(store.getState())).toBe(true)
     expect(document.activeElement).toBe(composer)
-    await press(composer as HTMLElement, "Escape")
+    act(() => {
+      composer?.dispatchEvent(
+        stamp(
+          new KeyboardEvent("keydown", {
+            code: "Escape",
+            key: "Escape",
+            bubbles: true,
+            cancelable: true,
+          }),
+          now,
+        ),
+      )
+    })
     expect(selectOverviewOpen(store.getState())).toBe(false)
   })
 

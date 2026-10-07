@@ -24,7 +24,10 @@ export type CommonConnectOptions = {
   endpointSource?: GatewayEndpointSource
   /** Caller role metadata; does not confer authorization. */
   role: ClientRole
-  /** Surface metadata; identity and permissions come from the credential. */
+  /**
+   * Surface the handshake sends (`kind` and `instance`). Identity and
+   * permissions come from the credential; this only tells connections apart.
+   */
   surface: SurfaceInfo
   /** Caller metadata. The handshake sends its id; other fields describe the local host. */
   client: ClientInfo

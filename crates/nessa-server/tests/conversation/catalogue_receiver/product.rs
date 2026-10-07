@@ -534,7 +534,7 @@ impl ProductSource {
             tungstenite::connect(format!("ws://127.0.0.1:{port}/session")).unwrap();
         let challenge: Value =
             serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
-        socket.send(Message::Text(json!({"type":"req","id":"auth","method":"session.authenticate","params":{"minVersion":1,"maxVersion":1,"nonce":challenge["payload"]["nonce"],"credential":format!("{owner}-phone"),"client":{"id":"catalogue-receiver"}}}).to_string().into())).unwrap();
+        socket.send(Message::Text(json!({"type":"req","id":"auth","method":"session.authenticate","params":{"minVersion":1,"maxVersion":1,"nonce":challenge["payload"]["nonce"],"credential":format!("{owner}-phone"),"client":{"id":"catalogue-receiver"},"surface":{"kind":"cli","instance":"catalogue-receiver"}}}).to_string().into())).unwrap();
         let ready: Value = serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
         assert_eq!(ready["ok"], true, "{ready}");
         let placeholder = Scope::new(
