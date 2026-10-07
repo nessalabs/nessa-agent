@@ -21,6 +21,9 @@ pub enum OwnershipFailure {
     Submission(PortFailure),
     /// The delegated task was empty.
     EmptyTask,
+    /// The named parent has no acknowledged admission or conservative retained identity.
+    /// Read visibility does not authorize creation beneath a private parent.
+    UnpublishedParent,
     /// Cleanup is still owned. The drain was not dropped.
     Incomplete,
 }
@@ -42,6 +45,9 @@ impl fmt::Display for OwnershipFailure {
                 output.write_str("child submission is uncertain")
             }
             Self::EmptyTask => output.write_str("delegated task is empty"),
+            Self::UnpublishedParent => {
+                output.write_str("parent ownership admission is not acknowledged")
+            }
             Self::Incomplete => output.write_str("ownership close is incomplete"),
         }
     }

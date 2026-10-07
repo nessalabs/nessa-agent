@@ -109,7 +109,7 @@ pub struct OwnershipCoordinator {
 
 pub(super) struct Shared {
     pub(super) publication: Mutex<OwnershipPublication>,
-    /// IDs that have ever accepted a physical cleanup owner.
+    /// IDs with a physical owner or a handed-out gate permitting possible transfer.
     pub(super) bound: Mutex<HashSet<AgentLifetimeId>>,
     pub(super) absence_claimed: Mutex<HashSet<AgentLifetimeId>>,
     scope: Arc<Mutex<()>>,
@@ -328,7 +328,7 @@ impl OwnershipCoordinator {
     ///
     /// # Errors
     /// Returns [`BindResourcesFailure`] with the exact rejected owner for an
-    /// unknown/Closed identity, occupied slot, or previously confirmed absence/release.
+    /// unknown/private/Closed identity, occupied slot, or confirmed absence/release.
     pub fn bind_resources(
         &self,
         lifetime: AgentLifetimeId,
@@ -336,24 +336,11 @@ impl OwnershipCoordinator {
     ) -> Result<(), BindResourcesFailure> {
         let result = self.inner.with_graph(|graph| {
             let mut owned = self.inner.resources.lock().expect("child resources");
-            let refusal = match graph.lifetime_state(&lifetime) {
-                None => Some(BindResourcesRefusal::UnknownLifetime),
-                Some(LifetimeState::Closed) => Some(BindResourcesRefusal::Closed),
-                _ if owned.contains_key(&lifetime) => Some(BindResourcesRefusal::AlreadyBound),
-                _ if self
-                    .inner
-                    .absence_claimed
-                    .lock()
-                    .expect("absence claims")
-                    .contains(&lifetime)
-                    || graph.snapshot().settlements.iter().any(|row| {
-                        row.target == lifetime && row.physical == PhysicalFact::Released
-                    }) =>
-                {
-                    Some(BindResourcesRefusal::Released)
-                }
-                _ => None,
-            };
+            let refusal = self.inner.transfer_refusal(graph, &lifetime).or_else(|| {
+                owned
+                    .contains_key(&lifetime)
+                    .then_some(BindResourcesRefusal::AlreadyBound)
+            });
             if let Some(reason) = refusal {
                 return Err(BindResourcesFailure { reason, resources });
             }
@@ -371,14 +358,45 @@ impl OwnershipCoordinator {
         result
     }
 
-    /// Gate for an admitted lifetime. Install it on that lifetime's Agent.
+    /// Hand out participation for an admitted lifetime, for installation on its Agent.
+    /// Gate handoff records possible external resource transfer; it does not prove
+    /// physical existence, but it prevents subsequent never-bound absence claims.
+    /// Private admissions, Closed history, and confirmed absence/release return
+    /// `None`. Refused restored history retains its already-sealed inspection
+    /// gate, which cannot authorize attachment. Already-held gates keep their seal for
+    /// correlated attachment cleanup reporting after close.
     pub fn participation(&self, lifetime: &AgentLifetimeId) -> Option<Arc<dyn OwnedLifetime>> {
-        self.inner
-            .gates
-            .lock()
-            .expect("lifetime gates")
-            .get(lifetime)
-            .map(|gate| Arc::clone(gate) as Arc<dyn OwnedLifetime>)
+        self.inner.with_graph(|graph| {
+            if graph.refusal().is_some() {
+                let gate = self
+                    .inner
+                    .gates
+                    .lock()
+                    .expect("lifetime gates")
+                    .get(lifetime)
+                    .cloned()?;
+                return gate
+                    .sealed
+                    .load(Ordering::Acquire)
+                    .then_some(gate as Arc<dyn OwnedLifetime>);
+            }
+            if self.inner.transfer_refusal(graph, lifetime).is_some() {
+                return None;
+            }
+            let gate = self
+                .inner
+                .gates
+                .lock()
+                .expect("lifetime gates")
+                .get(lifetime)
+                .cloned()?;
+            self.inner
+                .bound
+                .lock()
+                .expect("possible transfers")
+                .insert(lifetime.clone());
+            Some(gate as Arc<dyn OwnedLifetime>)
+        })
     }
 
     /// Reload the store. Reserved, prepared, and attached spawns become unconfirmed
@@ -467,6 +485,37 @@ impl Shared {
         let _scope = self.scope.lock().expect("tree admission");
         let mut graph = self.graph.lock().expect("ownership graph");
         body(&mut graph)
+    }
+
+    fn transfer_refusal(
+        &self,
+        graph: &OwnershipGraph,
+        lifetime: &AgentLifetimeId,
+    ) -> Option<BindResourcesRefusal> {
+        match graph.lifetime_state(lifetime) {
+            None => Some(BindResourcesRefusal::UnknownLifetime),
+            Some(LifetimeState::Closed) => Some(BindResourcesRefusal::Closed),
+            _ if !self
+                .publication
+                .lock()
+                .expect("ownership publication")
+                .lifetime_eligible(graph, lifetime) =>
+            {
+                Some(BindResourcesRefusal::UnpublishedLifetime)
+            }
+            _ if self
+                .absence_claimed
+                .lock()
+                .expect("absence claims")
+                .contains(lifetime)
+                || graph.snapshot().settlements.iter().any(|row| {
+                    row.target == *lifetime && row.physical == PhysicalFact::Released
+                }) =>
+            {
+                Some(BindResourcesRefusal::Released)
+            }
+            _ => None,
+        }
     }
 
     pub(super) fn remember(&self, inner: Weak<Shared>, lifetime: AgentLifetimeId, sealed: bool) {
@@ -614,6 +663,23 @@ impl Shared {
     ) -> Result<Admitted, OwnershipFailure> {
         if graph.spawn_progress(&command.request_id).is_some() {
             return Err(OwnershipFailure::Domain(OwnershipError::RequestConflict));
+        }
+        if let Some(refusal) = graph.refusal() {
+            return Err(OwnershipFailure::Domain(
+                if *refusal == OwnershipError::Cycle {
+                    OwnershipError::Cycle
+                } else {
+                    OwnershipError::DispatchRefused
+                },
+            ));
+        }
+        if !self
+            .publication
+            .lock()
+            .expect("ownership publication")
+            .lifetime_eligible(graph, &command.parent)
+        {
+            return Err(OwnershipFailure::UnpublishedParent);
         }
         let policy = select_inherited_policy(command.policy.clone(), command.child_supports_policy)
             .map_err(OwnershipFailure::Domain)?;
@@ -951,6 +1017,9 @@ impl Shared {
         token: &PublicationToken,
         unconfirmed_request: Option<&SpawnRequestId>,
     ) -> Result<(), OwnershipFailure> {
+        if token.is_safety() {
+            return self.persist_token_evidence(evidence, Some(token)).await;
+        }
         match self.audit.record(evidence).await {
             Ok(()) => {
                 self.with_graph(|_| {
@@ -1032,25 +1101,50 @@ impl Shared {
     }
 
     async fn mark_unconfirmed(&self, request: &SpawnRequestId) {
-        let evidence = self.with_graph(|graph| {
-            self.publication
-                .lock()
-                .expect("ownership publication")
-                .retain_spawn(request);
-            let progress = graph.spawn_progress(request)?.clone();
-            graph
+        let (evidence, close) = self.with_graph(|graph| {
+            let mut publication = self.publication.lock().expect("ownership publication");
+            let initially_private = !publication.spawn_eligible(request);
+            publication.retain_spawn(request);
+            let Some(progress) = graph.spawn_progress(request).cloned() else {
+                return (None, None);
+            };
+            let evidence = graph
                 .advance_spawn(
                     request,
                     SpawnProgress::Unconfirmed {
                         known: progress.known(),
                     },
                 )
-                .ok()
+                .ok();
+            let close = if initially_private {
+                graph.child_lifetime(request).cloned().and_then(|child| {
+                    let admission = graph
+                        .begin_close(
+                            &child,
+                            mint_close(),
+                            LifetimeCause::TerminalFailure,
+                            Initiator::Runtime,
+                        )
+                        .ok()?;
+                    if let Some(flag) = self.seals.lock().expect("lifetime seals").get(&child) {
+                        flag.store(true, Ordering::Release);
+                    }
+                    Some(admission.evidence)
+                })
+            } else {
+                None
+            };
+            (evidence, close)
         });
         if let Some(evidence) = evidence {
             let _ = self.audit.record(&evidence).await;
-            let _ = self.commit_snapshot().await;
         }
+        if let Some(evidence) = close {
+            let _ = self.audit.record(&evidence).await;
+        }
+        // Already-Unconfirmed and other terminal safety positions need no new
+        // graph transition, but their current facts still use the same writer.
+        let _ = self.commit_snapshot().await;
     }
 
     /// Write the snapshot even when the audit port rejects the record.
@@ -1059,7 +1153,25 @@ impl Shared {
         &self,
         evidence: &OwnershipEvidence,
     ) -> Result<(), OwnershipFailure> {
+        self.persist_token_evidence(evidence, None).await
+    }
+
+    async fn persist_token_evidence(
+        &self,
+        evidence: &OwnershipEvidence,
+        token: Option<&PublicationToken>,
+    ) -> Result<(), OwnershipFailure> {
         let audit = self.audit.record(evidence).await;
+        if audit.is_ok() {
+            if let Some(token) = token {
+                self.with_graph(|_| {
+                    self.publication
+                        .lock()
+                        .expect("ownership publication")
+                        .acknowledge(token)
+                });
+            }
+        }
         let stored = self.commit_snapshot().await;
         match (audit, stored) {
             (Ok(()), Ok(())) => Ok(()),
@@ -1524,9 +1636,6 @@ impl OwnedLifetime for LifetimeGate {
             let _ = shared.audit.record(&evidence).await;
             let _ = shared.commit_snapshot().await;
         }
-        if released {
-            shared.release_slot(&self.lifetime);
-        }
         shared.notify.notify_waiters();
     }
 
@@ -1867,6 +1976,44 @@ mod lifetime_races {
             .expect("root row");
         assert_eq!(row.state, LifetimeState::Closed);
         assert_eq!(row.cause, Some(LifetimeCause::HostClose));
+    }
+
+    #[tokio::test]
+    async fn row_30_already_safety_reconciliation_still_writes_current_fact() {
+        use crate::domain::agent_execution::subagents::{KnownMilestone, SpawnProgress};
+        let store = Arc::new(MemoryOwnershipStore::new());
+        let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+            store: store.clone(),
+            audit: Arc::new(AcceptAudit),
+            factory: Arc::new(OnceFactory {
+                resources: Arc::new(Holding {
+                    closes: AtomicUsize::new(0),
+                    hold: Arc::new(Notify::new()),
+                }),
+            }),
+            room: Arc::new(LiveCapacity::new(4)),
+        });
+        let root = coordinator
+            .open_root(SessionId::new("root-session").unwrap(), Initiator::Runtime)
+            .await
+            .unwrap();
+        let request = command(root);
+        coordinator.spawn(request.clone()).await.unwrap();
+        let safety = SpawnProgress::Unconfirmed {
+            known: KnownMilestone::TaskAdmitted {
+                receipt: TaskReceiptId::new("receipt").unwrap(),
+            },
+        };
+        coordinator.inner.with_graph(|graph| {
+            let _ = graph
+                .advance_spawn(&request.request_id, safety.clone())
+                .unwrap();
+        });
+        coordinator
+            .inner
+            .mark_unconfirmed(&request.request_id)
+            .await;
+        assert_eq!(store.read().await.unwrap().spawns[0].progress, safety);
     }
 
     #[tokio::test]

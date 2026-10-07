@@ -1378,7 +1378,7 @@ async fn r5_a_cycle_stays_readable_and_refuses_dispatch() {
         reports: Vec::new(),
     };
     store.write(&snapshot).await.unwrap();
-    let world = resumed(store);
+    let world = resumed(store.clone());
     world.coordinator.resume().await.unwrap();
     let refused = world
         .coordinator
@@ -1398,6 +1398,37 @@ async fn r5_a_cycle_stays_readable_and_refuses_dispatch() {
         .participation(&left)
         .expect("cycle gate")
         .is_sealed());
+    let refused_owner = world
+        .coordinator
+        .bind_resources(
+            left.clone(),
+            Arc::new(ScriptResources {
+                closes: AtomicUsize::new(0),
+                report: released(),
+                hold: None,
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(refused_owner.reason, nessa_sdk::application::agent_execution::subagents::BindResourcesRefusal::UnpublishedLifetime);
+    assert_eq!(store.read().await.unwrap(), snapshot);
+    let reloaded = resumed(store.clone());
+    reloaded.coordinator.resume().await.unwrap();
+    assert!(reloaded
+        .coordinator
+        .participation(&left)
+        .unwrap()
+        .is_sealed());
+    assert!(matches!(
+        reloaded
+            .coordinator
+            .spawn(reloaded.command(&left, "retry", "task"))
+            .await,
+        Err(OwnershipFailure::Domain(
+            OwnershipError::Cycle | OwnershipError::DispatchRefused
+        ))
+    ));
+    assert_eq!(reloaded.factory.prepares(), 0);
+    assert_eq!(store.read().await.unwrap(), snapshot);
 }
 
 fn resumed(store: Arc<MemoryOwnershipStore>) -> World {

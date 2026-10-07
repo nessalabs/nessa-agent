@@ -39,6 +39,8 @@ pub trait ChildResources: Send + Sync {
 pub enum BindResourcesRefusal {
     /// The identity is not present in the graph.
     UnknownLifetime,
+    /// The identity exists privately but its ownership admission is not acknowledged.
+    UnpublishedLifetime,
     /// The lifetime already completed closure.
     Closed,
     /// A cleanup owner is already retained; it cannot be replaced.

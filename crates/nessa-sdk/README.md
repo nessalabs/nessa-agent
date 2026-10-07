@@ -201,10 +201,15 @@ automatic session storage, hooks, invocation, and UI integration.
   reconciliation without making `open_root` an idempotent retry.
   `bind_resources` now returns a typed refusal plus the unchanged owner when
   transfer is refused; it does not replace an occupied owner or bind after an
-  absence claim. Never-bound root settlement consumes the actual absence audit
-  result; rejection leaves
-  Closing with failed evidence. Restored identities do not prove never-bound
-  absence. Whole-transaction panic supervision (#625) and production gateway
+  absence claim. Private root/child admissions cannot confer external binding,
+  participation, or descendant spawn authority before their audit acknowledges.
+  Handing out an eligible participation gate records possible ownership transfer
+  and prevents a never-bound absence claim. Captured nonrunnable safety facts use
+  the same snapshot writer even when their audit rejects or is uncertain.
+  Never-bound root settlement consumes the actual absence audit result; rejection
+  leaves Closing with failed evidence. Restored identities do not prove never-bound
+  absence. Additional cleanup audit/storage debt (#646), whole-transaction panic
+  supervision (#625), and production gateway
   child composition remain separate work. `providers`
   injected execution ports, `sessions`
   automatic snapshot management and the streaming commit clock port,

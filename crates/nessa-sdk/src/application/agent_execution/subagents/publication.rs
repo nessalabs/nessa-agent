@@ -29,6 +29,20 @@ pub(super) struct PublicationToken {
     previous: Option<PublishedState>,
 }
 
+impl PublicationToken {
+    pub(super) fn is_safety(&self) -> bool {
+        matches!(
+            self.proposed,
+            PublishedState::Spawn(
+                SpawnProgress::Unconfirmed { .. }
+                    | SpawnProgress::Draining { .. }
+                    | SpawnProgress::StartupFailed { .. }
+                    | SpawnProgress::Ended { .. }
+            ) | PublishedState::Report(DeliveryState::Suppressed)
+        )
+    }
+}
+
 #[derive(Default)]
 pub(super) struct OwnershipPublication {
     roots: HashSet<AgentLifetimeId>,
@@ -133,10 +147,10 @@ impl OwnershipPublication {
             .or_insert(SpawnProgress::Reserved);
     }
 
-    pub(super) fn project(&self, graph: &OwnershipGraph) -> OwnershipSnapshot {
-        let mut snapshot = graph.snapshot();
+    fn eligible_lifetimes(&self, snapshot: &OwnershipSnapshot) -> HashSet<AgentLifetimeId> {
         let mut retained = self.roots.clone();
-        // Select child identities only beneath retained ancestors, including nested spawns.
+        // Retain identities only with their retained ancestor chain. Admission
+        // uses this same authority; graph Open alone does not grant transfer.
         loop {
             let before = retained.len();
             for row in &snapshot.spawns {
@@ -150,6 +164,21 @@ impl OwnershipPublication {
                 break;
             }
         }
+        retained
+    }
+
+    pub(super) fn lifetime_eligible(
+        &self,
+        graph: &OwnershipGraph,
+        lifetime: &AgentLifetimeId,
+    ) -> bool {
+        self.eligible_lifetimes(&graph.snapshot())
+            .contains(lifetime)
+    }
+
+    pub(super) fn project(&self, graph: &OwnershipGraph) -> OwnershipSnapshot {
+        let mut snapshot = graph.snapshot();
+        let retained = self.eligible_lifetimes(&snapshot);
         snapshot
             .lifetimes
             .retain(|r| retained.contains(&r.lifetime_id));
@@ -287,6 +316,22 @@ mod tests {
             })
             .unwrap();
         assert_eq!(admitted.child_lifetime, Some(child.clone()));
+        // An acknowledged child below an unpublished ancestor cannot become
+        // a standalone root after projection/reload, even with stale metadata.
+        let mut orphaned = OwnershipPublication::default();
+        let token = orphaned.begin(
+            PublicationTarget::Spawn(SpawnRequestId::new("request").unwrap()),
+            PublishedState::Spawn(SpawnProgress::Reserved),
+        );
+        assert!(orphaned.acknowledge(&token));
+        assert!(!orphaned.lifetime_eligible(&graph, &child));
+        let projection = orphaned.project(&graph);
+        assert!(projection.lifetimes.is_empty());
+        assert!(projection.spawns.is_empty());
+        assert!(OwnershipGraph::restore(projection)
+            .snapshot()
+            .lifetimes
+            .is_empty());
         let report = graph
             .admit_report(ReportId::new("report").unwrap(), &child, &root)
             .unwrap();

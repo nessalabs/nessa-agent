@@ -760,7 +760,7 @@ uncertain ports; whole-transaction panic supervision is separate #625 work.
 | 5 | A Attached acknowledged; TaskAdmitted audit held; B commits | A snapshot remains Attached; no unaudited affirmative task receipt. |
 | 6 | A transition audit accepts after close has sealed A | Token may acknowledge captured eligibility, but projected/live A remains Closing/Closed; never reopen or dispatch. |
 | 7 | A close intent mutates graph; its audit rejects; B or A stores | Coherent Closing rows/cause/operation persist; no new open/reservation permission leaks. |
-| 8 | Cleanup reports Released; cleanup audit/store rejects or panics | Physical Released recorded and capacity reconciled before fallible ports; close evidence may remain failed/pending, never fake acknowledgement. |
+| 8 | Cleanup reports Released; cleanup audit/store rejects or is uncertain | Physical Released recorded and capacity reconciled before fallible ports; close evidence may remain failed/pending, never fake acknowledgement. |
 | 9 | Initial root audit accepts; store definitively rejects | ID already eligible: preserve ID, seal/reconcile root; return Store(Rejected). Do not delete eligible ID. |
 |10 | Initial root store writes then returns Uncertain; later reconcile/restart | Preserve same ID, seal/reconcile and persist conservative close state; never erase uncertain landed ID. |
 |11 | Initial root audit is Uncertain | No affirmative Open grant; preserve identity in conservative Closing retention; return typed audit uncertainty and own reconciliation. |
@@ -776,12 +776,19 @@ uncertain ports; whole-transaction panic supervision is separate #625 work.
 |21 | Never-bound absence claim wins admission scope; resource binding arrives while its audit is held or rejected | Reject binding and return the unchanged physical owner to the caller. Keep the absence claim through failure and evidence-only retry. |
 |22 | Resource binding wins admission scope before absence claim | Retain that owner and the once-bound fact; normal close drains it. No never-bound proof may be inferred. |
 |23 | Binding names unknown/Closed/released lifetime, or replaces an occupied resource slot | Return typed refusal plus the rejected owner; preserve any previous owner. Restored Closing may bind only before physical release or absence claim. |
-|24 | Initial root audit rejects after another operation sealed it or transferred a cleanup owner | Targeted deletion refuses; retain and reconcile the same identity and its real safety/ownership facts. |
+|24 | Initial root audit rejects after another operation sealed it, or eligible publication fails after a cleanup owner transferred | Targeted deletion refuses safety history; retain and reconcile the same identity and its real ownership facts. Private external transfers are refused by row 28. |
 |25 | Task submission returned its receipt; TaskAdmitted audit is held; close seals/settles child and stores before audit accepts or rejects | Domain-derived nonrunnable Unconfirmed retention includes the actual receipt while its permission is pending. Preserve Closing/Closed cause, terminal safety progress, and the receipt through resume without prepare or resubmit. |
+| 26 | Admitted lifetime gate is handed out before absence is claimed; caller drops or close audit rejects | Record possible ownership transfer under admission scope. Seal the held gate and retain Closing until real external attachment evidence; gate handoff does not prove physical existence or absence. |
+| 27 | Never-bound absence claim wins before gate handoff | Refuse a new usable participation gate while audit is held/rejected and after closure; preserve already-held gates and their seals. |
+| 28 | Private reservation/root identity is visible through reads/audit; external bind or participation is requested | Binding returns UnpublishedLifetime plus the unchanged owner; participation is absent. Read visibility confers no transfer authority. Accepted admission subsequently permits normal transfer. |
+| 29 | Root admission audit held; its observed ID is used as spawn parent | Refuse UnpublishedParent before capacity reservation, graph rows, or factory effect. Acceptance permits a later spawn; rejection leaves no descendants. |
+| 30 | Unconfirmed/StartupFailed/Ended safety transition audit rejects or is uncertain; graph is already nonrunnable | Use the shared safety writer. Persist the actual safety fact even when a same-state mark_unconfirmed transition is unnecessary or refused. |
+| 31 | Report is suppressed by a closed parent; suppression audit rejects | Persist suppression as a safety fact and return the actual audit failure. Do not turn a rejected Submitted admission into suppression without a domain close. |
+| 32 | Initial reservation audit is uncertain | Retain request/binding/child identity as Unconfirmed and seal its child lifetime. No runnable external gate or affirmative Reserved grant; retain capacity until authoritative release. |
 
 Enforcers: the public coordinator tests in
 `tests/application/agent_execution/subagents/publication.rs` name rows 1–15,
-18–19 and 21–25. `rejected_close_intent_is_persisted_before_cleanup_can_complete`
+18–19 and 21–32. `rejected_close_intent_is_persisted_before_cleanup_can_complete`
 adds the held-cleanup boundary for row 7. The library's
 `an_older_snapshot_does_not_replace_a_newer_seal` enforces row 16;
 `publication::tests::row_17_tokens_acknowledge_captured_progress_once_and_refuse_stale_generation`
@@ -790,7 +797,13 @@ enforce row 17. Domain
 `row_20_private_root_discard_preserves_neighbors_closed_history_reports_and_recovery`
 checks targeted removal without re-running recovery. Publication's
 `retained_projection_preserves_valid_history_and_referential_closure` checks
-valid Closed history. Report admission uses independently held audit in
+valid Closed history and prevents child identity retention without its eligible ancestor.
+`row_30_already_safety_reconciliation_still_writes_current_fact` checks
+same-state safety reconciliation; the restored cycle test preserves sealed
+inspection-only gates and refuses transfer/dispatch across save/reload.
+Row 8 proves release/capacity ordering, not propagation of every extra
+coordinator cleanup audit/storage failure: that evidence debt is tracked in #646
+with #625 supervision. Report admission uses independently held audit in
 `private_report_does_not_leak_through_unrelated_commit`. These SDK tests do not
 claim the proposed gateway wiring or #625 panic supervision is implemented.
 
