@@ -21,6 +21,7 @@ mod memory;
 mod ports;
 mod publication;
 mod root;
+mod supervision;
 
 pub use coordinator::{
     CloseCommand, OwnershipCoordinator, OwnershipDependencies, SpawnCommand, SpawnReceipt,

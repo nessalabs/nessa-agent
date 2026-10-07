@@ -1178,6 +1178,73 @@ C's settled contract; live routing waits for C. Sample F work can proceed agains
 its port, while its live adapter waits for D. This dependency order allows useful
 cloud work without shipping an unowned-child window.
 
+### Owned settlement and supervision (#625, #646, #649)
+
+The ownership graph retains three immutable resource observations per target:
+first actual Pending, Failed and Released, with monotonic physical knowledge.
+Each exact record has its own mandatory coordinator audit acknowledgement and
+an outcome-scoped provider witness. Failed acknowledgement cannot acknowledge
+release; repeated facts join the existing slot. Latest attempt failures remain
+failures even when older evidence can enable a later reconciliation.
+
+Actual absence is typed separately: NeverTransferredRoot, observed preparation
+Rejected with no cleanup owner correlated to its request, or THIS admitted
+invocation's observed AdmissionFailedBeforeFactory. The latter is installed in
+one admission/graph critical section while its flight still excludes binding,
+after validating request/child, no owner, no bound handoff and unrefused history.
+Uncertain results, panic, Ended, missing resources and restore do not prove absence.
+Durable absence itself excludes later binding/gate transfer after resume.
+
+Physical/absence facts and exact debt are installed, Released capacity returned,
+then effect future destruction contained. An acknowledged Closing snapshot of
+actual proof/debt precedes explicit root-only aggregate Completion. Completion
+has its own exact audit token; report acknowledgement cannot complete a close.
+Completion acknowledgement changes only lifetimes owned by that first operation;
+final snapshot rejection stays a Store failure, with writer-only explicit retry.
+No stored field acknowledges the snapshot that contains it.
+
+First close ownership is derived from existing cascade ancestry. Independently
+Closing children retain cause/actor/operation, and parents join their current
+drain generation outside locks. A failed generation terminates its parent attempt;
+only explicit later retry starts fresh child evidence work. Each generation tries
+each exact debt once and publishes one immutable terminal result. Confirmed
+Released targets never repeat physical cleanup. Unknown/missing work is Incomplete.
+
+Effect construction, poll and Drop are separate contained boundaries. Ready
+owners, failure cleanup, receipts, absence and resource facts enter their existing
+authoritative owners before Drop. Outer workers terminalize even when recovery
+faults; admitted request results are cached with binding validation, while
+preadmission NoRoom remains retriable. Owned drains register before fallible
+intent publication. Caller cancellation/waker/panic-payload faults do not erase
+terminal results. Runtime shutdown and process abort are outside unwind recovery.
+
+| Ordering | Required observable outcome / regression enforcer |
+|---|---|
+| Ready preparation Rejected+None then parent close | Actual absence/first child cause retained, parent closes; `rejected_startup_without_owner_then_parent_close_settles`. |
+| Released+provider Ack then coordinator observation rejects | Physical count one/capacity free, Audit(Rejected), Closing; `released_child_with_rejected_coordinator_observation_is_not_closed`. |
+| Actual never-bound absence, acknowledged Closing safety, final Closed store rejects, resume | Honest Store(Rejected), proof survives, explicit recovery closes/reopens; `never_bound_root_terminal_store_rejection_recovers_after_resume`. |
+| First Failed audit debt A, later Released debt B | Preserve both exact records; cleanup is not blocked by A; retry A once without re-closing B. |
+| Pending -> Failed -> Released, all audits reject | Maximum three immutable physical debts; capacity returns only on actual Released. |
+| Failed+provider Ack -> Released+provider Failed | Failure witness cannot acknowledge release; Incomplete despite coordinator Ack. |
+| Legitimate later Released+Ack report | Improve release witness without replacing first observation or physically replaying. |
+| Report token presented as Completion / foreign request, cause or operation | StaleOutcome; no coarse after-state authority. |
+| Closing safety write rejects vs final Closed write rejects | Former prevents Completion; latter allows only honest writer retry/recovery. |
+| Saved absence/mixed outstanding debts, resume | Validate exact correlation, retry retained records without factory/physical replay. |
+| Independent child audit held/rejected while parent joins | First operation remains; parent receives child failure; explicit parent retry reconciles fresh generation. |
+| Parent overtakes factory/submit output | No reopening/dispatch; Ready owner/receipt survives before future Drop. |
+| Initial publication fails before factory with concurrent bind | Live flight and same graph scope validate/install exclusion; no restored inference. |
+| Constructor/poll panic; Ready then Drop panic; recovery faults | Cached typed uncertainty; retain observed owner/receipt/report, no inferred release. |
+| Two close waiters/caller loss/waker or payload faults | All existing waiters settle same immutable result; later explicit retry differs without rewriting. |
+| NoRoom then capacity available; identical/conflicting admitted retry | Nonadmitted retry can run; admitted retry returns cached result; changed binding conflicts. |
+| Concurrent intent publication and terminal store rejection | Registered generation owns intent persistence before cleanup; no later independent intent writer publishes Closed after that generation's final refusal. |
+| End/host/root/disposal intent audit/store fault | Seal and owned drain precede fault; cleanup still executes under supervision. |
+
+Current ownership JSON requires typed settlement proof and explicit Completion.
+Proofless old settlement bodies return PortFailure::Rejected (Store(Rejected) on
+resume), unchanged on disk. No migration, defaults-to-Ack, dual reader, schema
+version bump or compatibility aliases. SQLite remains user_version=1. Valid
+no-settlement bodies depend on the current DTO's required shape, tested directly.
+
 ### Cloud checks and supported environments
 
 Portable fixture inspection runs on bare Node 24, without `node_modules`, provider

@@ -530,6 +530,8 @@ pub enum OwnershipMeaning {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[must_use]
 pub struct OwnershipEvidence {
+    /// Typed close observation, absence or aggregate completion authority.
+    pub close_detail: Option<CloseEvidenceDetail>,
     /// Parent lifetime this record is about. For a root open, this is the root.
     pub parent_lifetime: AgentLifetimeId,
     /// Child lifetime, when the transition has one.
@@ -581,6 +583,8 @@ pub struct SpawnRow {
 /// Physical and audit facts for one target of a close.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SettlementRow {
+    /// Actual resource observations or validated live absence, including exact audit debt.
+    pub proof: SettlementProof,
     /// Lifetime whose close this fact belongs to.
     pub close_lifetime: AgentLifetimeId,
     /// Target inside that close.
@@ -620,6 +624,8 @@ pub enum DeliveryState {
 /// Rows the store reloads. [`super::OwnershipGraph::restore`] decides whether they may dispatch.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct OwnershipSnapshot {
+    /// Explicit first-close aggregate completion facts, one per direct close root.
+    pub close_completions: Vec<CloseCompletionRow>,
     /// Lifetime rows.
     pub lifetimes: Vec<LifetimeRow>,
     /// Spawn rows.
@@ -628,4 +634,108 @@ pub struct OwnershipSnapshot {
     pub settlements: Vec<SettlementRow>,
     /// Result report rows.
     pub reports: Vec<ReportRow>,
+}
+
+
+/// Actual absence observed by the live transaction, never inferred during restoration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AbsenceProof {
+    /// A root that has never transferred resources or a gate.
+    NeverTransferredRoot,
+    /// Actual Ready preparation rejection promised no outstanding cleanup owner.
+    PreparationRejectedWithoutOwner(SpawnRequestId),
+    /// This admitted invocation failed publication before its factory handoff.
+    AdmissionFailedBeforeFactory(SpawnRequestId),
+}
+
+/// Consequential close fact delivered to the mandatory ownership audit port.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CloseEvidenceDetail {
+    /// The first actual observation of this physical outcome.
+    ResourceObservation {
+        /// Actual physical outcome, not an inference from audit delivery.
+        physical: PhysicalFact,
+        /// Provider evidence scoped to this physical outcome.
+        provider_evidence: EvidenceFact,
+    },
+    /// Actual absence has no synthetic provider acknowledgement.
+    Absence(AbsenceProof),
+    /// Aggregate readiness decision, separately acknowledged before Closed.
+    Completion,
+}
+
+/// Immutable first observation and its independent acknowledgements.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResourceObservationAudit {
+    /// Exact first observation delivered on every coordinator retry.
+    pub(super) record: OwnershipEvidence,
+    /// Actual coordinator acknowledgement; Acknowledged is absorbing.
+    pub(super) acknowledgement: EvidenceFact,
+    /// Actual same-outcome provider witness, including later correlated acknowledgement.
+    pub(super) provider_acknowledged: bool,
+}
+
+/// Actual absence and the exact mandatory coordinator audit obligation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AbsenceAudit {
+    /// Live transaction's validated absence authority.
+    pub(super) proof: AbsenceProof,
+    /// Exact immutable absence observation.
+    pub(super) record: OwnershipEvidence,
+    /// Actual ownership audit acknowledgement.
+    pub(super) acknowledgement: EvidenceFact,
+}
+
+/// Bounded close evidence. Resource slots are Pending, Failed, Released in that order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SettlementProof {
+    /// At most three immutable first observations and scoped provider witnesses.
+    Resource([Option<ResourceObservationAudit>; 3]),
+    /// Actual correlated absence, with no provider field.
+    Absence(AbsenceAudit),
+}
+
+/// Root-only aggregate completion authority retained by the ownership graph.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CloseCompletionRow {
+    /// Direct first-close root whose owned targets were ready.
+    pub(super) close_lifetime: AgentLifetimeId,
+    /// Immutable explicitly typed aggregate decision.
+    pub(super) record: OwnershipEvidence,
+    /// Actual completion audit acknowledgement; only Ack changes lifetimes to Closed.
+    pub(super) acknowledgement: EvidenceFact,
+}
+
+impl ResourceObservationAudit {
+    /// Exact immutable first-observation record.
+    pub fn record(&self) -> &OwnershipEvidence { &self.record }
+    /// Actual coordinator acknowledgement of this record.
+    pub fn acknowledgement(&self) -> EvidenceFact { self.acknowledgement }
+    /// Whether an actual provider witness for this outcome was observed.
+    pub fn provider_acknowledged(&self) -> bool { self.provider_acknowledged }
+    pub(crate) fn from_parts(record: OwnershipEvidence, acknowledgement: EvidenceFact, provider_acknowledged: bool) -> Self {
+        Self { record, acknowledgement, provider_acknowledged }
+    }
+}
+impl AbsenceAudit {
+    /// Actual live proof, validated with the enclosing graph on restoration.
+    pub fn proof(&self) -> &AbsenceProof { &self.proof }
+    /// Exact immutable absence observation.
+    pub fn record(&self) -> &OwnershipEvidence { &self.record }
+    /// Actual coordinator acknowledgement of the absence record.
+    pub fn acknowledgement(&self) -> EvidenceFact { self.acknowledgement }
+    pub(crate) fn from_parts(proof: AbsenceProof, record: OwnershipEvidence, acknowledgement: EvidenceFact) -> Self {
+        Self { proof, record, acknowledgement }
+    }
+}
+impl CloseCompletionRow {
+    /// First direct operation owner, which may itself be a child lifetime.
+    pub fn close_lifetime(&self) -> &AgentLifetimeId { &self.close_lifetime }
+    /// Exact immutable explicitly typed aggregate decision.
+    pub fn record(&self) -> &OwnershipEvidence { &self.record }
+    /// Actual mandatory audit acknowledgement of this decision.
+    pub fn acknowledgement(&self) -> EvidenceFact { self.acknowledgement }
+    pub(crate) fn from_parts(close_lifetime: AgentLifetimeId, record: OwnershipEvidence, acknowledgement: EvidenceFact) -> Self {
+        Self { close_lifetime, record, acknowledgement }
+    }
 }

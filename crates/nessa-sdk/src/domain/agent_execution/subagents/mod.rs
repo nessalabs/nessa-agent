@@ -16,11 +16,11 @@ mod values;
 
 pub use error::OwnershipError;
 pub use graph::{
-    ChildPage, ChildView, CloseAdmission, Dispatch, OwnershipGraph, SpawnAdmission,
+    ChildPage, ChildView, CloseAdmission, CloseCompletion, Dispatch, OwnershipGraph, SpawnAdmission,
     UnboundRootSettlement,
 };
 pub use values::{
-    select_inherited_policy, AgentLifetimeId, ApprovalPolicy, CloseOperationId, DeliveryState,
+    select_inherited_policy, AbsenceAudit, AbsenceProof, AgentLifetimeId, CloseCompletionRow, CloseEvidenceDetail, ResourceObservationAudit, SettlementProof, ApprovalPolicy, CloseOperationId, DeliveryState,
     EvidenceFact, HostActor, Initiator, KnownMilestone, LifetimeCause, LifetimeRow, LifetimeState,
     ModelChoice, OwnershipEvidence, OwnershipMeaning, OwnershipSnapshot, PhysicalFact, PolicyRead,
     ReportId, ReportRow, SettlementRow, SpawnBinding, SpawnOrigin, SpawnProgress, SpawnRequestId,

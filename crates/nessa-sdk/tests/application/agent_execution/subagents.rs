@@ -1546,6 +1546,7 @@ async fn r3_an_open_child_of_a_closing_parent_is_not_runnable() {
     let child = AgentLifetimeId::new("child-life").unwrap();
     let request = SpawnRequestId::new("child-req").unwrap();
     let snapshot = OwnershipSnapshot {
+        close_completions: Vec::new(),
         lifetimes: vec![
             LifetimeRow {
                 lifetime_id: parent.clone(),
@@ -1612,6 +1613,7 @@ async fn r5_an_open_child_under_a_closed_parent_is_not_runnable() {
     let child = AgentLifetimeId::new("child-life").unwrap();
     let request = SpawnRequestId::new("child-req").unwrap();
     let snapshot = OwnershipSnapshot {
+        close_completions: Vec::new(),
         lifetimes: vec![
             LifetimeRow {
                 lifetime_id: parent.clone(),
@@ -1702,6 +1704,7 @@ async fn r5_a_cycle_stays_readable_and_refuses_dispatch() {
     let left = AgentLifetimeId::new("life-left").unwrap();
     let right = AgentLifetimeId::new("life-right").unwrap();
     let snapshot = OwnershipSnapshot {
+        close_completions: Vec::new(),
         lifetimes: vec![open_row(&left, "sess-left"), open_row(&right, "sess-right")],
         spawns: vec![
             spawn_row(&right, &left, "req-left"),
