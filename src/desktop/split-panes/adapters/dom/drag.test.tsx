@@ -480,22 +480,12 @@ it("holds pane bodies out of the frame a cancel lets the preview go, and brings 
   // waiting on that turn — one comes back on the frame after.
   await act(async () => {})
   expect(grid?.hasAttribute(marks.reflow)).toBe(false)
-  expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
   expect(host.querySelectorAll("[data-drag-settling]").length).toBeGreaterThan(1)
   await act(
     async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
   )
   expect(host.querySelectorAll("[data-drag-settling]").length).toBe(1)
-  expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
-  // Glass returns on the next frame, and that frame brings no body back.
-  await act(
-    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
-  )
-  expect(host.querySelectorAll("[data-drag-settling]").length).toBe(1)
-  expect(document.documentElement.hasAttribute(marks.pressing)).toBe(false)
-  await act(
-    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
-  )
+  await frames()
   expect(host.querySelector("[data-drag-settling]")).toBeNull()
   expect(fake.state.drops).toEqual([])
   await act(async () => root.unmount())

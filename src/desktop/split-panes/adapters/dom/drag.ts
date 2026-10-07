@@ -541,26 +541,16 @@ export function useSplitPanesDrag(
     let waiting: { frame: number; timer: number } | null = null
     /** Bumped whenever glass blur is held or released, so a late release cannot drop a new drag's hold. */
     let glass = 0
-    /**
-     * The next body waits. That frame is the glass coming back, so it does not
-     * also paint a transcript into the sidebar's blur (`drag.test.tsx`).
-     */
-    let revealWaits = false
     const holdGlass = (on: boolean) => {
       const generation = ++glass
       if (on) {
-        revealWaits = false
         reflectMark(scope, marks.pressing, true)
         return
       }
-      // The next frame brings the first body back. Glass comes back the frame
-      // after that, and that frame brings no body with it (`drag.test.tsx`).
+      // A frame after the preview's own paint is gone, so that frame does not
+      // also rebuild the glass blur (`styles.test.ts`).
       requestAnimationFrame(() => {
-        if (generation !== glass) return
-        if (scope.querySelector(`[${marks.settling}]`)) revealWaits = true
-        requestAnimationFrame(() => {
-          if (generation === glass) reflectMark(scope, marks.pressing, false)
-        })
+        if (generation === glass) reflectMark(scope, marks.pressing, false)
       })
     }
     /** Drops the pending commit's frame and its listeners, if a drop is waiting on one. */
@@ -568,12 +558,6 @@ export function useSplitPanesDrag(
 
     /** One pane a frame, so letting the preview go does not lay every transcript out (`drag.test.tsx`). */
     const revealSettling = () => {
-      if (revealWaits) {
-        revealWaits = false
-        if (scope.querySelector(`[${marks.settling}]`))
-          requestAnimationFrame(revealSettling)
-        return
-      }
       const pane = scope.querySelector<HTMLElement>(`[${marks.settling}]`)
       pane?.removeAttribute(marks.settling)
       if (scope.querySelector(`[${marks.settling}]`))

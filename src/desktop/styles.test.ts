@@ -286,30 +286,20 @@ it("drops the composer's blur while a drag is carried, and leaves the sidebar's 
     .slice(styles.indexOf(":root[data-drag-pressing] .desktop-grain {"))
     .split("}")[0]
   expect(grain).toMatch(/visibility:\s*hidden/)
-  // Grain stays outside the open sidebar's blur sample. Hiding it then changes
-  // none of the pixels that blur reads. The inset is the sidebar's own radius.
-  const sample = styles
-    .slice(styles.indexOf('.workspace[data-sidebar="open"] .desktop-grain {'))
-    .split("}")[0]
-  const inset = sample.match(/\+\s*(\d+)px\)/)
-  const sidebar = readFileSync(
-    new URL("./workspace/ui/source-list/source-list.css", import.meta.url),
-    "utf8",
-  )
-  const radius = sidebar.match(
-    /\.workspace-sidebar \{[^}]*backdrop-filter:\s*blur\((\d+)px\)/,
-  )
-  expect(inset?.[1]).toBe(radius?.[1])
   // The resting shadow stays. A hairline in its place rastered a new blur
   // on the release.
   expect(styles).not.toContain(":root[data-drag-pressing] .workspace-sidebar {")
-  const row = sidebar
-    .slice(sidebar.indexOf(".workspace[data-overview-glass] .workspace-row {"))
+  const rows = readFileSync(
+    new URL("./workspace/ui/source-list/source-list.css", import.meta.url),
+    "utf8",
+  )
+  const row = rows
+    .slice(rows.indexOf(".workspace[data-overview-glass] .workspace-row {"))
     .split("}")[0]
   expect(row).toMatch(/transition:\s*none/)
-  const quiet = sidebar
+  const quiet = rows
     .slice(
-      sidebar.indexOf(
+      rows.indexOf(
         ".workspace[data-overview-glass] .workspace-row[data-active]:not(.agents-overview-entry)",
       ),
     )

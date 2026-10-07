@@ -365,14 +365,6 @@ html:not(.dark) [data-surface] {
   visibility: hidden;
 }
 
-/* Outside the open sidebar's blur sample, so hiding the grain does not
-   rebuild that blur (`styles.test.ts`). The 28px is the sidebar's blur radius. */
-.workspace[data-sidebar="open"] .desktop-grain {
-  clip-path: inset(
-    0 0 0 calc(var(--workspace-sidebar-width) + var(--desktop-gutter) + 28px)
-  );
-}
-
 @keyframes desktop-drift {
   to {
     transform: translate3d(6vw, 4vh, 0) scale(1.08);
