@@ -15,7 +15,9 @@
 //! opening of the same URL already holds, and DELETE that id at most once on
 //! close. A 404 on a session-bound request fails that request with
 //! [`McpError::SessionExpired`] and starts one fresh `initialize` without the
-//! old id; the failed request is not replayed. Legacy mode records that DELETE
+//! old id under its registered startup owner. Ordinary frames and initialized
+//! use the connection writer; the failed request is not replayed.
+//! Legacy mode records that DELETE
 //! does not apply.
 //!
 //! Streamed POST bodies (JSON and SSE, including initialize) are session-owned
@@ -436,7 +438,6 @@ impl HttpSession {
             };
         }
         let content_type = response.header("content-type").map(str::to_owned);
-        let session_header = response.header("mcp-session-id").map(str::to_owned);
         let event_stream = sse::is_event_stream(content_type.as_deref());
         if !event_stream && content_type.is_some() && !sse::is_json(content_type.as_deref()) {
             return SendOutcome::End(McpError::Malformed(
@@ -481,32 +482,27 @@ impl HttpSession {
             });
             return SendOutcome::Done;
         }
-        if event_stream {
-            return self
-                .finish_sse_bytes(
-                    &match response.body {
-                        super::http_exchange::HttpBody::Buffered(bytes) => bytes,
-                        super::http_exchange::HttpBody::Stream(_) => unreachable!(),
-                    },
-                    method,
-                    id,
-                    session_header,
-                )
-                .await;
+        if self.closing.load(Ordering::SeqCst) {
+            return SendOutcome::End(McpError::Closed);
         }
-        let bytes = match response.bytes(MAX_FRAME_BYTES).await {
-            Ok(bytes) => bytes,
-            Err(super::http_exchange::BodyRead::TooLarge) => {
-                return SendOutcome::End(McpError::TooLarge("an HTTP response body"))
-            }
-            Err(super::http_exchange::BodyRead::Closed) => {
-                return SendOutcome::End(McpError::Unconfirmed)
-            }
-        };
-        if let Err(error) = self.note_response(&bytes, method, id, session_header.as_deref()) {
-            return SendOutcome::End(error);
+        // Buffered bodies use the same correlation/EOF owner. Queue faults after
+        // preceding messages so an observed neighboring reply keeps its outcome.
+        match consume_body(
+            response,
+            event_stream,
+            method.and(id),
+            method == Some("initialize"),
+            &self.weak,
+            &self.inbound,
+        )
+        .await
+        {
+            Ok(_) => SendOutcome::Done,
+            Err(error) => match self.inbound.send(Err(error)).await {
+                Ok(()) => SendOutcome::Done,
+                Err(_) => SendOutcome::End(McpError::ServerGone),
+            },
         }
-        self.push_inbound(bytes).await
     }
 
     async fn post_modern(
@@ -738,63 +734,6 @@ impl HttpSession {
         SendOutcome::End(McpError::InsufficientScope)
     }
 
-    async fn finish_sse_bytes(
-        &self,
-        bytes: &[u8],
-        method: Option<&str>,
-        id: Option<u64>,
-        session_header: Option<String>,
-    ) -> SendOutcome {
-        let mut parser = SseParser::bounded();
-        let mut saw = false;
-        // Supply a final delimiter for buffered peers, but retire at the matching
-        // terminal before parsing trailing bytes, just as the streamed consumer does.
-        for mut chunk in [bytes, b"\n\n".as_slice()] {
-            loop {
-                let event = match parser.next_event(&mut chunk) {
-                    Ok(Some(event)) => event,
-                    Ok(None) => break,
-                    Err(SseError::TooLarge) => {
-                        return SendOutcome::End(McpError::TooLarge("an SSE event"))
-                    }
-                    Err(SseError::Utf8) => {
-                        return SendOutcome::End(McpError::Malformed(
-                            "an SSE event is not UTF-8".into(),
-                        ))
-                    }
-                };
-                if event.data.is_empty() {
-                    continue;
-                }
-                saw = true;
-                if let Err(error) =
-                    self.note_response(event.data.as_bytes(), method, id, session_header.as_deref())
-                {
-                    return SendOutcome::End(error);
-                }
-                let matched = id.is_some_and(|id| {
-                    serde_json::from_str::<Value>(&event.data)
-                        .ok()
-                        .is_some_and(|message| is_response_to(&message, id))
-                });
-                if let SendOutcome::End(error) = self.push_inbound(event.data.into_bytes()).await {
-                    return SendOutcome::End(error);
-                }
-                if matched {
-                    return SendOutcome::Done;
-                }
-            }
-        }
-        if saw {
-            SendOutcome::Done
-        } else {
-            SendOutcome::FailCall {
-                id,
-                error: McpError::Malformed("an SSE response carried no event".into()),
-            }
-        }
-    }
-
     fn note_response(
         &self,
         body: &[u8],
@@ -972,7 +911,13 @@ impl HttpSession {
                 if !event_stream && content_type.is_some() && !sse::is_json(content_type) {
                     return Err(McpError::SessionExpired);
                 }
-                if !consume_body(response, event_stream, Some(0), true, &weak, &inbound).await? {
+                if !consume_body(response, event_stream, Some(0), true, &weak, &inbound)
+                    .await
+                    .map_err(|error| match error {
+                        McpError::Unconfirmed => McpError::SessionExpired,
+                        other => other,
+                    })?
+                {
                     return Err(McpError::SessionExpired);
                 }
                 {
@@ -1081,13 +1026,6 @@ impl HttpSession {
     fn is_open(&self) -> bool {
         self.phase.lock().expect("http phase").open
     }
-
-    async fn push_inbound(&self, bytes: Vec<u8>) -> SendOutcome {
-        match self.inbound.send(Ok(bytes)).await {
-            Ok(()) => SendOutcome::Done,
-            Err(_) => SendOutcome::End(McpError::ServerGone),
-        }
-    }
 }
 
 impl Drop for HttpSession {
@@ -1126,12 +1064,14 @@ async fn consume_body(
         } else {
             false
         };
+        let matched = response_in(&bytes, request_id);
         if request_id != Some(0) || !initialize {
             inbound
                 .send(Ok(bytes))
                 .await
                 .map_err(|_| McpError::ServerGone)?;
         }
+        completed_body(request_id, matched)?;
         return Ok(accepted);
     }
     let mut stream = match response.body {
@@ -1144,11 +1084,8 @@ async fn consume_body(
     let mut parser = SseParser::bounded();
     loop {
         let Some(chunk) = stream.next().await.map_err(|_| McpError::Unconfirmed)? else {
-            return if request_id.is_some() {
-                Err(McpError::Unconfirmed)
-            } else {
-                Ok(false)
-            };
+            completed_body(request_id, false)?;
+            return Ok(false);
         };
         let mut chunk = chunk.as_slice();
         loop {
@@ -1162,11 +1099,7 @@ async fn consume_body(
             if event.data.is_empty() {
                 continue;
             }
-            let matched = request_id.is_some_and(|id| {
-                serde_json::from_str::<Value>(&event.data)
-                    .ok()
-                    .is_some_and(|message| is_response_to(&message, id))
-            });
+            let matched = response_in(event.data.as_bytes(), request_id);
             let accepted = if initialize {
                 weak.upgrade().ok_or(McpError::Closed)?.note_response(
                     event.data.as_bytes(),
@@ -1196,6 +1129,25 @@ impl super::http_exchange::HttpChunks for BufferedChunks {
     async fn next(&mut self) -> Result<Option<Vec<u8>>, super::http_exchange::HttpFailure> {
         Ok(self.0.take())
     }
+}
+
+/// Both codecs settle unanswered correlated bodies at completion; uncorrelated
+/// bodies have no request to fail (ADR 392 P3 and J2).
+fn completed_body(id: Option<u64>, matched: bool) -> Result<(), McpError> {
+    if id.is_some() && !matched {
+        Err(McpError::Unconfirmed)
+    } else {
+        Ok(())
+    }
+}
+
+/// Parsing does not alter the single terminal/correlation rule below.
+fn response_in(bytes: &[u8], id: Option<u64>) -> bool {
+    id.is_some_and(|id| {
+        serde_json::from_slice::<Value>(bytes)
+            .ok()
+            .is_some_and(|message| is_response_to(&message, id))
+    })
 }
 
 /// Correlation and terminal shape shared by POST retirement and initialization.

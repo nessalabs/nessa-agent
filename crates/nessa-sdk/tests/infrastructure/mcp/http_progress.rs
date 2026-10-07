@@ -63,6 +63,7 @@ struct Peer {
     delete: Option<Arc<Gate>>,
     initialized_status: u16,
     replacement_json: bool,
+    call_sse: bool,
 }
 impl Peer {
     fn new() -> Self {
@@ -78,6 +79,7 @@ impl Peer {
             delete: None,
             initialized_status: 202,
             replacement_json: false,
+            call_sse: false,
         }
     }
     async fn observed(&self, predicate: impl Fn(&HttpRequest) -> bool) {
@@ -205,6 +207,9 @@ impl HttpExchange for Peer {
                 );
                 if let Some(body) = self.bodies.lock().unwrap().pop_front() {
                     response.body = body;
+                    if self.call_sse {
+                        response.headers[0].1 = "text/event-stream".into();
+                    }
                 }
                 Ok(response)
             }
@@ -928,4 +933,159 @@ async fn j4_initialize_terminal_precedes_bad_trailing_bytes() {
         stop(&session).await;
         probe.released().await;
     }
+}
+
+fn complete_body(value: Value, sse: bool, streamed: bool) -> HttpBody {
+    let bytes = if sse {
+        format!("data: {value}\n\n").into_bytes()
+    } else {
+        serde_json::to_vec(&value).unwrap()
+    };
+    if !streamed {
+        return HttpBody::Buffered(bytes);
+    }
+    // The sender closes after supplying EOF; the owned chunks remain gated substitutes.
+    let (probe, body) = Probe::body();
+    probe.send.send(Ok(Some(bytes))).unwrap();
+    probe.send.send(Ok(None)).unwrap();
+    body
+}
+
+#[tokio::test]
+async fn j2_complete_body_without_own_terminal_settles_deadline_less_call() {
+    for sse in [false, true] {
+        for streamed in [false, true] {
+            for value in [
+                json!({"id":77,"result":{}}),
+                json!({"id":1,"method":"ping"}),
+                json!({"method":"notifications/tools/list_changed"}),
+                json!({"jsonrpc":"2.0"}),
+            ] {
+                let mut peer = Peer::new();
+                peer.call_sse = sse;
+                peer.bodies
+                    .lock()
+                    .unwrap()
+                    .push_back(complete_body(value, sse, streamed));
+                let peer = Arc::new(peer);
+                let (session, incoming) = transport(peer, Arc::default());
+                let connection =
+                    Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+                assert_eq!(
+                    bounded(connection.call("tools/list", None))
+                        .await
+                        .unwrap_err(),
+                    McpError::Unconfirmed
+                );
+                stop(&session).await;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn j2_matching_json_result_and_error_remain_accepted() {
+    for sse in [false, true] {
+        for streamed in [false, true] {
+            for error in [false, true] {
+                let expected = if error {
+                    Err(json!({"code":-32601,"message":"refused"}))
+                } else {
+                    Ok(json!({"tools":[]}))
+                };
+                let value = match &expected {
+                    Ok(result) => json!({"id":1,"result":result}),
+                    Err(error) => json!({"id":1,"error":error}),
+                };
+                let mut peer = Peer::new();
+                peer.call_sse = sse;
+                peer.bodies
+                    .lock()
+                    .unwrap()
+                    .push_back(complete_body(value, sse, streamed));
+                let (session, incoming) = transport(Arc::new(peer), Arc::default());
+                let connection =
+                    Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+                assert_eq!(
+                    bounded(connection.call("tools/list", None)).await.unwrap(),
+                    expected
+                );
+                stop(&session).await;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn j2_neighbor_reply_is_preserved_before_unconfirmed_completion() {
+    for sse in [false, true] {
+        for streamed in [false, true] {
+            let (probe, body) = Probe::body();
+            let mut peer = Peer::new();
+            peer.call_sse = sse;
+            peer.bodies.lock().unwrap().extend([
+                body,
+                complete_body(json!({"id":1,"result":{"tools":[]}}), sse, streamed),
+            ]);
+            let (session, incoming) = transport(Arc::new(peer), Arc::default());
+            let connection = Arc::new(Connection::open_http(
+                session.clone(),
+                incoming,
+                Arc::new(RuntimeClock::new()),
+            ));
+            let first = tokio::spawn({
+                let connection = connection.clone();
+                async move { connection.call("tools/list", None).await }
+            });
+            probe.polled(1).await;
+            assert_eq!(
+                bounded(connection.call("tools/list", None))
+                    .await
+                    .unwrap_err(),
+                McpError::Unconfirmed
+            );
+            assert_eq!(
+                bounded(first).await.unwrap().unwrap().unwrap(),
+                json!({"tools":[]})
+            );
+            stop(&session).await;
+            probe.released().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn j8_recovery_server_ping_reply_dispatches_before_initialize_result() {
+    let (probe, body) = Probe::body();
+    probe.event(json!({"id":70,"method":"ping"}));
+    let peer = Arc::new(Peer::new());
+    *peer.replacement.lock().unwrap() = Some(body);
+    let (session, incoming) = transport(peer.clone(), Arc::default());
+    let connection =
+        Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+    bounded(connection.call("initialize", None))
+        .await
+        .unwrap()
+        .unwrap();
+    peer.expire.store(true, Ordering::SeqCst);
+    assert_eq!(
+        bounded(connection.call("tools/list", None))
+            .await
+            .unwrap_err(),
+        McpError::SessionExpired
+    );
+    peer.observed(|request| {
+        serde_json::from_slice::<Value>(&request.body)
+            .ok()
+            .is_some_and(|message| message["id"] == 70 && message.get("result").is_some())
+    })
+    .await;
+    assert_eq!(
+        bounded(connection.call("tools/list", None))
+            .await
+            .unwrap_err(),
+        McpError::Busy
+    );
+    stop(&session).await;
+    probe.released().await;
 }

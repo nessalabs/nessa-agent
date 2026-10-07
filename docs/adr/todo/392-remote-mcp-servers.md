@@ -309,7 +309,7 @@ aborted readers until reaped after completion. The semaphore is the sole capacit
 authority: each retained reader holds its permit beside its task handle through
 reaping or close joining. Initialization identity and GET/POST reader admission share one reader-registry
 lock with close;
-readers own the response and inbound sender, with no reference back to the session.
+readers own the response and inbound sender, with no strong reference back to the session.
 Before a request POST (including initialize), a capacity permit is reserved, or the call
 is refused with `Busy` before exchange. Buffered JSON/202/failure releases that permit;
 a streamed JSON or SSE response holds it through reader teardown. Notification and ping-reply
@@ -356,7 +356,7 @@ when the inbound channel is backpressured.
 | --- | --- | --- | --- |
 | P1 | Active reader receives notices/ping, then matching result/error; peer holds body | Forward preceding events and matching response, release body; repeated successful calls retain bounded readers | `post_result_releases_held_body`, `post_error_releases_held_body`, `post_ping_before_result_remains_live` |
 | P2 | Active reader receives another id's response, same-id server request or nonterminal envelope | Forward it without ending this reader; retain until its own response/EOF/cancel/close | `post_other_response_does_not_retire_reader` |
-| P3 | Active reader reaches EOF before its matching response, or body failure | Release body before publishing `Unconfirmed`; a deadline-less request settles explicitly. EOF on an uncorrelated notification/reply stream releases normally | `post_eof_and_failure_release_body`, `post_eof_and_failure_settle_deadline_less_call`, `post_uncorrelated_eof_releases_normally` |
+| P3 | Request-correlated JSON/SSE body completes without its matching terminal (streamed or buffered), or body failure; uncorrelated body ends normally | Forward other valid evidence, then publish typed `Unconfirmed` for the unanswered call; release body and settle deadline-less calls. Uncorrelated EOF is normal. Private recovery refuses invalid initialize as `SessionExpired` (P14) | `post_eof_and_failure_settle_deadline_less_call`, `post_matched_response_before_eof_settles_normally`, `post_uncorrelated_eof_releases_normally`, `j2_complete_body_without_own_terminal_settles_deadline_less_call`, `j2_matching_json_result_and_error_remain_accepted`, `j2_neighbor_reply_is_preserved_before_unconfirmed_completion` |
 | P4 | Caller disappears during active read | Abort local reader; best-effort remote notification remains separate | `post_caller_cancellation_releases_body`, `post_cancellation_with_full_outgoing_queue_releases_active_body`, `post_cancellation_during_headers_releases_late_body` |
 | P5 | Close/drop while reader waits (including startup tools/list) or blocked inbound send; drop from an ordinary thread | Fence admission, abort and join owned readers before finished; repeated close shares completion | `post_close_joins_held_and_blocked_readers`, `post_finished_waits_for_reader_destruction`, `post_drop_releases_body`, `post_drop_outside_runtime_context_joins_body` |
 | P6 | POST exchange returns streamed body after close drained readers | Reject late admission with `Closed`, drop body | `post_late_body_after_close_is_dropped` |
@@ -400,7 +400,7 @@ The #622 slice established owned non-initialize POST SSE readers. The #623/#626/
 extension below also owns streamed JSON and initialization/recovery startup;
 body release is not confirmation of a remote tool stopping.
 
-### Owned JSON and initialization progress (#623, #626, #634)
+### Owned JSON and initialization progress (#623, #626, #634, #636)
 
 The same bounded POST registry owns streamed JSON, streamed initialization and
 replacement initialization. JSON consumption does not run on the frame writer.
@@ -413,21 +413,23 @@ The private `Recovery` state is Available, Initializing, ReadyForWriter, Complet
 or Failed. Identity publication does not change call admission. Recovery is
 registered before its initialize exchange. While it is initializing,
 ordinary calls are refused with `Busy`; cancellation and server replies remain
-available. A private `RecoveryReady` event uses the existing bounded writer queue
-to send initialized; it does not create another frame sender. Recovery is bounded
+available. The registered startup owner performs the fresh initialize exchange;
+ordinary frames and the initialized notification use the serialized writer.
+A private `RecoveryReady` event uses that existing bounded writer queue to send
+initialized; it creates no additional general frame sender. Recovery is bounded
 by the injected clock's initialization budget, and never replays the failed call.
 Close alone owns DELETE, retaining the ID claim through the attempt's completion.
 
 | Row | Trigger/order | Required outcome and ownership | Enforcer |
 | --- | --- | --- | --- |
 | J1 | JSON headers arrive, body stalls; call times out/drops | Writer can send cancellation and another call; direct cancellation aborts registered body; no replay | `j1_stalled_json_timeout_allows_cancel_and_next_call` |
-| J2 | JSON completion, body failure, oversize, or close | Typed existing outcome; bounded body and retained permit release only after destruction/reaping or joins | `j2_complete_streamed_json_settles_and_releases_body`, `j2_json_read_failure_and_bound_are_typed`, `j2_json_capacity_is_retained_through_physical_destruction` |
+| J2 | JSON/SSE completion without own terminal, valid terminal completion, body failure, oversize, or close | Forward neighboring evidence before typed Unconfirmed for an unanswered correlated call (P3); accept matching result/error. Bounded body and retained permit release only after destruction/reaping or joins | `j2_complete_streamed_json_settles_and_releases_body`, `j2_complete_body_without_own_terminal_settles_deadline_less_call`, `j2_matching_json_result_and_error_remain_accepted`, `j2_json_read_failure_and_bound_are_typed`, `j2_json_capacity_is_retained_through_physical_destruction` |
 | J3 | Matching initialize SSE result; peer holds body | Commit validated identity/version before GET/readiness, retire body, initialized/list/ping answer dispatch before EOF | `j3_public_open_held_initialize_dispatches_initialized_list_and_ping` |
 | J4 | Initialize has wrong id, request envelope, invalid version, repeated result or bad trailing bytes | Only first matching valid result establishes phase; invalid evidence does not start GET; terminal retirement ignores trailing bytes | `j4_invalid_initialize_version_does_not_claim_or_start_get`, `j4_initialize_terminal_precedes_bad_trailing_bytes`, P12/P13/P14 |
 | J5 | Close wins before initialization publication | Refuse publication/admission, no new claim or GET; owned reader/startup is joined | `j5_close_held_initialize_body_has_no_late_publication`, `j5_drop_initial_reader_does_not_retain_session`, P10 |
 | J6 | Initialization publication wins then close/caller loss | Close owns one DELETE and its completion; no independent cleanup attempt | `j6_recovery_publication_then_close_owns_one_retained_delete`, `j6_j7_close_owns_delete_and_retains_claim_through_completion` |
 | J7 | DELETE held; duplicate close or a new opening repeats its ID | Finished waits; retained claim refuses collision and prevents DELETE targeting a new owner | `j7_public_open_collision_while_delete_is_held_is_not_deleted`, `j6_j7_close_owns_delete_and_retains_claim_through_completion` |
-| J8 | Session 404; recovery header/body held | Failed call is SessionExpired without replay; recovery is owned before header I/O; ordinary requests Busy while controls remain available | `j8_recovery_owned_before_headers_and_controls_remain_available`, `j8_stalled_recovery_json_is_owned_and_bounded` |
+| J8 | Session 404; recovery header/body held | Failed call is SessionExpired without replay; recovery is owned before header I/O; ordinary requests Busy while controls remain available | `j8_recovery_owned_before_headers_and_controls_remain_available`, `j8_stalled_recovery_json_is_owned_and_bounded`, `j8_recovery_server_ping_reply_dispatches_before_initialize_result` |
 | J9 | Recovery succeeds, fails, times out, or races close before initialized dispatch | Identity publication is separate from call admission. Gate queued calls before RecoveryReady and while initialized headers are held. One remaining initialization budget covers headers/body, queue handoff and initialized dispatch; writer revalidates its correlated handoff before dispatch and admission. Timeout/close/stale handoff/rejected initialized cannot release admission. Close joins startup and owns any claimed ID | `j9_recovery_gate_covers_queued_calls_and_initialized_headers`, `j9_expired_queued_handoff_cannot_dispatch_initialized`, `j9_saturated_queue_budget_expiry_retains_close_ownership`, `j9_timeout_while_initialized_headers_held_cannot_reopen`, `j9_rejected_initialized_does_not_release_admission`, J6 recovery-close test |
 
 ```mermaid
