@@ -1,0 +1,349 @@
+{
+  "checkout": "/workspace/nessa-agent-oauth-callback",
+  "branch": "codex/624-629-oauth-callback",
+  "base": "e03e94c50ae025f9922a2f1d201ac0f63309ebcf",
+  "head": "7e295565931c8f156e9069221fc079d0a63a1f73",
+  "clean": true,
+  "preserved_cff_base_head": "14667c5bc329e7b553463386dd55d7daf4b8ed45",
+  "intent": "Fix RFC8414 issuer-path discovery plus bounded complete loopback callback framing/concurrency; preserve original exact issuer binding and domain-only callback acceptance. Public complete_callback signature/answers unchanged. Adjacent #647 correction retains the proven live-mount abort policy for delayed browser evidence until page close. Adjacent #648 correction separates historical launch observation from current liveness and verifies actual successful startup warm-up through its typed completion record.",
+  "files": [
+    "crates/nessa-server/src/mcp_authorization/application/discovery.rs",
+    "crates/nessa-server/src/mcp_authorization/application/mod.rs",
+    "crates/nessa-server/src/mcp_authorization/application/owner.rs",
+    "crates/nessa-server/src/mcp_authorization/application/ports.rs",
+    "crates/nessa-server/src/mcp_authorization/infrastructure/callback.rs",
+    "crates/nessa-server/src/mcp_authorization/infrastructure/memory.rs",
+    "crates/nessa-server/src/mcp_authorization/infrastructure/mod.rs",
+    "crates/nessa-server/tests/composition/current_agent.rs",
+    "crates/nessa-server/tests/mcp_authorization/application/callback.rs",
+    "crates/nessa-server/tests/mcp_authorization/mod.rs",
+    "docs/adr/done/221-startup-refusals.md",
+    "docs/adr/todo/392-remote-mcp-servers.md",
+    "verification/desktop/page-lines.md",
+    "verification/desktop/scripts/gateway-window.mjs",
+    "verification/desktop/scripts/lib/browser.mjs",
+    "verification/desktop/scripts/lib/browser.test.mjs",
+    "verification/desktop/scripts/lib/page-lines.test.mjs"
+  ],
+  "source_authorities": {
+    "discovery": "application/discovery.rs owns parsed issuer URL candidates; original identifier compared exactly into issuer_matches, consumed by unchanged domain DiscoveryAccepted",
+    "callback": "domain/machine.rs Command::Callback owns current state/resource/phase/consumption; application/owner.rs private AuthCallbackOutcome maps that same locked Decision and closes candidate receiver before terminal/accepted effects",
+    "bounds": "infrastructure/callback.rs owns four scoped connection futures including waiting candidate sends, one queued candidate, 4096-byte headers, two-second absolute connection budget and unchanged whole-attempt timeout",
+    "effects": "private prepared exchange keeps captured attempt/resource/endpoints; shared effect completion preserves existing typed exchange/publication failures"
+  },
+  "checks": [
+    {
+      "name": "corrected real owner/listener regression",
+      "result": "PASS in restored full7e assembled suite",
+      "log": "/tmp/nessa-645-648-tests.log",
+      "source_head": "7e295565931c8f156e9069221fc079d0a63a1f73"
+    },
+    {
+      "name": "Restored targeted browser/page-line Node tests",
+      "result": "24/24 PASS",
+      "log": "/tmp/nessa-647-targeted-restored.log"
+    },
+    {
+      "name": "Restored complete desktop verification Node tests",
+      "result": "147/147 PASS",
+      "log": "/tmp/nessa-647-desktop-node-tests.log"
+    },
+    {
+      "name": "ESLint src/packages/verification",
+      "result": "PASS",
+      "log": "/tmp/nessa-647-lint.log"
+    },
+    {
+      "name": "Prettier all five #647 files",
+      "result": "PASS",
+      "log": "/tmp/nessa-647-format-check.log"
+    },
+    {
+      "name": "Both-engine scripted browser verification",
+      "result": "PASS exit0; Chromium/WebKit MCP Apps16/16, gateway-window13/13, scripted scenarios8/8",
+      "source_head": "09e2c8238199f03e04082ba1032495de5c94a5f8",
+      "log": "/tmp/nessa-645-647-e03-scripted.log",
+      "summary": "/tmp/nessa-645-647-e03-scripted/pr-summary.md",
+      "inheritance": "Verification source byte-identical09e\u21927e; git diff --exit-code09e HEAD -- verification PASS. No new browser run required by root."
+    },
+    {
+      "name": "Workspace fmt",
+      "result": "PASS",
+      "log": "/tmp/nessa-645-648-fmt.log",
+      "source_head": "7e295565931c8f156e9069221fc079d0a63a1f73"
+    },
+    {
+      "name": "Six-package all-target Clippy -D warnings",
+      "result": "PASS",
+      "log": "/tmp/nessa-645-648-clippy.log",
+      "source_head": "7e295565931c8f156e9069221fc079d0a63a1f73"
+    },
+    {
+      "name": "Architecture74 tests/check",
+      "result": "PASS",
+      "log": "/tmp/nessa-645-648-architecture.log",
+      "source_head": "7e295565931c8f156e9069221fc079d0a63a1f73"
+    },
+    {
+      "name": "Six-package tests and doctests",
+      "result": "PASS exit0; server1968/7 existing ignored, SDK954/13 existing ignored; all six packages and doctests",
+      "log": "/tmp/nessa-645-648-tests.log",
+      "source_head": "7e295565931c8f156e9069221fc079d0a63a1f73"
+    },
+    {
+      "name": "Initial current-agent feature tests",
+      "result": "25/25 PASS before actual probes",
+      "log": "/tmp/nessa-648-current-agent-initial.log"
+    },
+    {
+      "name": "Final source/base/clean/diff verification",
+      "result": "PASS: clean7e, origin/main and merge-base e03; verification and OAuth owning paths byte-identical09e\u21927e; diff --check",
+      "source_head": "7e295565931c8f156e9069221fc079d0a63a1f73"
+    }
+  ],
+  "mutation_probes": [
+    {
+      "probe": "oauth-prefix",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-oauth-prefix.log"
+    },
+    {
+      "probe": "exact-issuer",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-exact-issuer.log"
+    },
+    {
+      "probe": "issuer-query",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-issuer-query.log"
+    },
+    {
+      "probe": "lost-metadata",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-lost-metadata.log"
+    },
+    {
+      "probe": "partial-frame",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-partial-frame.log"
+    },
+    {
+      "probe": "header-limit",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-header-limit.log"
+    },
+    {
+      "probe": "duplicate-query",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-duplicate-query.log"
+    },
+    {
+      "probe": "complete-crlf",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-complete-crlf.log"
+    },
+    {
+      "probe": "bounded-connections",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-bounded-connections.log"
+    },
+    {
+      "probe": "connection-deadline",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-connection-deadline.log"
+    },
+    {
+      "probe": "pending-stale-continue",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-pending-stale-continue.log"
+    },
+    {
+      "probe": "terminal-stale-stop",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-terminal-stale-stop.log"
+    },
+    {
+      "probe": "early-receiver-drop",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-early-receiver-drop.log"
+    },
+    {
+      "probe": "response-failure",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-response-failure.log"
+    },
+    {
+      "probe": "receiver-cancellation",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-receiver-cancellation.log"
+    },
+    {
+      "probe": "whole-deadline",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-whole-deadline.log"
+    },
+    {
+      "probe": "fixed-secret-free-page",
+      "exit": 101,
+      "caught": true,
+      "log": "/tmp/nessa-624-629-probe-fixed-secret-free-page.log"
+    }
+  ],
+  "mutation_provenance": "Original17 OAuth source probes on14667c5b/cff preserved with b8 restoration evidence; corrected callback delayed-drop proof uses f55/e03 and exact supervisor-completion assertion; four647 probes use09e shared policy and restored source; six648 probes use final7e current-agent test/fixture semantics. Every counted probe verified landed and produced actual regression failure then restored/touched. One648 namespace probe compile failure retained separately and not counted. Total28 counted source probes across staged provenance (17+1+4+6), with final applicable restored gates passing.",
+  "self_review": "Whole17-file base/head diff reviewed against canonical standards authority/identity, domain invariants, admission/concurrency, failure/cleanup, input/output, resource bounds, public surface/organization and field/layer agreement. Earlier OAuth and647 authorities unchanged. 648 has one shared scan with typed historical/liveness demand, only proactive startup changes demand; conversation Live demand retained. History proves launch only; successful exact-runtime completion is owned by existing WarmUpRecords port after terminal cleanup. Real failed initialize cannot satisfy it. Negative control waits terminal first. No production changes, new framework, seam, dependency or timeout inflation. Canonical ADR221 ordering first; six source probes actual failures/restored/touched including real runtime failure and exact identity mismatch. All earlier evidence preserved; no unresolved source-review findings.",
+  "limitations": [
+    "Original macOS CI mechanism remains unknown without fixture temp files; source-backed fast-complete history observation race is reachable, not claimed proven cause of that exact run. Corrected supported-platform CI remains root release gate.",
+    "Original Windows wait stage remains unknown; refused-connect delay was plausible, unconfirmed. Deterministic normal listener-task completion replaces OS refusal observation; Windows CI remains root release gate.",
+    "Existing empty-stream revoke lifetime remains bounded by original whole-attempt timeout.",
+    "Architecture invocation-path ENOENT and initial Node assertion-shape development failure retained/dispositioned. Original f55 browser failure retained and resolved through647; no failed run silently replaced.",
+    "Local full Rust verification ran final7e on Linux. Supported-platform corrected CI remains root release gate. Browser/Node verification evidence inherited from byte-identical09e verification source; no extra browser rerun required."
+  ],
+  "standards": "/workspace/nessa-agent-oauth-callback/CODING_STANDARDS.md",
+  "release": "Clean final local freeze7e/e03 with all applicable gates PASS. All owned build/test/probe processes complete; coding/build slot RELEASED. No pushes. Root assigns two fresh whole17-file cumulative R3 reviews and owns PR/required CI/merge.",
+  "preserved_prior_candidate": "b8c3df35950c09a7aa59a468b0535099ec3ce9bc, branch codex/624-629-b8-proof",
+  "correction": {
+    "finding": "Windows CI run37606633793 job112743648013 failed the real listener owner test at anonymous wait_until timeout. Original wait stage cannot be identified from available log; delayed refused-connect timing is plausible, unconfirmed.",
+    "change": "ADR A3h written first. Shared private bind/spawn returns actual supervisor completion handle; production ignores it as before, cfg(test) crate-private accessor exposes only receipt. Test-local ConsentCallback retains receipt after real wrong-state/valid TCP callbacks. Require normal task completion before gated token exchange release. Every phase/candidate-close timeout names its stage.",
+    "proof": {
+      "exit": 101,
+      "caught": true,
+      "mutation": "let _ = self.finish_callback(admission).await;\n            drop(candidates);",
+      "log": "/tmp/nessa-645-delayed-drop-probe.log",
+      "assertion": "listener supervisor completion before exchange release",
+      "base": "e03e94c50ae025f9922a2f1d201ac0f63309ebcf",
+      "preserved_head": "b8c3df35950c09a7aa59a468b0535099ec3ce9bc"
+    },
+    "production": "No changed listener budget, whole-attempt deadline, framing/channel/concurrency policy, acceptance authority or public API.",
+    "corrected_files": [
+      "crates/nessa-server/src/mcp_authorization/infrastructure/callback.rs",
+      "crates/nessa-server/tests/mcp_authorization/application/callback.rs",
+      "docs/adr/todo/392-remote-mcp-servers.md"
+    ]
+  },
+  "browser_failure": {
+    "failure": "requestfailed: http://127.0.0.1:46355/mcp-resources net::ERR_ABORTED",
+    "evidence": "/tmp/nessa-645-e03-scripted/gateway-window/result.json",
+    "confirmed": "Chromium apps state live and all named flow/handshake checks pass; only final console entry fails. Existing same-origin mount-live classification occurs at apps step before final close. No request response/body timing is stored.",
+    "hypothesis": "Abort may arrive after apps-step held-line classification; not confirmed, not silently ignored.",
+    "action": "Resolved via #647 persistent proof-backed policy. Original f55 failure and raw evidence retained; new final assembled run PASS. Deterministic late-line source mutation distinguishes old held-only policy from persistent fix."
+  },
+  "issues": [
+    "#624",
+    "#629",
+    "#647",
+    "#648"
+  ],
+  "pr": "#645; include Closes #647 and Closes #648 in expanded scope",
+  "verification_correction": {
+    "issue": "#647",
+    "canonical_ordering": "verification/desktop/page-lines.md; three rows written before code",
+    "authority": "browser.mjs publishes one anchored escaped canonical-origin/exact /mcp-resources ERR_ABORTED pattern, shared by held matcher and persistent policy. noteLiveMountResourceAbort accepts observed apps state and activates only live proof. gateway-window apps step is the only production registration call. watchLines retains classification; reporter/close ownership unchanged.",
+    "policy_disposition": "Tighten old suffix-path matcher to exact /mcp-resources endpoint per #473 policy; preserve query/fragment suffixes. Reject other origin/path/error, deceptive origin prefixes/userinfo and absent live proof.",
+    "regression": "Real watchLines + reporter test observes held match at apps, then injects late line before close; matching lines harmless and unrelated errors remain failures; close reports once. Absent/loading/failed state counterpart remains errors.",
+    "probes": [
+      {
+        "probe": "persistent-policy",
+        "exit": 1,
+        "caught": true,
+        "log": "/tmp/nessa-647-probe-persistent-policy.log",
+        "mutation": "if (pattern) opened.reclassifyHeld((line) => pattern.test(line), (line) => line)"
+      },
+      {
+        "probe": "live-proof",
+        "exit": 1,
+        "caught": true,
+        "log": "/tmp/nessa-647-probe-live-proof.log",
+        "mutation": "void mountState"
+      },
+      {
+        "probe": "exact-path",
+        "exit": 1,
+        "caught": true,
+        "log": "/tmp/nessa-647-probe-exact-path.log",
+        "mutation": "^requestfailed: ${escaped}/\\\\S*mcp-resources"
+      },
+      {
+        "probe": "escaped-origin",
+        "exit": 1,
+        "caught": true,
+        "log": "/tmp/nessa-647-probe-escaped-origin.log",
+        "mutation": "  const escaped = own"
+      }
+    ],
+    "probe_driver": "/tmp/nessa-647-probe-driver.log",
+    "initial_test_development_failure": "/tmp/nessa-647-targeted-tests.log failed due to asserting undefined failures when reporter success shape is failures: []; corrected assertion to []. Not counted as final pass. Restored target24 and complete147 tests PASS."
+  },
+  "preserved_09e_candidate": "09e2c8238199f03e04082ba1032495de5c94a5f8; branch codex/624-629-647-09e-proof",
+  "warm_up_correction": {
+    "issue": "#648",
+    "ci_provenance": "macOS run37612275950/job112762202255 at09e: proactive_current_warm_up_opens_and_closes_without_a_conversation_or_prompt failed anonymous launched expect at current_agent.rs984. Server1963 passed/1 failed/9 ignored. Original CI temp files unavailable; root retains full job log.",
+    "source_backed_hypothesis": "Wrapper writes per-PID history before exec; original watcher accepted only currently live PID every10ms. Warm-up opens/attaches/closes immediately; valid historical launch can finish before first scan. This reachable observation defect is established; exact macOS cause remains unproven.",
+    "table": "docs/adr/done/221-startup-refusals.md Startup warm-up verification (#648), written before source",
+    "change": "Private typed LaunchObservation::{Recorded,Live} governs one shared scan. Proactive startup alone requests Recorded; all five conversation callers request Live. Existing30s/10ms watcher budgets and production code unchanged.",
+    "success_authority": "After startup cleanup settles, FileWarmUpRecords::completed for RuntimeFingerprint from actual configured provider identity establishes successful open/attachment/configuration/close and acknowledged warm-up audit. File format/filename not reimplemented; runtime identity and credential fingerprint values never printed.",
+    "negative": "Real wrapper writes history then exits before ACP initialize. Wait managed release plus warm_up_may_hold_resources false (terminal) before asserting process dead and exact completion record false.",
+    "tests": "Controlled real completed-child history before first scan; Recorded accepts, Live refuses, missing/minimum counts refused, mixed completed+live selects live. Positive startup additionally requires exact success record. Current-agent suite25/25 initially passed.",
+    "probes": [
+      {
+        "probe": "recorded-completed",
+        "exit": 101,
+        "caught": true,
+        "mutation": "LaunchObservation::Recorded => launches.into_iter().find(|launch| unsafe { libc::kill(i32::try_from(launch[\"pid\"].as_i64().unwrap()).unwrap(), 0) == 0 }),",
+        "log": "/tmp/nessa-648-probe-recorded-completed.log"
+      },
+      {
+        "probe": "live-pid",
+        "exit": 101,
+        "caught": true,
+        "mutation": "{ let _ = pid; true }",
+        "log": "/tmp/nessa-648-probe-live-pid.log"
+      },
+      {
+        "probe": "minimum-history",
+        "exit": 101,
+        "caught": true,
+        "mutation": "if { let _ = minimum_launches; false } {",
+        "log": "/tmp/nessa-648-probe-minimum-history.log"
+      },
+      {
+        "probe": "history-namespace",
+        "exit": 101,
+        "caught": true,
+        "mutation": "({ let _ = prefix; true })",
+        "log": "/tmp/nessa-648-probe-history-namespace.log"
+      },
+      {
+        "probe": "exact-runtime",
+        "exit": 101,
+        "caught": true,
+        "mutation": "RuntimeFingerprint::new(identity.name(), \"not-the-configured-model\", identity.context()).unwrap()",
+        "log": "/tmp/nessa-648-probe-exact-runtime.log"
+      },
+      {
+        "probe": "actual-initialize-failure",
+        "exit": 101,
+        "caught": true,
+        "mutation": "sys.exit(0)\n# os.execv(sys.executable, [sys.executable, {fixture:?}, \"default\"])",
+        "log": "/tmp/nessa-648-probe-actual-initialize-failure.log"
+      }
+    ],
+    "probe_driver": "/tmp/nessa-648-probe-driver.log",
+    "invalid_probe_disposition": "Initial namespace mutation lacked parentheses around Rust block before &&, compile failure not counted. Logs retained /tmp/nessa-648-probe-history-namespace-invalid-syntax.log and /tmp/nessa-648-probe-driver-initial-invalid.log. Corrected syntax then produced actual regression failure and was restored/touched."
+  }
+}

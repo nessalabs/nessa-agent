@@ -1,0 +1,41 @@
+2026-10-07T11:22:32.6613740Z [nessa-server nessa_server] command failure: OnlineRefused
+2026-10-07T11:22:32.6715930Z [nessa-server nessa_server] test composition::read_only_online_tests::online_watch_precondition_refusals_use_the_records_output ... ok
+2026-10-07T11:22:33.0243430Z [nessa-server nessa_server] test composition::read_only_online_tests::online_watch_registers_after_a_preparing_discovery ... ok
+2026-10-07T11:22:33.0407970Z [nessa-server nessa_server] test composition::current_agent::tests::proactive_current_warm_up_opens_and_closes_without_a_conversation_or_prompt ... FAILED
+2026-10-07T11:22:33.0693960Z [nessa-server nessa_server] test composition::root::mcp_shutdown_tests::an_unfinished_drain_is_an_unconfirmed_shutdown ... ok
+2026-10-07T11:22:33.1028020Z [nessa-server nessa_server] test composition::root::mcp_shutdown_tests::x_early_admission_closes_and_inspections_are_cut_while_conversations_drain ... ok
+2026-10-07T11:22:33.1029440Z [nessa-server nessa_server] test composition::root::tests::a_completed_serve_still_fails_when_shutdown_did_not_confirm_cleanup ... ok
+2026-10-07T11:22:33.1030660Z [nessa-server nessa_server] test composition::root::tests::a_shutdown_that_finishes_records_which_way_it_went ... ok
+2026-10-07T11:22:33.1032790Z [nessa-server nessa_server] test composition::root::tests::a_shutdown_that_never_reported_is_not_treated_as_confirmed ... ok
+2026-10-07T11:22:33.1036740Z [nessa-server nessa_server] test composition::root::tests::a_vanished_native_listener_stops_the_gateway ... ok
+2026-10-07T11:22:33.1038880Z [nessa-server nessa_server] test composition::root::tests::cancelled_before_either_reader_outcome_retains_unknown_drain_and_deadline ... ok
+2026-10-07T11:23:06.7647870Z [nessa-server nessa_server] test mcp_authorization::tests::a10_restart_does_not_treat_a_fenced_secret_as_usable ... ok
+2026-10-07T11:23:06.7788000Z [nessa-server nessa_server] test mcp_authorization::tests::a1_a_missing_writer_refuses_before_discovery ... ok
+2026-10-07T11:23:06.7925700Z [nessa-server nessa_server] test mcp_authorization::tests::a2_binding_or_missing_pkce_returns_to_consent ... ok
+2026-10-07T11:23:06.8027530Z [nessa-server nessa_server] test mcp_authorization::tests::a3_a_callback_is_consumed_once ... ok
+2026-10-07T11:23:06.8129370Z [nessa-server nessa_server] test mcp_authorization::tests::a4_a_lost_exchange_fences_use ... ok
+2026-10-07T11:23:06.8130320Z [nessa-server nessa_server] test mcp_authorization::tests::a6_a_lost_refresh_does_not_replay ... ok
+2026-10-07T11:23:06.8232710Z [nessa-server nessa_server] test mcp_authorization::tests::a6_a_refresh_that_was_not_sent_keeps_a_usable_token ... ok
+2026-10-07T11:23:06.8334460Z [nessa-server nessa_server] test mcp_authorization::tests::a7_a_late_refresh_does_not_publish_over_revoke ... ok
+2026-10-07T11:23:06.8436630Z [nessa-server nessa_server] test mcp_authorization::tests::a8_failed_deletion_stays_fenced ... ok
+2026-10-07T11:23:06.8538600Z [nessa-server nessa_server] test mcp_authorization::tests::a9_deletion_without_audit_is_incomplete ... ok
+2026-10-07T11:23:06.8642000Z [nessa-server nessa_server] test mcp_authorization::tests::a_callback_after_the_url_changed_does_not_exchange ... ok
+2026-10-07T11:24:23.3708160Z nessa-server nessa_server finished in 172.7s with exit 101
+2026-10-07T11:24:23.3711430Z [nessa-server nessa_server] ---- composition::current_agent::tests::proactive_current_warm_up_opens_and_closes_without_a_conversation_or_prompt stdout ----
+2026-10-07T11:24:23.3712520Z [nessa-server nessa_server] 
+2026-10-07T11:24:23.3714400Z [nessa-server nessa_server] thread 'composition::current_agent::tests::proactive_current_warm_up_opens_and_closes_without_a_conversation_or_prompt' (54148) panicked at crates/nessa-server/src/composition/../../tests/composition/current_agent.rs:984:10:
+2026-10-07T11:24:23.3715770Z [nessa-server nessa_server] managed ACP fixture launched
+2026-10-07T11:24:23.3716330Z [nessa-server nessa_server] 
+2026-10-07T11:24:23.3716730Z [nessa-server nessa_server] 
+2026-10-07T11:24:23.3717140Z [nessa-server nessa_server] failures:
+2026-10-07T11:24:23.3729300Z nessa-server nessa_server exited with 101
+2026-10-07T11:24:23.3730150Z [nessa-server nessa_server]     composition::current_agent::tests::proactive_current_warm_up_opens_and_closes_without_a_conversation_or_prompt
+2026-10-07T11:24:23.3730720Z [nessa-server nessa_server] 
+2026-10-07T11:24:23.3731420Z [nessa-server nessa_server] test result: FAILED. 1963 passed; 1 failed; 9 ignored; 0 measured; 0 filtered out; finished in 172.60s
+2026-10-07T11:24:23.3732020Z [nessa-server nessa_server] 
+2026-10-07T11:24:23.4237610Z ##[error]Process completed with exit code 1.
+2026-10-07T11:24:23.5051950Z Post job cleanup.
+2026-10-07T11:24:24.2642270Z Post job cleanup.
+2026-10-07T11:24:24.4243350Z [command]/opt/homebrew/bin/git version
+2026-10-07T11:24:24.4695950Z git version 2.55.0
+2026-10-07T11:24:24.4727270Z Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/bb7c357d-4d09-4dc4-a317-cc6ae0c9cdbb/.gitconfig'

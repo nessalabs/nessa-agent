@@ -1,0 +1,19 @@
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-oauth-callback/crates/nessa-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.68s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-e2f6c708a6cf158b)
+
+running 1 test
+
+thread 'composition::current_agent::tests::completed_launch_history_is_recorded_but_live_observation_still_requires_a_process' (267867) panicked at crates/nessa-server/src/composition/../../tests/composition/current_agent.rs:1034:5:
+assertion failed: scan(2, LaunchObservation::Recorded).is_none()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test composition::current_agent::tests::completed_launch_history_is_recorded_but_live_observation_still_requires_a_process ... FAILED
+
+failures:
+
+failures:
+    composition::current_agent::tests::completed_launch_history_is_recorded_but_live_observation_still_requires_a_process
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1974 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

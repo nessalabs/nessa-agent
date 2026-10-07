@@ -1,0 +1,17 @@
+MUTATION LANDED recorded-completed 'LaunchObservation::Recorded => launches.into_iter().find(|launch| unsafe { libc::kill(i32::try_from(launch["pid"].as_i64().unwrap()).unwrap(), 0) == 0 }),'
+RESULT recorded-completed 101 CAUGHT True
+RESTORED recorded-completed
+MUTATION LANDED live-pid '{ let _ = pid; true }'
+RESULT live-pid 101 CAUGHT True
+RESTORED live-pid
+MUTATION LANDED minimum-history 'if { let _ = minimum_launches; false } {'
+RESULT minimum-history 101 CAUGHT True
+RESTORED minimum-history
+MUTATION LANDED history-namespace '{ let _ = prefix; true }'
+RESULT history-namespace 101 CAUGHT False
+RESTORED history-namespace
+Traceback (most recent call last):
+  File "/tmp/nessa-648-probes.py", line 30, in <module>
+    assert caught,name
+           ^^^^^^
+AssertionError: history-namespace

@@ -1,0 +1,28 @@
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-oauth-callback/crates/nessa-server)
+error[E0308]: mismatched types
+   --> crates/nessa-server/src/composition/../../tests/composition/current_agent.rs:955:31
+    |
+955 |             { let _ = prefix; true }
+    |                               ^^^^ expected `()`, found `bool`
+    |
+help: you might have meant to return this value
+    |
+955 |             { let _ = prefix; return true; }
+    |                               ++++++     +
+
+error[E0308]: mismatched types
+   --> crates/nessa-server/src/composition/../../tests/composition/current_agent.rs:956:17
+    |
+956 | /                 && entry
+957 | |                     .path()
+958 | |                     .extension()
+959 | |                     .is_some_and(|value| value == "json")
+    | |_________________________________________________________^ expected `bool`, found `&&bool`
+    |
+help: parentheses are required to parse this as an expression
+    |
+955 |             ({ let _ = prefix; true })
+    |             +                        +
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `nessa-server` (lib test) due to 2 previous errors

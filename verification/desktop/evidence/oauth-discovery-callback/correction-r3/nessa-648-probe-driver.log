@@ -1,0 +1,9 @@
+MUTATION LANDED history-namespace '({ let _ = prefix; true })'
+RESULT history-namespace 101 CAUGHT True
+RESTORED history-namespace
+MUTATION LANDED exact-runtime 'RuntimeFingerprint::new(identity.name(), "not-the-configured-model", identity.context()).unwrap()'
+RESULT exact-runtime 101 CAUGHT True
+RESTORED exact-runtime
+MUTATION LANDED actual-initialize-failure 'sys.exit(0)\n# os.execv(sys.executable, [sys.executable, {fixture:?}, "default"])'
+RESULT actual-initialize-failure 101 CAUGHT True
+RESTORED actual-initialize-failure

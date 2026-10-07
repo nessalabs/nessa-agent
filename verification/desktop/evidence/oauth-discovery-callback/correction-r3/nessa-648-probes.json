@@ -1,0 +1,44 @@
+[
+  {
+    "probe": "recorded-completed",
+    "exit": 101,
+    "caught": true,
+    "mutation": "LaunchObservation::Recorded => launches.into_iter().find(|launch| unsafe { libc::kill(i32::try_from(launch[\"pid\"].as_i64().unwrap()).unwrap(), 0) == 0 }),",
+    "log": "/tmp/nessa-648-probe-recorded-completed.log"
+  },
+  {
+    "probe": "live-pid",
+    "exit": 101,
+    "caught": true,
+    "mutation": "{ let _ = pid; true }",
+    "log": "/tmp/nessa-648-probe-live-pid.log"
+  },
+  {
+    "probe": "minimum-history",
+    "exit": 101,
+    "caught": true,
+    "mutation": "if { let _ = minimum_launches; false } {",
+    "log": "/tmp/nessa-648-probe-minimum-history.log"
+  },
+  {
+    "probe": "history-namespace",
+    "exit": 101,
+    "caught": true,
+    "mutation": "({ let _ = prefix; true })",
+    "log": "/tmp/nessa-648-probe-history-namespace.log"
+  },
+  {
+    "probe": "exact-runtime",
+    "exit": 101,
+    "caught": true,
+    "mutation": "RuntimeFingerprint::new(identity.name(), \"not-the-configured-model\", identity.context()).unwrap()",
+    "log": "/tmp/nessa-648-probe-exact-runtime.log"
+  },
+  {
+    "probe": "actual-initialize-failure",
+    "exit": 101,
+    "caught": true,
+    "mutation": "sys.exit(0)\n# os.execv(sys.executable, [sys.executable, {fixture:?}, \"default\"])",
+    "log": "/tmp/nessa-648-probe-actual-initialize-failure.log"
+  }
+]

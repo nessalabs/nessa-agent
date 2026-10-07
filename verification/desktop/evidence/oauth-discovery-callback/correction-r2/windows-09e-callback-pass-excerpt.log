@@ -1,0 +1,2 @@
+2026-10-07T11:27:52.6516739Z [nessa-server nessa_server] test mcp_authorization::tests::callback_application::a3c_real_listener_wrong_state_then_valid_closes_before_exchange ... ok
+2026-10-07T11:30:09.7031369Z [nessa-server nessa_server] test result: ok. 1710 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 564.03s

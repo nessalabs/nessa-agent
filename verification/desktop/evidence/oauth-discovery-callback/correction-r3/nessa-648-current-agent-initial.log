@@ -1,0 +1,33 @@
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-oauth-callback/crates/nessa-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 55.33s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-e2f6c708a6cf158b)
+
+running 25 tests
+test composition::current_agent::tests::configured_set_and_default_share_the_deferred_agent_authority ... ok
+test composition::current_agent::tests::cold_resolution_reobserves_after_readiness_in_both_directions ... ok
+test composition::current_agent::tests::cold_resolution_refuses_pin_and_credential_contradictions_without_redeciding_policy ... ok
+test composition::current_agent::tests::credential_authority_is_scoped_store_when_packaged_and_captured_environment_when_standalone ... ok
+test composition::current_agent::tests::invalid_packaged_policy_is_unconfigured_without_runtime_or_credential_effects ... ok
+test composition::current_agent::tests::managed_adapter_observes_installation_and_removal_without_restart ... ok
+test composition::current_agent::tests::managed_adapter_store_failures_are_unknown_not_missing ... ok
+test composition::current_agent::tests::completed_launch_history_is_recorded_but_live_observation_still_requires_a_process ... ok
+test composition::current_agent::tests::managed_probe_retries_the_same_release_before_observing_another_runtime ... ok
+test composition::current_agent::tests::managed_probe_failure_transitions_retain_the_admitted_owner_until_its_release ... ok
+test composition::current_agent::tests::one_observation_reads_runtime_and_credential_once_and_keeps_failures_distinct ... ok
+test composition::current_agent::tests::managed_model_and_mode_refusals_match_fixed_provider_semantics ... ok
+test composition::current_agent::tests::opencode_is_registered_to_delete_sessions_only_when_configured ... ok
+test composition::current_agent::tests::opencode_is_asked_to_delete_a_session_by_its_current_generation ... ok
+test composition::current_agent::tests::packaged_explicit_policy_preserves_every_static_field_but_not_its_command ... ok
+test composition::current_agent::tests::proactive_failed_initialization_has_launch_history_but_no_completed_warm_up ... ok
+test composition::current_agent::tests::proactive_current_warm_up_opens_and_closes_without_a_conversation_or_prompt ... ok
+test composition::current_agent::tests::missing_key_skips_startup_warm_up_and_a_later_key_recovers_on_the_cold_slot ... ok
+test composition::current_agent::tests::rotated_key_shares_runtime_preparation_but_the_conversation_uses_fresh_credentials ... ok
+test composition::current_agent::tests::timed_out_and_cancelled_callers_do_not_release_or_multiply_blocking_work ... ok
+test composition::current_agent::tests::install_refresh_launches_the_managed_fixture_and_live_generation_stays_owned ... ok
+test composition::current_agent::tests::unknown_probe_cleanup_retains_one_owner_without_releasing_or_admitting_again ... ok
+test composition::current_agent::tests::unsupported_packaged_host_is_unconfigured_without_effects_while_supported_missing_is_not_installed ... ok
+test composition::current_agent::tests::standalone_explicit_profile_launches_with_captured_environment_and_no_managed_effects ... ok
+test composition::current_agent::tests::stopping_during_native_resolution_prevents_provider_launch_and_preserves_work_ownership ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 1950 filtered out; finished in 5.19s
+
