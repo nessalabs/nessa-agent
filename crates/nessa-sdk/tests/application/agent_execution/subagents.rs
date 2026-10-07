@@ -9,7 +9,9 @@ use std::{
 };
 
 use async_trait::async_trait;
-use nessa_sdk::application::agent_execution::agents::{lifetime_disposition, LifetimeDisposition};
+use nessa_sdk::application::agent_execution::agents::{
+    lifetime_disposition, LifetimeDisposition, OwnedLifetime,
+};
 use nessa_sdk::application::agent_execution::providers::SessionCloseRequest;
 use nessa_sdk::application::agent_execution::subagents::{
     ChildFactory, ChildResources, CloseCommand, InitialSubmit, LiveCapacity, MemoryOwnershipStore,
@@ -99,6 +101,7 @@ struct ScriptFactory {
     hold_next: Mutex<Option<Arc<Notify>>>,
     submit_result: Mutex<Result<TaskReceiptId, PortFailure>>,
     last_child: Mutex<Option<AgentLifetimeId>>,
+    last_gate: Mutex<Option<Arc<dyn OwnedLifetime>>>,
 }
 
 impl ScriptFactory {
@@ -114,6 +117,7 @@ impl ScriptFactory {
             hold_next: Mutex::new(None),
             submit_result: Mutex::new(Ok(TaskReceiptId::new("receipt-1").unwrap())),
             last_child: Mutex::new(None),
+            last_gate: Mutex::new(None),
         })
     }
 
@@ -131,6 +135,7 @@ impl ChildFactory for ScriptFactory {
     async fn prepare(&self, request: PrepareRequest) -> Result<PreparedChild, PrepareFailure> {
         self.prepares.fetch_add(1, Ordering::SeqCst);
         *self.last_child.lock().expect("child") = Some(request.child.clone());
+        *self.last_gate.lock().expect("child gate") = Some(request.owned_lifetime.clone());
         self.entered.notify_one();
         let release = self.release.lock().expect("factory").clone();
         if let Some(release) = release {
