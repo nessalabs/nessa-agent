@@ -37,8 +37,8 @@ body {
 }
 
 /*
- * The scale that layers portalled to <body> — menus, the model picker — read
- * as well as the surfaces: they sit outside every [data-surface], and a
+ * The part of the scale that menus and the model picker, portalled to <body>,
+ * read as well as the surfaces (`styles.test.ts` keeps the list true): they sit outside every [data-surface], and a
  * `var()` with no value there drops the whole declaration (a menu then closes
  * without its fade). Defined once, for both.
  */

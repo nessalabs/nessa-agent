@@ -310,10 +310,10 @@ it("draws a pill, a short fade and a focus ring from the window's tokens, not fr
   }
 })
 
-it("defines every token a portalled layer reads on :root, because menus and pickers sit outside every surface", () => {
+it("defines every token the menus and the pickers read on :root, because they sit outside every surface", () => {
   // A `var()` with no value drops its whole declaration: a menu closed without its
-  // fade, the model picker lost its selected row, and a popover opened without its
-  // rise (#632 review). Menus and the model picker portal to <body>.
+  // fade, the model picker lost its selected row (both caught in review), and the picker's
+  // rise never played at the base commit, for the same reason. Menus and the model picker portal to <body>.
   const comments = /\/\*[\s\S]*?\*\//g
   const defined = (source: string) =>
     new Set([...source.matchAll(/(--desktop-[\w-]+)\s*:/g)].map((match) => match[1]))
