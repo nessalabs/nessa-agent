@@ -1,4 +1,12 @@
-import { memo, startTransition, useCallback, useEffect, useRef, useState } from "react"
+import {
+  memo,
+  startTransition,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react"
 import { sendMessage } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
@@ -111,7 +119,7 @@ export const Pane = memo(function Pane({
   const showHome = draft || arrival !== null
   // A new session's home settles when its pane changes its shape, not as it appears.
   const homeShown = filled && showHome
-  useEffect(() => {
+  useLayoutEffect(() => {
     const home = homeRef.current
     if (!homeShown || !home) return
     return settleOnReshape(home)

@@ -1,0 +1,183 @@
+[
+  {
+    "name": "Layout",
+    "ms": 124.748,
+    "cpuMs": 119.852,
+    "dirty": 15,
+    "total": 1553,
+    "app": [
+      {
+        "file": "src/desktop/split-panes/adapters/dom/flip.tsx",
+        "line": 124,
+        "name": null
+      },
+      {
+        "file": "src/desktop/split-panes/adapters/dom/flip.tsx",
+        "line": 124,
+        "name": null
+      },
+      {
+        "file": "src/desktop/split-panes/adapters/dom/flip.tsx",
+        "line": 212,
+        "name": "play"
+      }
+    ]
+  },
+  {
+    "name": "Layout",
+    "ms": 85.606,
+    "cpuMs": 84.299,
+    "dirty": 12,
+    "total": 1554,
+    "app": []
+  },
+  {
+    "name": "Layout",
+    "ms": 72.533,
+    "cpuMs": 72.217,
+    "dirty": 11,
+    "total": 1386,
+    "app": []
+  },
+  {
+    "name": "Layout",
+    "ms": 45.804,
+    "cpuMs": 45.699,
+    "dirty": 11,
+    "total": 1561,
+    "app": []
+  },
+  {
+    "name": "Layout",
+    "ms": 45.495,
+    "cpuMs": 45.209,
+    "dirty": 12,
+    "total": 1554,
+    "app": []
+  },
+  {
+    "name": "UpdateLayoutTree",
+    "ms": 33.538,
+    "cpuMs": 33.347,
+    "styled": 302,
+    "app": []
+  },
+  {
+    "name": "Layout",
+    "ms": 31.408,
+    "cpuMs": 31.146,
+    "dirty": 12,
+    "total": 1561,
+    "app": []
+  },
+  {
+    "name": "Layout",
+    "ms": 27.603,
+    "cpuMs": 27.143,
+    "dirty": 29,
+    "total": 425,
+    "app": [
+      {
+        "file": "src/desktop/ui/night-scene.tsx",
+        "line": 42,
+        "name": null
+      },
+      {
+        "file": "src/desktop/ui/night-scene.tsx",
+        "line": 48,
+        "name": "measure"
+      }
+    ]
+  },
+  {
+    "name": "Layout",
+    "ms": 26.113,
+    "cpuMs": 25.778,
+    "dirty": 12,
+    "total": 1561,
+    "app": []
+  },
+  {
+    "name": "UpdateLayoutTree",
+    "ms": 23.625,
+    "cpuMs": 23.429,
+    "styled": 86,
+    "app": []
+  },
+  {
+    "name": "Layout",
+    "ms": 23.404,
+    "cpuMs": 21.37,
+    "dirty": 380,
+    "total": 380,
+    "app": []
+  },
+  {
+    "name": "UpdateLayoutTree",
+    "ms": 21.811,
+    "cpuMs": 21.665,
+    "styled": 283,
+    "app": []
+  },
+  {
+    "name": "UpdateLayoutTree",
+    "ms": 21.345,
+    "cpuMs": 21.184,
+    "styled": 59,
+    "app": []
+  },
+  {
+    "name": "Layout",
+    "ms": 21.101,
+    "cpuMs": 20.88,
+    "dirty": 29,
+    "total": 759,
+    "app": [
+      {
+        "file": "src/desktop/ui/night-scene.tsx",
+        "line": 42,
+        "name": null
+      },
+      {
+        "file": "src/desktop/ui/night-scene.tsx",
+        "line": 48,
+        "name": "measure"
+      }
+    ]
+  },
+  {
+    "name": "UpdateLayoutTree",
+    "ms": 19.772,
+    "cpuMs": 19.551,
+    "styled": 59,
+    "app": []
+  },
+  {
+    "name": "UpdateLayoutTree",
+    "ms": 19.118,
+    "cpuMs": 18.608,
+    "styled": 59,
+    "app": []
+  },
+  {
+    "name": "UpdateLayoutTree",
+    "ms": 19.059,
+    "cpuMs": 18.95,
+    "styled": 59,
+    "app": []
+  },
+  {
+    "name": "Layout",
+    "ms": 18.218,
+    "cpuMs": 15.156,
+    "dirty": 217,
+    "total": 783,
+    "app": [
+      {
+        "file": "src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx",
+        "line": 109,
+        "name": null
+      }
+    ]
+  }
+]

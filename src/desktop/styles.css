@@ -1097,6 +1097,11 @@ html:not(.dark) [data-surface] {
   animation: none;
 }
 
+/* A static window has no offscreen copies to travel through, in either motion mode. */
+:root .desktop-night-scene[data-still] .desktop-night-scene-rain > span {
+  transform: none;
+}
+
 .split-panes-grid[data-split-multi]
   .workspace-pane:not([data-focused])
   .desktop-header[data-sliver] {

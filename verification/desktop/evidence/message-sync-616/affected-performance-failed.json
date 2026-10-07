@@ -1,0 +1,4269 @@
+{
+  "check": "perf-budget",
+  "ok": false,
+  "started": "2026-10-07T06:05:27.352Z",
+  "finished": "2026-10-07T06:09:50.934Z",
+  "target": {
+    "url": "http://127.0.0.1:63542/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:63542/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "calibration",
+      "engine": "chromium",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 66,
+        "throttledMs": 205,
+        "ratio": 3.1,
+        "ok": true
+      },
+      "calibrationFrame": {
+        "cost": 120,
+        "measuredMs": 133.4000000000001,
+        "attributed": true,
+        "ok": true
+      }
+    },
+    {
+      "ok": false,
+      "failures": ["longest frame 116.70000000000027 ms > 50 ms (runs: 67 67 117)"],
+      "name": "stream-1-of-4",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 116.70000000000027,
+      "median": 67,
+      "over50": 7,
+      "runs": [
+        {
+          "maxFrame": 66.69999999999982,
+          "over": 1,
+          "frames": 357,
+          "slow": [
+            {
+              "at": 3,
+              "frame": 66.69999999999982,
+              "longTask": 50,
+              "loaf": {
+                "duration": 62,
+                "blocking": 3,
+                "styleAndLayout": 1,
+                "scripts": [
+                  {
+                    "duration": 47,
+                    "invoker": "DIV#root.onkeydown",
+                    "type": "event-listener",
+                    "fn": "O_",
+                    "source": "index-Dp73fupZ.js:185686",
+                    "forcedLayout": 9
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 66.69999999999891,
+          "over": 3,
+          "frames": 347,
+          "slow": [
+            {
+              "at": 2734,
+              "frame": 66.69999999999891,
+              "longTask": 52,
+              "loaf": {
+                "duration": 53,
+                "blocking": 1,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            },
+            {
+              "at": 3600,
+              "frame": 66.60000000000036,
+              "longTask": 63,
+              "loaf": {
+                "duration": 73,
+                "blocking": 12,
+                "styleAndLayout": 5,
+                "scripts": []
+              }
+            },
+            {
+              "at": 5466,
+              "frame": 50.5,
+              "longTask": null,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 116.70000000000027,
+          "over": 3,
+          "frames": 348,
+          "slow": [
+            {
+              "at": 19,
+              "frame": 116.70000000000027,
+              "longTask": 75,
+              "loaf": {
+                "duration": 109,
+                "blocking": 37,
+                "styleAndLayout": 1,
+                "scripts": [
+                  {
+                    "duration": 73,
+                    "invoker": "DIV#root.onkeydown",
+                    "type": "event-listener",
+                    "fn": "O_",
+                    "source": "index-Dp73fupZ.js:185686",
+                    "forcedLayout": 9
+                  }
+                ]
+              }
+            },
+            {
+              "at": 951,
+              "frame": 67.30000000000018,
+              "longTask": 72,
+              "loaf": {
+                "duration": 57,
+                "blocking": 7,
+                "styleAndLayout": 46,
+                "scripts": []
+              }
+            },
+            {
+              "at": 1768,
+              "frame": 50.5,
+              "longTask": null,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": false,
+      "failures": ["longest frame 265.60000000000036 ms > 50 ms (runs: 266 216 134)"],
+      "name": "drag-drop",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 265.60000000000036,
+      "median": 216,
+      "over50": 46,
+      "runs": [
+        {
+          "maxFrame": 265.60000000000036,
+          "over": 20,
+          "frames": 380,
+          "slow": [
+            {
+              "at": 109,
+              "frame": 100,
+              "longTask": 67,
+              "loaf": {
+                "duration": 75,
+                "blocking": 24,
+                "styleAndLayout": 2,
+                "scripts": [
+                  {
+                    "duration": 21,
+                    "invoker": "DIV#root.onpointerdown",
+                    "type": "event-listener",
+                    "fn": "O_",
+                    "source": "index-Dp73fupZ.js:185686",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 242,
+              "frame": 199.5,
+              "longTask": 162,
+              "loaf": {
+                "duration": 148,
+                "blocking": 75,
+                "styleAndLayout": 9,
+                "scripts": [
+                  {
+                    "duration": 23,
+                    "invoker": "TimerHandler:setTimeout",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BmNeXeBi.js:61470",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 509,
+              "frame": 166.69999999999982,
+              "longTask": 163,
+              "loaf": {
+                "duration": 128,
+                "blocking": 64,
+                "styleAndLayout": 26,
+                "scripts": [
+                  {
+                    "duration": 10,
+                    "invoker": "DOMWindow.onpointermove",
+                    "type": "event-listener",
+                    "fn": "ke",
+                    "source": "desktop-BmNeXeBi.js:61606",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1259,
+              "frame": 133.39999999999964,
+              "longTask": 132,
+              "loaf": {
+                "duration": 102,
+                "blocking": 46,
+                "styleAndLayout": 57,
+                "scripts": [
+                  {
+                    "duration": 37,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1726,
+              "frame": 133.40000000000055,
+              "longTask": 133,
+              "loaf": {
+                "duration": 107,
+                "blocking": 50,
+                "styleAndLayout": 83,
+                "scripts": [
+                  {
+                    "duration": 14,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1976,
+              "frame": 66.60000000000036,
+              "longTask": 72,
+              "loaf": {
+                "duration": 66,
+                "blocking": 6,
+                "styleAndLayout": 39,
+                "scripts": [
+                  {
+                    "duration": 15,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2092,
+              "frame": 99.29999999999927,
+              "longTask": 100,
+              "loaf": {
+                "duration": 81,
+                "blocking": 28,
+                "styleAndLayout": 65,
+                "scripts": [
+                  {
+                    "duration": 10,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2526,
+              "frame": 65.80000000000018,
+              "longTask": 76,
+              "loaf": {
+                "duration": 61,
+                "blocking": 5,
+                "styleAndLayout": 40,
+                "scripts": [
+                  {
+                    "duration": 12,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 3226,
+              "frame": 100,
+              "longTask": 96,
+              "loaf": {
+                "duration": 74,
+                "blocking": 24,
+                "styleAndLayout": 52,
+                "scripts": [
+                  {
+                    "duration": 20,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 3392,
+              "frame": 200,
+              "longTask": 181,
+              "loaf": {
+                "duration": 141,
+                "blocking": 91,
+                "styleAndLayout": 116,
+                "scripts": [
+                  {
+                    "duration": 20,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 3908,
+              "frame": 100.60000000000036,
+              "longTask": 104,
+              "loaf": {
+                "duration": 83,
+                "blocking": 30,
+                "styleAndLayout": 60,
+                "scripts": [
+                  {
+                    "duration": 17,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 4226,
+              "frame": 82.30000000000018,
+              "longTask": 93,
+              "loaf": {
+                "duration": 73,
+                "blocking": 17,
+                "styleAndLayout": 50,
+                "scripts": [
+                  {
+                    "duration": 15,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 4542,
+              "frame": 116.69999999999982,
+              "longTask": 116,
+              "loaf": {
+                "duration": 97,
+                "blocking": 45,
+                "styleAndLayout": 79,
+                "scripts": [
+                  {
+                    "duration": 14,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 4692,
+              "frame": 66.69999999999891,
+              "longTask": 69,
+              "loaf": {
+                "duration": 52,
+                "blocking": 0,
+                "styleAndLayout": 29,
+                "scripts": [
+                  {
+                    "duration": 18,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 6109,
+              "frame": 66.69999999999891,
+              "longTask": 67,
+              "loaf": {
+                "duration": 59,
+                "blocking": 0,
+                "styleAndLayout": 39,
+                "scripts": [
+                  {
+                    "duration": 8,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 6326,
+              "frame": 65.70000000000073,
+              "longTask": 73,
+              "loaf": {
+                "duration": 52,
+                "blocking": 0,
+                "styleAndLayout": 32,
+                "scripts": [
+                  {
+                    "duration": 12,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 6909,
+              "frame": 166.10000000000036,
+              "longTask": 163,
+              "loaf": {
+                "duration": 136,
+                "blocking": 72,
+                "styleAndLayout": 101,
+                "scripts": [
+                  {
+                    "duration": 21,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 7442,
+              "frame": 83.5,
+              "longTask": 91,
+              "loaf": {
+                "duration": 72,
+                "blocking": 18,
+                "styleAndLayout": 42,
+                "scripts": []
+              }
+            },
+            {
+              "at": 8059,
+              "frame": 265.60000000000036,
+              "longTask": 256,
+              "loaf": {
+                "duration": 242,
+                "blocking": 192,
+                "styleAndLayout": 24,
+                "scripts": [
+                  {
+                    "duration": 193,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BmNeXeBi.js:58903",
+                    "forcedLayout": 170
+                  },
+                  {
+                    "duration": 17,
+                    "invoker": "DOMWindow.onpointerup",
+                    "type": "event-listener",
+                    "fn": "A",
+                    "source": "desktop-BmNeXeBi.js:61940",
+                    "forcedLayout": 7
+                  }
+                ]
+              }
+            },
+            {
+              "at": 8325,
+              "frame": 101,
+              "longTask": 256,
+              "loaf": {
+                "duration": 80,
+                "blocking": 28,
+                "styleAndLayout": 66,
+                "scripts": []
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1289.59375,
+                "y": 258,
+                "w": 302.3984375,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 705.59375,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 8,
+                "w": 302.3984375,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 508,
+                "w": 302.3984375,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 216.20000000000073,
+          "over": 13,
+          "frames": 467,
+          "slow": [
+            {
+              "at": 157,
+              "frame": 83.29999999999973,
+              "longTask": 53,
+              "loaf": {
+                "duration": 62,
+                "blocking": 12,
+                "styleAndLayout": 5,
+                "scripts": [
+                  {
+                    "duration": 18,
+                    "invoker": "DIV#root.onpointerdown",
+                    "type": "event-listener",
+                    "fn": "O_",
+                    "source": "index-Dp73fupZ.js:185686",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 307,
+              "frame": 183.29999999999973,
+              "longTask": 93,
+              "loaf": {
+                "duration": 137,
+                "blocking": 60,
+                "styleAndLayout": 6,
+                "scripts": [
+                  {
+                    "duration": 26,
+                    "invoker": "TimerHandler:setTimeout",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BmNeXeBi.js:61470",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 590,
+              "frame": 67.69999999999982,
+              "longTask": 64,
+              "loaf": null
+            },
+            {
+              "at": 1407,
+              "frame": 134,
+              "longTask": 130,
+              "loaf": {
+                "duration": 101,
+                "blocking": 43,
+                "styleAndLayout": 71,
+                "scripts": [
+                  {
+                    "duration": 18,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1691,
+              "frame": 82.69999999999982,
+              "longTask": 75,
+              "loaf": null
+            },
+            {
+              "at": 1891,
+              "frame": 66.69999999999982,
+              "longTask": 64,
+              "loaf": {
+                "duration": 61,
+                "blocking": 0,
+                "styleAndLayout": 36,
+                "scripts": [
+                  {
+                    "duration": 8,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2007,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 2574,
+              "frame": 50.19999999999982,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3624,
+              "frame": 66.19999999999982,
+              "longTask": 74,
+              "loaf": {
+                "duration": 69,
+                "blocking": 9,
+                "styleAndLayout": 49,
+                "scripts": [
+                  {
+                    "duration": 10,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 3706,
+              "frame": 51,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 7141,
+              "frame": 99.09999999999854,
+              "longTask": 103,
+              "loaf": {
+                "duration": 82,
+                "blocking": 21,
+                "styleAndLayout": 67,
+                "scripts": []
+              }
+            },
+            {
+              "at": 8274,
+              "frame": 216.20000000000073,
+              "longTask": 197,
+              "loaf": {
+                "duration": 222,
+                "blocking": 163,
+                "styleAndLayout": 11,
+                "scripts": [
+                  {
+                    "duration": 168,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BmNeXeBi.js:58903",
+                    "forcedLayout": 146
+                  },
+                  {
+                    "duration": 25,
+                    "invoker": "DOMWindow.onpointerup",
+                    "type": "event-listener",
+                    "fn": "A",
+                    "source": "desktop-BmNeXeBi.js:61940",
+                    "forcedLayout": 10
+                  }
+                ]
+              }
+            },
+            {
+              "at": 8490,
+              "frame": 50.099999999998545,
+              "longTask": 197,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1289.59375,
+                "y": 258,
+                "w": 302.3984375,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 705.59375,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 8,
+                "w": 302.3984375,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 508,
+                "w": 302.3984375,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 134.1999999999989,
+          "over": 13,
+          "frames": 458,
+          "slow": [
+            {
+              "at": 88,
+              "frame": 82.69999999999982,
+              "longTask": 57,
+              "loaf": {
+                "duration": 63,
+                "blocking": 13,
+                "styleAndLayout": 4,
+                "scripts": [
+                  {
+                    "duration": 26,
+                    "invoker": "DIV#root.onpointerdown",
+                    "type": "event-listener",
+                    "fn": "O_",
+                    "source": "index-Dp73fupZ.js:185686",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 170,
+              "frame": 134.09999999999945,
+              "longTask": 113,
+              "loaf": {
+                "duration": 117,
+                "blocking": 45,
+                "styleAndLayout": 2,
+                "scripts": [
+                  {
+                    "duration": 22,
+                    "invoker": "TimerHandler:setTimeout",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BmNeXeBi.js:61470",
+                    "forcedLayout": 0
+                  },
+                  {
+                    "duration": 9,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "o",
+                    "source": "desktop-BmNeXeBi.js:152206",
+                    "forcedLayout": 6
+                  }
+                ]
+              }
+            },
+            {
+              "at": 904,
+              "frame": 100.80000000000018,
+              "longTask": 110,
+              "loaf": {
+                "duration": 59,
+                "blocking": 2,
+                "styleAndLayout": 36,
+                "scripts": [
+                  {
+                    "duration": 15,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1254,
+              "frame": 100,
+              "longTask": 90,
+              "loaf": null
+            },
+            {
+              "at": 1520,
+              "frame": 101,
+              "longTask": 104,
+              "loaf": {
+                "duration": 95,
+                "blocking": 31,
+                "styleAndLayout": 62,
+                "scripts": [
+                  {
+                    "duration": 15,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1654,
+              "frame": 67.10000000000036,
+              "longTask": 56,
+              "loaf": null
+            },
+            {
+              "at": 2354,
+              "frame": 83.39999999999964,
+              "longTask": 82,
+              "loaf": {
+                "duration": 64,
+                "blocking": 2,
+                "styleAndLayout": 45,
+                "scripts": [
+                  {
+                    "duration": 7,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 3320,
+              "frame": 83,
+              "longTask": 90,
+              "loaf": {
+                "duration": 62,
+                "blocking": 12,
+                "styleAndLayout": 47,
+                "scripts": [
+                  {
+                    "duration": 12,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 3703,
+              "frame": 84.39999999999964,
+              "longTask": 83,
+              "loaf": {
+                "duration": 86,
+                "blocking": 24,
+                "styleAndLayout": 53,
+                "scripts": [
+                  {
+                    "duration": 20,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 4104,
+              "frame": 50.099999999998545,
+              "longTask": 50,
+              "loaf": null
+            },
+            {
+              "at": 4288,
+              "frame": 83.19999999999891,
+              "longTask": 78,
+              "loaf": {
+                "duration": 64,
+                "blocking": 13,
+                "styleAndLayout": 57,
+                "scripts": []
+              }
+            },
+            {
+              "at": 6220,
+              "frame": 50.899999999999636,
+              "longTask": 58,
+              "loaf": null
+            },
+            {
+              "at": 8220,
+              "frame": 134.1999999999989,
+              "longTask": 143,
+              "loaf": {
+                "duration": 136,
+                "blocking": 86,
+                "styleAndLayout": 10,
+                "scripts": [
+                  {
+                    "duration": 116,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BmNeXeBi.js:58903",
+                    "forcedLayout": 100
+                  },
+                  {
+                    "duration": 8,
+                    "invoker": "DOMWindow.onpointerup",
+                    "type": "event-listener",
+                    "fn": "A",
+                    "source": "desktop-BmNeXeBi.js:61940",
+                    "forcedLayout": 2
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1289.59375,
+                "y": 258,
+                "w": 302.3984375,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 705.59375,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 8,
+                "w": 302.3984375,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 508,
+                "w": 302.3984375,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": false,
+      "failures": ["longest frame 201.09999999999945 ms > 50 ms (runs: 199 167 201)"],
+      "name": "drag-cancel",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 201.09999999999945,
+      "median": 199,
+      "over50": 25,
+      "runs": [
+        {
+          "maxFrame": 199.30000000000018,
+          "over": 10,
+          "frames": 165,
+          "slow": [
+            {
+              "at": 83,
+              "frame": 66.70000000000073,
+              "longTask": 64,
+              "loaf": {
+                "duration": 67,
+                "blocking": 0,
+                "styleAndLayout": 38,
+                "scripts": []
+              }
+            },
+            {
+              "at": 150,
+              "frame": 83.29999999999927,
+              "longTask": 64,
+              "loaf": {
+                "duration": 65,
+                "blocking": 15,
+                "styleAndLayout": 1,
+                "scripts": [
+                  {
+                    "duration": 22,
+                    "invoker": "DIV#root.onpointerdown",
+                    "type": "event-listener",
+                    "fn": "O_",
+                    "source": "index-Dp73fupZ.js:185686",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 267,
+              "frame": 199.30000000000018,
+              "longTask": 171,
+              "loaf": {
+                "duration": 152,
+                "blocking": 83,
+                "styleAndLayout": 9,
+                "scripts": [
+                  {
+                    "duration": 19,
+                    "invoker": "TimerHandler:setTimeout",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BmNeXeBi.js:61470",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 533,
+              "frame": 116.70000000000073,
+              "longTask": 130,
+              "loaf": {
+                "duration": 100,
+                "blocking": 39,
+                "styleAndLayout": 39,
+                "scripts": [
+                  {
+                    "duration": 8,
+                    "invoker": "DOMWindow.onpointermove",
+                    "type": "event-listener",
+                    "fn": "ke",
+                    "source": "desktop-BmNeXeBi.js:61606",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1250,
+              "frame": 116.69999999999982,
+              "longTask": 122,
+              "loaf": {
+                "duration": 87,
+                "blocking": 30,
+                "styleAndLayout": 61,
+                "scripts": [
+                  {
+                    "duration": 18,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1382,
+              "frame": 51.100000000000364,
+              "longTask": 53,
+              "loaf": null
+            },
+            {
+              "at": 1750,
+              "frame": 115.89999999999964,
+              "longTask": 121,
+              "loaf": {
+                "duration": 98,
+                "blocking": 48,
+                "styleAndLayout": 65,
+                "scripts": [
+                  {
+                    "duration": 27,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2183,
+              "frame": 83.30000000000018,
+              "longTask": 84,
+              "loaf": {
+                "duration": 77,
+                "blocking": 12,
+                "styleAndLayout": 46,
+                "scripts": [
+                  {
+                    "duration": 16,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2533,
+              "frame": 150.29999999999927,
+              "longTask": 124,
+              "loaf": {
+                "duration": 120,
+                "blocking": 50,
+                "styleAndLayout": 37,
+                "scripts": [
+                  {
+                    "duration": 46,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "ne",
+                    "source": "desktop-BmNeXeBi.js:62377",
+                    "forcedLayout": 30
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2683,
+              "frame": 65.70000000000073,
+              "longTask": 124,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 167.40000000000055,
+          "over": 6,
+          "frames": 163,
+          "slow": [
+            {
+              "at": 268,
+              "frame": 66.69999999999982,
+              "longTask": 72,
+              "loaf": null
+            },
+            {
+              "at": 901,
+              "frame": 99.90000000000055,
+              "longTask": 108,
+              "loaf": {
+                "duration": 76,
+                "blocking": 11,
+                "styleAndLayout": 37,
+                "scripts": [
+                  {
+                    "duration": 24,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1335,
+              "frame": 100,
+              "longTask": 79,
+              "loaf": null
+            },
+            {
+              "at": 1701,
+              "frame": 82.39999999999964,
+              "longTask": 94,
+              "loaf": {
+                "duration": 73,
+                "blocking": 17,
+                "styleAndLayout": 60,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2100,
+              "frame": 167.40000000000055,
+              "longTask": 75,
+              "loaf": {
+                "duration": 130,
+                "blocking": 55,
+                "styleAndLayout": 21,
+                "scripts": [
+                  {
+                    "duration": 75,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "ne",
+                    "source": "desktop-BmNeXeBi.js:62377",
+                    "forcedLayout": 50
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2268,
+              "frame": 50.19999999999982,
+              "longTask": 101,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 201.09999999999945,
+          "over": 9,
+          "frames": 159,
+          "slow": [
+            {
+              "at": 68,
+              "frame": 50.40000000000009,
+              "longTask": null,
+              "loaf": {
+                "duration": 61,
+                "blocking": 11,
+                "styleAndLayout": 7,
+                "scripts": [
+                  {
+                    "duration": 20,
+                    "invoker": "DIV#root.onpointerdown",
+                    "type": "event-listener",
+                    "fn": "O_",
+                    "source": "index-Dp73fupZ.js:185686",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 118,
+              "frame": 67.19999999999982,
+              "longTask": null,
+              "loaf": {
+                "duration": 61,
+                "blocking": 11,
+                "styleAndLayout": 7,
+                "scripts": [
+                  {
+                    "duration": 20,
+                    "invoker": "DIV#root.onpointerdown",
+                    "type": "event-listener",
+                    "fn": "O_",
+                    "source": "index-Dp73fupZ.js:185686",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 218,
+              "frame": 201.09999999999945,
+              "longTask": 164,
+              "loaf": {
+                "duration": 154,
+                "blocking": 81,
+                "styleAndLayout": 9,
+                "scripts": [
+                  {
+                    "duration": 21,
+                    "invoker": "TimerHandler:setTimeout",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BmNeXeBi.js:61470",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 502,
+              "frame": 166.69999999999982,
+              "longTask": 165,
+              "loaf": {
+                "duration": 133,
+                "blocking": 73,
+                "styleAndLayout": 55,
+                "scripts": []
+              }
+            },
+            {
+              "at": 1185,
+              "frame": 82.60000000000036,
+              "longTask": 86,
+              "loaf": {
+                "duration": 65,
+                "blocking": 4,
+                "styleAndLayout": 36,
+                "scripts": [
+                  {
+                    "duration": 17,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1285,
+              "frame": 50.19999999999982,
+              "longTask": 51,
+              "loaf": null
+            },
+            {
+              "at": 1702,
+              "frame": 99,
+              "longTask": 93,
+              "loaf": {
+                "duration": 83,
+                "blocking": 26,
+                "styleAndLayout": 56,
+                "scripts": [
+                  {
+                    "duration": 17,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1869,
+              "frame": 66.60000000000036,
+              "longTask": 73,
+              "loaf": {
+                "duration": 60,
+                "blocking": 7,
+                "styleAndLayout": 45,
+                "scripts": [
+                  {
+                    "duration": 7,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2252,
+              "frame": 67,
+              "longTask": 61,
+              "loaf": {
+                "duration": 53,
+                "blocking": 0,
+                "styleAndLayout": 11,
+                "scripts": [
+                  {
+                    "duration": 26,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "ne",
+                    "source": "desktop-BmNeXeBi.js:62377",
+                    "forcedLayout": 16
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": false,
+      "failures": ["longest frame 116.70000000000027 ms > 50 ms (runs: 117 117 100)"],
+      "name": "stream-1-of-4",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 116.70000000000027,
+      "median": 117,
+      "over50": 4,
+      "runs": [
+        {
+          "maxFrame": 116.70000000000027,
+          "over": 1,
+          "frames": 355,
+          "slow": [
+            {
+              "at": 6,
+              "frame": 116.70000000000027,
+              "longTask": 82,
+              "loaf": {
+                "duration": 117,
+                "blocking": 39,
+                "styleAndLayout": 1,
+                "scripts": [
+                  {
+                    "duration": 81,
+                    "invoker": "DIV#root.onkeydown",
+                    "type": "event-listener",
+                    "fn": "O_",
+                    "source": "index-Dp73fupZ.js:185686",
+                    "forcedLayout": 10
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 116.70000000000027,
+          "over": 2,
+          "frames": 350,
+          "slow": [
+            {
+              "at": 7,
+              "frame": 116.70000000000027,
+              "longTask": 62,
+              "loaf": {
+                "duration": 104,
+                "blocking": 27,
+                "styleAndLayout": 4,
+                "scripts": [
+                  {
+                    "duration": 62,
+                    "invoker": "DIV#root.onkeydown",
+                    "type": "event-listener",
+                    "fn": "O_",
+                    "source": "index-Dp73fupZ.js:185686",
+                    "forcedLayout": 10
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1657,
+              "frame": 66.60000000000036,
+              "longTask": null,
+              "loaf": {
+                "duration": 58,
+                "blocking": 7,
+                "styleAndLayout": 7,
+                "scripts": [
+                  {
+                    "duration": 46,
+                    "invoker": "TimerHandler:setTimeout",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BmNeXeBi.js:377174",
+                    "forcedLayout": 14
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 99.80000000000018,
+          "over": 1,
+          "frames": 356,
+          "slow": [
+            {
+              "at": 10,
+              "frame": 99.80000000000018,
+              "longTask": 56,
+              "loaf": {
+                "duration": 82,
+                "blocking": 11,
+                "styleAndLayout": 1,
+                "scripts": [
+                  {
+                    "duration": 54,
+                    "invoker": "DIV#root.onkeydown",
+                    "type": "event-listener",
+                    "fn": "O_",
+                    "source": "index-Dp73fupZ.js:185686",
+                    "forcedLayout": 12
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": false,
+      "failures": ["longest frame 232.29999999999973 ms > 50 ms (runs: 184 232 200)"],
+      "name": "drag-drop",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 232.29999999999973,
+      "median": 200,
+      "over50": 37,
+      "runs": [
+        {
+          "maxFrame": 184.20000000000073,
+          "over": 14,
+          "frames": 407,
+          "slow": [
+            {
+              "at": 119,
+              "frame": 65.80000000000018,
+              "longTask": 62,
+              "loaf": {
+                "duration": 69,
+                "blocking": 19,
+                "styleAndLayout": 6,
+                "scripts": [
+                  {
+                    "duration": 22,
+                    "invoker": "DIV#root.onpointerdown",
+                    "type": "event-listener",
+                    "fn": "O_",
+                    "source": "index-Dp73fupZ.js:185686",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 301,
+              "frame": 184.20000000000073,
+              "longTask": null,
+              "loaf": {
+                "duration": 145,
+                "blocking": 0,
+                "styleAndLayout": 10,
+                "scripts": [
+                  {
+                    "duration": 16,
+                    "invoker": "TimerHandler:setTimeout",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BmNeXeBi.js:61470",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 502,
+              "frame": 82.80000000000018,
+              "longTask": 81,
+              "loaf": {
+                "duration": 56,
+                "blocking": 6,
+                "styleAndLayout": 20,
+                "scripts": [
+                  {
+                    "duration": 5,
+                    "invoker": "DOMWindow.onpointermove",
+                    "type": "event-listener",
+                    "fn": "ke",
+                    "source": "desktop-BmNeXeBi.js:61606",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1152,
+              "frame": 100.30000000000018,
+              "longTask": 98,
+              "loaf": {
+                "duration": 67,
+                "blocking": 8,
+                "styleAndLayout": 42,
+                "scripts": [
+                  {
+                    "duration": 15,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1402,
+              "frame": 83.40000000000055,
+              "longTask": null,
+              "loaf": {
+                "duration": 89,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            },
+            {
+              "at": 1536,
+              "frame": 66.69999999999982,
+              "longTask": 75,
+              "loaf": {
+                "duration": 63,
+                "blocking": 7,
+                "styleAndLayout": 43,
+                "scripts": [
+                  {
+                    "duration": 12,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1618,
+              "frame": 84.19999999999982,
+              "longTask": 57,
+              "loaf": null
+            },
+            {
+              "at": 2919,
+              "frame": 100,
+              "longTask": 105,
+              "loaf": {
+                "duration": 77,
+                "blocking": 19,
+                "styleAndLayout": 57,
+                "scripts": [
+                  {
+                    "duration": 9,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 3051,
+              "frame": 67.60000000000036,
+              "longTask": 74,
+              "loaf": {
+                "duration": 57,
+                "blocking": 2,
+                "styleAndLayout": 43,
+                "scripts": [
+                  {
+                    "duration": 8,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 5668,
+              "frame": 66.60000000000036,
+              "longTask": 80,
+              "loaf": {
+                "duration": 63,
+                "blocking": 9,
+                "styleAndLayout": 39,
+                "scripts": [
+                  {
+                    "duration": 20,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 6235,
+              "frame": 66.20000000000073,
+              "longTask": 64,
+              "loaf": {
+                "duration": 64,
+                "blocking": 5,
+                "styleAndLayout": 44,
+                "scripts": [
+                  {
+                    "duration": 10,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 6568,
+              "frame": 50.5,
+              "longTask": 52,
+              "loaf": null
+            },
+            {
+              "at": 6619,
+              "frame": 166.70000000000073,
+              "longTask": 52,
+              "loaf": {
+                "duration": 152,
+                "blocking": 101,
+                "styleAndLayout": 105,
+                "scripts": [
+                  {
+                    "duration": 35,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 7318,
+              "frame": 184.20000000000073,
+              "longTask": 176,
+              "loaf": {
+                "duration": 173,
+                "blocking": 123,
+                "styleAndLayout": 6,
+                "scripts": [
+                  {
+                    "duration": 146,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BmNeXeBi.js:58903",
+                    "forcedLayout": 123
+                  },
+                  {
+                    "duration": 16,
+                    "invoker": "DOMWindow.onpointerup",
+                    "type": "event-listener",
+                    "fn": "A",
+                    "source": "desktop-BmNeXeBi.js:61940",
+                    "forcedLayout": 13
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1264,
+                "y": 258,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 984,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1264,
+                "y": 8,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1264,
+                "y": 508,
+                "w": 328,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 232.29999999999973,
+          "over": 12,
+          "frames": 374,
+          "slow": [
+            {
+              "at": 117,
+              "frame": 100.09999999999991,
+              "longTask": 63,
+              "loaf": {
+                "duration": 77,
+                "blocking": 26,
+                "styleAndLayout": 7,
+                "scripts": [
+                  {
+                    "duration": 17,
+                    "invoker": "DIV#root.onpointerdown",
+                    "type": "event-listener",
+                    "fn": "O_",
+                    "source": "index-Dp73fupZ.js:185686",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 301,
+              "frame": 232.29999999999973,
+              "longTask": 117,
+              "loaf": {
+                "duration": 183,
+                "blocking": 95,
+                "styleAndLayout": 22,
+                "scripts": [
+                  {
+                    "duration": 29,
+                    "invoker": "TimerHandler:setTimeout",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BmNeXeBi.js:61470",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 533,
+              "frame": 50.90000000000009,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 667,
+              "frame": 115.69999999999982,
+              "longTask": 127,
+              "loaf": {
+                "duration": 102,
+                "blocking": 50,
+                "styleAndLayout": 37,
+                "scripts": [
+                  {
+                    "duration": 5,
+                    "invoker": "DOMWindow.onpointermove",
+                    "type": "event-listener",
+                    "fn": "ke",
+                    "source": "desktop-BmNeXeBi.js:61606",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1367,
+              "frame": 99.10000000000036,
+              "longTask": 102,
+              "loaf": {
+                "duration": 82,
+                "blocking": 24,
+                "styleAndLayout": 51,
+                "scripts": [
+                  {
+                    "duration": 21,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1666,
+              "frame": 67,
+              "longTask": 74,
+              "loaf": {
+                "duration": 62,
+                "blocking": 6,
+                "styleAndLayout": 41,
+                "scripts": [
+                  {
+                    "duration": 12,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2550,
+              "frame": 82.69999999999982,
+              "longTask": 90,
+              "loaf": {
+                "duration": 69,
+                "blocking": 19,
+                "styleAndLayout": 55,
+                "scripts": []
+              }
+            },
+            {
+              "at": 5084,
+              "frame": 50.20000000000073,
+              "longTask": 53,
+              "loaf": null
+            },
+            {
+              "at": 5634,
+              "frame": 182.39999999999964,
+              "longTask": 180,
+              "loaf": {
+                "duration": 159,
+                "blocking": 100,
+                "styleAndLayout": 128,
+                "scripts": [
+                  {
+                    "duration": 17,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 5816,
+              "frame": 50.79999999999927,
+              "longTask": 52,
+              "loaf": null
+            },
+            {
+              "at": 6701,
+              "frame": 149.60000000000036,
+              "longTask": 133,
+              "loaf": {
+                "duration": 147,
+                "blocking": 92,
+                "styleAndLayout": 12,
+                "scripts": [
+                  {
+                    "duration": 112,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BmNeXeBi.js:58903",
+                    "forcedLayout": 86
+                  },
+                  {
+                    "duration": 13,
+                    "invoker": "DOMWindow.onpointerup",
+                    "type": "event-listener",
+                    "fn": "A",
+                    "source": "desktop-BmNeXeBi.js:61940",
+                    "forcedLayout": 7
+                  }
+                ]
+              }
+            },
+            {
+              "at": 6850,
+              "frame": 50.399999999999636,
+              "longTask": 133,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1264,
+                "y": 258,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 984,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1264,
+                "y": 8,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1264,
+                "y": 508,
+                "w": 328,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 200,
+          "over": 11,
+          "frames": 386,
+          "slow": [
+            {
+              "at": 118,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 318,
+              "frame": 66.60000000000036,
+              "longTask": 64,
+              "loaf": {
+                "duration": 65,
+                "blocking": 1,
+                "styleAndLayout": 26,
+                "scripts": []
+              }
+            },
+            {
+              "at": 1168,
+              "frame": 150,
+              "longTask": 145,
+              "loaf": {
+                "duration": 115,
+                "blocking": 62,
+                "styleAndLayout": 72,
+                "scripts": [
+                  {
+                    "duration": 35,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1584,
+              "frame": 83.39999999999964,
+              "longTask": 85,
+              "loaf": {
+                "duration": 78,
+                "blocking": 19,
+                "styleAndLayout": 56,
+                "scripts": [
+                  {
+                    "duration": 11,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2600,
+              "frame": 133.60000000000036,
+              "longTask": 134,
+              "loaf": {
+                "duration": 112,
+                "blocking": 62,
+                "styleAndLayout": 95,
+                "scripts": [
+                  {
+                    "duration": 13,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2784,
+              "frame": 65.89999999999964,
+              "longTask": 72,
+              "loaf": {
+                "duration": 56,
+                "blocking": 6,
+                "styleAndLayout": 47,
+                "scripts": []
+              }
+            },
+            {
+              "at": 5117,
+              "frame": 51,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 5518,
+              "frame": 100.20000000000073,
+              "longTask": 101,
+              "loaf": {
+                "duration": 93,
+                "blocking": 35,
+                "styleAndLayout": 72,
+                "scripts": [
+                  {
+                    "duration": 11,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 5717,
+              "frame": 67.30000000000109,
+              "longTask": 56,
+              "loaf": {
+                "duration": 52,
+                "blocking": 2,
+                "styleAndLayout": 50,
+                "scripts": []
+              }
+            },
+            {
+              "at": 6518,
+              "frame": 200,
+              "longTask": 184,
+              "loaf": {
+                "duration": 195,
+                "blocking": 145,
+                "styleAndLayout": 17,
+                "scripts": [
+                  {
+                    "duration": 149,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BmNeXeBi.js:58903",
+                    "forcedLayout": 125
+                  },
+                  {
+                    "duration": 21,
+                    "invoker": "DOMWindow.onpointerup",
+                    "type": "event-listener",
+                    "fn": "A",
+                    "source": "desktop-BmNeXeBi.js:61940",
+                    "forcedLayout": 12
+                  }
+                ]
+              }
+            },
+            {
+              "at": 7485,
+              "frame": 66.40000000000146,
+              "longTask": 52,
+              "loaf": {
+                "duration": 66,
+                "blocking": 1,
+                "styleAndLayout": 4,
+                "scripts": []
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1264,
+                "y": 258,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 984,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1264,
+                "y": 8,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1264,
+                "y": 508,
+                "w": 328,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": false,
+      "failures": ["longest frame 166.5999999999999 ms > 50 ms (runs: 150 150 167)"],
+      "name": "drag-cancel",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 166.5999999999999,
+      "median": 150,
+      "over50": 23,
+      "runs": [
+        {
+          "maxFrame": 150.0999999999999,
+          "over": 10,
+          "frames": 153,
+          "slow": [
+            {
+              "at": 133,
+              "frame": 100.40000000000009,
+              "longTask": 90,
+              "loaf": {
+                "duration": 80,
+                "blocking": 14,
+                "styleAndLayout": 2,
+                "scripts": [
+                  {
+                    "duration": 15,
+                    "invoker": "TimerHandler:setTimeout",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BmNeXeBi.js:61470",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 268,
+              "frame": 150.0999999999999,
+              "longTask": 147,
+              "loaf": {
+                "duration": 125,
+                "blocking": 64,
+                "styleAndLayout": 48,
+                "scripts": [
+                  {
+                    "duration": 5,
+                    "invoker": "DOMWindow.onpointermove",
+                    "type": "event-listener",
+                    "fn": "ke",
+                    "source": "desktop-BmNeXeBi.js:61606",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1050,
+              "frame": 117.5,
+              "longTask": 131,
+              "loaf": {
+                "duration": 98,
+                "blocking": 44,
+                "styleAndLayout": 56,
+                "scripts": [
+                  {
+                    "duration": 34,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1217,
+              "frame": 66.80000000000018,
+              "longTask": 69,
+              "loaf": {
+                "duration": 72,
+                "blocking": 10,
+                "styleAndLayout": 42,
+                "scripts": [
+                  {
+                    "duration": 17,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1351,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 1401,
+              "frame": 99,
+              "longTask": 83,
+              "loaf": {
+                "duration": 90,
+                "blocking": 19,
+                "styleAndLayout": 39,
+                "scripts": []
+              }
+            },
+            {
+              "at": 1550,
+              "frame": 99.89999999999964,
+              "longTask": 101,
+              "loaf": {
+                "duration": 91,
+                "blocking": 35,
+                "styleAndLayout": 58,
+                "scripts": [
+                  {
+                    "duration": 23,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1801,
+              "frame": 50.19999999999982,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 2117,
+              "frame": 149.89999999999964,
+              "longTask": 61,
+              "loaf": {
+                "duration": 105,
+                "blocking": 42,
+                "styleAndLayout": 28,
+                "scripts": [
+                  {
+                    "duration": 62,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "ne",
+                    "source": "desktop-BmNeXeBi.js:62377",
+                    "forcedLayout": 44
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2284,
+              "frame": 83.40000000000055,
+              "longTask": null,
+              "loaf": {
+                "duration": 58,
+                "blocking": 8,
+                "styleAndLayout": 15,
+                "scripts": []
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 150,
+          "over": 6,
+          "frames": 158,
+          "slow": [
+            {
+              "at": 159,
+              "frame": 116.09999999999991,
+              "longTask": 60,
+              "loaf": {
+                "duration": 88,
+                "blocking": 32,
+                "styleAndLayout": 13,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "TimerHandler:setTimeout",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BmNeXeBi.js:61470",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 359,
+              "frame": 116.40000000000009,
+              "longTask": 107,
+              "loaf": {
+                "duration": 74,
+                "blocking": 23,
+                "styleAndLayout": 28,
+                "scripts": []
+              }
+            },
+            {
+              "at": 1025,
+              "frame": 83.30000000000018,
+              "longTask": 80,
+              "loaf": null
+            },
+            {
+              "at": 1142,
+              "frame": 66.69999999999982,
+              "longTask": 70,
+              "loaf": {
+                "duration": 70,
+                "blocking": 19,
+                "styleAndLayout": 7,
+                "scripts": []
+              }
+            },
+            {
+              "at": 1258,
+              "frame": 50.30000000000018,
+              "longTask": null,
+              "loaf": {
+                "duration": 59,
+                "blocking": 0,
+                "styleAndLayout": 17,
+                "scripts": [
+                  {
+                    "duration": 13,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 2042,
+              "frame": 150,
+              "longTask": 58,
+              "loaf": {
+                "duration": 116,
+                "blocking": 42,
+                "styleAndLayout": 27,
+                "scripts": [
+                  {
+                    "duration": 58,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "ne",
+                    "source": "desktop-BmNeXeBi.js:62377",
+                    "forcedLayout": 44
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 166.5999999999999,
+          "over": 7,
+          "frames": 154,
+          "slow": [
+            {
+              "at": 250,
+              "frame": 166.5999999999999,
+              "longTask": null,
+              "loaf": {
+                "duration": 131,
+                "blocking": 0,
+                "styleAndLayout": 12,
+                "scripts": [
+                  {
+                    "duration": 30,
+                    "invoker": "TimerHandler:setTimeout",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-BmNeXeBi.js:61470",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 483,
+              "frame": 100.59999999999991,
+              "longTask": 110,
+              "loaf": {
+                "duration": 80,
+                "blocking": 20,
+                "styleAndLayout": 30,
+                "scripts": []
+              }
+            },
+            {
+              "at": 1149,
+              "frame": 101,
+              "longTask": 106,
+              "loaf": {
+                "duration": 83,
+                "blocking": 18,
+                "styleAndLayout": 57,
+                "scripts": [
+                  {
+                    "duration": 11,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1317,
+              "frame": 82.5,
+              "longTask": 83,
+              "loaf": {
+                "duration": 71,
+                "blocking": 6,
+                "styleAndLayout": 50,
+                "scripts": [
+                  {
+                    "duration": 5,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1466,
+              "frame": 116,
+              "longTask": 92,
+              "loaf": {
+                "duration": 98,
+                "blocking": 44,
+                "styleAndLayout": 48,
+                "scripts": [
+                  {
+                    "duration": 24,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "x",
+                    "source": "desktop-BmNeXeBi.js:52232",
+                    "forcedLayout": 0
+                  },
+                  {
+                    "duration": 21,
+                    "invoker": "PerformanceObserverCallback",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": ":-1",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 1633,
+              "frame": 65.89999999999964,
+              "longTask": 58,
+              "loaf": null
+            },
+            {
+              "at": 2116,
+              "frame": 117.59999999999945,
+              "longTask": 80,
+              "loaf": {
+                "duration": 86,
+                "blocking": 17,
+                "styleAndLayout": 12,
+                "scripts": [
+                  {
+                    "duration": 44,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "ne",
+                    "source": "desktop-BmNeXeBi.js:62377",
+                    "forcedLayout": 25
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    }
+  ]
+}

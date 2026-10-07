@@ -213,6 +213,24 @@ first (`model/window-fit.ts`, asking the same `columnsFit`); where even that
 cannot fit them, each pane's composer takes a compact, one-line form rather
 than be clipped.
 
+**The night scene's layout work stays with its visible representation** (#616).
+`ui/night-scene.tsx` takes its content height from ResizeObserver rather than
+forcing another computed-height read. It remains hidden until measured. A static
+conversation header renders only the rain rows inside its existing window clip
+and one steam pattern, at their resting offsets in either motion mode. Animated
+homes retain the full tiling copies. Browser comparisons of the original and
+compiled fixed headers hold identical pixels in both engines, layouts and motion
+modes; the static scene retains 30,998 rather than 108,814 characters. This bounds
+redundant text, not every source of frame delay.
+
+The home's shape watcher is registered in the layout commit before paint and
+takes its initial CSS shape from the first resize observation. Initial appearance
+plays no settling; a later observed shape change does. An empty composer supplies
+one logical draft line to the existing page-mode decision without a synchronous
+geometry query; placeholders and minimum field height do not own draft length.
+Nonempty drafts, including whitespace, still use measured lines. These changes
+remove eager reads but do not establish the whole desktop's frame budget.
+
 **A new session's home takes its pane's shape** (`ui/panes/conversation.css`,
 issue #285). In a pane at least 640px each way the home is the window's own:
 the scene, "Working late?" and the composer's card. In a smaller pane — split

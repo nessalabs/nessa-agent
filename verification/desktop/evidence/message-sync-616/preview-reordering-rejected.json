@@ -1,0 +1,1687 @@
+{
+  "kind": "alternating-preview-clock-sampling-control",
+  "records": [
+    {
+      "round": 1,
+      "variant": "baseline",
+      "code": 0,
+      "result": {
+        "check": "perf-budget",
+        "ok": true,
+        "started": "2026-10-07T07:28:21.475Z",
+        "finished": "2026-10-07T07:28:36.308Z",
+        "target": {
+          "url": "http://127.0.0.1:55115/desktop.html",
+          "mode": "prod"
+        },
+        "results": [
+          {
+            "ok": true,
+            "failures": [],
+            "name": "console",
+            "harmless": [
+              "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:55115/favicon.ico)"
+            ]
+          },
+          {
+            "ok": true,
+            "failures": [],
+            "name": "calibration",
+            "engine": "chromium",
+            "calibration": {
+              "rate": 4,
+              "plainMs": 19,
+              "throttledMs": 64,
+              "ratio": 3.27,
+              "ok": true
+            },
+            "calibrationFrame": {
+              "cost": 120,
+              "measuredMs": 117.5,
+              "attributed": true,
+              "ok": true
+            }
+          },
+          {
+            "ok": true,
+            "failures": [],
+            "name": "drag-drop",
+            "engine": "chromium",
+            "layout": "columns",
+            "max": 49.30000000000018,
+            "median": 49,
+            "over50": 0,
+            "runs": [
+              {
+                "maxFrame": 49.30000000000018,
+                "over": 0,
+                "frames": 263,
+                "slow": [],
+                "noLoaf": false,
+                "before": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": true,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "6",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "6",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "after": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": true,
+                      "x": 1289.59375,
+                      "y": 258,
+                      "w": 302.3984375,
+                      "h": 242
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 705.59375,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1289.59375,
+                      "y": 8,
+                      "w": 302.3984375,
+                      "h": 242
+                    },
+                    {
+                      "key": "6",
+                      "focused": false,
+                      "x": 1289.59375,
+                      "y": 508,
+                      "w": 302.3984375,
+                      "h": 484
+                    }
+                  ],
+                  "order": "2,4,1,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "1",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "1",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "did": null
+              }
+            ]
+          },
+          {
+            "ok": true,
+            "failures": [],
+            "name": "drag-cancel",
+            "engine": "chromium",
+            "layout": "columns",
+            "max": 33.30000000000018,
+            "median": 33,
+            "over50": 0,
+            "runs": [
+              {
+                "maxFrame": 33.30000000000018,
+                "over": 0,
+                "frames": 118,
+                "slow": [],
+                "noLoaf": false,
+                "before": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": true,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "6",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "6",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "after": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": true,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "1",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "1",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "did": null
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "round": 1,
+      "variant": "batched",
+      "code": 0,
+      "result": {
+        "check": "perf-budget",
+        "ok": true,
+        "started": "2026-10-07T07:28:36.469Z",
+        "finished": "2026-10-07T07:28:50.780Z",
+        "target": {
+          "url": "http://127.0.0.1:60069/desktop.html",
+          "mode": "prod"
+        },
+        "results": [
+          {
+            "ok": true,
+            "failures": [],
+            "name": "console",
+            "harmless": [
+              "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:60069/favicon.ico)"
+            ]
+          },
+          {
+            "ok": true,
+            "failures": [],
+            "name": "calibration",
+            "engine": "chromium",
+            "calibration": {
+              "rate": 4,
+              "plainMs": 19,
+              "throttledMs": 79,
+              "ratio": 4.09,
+              "ok": true
+            },
+            "calibrationFrame": {
+              "cost": 120,
+              "measuredMs": 116.70000000000005,
+              "attributed": true,
+              "ok": true
+            }
+          },
+          {
+            "ok": true,
+            "failures": [],
+            "name": "drag-drop",
+            "engine": "chromium",
+            "layout": "columns",
+            "max": 34.30000000000018,
+            "median": 34,
+            "over50": 0,
+            "runs": [
+              {
+                "maxFrame": 34.30000000000018,
+                "over": 0,
+                "frames": 261,
+                "slow": [],
+                "noLoaf": false,
+                "before": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": true,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "6",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "6",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "after": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": true,
+                      "x": 1289.59375,
+                      "y": 258,
+                      "w": 302.3984375,
+                      "h": 242
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 705.59375,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1289.59375,
+                      "y": 8,
+                      "w": 302.3984375,
+                      "h": 242
+                    },
+                    {
+                      "key": "6",
+                      "focused": false,
+                      "x": 1289.59375,
+                      "y": 508,
+                      "w": 302.3984375,
+                      "h": 484
+                    }
+                  ],
+                  "order": "2,4,1,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "1",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "1",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "did": null
+              }
+            ]
+          },
+          {
+            "ok": true,
+            "failures": [],
+            "name": "drag-cancel",
+            "engine": "chromium",
+            "layout": "columns",
+            "max": 17.600000000000364,
+            "median": 18,
+            "over50": 0,
+            "runs": [
+              {
+                "maxFrame": 17.600000000000364,
+                "over": 0,
+                "frames": 117,
+                "slow": [],
+                "noLoaf": false,
+                "before": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": true,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "6",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "6",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "after": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": true,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "1",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "1",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "did": null
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "round": 2,
+      "variant": "batched",
+      "code": 1,
+      "result": {
+        "check": "perf-budget",
+        "ok": false,
+        "started": "2026-10-07T07:28:50.925Z",
+        "finished": "2026-10-07T07:29:05.621Z",
+        "target": {
+          "url": "http://127.0.0.1:60069/desktop.html",
+          "mode": "prod"
+        },
+        "results": [
+          {
+            "ok": true,
+            "failures": [],
+            "name": "console",
+            "harmless": [
+              "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:60069/favicon.ico)"
+            ]
+          },
+          {
+            "ok": true,
+            "failures": [],
+            "name": "calibration",
+            "engine": "chromium",
+            "calibration": {
+              "rate": 4,
+              "plainMs": 15,
+              "throttledMs": 62,
+              "ratio": 4.1,
+              "ok": true
+            },
+            "calibrationFrame": {
+              "cost": 120,
+              "measuredMs": 116.70000000000005,
+              "attributed": true,
+              "ok": true
+            }
+          },
+          {
+            "ok": false,
+            "failures": ["longest frame 99.5 ms > 50 ms (runs: 100)"],
+            "name": "drag-drop",
+            "engine": "chromium",
+            "layout": "columns",
+            "max": 99.5,
+            "median": 100,
+            "over50": 1,
+            "runs": [
+              {
+                "maxFrame": 99.5,
+                "over": 1,
+                "frames": 268,
+                "slow": [
+                  {
+                    "at": 3369,
+                    "frame": 99.5,
+                    "longTask": 95,
+                    "loaf": {
+                      "duration": 102,
+                      "blocking": 40,
+                      "styleAndLayout": 6,
+                      "scripts": [
+                        {
+                          "duration": 75,
+                          "invoker": "FrameRequestCallback",
+                          "type": "user-callback",
+                          "fn": "",
+                          "source": "desktop-CIMAV6Ue.js:58987",
+                          "forcedLayout": 64
+                        },
+                        {
+                          "duration": 7,
+                          "invoker": "DOMWindow.onpointerup",
+                          "type": "event-listener",
+                          "fn": "A",
+                          "source": "desktop-CIMAV6Ue.js:62024",
+                          "forcedLayout": 4
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "noLoaf": false,
+                "before": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": true,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "6",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "6",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "after": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": true,
+                      "x": 1289.59375,
+                      "y": 258,
+                      "w": 302.3984375,
+                      "h": 242
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 705.59375,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1289.59375,
+                      "y": 8,
+                      "w": 302.3984375,
+                      "h": 242
+                    },
+                    {
+                      "key": "6",
+                      "focused": false,
+                      "x": 1289.59375,
+                      "y": 508,
+                      "w": 302.3984375,
+                      "h": 484
+                    }
+                  ],
+                  "order": "2,4,1,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "1",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "1",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "did": null
+              }
+            ]
+          },
+          {
+            "ok": true,
+            "failures": [],
+            "name": "drag-cancel",
+            "engine": "chromium",
+            "layout": "columns",
+            "max": 33.29999999999973,
+            "median": 33,
+            "over50": 0,
+            "runs": [
+              {
+                "maxFrame": 33.29999999999973,
+                "over": 0,
+                "frames": 118,
+                "slow": [],
+                "noLoaf": false,
+                "before": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": true,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "6",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "6",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "after": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": true,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "1",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "1",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "did": null
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "round": 2,
+      "variant": "baseline",
+      "code": 0,
+      "result": {
+        "check": "perf-budget",
+        "ok": true,
+        "started": "2026-10-07T07:29:05.771Z",
+        "finished": "2026-10-07T07:29:19.993Z",
+        "target": {
+          "url": "http://127.0.0.1:55115/desktop.html",
+          "mode": "prod"
+        },
+        "results": [
+          {
+            "ok": true,
+            "failures": [],
+            "name": "console",
+            "harmless": [
+              "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:55115/favicon.ico)"
+            ]
+          },
+          {
+            "ok": true,
+            "failures": [],
+            "name": "calibration",
+            "engine": "chromium",
+            "calibration": {
+              "rate": 4,
+              "plainMs": 23,
+              "throttledMs": 66,
+              "ratio": 2.89,
+              "ok": true
+            },
+            "calibrationFrame": {
+              "cost": 120,
+              "measuredMs": 116.59999999999991,
+              "attributed": true,
+              "ok": true
+            }
+          },
+          {
+            "ok": true,
+            "failures": [],
+            "name": "drag-drop",
+            "engine": "chromium",
+            "layout": "columns",
+            "max": 33.599999999999454,
+            "median": 34,
+            "over50": 0,
+            "runs": [
+              {
+                "maxFrame": 33.599999999999454,
+                "over": 0,
+                "frames": 252,
+                "slow": [],
+                "noLoaf": false,
+                "before": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": true,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "6",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "6",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "after": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": true,
+                      "x": 1289.59375,
+                      "y": 258,
+                      "w": 302.3984375,
+                      "h": 242
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 705.59375,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1289.59375,
+                      "y": 8,
+                      "w": 302.3984375,
+                      "h": 242
+                    },
+                    {
+                      "key": "6",
+                      "focused": false,
+                      "x": 1289.59375,
+                      "y": 508,
+                      "w": 302.3984375,
+                      "h": 484
+                    }
+                  ],
+                  "order": "2,4,1,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "1",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "1",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "did": null
+              }
+            ]
+          },
+          {
+            "ok": true,
+            "failures": [],
+            "name": "drag-cancel",
+            "engine": "chromium",
+            "layout": "columns",
+            "max": 32.69999999999982,
+            "median": 33,
+            "over50": 0,
+            "runs": [
+              {
+                "maxFrame": 32.69999999999982,
+                "over": 0,
+                "frames": 117,
+                "slow": [],
+                "noLoaf": false,
+                "before": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": true,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "6",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "6",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "after": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": true,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "1",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "1",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "did": null
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "round": 3,
+      "variant": "baseline",
+      "code": 0,
+      "result": {
+        "check": "perf-budget",
+        "ok": true,
+        "started": "2026-10-07T07:29:20.139Z",
+        "finished": "2026-10-07T07:29:34.505Z",
+        "target": {
+          "url": "http://127.0.0.1:55115/desktop.html",
+          "mode": "prod"
+        },
+        "results": [
+          {
+            "ok": true,
+            "failures": [],
+            "name": "console",
+            "harmless": [
+              "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:55115/favicon.ico)"
+            ]
+          },
+          {
+            "ok": true,
+            "failures": [],
+            "name": "calibration",
+            "engine": "chromium",
+            "calibration": {
+              "rate": 4,
+              "plainMs": 23,
+              "throttledMs": 66,
+              "ratio": 2.9,
+              "ok": true
+            },
+            "calibrationFrame": {
+              "cost": 120,
+              "measuredMs": 117.09999999999991,
+              "attributed": true,
+              "ok": true
+            }
+          },
+          {
+            "ok": true,
+            "failures": [],
+            "name": "drag-drop",
+            "engine": "chromium",
+            "layout": "columns",
+            "max": 33.600000000000364,
+            "median": 34,
+            "over50": 0,
+            "runs": [
+              {
+                "maxFrame": 33.600000000000364,
+                "over": 0,
+                "frames": 259,
+                "slow": [],
+                "noLoaf": false,
+                "before": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": true,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "6",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "6",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "after": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": true,
+                      "x": 1289.59375,
+                      "y": 258,
+                      "w": 302.3984375,
+                      "h": 242
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 705.59375,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1289.59375,
+                      "y": 8,
+                      "w": 302.3984375,
+                      "h": 242
+                    },
+                    {
+                      "key": "6",
+                      "focused": false,
+                      "x": 1289.59375,
+                      "y": 508,
+                      "w": 302.3984375,
+                      "h": 484
+                    }
+                  ],
+                  "order": "2,4,1,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "1",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "1",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "did": null
+              }
+            ]
+          },
+          {
+            "ok": true,
+            "failures": [],
+            "name": "drag-cancel",
+            "engine": "chromium",
+            "layout": "columns",
+            "max": 33.80000000000018,
+            "median": 34,
+            "over50": 0,
+            "runs": [
+              {
+                "maxFrame": 33.80000000000018,
+                "over": 0,
+                "frames": 119,
+                "slow": [],
+                "noLoaf": false,
+                "before": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": true,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "6",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "6",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "after": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": true,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "1",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "1",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "did": null
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "round": 3,
+      "variant": "batched",
+      "code": 1,
+      "result": {
+        "check": "perf-budget",
+        "ok": false,
+        "started": "2026-10-07T07:29:34.653Z",
+        "finished": "2026-10-07T07:29:49.108Z",
+        "target": {
+          "url": "http://127.0.0.1:60069/desktop.html",
+          "mode": "prod"
+        },
+        "results": [
+          {
+            "ok": true,
+            "failures": [],
+            "name": "console",
+            "harmless": [
+              "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:60069/favicon.ico)"
+            ]
+          },
+          {
+            "ok": true,
+            "failures": [],
+            "name": "calibration",
+            "engine": "chromium",
+            "calibration": {
+              "rate": 4,
+              "plainMs": 23,
+              "throttledMs": 66,
+              "ratio": 2.91,
+              "ok": true
+            },
+            "calibrationFrame": {
+              "cost": 120,
+              "measuredMs": 116.79999999999995,
+              "attributed": true,
+              "ok": true
+            }
+          },
+          {
+            "ok": false,
+            "failures": ["longest frame 50.30000000000018 ms > 50 ms (runs: 50)"],
+            "name": "drag-drop",
+            "engine": "chromium",
+            "layout": "columns",
+            "max": 50.30000000000018,
+            "median": 50,
+            "over50": 1,
+            "runs": [
+              {
+                "maxFrame": 50.30000000000018,
+                "over": 1,
+                "frames": 257,
+                "slow": [
+                  {
+                    "at": 3129,
+                    "frame": 50.30000000000018,
+                    "longTask": 62,
+                    "loaf": {
+                      "duration": 67,
+                      "blocking": 10,
+                      "styleAndLayout": 5,
+                      "scripts": [
+                        {
+                          "duration": 47,
+                          "invoker": "FrameRequestCallback",
+                          "type": "user-callback",
+                          "fn": "",
+                          "source": "desktop-CIMAV6Ue.js:58987",
+                          "forcedLayout": 40
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "noLoaf": false,
+                "before": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": true,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "6",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "6",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "after": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": true,
+                      "x": 1289.59375,
+                      "y": 258,
+                      "w": 302.3984375,
+                      "h": 242
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 705.59375,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1289.59375,
+                      "y": 8,
+                      "w": 302.3984375,
+                      "h": 242
+                    },
+                    {
+                      "key": "6",
+                      "focused": false,
+                      "x": 1289.59375,
+                      "y": 508,
+                      "w": 302.3984375,
+                      "h": 484
+                    }
+                  ],
+                  "order": "2,4,1,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "1",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "1",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "did": null
+              }
+            ]
+          },
+          {
+            "ok": true,
+            "failures": [],
+            "name": "drag-cancel",
+            "engine": "chromium",
+            "layout": "columns",
+            "max": 33.30000000000018,
+            "median": 33,
+            "over50": 0,
+            "runs": [
+              {
+                "maxFrame": 33.30000000000018,
+                "over": 0,
+                "frames": 118,
+                "slow": [],
+                "noLoaf": false,
+                "before": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": false,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": true,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "6",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "6",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "after": {
+                  "thinking": null,
+                  "panes": 4,
+                  "geometry": [
+                    {
+                      "key": "1",
+                      "focused": true,
+                      "x": 576,
+                      "y": 8,
+                      "w": 400,
+                      "h": 984
+                    },
+                    {
+                      "key": "2",
+                      "focused": false,
+                      "x": 984,
+                      "y": 8,
+                      "w": 300,
+                      "h": 984
+                    },
+                    {
+                      "key": "4",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 8,
+                      "w": 300,
+                      "h": 488
+                    },
+                    {
+                      "key": "6",
+                      "focused": false,
+                      "x": 1292,
+                      "y": 504,
+                      "w": 300,
+                      "h": 488
+                    }
+                  ],
+                  "order": "1,2,4,6",
+                  "content": "panes",
+                  "active": "TEXTAREA[Message]",
+                  "activeInPane": "1",
+                  "activeIsComposer": true,
+                  "activeOverviewItem": null,
+                  "focusedPane": "1",
+                  "requests": 0,
+                  "ghost": 0
+                },
+                "did": null
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

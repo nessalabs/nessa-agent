@@ -1,0 +1,778 @@
+{
+  "kind": "application-idle-control",
+  "viewport": {
+    "width": 1600,
+    "height": 1000
+  },
+  "deviceScaleFactor": 2,
+  "records": [
+    {
+      "headed": true,
+      "kind": "full",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 15,
+        "throttledMs": 63,
+        "ratio": 4.06,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 17.700000000000728,
+        "over": 0,
+        "frames": 300,
+        "slow": [],
+        "noLoaf": false
+      }
+    },
+    {
+      "headed": true,
+      "kind": "still",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 18,
+        "throttledMs": 63,
+        "ratio": 3.54,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 17.700000000000273,
+        "over": 0,
+        "frames": 300,
+        "slow": [],
+        "noLoaf": false
+      }
+    },
+    {
+      "headed": true,
+      "kind": "promoted",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 23,
+        "throttledMs": 67,
+        "ratio": 2.93,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 17.700000000000728,
+        "over": 0,
+        "frames": 300,
+        "slow": [],
+        "noLoaf": false
+      }
+    },
+    {
+      "headed": true,
+      "kind": "full",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 17,
+        "throttledMs": 60,
+        "ratio": 3.6,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 17.800000000000182,
+        "over": 0,
+        "frames": 301,
+        "slow": [],
+        "noLoaf": false
+      }
+    },
+    {
+      "headed": false,
+      "kind": "full",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 18,
+        "throttledMs": 72,
+        "ratio": 4.06,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 50,
+        "over": 0,
+        "frames": 243,
+        "slow": [],
+        "noLoaf": false
+      }
+    },
+    {
+      "headed": false,
+      "kind": "still",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 33,
+        "throttledMs": 138,
+        "ratio": 4.17,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 50.100000000000364,
+        "over": 1,
+        "frames": 298,
+        "slow": [
+          {
+            "at": 1251,
+            "frame": 50.100000000000364,
+            "longTask": null,
+            "loaf": null
+          }
+        ],
+        "noLoaf": false
+      }
+    },
+    {
+      "headed": false,
+      "kind": "promoted",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 27,
+        "throttledMs": 136,
+        "ratio": 4.95,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 83.40000000000055,
+        "over": 56,
+        "frames": 79,
+        "slow": [
+          {
+            "at": 25,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 60,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 91,
+            "frame": 66.70000000000027,
+            "longTask": null,
+            "loaf": {
+              "duration": 64,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 158,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 65,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 625,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 54,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 741,
+            "frame": 50.099999999999454,
+            "longTask": null,
+            "loaf": {
+              "duration": 55,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 791,
+            "frame": 66.60000000000036,
+            "longTask": null,
+            "loaf": {
+              "duration": 55,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 858,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 54,
+              "blocking": 0,
+              "styleAndLayout": 2,
+              "scripts": []
+            }
+          },
+          {
+            "at": 975,
+            "frame": 66.60000000000036,
+            "longTask": null,
+            "loaf": {
+              "duration": 58,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 1041,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 58,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 1158,
+            "frame": 66.59999999999945,
+            "longTask": null,
+            "loaf": {
+              "duration": 57,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 1225,
+            "frame": 50.100000000000364,
+            "longTask": null,
+            "loaf": {
+              "duration": 57,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 1275,
+            "frame": 66.60000000000036,
+            "longTask": null,
+            "loaf": {
+              "duration": 59,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 1341,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 64,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 1458,
+            "frame": 66.59999999999945,
+            "longTask": null,
+            "loaf": {
+              "duration": 58,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 1525,
+            "frame": 66.70000000000073,
+            "longTask": null,
+            "loaf": {
+              "duration": 59,
+              "blocking": 0,
+              "styleAndLayout": 2,
+              "scripts": []
+            }
+          },
+          {
+            "at": 1591,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 62,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 1658,
+            "frame": 83.30000000000018,
+            "longTask": null,
+            "loaf": {
+              "duration": 67,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 1741,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 93,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 1808,
+            "frame": 66.59999999999945,
+            "longTask": null,
+            "loaf": {
+              "duration": 67,
+              "blocking": 0,
+              "styleAndLayout": 2,
+              "scripts": []
+            }
+          },
+          {
+            "at": 1875,
+            "frame": 66.70000000000073,
+            "longTask": null,
+            "loaf": {
+              "duration": 65,
+              "blocking": 0,
+              "styleAndLayout": 2,
+              "scripts": []
+            }
+          },
+          {
+            "at": 1941,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 63,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 2008,
+            "frame": 83.30000000000018,
+            "longTask": null,
+            "loaf": {
+              "duration": 68,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 2091,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 69,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 2158,
+            "frame": 66.59999999999945,
+            "longTask": null,
+            "loaf": {
+              "duration": 67,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 2225,
+            "frame": 66.70000000000073,
+            "longTask": null,
+            "loaf": {
+              "duration": 68,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 2291,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 63,
+              "blocking": 0,
+              "styleAndLayout": 2,
+              "scripts": []
+            }
+          },
+          {
+            "at": 2358,
+            "frame": 66.59999999999945,
+            "longTask": null,
+            "loaf": {
+              "duration": 64,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 2425,
+            "frame": 66.70000000000073,
+            "longTask": null,
+            "loaf": {
+              "duration": 68,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 2491,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 68,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 2558,
+            "frame": 66.59999999999945,
+            "longTask": null,
+            "loaf": {
+              "duration": 64,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 2625,
+            "frame": 66.70000000000073,
+            "longTask": null,
+            "loaf": {
+              "duration": 64,
+              "blocking": 0,
+              "styleAndLayout": 2,
+              "scripts": []
+            }
+          },
+          {
+            "at": 2691,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 63,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 2758,
+            "frame": 66.59999999999945,
+            "longTask": null,
+            "loaf": {
+              "duration": 66,
+              "blocking": 0,
+              "styleAndLayout": 2,
+              "scripts": []
+            }
+          },
+          {
+            "at": 2825,
+            "frame": 83.30000000000018,
+            "longTask": null,
+            "loaf": {
+              "duration": 70,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 2908,
+            "frame": 83.40000000000055,
+            "longTask": null,
+            "loaf": {
+              "duration": 71,
+              "blocking": 0,
+              "styleAndLayout": 2,
+              "scripts": []
+            }
+          },
+          {
+            "at": 2991,
+            "frame": 83.29999999999927,
+            "longTask": null,
+            "loaf": {
+              "duration": 85,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 3075,
+            "frame": 83.30000000000018,
+            "longTask": null,
+            "loaf": {
+              "duration": 87,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 3158,
+            "frame": 83.40000000000055,
+            "longTask": null,
+            "loaf": {
+              "duration": 83,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 3241,
+            "frame": 83.29999999999927,
+            "longTask": null,
+            "loaf": {
+              "duration": 82,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 3325,
+            "frame": 83.30000000000018,
+            "longTask": null,
+            "loaf": {
+              "duration": 81,
+              "blocking": 0,
+              "styleAndLayout": 2,
+              "scripts": []
+            }
+          },
+          {
+            "at": 3408,
+            "frame": 83.30000000000018,
+            "longTask": null,
+            "loaf": {
+              "duration": 81,
+              "blocking": 0,
+              "styleAndLayout": 2,
+              "scripts": []
+            }
+          },
+          {
+            "at": 3491,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 77,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 3558,
+            "frame": 83.30000000000018,
+            "longTask": null,
+            "loaf": {
+              "duration": 72,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 3641,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 77,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 3708,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 69,
+              "blocking": 0,
+              "styleAndLayout": 2,
+              "scripts": []
+            }
+          },
+          {
+            "at": 3775,
+            "frame": 66.70000000000073,
+            "longTask": null,
+            "loaf": {
+              "duration": 59,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 3891,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 58,
+              "blocking": 0,
+              "styleAndLayout": 2,
+              "scripts": []
+            }
+          },
+          {
+            "at": 4008,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 55,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 4125,
+            "frame": 66.60000000000036,
+            "longTask": null,
+            "loaf": {
+              "duration": 55,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 4291,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 51,
+              "blocking": 0,
+              "styleAndLayout": 2,
+              "scripts": []
+            }
+          },
+          {
+            "at": 4458,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 52,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 4525,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 64,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 4591,
+            "frame": 66.69999999999982,
+            "longTask": null,
+            "loaf": {
+              "duration": 63,
+              "blocking": 0,
+              "styleAndLayout": 2,
+              "scripts": []
+            }
+          },
+          {
+            "at": 4658,
+            "frame": 50.00000000000091,
+            "longTask": null,
+            "loaf": {
+              "duration": 59,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 4758,
+            "frame": 66.69999999999891,
+            "longTask": null,
+            "loaf": {
+              "duration": 57,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          },
+          {
+            "at": 4875,
+            "frame": 50.100000000000364,
+            "longTask": null,
+            "loaf": {
+              "duration": 54,
+              "blocking": 0,
+              "styleAndLayout": 1,
+              "scripts": []
+            }
+          }
+        ],
+        "noLoaf": false
+      }
+    },
+    {
+      "headed": false,
+      "kind": "full",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 29,
+        "throttledMs": 120,
+        "ratio": 4.17,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 50,
+        "over": 0,
+        "frames": 166,
+        "slow": [],
+        "noLoaf": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "kind": "empty-page-control",
+  "rate": 4,
+  "records": [
+    {
+      "run": 1,
+      "calibration": {
+        "rate": 4,
+        "plainMs": 33,
+        "throttledMs": 90,
+        "ratio": 2.71,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 17.700000000000045,
+        "over": 0,
+        "frames": 301,
+        "slow": [],
+        "noLoaf": false
+      }
+    },
+    {
+      "run": 2,
+      "calibration": {
+        "rate": 4,
+        "plainMs": 31,
+        "throttledMs": 150,
+        "ratio": 4.88,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 17.700000000000045,
+        "over": 0,
+        "frames": 300,
+        "slow": [],
+        "noLoaf": false
+      }
+    },
+    {
+      "run": 3,
+      "calibration": {
+        "rate": 4,
+        "plainMs": 31,
+        "throttledMs": 155,
+        "ratio": 4.96,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 17.700000000000728,
+        "over": 0,
+        "frames": 300,
+        "slow": [],
+        "noLoaf": false
+      }
+    },
+    {
+      "run": 4,
+      "calibration": {
+        "rate": 4,
+        "plainMs": 33,
+        "throttledMs": 133,
+        "ratio": 4.01,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 17.800000000000182,
+        "over": 0,
+        "frames": 300,
+        "slow": [],
+        "noLoaf": false
+      }
+    },
+    {
+      "run": 5,
+      "calibration": {
+        "rate": 4,
+        "plainMs": 38,
+        "throttledMs": 165,
+        "ratio": 4.32,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 17.700000000000273,
+        "over": 0,
+        "frames": 300,
+        "slow": [],
+        "noLoaf": false
+      }
+    }
+  ]
+}

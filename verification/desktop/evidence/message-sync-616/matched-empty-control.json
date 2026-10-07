@@ -1,0 +1,143 @@
+{
+  "kind": "matched-empty-frame-control",
+  "records": [
+    {
+      "headed": true,
+      "run": 1,
+      "viewport": {
+        "width": 1600,
+        "height": 1000
+      },
+      "deviceScaleFactor": 2,
+      "calibration": {
+        "rate": 4,
+        "plainMs": 15,
+        "throttledMs": 63,
+        "ratio": 4.25,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 17.700000000000273,
+        "over": 0,
+        "frames": 301,
+        "slow": [],
+        "noLoaf": false
+      }
+    },
+    {
+      "headed": true,
+      "run": 2,
+      "viewport": {
+        "width": 1600,
+        "height": 1000
+      },
+      "deviceScaleFactor": 2,
+      "calibration": {
+        "rate": 4,
+        "plainMs": 16,
+        "throttledMs": 66,
+        "ratio": 4.07,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 17.799999999999955,
+        "over": 0,
+        "frames": 300,
+        "slow": [],
+        "noLoaf": false
+      }
+    },
+    {
+      "headed": true,
+      "run": 3,
+      "viewport": {
+        "width": 1600,
+        "height": 1000
+      },
+      "deviceScaleFactor": 2,
+      "calibration": {
+        "rate": 4,
+        "plainMs": 16,
+        "throttledMs": 71,
+        "ratio": 4.51,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 17.600000000000136,
+        "over": 0,
+        "frames": 300,
+        "slow": [],
+        "noLoaf": false
+      }
+    },
+    {
+      "headed": false,
+      "run": 1,
+      "viewport": {
+        "width": 1600,
+        "height": 1000
+      },
+      "deviceScaleFactor": 2,
+      "calibration": {
+        "rate": 4,
+        "plainMs": 15,
+        "throttledMs": 62,
+        "ratio": 4.23,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 16.800000000000182,
+        "over": 0,
+        "frames": 300,
+        "slow": [],
+        "noLoaf": false
+      }
+    },
+    {
+      "headed": false,
+      "run": 2,
+      "viewport": {
+        "width": 1600,
+        "height": 1000
+      },
+      "deviceScaleFactor": 2,
+      "calibration": {
+        "rate": 4,
+        "plainMs": 15,
+        "throttledMs": 62,
+        "ratio": 4.15,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 16.800000000000182,
+        "over": 0,
+        "frames": 300,
+        "slow": [],
+        "noLoaf": false
+      }
+    },
+    {
+      "headed": false,
+      "run": 3,
+      "viewport": {
+        "width": 1600,
+        "height": 1000
+      },
+      "deviceScaleFactor": 2,
+      "calibration": {
+        "rate": 4,
+        "plainMs": 15,
+        "throttledMs": 62,
+        "ratio": 4.15,
+        "ok": true
+      },
+      "idle": {
+        "maxFrame": 16.800000000000182,
+        "over": 0,
+        "frames": 300,
+        "slow": [],
+        "noLoaf": false
+      }
+    }
+  ]
+}

@@ -59,3 +59,89 @@ intermittent symptoms' causes were established.
   the one MCP detach remain causally unestablished. Eleven repeated pre-fix MCP
   core runs and isolated pre-fix drag checks passed; the reproducible ownership
   defects above have their own failing-before / passing-after guards.
+
+## Adverse-condition investigation — performance gate remains open
+
+The synchronized source at `5c5bb197` was measured in a production build,
+Chromium bundled, headed, 4× CDP CPU throttling, three fresh pages per
+interaction and layout. CPU calibration held (ratio 3.1); the known 120 ms
+frame was detected and attributed. `affected-performance-failed.json` and
+its log retain all six failing rows. Streaming maxima were 117 ms in both
+layouts; drag/drop maxima were 266/232 ms and cancellation 201/167 ms.
+These are failures against the unchanged 50 ms budget, not passing evidence.
+
+Five empty-page controls under 4× throttling calibrated successfully and
+had no frame over 18 ms. This does not eliminate contention during application
+work. Long Animation Frame attribution and `drag-diagnostic.cpuprofile`
+identify expensive forced layout in the drop commit, specifically the first
+final-geometry read in `FlipScope.play`. Source maps from an otherwise identical
+production bundle mapped the callback to `drag.ts:1210` and the read to
+`flip.tsx:124`. Profiling adds overhead; this profile is diagnostic only.
+
+Temporary browser overrides tested removal of night-scene content, scene
+layout containment, and non-inheriting pane geometry properties. Their JSON
+files retain results; none established a complete fix, and no override was
+applied to application source. Removal had one passing streaming sample but
+still failed drag. Timing differences between separate runs do not prove
+causation. Calibration sequence samples show timing variability without
+establishing a JIT defect. The shared calibrator and acceptance threshold
+remain unchanged. Production message delivery and the full performance gate
+must be reverified after a supported fix.
+
+Two supported scene improvements were then implemented: the ResizeObserver's
+content height replaces synchronous computed-height reads, and a static
+header keeps only its clipped rain window and one steam pattern. Animated
+scenes retain their full tiling copies. The static reduced-motion rule keeps
+that window at its resting offset. Both regression rules fail when reverted
+individually and pass when restored. The same-page prototype comparison is
+pixel-identical in Chromium/WebKit, both layouts and both motion modes, with
+ambient drift held and the pointer outside hover controls.
+
+The compiled headless run still failed all six frame rows; its complete raw
+result is `bounded-scene-performance-failed.json`. It must not be replaced by
+a claim based on the passing streaming diagnostic. Matched empty controls at
+1600×1000, Retina scale 2 and 4× CPU all stayed below 18 ms in both modes.
+Headed application idle controls also stayed below 18 ms. Extra compositor
+promotion worsened headless idle behavior and was rejected.
+
+`preview-reordering-rejected.json` alternates the compiled fixed scene with an
+experimental preview-clock reordering, three rounds. The unchanged source
+passed all three headed drop/cancel pairs (drop max 49.3 ms, cancel max 33.8 ms);
+the experimental source failed drops at 99.5 and 50.3 ms. It was reverted, not
+included in the change. Passing pairs do not erase the earlier failing runs or
+establish behavior under arbitrary host contention.
+
+## Controlled load and additional layout reads
+
+`delivery-controlled-pressure.json` uses the development-mode parent runner
+with two separately owned, continuously busy Node CPU workers. The message-sync
+child reports its own **production** fixture. Chromium calibration held at a
+4× requested rate (loop ratio 4.99) and attributed the known 120 ms frame.
+All 15 delivery checks pass across both engines/layouts, three fresh-page runs.
+Chromium active maxima are 487.4/485.9 ms and held maxima 529/527 ms;
+frame maxima are 18.7 ms. WebKit is separately unthrottled: active maxima
+276/506 ms, held maxima 274/239 ms and frame maxima 22/21 ms.
+The worker ledger retains the declared workload and teardown outcome.
+
+The full sample-renderer interaction sweep under the same additional worker
+count holds **9/35**, with failures retained in
+`full-interaction-pressure-failed.json`. This is distinct from gateway delivery
+and the already-open #588 sample-renderer investigation. The budget remains
+50 ms unrounded; this result is not passing aggregate evidence.
+
+The invalidation trace identifies two eager layout reads on a new empty home:
+Composer's draft-line measurement, then home-shape's initial computed-style
+query. Removing only the empty-draft read shifts the large flush to home-shape
+(103.5 ms), rather than establishing a frame-budget fix. Composer now supplies
+the known empty-draft line count to the existing page-mode owner; nonempty and
+whitespace drafts are still measured. Home-shape establishes its initial
+baseline in the first resize observation, registered in the React layout commit
+before paint; subsequent shape changes still settle. Regression tests fail on
+each original source, including reverting the composition to a passive effect.
+Both engines/layouts pass the real home-shape check after these changes.
+
+The scene-omission build is diagnostic only. It preserves the scene's boxes,
+omits decoration, and alternates with the unchanged source under two busy
+workers. It is not shipped and does not establish the only source of layout
+cost; all source was exactly restored. All comparisons and unresolved failures
+remain part of the investigation.
