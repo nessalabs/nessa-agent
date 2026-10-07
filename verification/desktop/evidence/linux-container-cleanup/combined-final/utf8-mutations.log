@@ -1,0 +1,6 @@
+decoded-byte-budget FAILED as required
+character-byte-budget FAILED as required
+incremental-decoding FAILED as required
+pending-byte-flush FAILED as required
+overflow-verdict FAILED as required
+stderr-shared-budget FAILED as required

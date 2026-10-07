@@ -1,0 +1,18 @@
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-container-reaping/crates/nessa-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.12s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-e2f6c708a6cf158b)
+
+running 1 test
+test composition::mcp_servers::tests::audit_selection_rejects_ambiguous_operation_ids - should panic ... FAILED
+
+failures:
+
+---- composition::mcp_servers::tests::audit_selection_rejects_ambiguous_operation_ids stdout ----
+note: test did not panic as expected at crates/nessa-server/src/composition/../../tests/composition/mcp_servers.rs:1206:4
+
+failures:
+    composition::mcp_servers::tests::audit_selection_rejects_ambiguous_operation_ids
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1948 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-server --lib`
