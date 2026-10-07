@@ -142,6 +142,7 @@ impl OwnershipGraph {
     }
 
     pub(super) fn validate_target(&self, root: &AgentLifetimeId, operation: &CloseOperationId, target: &AgentLifetimeId) -> Result<(), OwnershipError> {
+        if self.lifetime_state(root).is_none() { return Err(OwnershipError::ParentMissing); }
         if self.lifetime_state(root) == Some(LifetimeState::Open) || self.close_operation(root) != Some(operation)
             || self.close_owner(target).as_ref() != Some(root) || !self.in_subtree(root, target) {
             return Err(OwnershipError::StaleOutcome);
@@ -181,6 +182,7 @@ impl OwnershipGraph {
             SettlementProof::Resource(slots) => slots.iter().any(Option::is_some) && slots.iter().enumerate().all(|(slot, a)| a.as_ref().is_none_or(|a| {
                 matches!(a.record.close_detail, Some(CloseEvidenceDetail::ResourceObservation { physical, .. }) if physical_slot(physical) == slot)
                     && self.valid_record(&row.close_lifetime, &row.target, &a.record)
+                    && !matches!(a.record.close_detail, Some(CloseEvidenceDetail::ResourceObservation { provider_evidence: EvidenceFact::Acknowledged, .. }) if !a.provider_acknowledged)
             })),
         };
         let mut expected = row.clone(); refresh_summary(&mut expected);
@@ -191,11 +193,8 @@ impl OwnershipGraph {
         self.lifetimes.keys().filter(|id| self.in_subtree(root, id)).all(|id| {
             let Some(owner) = self.close_owner(id) else { return false; };
             if &owner != root { return self.lifetime_state(id) == Some(LifetimeState::Closed); }
-            self.settlements.get(&(root.clone(), id.clone())).is_some_and(|s| match &s.row.proof {
-                SettlementProof::Absence(a) => a.acknowledgement == EvidenceFact::Acknowledged,
-                SettlementProof::Resource(slots) => slots[2].as_ref().is_some_and(|a| a.provider_acknowledged)
-                    && slots.iter().flatten().all(|a| a.acknowledgement == EvidenceFact::Acknowledged),
-            })
+            self.settlements.get(&(root.clone(), id.clone())).is_some_and(|s|
+                settlement_summary(&s.row.proof) == (PhysicalFact::Released, EvidenceFact::Acknowledged))
         })
     }
 }

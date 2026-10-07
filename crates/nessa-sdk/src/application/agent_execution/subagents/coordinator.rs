@@ -711,6 +711,10 @@ impl Shared {
                 });
                 self.release_slot(&admitted.child);
                 self.notify.notify_waiters();
+                // Preserve this actual flight-owned exclusion in the acknowledged
+                // Closing safety snapshot. The immutable publication failure
+                // remains the generation's result even if this write succeeds.
+                let _ = self.commit_snapshot().await;
             }
             return Err(error);
         }
@@ -824,6 +828,7 @@ impl Shared {
                 .cloned()
                 .expect("admitted child gate") as Arc<dyn OwnedLifetime>
         });
+        let mut preparation = None;
         let observed = effect(|| self.factory.prepare(PrepareRequest {
                 owned_lifetime,
                 parent: command.parent.clone(),
@@ -838,6 +843,10 @@ impl Shared {
                 self.with_graph(|graph| match &mut result {
                     Ok(prepared) => {
                         self.resources.lock().expect("child resources").insert(admitted.child.clone(), prepared.resources.clone());
+                        let evidence = graph.note_prepared_owner(&command.request_id).expect("actual prepared owner follows reservation");
+                        let progress = graph.spawn_progress(&command.request_id).cloned().expect("prepared progress");
+                        let token = self.publication.lock().expect("ownership publication").begin(PublicationTarget::Spawn(command.request_id.clone()), PublishedState::Spawn(progress));
+                        preparation = Some((evidence, token));
                     }
                     Err(failure) => {
                         self.revoke_child_in_graph(graph, &admitted.child);
@@ -860,7 +869,7 @@ impl Shared {
         if observed.faulted {
             let closing = self.revoke_child(&admitted.child);
             self.persist_revocation(closing).await;
-            let _ = self.advance(&command.request_id, SpawnProgress::Unconfirmed { known: SpawnProgress::Reserved.known() }).await;
+            let _ = self.advance(&command.request_id, SpawnProgress::Unconfirmed { known: self.with_graph(|graph| graph.spawn_progress(&command.request_id).expect("admitted progress").known()) }).await;
             return Err(OwnershipFailure::Startup(PortFailure::Uncertain));
         }
         let prepared = observed.output.expect("nonfaulted factory output");
@@ -916,7 +925,7 @@ impl Shared {
                 .advance(
                     &command.request_id,
                     SpawnProgress::Ended {
-                        known: SpawnProgress::Reserved.known(),
+                        known: self.with_graph(|graph| graph.spawn_progress(&command.request_id).expect("actual preparation").known()),
                     },
                 )
                 .await;
@@ -927,8 +936,8 @@ impl Shared {
             };
             return Err(OwnershipFailure::Domain(error));
         }
-        self.advance(&command.request_id, SpawnProgress::Prepared)
-            .await?;
+        let (evidence, token) = preparation.expect("Ready preparation installed before Drop");
+        self.publish_evidence(&evidence, &token, Some(&command.request_id)).await?;
         self.advance(&command.request_id, SpawnProgress::Attached)
             .await?;
         let submitted = effect(|| prepared.submit.submit(&command.task, &command.request_id), |result| {
@@ -983,10 +992,11 @@ impl Shared {
     }
 
     async fn close_claimed(&self, root: &AgentLifetimeId, target: &AgentLifetimeId) -> Result<(), OwnershipFailure> {
+        let root = self.with_graph(|graph| graph.close_owner(target)).unwrap_or_else(|| root.clone());
         let Some(resources) = self.claim(target) else { return Ok(()); };
-        let (Some(cause), Some(initiator), Some(operation)) = self.close_facts(root) else { return Err(OwnershipFailure::Incomplete); };
+        let (Some(cause), Some(initiator), Some(operation)) = self.close_facts(&root) else { return Err(OwnershipFailure::Incomplete); };
         let observed = effect(|| resources.close(&cause, &initiator), |report| {
-            self.install_report(root, &operation, target, report).map(|_| report)
+            self.install_report(&root, &operation, target, report).map(|_| report)
         }).await;
         self.notify.notify_waiters();
         if observed.faulted { return Err(OwnershipFailure::Incomplete); }
@@ -1846,8 +1856,11 @@ impl OwnedLifetime for LifetimeGate {
             let operation = shared.with_graph(|graph| graph.close_operation(&owner).cloned());
             if let Some(operation) = operation {
                 let _ = shared.install_report(&owner, &operation, &self.lifetime, super::ports::ResourceReport { physical, evidence: evidence_fact });
-                // The registered owned drain performs exact audit and writer reconciliation.
-                let _ = shared.commit_snapshot().await;
+                // A newly observed host report starts or joins the existing first close;
+                // its owned generation performs exact audit and writer reconciliation.
+                if let Some(generation) = shared.start_drain(owner.clone(), false) {
+                    let _ = wait_generation(generation).await;
+                }
             }
         }
         shared.notify.notify_waiters();

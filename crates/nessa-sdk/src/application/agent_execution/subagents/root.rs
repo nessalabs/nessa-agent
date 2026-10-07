@@ -39,6 +39,7 @@ pub(super) async fn open(
     session: SessionId,
     initiator: Initiator,
 ) -> Result<AgentLifetimeId, OwnershipFailure> {
+    let waiter = format!("owned root {}", session.as_str());
     let (sender, receiver) = oneshot::channel();
     let executor = Handle::current();
     let delivery_executor = executor.clone();
@@ -52,7 +53,7 @@ pub(super) async fn open(
         });
         let _ = sender.send(result);
     });
-    receiver
+    crate::application::agent_execution::caller_wake::contain_caller_wake(waiter, receiver)
         .await
         .map_err(|_| OwnershipFailure::Incomplete)?
         .map(DeliveryTicket::claim)

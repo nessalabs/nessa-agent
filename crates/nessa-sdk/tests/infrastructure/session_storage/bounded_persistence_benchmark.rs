@@ -72,6 +72,11 @@ fn benchmark_single_store_root_rows() {
                             EvidenceFact::Acknowledged,
                         )
                         .unwrap();
+                    for record in graph.pending_close_evidence(&life) {
+                        graph.acknowledge_observation(&record, EvidenceFact::Acknowledged).unwrap();
+                    }
+                    let completion = graph.prepare_completion(&life, &operation).unwrap();
+                    graph.acknowledge_completion(&completion, EvidenceFact::Acknowledged).unwrap();
                 }
             }
             let snapshot = graph.snapshot();

@@ -486,6 +486,25 @@ impl OwnershipGraph {
         ))
     }
 
+    /// Retain actual transferred factory ownership before its returned future is destroyed.
+    /// Existing terminal safety progress stays terminal and gains the known preparation.
+    ///
+    /// # Errors
+    /// Rejects unknown requests or a preparation unrelated to the retained chart.
+    pub fn note_prepared_owner(&mut self, request: &SpawnRequestId) -> Result<OwnershipEvidence, OwnershipError> {
+        self.ensure_dispatch()?;
+        let spawn = self.spawns.get_mut(request).ok_or(OwnershipError::UnknownSpawn)?;
+        if spawn.row.progress.known() != KnownMilestone::Reserved { return Err(OwnershipError::IllegalSpawnProgress); }
+        let before = meaning_of(&spawn.row.progress);
+        spawn.row.progress = match spawn.row.progress {
+            SpawnProgress::Draining { .. } => SpawnProgress::Draining { known: KnownMilestone::Prepared },
+            SpawnProgress::Unconfirmed { .. } => SpawnProgress::Unconfirmed { known: KnownMilestone::Prepared },
+            SpawnProgress::Ended { .. } | SpawnProgress::StartupFailed { .. } => return Err(OwnershipError::StaleOutcome),
+            _ => SpawnProgress::Prepared,
+        };
+        Ok(evidence_for_spawn(&spawn.row, before, meaning_of(&spawn.row.progress), Initiator::Runtime))
+    }
+
     /// Install an actually returned task receipt without reopening a sealed lifetime.
     ///
     /// # Errors
@@ -604,6 +623,9 @@ impl OwnershipGraph {
         self.ensure_dispatch()?;
         self.validate_target(close_lifetime, operation, target)?;
         let key = (close_lifetime.clone(), target.clone());
+        if self.physical(close_lifetime, target) == Some(PhysicalFact::Released) && physical != PhysicalFact::Released {
+            return Err(OwnershipError::StaleOutcome);
+        }
         let slot = physical_slot(physical);
         let record = self.observation_record(close_lifetime, operation, target,
             CloseEvidenceDetail::ResourceObservation { physical, provider_evidence: evidence });
@@ -841,12 +863,19 @@ impl OwnershipGraph {
                 || !graph.valid_record(&root, &root, &row.record)
                 || graph.cascaded_from(&root).is_some()
                 || !graph.completion_ready(&root)
+                || (row.acknowledgement == EvidenceFact::Acknowledged && graph.lifetime_state(&root) != Some(LifetimeState::Closed))
             {
                 note_refusal(&mut refusal, OwnershipError::Contradictory);
             }
             graph.close_completions.insert(root, row);
         }
         for (id, lifetime) in &graph.lifetimes {
+            if lifetime.row.state != LifetimeState::Open && graph.close_owner(id).is_none() {
+                note_refusal(&mut refusal, OwnershipError::Contradictory);
+            }
+            if lifetime.row.state == LifetimeState::Open && lifetime.row.cascaded_from.is_some() {
+                note_refusal(&mut refusal, OwnershipError::Contradictory);
+            }
             if lifetime.row.state == LifetimeState::Closed {
                 if !graph.close_owner(id).and_then(|owner| graph.close_completions.get(&owner))
                     .is_some_and(|row| row.acknowledgement == EvidenceFact::Acknowledged)
@@ -1279,19 +1308,23 @@ fn physical_slot(physical: PhysicalFact) -> usize {
     match physical { PhysicalFact::Pending => 0, PhysicalFact::Failed => 1, PhysicalFact::Released => 2 }
 }
 
-fn refresh_summary(row: &mut SettlementRow) {
-    match &row.proof {
-        SettlementProof::Absence(absence) => {
-            row.physical = PhysicalFact::Released;
-            row.evidence = absence.acknowledgement;
-        }
+/// One derivation owns both the coarse inspection summary and aggregate readiness.
+fn settlement_summary(proof: &SettlementProof) -> (PhysicalFact, EvidenceFact) {
+    match proof {
+        SettlementProof::Absence(absence) => (PhysicalFact::Released, absence.acknowledgement),
         SettlementProof::Resource(slots) => {
-            if let Some(observation) = slots.iter().rev().flatten().next() {
-                if let Some(CloseEvidenceDetail::ResourceObservation { physical, provider_evidence }) = observation.record.close_detail {
-                    row.physical = physical;
-                    row.evidence = if observation.provider_acknowledged { EvidenceFact::Acknowledged } else { provider_evidence };
-                }
-            }
+            let observation = slots.iter().rev().flatten().next().expect("resource observation");
+            let Some(CloseEvidenceDetail::ResourceObservation { physical, provider_evidence }) = observation.record.close_detail else {
+                return (PhysicalFact::Pending, EvidenceFact::Pending);
+            };
+            let evidence = if slots.iter().flatten().any(|a| a.acknowledgement == EvidenceFact::Failed) { EvidenceFact::Failed }
+                else if slots.iter().flatten().any(|a| a.acknowledgement != EvidenceFact::Acknowledged) { EvidenceFact::Pending }
+                else if observation.provider_acknowledged { EvidenceFact::Acknowledged } else { provider_evidence };
+            (physical, evidence)
         }
     }
+}
+
+fn refresh_summary(row: &mut SettlementRow) {
+    (row.physical, row.evidence) = settlement_summary(&row.proof);
 }

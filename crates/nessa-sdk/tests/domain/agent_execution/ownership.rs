@@ -74,6 +74,18 @@ fn admit(
         .unwrap()
 }
 
+fn complete(graph: &mut OwnershipGraph, root: &AgentLifetimeId) {
+    for record in graph.pending_close_evidence(root) {
+        graph.acknowledge_observation(&record, EvidenceFact::Acknowledged).unwrap();
+    }
+    let operation = graph.close_operation(root).cloned().unwrap();
+    let completion = graph.prepare_completion(root, &operation).unwrap();
+    graph.acknowledge_completion(&completion, EvidenceFact::Acknowledged).unwrap();
+}
+
+#[path = "ownership/settlement.rs"]
+mod settlement;
+
 #[test]
 fn identity_and_policy_values_reject_blank_and_oversized_input() {
     assert!(matches!(
@@ -466,6 +478,7 @@ fn dispatch_after_prepare_refuses_a_child_that_is_not_open() {
             EvidenceFact::Acknowledged,
         )
         .unwrap();
+    complete(&mut closed, &life("child"));
     assert_eq!(
         closed.lifetime_state(&life("child")),
         Some(LifetimeState::Closed)
@@ -579,6 +592,7 @@ fn retained_request_limit_is_the_published_constant() {
                 EvidenceFact::Acknowledged,
             )
             .unwrap();
+        complete(&mut graph, &life(&child));
         assert_eq!(
             graph.lifetime_state(&life(&child)),
             Some(LifetimeState::Closed)
@@ -661,6 +675,7 @@ fn closed_parent_and_second_root_are_refused() {
             EvidenceFact::Acknowledged,
         )
         .unwrap();
+    complete(&mut graph, &life("parent"));
     assert_eq!(
         graph.lifetime_state(&life("parent")),
         Some(LifetimeState::Closed)
@@ -706,6 +721,7 @@ fn closed_parent_and_second_root_are_refused() {
             EvidenceFact::Acknowledged,
         )
         .unwrap();
+    complete(&mut graph, &life("parent-2"));
     assert_eq!(
         graph.open_root(session("parent"), life("parent"), Initiator::Runtime),
         Err(OwnershipError::Contradictory)
@@ -876,6 +892,7 @@ fn cleanup_settles_only_correlated_released_and_acknowledged_targets() {
             EvidenceFact::Acknowledged,
         )
         .unwrap();
+    complete(&mut graph, &life("parent"));
     assert_eq!(
         graph.lifetime_state(&life("parent")),
         Some(LifetimeState::Closed)
@@ -1562,7 +1579,7 @@ fn begin_close_of_a_missing_lifetime_is_parent_missing() {
 }
 
 #[test]
-fn second_physical_release_records_the_previous_release_as_before() {
+fn second_physical_release_reuses_the_exact_first_observation() {
     let mut graph = OwnershipGraph::new();
     root(&mut graph, "parent");
     graph
@@ -1591,8 +1608,13 @@ fn second_physical_release_records_the_previous_release_as_before() {
             EvidenceFact::Acknowledged,
         )
         .unwrap();
-    assert_eq!(again.before, OwnershipMeaning::Closed);
-    assert_eq!(again.after, OwnershipMeaning::Closed);
+    assert_eq!(again.before, OwnershipMeaning::Closing);
+    assert_eq!(again.after, OwnershipMeaning::Closing);
+    assert_eq!(again.close_detail, Some(CloseEvidenceDetail::ResourceObservation {
+        physical: PhysicalFact::Released, provider_evidence: EvidenceFact::Pending,
+    }));
+    assert_eq!(graph.lifetime_state(&life("parent")), Some(LifetimeState::Closing));
+    complete(&mut graph, &life("parent"));
     assert_eq!(
         graph.close_cause(&life("parent")),
         Some(&LifetimeCause::HostClose)
@@ -1728,6 +1750,7 @@ fn a_closed_child_is_omitted_when_the_parent_seals() {
             EvidenceFact::Acknowledged,
         )
         .unwrap();
+    complete(&mut graph, &life("child"));
     let admission = graph
         .begin_close(
             &life("parent"),
@@ -1747,6 +1770,7 @@ fn a_closed_child_is_omitted_when_the_parent_seals() {
             EvidenceFact::Acknowledged,
         )
         .unwrap();
+    complete(&mut graph, &life("parent"));
     assert_eq!(
         graph.lifetime_state(&life("parent")),
         Some(LifetimeState::Closed)
@@ -1859,7 +1883,7 @@ fn r3_an_open_descendant_of_a_closing_ancestor_joins_that_close() {
     child.cause = Some(LifetimeCause::OwnerDisposed);
     child.close_operation = Some(close_id("close-child"));
     child.initiator = Some(Initiator::Runtime);
-    child.cascaded_from = Some(life("parent"));
+    child.cascaded_from = None;
     direct.lifetimes.push(child);
     direct.lifetimes.push(row("grand", LifetimeState::Open));
     direct
@@ -1981,6 +2005,7 @@ fn row_20_private_root_discard_preserves_neighbors_closed_history_reports_and_re
             EvidenceFact::Acknowledged,
         )
         .unwrap();
+    complete(&mut graph, &life("history"));
     graph
         .begin_close(
             &life("neighbor"),
@@ -2081,6 +2106,7 @@ fn active_root_query_excludes_child_and_closed_history_and_discard_refuses_depen
     graph
         .acknowledge_unbound_root(token, EvidenceFact::Acknowledged)
         .unwrap();
+    complete(&mut graph, &life("history"));
     assert!(graph
         .root_lifetime_for_session(&session("history"))
         .is_none());
@@ -2124,25 +2150,10 @@ fn unbound_absence_token_refuses_child_closed_history_and_stale_completion() {
     let token = graph
         .note_unbound_root(&life("root"), &close_id("close"))
         .unwrap();
-    graph
-        .apply_report(
-            &life("root"),
-            &close_id("close"),
-            &life("root"),
-            PhysicalFact::Released,
-            EvidenceFact::Acknowledged,
-        )
-        .unwrap();
-    assert_eq!(
-        graph.acknowledge_unbound_root(token, EvidenceFact::Failed),
-        Err(OwnershipError::StaleOutcome)
-    );
-    assert_eq!(
-        graph
-            .note_unbound_root(&life("root"), &close_id("close"))
-            .unwrap_err(),
-        OwnershipError::StaleOutcome
-    );
+    assert_eq!(graph.apply_report(&life("root"), &close_id("close"), &life("root"), PhysicalFact::Released, EvidenceFact::Acknowledged), Err(OwnershipError::StaleOutcome));
+    graph.acknowledge_unbound_root(token, EvidenceFact::Acknowledged).unwrap();
+    complete(&mut graph, &life("root"));
+    assert_eq!(graph.note_unbound_root(&life("root"), &close_id("close")).unwrap_err(), OwnershipError::StaleOutcome);
     assert_eq!(
         graph.snapshot().settlements[0].evidence,
         EvidenceFact::Acknowledged
@@ -2316,6 +2327,7 @@ fn sealed_progress_retains_actual_receipt_without_inventing_permission_or_termin
             EvidenceFact::Acknowledged,
         )
         .unwrap();
+    complete(&mut graph, &life("child"));
     assert_eq!(
         graph.lifetime_state(&life("child")),
         Some(LifetimeState::Closed)

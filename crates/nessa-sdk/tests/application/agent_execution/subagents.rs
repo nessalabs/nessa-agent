@@ -679,9 +679,8 @@ async fn rejected_submission_stays_attached_and_is_not_submitted_again() {
     let again = world
         .coordinator
         .spawn(world.command(&root, "req-1", "draft the note"))
-        .await
-        .unwrap();
-    assert!(matches!(again.progress, SpawnProgress::Attached));
+        .await;
+    assert_eq!(again, Err(OwnershipFailure::Submission(PortFailure::Rejected)));
     assert_eq!(world.factory.prepares(), 1);
     assert_eq!(world.factory.submits(), 1);
 }
@@ -796,9 +795,9 @@ async fn s13_rejected_and_uncertain_publication_does_not_prepare() {
     let retained = world
         .coordinator
         .spawn(world.command(&root, "req-reject", "draft"))
-        .await
-        .unwrap();
-    assert!(matches!(retained.progress, SpawnProgress::Reserved));
+        .await;
+    assert_eq!(retained, Err(OwnershipFailure::Audit(PortFailure::Rejected)));
+    assert_eq!(world.coordinator.spawn_progress(&SpawnRequestId::new("req-reject").unwrap()), Some(SpawnProgress::Reserved));
     assert_eq!(world.factory.prepares(), 0);
 
     world.audit.fail_next(PortFailure::Uncertain);
@@ -835,9 +834,9 @@ async fn rejected_reservation_publication_returns_the_live_slot() {
     let retained = world
         .coordinator
         .spawn(world.command(&root, "req-reject", "draft"))
-        .await
-        .unwrap();
-    assert!(matches!(retained.progress, SpawnProgress::Reserved));
+        .await;
+    assert_eq!(retained, Err(OwnershipFailure::Audit(PortFailure::Rejected)));
+    assert_eq!(world.coordinator.spawn_progress(&SpawnRequestId::new("req-reject").unwrap()), Some(SpawnProgress::Reserved));
     assert_eq!(world.factory.prepares(), 0);
     world
         .coordinator
@@ -859,9 +858,9 @@ async fn rejected_reservation_publication_returns_the_live_slot() {
     let retained = world
         .coordinator
         .spawn(world.command(&root, "req-store", "draft"))
-        .await
-        .unwrap();
-    assert!(matches!(retained.progress, SpawnProgress::Reserved));
+        .await;
+    assert_eq!(retained, Err(OwnershipFailure::Store(PortFailure::Rejected)));
+    assert_eq!(world.coordinator.spawn_progress(&SpawnRequestId::new("req-store").unwrap()), Some(SpawnProgress::Reserved));
     assert_eq!(world.factory.prepares(), 0);
     world
         .coordinator

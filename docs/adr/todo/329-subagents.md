@@ -1183,7 +1183,11 @@ cloud work without shipping an unowned-child window.
 The ownership graph retains three immutable resource observations per target:
 first actual Pending, Failed and Released, with monotonic physical knowledge.
 Each exact record has its own mandatory coordinator audit acknowledgement and
-an outcome-scoped provider witness. Failed acknowledgement cannot acknowledge
+an outcome-scoped provider witness. Coarse settlement evidence is derived from
+all outstanding coordinator debt and the retained physical outcome's provider
+witness; a single domain derivation also supplies aggregate readiness and restore validation. It cannot say Acknowledged while exact audit debt remains. The SQLite
+`contradictory_resource_debt_is_rejected_without_sqlite_rewrite` test enforces
+this relationship. Failed acknowledgement cannot acknowledge
 release; repeated facts join the existing slot. Latest attempt failures remain
 failures even when older evidence can enable a later reconciliation.
 
@@ -1232,7 +1236,7 @@ terminal results. Runtime shutdown and process abort are outside unwind recovery
 | Saved absence/mixed outstanding debts, resume | Validate exact correlation, retry retained records without factory/physical replay. |
 | Independent child audit held/rejected while parent joins | First operation remains; parent receives child failure; explicit parent retry reconciles fresh generation. |
 | Parent overtakes factory/submit output | No reopening/dispatch; Ready owner/receipt survives before future Drop. |
-| Initial publication fails before factory with concurrent bind | Live flight and same graph scope validate/install exclusion; no restored inference. |
+| Initial publication fails before factory with concurrent bind | Live flight and same graph scope validate/install exclusion; persist the newly installed proof in Closing before returning the immutable failure; no restored inference. `row_38_publication_error_matrix_seals_actual_gate_preserves_owner_receipt_and_restore` checks retained actual exclusion. |
 | Constructor/poll panic; Ready then Drop panic; recovery faults | Cached typed uncertainty; retain observed owner/receipt/report, no inferred release. |
 | Two close waiters/caller loss/waker or payload faults | All existing waiters settle same immutable result; later explicit retry differs without rewriting. |
 | NoRoom then capacity available; identical/conflicting admitted retry | Nonadmitted retry can run; admitted retry returns cached result; changed binding conflicts. |
