@@ -21,7 +21,10 @@ export function validate(report, scenario) {
   const fail = (reason) => {
     throw new Error(`Harness failure: ${reason}`)
   }
-  if (report.test !== scenario.test || report.timed_out) fail("wrong test or timeout")
+  if (report.test !== scenario.test || report.timed_out || report.output_truncated)
+    fail("wrong test, timeout or truncated output")
+  if (!report.output.includes(`test ${scenario.test} ...`))
+    fail("selected test did not run")
   const summary =
     /test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;/.exec(
       report.output,
@@ -60,8 +63,19 @@ export function validate(report, scenario) {
   return report
 }
 
-export function docker(args, { signal, timeout = 30000 } = {}) {
-  const env = { ...process.env }
+export class DockerFailure extends Error {
+  constructor(message, stdout, stderr) {
+    super(message)
+    this.stdout = stdout
+    this.stderr = stderr
+  }
+}
+
+export function docker(
+  args,
+  { signal, timeout = 30000, launch = spawn, environment = process.env } = {},
+) {
+  const env = { ...environment }
   for (const key of [
     "DOCKER_HOST",
     "DOCKER_CONTEXT",
@@ -71,7 +85,7 @@ export function docker(args, { signal, timeout = 30000 } = {}) {
   ])
     delete env[key]
   return new Promise((resolvePromise, reject) => {
-    const child = spawn("docker", ["--host=unix:///var/run/docker.sock", ...args], {
+    const child = launch("docker", ["--host=unix:///var/run/docker.sock", ...args], {
       env,
       signal,
       timeout,
@@ -79,23 +93,49 @@ export function docker(args, { signal, timeout = 30000 } = {}) {
     })
     let stdout = "",
       stderr = ""
+    const limit = 128 * 1024
+    let overflow = false
+    const append = (current, data) => {
+      const next = current + data
+      if (Buffer.byteLength(next) > limit) {
+        overflow = true
+        child.kill("SIGKILL")
+        return Buffer.from(next).subarray(0, limit).toString()
+      }
+      return next
+    }
     child.stdout.on("data", (data) => {
-      stdout += data
+      stdout = append(stdout, data)
     })
     child.stderr.on("data", (data) => {
-      stderr += data
+      stderr = append(stderr, data)
     })
-    child.on("error", reject)
-    child.on("close", (code) =>
-      code === 0
-        ? resolvePromise(stdout)
-        : reject(new Error(`docker ${args[0]} exited ${code}: ${stderr}`)),
-    )
+    child.on("error", (error) => reject(new DockerFailure(error.message, stdout, stderr)))
+    child.on("close", (code) => {
+      if (code === 0 && !overflow) resolvePromise(stdout)
+      else
+        reject(
+          new DockerFailure(
+            `docker ${args[0]} ${overflow ? "output exceeded limit" : `exited ${code}`}`,
+            stdout,
+            stderr,
+          ),
+        )
+    })
   })
 }
 
 export async function runScenario(options, scenario, run = docker) {
   const name = `nessa-cleanup-${randomUUID()}`
+  const evidence = {
+    container: name,
+    init: scenario.init,
+    test: scenario.test,
+    accepted: false,
+  }
+  const record = async () => {
+    await options.recordEvidence?.({ ...evidence })
+  }
   try {
     await run(
       [
@@ -119,21 +159,40 @@ export async function runScenario(options, scenario, run = docker) {
       { signal: options.signal },
     )
     const output = await run(["start", "--attach", name], { signal: options.signal })
-    return validate(JSON.parse(output), scenario)
+    evidence.output = output
+    // Persist diagnostics before validation can reject and before removal.
+    await record()
+    evidence.report = JSON.parse(output)
+    await record()
+    return validate(evidence.report, scenario)
+  } catch (error) {
+    evidence.failure = error.message
+    if (error instanceof DockerFailure) {
+      evidence.output = error.stdout
+      evidence.stderr = error.stderr
+    }
+    await record()
+    throw error
   } finally {
     // Removal must not inherit an already-aborted signal.
-    await run(["rm", "--force", name], { timeout: 10000 })
+    try {
+      await run(["rm", "--force", name], { timeout: 10000 })
+    } catch (error) {
+      evidence.removalFailure = error.message
+      await record()
+      throw error
+    }
   }
 }
 
-async function main() {
-  const [binaryInput, manifest, image, evidence] = process.argv.slice(2)
+export async function checkContainers(args, run = docker) {
+  const [binaryInput, manifest, image, evidence] = args
   if (
     !binaryInput ||
     !manifest ||
     !image ||
     !evidence ||
-    process.argv.length !== 6 ||
+    args.length !== 4 ||
     !isAbsolute(manifest)
   ) {
     throw new Error(
@@ -149,18 +208,14 @@ async function main() {
   const interrupt = () => controller.abort()
   process.once("SIGINT", interrupt)
   process.once("SIGTERM", interrupt)
-  const reports = []
+  const reports = new Map()
   try {
-    const imageInfo = JSON.parse(await docker(["image", "inspect", image]))[0]
+    const imageInfo = JSON.parse(await run(["image", "inspect", image]))[0]
     const binarySha256 = createHash("sha256")
       .update(await readFile(binary))
       .digest("hex")
-    for (const scenario of scenarios) {
-      const report = await runScenario(
-        { binary, manifest, fixture, image, signal: controller.signal },
-        scenario,
-      )
-      reports.push({ init: scenario.init, ...report })
+    const recordEvidence = async (entry) => {
+      reports.set(entry.container, entry)
       await writeFile(
         resolve(evidence, "acceptance.json"),
         JSON.stringify(
@@ -170,12 +225,31 @@ async function main() {
             binary,
             binarySha256,
             manifest,
-            reports,
+            reports: [...reports.values()],
           },
           null,
           2,
         ) + "\n",
       )
+    }
+    for (const scenario of scenarios) {
+      let captured
+      await runScenario(
+        {
+          binary,
+          manifest,
+          fixture,
+          image: imageInfo.Id,
+          signal: controller.signal,
+          recordEvidence: async (entry) => {
+            captured = entry
+            await recordEvidence(entry)
+          },
+        },
+        scenario,
+        run,
+      )
+      await recordEvidence({ ...captured, accepted: true })
       console.log(`${scenario.init ? "init" : "non-reaping"}: ${scenario.test}: accepted`)
     }
   } finally {
@@ -185,7 +259,7 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main().catch((error) => {
+  checkContainers(process.argv.slice(2)).catch((error) => {
     console.error(error)
     process.exitCode = 1
   })

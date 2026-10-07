@@ -66,6 +66,7 @@ def main():
         time.sleep(1)
         after = processes()
         output.seek(0)
+        captured_output = output.read(64 * 1024 + 1)
         report = {
             'test': test_name,
             'supervisor_pid': os.getpid(),
@@ -75,7 +76,8 @@ def main():
             'test_pid': child.pid,
             'test_exit': exit_code,
             'timed_out': timed_out,
-            'output': output.read(),
+            'output': captured_output[:64 * 1024],
+            'output_truncated': len(captured_output) > 64 * 1024,
             'new_orphans': [p for pid, p in after.items() if pid not in before and p['ppid'] == 1],
             'retained_directories': sorted(glob.glob('/tmp/nessa-agent-*')),
             'packages': packages(),

@@ -1,6 +1,17 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { runScenario, scenarios, validate } from "./check-container.mjs"
+import { EventEmitter } from "node:events"
+import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import {
+  checkContainers,
+  docker,
+  DockerFailure,
+  runScenario,
+  scenarios,
+  validate,
+} from "./check-container.mjs"
 
 function report(scenario) {
   return {
@@ -10,8 +21,8 @@ function report(scenario) {
     supervisor_ppid: scenario.init ? 1 : 0,
     test_exit: scenario.init ? 0 : 101,
     output: scenario.init
-      ? "running 1 test\ntest result: ok. 1 passed; 0 failed; 0 ignored;"
-      : "running 1 test\nCleanupUncertain\ntest result: FAILED. 0 passed; 1 failed; 0 ignored;",
+      ? `running 1 test\ntest ${scenario.test} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;`
+      : `running 1 test\ntest ${scenario.test} ... FAILED\nCleanupUncertain\ntest result: FAILED. 0 passed; 1 failed; 0 ignored;`,
     new_orphans: scenario.init ? [] : [{ pid: 10, ppid: 1, pgid: 9, state: "Z" }],
     retained_directories: scenario.init ? [] : ["/tmp/nessa-agent-owned"],
   }
@@ -30,7 +41,7 @@ test("zero selected tests cannot pass", () => {
       validate(
         {
           ...report(positive),
-          output: "running 0 tests\ntest result: ok. 0 passed; 0 failed; 0 ignored;",
+          output: `running 0 tests\ntest ${positive.test} ... ok\ntest result: ok. 0 passed; 0 failed; 0 ignored;`,
         },
         positive,
       ),
@@ -164,4 +175,245 @@ test("a failed removal prevents acceptance", async () => {
     }),
     /removal failed/,
   )
+})
+
+test("rejected evidence is saved before removal", async () => {
+  const events = []
+  const rejected = { ...report(scenarios[0]), new_orphans: [] }
+  await assert.rejects(
+    runScenario(
+      { ...options, recordEvidence: async (entry) => events.push(entry) },
+      scenarios[0],
+      async (args) => {
+        if (args[0] === "rm") {
+          assert.equal(events.at(-1).accepted, false)
+          assert.match(events.at(-1).failure, /zombie/)
+          assert.deepEqual(events.at(-1).report, rejected)
+          assert.equal(events.at(-1).output, JSON.stringify(rejected))
+        }
+        return args[0] === "start" ? JSON.stringify(rejected) : ""
+      },
+    ),
+    /zombie/,
+  )
+})
+
+test("malformed output and Docker failure retain diagnostics before removal", async () => {
+  for (const failure of [
+    "not json",
+    new DockerFailure("start failed", "partial stdout", "bounded stderr"),
+  ]) {
+    const events = []
+    await assert.rejects(
+      runScenario(
+        { ...options, recordEvidence: async (entry) => events.push(entry) },
+        scenarios[0],
+        async (args) => {
+          if (args[0] === "start") {
+            if (failure instanceof Error) throw failure
+            return failure
+          }
+          if (args[0] === "rm")
+            assert.equal(
+              events.at(-1).output,
+              typeof failure === "string" ? failure : failure.stdout,
+            )
+          return ""
+        },
+      ),
+    )
+    if (failure instanceof DockerFailure)
+      assert.equal(events.at(-1).stderr, failure.stderr)
+  }
+})
+
+test("evidence failure still removes the container", async () => {
+  let removed = false
+  await assert.rejects(
+    runScenario(
+      {
+        ...options,
+        recordEvidence: async () => {
+          throw new Error("evidence write failed")
+        },
+      },
+      scenarios[0],
+      async (args) => {
+        if (args[0] === "rm") removed = true
+        return args[0] === "start" ? JSON.stringify(report(scenarios[0])) : ""
+      },
+    ),
+    /evidence write failed/,
+  )
+  assert.equal(removed, true)
+})
+
+test("truncated output cannot be accepted", () => {
+  assert.throws(
+    () => validate({ ...report(scenarios[0]), output_truncated: true }, scenarios[0]),
+    /truncated/,
+  )
+})
+
+function launcher(onLaunch, onChild) {
+  return (command, args, options) => {
+    onLaunch(command, args, options)
+    const child = new EventEmitter()
+    child.stdout = new EventEmitter()
+    child.stderr = new EventEmitter()
+    child.kill = () => {
+      child.emit("close", null)
+      return true
+    }
+    queueMicrotask(() => onChild(child))
+    return child
+  }
+}
+
+test("Docker uses the managed socket, bounded deadline and supplied cancellation", async () => {
+  const signal = new AbortController().signal
+  const environment = Object.fromEntries(
+    [
+      "DOCKER_HOST",
+      "DOCKER_CONTEXT",
+      "DOCKER_TLS",
+      "DOCKER_TLS_VERIFY",
+      "DOCKER_CERT_PATH",
+    ].map((key) => [key, "inherited-selector"]),
+  )
+  environment.DOCKER_CONFIG = "/preserved/config"
+  environment.HTTPS_PROXY = "configured-proxy"
+  await docker(["info"], {
+    signal,
+    environment,
+    launch: launcher(
+      (command, args, options) => {
+        assert.equal(command, "docker")
+        assert.deepEqual(args, ["--host=unix:///var/run/docker.sock", "info"])
+        assert.equal(options.signal, signal)
+        assert.equal(options.timeout, 30000)
+        assert.equal(options.killSignal, "SIGKILL")
+        for (const key of [
+          "DOCKER_HOST",
+          "DOCKER_CONTEXT",
+          "DOCKER_TLS",
+          "DOCKER_TLS_VERIFY",
+          "DOCKER_CERT_PATH",
+        ])
+          assert.equal(Object.hasOwn(options.env, key), false)
+        assert.equal(options.env.DOCKER_CONFIG, environment.DOCKER_CONFIG)
+        assert.equal(options.env.HTTPS_PROXY, environment.HTTPS_PROXY)
+      },
+      (child) => child.emit("close", 0),
+    ),
+  })
+})
+
+test("Docker output overflow kills the client and keeps bounded failure diagnostics", async () => {
+  let killed = false
+  await assert.rejects(
+    docker(["start"], {
+      launch: launcher(
+        () => {},
+        (child) => {
+          child.kill = () => {
+            killed = true
+            queueMicrotask(() => child.emit("close", null))
+            return true
+          }
+          child.stdout.emit("data", Buffer.alloc(129 * 1024, 97))
+        },
+      ),
+    }),
+    (error) => {
+      assert.ok(error instanceof DockerFailure)
+      assert.match(error.message, /output exceeded/)
+      assert.equal(Buffer.byteLength(error.stdout), 128 * 1024)
+      return true
+    },
+  )
+  assert.equal(killed, true)
+})
+
+test("libtest output must name the selected test and account for one active test", () => {
+  const positive = scenarios[1]
+  const output = report(positive).output
+  for (const changed of [
+    output.replace(positive.test, "another-test"),
+    output.replace("1 passed; 0 failed", "1 passed; 1 failed"),
+    output.replace("0 ignored", "1 ignored"),
+    output.replace("test result: ok.", "no summary"),
+  ])
+    assert.throws(
+      () => validate({ ...report(positive), output: changed }, positive),
+      /Harness failure/,
+    )
+})
+
+test("libtest counts, status and process exit cannot contradict each other", () => {
+  for (const [scenario, output] of [
+    [
+      scenarios[1],
+      report(scenarios[1]).output.replace("running 1 test", "running 2 tests"),
+    ],
+    [
+      scenarios[1],
+      report(scenarios[1]).output.replace("test result: ok.", "test result: FAILED."),
+    ],
+    [
+      scenarios[1],
+      report(scenarios[1]).output.replace("1 passed; 0 failed", "0 passed; 1 failed"),
+    ],
+    [
+      scenarios[0],
+      report(scenarios[0]).output.replace("test result: FAILED.", "test result: ok."),
+    ],
+    [
+      scenarios[0],
+      report(scenarios[0]).output.replace("0 passed; 1 failed", "1 passed; 0 failed"),
+    ],
+  ])
+    assert.throws(
+      () => validate({ ...report(scenario), output }, scenario),
+      /Harness failure/,
+    )
+})
+
+test("the complete harness pins the inspected image and records four removed acceptances", async () => {
+  const root = await mkdtemp(join(tmpdir(), "nessa-cleanup-orchestration-"))
+  try {
+    const binary = join(root, "explicit-test-binary")
+    const manifest = join(root, "compiled-sdk")
+    const fixture = join(manifest, "tests/infrastructure/acp/contracts/fixtures")
+    const evidence = join(root, "evidence")
+    await writeFile(binary, "explicit library test")
+    await mkdir(fixture, { recursive: true })
+    await writeFile(join(fixture, "claude_acp_test_handler.py"), "fixture")
+    let active
+    const created = [],
+      removed = []
+    await checkContainers([binary, manifest, "mutable-tag", evidence], async (args) => {
+      if (args[0] === "image") return JSON.stringify([{ Id: "sha256:immutable-image" }])
+      if (args[0] === "create") {
+        created.push(args)
+        active = scenarios.find(
+          (scenario) =>
+            scenario.test === args.at(-1) && scenario.init === args.includes("--init"),
+        )
+      }
+      if (args[0] === "rm") removed.push(args.at(-1))
+      return args[0] === "start" ? JSON.stringify(report(active)) : ""
+    })
+    const saved = JSON.parse(await readFile(join(evidence, "acceptance.json"), "utf8"))
+    assert.equal(saved.image, "sha256:immutable-image")
+    assert.equal(saved.imageReference, "mutable-tag")
+    assert.match(saved.binarySha256, /^[a-f0-9]{64}$/)
+    assert.equal(saved.reports.length, 4)
+    assert.ok(
+      saved.reports.every((entry) => entry.accepted && removed.includes(entry.container)),
+    )
+    assert.ok(created.every((args) => args.at(-2) === saved.image))
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
