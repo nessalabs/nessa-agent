@@ -345,22 +345,15 @@ impl OwnershipCoordinator {
                 evidence,
             )
             .ok_or(OwnershipFailure::Incomplete)?;
-        let waited = contain_caller_wake(
-            format!("owned close {}", command.lifetime.as_str()),
-            async {
-                match command.timeout {
-                    Some(duration) => {
-                        match tokio::time::timeout(duration, wait_generation(generation)).await {
-                            Ok(result) => result,
-                            Err(_) => Err(OwnershipFailure::Incomplete),
-                        }
-                    }
-                    None => wait_generation(generation).await,
+        match command.timeout {
+            Some(duration) => {
+                match tokio::time::timeout(duration, wait_generation(generation)).await {
+                    Ok(result) => result,
+                    Err(_) => Err(OwnershipFailure::Incomplete),
                 }
-            },
-        )
-        .await;
-        waited
+            }
+            None => wait_generation(generation).await,
+        }
     }
 
     /// Transfer a cleanup owner for an admitted lifetime, such as the root.
