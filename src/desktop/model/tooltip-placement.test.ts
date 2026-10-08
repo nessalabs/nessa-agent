@@ -77,3 +77,24 @@ describe("where a popover sits by its chip", () => {
     ).toBe("above")
   })
 })
+
+describe("a tooltip beside a control, as the side rail's icons ask", () => {
+  it("sits to the right, a gap away, centred on the control", () => {
+    expect(placeTooltip(button(10, 300), tip, window, { prefer: "right" })).toEqual({
+      x: 44,
+      y: 303,
+      side: "right",
+    })
+  })
+
+  it("flips to the left when the right runs out of window", () => {
+    expect(placeTooltip(button(900, 300), tip, window, { prefer: "right" }).side).toBe(
+      "left",
+    )
+  })
+
+  it("stays inside the window top and bottom", () => {
+    expect(placeTooltip(button(10, 0), tip, window, { prefer: "right" }).y).toBe(8)
+    expect(placeTooltip(button(10, 690), tip, window, { prefer: "right" }).y).toBe(670)
+  })
+})

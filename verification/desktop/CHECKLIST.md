@@ -222,6 +222,35 @@ _ADR 238 › One fit rule for every change of layout_.
   the pane showing another session. _ADR 238 › What is typed and not sent_.
   _Check:_ manual.
 
+## Side rail
+
+_Prototype, `workspace/ui/chrome/side-rail.*`, off until Settings › Advanced ›
+Experimental turns it on; the rail stands beside the workspace in
+`.workspace-window`, not inside it. `columns.mjs` turns it on for its checks._
+
+- [ ] **Off by default, and off means absent**: no rail, no toggle, the
+  workspace at the window's edge. _Check:_ `columns.mjs --only rail-off`;
+  `smoke.mjs` (Experimental offers one switch, off).
+
+- [ ] **No two columns overlap**, and nothing sits under the rail, in any
+  combination of the rail, the sidebar, the session list and the Agents
+  overview, at 1440, 1000 and 760 wide. _Check:_ `columns.mjs --only no-overlap`
+  (Chromium and WebKit, both layouts).
+- [ ] **The rail's toggle never moves**: it is at the control edge of the
+  window's bottom-left corner in every state, and hidden exactly when the rail
+  and the sidebar are both closed. **"nessa Studio" is at the same pixels in
+  Agents and in an item's full view**, and never under the toggle.
+  _Check:_ `columns.mjs --only rail-corner`.
+- [ ] **Under an item's full view the workspace takes no keys**: ⌘B, ⌘0 and
+  ⌥⌘S change nothing behind it. _Check:_ `columns.mjs --only rail-view-inert`.
+- [ ] **The titlebar's controls never pass under the window's controls while
+  the rail opens or closes**: every frame draws them between where they were
+  and where they land — still, in the macOS window. _Check:_
+  `columns.mjs --only titlebar-steady`.
+- [ ] **Toggling the rail moves things by transform only**: the width lands at
+  once and FlipScope plays the columns back, so no frame lays text out again.
+  _Check:_ `perf-budget.mjs` (production build) — not yet run for the rail.
+
 ## Keyboard and focus
 
 _ADR 238 › Focus follows the focused pane_; keys in
@@ -255,6 +284,49 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
 - [ ] **The keyboard walks its items; ⌘↩ allows, ⌘⌫ denies, ⌘R replies**, and
   the caret stays in the overview after an answer. _Check:_ `focus.mjs`
   (`focus-overview`, the walk); `perf-budget.mjs --only overview-answer` (answer lands); ⌘⌫ and ⌘R by hand.
+- [ ] **One row at a time shows its answers, and only when pointed at or
+  reached by the keyboard**: at rest a request row shows its title and time,
+  its why and its command, and no answers — nor room kept for them: the why
+  and the command run on to the time (the row's 12px gap before it, ±4).
+  Pointed at, or with the keyboard visibly on it (`:focus-visible`), Deny and
+  Allow Once (⌥ turns it into Always Allow where offered) take the time's
+  place at its end, sliding in (at once with less motion); the row's height
+  and the list do not change. A row clicked and chosen (its peek beside the
+  list) shows none while the pointer is on another row or off the list. The
+  answers carry no tooltip; each names its chord (`aria-keyshortcuts`);
+  labels ≥ 4.5:1. _Check:_ `responsive.mjs --only overview-row-answers`
+  (Chromium and WebKit); unit tests `overview.test.tsx`.
+- [ ] **An answered request moves to where it now belongs in one beat**: no
+  label on the row and nothing drawn around it — no ring, box or line — in
+  any frame. Taken, the row waits, quiet, until the source moves its session
+  on (at most 2s; then it shows as the workspace holds it), so it never
+  springs back into Needs you. Then it dematerializes where it stood (a copy
+  that fades, scales to 0.97 and blurs over `--desktop-slow`) while the
+  session's row materializes in its new group (from 0.98 and a blur) — the
+  arrival's first visible frame within one frame of the departure's — and
+  the rows after it close the gap by transform; the copy is gone within
+  400ms and the next row ends where the answered one stood. Deny leaves the
+  same way. The live region says "Allowed: <title>" / "Denied: <title>".
+  With less motion: no copy, no blur or scale — the row is simply where it
+  now belongs. _Check:_ `responsive.mjs --only overview-leave` (Chromium and
+  WebKit), with its revert probe; unit tests `overview.test.tsx`,
+  `overview-reflow.test.tsx`.
+- [ ] **The edge between the list and the peek resizes, as the window's
+  other edges do**: at rest nothing of it shows — no fill, shadow, border or
+  glow over the peek's hairline; near the pointer, or with the keyboard on
+  it, the edge light glows along it. Dragged, the boundary follows the
+  pointer (+120px moves it 120px); ← / → move it 16px; a double-click restores
+  the even split. The list keeps at least 340px and the peek 320px, dragged
+  or as the window narrows, and the dragged width holds while the window is
+  open (the layer's state, not a stored preference). It is a separator
+  (`aria-valuenow`/`min`/`max`) and a tab stop between the list and the
+  peek. The peek's content — header, where it stands, the story and the
+  reply — is one column centred in the peek at every width (its gaps either
+  side equal ±2px, their edges shared ±1px). What the peek says scrolls above its reply pill,
+  as a pane's transcript does above its composer (fading 20px at its edges):
+  nothing is drawn behind the pill at any scroll, and the last line scrolls
+  clear of it. _Check:_ `responsive.mjs --only
+  overview-edge` (Chromium and WebKit); its place in the tab order, by hand.
 - [ ] **One press answers one request** (_ADR 238 › What fills the content
   region_): a held ⌘↩ answers one; two presses 80ms apart answer one; a held ↩
   on a pane card's Allow Once answers one and sends nothing typed; a double
@@ -626,21 +698,57 @@ phone's scanner is not this screen.
   _Check:_ `smoke.mjs` (`settings`); inertness by hand (click under it).
 - [ ] **Its sidebar folds for room below a 420px page.** _Check:_
   `responsive.mjs --only settings-fold`.
-- [ ] **Pending settings say "Not available yet" and their controls are
-  disabled** — nothing looks as if it works when it does not. _Check:_ unit
-  test `settings-view.test.tsx`; by eye.
+- [ ] **Pending settings say "Not available yet" once, and their controls
+  are disabled** — nothing looks as if it works when it does not. A group
+  whose settings are all pending says it once under its card, and each
+  disabled control is described by that note (`aria-describedby`); a pending
+  row in a group with others says it on its own row. _Check:_ unit tests
+  `settings-view.test.tsx`, `settings-controls.test.tsx`; by eye.
 - [ ] **A setting for one layout says so elsewhere**: "Show session list" and
   "Keep running sessions at the top" work in three columns; in sessions in
   the sidebar and classic their switches are disabled and say "Three columns
   only". _Check:_ unit test `settings-view.test.tsx` (per layout).
+- [ ] **Segmented choices are one Tab stop each option, for now**: they are
+  the kit's `SegmentedControl` (a group of pressed buttons, no arrow keys);
+  one Tab stop with arrows waits on its radio-group mode (nessalabs/nessa_ui#120).
+  _Check:_ by hand.
 - [ ] **Advanced › Experimental is the home of previews**: Advanced sits just
-  before About with its flask in both icon families; its one tab,
-  Experimental, shows "Nothing to try right now." and no control while no
-  preview is on offer; General has no Experimental tab; search finds it as
-  "advanced", "experimental", "labs" or "preview". _Check:_ `smoke.mjs`
-  (`settings`); unit tests `settings-view.test.tsx`,
-  `settings-catalogue.test.ts`, `icon-provider.test.tsx`; the flask by eye in
-  both families.
+  before About with its flask in both icon families; one line under its
+  title says what it is for, and with one tab there is no tab strip; it
+  offers each preview as one switch, off until turned on (today: the side
+  rail); General has no Experimental tab; search finds it as "advanced",
+  "experimental", "labs" or "preview". _Check:_ `smoke.mjs` (`settings`);
+  unit tests `settings-view.test.tsx`, `settings-catalogue.test.ts`,
+  `icon-provider.test.tsx`; the flask by eye in both families.
+- [ ] **A page's title stands clear of the window's controls**: at 1440 × 900,
+  1000 × 700, 760 × 700 and 600 × 700 (sidebar folded) every category's
+  title starts at least 16px below the titlebar row; at 1000 × 700 every row
+  of General, Appearance, Workspace, Models and Privacy & Permissions (their
+  first tabs) is above the fold. _ADR 238 › The titlebar's safe area._
+  _Check:_ `settings-page.mjs --only masthead`.
+- [ ] **No word shows twice at once**: no tab in a strip is named as its
+  category is (General's first tab is Startup); no group's title on screen
+  repeats its page's or its tab's name (Workspace › Keyboard's groups are
+  Window and Panes and sessions; Linked devices lists Your devices); and a
+  card named as its tab (Agents, Providers, Layout, Linked devices) keeps its
+  title for assistive technology only. _Check:_ unit tests
+  `settings-catalogue.test.ts`, `settings-view.test.tsx` (every page without
+  a gateway); Linked devices with a gateway by eye.
+- [ ] **Scrolled, the page's bar names it**: once the title has scrolled under
+  the bar, the bar shows the page's name small — starting with the column,
+  or after the window's controls with the sidebar folded — and it goes when
+  scrolled back. _Check:_ `settings-page.mjs --only condense` (1000 × 700,
+  600 × 700); `safe-area.mjs --only settings,settings-sidebar-return`.
+- [ ] **A page arrives quickly, and at once under less motion**: a category or
+  tab change runs at most 300ms of motion, on the masthead and the page only,
+  and none under Reduce motion. _Check:_ `settings-page.mjs --only arrive`.
+- [ ] **Search lands on the setting**: Enter takes the first result's
+  category and tab, brings the setting to the middle of the view and marks it
+  for a moment; ⌘F goes to the search field, showing a hidden sidebar first.
+  _Check:_ `settings-page.mjs --only search`.
+- [ ] **Keyboard focus shows the window's focus ring** on Settings' tabs and
+  controls (not a fill). _Check:_ `settings-page.mjs --only focus-ring`
+  (WebKit walks with ⌥Tab, as Safari does).
 
 ### Integrations: the gateway's MCP servers
 

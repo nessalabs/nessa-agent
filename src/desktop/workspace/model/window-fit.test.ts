@@ -4,6 +4,7 @@ import {
   clampColumn,
   columnWidth,
   foldToFit,
+  railFits,
   sessionListLimits,
   sidebarLimits,
   treeSidebarLimits,
@@ -60,5 +61,36 @@ describe("folding the side columns to fit", () => {
   it("leaves closed columns closed and only folds what is open", () => {
     const sidebarOnly = { ...open, sessionListOpen: false, sessionListWidth: 0 }
     expect(foldToFit(sidebarOnly, 500, 1)).toEqual({ ...sidebarOnly, sidebarOpen: false })
+  })
+})
+
+describe("the side rail gives way first", () => {
+  const rail = 48
+  // Exactly enough for one column of panes beside both side columns.
+  const snug = paneLimits.minWidth + 2 * paneLimits.gutter + 240 + 8 + 312 + 8
+
+  it("fits where standing beside the columns folds nothing", () => {
+    expect(railFits(open, 1440, 1, rail)).toBe(true)
+  })
+
+  it("does not fit where it would fold a column the person has open", () => {
+    expect(railFits(open, snug, 1, rail)).toBe(false)
+    expect(railFits(open, snug + rail, 1, rail)).toBe(true)
+  })
+
+  it("fits beside a column the window folded already, without taking its room", () => {
+    // The sidebar is folded at this width with or without the rail.
+    const folded = snug - 100
+    expect(foldToFit(open, folded, 1).sidebarOpen).toBe(false)
+    // The list still has its room beside the rail, so the rail fits…
+    expect(railFits(open, folded, 1, rail)).toBe(true)
+    // …and where the rail would cost the list its room too, it does not.
+    const listSnug = paneLimits.minWidth + 2 * paneLimits.gutter + 312 + 8
+    expect(railFits(open, listSnug, 1, rail)).toBe(false)
+  })
+
+  it("fits wherever the person has the side columns closed", () => {
+    const closed = { ...open, sidebarOpen: false, sessionListOpen: false }
+    expect(railFits(closed, 560, 1, rail)).toBe(true)
   })
 })

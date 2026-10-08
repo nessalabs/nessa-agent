@@ -110,131 +110,135 @@ export const SessionPeek = memo(function SessionPeek({
 
   return (
     <article className="agents-peek" aria-label={`${summary.title}, at a glance`}>
-      <header className="agents-peek-head">
-        <AgentTile model={summary.model} size={32} />
-        <div className="agents-peek-titles">
-          <h2>{summary.title}</h2>
-          <p className="agents-truncate">
-            {agent} · {modelName(summary.model)}
-            {channel ? ` · #${channel}` : ""}
-          </p>
-        </div>
-        <button
-          type="button"
-          className="workspace-button agents-peek-open"
-          {...tooltip("Open Session", { shortcut: labelOf(overviewKeys, "open") })}
-          onClick={() => onOpen(sessionId)}
-        >
-          Open
-          <DesktopIcon name="forward" />
-        </button>
-      </header>
+      {/* What it says scrolls above the reply, as a pane's transcript does above its composer. */}
+      <div className="agents-peek-scroll">
+        <header className="agents-peek-head">
+          <AgentTile model={summary.model} size={32} />
+          <div className="agents-peek-titles">
+            <h2>{summary.title}</h2>
+            <p className="agents-truncate">
+              {agent} · {modelName(summary.model)}
+              {channel ? ` · #${channel}` : ""}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="workspace-button agents-peek-open"
+            {...tooltip("Open Session", { shortcut: labelOf(overviewKeys, "open") })}
+            onClick={() => onOpen(sessionId)}
+          >
+            Open
+            <DesktopIcon name="forward" />
+          </button>
+        </header>
 
-      <div className="agents-peek-now">
-        <p className="agents-peek-state" data-status={summary.status}>
-          <StatusGlyph status={waiting ? "needs-you" : summary.status} idle />
-          <span>
-            {waiting
-              ? "Waiting for you"
-              : summary.status === "running"
-                ? "Working"
-                : "Finished"}
-          </span>
-          <time dateTime={new Date(summary.updatedAt).toISOString()}>
-            {sessionTime(summary.updatedAt, now)}
-          </time>
-        </p>
-        {line !== null ? (
-          <p className="agents-peek-summary agents-truncate" title={line}>
-            {line}
+        <div className="agents-peek-now">
+          <p className="agents-peek-state" data-status={summary.status}>
+            <StatusGlyph status={waiting ? "needs-you" : summary.status} idle />
+            <span>
+              {waiting
+                ? "Waiting for you"
+                : summary.status === "running"
+                  ? "Working"
+                  : "Finished"}
+            </span>
+            <time dateTime={new Date(summary.updatedAt).toISOString()}>
+              {sessionTime(summary.updatedAt, now)}
+            </time>
+          </p>
+          {line !== null ? (
+            <p className="agents-peek-summary agents-truncate" title={line}>
+              {line}
+            </p>
+          ) : null}
+        </div>
+
+        {peek && (peek.asked || peek.since.length > 0 || running) ? (
+          <section
+            className="agents-peek-story"
+            aria-label="This turn"
+            tabIndex={placement === "beneath" ? 0 : undefined}
+            onKeyDown={placement === "beneath" ? keepScrollKeys : undefined}
+          >
+            {peek.asked ? (
+              <Message sessionId={sessionId} message={peek.asked} isNew={false} />
+            ) : null}
+            {peek.earlier ? (
+              <p className="agents-peek-earlier">
+                Earlier in this turn
+                {" · "}
+                <button
+                  type="button"
+                  className="workspace-link-button"
+                  {...tooltip("Open Session", {
+                    shortcut: labelOf(overviewKeys, "open"),
+                  })}
+                  onClick={() => onOpen(sessionId)}
+                >
+                  Open
+                </button>
+              </p>
+            ) : null}
+            {peek.since.map((message) => (
+              <Message
+                key={message.id}
+                sessionId={sessionId}
+                message={message}
+                isNew={false}
+              />
+            ))}
+            {running ? <LiveRow key="live" activity={running} /> : null}
+          </section>
+        ) : null}
+
+        {approval ? (
+          <section className="agents-peek-ask" aria-label="Request">
+            <p className="agents-peek-reason">
+              <Saying said={approvalReason(approval)} />
+            </p>
+            <ApprovalCommand
+              command={approval.command}
+              name={approval.origin.kind === "app" ? approval.origin.tool : undefined}
+            />
+            {refused ? (
+              <p className="agents-peek-failure" role="status">
+                {failureCopy(refused)}
+              </p>
+            ) : null}
+            {settling ? (
+              <p className="agents-peek-answered" data-answer={settling.choice}>
+                <DesktopIcon name={settling.choice === "deny" ? "close" : "check"} />
+                {answeredLabels[settling.choice]}
+              </p>
+            ) : (
+              <ApprovalActions
+                options={approval.options}
+                disabled={!answerable}
+                tips={{
+                  deny: tooltip(answerTips[approval.ask].deny, {
+                    shortcut: labelOf(overviewKeys, "deny"),
+                  }),
+                  always: tooltip("Allow it now, and whenever it’s asked again", {
+                    shortcut: labelOf(overviewKeys, "always"),
+                  }),
+                  once: tooltip(answerTips[approval.ask].once, {
+                    shortcut: labelOf(overviewKeys, "once"),
+                  }),
+                }}
+                onAnswer={(option, at) => {
+                  if (answerable) onAnswer(summary, approval, option, at)
+                }}
+              />
+            )}
+          </section>
+        ) : null}
+
+        {!transcript && unreadable ? (
+          <p className="agents-peek-failure" role="status">
+            {readFailureCopy(unreadable, "conversation")}
           </p>
         ) : null}
       </div>
-
-      {peek && (peek.asked || peek.since.length > 0 || running) ? (
-        <section
-          className="agents-peek-story"
-          aria-label="This turn"
-          tabIndex={placement === "beneath" ? 0 : undefined}
-          onKeyDown={placement === "beneath" ? keepScrollKeys : undefined}
-        >
-          {peek.asked ? (
-            <Message sessionId={sessionId} message={peek.asked} isNew={false} />
-          ) : null}
-          {peek.earlier ? (
-            <p className="agents-peek-earlier">
-              Earlier in this turn
-              {" · "}
-              <button
-                type="button"
-                className="workspace-link-button"
-                {...tooltip("Open Session", { shortcut: labelOf(overviewKeys, "open") })}
-                onClick={() => onOpen(sessionId)}
-              >
-                Open
-              </button>
-            </p>
-          ) : null}
-          {peek.since.map((message) => (
-            <Message
-              key={message.id}
-              sessionId={sessionId}
-              message={message}
-              isNew={false}
-            />
-          ))}
-          {running ? <LiveRow key="live" activity={running} /> : null}
-        </section>
-      ) : null}
-
-      {approval ? (
-        <section className="agents-peek-ask" aria-label="Request">
-          <p className="agents-peek-reason">
-            <Saying said={approvalReason(approval)} />
-          </p>
-          <ApprovalCommand
-            command={approval.command}
-            name={approval.origin.kind === "app" ? approval.origin.tool : undefined}
-          />
-          {refused ? (
-            <p className="agents-peek-failure" role="status">
-              {failureCopy(refused)}
-            </p>
-          ) : null}
-          {settling ? (
-            <p className="agents-peek-answered" data-answer={settling.choice}>
-              <DesktopIcon name={settling.choice === "deny" ? "close" : "check"} />
-              {answeredLabels[settling.choice]}
-            </p>
-          ) : (
-            <ApprovalActions
-              options={approval.options}
-              disabled={!answerable}
-              tips={{
-                deny: tooltip(answerTips[approval.ask].deny, {
-                  shortcut: labelOf(overviewKeys, "deny"),
-                }),
-                always: tooltip("Allow it now, and whenever it’s asked again", {
-                  shortcut: labelOf(overviewKeys, "always"),
-                }),
-                once: tooltip(answerTips[approval.ask].once, {
-                  shortcut: labelOf(overviewKeys, "once"),
-                }),
-              }}
-              onAnswer={(option, at) => {
-                if (answerable) onAnswer(summary, approval, option, at)
-              }}
-            />
-          )}
-        </section>
-      ) : null}
-
-      {!transcript && unreadable ? (
-        <p className="agents-peek-failure" role="status">
-          {readFailureCopy(unreadable, "conversation")}
-        </p>
-      ) : null}
-
       {reply}
     </article>
   )

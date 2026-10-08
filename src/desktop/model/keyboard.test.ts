@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   chordLabel,
+  chordShortcut,
   commandLabel,
   macUserAgent,
   matchesChord,
@@ -89,5 +90,17 @@ describe("reading the platform", () => {
     expect(macUserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36")).toBe(false)
     expect(macUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")).toBe(false)
     expect(macUserAgent("")).toBe(false)
+  })
+})
+
+describe("chordShortcut", () => {
+  it("names a chord as aria-keyshortcuts does: Meta on a Mac, Control elsewhere", () => {
+    expect(chordShortcut({ code: "Enter", command: true }, true)).toBe("Meta+Enter")
+    expect(chordShortcut({ code: "Enter", command: true }, false)).toBe("Control+Enter")
+    expect(chordShortcut({ code: "Enter", command: true, alt: true }, true)).toBe(
+      "Alt+Meta+Enter",
+    )
+    expect(chordShortcut({ code: "KeyR", command: true }, true)).toBe("Meta+R")
+    expect(chordShortcut({ code: "NumpadEnter" }, true)).toBe("Enter")
   })
 })

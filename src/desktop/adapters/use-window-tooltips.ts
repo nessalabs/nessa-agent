@@ -41,7 +41,7 @@ function menuOpen(target: HTMLElement): boolean {
   return target.matches(open) || target.querySelector(open) !== null
 }
 
-const sides: readonly TooltipSide[] = ["below", "above"]
+const sides: readonly TooltipSide[] = ["below", "above", "right", "left"]
 const sideOf = (value: string | undefined): TooltipSide =>
   sides.find((side) => side === value) ?? "below"
 

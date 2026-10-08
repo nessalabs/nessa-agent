@@ -1,10 +1,25 @@
 /**
  * A request the person answered in the overview, held in its place while it
- * settles and leaves: the row keeps showing the session and its approval as
- * they stood when answered, says what became of it, then fades. This is the
- * view's hold on a row, nothing more — the answer itself is the workspace's
- * (`approve`, `deny`), and what the source does with it arrives as the
- * workspace's own updates.
+ * leaves: the row keeps showing the session and its approval as they stood
+ * when answered; taken, it leaves its place as the session arrives in its
+ * new one, in one beat (`leaveInPlace`). What became of it is said to a
+ * screen reader (the overview's live region), and in the peek beside the
+ * list while it is still shown. This is the view's hold on a row, nothing
+ * more — the answer itself is the workspace's (`approve`, `deny`), and what
+ * the source does with it arrives as the workspace's own updates.
+ *
+ * The orderings it is held through (`overview.tsx`, the answer's `.then`):
+ *
+ * | phase      | event                                     | then                                  |
+ * | ---------- | ----------------------------------------- | ------------------------------------- |
+ * | answering  | answer refused, unconfirmed, or not asked | released: the row as the workspace has it |
+ * | answering  | sent, the session already moved on        | leaving: copy left in place, released at once |
+ * | answering  | sent, the session still waits             | leaving: held, watching the store     |
+ * | leaving    | the source moves the session on           | copy left in place, released          |
+ * | leaving    | the source asks something new             | released; the row stays, asking again |
+ * | leaving    | `heldAtMost` passes with no move          | released as the workspace has it      |
+ * | any        | the overview closes                       | watches and timers stopped; a late answer does nothing |
+ * | any        | reduced motion                            | no copy; the row is simply where it now belongs |
  */
 import type { Approval, ApprovalChoice, ApprovalOption } from "../../model/transcript"
 import type { SessionSummary } from "../../model/workspace-index"
@@ -15,11 +30,11 @@ export interface Settling {
   readonly summary: SessionSummary
   readonly approval: Approval
   readonly choice: ApprovalChoice
-  /** On its way to the source; taken, saying so; fading out of the list. */
-  readonly phase: "answering" | "settled" | "leaving"
+  /** On its way to the source; taken, and leaving the list. */
+  readonly phase: "answering" | "leaving"
 }
 
-/** What a settled request says in place of its buttons. */
+/** What became of an answered request: said to a screen reader, and in the peek. */
 export const answeredLabels: Readonly<Record<ApprovalChoice, string>> = {
   once: "Allowed",
   always: "Always allowed",

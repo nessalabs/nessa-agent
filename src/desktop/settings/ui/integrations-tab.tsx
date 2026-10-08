@@ -39,7 +39,7 @@ import {
   type VariableRow,
 } from "../model/mcp-servers"
 import { DesktopIcon } from "../../ui/icons"
-import { PendingAction, SettingGroup, Toggle } from "./settings-controls"
+import { ItemRow, PendingAction, SettingGroup, Toggle } from "./settings-controls"
 
 /**
  * Settings › Connections › Integrations: the gateway's stored MCP servers
@@ -80,7 +80,7 @@ export function IntegrationsTab() {
   const gateway = useContext(McpServersContext)
   if (!gateway)
     return (
-      <SettingGroup id="mcp-servers" footnote={footnote} pending>
+      <SettingGroup id="mcp-servers" note={footnote} pending>
         <div className="settings-empty">
           <DesktopIcon name="connections" />
           <p>{sentences.empty}</p>
@@ -253,7 +253,7 @@ function ManagedServers({ gateway }: { gateway: McpServersGateway }) {
       data-connection={state.connection}
       aria-busy={state.pending !== null || undefined}
     >
-      <SettingGroup id="mcp-servers" footnote={footnote}>
+      <SettingGroup id="mcp-servers" note={footnote}>
         <ServersCard state={state} dispatch={dispatch} />
       </SettingGroup>
       {state.form && state.access === "admin" ? (
@@ -358,21 +358,13 @@ function ServersBody({
   if (list.phase === "loading")
     return (
       <>
-        <div
-          className="settings-row settings-skeleton"
-          data-mcp-skeleton
-          aria-hidden="true"
-        >
+        <div className="settings-skeleton" data-mcp-skeleton aria-hidden="true">
           <span />
         </div>
-        <div
-          className="settings-row settings-skeleton"
-          data-mcp-skeleton
-          aria-hidden="true"
-        >
+        <div className="settings-skeleton" data-mcp-skeleton aria-hidden="true">
           <span />
         </div>
-        <div className="settings-row settings-servers-add">{add}</div>
+        <div className="settings-servers-add">{add}</div>
       </>
     )
   const { groups, managed } = groupsOf(list)
@@ -404,7 +396,7 @@ function ServersBody({
               />
             ),
           )}
-          <div className="settings-row settings-servers-add">{add}</div>
+          <div className="settings-servers-add">{add}</div>
         </>
       )}
       {managed.map((row) => (
@@ -444,13 +436,55 @@ function TooLargeBody({
     dispatch({ type: "cancelRemove" })
   }
   return (
-    <div
-      className="settings-row settings-server"
+    <ItemRow
+      className="settings-server"
       data-mcp-too-large
       onKeyDown={onKeyDown}
+      label={<span id={textId}>{sentences.listTooLarge}</span>}
+      control={
+        <span className="settings-server-actions">
+          {confirming
+            ? [
+                <button
+                  key="cancel"
+                  ref={cancel}
+                  type="button"
+                  className="settings-button"
+                  data-mcp-action="cancel"
+                  aria-describedby={askId}
+                  disabled={state.pending !== null}
+                  onClick={() => dispatch({ type: "cancelRemove" })}
+                >
+                  Cancel
+                </button>,
+                <button
+                  key="confirm"
+                  type="button"
+                  className="settings-button settings-button-danger"
+                  data-mcp-action="confirm"
+                  aria-describedby={askId}
+                  disabled={!canRemoveByName(state)}
+                  onClick={() => dispatch({ type: "confirmRemove" })}
+                >
+                  Remove
+                </button>,
+              ]
+            : [
+                <button
+                  key="remove"
+                  type="button"
+                  className="settings-button"
+                  data-mcp-action="remove"
+                  disabled={!canRemoveByName(state)}
+                  onClick={() => dispatch({ type: "askRemoveByName" })}
+                >
+                  Remove
+                </button>,
+              ]}
+        </span>
+      }
     >
-      <div className="settings-row-text">
-        <p id={textId}>{sentences.listTooLarge}</p>
+      <div className="settings-field">
         <label htmlFor={fieldId}>Server name</label>
         <input
           id={fieldId}
@@ -465,53 +499,13 @@ function TooLargeBody({
             dispatch({ type: "changeRemoveName", name: event.target.value })
           }
         />
-        {state.confirming !== null ? (
-          <p id={askId} className="settings-server-confirm" data-mcp-confirm>
-            {sentences.removeByNameAsk(state.confirming.name)}
-          </p>
-        ) : null}
       </div>
-      <div className="settings-row-control settings-server-actions">
-        {confirming
-          ? [
-              <button
-                key="cancel"
-                ref={cancel}
-                type="button"
-                className="settings-button"
-                data-mcp-action="cancel"
-                aria-describedby={askId}
-                disabled={state.pending !== null}
-                onClick={() => dispatch({ type: "cancelRemove" })}
-              >
-                Cancel
-              </button>,
-              <button
-                key="confirm"
-                type="button"
-                className="settings-button settings-button-danger"
-                data-mcp-action="confirm"
-                aria-describedby={askId}
-                disabled={!canRemoveByName(state)}
-                onClick={() => dispatch({ type: "confirmRemove" })}
-              >
-                Remove
-              </button>,
-            ]
-          : [
-              <button
-                key="remove"
-                type="button"
-                className="settings-button"
-                data-mcp-action="remove"
-                disabled={!canRemoveByName(state)}
-                onClick={() => dispatch({ type: "askRemoveByName" })}
-              >
-                Remove
-              </button>,
-            ]}
-      </div>
-    </div>
+      {state.confirming !== null ? (
+        <p id={askId} className="settings-server-confirm" data-mcp-confirm>
+          {sentences.removeByNameAsk(state.confirming.name)}
+        </p>
+      ) : null}
+    </ItemRow>
   )
 }
 
@@ -586,107 +580,116 @@ function ServerRow({
   const authorization = authorizationLabel(server)
   const consent = state.consent?.name === server.name ? state.consent : null
   return (
-    <div
-      className="settings-row settings-server"
+    <ItemRow
+      className="settings-server"
       data-mcp-server={server.name}
       data-managed={server.managed || undefined}
       onKeyDown={confirmEscape(confirming, state, dispatch)}
+      label={<span id={nameId}>{server.name}</span>}
+      detail={
+        <>
+          <code className="settings-server-command">{command}</code>
+          <small>
+            {server.managed
+              ? sentences.managed
+              : server.url
+                ? (authorization ?? server.url)
+                : sentences.variables(server.envNames.length)}
+          </small>
+        </>
+      }
+      control={
+        <span className="settings-server-actions">
+          {server.managed ? null : confirming ? (
+            <ConfirmButtons
+              key="confirm"
+              askId={askId}
+              state={state}
+              dispatch={dispatch}
+            />
+          ) : (
+            [
+              <button
+                key="edit"
+                type="button"
+                className="settings-button"
+                data-mcp-action="edit"
+                aria-describedby={nameId}
+                disabled={!writable}
+                onClick={() => dispatch({ type: "edit", name: server.name })}
+              >
+                Edit
+              </button>,
+              ...(server.remoteId
+                ? [
+                    <button
+                      key="authorize"
+                      type="button"
+                      className="settings-button"
+                      data-mcp-action="authorize"
+                      aria-describedby={nameId}
+                      disabled={!writable}
+                      onClick={() => dispatch({ type: "authorize", name: server.name })}
+                    >
+                      Authorize
+                    </button>,
+                    <button
+                      key="revoke"
+                      type="button"
+                      className="settings-button"
+                      data-mcp-action="revoke"
+                      aria-describedby={nameId}
+                      disabled={!writable}
+                      onClick={() => dispatch({ type: "revoke", name: server.name })}
+                    >
+                      Revoke
+                    </button>,
+                  ]
+                : []),
+              <button
+                key="inspect"
+                type="button"
+                className="settings-button"
+                data-mcp-action="inspect"
+                aria-describedby={nameId}
+                disabled={!canInspect(state)}
+                onClick={() => dispatch({ type: "inspect", name: server.name })}
+              >
+                Inspect
+              </button>,
+              <button
+                key="remove"
+                type="button"
+                className="settings-button"
+                data-mcp-action="remove"
+                aria-describedby={nameId}
+                disabled={!writable}
+                onClick={() => dispatch({ type: "askRemove", name: server.name })}
+              >
+                Remove
+              </button>,
+            ]
+          )}
+          <Toggle
+            checked={server.enabled}
+            label={server.name}
+            disabled={server.managed || !writable || confirming}
+            onChange={() => dispatch({ type: "toggle", name: server.name })}
+          />
+        </span>
+      }
     >
-      <div className="settings-row-text">
-        <span id={nameId}>{server.name}</span>
-        <code className="settings-server-command">{command}</code>
-        <small>
-          {server.managed
-            ? sentences.managed
-            : server.url
-              ? (authorization ?? server.url)
-              : sentences.variables(server.envNames.length)}
-        </small>
-        {consent ? (
-          <a href={consent.url} data-mcp-consent>
-            {sentences.pendingConsent}
-          </a>
-        ) : null}
-        {confirming ? (
-          <p id={askId} className="settings-server-confirm" data-mcp-confirm>
-            {sentences.removeAsk(server.name)}
-          </p>
-        ) : null}
-      </div>
-      <div className="settings-row-control settings-server-actions">
-        {server.managed ? null : confirming ? (
-          <ConfirmButtons key="confirm" askId={askId} state={state} dispatch={dispatch} />
-        ) : (
-          [
-            <button
-              key="edit"
-              type="button"
-              className="settings-button"
-              data-mcp-action="edit"
-              aria-describedby={nameId}
-              disabled={!writable}
-              onClick={() => dispatch({ type: "edit", name: server.name })}
-            >
-              Edit
-            </button>,
-            ...(server.remoteId
-              ? [
-                  <button
-                    key="authorize"
-                    type="button"
-                    className="settings-button"
-                    data-mcp-action="authorize"
-                    aria-describedby={nameId}
-                    disabled={!writable}
-                    onClick={() => dispatch({ type: "authorize", name: server.name })}
-                  >
-                    Authorize
-                  </button>,
-                  <button
-                    key="revoke"
-                    type="button"
-                    className="settings-button"
-                    data-mcp-action="revoke"
-                    aria-describedby={nameId}
-                    disabled={!writable}
-                    onClick={() => dispatch({ type: "revoke", name: server.name })}
-                  >
-                    Revoke
-                  </button>,
-                ]
-              : []),
-            <button
-              key="inspect"
-              type="button"
-              className="settings-button"
-              data-mcp-action="inspect"
-              aria-describedby={nameId}
-              disabled={!canInspect(state)}
-              onClick={() => dispatch({ type: "inspect", name: server.name })}
-            >
-              Inspect
-            </button>,
-            <button
-              key="remove"
-              type="button"
-              className="settings-button"
-              data-mcp-action="remove"
-              aria-describedby={nameId}
-              disabled={!writable}
-              onClick={() => dispatch({ type: "askRemove", name: server.name })}
-            >
-              Remove
-            </button>,
-          ]
-        )}
-        <Toggle
-          checked={server.enabled}
-          label={server.name}
-          disabled={server.managed || !writable || confirming}
-          onChange={() => dispatch({ type: "toggle", name: server.name })}
-        />
-      </div>
-    </div>
+      {consent ? (
+        <a href={consent.url} data-mcp-consent>
+          {sentences.pendingConsent}
+        </a>
+      ) : null}
+      {confirming ? (
+        <p id={askId} className="settings-server-confirm" data-mcp-confirm>
+          {sentences.removeAsk(server.name)}
+        </p>
+      ) : null}
+    </ItemRow>
   )
 }
 
@@ -709,55 +712,62 @@ function SharedGroup({
   const writable = canWrite(state) && state.form === null
   const confirming = state.confirming?.name === group.name
   return (
-    <div
-      className="settings-row settings-server settings-server-group"
+    <ItemRow
+      className="settings-server settings-server-group"
       data-mcp-group={group.name}
       onKeyDown={confirmEscape(confirming, state, dispatch)}
-    >
-      <div className="settings-row-text">
-        <span>{group.name}</span>
+      label={group.name}
+      detail={
         <small id={sharedId} data-mcp-shared>
           {sentences.nameShared(group.rows.length)}
         </small>
-        <ul className="settings-server-shared">
-          {group.rows.map(({ id, server }) => (
-            <li key={id} data-mcp-shared-row>
-              <code className="settings-server-command">
-                {[server.command, ...server.args].join(" ")}
-              </code>
-              <small>
-                {[
-                  sentences.variables(server.envNames.length),
-                  ...(server.enabled ? [] : [sentences.notOffered]),
-                ].join(" · ")}
-              </small>
-            </li>
-          ))}
-        </ul>
-        {confirming ? (
-          <p id={askId} className="settings-server-confirm" data-mcp-confirm>
-            {sentences.removeFirstAsk(group.name, group.rows[0].server.command)}
-          </p>
-        ) : null}
-      </div>
-      <div className="settings-row-control settings-server-actions">
-        {confirming ? (
-          <ConfirmButtons key="confirm" askId={askId} state={state} dispatch={dispatch} />
-        ) : (
-          <button
-            key="removeFirst"
-            type="button"
-            className="settings-button settings-button-wrapped"
-            data-mcp-action="removeFirst"
-            aria-describedby={sharedId}
-            disabled={!writable}
-            onClick={() => dispatch({ type: "askRemove", name: group.name })}
-          >
-            {sentences.removeFirst(group.name)}
-          </button>
-        )}
-      </div>
-    </div>
+      }
+      control={
+        <span className="settings-server-actions">
+          {confirming ? (
+            <ConfirmButtons
+              key="confirm"
+              askId={askId}
+              state={state}
+              dispatch={dispatch}
+            />
+          ) : (
+            <button
+              key="removeFirst"
+              type="button"
+              className="settings-button settings-button-wrapped"
+              data-mcp-action="removeFirst"
+              aria-describedby={sharedId}
+              disabled={!writable}
+              onClick={() => dispatch({ type: "askRemove", name: group.name })}
+            >
+              {sentences.removeFirst(group.name)}
+            </button>
+          )}
+        </span>
+      }
+    >
+      <ul className="settings-server-shared">
+        {group.rows.map(({ id, server }) => (
+          <li key={id} data-mcp-shared-row>
+            <code className="settings-server-command">
+              {[server.command, ...server.args].join(" ")}
+            </code>
+            <small>
+              {[
+                sentences.variables(server.envNames.length),
+                ...(server.enabled ? [] : [sentences.notOffered]),
+              ].join(" · ")}
+            </small>
+          </li>
+        ))}
+      </ul>
+      {confirming ? (
+        <p id={askId} className="settings-server-confirm" data-mcp-confirm>
+          {sentences.removeFirstAsk(group.name, group.rows[0].server.command)}
+        </p>
+      ) : null}
+    </ItemRow>
   )
 }
 

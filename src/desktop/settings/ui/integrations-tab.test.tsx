@@ -230,7 +230,9 @@ describe("Integrations", () => {
     await type(value, "very-secret-value")
     await click(button("Save"))
     // U21: in flight, the form rests.
-    expect((host.querySelector("fieldset") as HTMLFieldSetElement).disabled).toBe(true)
+    expect(
+      (host.querySelector("fieldset.settings-form") as HTMLFieldSetElement).disabled,
+    ).toBe(true)
     const save = fake.requests.find((each) => each.method === "save")
     expect(save?.argument).toMatchObject({
       server: { env: [{ name: "TOKEN", value: "very-secret-value" }] },

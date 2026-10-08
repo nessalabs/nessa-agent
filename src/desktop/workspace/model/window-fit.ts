@@ -70,3 +70,24 @@ export function foldToFit(
   if (!side.sidebarOpen && sessionListOpen === side.sessionListOpen) return side
   return { ...side, sidebarOpen: false, sessionListOpen }
 }
+
+/**
+ * Whether a column `width` wide — the side rail — fits beside what the person
+ * has open: it does when standing beside them folds nothing that would not
+ * fold without it. Being the most optional column, it is the first to give
+ * way for room; asked of the person's choices, so it never steals the room a
+ * column the window already folded is waiting for.
+ */
+export function railFits(
+  side: SideColumns,
+  windowWidth: number,
+  columns: number,
+  width: number,
+): boolean {
+  const without = foldToFit(side, windowWidth, columns)
+  const beside = foldToFit(side, windowWidth - width, columns)
+  return (
+    beside.sidebarOpen === without.sidebarOpen &&
+    beside.sessionListOpen === without.sessionListOpen
+  )
+}

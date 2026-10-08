@@ -16,6 +16,7 @@ import {
   useBesidePreference,
   useDriftPreference,
   useGreetingPreference,
+  useSideRailPreference,
   usePictureInConversationsPreference,
   useRunningFirstPreference,
 } from "../../adapters/window-preferences"
@@ -89,28 +90,24 @@ function GeneralTab() {
   const [menuBar, setMenuBar] = usePrototype(true)
   const [open, setOpen] = usePrototype<"home" | "last">("last")
   return (
-    <>
-      <Group>
-        <Row id="open-at-login">
-          <Toggle checked={launch} onChange={setLaunch} />
-        </Row>
-        <Row id="menu-bar">
-          <Toggle checked={menuBar} onChange={setMenuBar} />
-        </Row>
-      </Group>
-      <Group title="When the window opens">
-        <Row id="window-opens-to">
-          <Segmented
-            value={open}
-            onChange={setOpen}
-            options={[
-              { id: "home", label: "Home" },
-              { id: "last", label: "Last session" },
-            ]}
-          />
-        </Row>
-      </Group>
-    </>
+    <Group>
+      <Row id="open-at-login">
+        <Toggle checked={launch} onChange={setLaunch} />
+      </Row>
+      <Row id="menu-bar">
+        <Toggle checked={menuBar} onChange={setMenuBar} />
+      </Row>
+      <Row id="window-opens-to">
+        <Segmented
+          value={open}
+          onChange={setOpen}
+          options={[
+            { id: "home", label: "Home" },
+            { id: "last", label: "Last session" },
+          ]}
+        />
+      </Row>
+    </Group>
   )
 }
 
@@ -119,10 +116,7 @@ function NotificationsTab() {
   const [finished, setFinished] = usePrototype(false)
   const [sound, setSound] = usePrototype(false)
   return (
-    <Group
-      title="Let me know"
-      footnote="Only while the window is in the background or closed."
-    >
+    <Group note="Only while the window is in the background or closed.">
       <Row id="notify-needs-you">
         <Toggle checked={needsYou} onChange={setNeedsYou} />
       </Row>
@@ -139,31 +133,23 @@ function NotificationsTab() {
 function UpdatesTab() {
   const [automatic, setAutomatic] = usePrototype(true)
   const [channel, setChannel] = usePrototype<"stable" | "beta">("stable")
+  // No row claims Nessa is up to date: nothing here has checked.
   return (
-    <>
-      <Group>
-        <ItemRow
-          label="Nessa is up to date"
-          detail="Version 0.1.0 (prototype)"
-          control={<PendingAction>Check now</PendingAction>}
+    <Group>
+      <Row id="update-automatically">
+        <Toggle checked={automatic} onChange={setAutomatic} />
+      </Row>
+      <Row id="update-channel">
+        <Segmented
+          value={channel}
+          onChange={setChannel}
+          options={[
+            { id: "stable", label: "Stable" },
+            { id: "beta", label: "Beta" },
+          ]}
         />
-      </Group>
-      <Group>
-        <Row id="update-automatically">
-          <Toggle checked={automatic} onChange={setAutomatic} />
-        </Row>
-        <Row id="update-channel">
-          <Segmented
-            value={channel}
-            onChange={setChannel}
-            options={[
-              { id: "stable", label: "Stable" },
-              { id: "beta", label: "Beta" },
-            ]}
-          />
-        </Row>
-      </Group>
-    </>
+      </Row>
+    </Group>
   )
 }
 
@@ -183,7 +169,7 @@ function ThemeTab() {
   const [family, setFamily] = useIconFamilyPreference()
   return (
     <>
-      <SettingGroup id="theme-light">
+      <SettingGroup id="theme-colour">
         <Choices
           options={desktopThemes}
           value={theme}
@@ -199,7 +185,7 @@ function ThemeTab() {
           )}
         />
       </SettingGroup>
-      <SettingGroup id="icon-family" footnote="Used for the window's own controls.">
+      <SettingGroup id="icon-family" note="Used for the window's own controls.">
         <Choices
           options={iconFamilies}
           value={family}
@@ -240,7 +226,7 @@ function HeaderTab() {
   const [greeting, setGreeting] = useGreetingPreference()
   const [inConversations, setInConversations] = usePictureInConversationsPreference()
   return (
-    <Group footnote="Choose or frame the picture from Customize on the home header.">
+    <Group note="Choose or frame the picture from Customize on the home header.">
       <Row id="tint-from-picture">
         <Toggle checked={tint} onChange={setTint} />
       </Row>
@@ -264,7 +250,7 @@ function MotionTab() {
   const [motion, setMotion] = useMotionPreference()
   const [drift, setDrift] = useDriftPreference()
   return (
-    <Group footnote="System follows Reduce motion in macOS Accessibility settings.">
+    <Group note="System follows Reduce motion in macOS Accessibility settings.">
       <Row id="animations">
         <Segmented value={motion} onChange={setMotion} options={motionChoices} />
       </Row>
@@ -335,7 +321,7 @@ function SessionsTab() {
   const [keep, setKeep] = usePrototype<"week" | "month" | "always">("month")
   const [runningFirst, setRunningFirst] = useRunningFirstPreference()
   return (
-    <Group footnote="Pinned sessions are always kept.">
+    <Group note="Pinned sessions are always kept.">
       <Row id="keep-sessions">
         <Segmented
           value={keep}
@@ -374,7 +360,7 @@ function KeyboardTab() {
           }
         />
       </Group>
-      <Group title="Workspace">
+      <Group title="Panes and sessions">
         {workspaceShortcuts.map((binding) => (
           <ItemRow
             key={binding.command}
@@ -398,7 +384,7 @@ function DefaultsTab() {
   )
   const [fast, setFast] = usePrototype(false)
   return (
-    <Group title="New sessions start with">
+    <Group>
       <Row id="default-model">
         <Segmented
           value={model}
@@ -433,7 +419,7 @@ function ProvidersTab() {
   return (
     <SettingGroup
       id="providers"
-      footnote="Models come from the agents on this Mac; a provider without one needs its own key."
+      note="Models come from the agents on this Mac; a provider without one needs its own key."
     >
       {composerProviders.map((provider) => {
         const agent = agentForProvider(provider.id)
@@ -473,7 +459,7 @@ function AgentsTab() {
   return (
     <SettingGroup
       id="agents"
-      footnote="Nessa runs the agents already on this Mac; it doesn't install its own copies."
+      note="Nessa runs the agents already on this Mac; it doesn't install its own copies."
     >
       {agents.map((agent) => (
         <ItemRow
@@ -509,10 +495,7 @@ function AccessTab() {
   const [access, setAccess] = usePrototype<"ask" | "edits" | "full">("ask")
   const [remember, setRemember] = usePrototype(true)
   return (
-    <Group
-      title="By default, agents may"
-      footnote="Each session can change this from the shield in its composer."
-    >
+    <Group note="Each session can change this from the shield in its composer.">
       <Row id="default-access">
         <Segmented
           value={access}
@@ -534,35 +517,27 @@ function AccessTab() {
 function DataTab() {
   const [crashes, setCrashes] = usePrototype(false)
   return (
-    <>
-      <Group>
-        <Row id="crash-reports">
-          <Toggle checked={crashes} onChange={setCrashes} />
-        </Row>
-      </Group>
-      <Group>
-        <Row id="session-history">
-          <PendingAction>Show in Finder</PendingAction>
-        </Row>
-      </Group>
-    </>
+    <Group>
+      <Row id="crash-reports">
+        <Toggle checked={crashes} onChange={setCrashes} />
+      </Row>
+      <Row id="session-history">
+        <PendingAction>Show in Finder</PendingAction>
+      </Row>
+    </Group>
   )
 }
 
 /* ——— Advanced ——— */
 
-/**
- * Previews of features not settled yet. None is on offer now, so the page
- * says so rather than showing a control that does nothing.
- */
+/** Previews of features not settled yet, each off until turned on. */
 function ExperimentalTab() {
+  const [rail, setRail] = useSideRailPreference()
   return (
     <Group>
-      <div className="settings-empty">
-        <DesktopIcon name="advanced" />
-        <p>Nothing to try right now.</p>
-        <p>Previews of new features will appear here.</p>
-      </div>
+      <Row id="side-rail">
+        <Toggle checked={rail === "on"} onChange={(on) => setRail(on ? "on" : "off")} />
+      </Row>
     </Group>
   )
 }
@@ -572,12 +547,9 @@ function ExperimentalTab() {
 function AboutTab() {
   return (
     <>
-      <div className="settings-about">
-        <span className="desktop-mark settings-about-mark" aria-hidden="true" />
-        <div>
-          <strong>nessa</strong> <span>Studio</span>
-        </div>
-      </div>
+      <p className="settings-about">
+        <strong>nessa</strong> <span>Studio</span>
+      </p>
       <Group>
         <Row id="version">
           <span className="settings-value">0.1.0 (prototype)</span>

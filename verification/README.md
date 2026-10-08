@@ -44,6 +44,7 @@ verification/
       smoke.mjs             loads, sends, splits, Settings, overview; console errors
       perf-budget.mjs       the frame budget, production build, 4× CPU throttling
       safe-area.mjs         nothing painted under the window controls, per frame
+      columns.mjs           no two columns overlap in any state of the side rail, sidebar, list and overview; the rail's toggle and "nessa Studio" hold still; a full view's workspace takes no keys
       load-fallback.mjs     the load fallback inside, and centred in, the visible panel
       gateway-states.mjs    the desktop app's window when it cannot read the gateway: says why, never the sample
       conversation-unread.mjs a listed conversation the window could not read: the transcript and the Agents peek say what (#433)

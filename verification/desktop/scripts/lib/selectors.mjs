@@ -111,6 +111,13 @@ export const css = {
   // Side columns
   sidebar: ".workspace-sidebar", // class
   sessionList: ".workspace-list", // class
+  chat: ".workspace-chat", // class: the chat area, the panes' column
+  sideRail: ".side-rail", // class: the rail beside the workspace
+  workspaceWindow: ".workspace-window", // class: the frame holding the rail and the workspace; data-rail, data-sidebar
+  titlebarSidebarToggle: '.workspace-titlebar [aria-controls="workspace-sidebar"]', // the titlebar's Show/Hide Sidebar
+  sideRailToggle: ".side-rail-toggle", // class: shows or hides the rail; aria-expanded
+  studio: ".workspace-identity-name", // class: "nessa Studio", which opens Settings
+  peekEdge: ".desktop-peek-edge", // class: the strip at the folded sidebar's edge a hover reveals it from
   listSearch: ".workspace-list .workspace-search", // class: the session list's search field
   listScroll: ".workspace-list-scroll", // class: the session list's scroller
   sessionListRow: ".workspace-list [data-session-row]", // a row of the session list, not a sidebar thread
@@ -138,6 +145,12 @@ export const css = {
   overviewItem: "[data-overview-item]",
   overviewRequest: ".agents-request", // class
   overviewCommand: ".agents-request-command", // class: the command on a request row
+  overviewRequestActions: ".agents-request-actions", // class: a request row's answers, at its end while pointed at or the keyboard is visibly on it
+  overviewRowItem: ".agents-row-item", // class: a listed row's item
+  overviewEdge: ".agents-overview-edge", // class: the resize edge between the list and the peek beside it (role=separator)
+  overviewSide: ".agents-overview-side", // class: the list's side of the overview, whose right is the edge
+  overviewSurface: ".agents-overview-surface", // class: the overview's card, holding the list and the peek
+  overviewSaid: ".agents-overview-said", // class: the overview's live region, which says what became of an answer
   overviewRow: ".agents-row", // class
   overviewReplyPill: ".agents-reply-pill", // class
   overviewReplyField: "[data-reply-for] textarea", // data-reply-for is the session replied to
@@ -157,6 +170,7 @@ export const css = {
   inlinePeek: ".agents-inline-peek", // class: the peek opened beneath its row
   overviewTitle: ".agents-overview-title", // class: the overview's heading and filter
   peekAsk: ".agents-peek-ask", // class: the request in full, after the story
+  overviewPeekScroll: ".agents-overview-peek .agents-peek-scroll", // class: what the peek beside the list says, scrolling above its reply pill
 
   // The composer's thinking control (src/desktop/ui/thinking-control.tsx): a chip
   // opening a popover holding a slider; the levels are read from
@@ -186,9 +200,19 @@ export const css = {
   settingsHeading: "#settings-heading", // the open category's name
   settingsTab: '.settings-tabs [role="tab"]',
   settingsPanel: "#settings-panel", // the open tab's page
-  settingsCard: ".settings-card", // class: a card on a Settings page, which what it holds must lie inside
+  settingsCard: '[data-slot="settings-group-card"]', // the UI kit's card on a Settings page, which what it holds must lie inside
+  settingsFormCard: ".settings-card", // class: a card Settings draws itself (Integrations' form and inspection), there only while open
   settingsGroupHeading: ".settings-group > h2", // class: a group's heading on a Settings page
   settingsScrollers: ".settings-content, .settings-scroll, .settings-panel", // class: what scrolls in Settings, which must not scroll sideways
+  settingsScroll: ".settings-scroll", // class: the page's scroller, below its bar
+  settingsBar: ".settings-bar", // class: the page's titlebar row (drag strip); data-condensed on .settings-content once the masthead's title has scrolled under it
+  settingsBarTitle: ".settings-bar-title", // class: the page's name, small, in that row
+  settingsContent: ".settings-content", // class
+  settingsMasthead: ".settings-masthead", // class: the page's head: title, dek, tabs
+  settingsDek: ".settings-dek", // class: the one line under a title, where a category has one
+  settingsRow: '[data-slot="settings-row"]', // the UI kit's row, on any Settings page
+  settingsFound: "[data-setting][data-found]", // where a search just landed
+  settingsSearch: 'input[aria-label="Search settings"]',
   control: 'button, input, select, textarea, [role="switch"]',
 
   // Settings › Connections › Integrations: the gateway's MCP servers
@@ -212,7 +236,7 @@ export const css = {
   mcpShared: "[data-mcp-shared]", // a group's "N servers share this name…"
   mcpSharedRow: "[data-mcp-shared-row]", // one read-only server of a group
   mcpManagedRow: "[data-mcp-server][data-managed]",
-  mcpRowText: ".settings-row-text", // class: a row's name, command and variables
+  mcpRowText: 'div:has(> [data-slot="settings-row-label"])', // a row's name with its command and variables (the kit's row's text column)
   mcpRowActions: ".settings-server-actions", // class: a row's buttons and switch
   mcpEmpty: "[data-mcp-empty]",
   mcpTooLarge: "[data-mcp-too-large]", // a list too large to show: its sentence and the remove-by-name field (U44)
@@ -254,6 +278,7 @@ export const css = {
 
 /** Parameterized selectors, built before passing their strings to the page. */
 export const selectorFor = {
+  railItem: (id) => `[data-rail-item="${id}"]`, // a place on the side rail: agents, notes, …
   appFrameIn: (place) => `[data-app-frame="${place}"]`, // the app's frame in one place: inline, pane, window
   fixtureControl: (name) => `[data-fixture="${name}"]`, // a control inside the fixture app's own document
   fixtureState: (state) => `body[data-fixture-state="${state}"]`, // the fixture app saying where it is
@@ -321,6 +346,7 @@ export const storage = {
   theme: "nessa.desktop.theme",
   pictureInConversations: "nessa.desktop.picture-in-conversations",
   greeting: "nessa.desktop.greeting",
+  sideRail: "nessa.desktop.side-rail", // "on" offers the side rail (Advanced › Experimental)
 }
 
 /** The same-window event a stored preference announces a change on. */

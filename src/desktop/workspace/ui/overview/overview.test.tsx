@@ -419,14 +419,9 @@ describe("the agents overview", () => {
       [...(scope?.querySelectorAll<HTMLElement>("button[data-tooltip]") ?? [])]
         .map((each) => each.dataset.tooltip ?? "")
         .filter((tip) => / it/.test(tip))
-    expect(tips(card("second"))).toEqual([
-      "Don’t send it",
-      "Send it once. Hold ⌥ to always allow it",
-    ])
-    expect(tips(card("first"))).toEqual([
-      "Don’t run it",
-      "Run it once. Hold ⌥ to always allow it",
-    ])
+    // The row's answers carry no tooltip: they say what they do.
+    expect(card("second")?.querySelectorAll("button[data-tooltip]")).toHaveLength(0)
+    expect(card("first")?.querySelectorAll("button[data-tooltip]")).toHaveLength(0)
     await act(async () => card("second")?.click())
     await act(async () => settle(10))
     const peek = host.querySelector(".agents-inline-peek .agents-peek-ask")
@@ -459,8 +454,13 @@ describe("the agents overview", () => {
       "once",
     ])
     expect(document.activeElement).toBe(card("second"))
-    // Held in place while it settles, saying what became of it.
-    expect(card("first")?.dataset.phase).toBe("settled")
+    // Taken, it leaves at once — no label dwells on the row — and what
+    // became of it is said to a screen reader.
+    expect(card("first")?.dataset.phase).toBe("leaving")
+    expect(card("first")?.textContent).not.toContain("Allowed")
+    expect(host.querySelector(".agents-overview-said")?.textContent).toBe(
+      "Allowed: Sign the build",
+    )
     // A new press, once the person can see where the keyboard went.
     elapse(answerPause)
     await press(card("second") as HTMLElement, "Backspace", { command: true })
@@ -471,6 +471,20 @@ describe("the agents overview", () => {
       "person",
       "deny",
     ])
+  })
+
+  it("keeps an answered row leaving until the source moves its session on, then lists it where it now is", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await press(card("first") as HTMLElement, "Enter", { command: true })
+    // Sent, but the source has not said so yet: the row stays leaving, never asking again.
+    await act(async () => settle(10))
+    expect(card("first")?.dataset.phase).toBe("leaving")
+    await moveOn(source, "first", "Sign the build", "running")
+    await nextFrame()
+    expect(card("first")).toBeNull()
+    expect(row("first")?.dataset.kind).toBe("working")
   })
 
   it("answers one request per press: a held key's repeats, or a press straight after, answer nothing more", async () => {
@@ -793,6 +807,23 @@ describe("the agents overview", () => {
       "always",
       "person",
       "always",
+    ])
+  })
+
+  it("names each answer's chord on the row, and gives none a tooltip", async () => {
+    await mount()
+    await open()
+    expect(
+      [...(card("first")?.querySelectorAll<HTMLButtonElement>("button") ?? [])].map(
+        (each) => [
+          each.dataset.answer,
+          each.getAttribute("aria-keyshortcuts"),
+          each.dataset.tooltip,
+        ],
+      ),
+    ).toEqual([
+      ["deny", "Control+Backspace", undefined],
+      ["once", "Control+Enter", undefined],
     ])
   })
 

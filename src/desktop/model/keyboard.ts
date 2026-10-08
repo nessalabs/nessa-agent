@@ -99,6 +99,30 @@ export function chordLabel(chord: Chord, mac: boolean): string {
   return parts.filter(Boolean).join("+")
 }
 
+/**
+ * A chord as `aria-keyshortcuts` names it — modifiers, then the key's
+ * `KeyboardEvent.key` value, joined by "+": "Meta+Enter" on a Mac,
+ * "Control+Enter" elsewhere (`keyboard.test.ts`).
+ */
+export function chordShortcut(chord: Chord, mac: boolean): string {
+  const key = chord.code.startsWith("Key")
+    ? chord.code.slice(3)
+    : chord.code.startsWith("Digit")
+      ? chord.code.slice(5)
+      : chord.code === "NumpadEnter"
+        ? "Enter"
+        : chord.code
+  return [
+    chord.control || (chord.command && !mac) ? "Control" : "",
+    chord.alt ? "Alt" : "",
+    chord.shift ? "Shift" : "",
+    chord.command && mac ? "Meta" : "",
+    key,
+  ]
+    .filter(Boolean)
+    .join("+")
+}
+
 /** The command key alone, as the platform writes it before a click: "⌘Click", "Ctrl+Click". */
 export function commandLabel(mac: boolean): string {
   return mac ? "⌘" : "Ctrl+"

@@ -181,16 +181,21 @@ describe("Advanced", () => {
     expect(navItem("Advanced")?.querySelector("svg.settings-nav-icon")).not.toBeNull()
   })
 
-  it("shows its Experimental tab, calmly empty, with no control that does nothing", async () => {
+  it("says what it is for under its title, calmly empty, with no control that does nothing", async () => {
     await mount()
     await act(async () => setOpen(true))
     await act(async () => navItem("Advanced")?.click())
     expect(document.querySelector("#settings-heading")?.textContent).toBe("Advanced")
-    expect(tabNames()).toEqual(["Experimental"])
+    expect(document.querySelector(".settings-dek")?.textContent).toBe(
+      "Early features you can try before they are finished.",
+    )
+    // One tab is nothing to choose between: no strip.
+    expect(tabNames()).toEqual([])
+    // Each preview is a switch, off until turned on.
     const panel = document.querySelector("#settings-panel")
-    expect(panel?.textContent).toContain("Nothing to try right now.")
-    expect(panel?.textContent).toContain("Previews of new features will appear here.")
-    expect(panel?.querySelectorAll("button, input, [role='switch']").length).toBe(0)
+    const rail = panel?.querySelector<HTMLElement>("[role='switch']")
+    expect(panel?.textContent).toContain("Side rail")
+    expect(rail?.getAttribute("aria-checked")).toBe("false")
   })
 
   it("has taken Experimental out of General", async () => {
@@ -202,7 +207,7 @@ describe("Advanced", () => {
 })
 
 describe("what Settings offers", () => {
-  it("disables every control a setting not available yet shows, and says so", async () => {
+  it("disables every control a setting not available yet shows, and says so once for its group", async () => {
     const tabs = settingsCategories.flatMap((category) =>
       category.tabs.map((tab) => tab.id),
     )
@@ -221,14 +226,59 @@ describe("what Settings offers", () => {
     for (const entry of pending) {
       const row = host.querySelector(`[data-setting="${entry.id}"]`)
       expect(row, entry.id).not.toBeNull()
-      expect(row?.textContent).toContain("Not available yet")
       expect(row?.querySelectorAll("button:not(:disabled)").length, entry.id).toBe(0)
+      // Said on the row, or once for its group — never on a row whose group says it.
+      const group = row?.closest(".settings-group")
+      const said = [...(group?.querySelectorAll(".settings-unavailable") ?? [])]
+      // A setting that is a whole card of its own is its group: its note is the group's.
+      const onRow =
+        row !== group && (row?.textContent?.includes("Not available yet") ?? false)
+      expect(said.length + (onRow ? 1 : 0), entry.id).toBe(1)
+      // And whoever reads its controls hears why they rest.
+      if (said.length === 1)
+        for (const control of row?.querySelectorAll<HTMLElement>(
+          "[role=switch], [data-slot=segmented-control], .settings-button",
+        ) ?? [])
+          expect(control.getAttribute("aria-describedby") ?? "", entry.id).toContain(
+            said[0].id,
+          )
     }
+    // A group none of whose settings is available yet says so once, not on every row.
+    const general = host
+      .querySelector('[data-setting="open-at-login"]')
+      ?.closest(".settings-group")
+    expect(general?.textContent?.match(/Not available yet/g)).toHaveLength(1)
     // And every other control can be used.
     const available = [...host.querySelectorAll("[data-setting]:not([data-pending])")]
     expect(
       available.every((row) => row.querySelectorAll("button:disabled").length === 0),
     ).toBe(true)
+  })
+
+  it("never titles a group as its page or its tab is named, so no word shows twice at once", async () => {
+    const pages = settingsCategories.flatMap((category) =>
+      category.tabs.map((tab) => ({
+        category: category.label,
+        tab: tab.label,
+        id: tab.id,
+      })),
+    )
+    for (const { category, tab, id } of pages) {
+      const Page = settingsTabPages[id]
+      await act(async () =>
+        root.render(
+          <Provider store={testStore()}>
+            <Page />
+          </Provider>,
+        ),
+      )
+      // A title kept for assistive technology only is not on screen.
+      const titles = [
+        ...host.querySelectorAll('.settings-group:not([data-title="hidden"]) > h2'),
+      ].map((title) => title.textContent?.trim())
+      expect(titles, id).not.toContain(category)
+      expect(titles, id).not.toContain(tab)
+    }
   })
 
   // The session list is drawn only in three columns: its settings do

@@ -1,4 +1,4 @@
-import { useCallback, useRef, type RefObject } from "react"
+import { useCallback, useRef, useState, type RefObject } from "react"
 import { focusInFront } from "../../adapters/dom/focus"
 import { useAtLeastWide } from "../../adapters/dom/width"
 import { showContent } from "../../adapters/store/commands"
@@ -24,6 +24,11 @@ export function OverviewLayer({ root }: { root: RefObject<HTMLElement | null> })
   const open = useWorkspaceSelector(selectOverviewOpen)
   const layer = useRef<HTMLDivElement>(null)
   const split = useAtLeastWide(layer, splitWidth)
+  // The list's width beside the peek, as the person dragged it; null is the
+  // even split the stylesheet draws. Held here, where the layer outlives each
+  // opening, so the overview opens as it was left for as long as the window
+  // is; it is a view's arrangement, not the workspace's state.
+  const [listWidth, setListWidth] = useState<number | null>(null)
   const stop = useRef<() => void>(() => {})
   const leave = useCallback(() => {
     dispatch(showContent({ content: "panes" }))
@@ -31,8 +36,21 @@ export function OverviewLayer({ root }: { root: RefObject<HTMLElement | null> })
     stop.current = focusInFront(root.current ?? document)
   }, [dispatch, root])
   return (
-    <div className="workspace-overview-layer" ref={layer} data-open={open || undefined}>
-      {open ? <AgentsOverview split={split} onLeave={leave} /> : null}
+    <div
+      className="workspace-overview-layer"
+      ref={layer}
+      data-open={open || undefined}
+      data-flip="slide"
+      data-flip-id="overview"
+    >
+      {open ? (
+        <AgentsOverview
+          split={split}
+          listWidth={listWidth}
+          onListWidth={setListWidth}
+          onLeave={leave}
+        />
+      ) : null}
     </div>
   )
 }

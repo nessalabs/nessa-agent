@@ -1,5 +1,5 @@
 import { useLayoutEffect } from "react"
-import { parseFlag } from "../model/window-preferences"
+import { parseFlag, parseOptIn } from "../model/window-preferences"
 import { storedPreference } from "./stored-preference"
 
 /**
@@ -14,7 +14,10 @@ import { storedPreference } from "./stored-preference"
  * - **running first** — the session list keeps running sessions in a group
  *   above the rest; off, they are listed with the rest, newest first;
  * - **picture in conversations** — a sliver of the header picture, or the
- *   night scene, at the top of each conversation pane (`HeaderSliver`).
+ *   night scene, at the top of each conversation pane (`HeaderSliver`);
+ * - **side rail** — a preview, off until turned on in Advanced ›
+ *   Experimental: the strip of places at the window's left edge
+ *   (`workspace/ui/chrome/side-rail.tsx`).
  */
 const flag = (key: string, event: string) =>
   storedPreference({
@@ -47,3 +50,9 @@ export function useDriftInEffect(): void {
     document.documentElement.dataset.drift = drift === "on" ? "drifting" : "still"
   }, [drift])
 }
+
+export const useSideRailPreference = storedPreference({
+  key: "nessa.desktop.side-rail",
+  event: "nessa:desktop-side-rail",
+  parse: parseOptIn,
+}).usePreference

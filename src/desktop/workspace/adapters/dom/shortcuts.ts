@@ -7,7 +7,12 @@
  */
 import { useEffect, useRef } from "react"
 import { isMac } from "../../../adapters/platform"
-import { chordLabel, matchesChord, type Chord } from "../../../model/keyboard"
+import {
+  chordLabel,
+  chordShortcut,
+  matchesChord,
+  type Chord,
+} from "../../../model/keyboard"
 
 export interface Binding<Command extends string> {
   readonly chord: Chord
@@ -21,6 +26,15 @@ export function labelOf<Command extends string>(
 ): string | undefined {
   const binding = bindings.find((candidate) => candidate.command === command)
   return binding ? chordLabel(binding.chord, isMac) : undefined
+}
+
+/** The first chord bound to `command`, as `aria-keyshortcuts` names it. */
+export function shortcutOf<Command extends string>(
+  bindings: readonly Binding<Command>[],
+  command: Command,
+): string | undefined {
+  const binding = bindings.find((candidate) => candidate.command === command)
+  return binding ? chordShortcut(binding.chord, isMac) : undefined
 }
 
 /**
