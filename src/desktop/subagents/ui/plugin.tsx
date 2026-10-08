@@ -1,8 +1,8 @@
 /**
  * The subagents widget: one per conversation, drawn in a pane and in the
  * window. What it answers is `subagentsWidgetState`, in that order. It has
- * no card of its own — a widget-only message is the host's title and Open —
- * and no header accessory.
+ * no card of its own — a widget-only message is the host's title and Open.
+ * Its header accessory is the conversation's subagents.
  */
 import { useMemo, useSyncExternalStore } from "react"
 import { useSubagentsPreview } from "../../adapters/window-preferences"
@@ -12,6 +12,7 @@ import { selectSessionListing, useWorkspaceSelector } from "../../workspace"
 import { useSubagentSource } from "../adapters/react/source-context"
 import { subagentsPluginId } from "../application/ports"
 import { subagentsWidgetState } from "../application/widget-state"
+import { SubagentStackAccessory } from "./subagent-stack"
 import { SubagentsPanel } from "./subagents-panel"
 
 function SubagentsPane({ id, host }: WidgetViewProps) {
@@ -38,5 +39,6 @@ export function subagentsPlugin(): NativeWidgetPlugin {
       )
     },
     views: { pane: SubagentsPane, window: SubagentsPane },
+    SessionAccessory: SubagentStackAccessory,
   }
 }

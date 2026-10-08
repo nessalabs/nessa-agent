@@ -322,9 +322,10 @@ writing the full defaults on first launch is buying.
   while the sample workspace is in use; a window on another source keeps an
   unread source and does not register the plugin. The panel (`ui/`) is the
   native `subagents` widget: a list and a read-only transcript, in a pane
-  and in the window. Counts live in `src/desktop/model/counts.ts`. The
-  preview is the window preference `useSubagentsPreview`, offered under
-  Settings › Advanced › Experimental.
+  and in the window, and the conversation's subagents in its pane header
+  (`SessionAccessory`, drawn by the workspace's slot). Counts live in
+  `src/desktop/model/counts.ts`. The preview is the window preference
+  `useSubagentsPreview`, offered under Settings › Advanced › Experimental.
 - The shared desktop light's fixed grain tile lives in
   `src/desktop/ui/ambient-grain.png`, drawn by `.desktop-grain` in the desktop
   stylesheet. It is pre-rendered to keep SVG turbulence out of runtime raster

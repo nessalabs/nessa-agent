@@ -105,6 +105,9 @@ export const css = {
   subagentScroll: "[data-subagent-scroll]", // the conversation's scroller
   subagentMessages: "[data-subagent-messages]", // the messages that scroller follows
   subagentSummary: "[data-subagent-summary]", // the list's counts
+  subagentStack: "[data-subagent-stack]", // the conversation's subagents, in its pane header
+  avatarFace: '[data-slot="random-avatar-paint"]', // one face; aria-label is its name
+  avatarMore: '[data-slot="avatar-stack-more"]', // the count of faces the stack does not show
 
   // MCP Apps (ADR 344, #349) and the fixture app the sample workspace registers (src/desktop/widgets/app/fixture/)
   appFrame: "[data-app-frame]", // an app's sandbox proxy frame; its value is the place it is drawn in
