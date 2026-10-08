@@ -6,7 +6,7 @@
     "protocolVersion": "2025-06-18",
     "transport": "streamable-http-json",
     "sessionIds": "omitted",
-    "serverSha256": "f004e0245c52209803226c6bfb61890e68f9e12e9731b6b20bef76c7924b31ac",
+    "serverSha256": "f27c6342ce351fcb565071d624185f5cc5fac4651557f262d945119d7e419c3c",
     "transportSha256": "ccdc1511691f5ee055d5681e8b2bf9d05750cf7e4c30c812090b7cb54bdc2b5d",
     "probeSha256": "892610acb6ce62ed63ae1abc50c2e5519ad69966f9e02538fb3bb23c9b3de6e3"
   },
@@ -134,7 +134,7 @@
             {
               "uri": "ui://nessa-test/chart.html",
               "mimeType": "text/html;profile=mcp-app",
-              "text": "<!doctype html><html><body><p id=chart>chart for nessa-test</p></body></html>",
+              "text": "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Chart</title>\n<style>\n  body { margin: 0; padding: 16px; font: 16px/1.4 system-ui, sans-serif; background: #fff; color: #142033; }\n  h1 { font-size: 13px; font-weight: 600; margin: 0 0 10px; }\n  #chart { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: 0; }\n</style>\n</head>\n<body data-chart-state=\"loading\">\n<h1>Chart (nessa-test)</h1>\n<p id=\"chart\"></p>\n<script>\n(function () {\n  var parentWindow = window.parent;\n  var next = 1;\n  var waiting = {};\n  var body = document.body;\n  function post(message) { parentWindow.postMessage(message, \"*\"); }\n  function ask(method, params) {\n    var id = next++;\n    post({ jsonrpc: \"2.0\", id: id, method: method, params: params });\n    return new Promise(function (resolve) { waiting[id] = resolve; });\n  }\n  function tell(method, params) { post({ jsonrpc: \"2.0\", method: method, params: params }); }\n  function seriesText(params) {\n    var series = params && params.structuredContent && params.structuredContent.series || [];\n    return series.map(function (point) { return point.name + \" \" + point.value; }).join(\", \");\n  }\n  window.addEventListener(\"message\", function (event) {\n    if (event.source !== parentWindow) return;\n    var message = event.data;\n    if (!message || message.jsonrpc !== \"2.0\") return;\n    if (message.id !== undefined && !message.method) {\n      var resolve = waiting[message.id];\n      delete waiting[message.id];\n      if (resolve) resolve(message);\n      return;\n    }\n    if (message.method === \"ui/notifications/tool-result\")\n      document.getElementById(\"chart\").textContent = seriesText(message.params);\n  });\n  function reportSize() {\n    tell(\"ui/notifications/size-changed\", {\n      width: document.documentElement.scrollWidth,\n      height: document.documentElement.scrollHeight\n    });\n  }\n  ask(\"ui/initialize\", {\n    appInfo: { name: \"Chart\", version: \"1.0.0\" },\n    appCapabilities: {},\n    protocolVersion: \"2026-01-26\"\n  }).then(function (answer) {\n    if (answer.error) { body.setAttribute(\"data-chart-state\", \"refused\"); return; }\n    body.setAttribute(\"data-chart-state\", \"live\");\n    tell(\"ui/notifications/initialized\", {});\n    reportSize();\n    new ResizeObserver(reportSize).observe(body);\n  });\n})();\n</script>\n</body>\n</html>\n",
               "_meta": {
                 "ui": {
                   "csp": {
