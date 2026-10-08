@@ -216,8 +216,11 @@ export function ItemRow({
           onKeyDown={onKeyDown}
           className={className ? `settings-row ${className}` : "settings-row"}
           data-setting={settingId}
-          data-found={found || undefined}
-          data-pending={!available || undefined}
+          // The kit's row writes its own data-found and data-pending after the
+          // props it is passed: found is its `found`, and "not available yet"
+          // (not the kit's "being applied") is ours, under a name it leaves alone.
+          found={found}
+          data-unavailable={!available || undefined}
           label={label}
           detail={detail ? <span id={detailId}>{detail}</span> : undefined}
           leading={

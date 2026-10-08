@@ -260,7 +260,9 @@ describe("what Settings offers", () => {
       ?.closest(".settings-group")
     expect(general?.textContent?.match(/Not available yet/g)).toHaveLength(1)
     // And every other control can be used.
-    const available = [...host.querySelectorAll("[data-setting]:not([data-pending])")]
+    const available = [
+      ...host.querySelectorAll("[data-setting]:not([data-pending], [data-unavailable])"),
+    ]
     expect(
       available.every((row) => row.querySelectorAll("button:disabled").length === 0),
     ).toBe(true)
