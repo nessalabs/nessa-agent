@@ -172,11 +172,13 @@ html:not(.dark) .workspace-sidebar {
 }
 
 /*
- * A running glyph at a row's end is the row's, as its count is (the kit makes
- * the count's slot transparent to the pointer): pointed at, the row keeps its
- * fill, its click and its tooltip.
+ * A count or a running glyph at a row's end is the row's, as it was inside the
+ * row's button: the kit lays it in a slot beside the control, so the slot lets
+ * the pointer through, and pointed at, the row keeps its fill, its click and
+ * its tooltip. (`data-trailing` is written by `sidebar-row.tsx` only; the tree's
+ * + is a control of its own.)
  */
-.workspace-sidebar [data-trailing="glyph"] + [data-slot="sidebar-menu-item-trailing"] {
+.workspace-sidebar [data-trailing] + [data-slot="sidebar-menu-item-trailing"] {
   pointer-events: none;
 }
 

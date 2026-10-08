@@ -596,24 +596,33 @@ const checks = {
     for (const kind of ["count", "glyph"])
       if (!onLoad.some((row) => row.besides === kind))
         failures.push(`no kit row with a ${kind} beside it on load`)
-    // Pointed at, a running glyph at a row's end leaves the row its fill.
-    const glyph = page
-      .locator(
-        `${css.sidebar} [data-trailing="glyph"] + [data-slot="sidebar-menu-item-trailing"] .workspace-status`,
-      )
-      .first()
-    if (await glyph.count()) {
-      await glyph.hover({ force: true })
+    // Pointed at, a count or a running glyph at a row's end leaves the row its fill.
+    for (const kind of ["count", "glyph"]) {
+      const beside = page
+        .locator(
+          `${css.sidebar} [data-trailing="${kind}"] + [data-slot="sidebar-menu-item-trailing"] :is(${css.countBadge}, .workspace-status)`,
+        )
+        .first()
+      if (!(await beside.count())) {
+        // The tree lays its folded summary in the kit's own badge slot, with no `data-trailing`.
+        measured.hover[`kit row under its ${kind}`] = "none on this layout"
+        if (kind === "count" || layout === "columns")
+          failures.push(`no kit row with a ${kind} at its end to point at`)
+        continue
+      }
+      await beside.hover({ force: true })
       await page.waitForTimeout(250)
-      const fill = await glyph.evaluate(
+      const fill = await beside.evaluate(
         (element, sel) =>
           getComputedStyle(element.closest(sel.kitRowFrame).querySelector(sel.kitRow))
             .backgroundColor,
         css,
       )
-      measured.hover["kit row under its glyph"] = fill
+      measured.hover[`kit row under its ${kind}`] = fill
       if (fill !== scale.hover && fill !== scale.selected)
-        failures.push(`a kit row pointed at by its glyph is ${fill}, not ${scale.hover}`)
+        failures.push(
+          `a kit row pointed at by its ${kind} is ${fill}, not ${scale.hover}`,
+        )
       await page.mouse.move(1, 1)
     }
     for (const [kind, selector] of Object.entries(rowKinds[layout] ?? {})) {
