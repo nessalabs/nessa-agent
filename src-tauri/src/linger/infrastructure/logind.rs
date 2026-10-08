@@ -110,9 +110,21 @@ pub(crate) fn linger_record(path: &Path) -> LingerObservation {
     }
 }
 
+const ACCOUNT_NAME_START: usize = 4096;
+const ACCOUNT_NAME_LIMIT: usize = 1 << 20;
+
 fn account_name(uid: u32) -> Option<String> {
+    // `erange_grows_the_buffer_until_the_name_fits` is the growth rule.
+    read_account_name(ACCOUNT_NAME_START, ACCOUNT_NAME_LIMIT, |size| {
+        passwd_name(uid, size)
+    })
+}
+
+/// Copy the account name out while `buf` is still alive. `ERANGE` means the
+/// buffer was too small. Any other status, including no such account, is no name.
+fn passwd_name(uid: u32, size: usize) -> Result<String, i32> {
     let mut pwd = std::mem::MaybeUninit::<libc::passwd>::uninit();
-    let mut buf = vec![0u8; 4096];
+    let mut buf = vec![0u8; size];
     let mut result = std::ptr::null_mut();
     // SAFETY: `pwd` and `result` are writable out-params, and `buf` is writable
     // for `buf.len()` bytes. `getpwuid_r` does not retain those pointers.
@@ -125,17 +137,42 @@ fn account_name(uid: u32) -> Option<String> {
             &mut result,
         )
     };
-    if rc != 0 || result.is_null() {
-        return None;
+    if rc != 0 {
+        return Err(rc);
+    }
+    if result.is_null() {
+        return Err(0);
     }
     // SAFETY: a non-null result points at `pwd`, and `pw_name` points into `buf`
-    // for the rest of this function. The name is copied before either is dropped.
+    // until this function returns. The `String` is that copy.
     let name = unsafe { (*result).pw_name };
     if name.is_null() {
-        return None;
+        return Err(0);
     }
     let name = unsafe { CStr::from_ptr(name) };
-    name.to_str().ok().map(str::to_string)
+    name.to_str().map(str::to_string).map_err(|_| 0)
+}
+
+fn read_account_name(
+    start: usize,
+    limit: usize,
+    mut lookup: impl FnMut(usize) -> Result<String, i32>,
+) -> Option<String> {
+    let mut size = start.max(1);
+    loop {
+        match lookup(size) {
+            Ok(name) => return Some(name),
+            Err(rc) if rc == libc::ERANGE && size < limit => {
+                let grown = size.saturating_mul(2);
+                size = if grown > size {
+                    grown.min(limit)
+                } else {
+                    limit
+                };
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 fn call_from_zbus(error: &zbus::Error) -> LingerCall {
@@ -195,6 +232,44 @@ mod tests {
         assert!(linger_path("/var/lib/systemd/linger", "lt").is_some());
         assert!(linger_path("/var/lib/systemd/linger", "../lt").is_none());
         assert!(linger_path("/var/lib/systemd/linger", "a/b").is_none());
+    }
+
+    #[test]
+    fn erange_grows_the_buffer_until_the_name_fits() {
+        let mut seen = Vec::new();
+        let name = super::read_account_name(8, 32, |size| {
+            seen.push(size);
+            if size < 32 {
+                Err(libc::ERANGE)
+            } else {
+                Ok("lt".to_string())
+            }
+        });
+        assert_eq!(name.as_deref(), Some("lt"));
+        assert_eq!(seen, vec![8, 16, 32]);
+    }
+
+    #[test]
+    fn erange_past_the_cap_is_no_name() {
+        let mut seen = Vec::new();
+        let name = super::read_account_name(16, 32, |size| {
+            seen.push(size);
+            Err(libc::ERANGE)
+        });
+        assert_eq!(name, None);
+        assert_eq!(seen, vec![16, 32]);
+    }
+
+    #[test]
+    fn the_current_account_name_is_copied_out_of_the_passwd_buffer() {
+        let uid = unsafe { libc::getuid() };
+        let name = super::account_name(uid).expect("account name");
+        let output = std::process::Command::new("id")
+            .arg("-un")
+            .output()
+            .expect("id");
+        let expected = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(name, expected.trim());
     }
 
     /// The real adapter, for the throwaway user `lt` only.
