@@ -23,8 +23,9 @@ Start with [the words](#the-words), then [the picture](#the-picture), then
 [seven situations](#seven-situations), which walk through what happens on one
 laptop, with a phone, with a home server, with another machine you can SSH
 into, with a machine that is not yours, when you build on the Mac mini and
-run the result here, and when you share one conversation with a friend. Everything after that is the
-contract behind those stories. [What we borrowed](#what-we-borrowed) says
+run the result here, and when you share one conversation with a friend. Then [what the agent gets](#what-the-agent-gets): the tools an agent is
+given once the mesh exists, and [reaching your gateway from outside](#reaching-your-gateway-from-outside).
+Everything after that is the contract behind those stories. [What we borrowed](#what-we-borrowed) says
 where the ideas come from, with sources.
 
 ## The words
@@ -251,7 +252,7 @@ surface, why), so replay shows who ran what, where, and when.
 | --- | --- |
 | Conversation, optional turn | What may run. A conversation lease covers successive turns while live; a turn lease covers one. |
 | Environment | Which environment: this process, an SSH host, or a paired principal, identified by its pinned key. |
-| Binding and model | Which harness and model the environment is to run. |
+| Work | What to run: an **agent** (binding and model) for a conversation, or a **command** (argv, working directory, timeout, captured output) for one bounded run. Both have the same lifecycle, cleanup evidence and audit; a command is the small case of the same contract, not a second mechanism. |
 | Sandbox profile | What the environment must enforce around the agent's commands: none, the harness's own sandbox with these roots and domains, or a container. The environment declares what it can enforce; a profile it cannot enforce is refused at configuration, not silently weakened. |
 | Grants | Held artifacts the environment may fetch by digest; the Nessa tools the agent may call through the relay; the policy snapshot revision to enforce before a tool runs. |
 | Deadline and revision | When it lapses without renewal; which issuance this is. |
@@ -309,6 +310,83 @@ side so nothing inbound ever opens on a machine that is not yours. A relay
 is the fallback, and it forwards TLS it cannot open because the gateway's
 key was pinned at pairing.
 
+## What the agent gets
+
+Once the mesh exists, the agent should not need to know how any of it
+works. It gets a few tools through `nessa-mcp`, the stdio MCP server that
+already carries every Nessa-provided tool ([ADR 0012](../adr/todo/0012-agent-harnesses-and-optional-tools.md)),
+and an environment is just a name it passes in. Every tool is a thin
+wrapper over a product method the gateway already authorizes; the tool
+adds no behavior, keeps `requestId` for retries, and returns typed
+refusals.
+
+| Tool | What it does | Product method behind it | Gateway checks |
+| --- | --- | --- | --- |
+| `environments.list` | The environments this conversation may use: `here`, SSH hosts, paired peers and workers, each with platform, declared sandbox profiles, reachability now, and what this caller may do there (`agent`, `command`) | `environment.list` | Caller's grants; peers filtered to what they grant this principal |
+| `thread.create` | Start a child conversation on a named environment with a prompt, a binding and a sandbox profile; returns the child's id and receipt | `conversation.create` with `environment`, under [ADR 329](../adr/todo/329-subagents.md) parent ownership | Caller's tool policy allows delegation; environment grants `agent`; budgets; parent closure fences children |
+| `run` | Run one command on a named environment with a timeout and bounded output; returns exit status, captured output, and any artifacts it published | `environment.run`: a lease whose work is a command | Caller's tool policy on the command (allowlist, deny patterns); environment grants `command`; sandbox profile; budgets; everything audited with the caller as initiator |
+| `artifacts.publish`, `artifacts.fetch` | Attach a file from the environment to the conversation by digest; fetch one by digest into the environment | The artifact channel and lease-scoped tickets | Hold ownership; per-lease byte budgets |
+| `conversation.read`, `message.send`, `turn.cancel` | Already planned under 0012: read a thread's records, leave a note, stop a turn | Existing product methods | Existing grants |
+
+The signatures are the same whatever the box: `run({environment:
+"macmini", command: ["cargo", "build", "--release"], cwd: "nessa-agent",
+timeout_s: 1200})` reads the same for `here`, for a build box over SSH,
+and for a friend's worker, and the gateway answers with the same typed
+outcomes. "Build the DMG on the Mac mini and show me the screenshots" is
+then an agent calling `environments.list`, `run` a few times, and
+`artifacts.publish`, with every step admitted, bounded and audited by the
+gateway, and the person seeing the same approval cards they see for a
+local shell command.
+
+What the gateway refuses, typed: an environment the caller has no grant
+on; a command the caller's tool policy denies; a sandbox profile the
+environment cannot enforce; a budget exceeded; an environment unreachable
+now; a parent that is closing. The agent can read the refusal and choose
+another environment or ask the person.
+
+**Why not let the agent `ssh macmini cargo build` itself?** It can, today,
+if its permission mode allows the shell command, and nothing here forbids
+a person from allowing that. But then the command runs under the agent's
+own SSH keys, outside any Nessa policy, with no audit, no artifact, no
+cleanup evidence and no per-person tool policy, and a friend driving the
+conversation would inherit your SSH access. The `run` tool is the same
+action with the gateway in the loop, which is the whole point of the
+gateway. The sandbox profile can close the direct path where that matters.
+
+## Reaching your gateway from outside
+
+A gateway listens on loopback for its own machine's surfaces and, when
+configured, on a native address for paired devices and peers. Getting a
+phone on a cellular network to that address is a reachability question,
+and Nessa's answer is to use what exists, in this order of preference:
+
+| Way | How | What Nessa adds | Trade |
+| --- | --- | --- | --- |
+| Same LAN | The phone finds the gateway by local discovery or its last address | Nothing | Works only at home |
+| Private overlay (Tailscale, a VPN) | The gateway's native listener binds its overlay address; the phone joins the same overlay | Nothing; Nessa does not know it is there | The overlay's own setup, once; strongest default |
+| A tunnel (Cloudflare Tunnel, Tailscale Funnel, ngrok) | The native listener is published at a public name; the phone connects to it | Nothing, but the listener is now internet-facing | Simplest to explain; widest exposure; the gateway must hold up on its own |
+| Nessa relay (#266) | Gateway and phone both connect outbound to a relay that pairs them by id | The relay; no inbound anywhere | Depends on a relay being run; the relay sees metadata |
+
+In every case the gateway's native listener accepts **only** what pairing
+minted. The connection is TLS with raw public keys on both sides: the
+phone pins the gateway's key at pairing, and the gateway admits a session
+only from a key it issued a credential to; every request then passes
+current credential, receiver binding and owner admission before any read,
+and Cedar before any command. An unknown key cannot complete the
+protected session. The one unauthenticated path is enrollment itself, and
+it exists only while an invitation is open: ten minutes, five attempts,
+bounded frames, a 40-bit one-use secret, then it closes. A tunnel
+therefore exposes a handshake and an enrollment window, not a product
+API, and the honest statement is that an internet-facing listener is
+exposed to denial of service and to any defect in that handshake, which is
+why the overlay is preferred and the relay exists.
+
+Today: pairing is implemented through Approved on the native listener
+(`native.listenAddress` in `config.json`); the loopback `/session` socket
+refuses anything without a minted credential; the protected native
+channel for a phone's reads is in progress (#265); the relay is #266. The
+tunnel and overlay rows need nothing from Nessa beyond that listener.
+
 ## The mesh
 
 A gateway keeps a **peer table**: for every paired device or gateway, and
@@ -326,7 +404,8 @@ Finding a peer, in order:
    pairs them by id and forwards. Move back to direct when direct works.
    (Tailscale's DERP; Syncthing's relays.)
 
-Trust never comes from the network. A peer is trusted because its key was
+A tunnel's public name or an overlay address is just another last-known
+address in that table. Trust never comes from the network. A peer is trusted because its key was
 pinned at pairing, and what it may do comes from the grants in the table,
 checked by Cedar on every command and every lease. Revoking a peer removes
 its row; its next connection is refused.
@@ -380,6 +459,58 @@ default; a peer with no grant on an id cannot tell it exists.
 - **Disclosure** follows the role: Read and Comment see the records;
   Drive additionally has its prompts become part of the conversation the
   environment sees.
+
+## What syncs, and which way
+
+Nothing syncs by default. Each gateway owns its own conversations in its
+own store, and two gateways are two authorities with two stores that are
+never merged. A conversation leaves its gateway only as a **replica** on a
+peer that was granted it and chose to follow it, and the sync engine
+replicates exactly that intersection, in one direction, from the owner to
+the follower. Execution is granted separately and per peer, so what a
+machine may *see* and what it may *run* are two different tables.
+
+Take a MacBook, a dev desktop and a phone, all paired:
+
+| From → To | What the MacBook sees of the dev desktop | What the dev desktop sees of the MacBook | What the phone sees |
+| --- | --- | --- | --- |
+| Grant (owner's choice) | All of the dev desktop's conversations, Read and Drive | Nothing | The MacBook's and the dev desktop's, Read; Drive when #267 lands |
+| Follow (follower's choice) | Only the `nessa-agent` channel; keep two weeks | Not applicable | Everything granted; keep 200 MB |
+| Replica on the follower | Those conversations' records, folded locally, kept to the follow rule | None | A cache bounded by the follow rule |
+
+And the execution table, which is independent of the one above:
+
+| Environment → Who may use it | The MacBook as environment | The dev desktop as environment |
+| --- | --- | --- |
+| The MacBook's gateway | `agent`, `command`, any declared sandbox | `agent` with a read-only tool policy; no `command`; container sandbox only |
+| The dev desktop's gateway | Nothing | `agent`, `command` |
+| The phone | Nothing | Nothing |
+
+So the MacBook can watch and drive the dev desktop's threads and can lease
+an agent onto it that may only read and respond, while the dev desktop
+can neither see the MacBook's threads nor run anything on it. Reversing
+any cell is a change to one row in the grantor's table, and a conversation
+never granted never leaves the machine it was created on.
+
+The pieces this rests on:
+
+- **Grant** (owner's table): per peer, per conversation id or per filter
+  (a channel, a project), with a role and a tool policy
+  ([Sharing a conversation](#sharing-a-conversation)). A filter is
+  evaluated at the owner on each change, so a conversation moved out of a
+  channel stops being granted.
+- **Follow** (follower's table): per peer, what of the granted set to
+  replicate and how much to keep. The sync engine's scope, generation and
+  reset receipts ([read-only sync](read-only-sync-example.md)) are keyed
+  by that choice; changing it is an explicit reset, not a silent purge.
+- **Environment policy** (environment's table): per peer, which work
+  kinds (`agent`, `command`), which sandbox profiles, which tool policy
+  ceiling, which budgets. A lease that asks for more is narrowed or
+  refused ([Leases](#leases)).
+- **Direction**: records flow owner → follower; commands flow follower →
+  owner and are admitted there; leases flow conversation authority →
+  environment and are admitted there. No table is pushed to a peer; each
+  side reads the other's grants when it connects.
 
 ## Artifacts across devices
 
@@ -490,6 +621,9 @@ locally.
 | Policy hooks | Capability reporting merged (#142); no configured pre-tool runtime | Verdicts at the gateway; pre-tool verdicts enforced by the environment's SDK from the snapshot the lease carries, with evidence | SDK application owner (0014) | #130 slices |
 | Extensions | MCP Apps in a sandboxed iframe; one MCP connection per harness session; remote MCP with gateway-owned OAuth | Unchanged; an extension holds only the opening's token | Gateway `mcp_servers`, `mcp_authorization` | 344, 392 |
 | Artifacts | Held by digest; single-use upload tickets; local manifest and range reads; uploads from surfaces only | An artifact channel from environments (sftp over SSH; bounded stream over a paired connection); lease-scoped tickets for environments; protected sync to devices | Gateway `attachments` | #273; step 8 |
+| Agent tools for the mesh | `nessa-mcp` serves shell and other Nessa tools locally; no environment argument | `environments.list`, `thread.create` with an environment, `run` on an environment, `artifacts.publish`/`fetch`, all thin over product methods and validated by the gateway | `nessa-mcp`; gateway `environment.*` methods | 0012; steps 8, 9 |
+| Reaching the gateway from outside | Loopback `/session`; native listener with pairing to Approved when configured | Overlay or tunnel are the person's choice and need nothing new; the relay is #266; the native listener admits only minted credentials on both paths | Gateway `device_pairing`, composition | #263, #265, #266 |
+| Directional sync | The device client follows what its credential grants, all of it | Follow rules per peer (which granted conversations, how much to keep) beside grants per peer (which conversations, which role); two gateways never merge stores; environment policy per peer and per work kind | `nessa-client-core` follow table; gateway grants; sync engine scope | #257, #262; steps 2, 9 |
 | Sharing | Grants are per principal across its organization's conversations; devices get `conversation.read` on all of the owner's | Grants per conversation id with a role (Read, Comment, Drive) and a per-principal tool policy revision carried on each accepted turn | Gateway `auth`, `conversation`; 0014 policy owner | 0011 phase B; #130 slices; step 9 |
 | Backup and restore | None | Export cut with deletion inventory; quarantined restore | New gateway module | #270 |
 | Budgets | Every lane bounded; [limits.md](../limits.md) rendered from owners | Per-lease, per-peer and per-organization rows in the same table | `config.json`, protocol fixed values | Each slice |
@@ -624,6 +758,16 @@ needs them:
 - **Share one conversation, not your machine.** Pick a person, a role and
   a tool policy in the conversation's header. They see that thread and
   nothing else, and the audit says what they did.
+- **Sync is a choice, both ends.** See your dev desktop's threads on the
+  MacBook and not the other way around; follow one channel on the phone
+  and everything on the laptop. Each is one row, and nothing leaves a
+  machine that was not granted.
+- **The agent gets names, not plumbing.** `run` on `macmini`, `thread.create`
+  on `org-workers`: the same signature everywhere, and the gateway says no
+  with a reason the agent can act on.
+- **Your phone reaches home your way.** Tailscale if you have it, a
+  tunnel if you want it simple, the relay when neither; the gateway
+  accepts only the credential it minted for that phone regardless.
 - **Nothing to run that is not already running.** No daemon on the phone
   beyond the app, no VPN to install, no server on the build box until the
   first lease asks for it.
@@ -644,8 +788,8 @@ pairing of gateways because it needs no new trust.
 | 5. Backup and quarantined restore (#270) | A lost gateway is recoverable | Restore drill proves deletion boundaries, refuses ambiguous authority |
 | 6. Artifacts over the paired channel (#273) | Images and files reach devices, verified | Digest verification; bulk audit bounded |
 | 7. `Environment` port and local leases (new issue) | Today's behavior behind one typed port; a lease recorded for every run; per-binding sandbox-profile declaration | No behavior change; identical records and cleanup evidence before and after |
-| 8. SSH environments (new issue) | `nessa env serve` over SSH stdio; "run on buildbox" in the composer; the artifact channel from an environment (situation 6) | Lease ends on Stop, close and connection loss with cleanup evidence; late events dropped; first-use install verified on macOS and Linux hosts; a DMG built remotely downloads and verifies by digest |
-| 9. Peer gateways and per-conversation sharing (new issue) | Gateway-to-gateway pairing; outbound environment connection; relay fallback; local discovery; Share on one conversation with role and tool policy (situation 7) | Narrowed grants recorded; a peer cannot hold both authorities; revocation refuses the next connection; a shared turn runs under the sharer's policy with its denials attributed to them; an ungranted id is invisible |
+| 8. SSH environments (new issue) | `nessa env serve` over SSH stdio; "run on buildbox" in the composer; the artifact channel from an environment (situation 6); `environments.list` and `run` in `nessa-mcp` | Lease ends on Stop, close and connection loss with cleanup evidence; late events dropped; first-use install verified on macOS and Linux hosts; a DMG built remotely downloads and verifies by digest; `run` refused by tool policy and by an absent grant, with the caller as initiator in the audit |
+| 9. Peer gateways and per-conversation sharing (new issue) | Gateway-to-gateway pairing; outbound environment connection; relay fallback; local discovery; Share on one conversation with role and tool policy (situation 7); `thread.create` on a peer under ADR 329 | Narrowed grants recorded; a peer cannot hold both authorities; revocation refuses the next connection; a shared turn runs under the sharer's policy with its denials attributed to them; an ungranted id is invisible |
 | 10. Hosted workers (new issue) | Environment-only gateways per organization in containers | Two-organization isolation across leases, artifacts, tools and audit |
 | 11. Hosted identity adapter (if hosted) | Login and membership from a provider behind Nessa's model | The adapter contract suite in the identity direction |
 
@@ -717,6 +861,13 @@ Named so they are not mistaken for settled:
 - **Artifact channel bounds and resumption.** Chunk size, per-lease
   budgets, and resuming a large transfer by digest after a dropped SSH
   connection.
+- **Command leases.** Output capture limits, how a command's artifacts
+  are named, and whether a long command may outlive the tool call that
+  started it (a receipt the agent polls) or must be bounded by it.
+- **Listener hardening for a tunnel.** What the native handshake must
+  withstand before a public tunnel is recommended rather than merely
+  possible: rate limits per source, invitation-closed behavior, and a
+  measured handshake budget.
 - **Delegating to an environment.** How a parent names the child's
   environment under ADR 329, and how the child's artifacts are delivered
   as results.

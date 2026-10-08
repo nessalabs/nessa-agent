@@ -51,9 +51,9 @@ authority**: it holds its provider credentials, supervises the harness
 processes, enforces the sandbox it declares, admits or narrows a lease
 under its own policy, and keeps its own audit. A **lease** is the only way
 execution moves: a semantic record in the conversation's stream with an
-`ActionContext`, naming the environment, the binding and model, a sandbox
-profile the environment must enforce or refuse, grants, a deadline and a
-revision. One conversation holds at most one live lease. A lease carries no
+`ActionContext`, naming the environment, the work (an agent with its binding and model,
+or one bounded command), a sandbox profile the environment must enforce or
+refuse, grants, a deadline and a revision. One conversation holds at most one live lease. A lease carries no
 record-write right and no approval right; the gateway commits what a live
 lease reports and drops the rest with evidence; ending a lease requires
 cleanup evidence or the turn is `interrupted`. There is one lease contract
@@ -66,8 +66,17 @@ by the conversation, carried on an artifact channel beside the lease's
 control channel, verified on receipt. Access to a conversation is granted
 **per conversation id** with a role (Read, Comment, Drive) and a **tool
 policy per principal**, carried on each accepted turn and enforced as 0014
-verdicts attributed to that turn's initiator. Surfaces fold committed
-records and send intents; replicas have no role and no grants; a gateway's mesh is
+verdicts attributed to that turn's initiator. The agent reaches all of this through `nessa-mcp` tools
+(`environments.list`, `thread.create`, `run`, `artifacts.publish`) that are
+thin over product methods, take an environment by name, and are admitted,
+bounded and audited by the gateway like any other command. The gateway's
+native listener admits only credentials pairing minted, over mutual
+raw-key TLS; how a phone reaches it (LAN, an overlay, a tunnel, the relay)
+is the person's choice and adds nothing to Nessa. Nothing syncs by default: a conversation leaves its gateway only as a
+replica on a peer that was granted it and chose to follow it, records flow
+owner to follower, and what a peer may see and what it may run are two
+separate per-peer tables. Surfaces fold committed records and send
+intents; replicas have no role and no grants; a gateway's mesh is
 its table of paired and named peers with pinned keys and last addresses,
 riding on whatever network exists. One binary runs any role by
 configuration; a hosted worker is `nessa env serve` in a container; a home
@@ -112,6 +121,22 @@ are identical wherever the work ran.
   who may read one thread would see the rest. A grant names one
   conversation id; the tool policy names the person, so the same thread
   runs with your tools for you and narrowed tools for them.
+- **Let the agent reach other machines with its own shell and SSH keys.**
+  Works today where permissions allow, and is not forbidden; but it runs
+  outside policy, audit, artifacts and cleanup, and a person sharing a
+  conversation would share their SSH access with it. The `run` tool is
+  the same action with the gateway in the loop.
+- **A Nessa-operated tunnel or ingress as the standard way in.** Would
+  make the phone work without an overlay, at the cost of operating an
+  internet-facing service and hardening the native handshake for it. The
+  listener accepts only minted credentials either way; the overlay is the
+  recommended default, the tunnel is allowed, and the relay (#266) is the
+  outbound-only option when neither fits.
+- **Sync everything between a person's own gateways.** Simplest to
+  explain, but it makes every machine hold every thread and makes two
+  stores that must agree, which 0009 refuses. Grants and follow rules per
+  peer keep one owner per conversation and let a dev desktop stay
+  invisible to a laptop, or the reverse, by one row.
 - **A relay that stores a catch-up feed.** Better offline reads, but a
   relay that holds records is a replica with an address, and the trust
   statement changes. The first relay forwards opaque TLS and stores nothing.
@@ -125,7 +150,8 @@ one binary's environment role; "run on buildbox" needs nothing a developer
 does not already have; a DMG built on the Mac mini is a verified download
 on every surface and the next turn can open it here; one thread can be
 shared with one person under narrowed tools without exposing anything
-else; every transcript everywhere is one fold of one
+else; an agent asks for a box by name and gets the same answer shapes
+everywhere; every transcript everywhere is one fold of one
 record stream. Phone sync ships before any remote environment exists, and
 SSH environments ship before any new trust is built. Harder: the gateway
 stays a single point per organization, so its availability is the
@@ -136,7 +162,10 @@ environment can prove, and today that is "harness default"; a tool policy
 can gate only what the binding's permission exchange gates, and the share
 dialog must say which tools that excludes; first-use
 install over SSH and version skew between gateway and environment are new
-operational surface. We accept extracting the port with no behavior change
+operational surface; a command lease needs output, lifetime and artifact
+rules of its own; and a listener published through a tunnel must be
+hardened and measured before it is recommended rather than merely
+possible. We accept extracting the port with no behavior change
 before any wire is designed. Signs this has stopped being right: a grant
 that lets a surface run a tool, a path that commits a record without a live
 lease, a conversation found in two streams, a file byte crossing the lease's
