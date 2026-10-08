@@ -5,7 +5,7 @@
   "browser_relationship": "Final commit changes only test import spelling; production/UI/scripts unchanged. No browser result relabeled as a new run.",
   "historical_probes_source": "ee798344ddf921f5a60abd97ea7e5b0e547f7c36",
   "broad_suite_source": "f5f4f2b5b1fd04796301383dd0e73bb93eddc923",
-  "review": "R1 reports included; fresh R2 and current hosted CI pending at publication.",
+  "review": "Fresh R2 full review on155: no findings at any priority. R1 imports nit corrected; current hosted CI and external reviews pending at publication.",
   "excluded": "Executables, other screenshots and older raw browser bundles retained locally; published two genuine small MCP app scope-refusal screenshots.",
   "files": [
     {
@@ -132,6 +132,11 @@
       "file": "independent-inspection/ee798-browser-inspection.json",
       "bytes": 890,
       "sha256": "094d9443cc7eb5eabdca017f5163e838b10cccd8ebc98e905a8ac182f5baeb03"
+    },
+    {
+      "file": "independent-inspection/review-r2-final.md",
+      "bytes": 12241,
+      "sha256": "a2d066f70a445f62d55cd5a46c5ec0549cfdfcff8f6855946b43ad1e3c8779e4"
     },
     {
       "file": "independent-inspection/restack-source-identity.json",
