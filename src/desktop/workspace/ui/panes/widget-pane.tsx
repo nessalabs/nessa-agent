@@ -13,15 +13,14 @@ import {
 } from "../../../widgets"
 import { paneScope, useEscapeScope } from "../../adapters/dom/widget-escape"
 import { focusedPaneAttribute } from "../../adapters/dom/focus"
-import { closePane, openBeside } from "../../adapters/store/commands"
+import { openBeside } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
-import { selectFocusedPaneKey, selectPaneClosable } from "../../adapters/store/selectors"
+import { selectFocusedPaneKey } from "../../adapters/store/selectors"
 import { usePaneWidgetHost } from "../../adapters/store/widget-hosts"
 import type { PaneFrame } from "../../../split-panes"
 import type { PaneKey } from "../../../split-panes/model/pane-layout"
 import { IconButton } from "../../../ui/icon-button"
-import { useWorkspaceFrame } from "../workspace-frame"
-import { headerBar } from "./header-bar"
+import { ClosePaneButton, PaneHeaderFrame } from "./pane-header-frame"
 import { usePaneFocus } from "./use-pane-focus"
 import { WidgetTrail } from "./widget-trail"
 
@@ -86,14 +85,11 @@ function WidgetPaneParts({
   plugin: WidgetPlugin | undefined
 }) {
   const dispatch = useWorkspaceDispatch()
-  const shortcuts = useWorkspaceFrame()
   const focusHandlers = usePaneFocus(pane)
   const focused = useWorkspaceSelector((state) => selectFocusedPaneKey(state) === pane)
-  const closable = useWorkspaceSelector((state) => selectPaneClosable(state, pane))
   const origin = widgetOrigin(answer)
   const title = widgetTitle(answer)
   const host = usePaneWidgetHost(pane, widget, origin, steps)
-  const bar = headerBar({ pane, multi })
   // Back to the conversation: focused where it is, or opened beside this pane.
   const toOrigin = useCallback(
     (sessionId: string) => dispatch(openBeside({ sessionId, target: pane })),
@@ -110,38 +106,27 @@ function WidgetPaneParts({
       aria-label={title}
       {...focusHandlers}
     >
-      <header className="workspace-pane-header" {...bar.bar}>
-        <div className="workspace-pane-name" data-shown>
-          <WidgetTrail origin={origin} title={title} onOrigin={toOrigin} />
-        </div>
-        <span className="workspace-spacer" {...bar.spacer} />
-        <div className="workspace-pane-actions">
-          {offersWindow(answer, offeredBy(plugin)) ? (
-            <IconButton
-              icon="maximize"
-              label="Open in Window"
-              draggable={false}
-              onClick={(event) => {
-                event.stopPropagation()
-                host.open("window")
-              }}
-            />
-          ) : null}
-          <IconButton
-            icon="close"
-            label="Close Pane"
-            shortcut={shortcuts.shortcut("closePane")}
-            draggable={false}
-            data-reserved={!closable || undefined}
-            tabIndex={closable ? 0 : -1}
-            aria-hidden={!closable || undefined}
-            onClick={(event) => {
-              event.stopPropagation()
-              if (closable) dispatch(closePane({ pane }))
-            }}
-          />
-        </div>
-      </header>
+      <PaneHeaderFrame
+        pane={pane}
+        multi={multi}
+        name={<WidgetTrail origin={origin} title={title} onOrigin={toOrigin} />}
+        actions={
+          <>
+            {offersWindow(answer, offeredBy(plugin)) ? (
+              <IconButton
+                icon="maximize"
+                label="Open in Window"
+                draggable={false}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  host.open("window")
+                }}
+              />
+            ) : null}
+            <ClosePaneButton pane={pane} />
+          </>
+        }
+      />
       <div className="workspace-pane-body" data-split-through>
         <WidgetBody
           id={widget.id}

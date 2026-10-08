@@ -7,16 +7,14 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "../../../ui/menu"
-import { closePane } from "../../adapters/store/commands"
-import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
-import { selectPaneClosable, selectSession } from "../../adapters/store/selectors"
 import type { PaneKey } from "../../../split-panes/model/pane-layout"
 import { AgentTile } from "../chrome/agent-tile"
 import { IconButton } from "../../../ui/icon-button"
 import { StatusGlyph } from "../chrome/status-glyph"
-import { useWorkspaceFrame } from "../workspace-frame"
-import { headerBar } from "./header-bar"
 import { PaneMenuItems } from "./pane-menu"
+import { ClosePaneButton, PaneHeaderFrame } from "./pane-header-frame"
+import { useWorkspaceSelector } from "../../adapters/store/hooks"
+import { selectSession } from "../../adapters/store/selectors"
 import { SessionAccessories } from "./session-accessories"
 import { tooltip } from "../../../ui/tooltip"
 import { useChooseHeaderPicture } from "../../../adapters/header-image"
@@ -46,7 +44,6 @@ export const PaneHeader = memo(function PaneHeader({
   multi: boolean
   titleShown: boolean
 }) {
-  const dispatch = useWorkspaceDispatch()
   // Why a picture chosen from this pane's menu was not taken, said briefly in
   // its header: the menu that asked is gone by the time the file dialog answers.
   const [refusal, setRefusal] = useState<string | null>(null)
@@ -62,68 +59,61 @@ export const PaneHeader = memo(function PaneHeader({
     const timer = window.setTimeout(() => setRefusal(null), headerImageRefusalMs)
     return () => window.clearTimeout(timer)
   }, [refusal])
-  const frame = useWorkspaceFrame()
   const session = useWorkspaceSelector((state) => selectSession(state, sessionId))
   const title = session?.title ?? "New session"
   const shown = titleShown && session !== undefined
-  // The last pane closes back to a new session's home; a home itself has nothing to close.
-  const closable = useWorkspaceSelector((state) => selectPaneClosable(state, pane))
-  const bar = headerBar({ pane, multi })
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <header className="workspace-pane-header" {...bar.bar}>
-          <div
-            className="workspace-pane-name"
-            data-shown={shown || undefined}
-            aria-hidden={!shown}
-          >
-            {session ? <AgentTile model={session.model} size={16} /> : null}
-            <span className="workspace-pane-title workspace-truncate" {...tooltip(title)}>
-              {title}
-            </span>
-            {session ? <StatusGlyph status={session.status} /> : null}
-          </div>
-          <span className="workspace-spacer" {...bar.spacer} />
-          <SessionAccessories sessionId={sessionId} />
-          {refusal ? (
-            <span className="workspace-pane-refusal" role="status">
-              {refusal}
-            </span>
-          ) : null}
-          <div className="workspace-pane-actions">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <IconButton
-                  icon="moreHorizontal"
-                  label="Pane Actions"
-                  draggable={false}
-                />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" sideOffset={6}>
-                <PaneMenuItems
-                  pane={pane}
-                  sessionId={sessionId}
-                  moves={false}
-                  onChooseHeaderPicture={choosePicture}
-                />
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <IconButton
-              icon="close"
-              label="Close Pane"
-              shortcut={frame.shortcut("closePane")}
-              draggable={false}
-              data-reserved={!closable || undefined}
-              tabIndex={closable ? 0 : -1}
-              aria-hidden={!closable || undefined}
-              onClick={(event) => {
-                event.stopPropagation()
-                if (closable) dispatch(closePane({ pane }))
-              }}
-            />
-          </div>
-        </header>
+        <PaneHeaderFrame
+          pane={pane}
+          multi={multi}
+          nameShown={shown}
+          name={
+            <>
+              {session ? <AgentTile model={session.model} size={16} /> : null}
+              <span
+                className="workspace-pane-title workspace-truncate"
+                {...tooltip(title)}
+              >
+                {title}
+              </span>
+              {session ? <StatusGlyph status={session.status} /> : null}
+            </>
+          }
+          accessories={
+            <>
+              <SessionAccessories sessionId={sessionId} />
+              {refusal ? (
+                <span className="workspace-pane-refusal" role="status">
+                  {refusal}
+                </span>
+              ) : null}
+            </>
+          }
+          actions={
+            <>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <IconButton
+                    icon="moreHorizontal"
+                    label="Pane Actions"
+                    draggable={false}
+                  />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" sideOffset={6}>
+                  <PaneMenuItems
+                    pane={pane}
+                    sessionId={sessionId}
+                    moves={false}
+                    onChooseHeaderPicture={choosePicture}
+                  />
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <ClosePaneButton pane={pane} />
+            </>
+          }
+        />
       </ContextMenuTrigger>
       <ContextMenuContent>
         <PaneMenuItems

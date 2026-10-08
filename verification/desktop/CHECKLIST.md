@@ -992,6 +992,12 @@ it is redesigned on its own branch.
   `--desktop-card-rim`. At the base commit the four had four edges (1px at
   4%, 1px `--desktop-rim`, 0.5px at 9% and at 10%). Settings' cards are left
   to its redesign; warm edges (a review, the peek's request) are their own.
+- [ ] **A session's pane, a widget's pane and the window share one header
+  bar (#657).** `panes/pane-header-frame.tsx`: name, spacer, what is added,
+  actions, with `headerBar`'s drag attributes; a pane's × keeps its room
+  (`ClosePaneButton`). _Check:_ `pane-header-frame.test.tsx`; the markup of
+  every header is unchanged from the base (scratch comparison in #657's pull
+  request); `drag.mjs`, `widgets.mjs` and `safe-area.mjs` hold the behaviour.
 
 ## Menus and tooltips
 
