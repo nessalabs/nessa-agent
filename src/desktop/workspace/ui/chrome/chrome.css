@@ -162,13 +162,30 @@
   background: color-mix(in oklab, var(--foreground) 24%, transparent);
 }
 
-.workspace-status[data-status="needs-you"]::before {
+/* A lit point: what waits on the person in amber, what is unread in the running light. */
+.workspace-status:is([data-status="needs-you"], [data-status="unread"])::before {
   content: "";
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--desktop-needs);
-  box-shadow: 0 0 8px color-mix(in oklab, var(--desktop-needs) 55%, transparent);
+  background: var(--status-light);
+  box-shadow: 0 0 8px
+    color-mix(in oklab, var(--status-light) var(--status-glow), transparent);
+}
+
+.workspace-status[data-status="needs-you"] {
+  --status-light: var(--desktop-needs);
+  --status-glow: 55%;
+}
+
+.workspace-status[data-status="unread"] {
+  --status-light: var(--desktop-run);
+  --status-glow: 60%;
+}
+
+/* At its point's own width, where a line of words starts at the point. */
+.workspace-status[data-flush] {
+  margin-inline: -2px;
 }
 
 /*

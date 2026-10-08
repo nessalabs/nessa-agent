@@ -8,6 +8,7 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react"
+import { StatusGlyph } from "../chrome/status-glyph"
 import { EmptyState } from "@nessa-ui/react/empty-state"
 import { flushSync } from "react-dom"
 import { reducedMotion } from "../../../adapters/motion-preference"
@@ -865,6 +866,8 @@ function Groups({
       {glance.needsYou.length > 0 ? (
         <section className="agents-overview-group" aria-labelledby="agents-needs-you">
           <h2 id="agents-needs-you" data-reflow="title:needs-you">
+            {/* The page's one warm point: what waits on the person. */}
+            <StatusGlyph status="needs-you" flush decorative />
             Needs you
           </h2>
           <ul role="list" className="agents-overview-list">

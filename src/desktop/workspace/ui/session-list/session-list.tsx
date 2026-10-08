@@ -26,6 +26,7 @@ import { sessionTime } from "../../model/time-labels"
 import { sameWords } from "../../model/transcript"
 import { paneItemKey, sessionItem } from "../../model/pane-item"
 import { AgentTile } from "../chrome/agent-tile"
+import { StatusGlyph } from "../chrome/status-glyph"
 import { ColumnHeader } from "../../../ui/column-header"
 import { IconButton } from "../../../ui/icon-button"
 import { ListRow } from "../../../ui/list-row"
@@ -210,11 +211,7 @@ const SessionRow = memo(function SessionRow({
             actions.activate(event, session.id)
           }}
           leading={<AgentTile model={session.model} size={22} />}
-          marker={
-            session.unread ? (
-              <span className="workspace-unread" aria-label="Unread" />
-            ) : null
-          }
+          marker={session.unread ? <StatusGlyph status="unread" flush /> : null}
           title={session.title}
           trailing={<SessionTime at={session.updatedAt} />}
           // A short first message is the title too; it is said once.

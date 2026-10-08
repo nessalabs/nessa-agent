@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { Badge } from "@nessa-ui/react/badge"
 import { SidebarMenuItem } from "@nessa-ui/react/sidebar"
 import { DesktopIcon } from "../../../ui/icons"
 import { tooltip } from "../../../ui/tooltip"
@@ -56,9 +57,14 @@ export function SidebarRow({
       icon={<SidebarRowIcon name={icon} />}
       badge={
         badge ? (
-          <span className="workspace-badge" data-tone={badgeTone} aria-label={badgeLabel}>
+          <Badge
+            variant="secondary"
+            className="workspace-badge"
+            data-tone={badgeTone}
+            aria-label={badgeLabel}
+          >
             {badge}
-          </span>
+          </Badge>
         ) : undefined
       }
       trailing={!badge && running ? <StatusGlyph status="running" /> : undefined}

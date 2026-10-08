@@ -974,6 +974,16 @@ it is redesigned on its own branch.
   shell's notes); `gateway-states.mjs` reads the workspace's sentence from the
   kit's title. Rule: `styles.css` › Empty states. Settings' own are left to
   its redesign.
+- [ ] **Counts are the kit's `Badge`; lit points are `StatusGlyph`'s (#657).**
+  A sidebar row's count is the kit's `Badge` as the row's caption (16px tall,
+  at least 18 wide, no border, the needs light for what waits); the session
+  list's unread point and the overview's "Needs you" point are
+  `StatusGlyph`'s 6px points (`unread`, `needs-you`; `flush` where words start
+  at the point, `decorative` beside words that say it). _Check:_
+  `shared-controls.mjs` (`badges`, on load and in the overview);
+  `status-glyph.test.tsx` for what each says. Rules: `source-list.css` ›
+  `.workspace-badge`, `chrome.css` › `.workspace-status`. At the base commit
+  the unread point and the heading's point were drawn by their own rules.
 
 ## Menus and tooltips
 

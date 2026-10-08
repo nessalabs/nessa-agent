@@ -291,16 +291,6 @@ html:not(.dark) .agents-overview-surface {
   user-select: none;
 }
 
-/* The page's one warm point: what waits on the person. */
-#agents-needs-you::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--desktop-needs);
-  box-shadow: 0 0 8px color-mix(in oklab, var(--desktop-needs) 55%, transparent);
-}
-
 /* ——— Working and finished: one quiet grouped list ——— */
 
 .agents-overview-list {

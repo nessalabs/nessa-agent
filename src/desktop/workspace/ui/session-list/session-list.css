@@ -222,15 +222,6 @@
   align-self: center;
 }
 
-.workspace-unread {
-  width: 6px;
-  height: 6px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--desktop-run);
-  box-shadow: 0 0 8px color-mix(in oklab, var(--desktop-run) 60%, transparent);
-}
-
 .workspace-session time {
   color: var(--desktop-faint);
   font-size: var(--desktop-text-caption);

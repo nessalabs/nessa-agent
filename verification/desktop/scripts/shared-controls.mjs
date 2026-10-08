@@ -264,6 +264,65 @@ function measureEmptyStates() {
   return { failures, seen }
 }
 
+/**
+ * The window's counts and lit points: a count is the kit's `Badge` skinned as
+ * a row's caption (`source-list.css`), a point is `StatusGlyph`'s — 6px, in
+ * the needs or the running light, wherever it stands. In the page.
+ */
+function measureBadges() {
+  const probe = document.createElement("div")
+  document.querySelector("[data-surface]").append(probe)
+  const read = (value) => {
+    probe.style.background = value
+    return getComputedStyle(probe).backgroundColor
+  }
+  const light = {
+    "needs-you": read("var(--desktop-needs)"),
+    unread: read("var(--desktop-run)"),
+  }
+  probe.remove()
+  const failures = []
+  const shown = (element) => element.getClientRects().length > 0
+  const counts = [...document.querySelectorAll(".workspace-badge")].filter(shown)
+  for (const count of counts) {
+    const box = count.getBoundingClientRect()
+    const style = getComputedStyle(count)
+    const words = count.textContent.trim()
+    if (Math.abs(box.height - 16) > 0.5)
+      failures.push(`count ${words}: ${box.height}px tall, not 16`)
+    if (box.width < 17.5) failures.push(`count ${words}: ${box.width}px wide, under 18`)
+    if (style.borderTopWidth !== "0px")
+      failures.push(`count ${words}: a ${style.borderTopWidth} border`)
+    if (count.dataset.tone === "needs" && style.color !== light["needs-you"])
+      failures.push(`count ${words}: ink ${style.color}, not the needs light`)
+  }
+  const points = [
+    ...document.querySelectorAll(
+      '.workspace-status:is([data-status="needs-you"], [data-status="unread"])',
+    ),
+  ].filter(shown)
+  for (const point of points) {
+    const dot = getComputedStyle(point, "::before")
+    const where = point.closest("h2, [data-session-row], [data-row], [role='option']")
+    const name = `${point.dataset.status} point in "${(where?.textContent ?? "").trim().slice(0, 30)}"`
+    if (dot.width !== "6px" || dot.height !== "6px")
+      failures.push(`${name}: ${dot.width} by ${dot.height}, not 6px`)
+    if (dot.backgroundColor !== light[point.dataset.status])
+      failures.push(`${name}: ${dot.backgroundColor}, not its light`)
+  }
+  // The classes the window drew its own point and count with, before.
+  for (const old of document.querySelectorAll(".workspace-unread"))
+    failures.push(`"${old.outerHTML.slice(0, 60)}" is not StatusGlyph`)
+  const header = document.querySelector("#agents-needs-you")
+  if (header && getComputedStyle(header, "::before").content !== "none")
+    failures.push("the overview's Needs you heading draws its own point")
+  return {
+    failures,
+    counts: counts.length,
+    points: points.map((point) => point.dataset.status),
+  }
+}
+
 const rowKinds = {
   columns: {
     "sidebar row": ".workspace-sidebar [data-slot='sidebar-menu-item-row'] > [data-size]",
@@ -322,6 +381,17 @@ const checks = {
         .catch(() => {})
     }
     return { failures, measured: { inWindow, inSettings, inClassic } }
+  },
+  badges: async (page) => {
+    const failures = []
+    const onLoad = await page.evaluate(measureBadges)
+    failures.push(...onLoad.failures)
+    if (onLoad.counts === 0) failures.push("no count in the sidebar")
+    await page.keyboard.press(keys.overview)
+    await need(page, "#agents-needs-you", "the overview's Needs you heading")
+    const inOverview = await page.evaluate(measureBadges)
+    failures.push(...inOverview.failures.map((f) => `in the overview: ${f}`))
+    return { failures, measured: { onLoad, inOverview } }
   },
   empty: async (page, { layout, open }) => {
     const failures = []
@@ -425,7 +495,11 @@ await main(
       only: { type: "string" },
     },
     help: `
-Checks, per engine and layout (--only empty,identity,keys,rows):
+Checks, per engine and layout (--only badges,empty,identity,keys,rows):
+  badges     every count is the kit's Badge as a row's caption (16px tall, at
+             least 18 wide, no border, the needs light for what waits); every
+             lit point — unread, needs you, the overview's heading included —
+             is StatusGlyph's 6px point in its light. On load and in the overview.
   empty      every empty state — the session list's with no match, the classic
              shell's notes — is the kit's EmptyState in the window's type: a
              quiet one faint footnote, a titled one at reading size, 600.
