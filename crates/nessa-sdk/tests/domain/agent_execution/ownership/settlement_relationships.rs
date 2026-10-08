@@ -554,34 +554,11 @@ fn cyclic_restored_ancestry_keeps_its_first_refusal_and_returns_with_completion(
         assert_eq!(restored.snapshot(), history);
         return;
     }
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "domain::agent_execution::ownership::settlement_relationships::cyclic_restored_ancestry_keeps_its_first_refusal_and_returns_with_completion",
-            "--nocapture",
-        ])
-        .env(CHILD, "1")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    let returned = loop {
-        if child.try_wait().unwrap().is_some() {
-            break true;
-        }
-        if std::time::Instant::now() >= deadline {
-            child.kill().unwrap();
-            break false;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    };
-    let output = child.wait_with_output().unwrap();
-    eprintln!("child stdout: {}", String::from_utf8_lossy(&output.stdout));
-    eprintln!("child stderr: {}", String::from_utf8_lossy(&output.stderr));
-    assert!(
-        returned && output.status.success(),
-        "public restore must return its typed structural refusal after the accepted control"
+    crate::subprocess::run(
+        "domain::agent_execution::ownership::settlement_relationships::cyclic_restored_ancestry_keeps_its_first_refusal_and_returns_with_completion",
+        CHILD,
+        std::time::Duration::from_secs(3),
+        Some("accepted completed control; restoring actual ancestry cycle"),
     );
 }
 

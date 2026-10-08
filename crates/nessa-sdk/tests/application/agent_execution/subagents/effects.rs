@@ -414,27 +414,12 @@ fn panicking_caller_waker_and_payload_do_not_strand_other_close_waiters() {
             });
         return;
     }
-    let log_path =
-        std::env::temp_dir().join(format!("nessa-settlement-waker-{}.log", std::process::id()));
-    let log = std::fs::File::create(&log_path).unwrap();
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact", "application::agent_execution::subagents::effects::panicking_caller_waker_and_payload_do_not_strand_other_close_waiters", "--nocapture"]).env(CHILD, "1").stdout(log.try_clone().unwrap()).stderr(log).spawn().unwrap();
-    let started = std::time::Instant::now();
-    loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            assert!(
-                status.success(),
-                "waker child failed {status}: {}",
-                std::fs::read_to_string(&log_path).unwrap()
-            );
-            break;
-        }
-        if started.elapsed() > Duration::from_secs(8) {
-            child.kill().unwrap();
-            let _ = child.wait();
-            panic!("waker child timed out");
-        }
-        std::thread::yield_now();
-    }
+    crate::subprocess::run(
+        "application::agent_execution::subagents::effects::panicking_caller_waker_and_payload_do_not_strand_other_close_waiters",
+        CHILD,
+        Duration::from_secs(8),
+        None,
+    );
 }
 
 #[tokio::test]
@@ -655,27 +640,10 @@ fn panicking_caller_waker_drop_does_not_strand_registered_close_waiters() {
             });
         return;
     }
-    let log_path = std::env::temp_dir().join(format!(
-        "nessa-settlement-waker-drop-{}.log",
-        std::process::id()
-    ));
-    let log = std::fs::File::create(&log_path).unwrap();
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact", "application::agent_execution::subagents::effects::panicking_caller_waker_drop_does_not_strand_registered_close_waiters", "--nocapture"]).env(CHILD,"1").stdout(log.try_clone().unwrap()).stderr(log).spawn().unwrap();
-    let started = std::time::Instant::now();
-    loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            assert!(
-                status.success(),
-                "waker Drop child failed {status}: {}",
-                std::fs::read_to_string(&log_path).unwrap()
-            );
-            break;
-        }
-        if started.elapsed() > Duration::from_secs(8) {
-            child.kill().unwrap();
-            let _ = child.wait();
-            panic!("waker Drop child timed out");
-        }
-        std::thread::yield_now();
-    }
+    crate::subprocess::run(
+        "application::agent_execution::subagents::effects::panicking_caller_waker_drop_does_not_strand_registered_close_waiters",
+        CHILD,
+        Duration::from_secs(8),
+        None,
+    );
 }

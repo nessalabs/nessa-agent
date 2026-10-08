@@ -214,25 +214,10 @@ fn panicking_gate_join_waker_drop_is_contained_in_owned_publisher() {
             });
         return;
     }
-    let log_path =
-        std::env::temp_dir().join(format!("nessa-gate-join-drop-{}.log", std::process::id()));
-    let log = std::fs::File::create(&log_path).unwrap();
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact", "application::agent_execution::subagents::gate_waiters::panicking_gate_join_waker_drop_is_contained_in_owned_publisher", "--nocapture"]).env(CHILD, "1").stdout(log.try_clone().unwrap()).stderr(log).spawn().unwrap();
-    let started = std::time::Instant::now();
-    loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            assert!(
-                status.success(),
-                "gate waker child failed {status}: {}",
-                std::fs::read_to_string(&log_path).unwrap()
-            );
-            break;
-        }
-        if started.elapsed() > Duration::from_secs(8) {
-            child.kill().unwrap();
-            let _ = child.wait();
-            panic!("gate waker child timed out");
-        }
-        std::thread::yield_now();
-    }
+    crate::subprocess::run(
+        "application::agent_execution::subagents::gate_waiters::panicking_gate_join_waker_drop_is_contained_in_owned_publisher",
+        CHILD,
+        Duration::from_secs(8),
+        None,
+    );
 }

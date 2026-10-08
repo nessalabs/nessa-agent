@@ -783,7 +783,7 @@ remain retained; only a definite preeligible audit rejection removes its target.
 
 The table shares ordering requirements with the
 [owned-settlement supervision](#owned-settlement-and-supervision-625-646-649).
-#628 established rejected and uncertain-port containment; the coupled settlement
+Issue #628 established rejected and uncertain-port containment; the coupled settlement
 implementation also contains construction, poll and destruction faults.
 
 | # | Ordering | Required result |

@@ -246,32 +246,12 @@ fn factory_poll_payload_destructor_is_not_run() {
             .block_on(unknown_factory_fault(FactoryFault::PollPayload));
         return;
     }
-    let log_path =
-        std::env::temp_dir().join(format!("nessa-factory-payload-{}.log", std::process::id()));
-    let log = std::fs::File::create(&log_path).unwrap();
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "application::agent_execution::subagents::supervision::factory_poll_payload_destructor_is_not_run"])
-        .env(CHILD, "1")
-        .stdout(log.try_clone().unwrap())
-        .stderr(log)
-        .spawn().unwrap();
-    let started = std::time::Instant::now();
-    loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            assert!(
-                status.success(),
-                "factory payload subprocess failed: {status}: {}",
-                std::fs::read_to_string(&log_path).unwrap()
-            );
-            break;
-        }
-        if started.elapsed() > Duration::from_secs(8) {
-            child.kill().unwrap();
-            let _ = child.wait();
-            panic!("factory payload subprocess watchdog expired");
-        }
-        std::thread::yield_now();
-    }
+    crate::subprocess::run(
+        "application::agent_execution::subagents::supervision::factory_poll_payload_destructor_is_not_run",
+        CHILD,
+        Duration::from_secs(8),
+        None,
+    );
 }
 
 #[tokio::test]
