@@ -180,30 +180,30 @@ fn panicking_gate_join_waker_drop_is_contained_in_owned_publisher() {
                 );
                 assert_eq!(resources.closes.load(Ordering::SeqCst), 0);
                 assert_eq!(factory.prepares.load(Ordering::SeqCst), 0);
-                let records = audit.records.lock().unwrap();
-                assert_eq!(
-                    records
-                        .iter()
-                        .filter(|record| matches!(
-                            record.close_detail,
-                            Some(CloseEvidenceDetail::ResourceObservation {
-                                physical: PhysicalFact::Released,
-                                ..
-                            })
-                        ))
-                        .count(),
-                    1
-                );
-                assert_eq!(
-                    records
-                        .iter()
-                        .filter(
-                            |record| record.close_detail == Some(CloseEvidenceDetail::Completion)
-                        )
-                        .count(),
-                    1
-                );
-                drop(records);
+                {
+                    let records = audit.records.lock().unwrap();
+                    assert_eq!(
+                        records
+                            .iter()
+                            .filter(|record| matches!(
+                                record.close_detail,
+                                Some(CloseEvidenceDetail::ResourceObservation {
+                                    physical: PhysicalFact::Released,
+                                    ..
+                                })
+                            ))
+                            .count(),
+                        1
+                    );
+                    assert_eq!(
+                        records
+                            .iter()
+                            .filter(|record| record.close_detail
+                                == Some(CloseEvidenceDetail::Completion))
+                            .count(),
+                        1
+                    );
+                }
                 let snapshot = bounded(store.read()).await.unwrap();
                 let row = snapshot
                     .lifetimes

@@ -564,7 +564,7 @@ async fn restored_completion_cannot_borrow_authority_from_a_nonresource_observat
         .path()
         .join("private/nonresource-completion.sqlite3");
     let mut graph = closing_resource();
-    resource_report(
+    let _ = resource_report(
         &mut graph,
         PhysicalFact::Released,
         EvidenceFact::Acknowledged,
