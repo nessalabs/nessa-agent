@@ -162,17 +162,197 @@ test("every Linux build installs the one list of host build dependencies", () =>
   }
 })
 
+/**
+ * Job keys sit at two spaces. A job timeout sits at four, which is what keeps
+ * it distinct from a step timeout further in.
+ *
+ * GitHub's job id is a letter or `_`, then letters, digits, `_`, or `-`.
+ * There is no YAML parser in the dev dependencies, so this is that syntax.
+ * A narrower `[a-z][a-z0-9-]*` class folds `sdk_coverage`, `Build`, and
+ * `_hidden` into the previous job, and a missing timeout on them passes.
+ */
+function workflowJobs(workflow) {
+  const jobsAt = workflow.search(/\njobs:\r?\n/)
+  if (jobsAt === -1) return []
+  // `on:` uses the same two-space keys (`push:`, `pull_request:`). Jobs are
+  // only what follows `jobs:`.
+  const jobs = workflow.slice(jobsAt)
+  const headers = [...jobs.matchAll(/\n  ([A-Za-z_][A-Za-z0-9_-]*):\r?\n/g)]
+  return headers.map((header, index) => {
+    const start = header.index + 1
+    const end = index + 1 < headers.length ? headers[index + 1].index + 1 : jobs.length
+    return [header[1], jobs.slice(start, end)]
+  })
+}
+
+function jobTimeoutMinutes(body) {
+  return [...body.matchAll(/^    timeout-minutes: (\d+)\r?$/gm)].map((match) =>
+    Number(match[1]),
+  )
+}
+
+/**
+ * Worst case of install-linux-build-deps.sh, in minutes. Each `timeout`
+ * duration is followed by its kill-after when the command ignores SIGTERM,
+ * and the backoff sleeps run between update attempts, not after the last one.
+ */
+function aptScriptBudgetMinutes(script) {
+  const update = script.match(
+    /timeout --kill-after=(\d+)s (\d+)m apt-get "\$\{apt_options\[@\]\}" update/,
+  )
+  const install = script.match(
+    /timeout --kill-after=(\d+)s (\d+)m apt-get "\$\{apt_options\[@\]\}" install/,
+  )
+  assert.ok(update, "update timeout")
+  assert.ok(install, "install timeout")
+  const killSec = Number(update[1])
+  assert.equal(Number(install[1]), killSec)
+  const attempts = script
+    .match(/for attempt in ([0-9 ]+);/)[1]
+    .trim()
+    .split(/\s+/)
+    .map(Number)
+  const backoffFactor = Number(script.match(/sleep \$\(\(attempt \* (\d+)\)\)/)[1])
+  const backoffSec = attempts
+    .slice(0, -1)
+    .reduce((sum, attempt) => sum + attempt * backoffFactor, 0)
+  return (
+    attempts.length * (Number(update[2]) + killSec / 60) +
+    backoffSec / 60 +
+    Number(install[2]) +
+    killSec / 60
+  )
+}
+
+test("apt installs and every CI job are bounded", () => {
+  // #653. A silent mirror used to hold the install step until GitHub's
+  // six-hour job limit, because nothing around apt-get had a bound.
+  const script = readFileSync("scripts/desktop/install-linux-build-deps.sh", "utf8")
+  assert.match(script, /Acquire::Retries=3/)
+  assert.match(script, /Acquire::http::Timeout=30/)
+  assert.match(script, /Acquire::https::Timeout=30/)
+  assert.doesNotMatch(script, /sudo\s+-E\b/)
+  assert.equal(script.match(/apt-get "\$\{apt_options\[@\]\}"/g)?.length, 2)
+  // `update` is the command the mirror stalled in, so it is the one that is
+  // retried. `install` stays after the loop: one attempt, its own ceiling.
+  assert.match(
+    script,
+    /for attempt in 1 2 3; do\r?\n {2}if sudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 5m apt-get "\$\{apt_options\[@\]\}" update; then\r?\n {4}break\r?\n {2}fi\r?\n {2}if \[ "\$attempt" -eq 3 \]; then\r?\n {4}echo "apt-get update failed on all three attempts" >&2\r?\n {4}exit 1\r?\n {2}fi\r?\n {2}sleep \$\(\(attempt \* 15\)\)\r?\ndone\r?\nsudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 45m apt-get "\$\{apt_options\[@\]\}" install -y \\/,
+  )
+  // 3×(5m+30s) + 15s + 30s + 45m + 30s. The install step has to cover it.
+  const scriptBudget = aptScriptBudgetMinutes(script)
+  assert.equal(scriptBudget, 62.75)
+
+  // Minutes, from 21 green local-auth runs on 2026-10-07 and the four release
+  // runs that exist. local-auth is 130 because the 65 minute apt step, the
+  // 45 minute Rust test step, and at most 11.3 minutes of everything else
+  // sum past 120. The release build is 120 because 65 + 25.7 does too.
+  const bounds = {
+    "local-auth.yml": {
+      workflows: 10,
+      changes: 10,
+      "gateway-contract": 45,
+      "desktop-release-profile": 45,
+      frontend: 30,
+      "local-auth": 130,
+      "sdk-domain-coverage": 60,
+      "required-checks": 10,
+    },
+    "release.yml": {
+      version: 10,
+      "updater-key": 30,
+      build: 120,
+      release: 15,
+    },
+  }
+  for (const [file, expected] of Object.entries(bounds)) {
+    const original = readFileSync(`.github/workflows/${file}`, "utf8")
+    // Hosted Windows checks the workflow out with CRLF. A job split or a
+    // timeout line that requires a bare LF passes here and fails that leg.
+    const asWindowsCheckout = original.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n")
+    for (const workflow of [original, asWindowsCheckout]) {
+      const jobs = workflowJobs(workflow)
+      assert.deepEqual(
+        jobs.map(([name]) => name).sort(),
+        Object.keys(expected).sort(),
+        `${file} jobs`,
+      )
+      for (const [name, body] of jobs) {
+        assert.deepEqual(jobTimeoutMinutes(body), [expected[name]], `${file} ${name}`)
+      }
+    }
+  }
+
+  const localAuth = readFileSync(".github/workflows/local-auth.yml", "utf8")
+  const release = readFileSync(".github/workflows/release.yml", "utf8")
+  for (const workflow of [localAuth, release]) {
+    const asWindowsCheckout = workflow.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n")
+    const step =
+      workflow === localAuth
+        ? /run: bash scripts\/desktop\/install-linux-build-deps\.sh webkit2gtk-driver xvfb\r?\n\s+timeout-minutes: (\d+)\r?\n/
+        : /run: bash scripts\/desktop\/install-linux-build-deps\.sh\r?\n\s+timeout-minutes: (\d+)\r?\n/
+    for (const checkout of [workflow, asWindowsCheckout]) {
+      const found = checkout.match(step)
+      assert.ok(found, "install step timeout")
+      const stepTimeout = Number(found[1])
+      assert.equal(stepTimeout, 65)
+      // Script budget, then the step, then the job. The step has to be able
+      // to elapse; the job has to still be running when it does.
+      const jobTimeout =
+        workflow === localAuth
+          ? bounds["local-auth.yml"]["local-auth"]
+          : bounds["release.yml"].build
+      assert.ok(scriptBudget <= stepTimeout, `${scriptBudget} <= ${stepTimeout}`)
+      assert.ok(stepTimeout < jobTimeout, `${stepTimeout} < ${jobTimeout}`)
+    }
+  }
+})
+
+test("an underscore or uppercase job with no timeout is not absorbed by the previous job", () => {
+  const fixture = [
+    "name: Fixture",
+    "on:",
+    "  push:",
+    "  pull_request:",
+    "jobs:",
+    "  local-auth:",
+    "    timeout-minutes: 130",
+    "    steps:",
+    "      - run: echo ok",
+    "  sdk_coverage:",
+    "    runs-on: ubuntu-latest",
+    "    steps:",
+    "      - run: echo missing",
+    "  Build:",
+    "    runs-on: ubuntu-latest",
+    "    steps:",
+    "      - run: echo also missing",
+    "  _hidden:",
+    "    runs-on: ubuntu-latest",
+    "    steps:",
+    "      - run: echo leading underscore",
+    "",
+  ].join("\n")
+  for (const checkout of [fixture, fixture.replace(/\n/g, "\r\n")]) {
+    const jobs = workflowJobs(checkout)
+    assert.deepEqual(
+      jobs.map(([name]) => name),
+      ["local-auth", "sdk_coverage", "Build", "_hidden"],
+    )
+    const missing = jobs
+      .filter(([, body]) => jobTimeoutMinutes(body).length !== 1)
+      .map(([name]) => name)
+    assert.deepEqual(missing, ["sdk_coverage", "Build", "_hidden"])
+  }
+})
+
 test("the existing Windows matrix leg uniquely owns the Task Scheduler model proof", () => {
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
   const proof = "./scripts/desktop/check-windows-task-scheduler.ps1"
-  const localAuthStart = workflow.indexOf("  local-auth:")
-  assert.notEqual(localAuthStart, -1)
-  const afterStart = workflow.slice(localAuthStart + 1)
-  const nextJobOffset = afterStart.search(/\n  [a-z][a-z0-9-]+:\n/)
-  const localAuth = workflow.slice(
-    localAuthStart,
-    nextJobOffset === -1 ? undefined : localAuthStart + 1 + nextJobOffset,
-  )
+  // Same job split as the timeout check. A narrower class would swallow a
+  // following `sdk_coverage` into this body and the proof would still look unique.
+  const localAuth = workflowJobs(workflow).find(([name]) => name === "local-auth")?.[1]
+  assert.ok(localAuth, "local-auth job")
   assert.match(localAuth, /matrix:\s+os: \[windows-latest, ubuntu-latest, macos-latest\]/)
   assert.equal(localAuth.split(proof).length - 1, 1)
   assert.match(

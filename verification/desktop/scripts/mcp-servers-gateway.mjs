@@ -193,7 +193,7 @@ Steps, per engine, in order on one page (--only <names> to pick):
              administrator notice and no control (U2)
   done-when  (once, after both engines) ${SERVER} added again from the window;
              the agent calls show_chart in a new conversation; in each engine
-             its app frame renders the chart, once`,
+             its app is live and #chart shows the tool result's series, once`,
 }
 
 /** The gateway, the dev server in front of it, and an owner client in Node. */
@@ -1823,20 +1823,36 @@ async function chartDrawn(page, title) {
     return { seen: { lifecycle }, failures }
   }
   const { app } = await appFrame(page, "inline", 30_000)
-  await app.waitForSelector(css.chartApp, { timeout: 20_000 }).catch(() => {})
+  await app
+    .waitForSelector(selectorFor.chartState("live"), { timeout: 20_000 })
+    .catch(() => {})
+  await app
+    .waitForFunction(
+      (chart) => document.querySelector(chart)?.textContent === "alpha 10, beta 20",
+      css.chartApp,
+      { timeout: 20_000 },
+    )
+    .catch(() => {})
   await settled(page)
   const frames = (await page.$$(selectorFor.appFrameIn("inline"))).length
   const mounts = oneMount(frames)
   const seen = {
     frames,
+    lifecycle: await page.locator(css.appView).first().getAttribute("data-app-view"),
+    state: await app.evaluate(() => document.body.getAttribute("data-chart-state")),
     chart: await app.evaluate(
       (chart) => document.querySelector(chart)?.textContent ?? null,
       css.chartApp,
     ),
   }
   if (mounts) failures.push(mounts)
-  if (seen.chart !== "chart for nessa-test")
-    failures.push(`the app frame shows "${seen.chart}", not the chart`)
+  if (seen.lifecycle !== "live")
+    failures.push(`the chart's view is ${seen.lifecycle}, not live`)
+  if (seen.state !== "live") failures.push(`the chart app is ${seen.state}, not live`)
+  if (seen.chart !== "alpha 10, beta 20")
+    failures.push(
+      `the app frame shows ${JSON.stringify(seen.chart)}, not the tool result`,
+    )
   return { seen, failures }
 }
 

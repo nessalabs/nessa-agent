@@ -139,7 +139,7 @@ export const devServerOnlyChecks = [
 export const devServerOnlySteps = {
   drag: ["boundary-jitter"],
   widgets: ["off-missing"],
-  "mcp-apps": ["departures", "departures-back"],
+  "mcp-apps": ["departures", "departures-back", "chart"],
   "message-sync": ["retained-app"],
 }
 
