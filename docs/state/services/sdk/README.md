@@ -81,8 +81,13 @@ stateDiagram-v2
     Closing --> ClosingSafety: owned proof ready and independent child closes complete
     ClosingSafety --> Completion: covering Closing snapshot acknowledged
     Completion --> Closing: Completion audit fails; explicit retry
-    Completion --> Closed: exact Completion audit acknowledged
+    Completion --> Closed: exact audit acknowledged; all same-owner lifetimes Closed
     Closed --> Closed: final snapshot failure permits writer retry
+    note right of Closed
+        Restore checks structural refusal before ancestry-derived proof.
+        Acknowledged Completion requires the whole owned group Closed.
+        Contradictory retained history is refused without repair.
+    end note
 ```
 
 Attachment callbacks install observed facts and notify the owned drain. Explicit
@@ -123,3 +128,9 @@ The [public lifecycle regressions](../../../../crates/nessa-sdk/tests/applicatio
 exercise startup rejection, selective coordinator audit rejection and terminal
 store recovery. The [SQLite cases](../../../../crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests/settlement.rs)
 exercise real reopen and reject contradictory or proofless settlement bodies.
+
+The [retained-history regressions](../../../../crates/nessa-sdk/tests/domain/agent_execution/ownership/settlement_relationships.rs)
+check cyclic ancestry returns its first structural refusal and acknowledged
+Completion cannot authorize a partly Closed group. Independent close owners
+remain separate. The [public SQLite refusal case](../../../../crates/nessa-sdk/tests/infrastructure/session_storage/ownership_settlement.rs)
+checks the same group correlation without rewriting the stored body or schema.

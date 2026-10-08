@@ -467,3 +467,120 @@ fn completion_receipt_requires_the_ready_recipient_own_prepared_decision() {
         Some(LifetimeState::Closed)
     );
 }
+
+fn completed_owned_group(independent: bool) -> OwnershipGraph {
+    let mut graph = OwnershipGraph::new();
+    root(&mut graph, "outside");
+    admit(&mut graph, "outside", "a", "outside-a");
+    admit(&mut graph, "a", "z", "a-z");
+    let owner = life(if independent { "a" } else { "outside" });
+    graph
+        .begin_close(
+            &owner,
+            close_id("group-close"),
+            LifetimeCause::HostClose,
+            Initiator::Runtime,
+        )
+        .unwrap();
+    let targets = if independent {
+        vec![life("a"), life("z")]
+    } else {
+        vec![life("outside"), life("a"), life("z")]
+    };
+    for target in targets {
+        let observation = graph
+            .apply_report(
+                &owner,
+                &close_id("group-close"),
+                &target,
+                PhysicalFact::Released,
+                EvidenceFact::Acknowledged,
+            )
+            .unwrap();
+        graph
+            .acknowledge_observation(&observation, EvidenceFact::Acknowledged)
+            .unwrap();
+    }
+    complete(&mut graph, &owner);
+    assert!(OwnershipGraph::restore(graph.snapshot())
+        .refusal()
+        .is_none());
+    graph
+}
+
+#[test]
+fn acknowledged_completion_refuses_a_partly_reopened_owned_group_without_repair() {
+    for independent in [false, true] {
+        let graph = completed_owned_group(independent);
+        let mut history = graph.snapshot();
+        history
+            .lifetimes
+            .iter_mut()
+            .find(|row| row.lifetime_id == life("z"))
+            .unwrap()
+            .state = LifetimeState::Closing;
+        let mut restored = OwnershipGraph::restore(history.clone());
+        assert_eq!(restored.refusal(), Some(&OwnershipError::Contradictory));
+        assert_eq!(restored.snapshot(), history);
+        assert_eq!(
+            restored.open_root(session("late"), life("late"), Initiator::Runtime),
+            Err(OwnershipError::DispatchRefused)
+        );
+        assert_eq!(restored.snapshot(), history);
+    }
+}
+
+#[test]
+fn cyclic_restored_ancestry_keeps_its_first_refusal_and_returns_with_completion() {
+    const CHILD: &str = "NESSA_CYCLIC_OWNERSHIP_RESTORE_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let graph = completed_owned_group(true);
+        let mut history = graph.snapshot();
+        let edge = history
+            .spawns
+            .iter_mut()
+            .find(|row| row.child_lifetime == life("a"))
+            .unwrap();
+        edge.binding.parent_lifetime = life("z");
+        edge.binding.parent_session = session("z");
+        eprintln!("accepted completed control; restoring actual ancestry cycle");
+        let mut restored = OwnershipGraph::restore(history.clone());
+        assert_eq!(restored.refusal(), Some(&OwnershipError::Cycle));
+        assert_eq!(restored.snapshot(), history);
+        assert_eq!(
+            restored.open_root(session("late"), life("late"), Initiator::Runtime),
+            Err(OwnershipError::DispatchRefused)
+        );
+        assert_eq!(restored.snapshot(), history);
+        return;
+    }
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "domain::agent_execution::ownership::settlement_relationships::cyclic_restored_ancestry_keeps_its_first_refusal_and_returns_with_completion",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let returned = loop {
+        if child.try_wait().unwrap().is_some() {
+            break true;
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill().unwrap();
+            break false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let output = child.wait_with_output().unwrap();
+    eprintln!("child stdout: {}", String::from_utf8_lossy(&output.stdout));
+    eprintln!("child stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        returned && output.status.success(),
+        "public restore must return its typed structural refusal after the accepted control"
+    );
+}
