@@ -1,0 +1,9 @@
+starting a dev server of its own on port 58647…
+warmed 473 modules in 1239 ms
+ok    chart-cleanup [chromium columns]
+ok    chart [chromium columns]
+ok    console
+ok    chart-cleanup [chromium sidebar]
+ok    chart [chromium sidebar]
+wrote /tmp/616-sandbox-host-fault.json
+mcp-apps: 5/5 held

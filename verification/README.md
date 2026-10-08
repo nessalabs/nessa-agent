@@ -31,6 +31,7 @@ verification/
     evidence/
       conversation-unread/  screenshots the pull request shows for that check
     fixtures/
+      sandbox-probes/      labelled host for visible isolation and navigation probes
       attachments-races/    real panel with controlled attachment host and scenario gateway effects
       onboarding-readiness/ real setup with stalled HTTP response and retry cases
       provider-sign-in/     real transcript with typed auth refusal and controlled login launch
@@ -95,6 +96,12 @@ guessing; a step that began and then waited in vain for the product has
 failed. Steps wait on conditions (`until`, `settled`, `contentIs`,
 `paneCountIs` in `lib/workspace.mjs`), not on fixed times; where a check
 asserts that something does not happen, its window is named and explained.
+
+The standalone MCP sandbox departure and chart checks use
+`desktop/fixtures/sandbox-probes/index.html`. Their visible frames stay on that
+labelled verification page, separate from the product UI. Every check releases
+its message-listener owner and removes its frames before closing the page;
+cleanup assertions report any remaining frames or product markup.
 
 ## Prerequisites
 

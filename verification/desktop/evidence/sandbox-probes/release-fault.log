@@ -1,0 +1,13 @@
+starting a dev server of its own on port 57110…
+warmed 473 modules in 2643 ms
+FAIL  chart-cleanup [chromium columns]
+        - probe listener owner was not released
+        - 1 probe frames remain after cleanup
+ok    chart [chromium columns]
+ok    console
+FAIL  chart-cleanup [chromium sidebar]
+        - probe listener owner was not released
+        - 1 probe frames remain after cleanup
+ok    chart [chromium sidebar]
+wrote /tmp/616-sandbox-host-fault.json
+mcp-apps: 3/5 held
