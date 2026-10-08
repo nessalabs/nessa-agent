@@ -15,7 +15,9 @@ use serde_json::{json, Value};
 #[tokio::test]
 async fn public_sqlite_restore_refuses_nonresource_observation_with_actual_completion_unchanged() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("owned.sqlite3");
+    let private = directory.path().join("private");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let path = private.join("owned.sqlite3");
     let root = AgentLifetimeId::new("root").unwrap();
     let operation = CloseOperationId::new("close").unwrap();
     let mut graph = OwnershipGraph::new();
