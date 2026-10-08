@@ -84,6 +84,7 @@ this table. None of it changes implementation or approval status.
 | 16 | [333 — Experiments](todo/333-experiments.md) | Proposed: an experiment drawn from its definition (metric, splits, guardrails, verdicts), validated at its adapter, with the best run named by the harness, so any kind reads the same way; `ExperimentSource`; its swarm as subagents. Slices #334–#337 |
 | 17 | [344 — MCP UI](todo/344-mcp-ui.md) | Proposed: Nessa hosts MCP Apps (`io.modelcontextprotocol/ui`) — a gateway MCP client, tool identity and `_meta` end to end, app tool/resource methods with policy and audit, a sandboxed iframe host — and ships its own views such as experiments as extensions in nessalabs/nessa-extensions. Amends 326 (plugin kinds) and 333 (where experiments is built). Slices #346–#349 |
 | — | [392 — Remote MCP](todo/392-remote-mcp-servers.md) | Accepted and implemented in the gateway and desktop: owned HTTP sessions, OAuth/refresh/revoke, generation fencing, honest app-call outcomes, and authorize/revoke/consent. Remaining: an owner-run check against a consenting remote server. Priority not assigned |
+| — | [217 — Linger at Linux setup](todo/217-linux-linger-at-setup.md) | Accepted. Linux setup offers linger and reports only what logind confirms. Not yet implemented |
 
 Auth API readiness and operating-bound work is complete. The
 [current Rust SDK](../../crates/nessa-sdk/docs/agent_execution/README.md) provides
