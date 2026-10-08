@@ -2,3 +2,7 @@
 
 #[path = "domain/mod.rs"]
 mod domain;
+
+// Shared bounded Shepherd isolation for intentional process-level faults.
+#[path = "support/subprocess.rs"]
+mod subprocess;

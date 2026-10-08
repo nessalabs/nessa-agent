@@ -217,6 +217,9 @@ impl OwnershipPublication {
         snapshot
             .settlements
             .retain(|r| retained.contains(&r.close_lifetime) && retained.contains(&r.target));
+        snapshot
+            .close_completions
+            .retain(|r| retained.contains(r.close_lifetime()));
         snapshot.reports.retain(|r| {
             retained.contains(&r.parent_lifetime)
                 && retained.contains(&r.child_lifetime)
