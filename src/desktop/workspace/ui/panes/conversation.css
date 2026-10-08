@@ -2,6 +2,11 @@
  * What a pane shows: a new session's home, and a conversation with its
  * composer docked at the foot.
  */
+.workspace-conversation[data-message-arrival-waiting]
+  :is(.desktop-composer, .workspace-bubble, .workspace-heading) {
+  opacity: 0;
+}
+
 .workspace-pane-home {
   display: flex;
   flex: 1;

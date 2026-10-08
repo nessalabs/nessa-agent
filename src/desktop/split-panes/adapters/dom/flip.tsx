@@ -24,9 +24,11 @@ import { Component, type ReactNode, type RefObject } from "react"
 import { slideAnimation } from "../../../adapters/hold-still"
 import { letGoOfDragPreview } from "./drag"
 import { marks, reflectMark } from "./marks"
+import { stagedReveal } from "./staged-reveal"
 import { durationToken, motionToken } from "../../../adapters/motion"
 
 type Rects = { panes: Map<string, DOMRect>; slides: Map<string, DOMRect> }
+type Snapshot = { readonly root: HTMLElement; readonly rects: Rects }
 
 function measure(root: HTMLElement): Rects {
   const rects: Rects = { panes: new Map(), slides: new Map() }
@@ -184,52 +186,82 @@ export class FlipScope extends Component<{
   children: ReactNode
 }> {
   private flights: Animation[] = []
+  private scope: HTMLElement | null = null
+  private reveal: ReturnType<typeof stagedReveal> | null = null
 
-  getSnapshotBeforeUpdate(previous: Readonly<{ shape: string }>): Rects | null {
+  private release() {
+    const flights = this.flights
+    this.flights = []
+    flights.forEach((flight) => flight.cancel())
+    this.reveal?.dispose()
+    this.reveal = null
+    if (this.scope) reflectMark(this.scope, marks.flipping, false)
+    this.scope = null
+  }
+
+  getSnapshotBeforeUpdate(previous: Readonly<{ shape: string }>): Snapshot | null {
     const root = this.props.root.current
     if (previous.shape === this.props.shape || !root) return null
     // Reduced motion makes the flight's duration zero: nothing to measure for.
     if (durationToken(root, "--desktop-flight") === 0) return null
     // Read mid-flight too: a change during a flight starts from where things are now.
-    return measure(root)
+    return { root, rects: measure(root) }
   }
 
   componentDidUpdate(
     previous: Readonly<{ shape: string }>,
     _state: unknown,
-    snapshot: Rects | null,
+    snapshot: Snapshot | null,
   ) {
     const root = this.props.root.current
-    if (!root) return
+    if (root !== this.scope) {
+      this.release()
+      this.scope = root
+      this.reveal = root ? stagedReveal(root, marks.restoring) : null
+    }
+    if (!root || !this.reveal) return
+    const from = snapshot?.root === root ? snapshot.rects : null
     // A drag's preview put panes where this change puts them: measured through
     // it before the change, it is let go before measuring where they landed,
     // so a drop that lands where it previewed has nowhere to fly. With less
     // motion nothing is measured, but the preview goes all the same: left
     // on, it would draw the landed panes moved again.
     if (previous.shape !== this.props.shape) letGoOfDragPreview(root)
-    if (!snapshot) return
-    this.flights.forEach((flight) => flight.cancel())
-    const flying = play(root, snapshot)
-    this.flights = flying
-    if (flying.length === 0) {
+    if (!from && previous.shape === this.props.shape) return
+    const hadFlight = root.hasAttribute(marks.flipping)
+    this.reveal.stop()
+    const previousFlights = this.flights
+    this.flights = []
+    previousFlights.forEach((flight) => flight.cancel())
+    if (!from) {
+      if (hadFlight) this.reveal.hold()
       reflectMark(root, marks.flipping, false)
+      this.reveal.start()
       return
     }
+    // Hold expensive bodies before the landing read forces layout, rather
+    // than hiding them only after that work has already happened.
     reflectMark(root, marks.flipping, true)
+    const flying = play(root, from)
+    this.flights = flying
+    if (flying.length === 0) {
+      if (hadFlight) this.reveal.hold()
+      reflectMark(root, marks.flipping, false)
+      this.reveal.start()
+      return
+    }
     Promise.all(flying.map((flight) => flight.finished))
       .then(() => {
-        if (this.flights === flying) reflectMark(root, marks.flipping, false)
+        if (this.flights !== flying || this.scope !== root) return
+        this.reveal?.hold()
+        reflectMark(root, marks.flipping, false)
+        this.reveal?.start()
       })
       .catch(() => undefined)
   }
 
   componentWillUnmount() {
-    this.flights.forEach((flight) => flight.cancel())
-    // The finishing promise identifies this flight by identity. Replacing it
-    // means that promise is no longer this flight, so it leaves the mark.
-    this.flights = []
-    const root = this.props.root.current
-    if (root?.hasAttribute(marks.flipping)) reflectMark(root, marks.flipping, false)
+    this.release()
   }
 
   render() {

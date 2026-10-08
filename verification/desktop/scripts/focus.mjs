@@ -24,7 +24,7 @@
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { content, css, keys, names } from "./lib/selectors.mjs"
+import { content, css, keys, names, storage } from "./lib/selectors.mjs"
 import {
   contentIs,
   focusComposer,
@@ -712,7 +712,7 @@ async function givesBackLostFocus(page, cause) {
   return { trail, failures }
 }
 
-async function firstMessageHandoff(page) {
+async function firstMessageHandoff(page, reduced = false) {
   const prompt = "one composer through the first message"
   await page.keyboard.press(keys.newSession)
   const ready = await until(
@@ -729,20 +729,36 @@ async function firstMessageHandoff(page) {
     ([pane, composer]) => {
       const current = document.querySelector(pane)
       const counts = []
+      const flights = new Map()
+      const seen = new Set()
       const sample = () => counts.push(current.querySelectorAll(composer).length)
       const observer = new MutationObserver(sample)
       observer.observe(current, { childList: true, subtree: true })
+      let frame = 0
+      const sampleMotion = () => {
+        for (const animation of current.getAnimations({ subtree: true })) {
+          if (animation.id.startsWith("first-send-")) {
+            seen.add(animation)
+            flights.set(animation.id, animation.effect?.getKeyframes())
+          }
+        }
+        frame = requestAnimationFrame(sampleMotion)
+      }
+      frame = requestAnimationFrame(sampleMotion)
       sample()
       window.__focusHomeHandoff = () => {
         sample()
         observer.disconnect()
+        cancelAnimationFrame(frame)
         delete window.__focusHomeHandoff
-        return counts
+        return { counts, flights: Object.fromEntries(flights), motionCount: seen.size }
       }
     },
     [css.focusedPane, css.composerCard],
   )
   let counts
+  let flights
+  let motionCount
   const failures = []
   try {
     await page.keyboard.type(prompt)
@@ -777,14 +793,52 @@ async function firstMessageHandoff(page) {
         .locator(`${css.focusedPane} ${css.conversationDock} ${css.field}`)
         .inputValue()
       if (value !== "next reply") failures.push(`reply draft is ${JSON.stringify(value)}`)
+      await frames(page, 2)
+      await page.evaluate((pane) => {
+        for (const animation of document
+          .querySelector(pane)
+          .getAnimations({ subtree: true }))
+          if (animation.id.startsWith("first-send-")) animation.pause()
+      }, css.focusedPane)
+      await page.keyboard.press(keys.newSession)
+      await page.locator(css.sessionRow).filter({ hasText: prompt }).first().click()
+      const returned = await until(
+        page,
+        ([pane, dock, field]) => {
+          const input = document.querySelector(pane)?.querySelector(`${dock} ${field}`)
+          return input?.value === "next reply"
+        },
+        [css.focusedPane, css.conversationDock, css.field],
+      )
+      if (!returned) failures.push("returning to the sent chat lost its reply draft")
+      await frames(page, 4)
     }
   } finally {
-    counts = await page.evaluate(() => window.__focusHomeHandoff?.() ?? [])
+    const observed = await page.evaluate(
+      () => window.__focusHomeHandoff?.() ?? { counts: [], flights: {}, motionCount: 0 },
+    )
+    counts = observed.counts
+    flights = observed.flights
+    motionCount = observed.motionCount
   }
   if (counts.length === 0) failures.push("handoff had no observed composer counts")
   if (counts.some((count) => count > 1))
     failures.push(`overlapping composers during handoff: ${counts.join(" ")}`)
-  return { counts, after: await state(page), failures }
+  if (reduced) {
+    if (Object.keys(flights).length)
+      failures.push("first send animated with reduced motion")
+  } else {
+    if (motionCount !== 2)
+      failures.push(
+        `first-send motion replayed or was missing: ${motionCount} flights, expected 2`,
+      )
+    for (const id of ["first-send-composer", "first-send-message"]) {
+      const frames = flights[id]
+      if (!frames || !frames[0]?.transform?.startsWith("translate("))
+        failures.push(`${id} did not glide from its origin`)
+    }
+  }
+  return { counts, flights, motionCount, after: await state(page), failures }
 }
 
 const meta = {
@@ -945,6 +999,24 @@ await main(meta, async ({ options, rep, url }) => {
           await fresh.close()
         }
       })
+      await attempt(
+        rep,
+        { name: "focus-home-handoff-reduced", engine, layout },
+        async () => {
+          const fresh = await openPage(browser, {
+            url,
+            layout,
+            width: 1440,
+            height: 900,
+            prefs: { [storage.motion]: "reduced" },
+          })
+          try {
+            return await firstMessageHandoff(fresh.page, true)
+          } finally {
+            await fresh.close()
+          }
+        },
+      )
       for (const [name, answer] of [
         ["focus-answers-overview", answerOnceInOverview],
         ["focus-answers-card", answerOnceOnCard],

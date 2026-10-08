@@ -318,17 +318,22 @@ it("does not paint a carried pane's conversation on the frame it lifts", () => {
     new URL("./workspace/ui/panes/panes.css", import.meta.url),
     "utf8",
   )
-  const lifted = sheet
+  const normalized = sheet.replace(/\s+/g, " ")
+  const lifted = normalized
     .slice(
-      sheet.indexOf(
-        ".workspace-pane[data-drag-lifted] > .workspace-pane-header,\n.workspace-pane[data-drag-lifted] > .workspace-pane-body {",
+      normalized.indexOf(
+        ".workspace:not([data-drag-card]) .workspace-pane[data-drag-lifted] > .workspace-pane-header,",
       ),
     )
     .split("}")[0]
   expect(lifted).toMatch(/content-visibility:\s*hidden/)
   expect(lifted).not.toMatch(/opacity/)
   const slot = sheet
-    .slice(sheet.indexOf(".workspace-pane[data-drag-lifted] {"))
+    .slice(
+      sheet.indexOf(
+        ".workspace:not([data-drag-card]) .workspace-pane[data-drag-lifted] {",
+      ),
+    )
     .split("}")[0]
   expect(slot).toMatch(/transition:\s*none/)
 })
@@ -463,4 +468,20 @@ it("moves Settings' sidebar by transform, never by animating its width", () => {
   )
   const body = sheet.slice(sheet.indexOf(".settings-sidebar {")).split("}")[0]
   expect(body).not.toMatch(/transition/)
+})
+
+it("keeps pane bodies out of layout during a flight and staged restoration", () => {
+  const sheet = readFileSync(
+    new URL("./workspace/ui/panes/panes.css", import.meta.url),
+    "utf8",
+  )
+  const rule = sheet
+    .slice(
+      sheet.indexOf(
+        `.workspace[${marks.flipping}] .workspace-pane > .workspace-pane-body,`,
+      ),
+    )
+    .split("}")[0]
+  expect(rule).toContain(`.workspace-pane[${marks.restoring}] > .workspace-pane-body`)
+  expect(rule).toMatch(/content-visibility:\s*hidden/)
 })

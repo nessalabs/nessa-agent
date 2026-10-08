@@ -5,6 +5,7 @@
  * list the person is walking, or a dialog.
  */
 import { act, useRef } from "react"
+import { arrivalWaitingAttribute } from "./arrival"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it } from "vitest"
@@ -306,24 +307,27 @@ it("skips inert composers when choosing the target", async () => {
   }
 })
 
-it("waits for the pane body to return to layout before finding its field", async () => {
-  host.innerHTML =
-    '<div data-pane-focused><form class="desktop-composer"><textarea aria-label="Ready" /></form></div>'
-  const pane = host.firstElementChild as HTMLElement
-  pane.setAttribute(marks.settling, "")
-  const stop = focusInFront(host)
-  try {
-    await act(async () => animation.runFrame())
-    expect(caretIn()).not.toBe("Ready")
-    pane.removeAttribute(marks.settling)
-    await act(async () => animation.runFrame())
-    expect(caretIn()).not.toBe("Ready")
-    await act(async () => animation.runFrame())
-    expect(caretIn()).toBe("Ready")
-  } finally {
-    stop()
-  }
-})
+it.each([marks.settling, marks.flipping, marks.restoring, arrivalWaitingAttribute])(
+  "waits for %s to release before finding its field",
+  async (attribute) => {
+    host.innerHTML =
+      '<div data-pane-focused><form class="desktop-composer"><textarea aria-label="Ready" /></form></div>'
+    const pane = host.firstElementChild as HTMLElement
+    pane.setAttribute(attribute, "")
+    const stop = focusInFront(host)
+    try {
+      await act(async () => animation.runFrame())
+      expect(caretIn()).not.toBe("Ready")
+      pane.removeAttribute(attribute)
+      await act(async () => animation.runFrame())
+      expect(caretIn()).not.toBe("Ready")
+      await act(async () => animation.runFrame())
+      expect(caretIn()).toBe("Ready")
+    } finally {
+      stop()
+    }
+  },
+)
 
 it("waits for a window widget's body rather than focusing the pane beneath it", async () => {
   await act(async () =>

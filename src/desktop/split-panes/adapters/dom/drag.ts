@@ -78,6 +78,7 @@ import { paneLimits } from "../../model/pane-layout"
 import { placements, type PanePlacement, type PaneRoom } from "../../model/pane-sizing"
 import { durationToken, motionToken } from "../../../adapters/motion"
 import { classes, gridOf, marks, reflectMark } from "./marks"
+import { stagedReveal } from "./staged-reveal"
 
 /** Marks the preview's own motion. */
 const dragPreview = "split-panes-preview"
@@ -464,7 +465,7 @@ function partsOf(pane: HTMLElement): PanePart[] {
 /** What the host adds to a drag of its own: what only it knows of its page. */
 export interface SplitPanesDragOptions {
   /**
-   * The copy carried for an item pressed outside the grid (`data-drag-item`),
+   * The copy carried for a pane or an item pressed outside the grid,
    * built detached — never put on the page, and nothing on the page read
    * after the press. `pressed` is what was pressed; `picture` copies an
    * element as the drag copies a pane (ids, labels, and the marks that
@@ -472,13 +473,18 @@ export interface SplitPanesDragOptions {
    * `alwaysStripped`); `focusedPane` is the focused pane's element, if drawn.
    */
   readonly copyOf: (
-    item: string,
+    carried: Carried,
     context: {
       readonly pressed: HTMLElement
+      readonly pane: HTMLElement | null
       readonly picture: (element: Element) => HTMLElement
       readonly focusedPane: HTMLElement | null
     },
   ) => HTMLElement
+  /** A fixed compact copy, or the source pane's natural size. */
+  readonly copySize: Size | null
+  /** Whether live panes preview the proposal, or only the hovered target highlights. */
+  readonly previewPanes: boolean
   /**
    * What the host draws over or beside the grid under `root` as the press
    * begins, never a target whatever is under it (side columns, docked or
@@ -523,6 +529,8 @@ const alwaysStripped = [
   marks.lifted,
   marks.waiting,
   marks.settling,
+  marks.restoring,
+  marks.card,
 ]
 
 /**
@@ -554,12 +562,10 @@ export function useSplitPanesDrag(
     let waiting: { frame: number; timer: number } | null = null
     let active = true
     let glassFrame: number | null = null
-    let revealFrame: number | null = null
-    let revealGeneration = 0
-    const stopReveal = () => {
-      revealGeneration++
-      if (revealFrame !== null) cancelAnimationFrame(revealFrame)
-      revealFrame = null
+    const reveal = stagedReveal(scope, marks.settling)
+    const stopReveal = reveal.stop
+    const startReveal = () => {
+      if (active) reveal.start()
     }
     /** Bumped whenever glass blur is held or released, so a late release cannot drop a new drag's hold. */
     let glass = 0
@@ -570,7 +576,7 @@ export function useSplitPanesDrag(
       const generation = ++glass
       if (on) {
         stopReveal()
-        reflectMark(scope, marks.pressing, true)
+        reflectMark(scope, marks.pressing, options.previewPanes)
         return
       }
       // A frame after the preview's own paint is gone, so that frame does not
@@ -584,22 +590,6 @@ export function useSplitPanesDrag(
     /** Drops the pending commit's frame and its listeners, if a drop is waiting on one. */
     let releaseDrop: (() => void) | null = null
 
-    /** One pane a frame, so letting the preview go does not lay every transcript out (`drag.test.tsx`). */
-    const revealSettling = (owner: number) => {
-      if (!active || owner !== revealGeneration) return
-      revealFrame = null
-      const pane = scope.querySelector<HTMLElement>(`[${marks.settling}]`)
-      pane?.removeAttribute(marks.settling)
-      if (scope.querySelector(`[${marks.settling}]`))
-        revealFrame = requestAnimationFrame(() => revealSettling(owner))
-    }
-    const startReveal = () => {
-      if (active && revealFrame === null) {
-        const owner = revealGeneration
-        revealFrame = requestAnimationFrame(() => revealSettling(owner))
-      }
-    }
-
     /**
      * Drops the preview's mark. Bodies are already waiting, or start waiting
      * now, and return one a frame: clearing the mark alone lays every
@@ -609,9 +599,7 @@ export function useSplitPanesDrag(
       if (!scope.hasAttribute(marks.reflow)) return
       const waiting = scope.querySelector(`[${marks.settling}]`) !== null
       if (!waiting) {
-        scope.querySelectorAll<HTMLElement>("[data-pane-key]").forEach((pane) => {
-          pane.setAttribute(marks.settling, "")
-        })
+        reveal.hold()
       }
       startReveal()
       reflectMark(scope, marks.reflow, false)
@@ -802,6 +790,29 @@ export function useSplitPanesDrag(
       if (!layout) return
       const { grid, room } = made
       const real = boxes(layout, grid)
+      if (!options.previewPanes) {
+        const target = aim ? real.get(aim.target) : null
+        const box = target && outcome ? inside(target, grid) : null
+        if (box && aim) {
+          const horizontal = aim.zone === "left" || aim.zone === "right"
+          const vertical = aim.zone === "top" || aim.zone === "bottom"
+          placeholder(made, {
+            left: box.left + (aim.zone === "right" ? box.width / 2 : 0),
+            top: box.top + (aim.zone === "bottom" ? box.height / 2 : 0),
+            width: horizontal ? box.width / 2 : box.width,
+            height: vertical ? box.height / 2 : box.height,
+          })
+        } else placeholder(made, null)
+        announcer.textContent =
+          outcome && aim
+            ? saying(
+                outcome,
+                aim.zone,
+                paneElement(aim.target)?.getAttribute("aria-label") ?? "the pane",
+              )
+            : ""
+        return
+      }
       const spare = outcome?.takesSpare ? (room?.spare ?? 0) : 0
       const landing = outcome ? boxes(outcome.layout, landingGrid(grid, spare)) : null
       const corners = new Set(
@@ -865,7 +876,7 @@ export function useSplitPanesDrag(
       preview(made, outcome, aim)
       // The copy takes the shape of the slot it would land in, or — with
       // nothing offered — its own, its centre still on the pointer.
-      const shape = copyShape(made.size, drawing.landing)
+      const shape = options.copySize ?? copyShape(made.size, drawing.landing)
       if (!sameSize(shape, drawing.shape.to)) reshape(made, shape)
     }
 
@@ -939,7 +950,7 @@ export function useSplitPanesDrag(
         x: box.left + box.width / 2 - drawing.pointer.x - glide.x,
         y: box.top + box.height / 2 - drawing.pointer.y - glide.y,
       }
-      return reshape(made, box, by, { from: 1, to: fade ? 0 : 1 })
+      return reshape(made, options.copySize ?? box, by, { from: 1, to: fade ? 0 : 1 })
     }
 
     const ghostFor = (
@@ -1014,27 +1025,15 @@ export function useSplitPanesDrag(
         if (scroller.scrollTop > 0)
           copied.style.transform = `translateY(${-scroller.scrollTop}px)`
       }
-      if (carried.kind === "pane") {
-        const pane = paneElement(carried.pane)
-        if (pane) {
-          const copy = picture(pane, onScreenOnly)
-          copy.removeAttribute("style")
-          copy.classList.add("split-panes-ghost-pane")
-          const typed = pane.querySelectorAll("textarea")
-          copy.querySelectorAll("textarea").forEach((field, index) => {
-            field.value = typed[index]?.value ?? ""
-          })
-          inner.append(copy)
-          return { ghost, inner }
-        }
-      }
-      // An item with no pane yet: what the host makes of it.
       const layout = layoutNow()
-      const copy = options.copyOf(carried.kind === "item" ? carried.item : "", {
+      const pane = carried.kind === "pane" ? paneElement(carried.pane) : null
+      const copy = options.copyOf(carried, {
         pressed,
-        picture,
+        pane,
+        picture: (element) => picture(element, onScreenOnly),
         focusedPane: layout ? paneElement(layout.focused) : null,
       })
+      copy.removeAttribute("style")
       copy.classList.add("split-panes-ghost-pane")
       inner.append(copy)
       return { ghost, inner }
@@ -1070,22 +1069,25 @@ export function useSplitPanesDrag(
         carried.kind === "pane"
           ? paneElement(carried.pane)?.getBoundingClientRect()
           : paneElement(layout.focused)?.getBoundingClientRect()
-      const size = {
+      const size = options.copySize ?? {
         width: from?.width ?? 480,
         height: from?.height ?? 360,
       }
       // Held where it was grabbed: a pane by its header, a card by its top.
-      const home: Box =
-        carried.kind === "pane" && from
+      const home: Box = options.copySize
+        ? { left: x - size.width / 2, top: y - size.height / 2, ...size }
+        : carried.kind === "pane" && from
           ? boxOf(from)
           : { left: x - size.width / 2, top: y - 20, ...size }
       // What the host covers the grid with is never a target.
       const covered = options.covered(scope).map(settledBox)
       const parts = new Map(
-        Array.from(scope.querySelectorAll<HTMLElement>("[data-pane-key]"), (pane) => [
-          pane,
-          partsOf(pane),
-        ]),
+        Array.from(
+          options.previewPanes
+            ? scope.querySelectorAll<HTMLElement>("[data-pane-key]")
+            : [],
+          (pane) => [pane, partsOf(pane)],
+        ),
       )
       const motion = {
         duration: durationToken(scope, "--desktop-base"),
@@ -1159,6 +1161,7 @@ export function useSplitPanesDrag(
       // Before the copy is shown. A backdrop blur would be sampled again on
       // every frame the copy moves (`styles.test.ts`).
       holdGlass(true)
+      scope.toggleAttribute(marks.card, options.copySize !== null)
       drawing.pointer = { x: at.x, y: at.y }
       shield.addEventListener("lostpointercapture", onLost)
       window.getSelection()?.removeAllRanges()
@@ -1222,6 +1225,7 @@ export function useSplitPanesDrag(
       const unmark = () => {
         outline?.remove()
         scope.removeAttribute(marks.carrying)
+        scope.removeAttribute(marks.card)
         pressed.removeAttribute(marks.carrying)
         scope
           .querySelectorAll(`[${marks.lifted}]`)
@@ -1310,7 +1314,7 @@ export function useSplitPanesDrag(
       // The frame commits the preview, not whatever the panes became while it
       // waited: a resize, a watched change, or a carried item let go. The
       // dropping phase ignores those, so the frame itself checks.
-      const previewHolds = () => {
+      const proposalHolds = () => {
         const watched = source.watched()
         if (
           layoutNow()?.columns !== seen.columns ||
@@ -1326,12 +1330,12 @@ export function useSplitPanesDrag(
       }
       window.addEventListener("resize", refuse)
       const unsubscribe = source.subscribe(() => {
-        if (!previewHolds()) refuse()
+        if (!proposalHolds()) refuse()
       })
       const frame = requestAnimationFrame(() => {
         release()
         if (!ownsDragResources(phase, made)) return
-        if (accept && previewHolds()) {
+        if (accept && proposalHolds()) {
           // Bodies stay out of this layout and return one a frame (`drag.test.tsx`).
           scope.querySelectorAll<HTMLElement>("[data-pane-key]").forEach((pane) => {
             pane.setAttribute(marks.settling, "")
@@ -1611,9 +1615,7 @@ export function useSplitPanesDrag(
       releaseDrop?.()
       const made = phase.kind === "idle" ? null : phase.made
       if (made) releaseMade(made)
-      scope
-        .querySelectorAll(`[${marks.settling}]`)
-        .forEach((pane) => pane.removeAttribute(marks.settling))
+      reveal.dispose()
       reflectMark(scope, marks.reflow, false)
       reflectMark(scope, marks.pressing, false)
       phase = idle

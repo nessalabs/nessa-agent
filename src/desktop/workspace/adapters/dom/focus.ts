@@ -32,6 +32,7 @@ import type { DesktopStore } from "../../../store"
 import { widgetBodyAttribute } from "../../../widgets"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
 import { selectContentKind, selectWindowWidget } from "../store/selectors"
+import { arrivalWaitingAttribute } from "./arrival"
 
 /** Marks the focused pane, whichever layout draws it, for the caret to find. */
 export const focusedPaneAttribute = "data-pane-focused"
@@ -54,7 +55,9 @@ function caretTarget(scope: ParentNode): HTMLElement | null {
   return (
     candidates.find(
       (element) =>
-        element.closest(`[inert], [${marks.settling}], [${marks.reflow}]`) === null,
+        element.closest(
+          `[inert], [${marks.settling}], [${marks.reflow}], [${marks.flipping}], [${marks.restoring}], [${arrivalWaitingAttribute}]`,
+        ) === null,
     ) ?? null
   )
 }

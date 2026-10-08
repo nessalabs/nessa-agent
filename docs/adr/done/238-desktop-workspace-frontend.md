@@ -257,8 +257,11 @@ small, so the dock and the title are each written once. Nothing is
 remounted, so the draft, the caret, the model chosen and a long draft's page
 stay as they were across the threshold; the page still opens in either
 shape. Sending the first message replaces the home directly when the session
-is listed; there is no overlapping home/composer clone or geometry-driven
-arrival animation. The existing workspace focus owner follows the removed
+is listed, with one composer on the page. Its composer glides from the home's
+card to the dock, and the sent words rise from the field into their bubble.
+The origin is read before send changes the page; IntersectionObserver supplies
+the destination boxes after the browser's layout, so the arrival does not
+force a second layout in React's commit. The existing workspace focus owner follows the removed
 field and respects focus the person moved elsewhere. Crossing the threshold, as a pane is resized or
 split, the greeting and composer settle into their new places
 (`--desktop-slow`, opacity and transform only) under the panes' own flight;
@@ -285,7 +288,8 @@ nothing else, the caret's focus and position. `focus.mjs`
 becomes small, and `responsive.mjs` (`header-picture`) that a pane's menu
 chooses the picture, takes it back, and says why a file was refused.
 `focus.mjs` measures the first-message handoff, including one composer per
-pane and the reply caret; no separate arrival animation remains.
+pane and the reply caret. Browser verification also checks the first-send
+composer and bubble flights, and their absence with reduced motion.
 
 The first-message and transcript handoff has one focus owner and one scroll
 owner (`focus.ts`, `transcript.tsx`):
@@ -294,6 +298,11 @@ owner (`focus.ts`, `transcript.tsx`):
 | --- | --- |
 | first send pending | draft home remains while the source creates the session |
 | source lists the session | home is replaced by the conversation; the focus adapter follows a lost field after its target paint |
+| arrival awaits destination boxes | one conversation composer; its composer, first bubble and heading wait unpainted; the browser observer owns their boxes |
+| observer supplies all destination boxes | reveal and animate the composer and first bubble from their captured origins; settle the heading; no geometry read follows a write |
+| reduced motion | replace directly, without a waiting mark or flight |
+| another session replaces the arriving session | cancel the old observer and flights; discard its origin so returning cannot replay it |
+| arrival view removed or observer delivers late | cancel flights, clear its waiting mark and reject the late callback |
 | person took focus elsewhere | keep that focus rather than reclaiming it on mount |
 | transcript or viewport layout changes while pinned | ResizeObserver pins the tail after layout, before paint |
 | person scrolls away | resize does not change their scroll position |
@@ -539,81 +548,19 @@ button carries**; and **the zone settles at rest**.
 | pressed (with its copy) | move 4px or more | carrying (aim: none yet) | the copy is shown under the pointer at the carried pane's own size, and glides (`--desktop-base`, transform only) until its centre is under the pointer, where it stays; the zone waits for the next frame |
 | pressed | release of its pointer | idle | a click; what was made goes |
 | pressed | Escape; any other key but a lone modifier; another button (a move whose `buttons` is not the primary alone — a chorded button reaches the page as a move, never a press); `pointercancel`; the window's blur; a change (below) | idle | the press is let go: no later move can start a drag |
-| carrying | move of its pointer | carrying | the copy moves with the pointer, one to one; the zone is decided from the pointer (below); the panes, the placeholder and the copy's shape change only when the zone does, a frame later (the preview): each pane takes the rect the drop would give it, and the copy the placeholder's size about the pointer — or, with nothing offered, its own (_What the copy and the panes are drawn at_, below) |
-| carrying | a move of another pointer, or to where it already is | carrying | — (resting is not restarted) |
-| carrying | no move for 150ms (`restAfter`, `still`) | carrying | the pointer's heading has aged out: the zone is decided again as at rest, and previewed a frame later |
-| carrying | release of its pointer while the page shows a zone that offers something (`dropOutcome`) | dropping | the zone shown is committed — what the person saw, never one decided again at the release, so a heading that ages out as the button lifts cancels nothing — by `commitDrop`, in the room read as the press began, and the copy flies into its rect — already its shape, so it only moves, unless the release came mid-change; the click the release makes is swallowed |
-| carrying | release of its pointer with no zone shown that offers something: before any preview was shown (a flick), off the grid, over a side column, the carried pane's own place, a side the room refuses, no pane in sight (under the overview, or under a widget in the window: [ADR 326](../todo/326-widgets.md)) | cancelling (home) | the copy flies home, taking its own size again, as the panes go back to theirs; the click is swallowed |
-| carrying | release of another pointer | carrying | — (no click is swallowed for it) |
-| carrying | Escape | cancelling (home) | as above; Escape goes no further |
-| carrying | another button, `lostpointercapture`, `pointercancel`, the window's blur | cancelling (home) | as above; with the press let go, a later move starts nothing |
-| carrying | a change: any key but Escape or a lone modifier (a command — ⌘W, ⌘0, ⌘B, ⌘,, ⌘K, an arrow — ends the drag before it runs); a resize; the panes, the content view or the side columns changing in the store (an agent's dispatch, a session removed); the carried session no longer listed; the window going inert under Settings, seen as it happens (a `MutationObserver` on `inert`). A layout switch unmounts the shell, and the drag with it, taking everything it drew | cancelling (at once) | the copy and the preview go at once, nothing read again, and the change plays as it would with no drag; a key that reaches the window while it is inert is never the drag's, so Settings keeps its Escape |
-| dropping | its flight finishes before the deferred commit/preview release | dropping | retain the resource owner until both finish, including reduced motion (#616) |
-| dropping | the drop's own change to the panes | dropping | (it is the drop) |
-| cancelling (home) | a change of room/view before its return flight ends | cancelling (at once) | remove the retained copy and preview immediately, including a lost pointer followed by resize; keep the resource owner through the flight (#616) |
-| dropping, cancelling | the owned copy's flight ends (`landed`, with its made resources) | idle | an obsolete flight's settlement leaves the current drag and its preview unchanged (#616) |
-| any phase with retained resources | adapter unmounts | idle | cancel owned flights, remove their copy/preview, and fence their later callbacks before cleanup effects (#616) |
-| dropping, cancelling | anything else, a press included | unchanged | a press while the copy still flies starts nothing |
+| carrying | move of its pointer | carrying | the copy moves with the pointer, one to one; the zone is decided from the pointer (below); the panes, the placeholder and the copy's shape change only when the zone does, a frame later (the preview): each pane takes the rect the drop would give it, and the copy the placeholder's size about the pointer — or, with nothing offered, its own (_The workspace carries a compact, fixed-size icon-and-title card. Existing chats
+keep their normal material and layout while the pointer moves. Only the target
+zone is highlighted: the corresponding half of the hovered pane, or the whole
+pane for a middle drop. The same drop outcome still commits on release. The
+card copies no transcript or composer and never changes size over a target.
 
-What the copy and the panes are drawn at (`copyShape`, `split-panes/model/drag.ts`; the
-drawing is `split-panes/adapters/dom/drag.ts`):
-
-| while carrying | the copy | a pane the drop would move or resize |
-| --- | --- | --- |
-| no zone shown: before the first preview, off the grid, over a side column, its own place, a side the room refuses, under the overview | the carried pane's own size, its centre on the pointer | where and as big as it is |
-| a zone shown that offers something | the placeholder's size — the slot it would land in — its centre still on the pointer, never the slot's place | the rect the drop gives it (`dropOutcome`, the same the drop commits), what it holds at its own size, as a pane that shape would place it — its transcript held to the top, centred across as it grows and held left as it shrinks, its composer to the foot, its header to the top left — and cut to the shape where smaller, its header past the window's controls where it would rest in the corner (`data-drag-corner`) and not until it has moved out from under them where it would leave |
-| the zone changes, even mid-change | from the size it is drawn at now to the new one, `--desktop-base` on `--desktop-ease`, one way, never past it | from where it is drawn now, the same |
-| released onto the zone shown | flies from the pointer into the placeholder's rect | lands where it was previewed: `FlipScope` lets the preview go and finds nothing to fly |
-| cancelled home | flies home, back to its own size | back to its own place and size |
-| less motion | changes size at once | takes the rect the drop gives it at once, never gliding, and is let go as the drop lays it out there (`FlipScope`, which flies nothing); the placeholder marks the slot. Left where it is, a swap would show only the placeholder, under the copy: nothing would say the other pane moves (#286) |
-
-Neither the copy nor a pane is ever drawn stretched: each grows or shrinks
-into its shape by a scale its content undoes at each of twelve steps (as a
-flight does, `flip.tsx`), so at every step its words are drawn at their own
-size, and at rest the box is exactly the rect it would take. The two differ
-in what the content is laid out at, chosen by measurement:
-
-- **The copy is laid out at the slot's size, once per zone change**, so its
-  title reads as the pane will; at rest nothing in it is scaled. It is the
-  pane's chrome in a box of its own (`contain: strict`). The conversation
-  stays in the copy and is not painted: laying that body out on each shape
-  change misses the frame budget.
-- **A pane keeps its layout and is cut to its would-be shape**: its box
-  takes the rect by transform (`overflow: hidden` clips it) and its content,
-  scaled back, stays at the size it has, placed as a pane that shape would
-  place it — its transcript held to the top, centred across where the pane
-  grows, as a wider pane centres its column, and held left where it
-  shrinks, so a line loses its end, never its start (centred both ways, a
-  narrower pane cut its title's first words); its composer held to the
-  foot, as a taller pane docks it (held to the top with the rest, it
-  floated mid-pane), and what is held to the top cut where the composer
-  begins, by as much as the pane is shorter, so it never runs under it; a
-  new session's home held to the middle — a small one's docked composer
-  with it, not to the foot; its header
-  held to the top left, so it steps
-  past the window's controls where it rests in the corner and nothing of it
-  passes under them. Centring down as well was tried: a pane shorter than
-  before then drew its conversation's heading into the titlebar row, under
-  the controls (`copy-takes-slot-shape`'s safe-area sampling caught it).
-  Laying a pane out at its would-be size instead was built and measured: a
-  pane is a size container (`container: workspace-pane / size`), so a change
-  of its size restyles and lays out everything it holds — traced at 20–42ms
-  of layout per zone change at 4×, frames of 67–83ms, over the 50ms budget
-  even with its conversation held at its width; turning the container off
-  during a drag cut it to 26ms but would drop its container queries and
-  jump at the drop.
-
-A box's change of shape and its content's undoing of it start at one time
-on the document's clock (`startTime`), so an engine never starts one a
-frame before the other and draws the content stretched for that frame.
-
-The other ways were weighed for the copy too: a uniform scale clipped to the
-slot (`clip-path: inset()`) never distorts but draws a tall pane's words
-three times their size in a wide slot, and a box cut to the slot with its
-content at the carried shape shows empty space where the slot is bigger;
-animating `width` and `height` lays the copy out every frame. The copy's
-shape is `made.drawing.shape`, and a pane's the preview's own motion —
-neither is read back.
+| workspace drag event | visual response |
+| --- | --- |
+| lift from a pane or sidebar row | one compact icon/title card follows the pointer; existing pane contents remain visible |
+| enter an accepted target zone | highlight that pane's zone; leave live pane geometry and material unchanged |
+| enter a covered/refused area or the overview | remove the highlight; keep the card compact |
+| release over a target | commit the owned drop outcome; move/fade the card without stretching it; restore committed bodies through the existing staged owner |
+| cancel, rebind or lose capture | remove owned card/highlight resources; leave the layout unchanged; late callbacks cannot affect a newer drag |
 
 The copy is drawn in a layer that begins below the titlebar row
 (`.split-panes-layer`), so nothing carried is ever painted under the
@@ -645,21 +592,12 @@ Where the pointer is decides the zone (`aimAt`, `split-panes/model/drop.ts`):
 
 The pointer is the aim because the copy's centre is under it: what the eye
 tracks and what aims are one point, so the middle of a tall pane — Swap — is
-where the copy's middle is. **The result is shown by the layout**: over a
-zone, the real panes move to where the drop would put them, and a calm
-placeholder marks exactly the rect the drop will take — from `dropOutcome`,
-the same outcome the drop's command commits, so nothing jumps
-(`panes.test.ts` holds preview == commit for every zone; every preview rect is
-held inside the grid). A zone the fit rule refuses offers nothing; a session
-already on screen offers "Go to Pane". What is carried is an opaque copy
-of the pane's title and chrome, in a box of the shape it would land in
-(`contain: strict`). Its conversation is in the copy and not painted.
-A session from a list is drawn from what the window holds of it. Nothing of
-the page is read after the press's frame: where a preview has drawn a pane is
-known from the preview's own motion, and the preview and
-the drop's command are given the room read as the press began (a resize or a
-side column changing ends the drag, so it is still the room at the release),
-so beginning, previewing, dropping and letting go only write. What is read is
+where the copy's middle is. **The target is highlighted without rearranging live chats**. The
+highlight identifies the accepted zone; `dropOutcome` calculates the committed
+layout from the same pane, zone and room. A zone the fit rule refuses offers
+nothing; a session already on screen offers "Go to Pane". The card contains
+only the visible title and icon. Beginning, targeting, dropping and cancelling
+read no new geometry after preparation. What is read is
 read in a task after the press's frame has painted; a page written to in
 between is laid out by that read, once. That is accepted, not avoided: in
 Chrome at 4× CPU throttle, four panes, the task took a median 1.6ms (max
@@ -830,12 +768,25 @@ and played back with FLIP. The measurement is taken in React's commit phase,
 just before the DOM changes (`FlipScope`, `getSnapshotBeforeUpdate`), so any
 dispatch — a click, a key, an agent — animates, and it plays only when the
 panes' arrangement changes, never while an edge is dragged. Blur and large
-shadows pause while panes fly; a new pane's content fills in the frame after
+shadows pause while panes fly. During a flight, pane bodies wait out of layout:
+the card and title move, rather than every transcript being laid out at a new
+size inside the key handler. The quiet mark is applied before FLIP reads its
+landing boxes. Once the flight ends, bodies return one per frame through the
+same staged-reveal mechanism a drag uses; each adapter owns its own marker and
+cancellation generation. A new pane's content fills in the frame after
 its shell, in a transition. Durations and curves are `--desktop-*` tokens
 defined once in `styles.css` and read by script and stylesheet alike; reduced
 motion — chosen in Settings, or the system's — sets the durations to zero
 there under the root's `data-motion`, and script motion follows with no
 check of its own.
+
+| pane-motion event | owned response |
+| --- | --- |
+| shape changes with motion | snapshot old boxes; hold the quiet mark before reading landing boxes; cancel the previous flight and pending reveal |
+| flight completes | hold each body's restoration marker, release the flight mark, then restore one body per frame |
+| shape changes again during restoration | cancel the old reveal generation; keep bodies quiet until the new flight settles |
+| no new flight or reduced motion interrupts a flight | release the old flight and resume staged restoration |
+| root replaced or scope unmounts | cancel the owned flights and reveal; clear only that owner's old root and markers; reject late completions |
 
 ### The thinking control
 

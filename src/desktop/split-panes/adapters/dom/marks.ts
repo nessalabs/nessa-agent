@@ -39,6 +39,8 @@ export const marks = {
   dragCorner: "data-drag-corner",
   /** On the FLIP root while anything flies. */
   flipping: "data-split-flipping",
+  /** On a pane whose body returns one frame at a time after a FLIP flight. */
+  restoring: "data-split-restoring",
   /** On the drag's root while a preview draws panes away from where they are laid out. */
   reflow: "data-drag-reflow",
   /**
@@ -49,6 +51,8 @@ export const marks = {
   pressing: "data-drag-pressing",
   /** On the drag's root while carrying (`pane` or `item`), and on what was pressed. */
   carrying: "data-drag-carrying",
+  /** On the root while a compact card is carried and live panes remain visible. */
+  card: "data-drag-card",
   /** On the pane being carried: its slot, left behind. */
   lifted: "data-drag-lifted",
   /** On the copy while it waits, unseen, for the press to become a drag. */

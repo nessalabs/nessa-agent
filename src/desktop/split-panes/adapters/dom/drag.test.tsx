@@ -184,9 +184,12 @@ function Page({
 const options = (
   overrides: Partial<SplitPanesDragOptions> = {},
 ): SplitPanesDragOptions => ({
-  copyOf: (item) => {
+  copySize: null,
+  previewPanes: true,
+  copyOf: (carried, { pane, picture }) => {
+    if (carried.kind === "pane" && pane) return picture(pane)
     const copy = document.createElement("article")
-    copy.textContent = `copy of ${item}`
+    copy.textContent = `copy of ${carried.kind === "item" ? carried.item : ""}`
     return copy
   },
   covered: () => [],
@@ -915,6 +918,7 @@ it("carries the host's copy of an item, and a picture of a pane without the host
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
   pointer("pointerup", 40, 40)
   await frames()
+  element('[data-pane-key="1"]').setAttribute(marks.restoring, "")
   await liftOntoTwo()
   const copy = element(`.${classes.ghost} header`)
   // A picture of the pane as it looks — in the corner, its header starts
@@ -922,7 +926,13 @@ it("carries the host's copy of an item, and a picture of a pane without the host
   expect(element(`.${classes.ghost} article`).hasAttribute(marks.corner)).toBe(true)
   // Only `dragPane` is on the pane as it is pictured; the others are set
   // after the copy is made, and are listed so that stays true.
-  for (const name of [marks.dragPane, marks.dragItem, marks.carrying, marks.lifted])
+  for (const name of [
+    marks.dragPane,
+    marks.dragItem,
+    marks.carrying,
+    marks.lifted,
+    marks.restoring,
+  ])
     expect(element(`.${classes.ghost}`).querySelector(`[${name}]`), name).toBeNull()
   expect(copy.hasAttribute("data-host-mark")).toBe(false)
   expect(copy.hasAttribute("data-drag-pane")).toBe(false)

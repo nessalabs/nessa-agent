@@ -17,6 +17,7 @@ import {
 } from "../../adapters/store/selectors"
 import { settleOnReshape } from "../../adapters/dom/home-shape"
 import { focusedPaneAttribute } from "../../adapters/dom/focus"
+import { captureArrival, type Arrival } from "../../adapters/dom/arrival"
 import { usePictureInConversationsPreference } from "../../../adapters/window-preferences"
 import { HeaderSliver } from "../../../ui/header-art"
 import type { PaneFrame } from "../../../split-panes"
@@ -69,6 +70,13 @@ export const Pane = memo(function Pane({
   }, [])
 
   const homeRef = useRef<HTMLDivElement>(null)
+  const [arriving, setArriving] = useState<{
+    sessionId: string
+    from: Arrival
+  } | null>(null)
+  if (arriving && arriving.sessionId !== sessionId) setArriving(null)
+  const arrival = arriving?.sessionId === sessionId ? arriving.from : null
+  const finishArrival = useCallback(() => setArriving(null), [])
   // The session shown now, for the callbacks below: they keep their identity
   // for the pane's life, so the memoised home and conversation they are
   // handed render only for what they show, never because this pane did.
@@ -77,7 +85,14 @@ export const Pane = memo(function Pane({
   const sendFromHome = useCallback(
     (text: string) => {
       const shown = shownRef.current
-      void dispatch(sendMessage({ sessionId: shown, text, initiator: "person" }))
+      const from = captureArrival(homeRef.current)
+      setArriving(from ? { sessionId: shown, from } : null)
+      void dispatch(sendMessage({ sessionId: shown, text, initiator: "person" })).then(
+        (outcome) => {
+          if (outcome === "not-asked")
+            setArriving((current) => (current?.from === from ? null : current))
+        },
+      )
     },
     [dispatch],
   )
@@ -125,6 +140,8 @@ export const Pane = memo(function Pane({
             key={sessionId}
             sessionId={sessionId}
             onHeadingVisible={setHeadingVisible}
+            arrival={arrival}
+            onArrivalDone={finishArrival}
           />
         ) : null}
       </div>

@@ -228,7 +228,8 @@ writing the full defaults on first launch is buying.
   the split panes' source in `store/`; the gateway's source and its mapping
   of conversation views in `gateway/`; the in-memory source in `in-memory/`;
   focus, Escape for the widget in front (`widget-escape.ts`), the panes'
-  room, what the workspace adds to a drag, keys and the clock in `dom/`; the
+  room, what the workspace adds to a drag, first-send motion (`arrival.ts`),
+  keys and the clock in `dom/`; the
   host callbacks each place gives a widget's view in
   `store/widget-hosts.ts`) and `ui/` (each component once, and `layouts/`
   that only arrange them; `ui/panes/` a session's pane, a widget's
@@ -332,7 +333,8 @@ writing the full defaults on first launch is buying.
 - Split panes are a module of the desktop window's, not of the workspace:
   `src/desktop/split-panes/` (its map is `index.ts`) owns the pane layout, its
   sizing, drops and the drag's phases (`model/`, pure), the port a host
-  implements (`application/ports.ts`, `SplitPanesSource`), the drag, FLIP,
+  implements (`application/ports.ts`, `SplitPanesSource`), the drag, FLIP and
+  their shared cancellable body restoration (`adapters/dom/staged-reveal.ts`),
   Tab order and the names a host may see of the page (`adapters/dom/`,
   `marks.ts`), and the grid and its stylesheet (`ui/`). A host supplies one
   source that reads its layout and carries out every change through its own

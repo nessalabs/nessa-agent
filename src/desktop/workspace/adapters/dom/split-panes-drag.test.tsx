@@ -34,7 +34,7 @@ import { measureWorkspace } from "./measure"
 import { workspaceSplitPanes } from "../store/split-panes-source"
 import { useSplitPanesDrag } from "../../../split-panes"
 import { classes, gridOf, marks } from "../../../split-panes"
-import { carriedSession, workspaceDragOptions } from "./split-panes-drag"
+import { dragCard, dragCardSize, workspaceDragOptions } from "./split-panes-drag"
 
 let host: HTMLDivElement
 /** Every animation asked for, and of what. */
@@ -65,7 +65,7 @@ function Grid() {
   const root = useRef<HTMLDivElement>(null)
   const store = useWorkspaceStore()
   const source = useMemo(() => workspaceSplitPanes(store), [store])
-  const options = useMemo(() => workspaceDragOptions(store), [store])
+  const options = useMemo(workspaceDragOptions, [])
   useSplitPanesDrag(root, source, options)
   const panes = store.getState().workspace.panes
   return (
@@ -213,12 +213,12 @@ it("carries the copy under the pointer, gliding to its centre, and commits the z
   // held where it was grabbed, 60, 16 from its corner, and glides until its
   // centre is under the pointer.
   expect(carrier()?.style.transform).toBe("translate(90px, 40px)")
-  expect(ghost?.style.transform).toBe("translate(-273px, -400px)")
+  expect(ghost?.style.transform).toBe("translate(-140px, -22px)")
   const glider = ghost?.parentElement
-  expect(glider?.style.transform).toBe("translate(213px, 384px)")
+  expect(glider?.style.transform).toBe("translate(0px, 0px)")
   const glide = animated.find((entry) => entry.element === glider)
   expect(glide?.keyframes.map((frame) => frame.transform)).toEqual([
-    "translate(213px, 384px)",
+    "translate(0px, 0px)",
     "translate(0px, 0px)",
   ])
   // The middle of the other pane, where the pointer is: a swap, said, and held by a placeholder.
@@ -381,8 +381,8 @@ it("pictures the pane's header and leaves its conversation out of the copy", asy
   const ghost = host.querySelector(`.${classes.ghost}`)
   expect(ghost?.querySelector("[data-tauri-drag-region], [data-pane-focused]")).toBeNull()
   expect(ghost?.querySelector("[data-sliver]")).toBeNull()
-  expect(ghost?.querySelector(".workspace-pane-header")?.textContent).toBe(
-    header(1).textContent,
+  expect(ghost?.querySelector(".workspace-drag-title")?.textContent).toBe(
+    pane.getAttribute("aria-label"),
   )
   // The conversation is not painted, and building it is the press's long frame.
   expect(ghost?.querySelector(".workspace-pane-body, .workspace-transcript")).toBeNull()
@@ -390,34 +390,25 @@ it("pictures the pane's header and leaves its conversation out of the copy", asy
   await act(async () => root.unmount())
 })
 
-it("gives a carried session the composer of a new session's home it would open beside, emptied, in a conversation's shape", async () => {
-  const store = testStore()
-  await store.dispatch(loadWorkspace())
-  await settle()
-  // The focused pane is a new session's home, its composer in the box that docks it.
-  const focusedPane = document.createElement("article")
-  focusedPane.innerHTML =
-    '<div class="workspace-pane-home"><div class="desktop-home"><h1 class="desktop-greeting">Working late?</h1>' +
-    '<div class="desktop-home-composer workspace-dock"><form class="desktop-composer"><textarea></textarea></form></div></div></div>'
-  const field = focusedPane.querySelector("textarea")
-  if (field) field.value = "a draft of its own"
+it("carries only a row's title and icon, never its preview or a composer", () => {
   const pressed = document.createElement("div")
-  pressed.textContent = "Session d"
-  const copy = carriedSession(store)?.("d", {
-    pressed,
-    picture: (element) => element.cloneNode(true) as HTMLElement,
-    focusedPane,
-  })
-  // A conversation's body, which the dock's rules and the title's type ask for (`conversation.css`).
-  expect(copy?.querySelector(".workspace-pane-body")?.classList).toContain(
-    "workspace-conversation",
+  pressed.innerHTML =
+    '<span class="workspace-agent-tile">A</span><span class="workspace-session-title">Session d</span><p>Long conversation preview</p><textarea>draft</textarea>'
+  const copy = dragCard(
+    { kind: "item", item: "session:d" },
+    {
+      pressed,
+      pane: null,
+      picture: (element) => element.cloneNode(true) as HTMLElement,
+      focusedPane: null,
+    },
   )
-  const docks = copy?.querySelectorAll(".workspace-pane-body > .workspace-dock") ?? []
-  expect(docks).toHaveLength(1)
-  expect(docks[0]?.querySelector(".desktop-composer textarea")).not.toBeNull()
-  expect(docks[0]?.querySelector("textarea")?.value).toBe("")
-  // The home's greeting is no part of it.
-  expect(copy?.querySelector(".desktop-greeting")).toBeNull()
+  expect(copy.textContent).toBe("ASession d")
+  expect(
+    copy.querySelector("textarea, .workspace-transcript, .workspace-pane-body"),
+  ).toBeNull()
+  expect(workspaceDragOptions().copySize).toEqual(dragCardSize)
+  expect(workspaceDragOptions().previewPanes).toBe(false)
 })
 
 it("draws the copy in the frame the drag begins, and what the zone would do in the next", async () => {
@@ -809,119 +800,43 @@ it("aims at the pointer: off the grid at nothing, a gutter at the pane nearest, 
   await act(async () => root.unmount())
 })
 
-it("draws the copy at the slot it would land in, and the panes at the rects the drop gives them — none stretched — and at their own with no zone", async () => {
+it("keeps a compact card and live panes unchanged while highlighting the hovered zone", async () => {
   const { store, root } = await mounted()
-  const ghost = () => host.querySelector<HTMLElement>(`.${classes.ghost}`)
-  const placeholder = () => host.querySelector<HTMLElement>(`.${classes.placeholder}`)
-  const pane = (key: number) =>
-    host.querySelector<HTMLElement>(`[data-pane-key="${key}"]`) ?? new HTMLElement()
-  /** The last transform of the last animation asked of `element`. */
-  const lastDrawn = (element: Element | null) =>
-    animated
-      .filter((entry) => entry.element === element)
-      .at(-1)
-      ?.keyframes.at(-1)?.transform
-  /**
-   * At every step of the last change of shape asked of `box`, its scale times
-   * the scale its content (`content`) is drawn at back: 1, 1 where nothing is stretched.
-   */
-  const stretch = (box: Element | null, content: Element | null) => {
-    const scales = (element: Element | null) =>
-      (animated.filter((entry) => entry.element === element).at(-1)?.keyframes ?? []).map(
-        (frame) =>
-          (/scale\(([^,]+), ([^)]+)\)/.exec(String(frame.transform)) ?? [])
-            .slice(1)
-            .map(Number),
-      )
-    const outer = scales(box)
-    const inner = scales(content)
-    expect(outer.length).toBeGreaterThan(2)
-    expect(inner.length).toBe(outer.length)
-    return outer.map(([x, y], step) => [
-      Number((x * inner[step][0]).toFixed(6)),
-      Number((y * inner[step][1]).toFixed(6)),
-    ])
-  }
-  const unstretched = (box: Element | null, content: Element | null) =>
-    expect(new Set(stretch(box, content).flat())).toEqual(new Set([1]))
-  // The document's clock, so the page can start a box and its content at one time.
-  Object.defineProperty(document, "timeline", {
-    configurable: true,
-    value: { currentTime: 1234 },
-  })
-  /** When the last animation asked of `element` starts. */
-  const startOf = (element: Element | null) =>
-    animated.filter((entry) => entry.element === element).at(-1)?.animation.startTime
+  const before = store.getState().workspace.panes
   await press(60, 16, header(1))
-  // Up pane c's middle: above it. The tall pane a would lie on top, the width of the grid.
   for (const y of [400, 300, 200, 100, 30]) {
     pointer("pointermove", 827, y)
     await apart()
   }
   await frames()
+  const ghost = host.querySelector<HTMLElement>(`.${classes.ghost}`)
+  const highlight = host.querySelector<HTMLElement>(`.${classes.placeholder}`)
   expect(said()).toBe("Move above Session c")
-  expect(placeholder()?.style.width).toBe("1100px")
-  expect(placeholder()?.style.height).toBe("396px")
-  // The copy is the slot's size, so its centre stays on the pointer.
-  expect(ghost()?.style.width).toBe("1100px")
-  expect(ghost()?.style.height).toBe("396px")
-  expect(lastDrawn(ghost())).toBe("translate(-550px, -198px) scale(1, 1)")
-  expect(lastDrawn(ghost()?.firstElementChild ?? null)).toBe("scale(1, 1)")
-  // Pane c goes below it (0, 404, 1100 × 396): drawn there by transform
-  // from where it is laid out (554, 0, 546 × 800), its content scaled back —
-  // cut to that shape, never laid out again.
-  expect(pane(2).style.width).toBe("")
-  expect(lastDrawn(pane(2))).toBe(
-    `translate(-277px, 202px) scale(${1100 / 546}, ${396 / 800})`,
-  )
-  // Pane a's slot would be the window's corner: its header steps past the controls there.
-  expect(pane(1).getAttribute(marks.dragCorner)).toBe("yes")
-  expect(pane(2).getAttribute(marks.dragCorner)).toBeNull()
-  // Its content is scaled back as a pane that shape lays it out: the header
-  // held to the top left, the transcript to the top — centred across (273
-  // is half the width it has) as it grows, held left as it shrinks — cut
-  // to the shape where it is smaller.
-  const paneHeader = pane(2).querySelector<HTMLElement>(".workspace-pane-header")
-  const transcript = pane(2).querySelector<HTMLElement>(".workspace-transcript")
-  expect(paneHeader?.style.transformOrigin).toBe("0px 0px")
-  // The conversation is not painted, so the preview does not make it a layer.
-  expect(transcript?.style.transformOrigin).toBe("")
-  // Each box and its content start at one time: never a frame apart.
-  for (const [box, content] of [
-    [pane(2), pane(2).firstElementChild],
-    [ghost(), ghost()?.firstElementChild ?? null],
-  ] as const) {
-    expect(startOf(box)).toBe(1234)
-    expect(startOf(content)).toBe(1234)
+  expect([ghost?.style.width, ghost?.style.height]).toEqual(["280px", "44px"])
+  expect([highlight?.style.width, highlight?.style.height]).toEqual(["546px", "400px"])
+  expect(host.querySelector(`[${marks.reflow}]`)).toBeNull()
+  expect(host.querySelector(`[${marks.pressing}]`)).toBeNull()
+  for (const pane of host.querySelectorAll<HTMLElement>("[data-pane-key]")) {
+    expect([pane.style.transform, pane.style.width, pane.style.height]).toEqual([
+      "",
+      "",
+      "",
+    ])
+    expect(pane.hasAttribute(marks.dragCorner)).toBe(false)
   }
-  // On the way, every step: the box scaled, its content scaled back exactly.
-  unstretched(ghost(), ghost()?.firstElementChild ?? null)
-  unstretched(pane(2), pane(2).firstElementChild)
-  // Off the grid: nothing offered, so the copy is its own size and the panes their own.
+  expect(store.getState().workspace.panes).toBe(before)
   pointer("pointermove", 1200, 300)
   await frames()
-  expect(said()).toBe("")
-  expect(ghost()?.style.width).toBe("546px")
-  expect(ghost()?.style.height).toBe("800px")
-  expect(lastDrawn(ghost())).toBe("translate(-273px, -400px) scale(1, 1)")
-  expect(lastDrawn(pane(2))).toBe("translate(0px, 0px) scale(1, 1)")
-  // Out from under the controls once its motion ends — here, at once — its header steps back.
-  expect(pane(1).getAttribute(marks.dragCorner)).toBeNull()
-  // Back above it and dropped: it lands at the slot previewed; no pane keeps a size of the drag's.
+  expect(host.querySelector(`.${classes.placeholder}`)).toBeNull()
+  expect([ghost?.style.width, ghost?.style.height]).toEqual(["280px", "44px"])
   for (const y of [400, 300, 200, 100, 30]) {
     pointer("pointermove", 827, y)
     await apart()
   }
   await frames()
-  expect(said()).toBe("Move above Session c")
   pointer("pointerup", 827, 30)
   await frames()
-  const after = store.getState().workspace.panes
-  expect(shownIn(after)).toEqual(["a", "c"])
-  for (const each of host.querySelectorAll<HTMLElement>("[data-pane-key]")) {
-    expect([each.style.width, each.style.height]).toEqual(["", ""])
-    expect(each.hasAttribute(marks.dragCorner)).toBe(false)
-  }
+  expect(shownIn(store.getState().workspace.panes)).toEqual(["a", "c"])
   nothingLeft()
   await act(async () => root.unmount())
 })

@@ -1,4 +1,5 @@
-import { memo, useCallback, useRef } from "react"
+import { memo, useCallback, useLayoutEffect, useRef } from "react"
+import { playArrival, type Arrival } from "../../adapters/dom/arrival"
 import { Composer } from "../../../ui/composer"
 import { chooseModel, sendMessage, setComposerText } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
@@ -85,15 +86,24 @@ export const PaneHome = memo(function PaneHome({
 export const Conversation = memo(function Conversation({
   sessionId,
   onHeadingVisible,
+  arrival = null,
+  onArrivalDone = stayCard,
 }: {
   sessionId: string
   onHeadingVisible: (visible: boolean) => void
+  arrival?: Arrival | null
+  onArrivalDone?: () => void
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const conversationRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const conversation = conversationRef.current
+    if (conversation && arrival) return playArrival(conversation, arrival, onArrivalDone)
+  }, [arrival, onArrivalDone])
 
   return (
     // Its transcript and its composer are each a part of the pane to a drag's preview.
-    <div className="workspace-conversation" data-split-through>
+    <div ref={conversationRef} className="workspace-conversation" data-split-through>
       <Transcript
         sessionId={sessionId}
         scrollRef={scrollRef}

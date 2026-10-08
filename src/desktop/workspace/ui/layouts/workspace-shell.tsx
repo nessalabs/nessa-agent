@@ -313,7 +313,7 @@ export function WorkspaceShell({
   useFocusFollowsPane(store, root)
   // The panes' drag spans the window: sessions are picked up from its lists.
   const splitPanes = useMemo(() => workspaceSplitPanes(store), [store])
-  const dragOptions = useMemo(() => workspaceDragOptions(store), [store])
+  const dragOptions = useMemo(workspaceDragOptions, [])
   useSplitPanesDrag(root, splitPanes, dragOptions)
   const peek = useEdgePeek(!sidebarOpen, sidebarOpen)
   // Each widget host on the page, by scope, for Escape to find (`widget-escape.ts`).

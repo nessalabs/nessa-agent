@@ -41,7 +41,7 @@ export function recordShapeFrames(sel) {
   // a moment later than the frame drawn, which matters only to a stretch
   // that comes and goes within a frame. What this does not hide, as
   // observed in #365 and re-run there whenever this changes: a counter-scale
-  // started a frame off still fails `copy-takes-slot-shape` in both engines.
+  // started a frame off still fails `compact-drag-card` in both engines.
   // A chain that never settles in `steadyReads` reads is marked `unsteady`,
   // and every check that judges a title fails it (`unsteadily`): never
   // passed for being unreadable.
@@ -117,7 +117,7 @@ export function recordShapeFrames(sel) {
     const ghost = document.querySelector(sel.dragGhost)
     const placeholder = document.querySelector(sel.dragPlaceholder)
     const shown = ghost && ghost.checkVisibility({ checkOpacity: true })
-    const copyTitle = ghost?.querySelector(sel.titleText)
+    const copyTitle = ghost?.querySelector(sel.dragTitle)
     window.__shapes.push({
       t,
       pointer: window.__verifyPointer ?? null,
