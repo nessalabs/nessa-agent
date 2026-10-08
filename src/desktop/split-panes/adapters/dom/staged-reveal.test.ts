@@ -31,6 +31,21 @@ const frame = () => {
   pending.forEach((run) => run(0))
 }
 
+it("holds only affected panes belonging to its scope", () => {
+  const reveal = stagedReveal(scope, marks.restoring)
+  const stationary = scope.children[0]
+  const moving = scope.children[1]
+  const outside = document.createElement("article")
+  reveal.hold([moving, outside])
+  expect(stationary.hasAttribute(marks.restoring)).toBe(false)
+  expect(outside.hasAttribute(marks.restoring)).toBe(false)
+  expect(waiting()).toBe(1)
+  reveal.start()
+  frame()
+  expect(waiting()).toBe(0)
+  reveal.dispose()
+})
+
 it("restores one body per frame and schedules only one pending frame", () => {
   const reveal = stagedReveal(scope, marks.restoring)
   reveal.hold()

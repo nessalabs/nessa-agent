@@ -502,6 +502,8 @@ const alwaysStripped = [
   marks.waiting,
   marks.settling,
   marks.restoring,
+  marks.flying,
+  marks.measuring,
   marks.card,
 ]
 
@@ -1308,12 +1310,11 @@ export function useSplitPanesDrag(
         release()
         if (!ownsDragResources(phase, made)) return
         if (accept && proposalHolds()) {
-          // Bodies stay out of this layout and return one a frame (`drag.test.tsx`).
-          scope.querySelectorAll<HTMLElement>("[data-pane-key]").forEach((pane) => {
-            pane.setAttribute(marks.settling, "")
-          })
+          // A pane preview releases all its bodies through this owner. A
+          // target-only drop leaves that work to the affected layout flights.
+          if (options.previewPanes) reveal.hold()
           source.commitDrop({ carried: what, target: aim.target, zone: aim.zone, room })
-          startReveal()
+          if (options.previewPanes) startReveal()
           return
         }
         // The preview was the arrangement this frame is not committing.

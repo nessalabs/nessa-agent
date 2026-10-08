@@ -9,7 +9,7 @@
  */
 import { act, useRef, useSyncExternalStore, type RefObject } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { afterEach, beforeEach, expect, it } from "vitest"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import type { Drop, SplitPanesSource } from "../../application/ports"
 import { dropOutcome } from "../../model/drop"
 import { panesOf, singlePane, splitPane, type PaneLayout } from "../../model/pane-layout"
@@ -437,6 +437,27 @@ it("keeps a ready failure that is not cancellation", async () => {
     else globalThis.reportError = previous
     Reflect.deleteProperty(document, "timeline")
   }
+})
+
+it("a target-only drop leaves body restoration to the layout owner", async () => {
+  const fake = fakeSource(two())
+  const commit = fake.source.commitDrop
+  vi.spyOn(fake.source, "commitDrop").mockImplementation((drop) => {
+    expect(host.querySelector(`[${marks.settling}]`)).toBeNull()
+    commit(drop)
+  })
+  const root = await mounted(
+    fake,
+    options({ previewPanes: false, copySize: { width: 280, height: 44 } }),
+  )
+  await liftOntoTwo()
+  expect(said()).toBe("Swap with Pane b")
+  pointer("pointerup", 827, 400)
+  await frames()
+  expect(fake.state.drops).toHaveLength(1)
+  expect(items(fake)).toEqual(["b", "a"])
+  expect(host.querySelector(`[${marks.settling}]`)).toBeNull()
+  await act(async () => root.unmount())
 })
 
 it("previews the outcome of the layout the source holds, and commits it through the source in the room the press read", async () => {
@@ -919,6 +940,8 @@ it("carries the host's copy of an item, and a picture of a pane without the host
   pointer("pointerup", 40, 40)
   await frames()
   element('[data-pane-key="1"]').setAttribute(marks.restoring, "")
+  element('[data-pane-key="1"]').setAttribute(marks.flying, "")
+  element('[data-pane-key="1"]').setAttribute(marks.measuring, "")
   await liftOntoTwo()
   const copy = element(`.${classes.ghost} header`)
   // A picture of the pane as it looks — in the corner, its header starts
@@ -932,6 +955,8 @@ it("carries the host's copy of an item, and a picture of a pane without the host
     marks.carrying,
     marks.lifted,
     marks.restoring,
+    marks.flying,
+    marks.measuring,
   ])
     expect(element(`.${classes.ghost}`).querySelector(`[${name}]`), name).toBeNull()
   expect(copy.hasAttribute("data-host-mark")).toBe(false)

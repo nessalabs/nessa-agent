@@ -307,27 +307,30 @@ it("skips inert composers when choosing the target", async () => {
   }
 })
 
-it.each([marks.settling, marks.flipping, marks.restoring, arrivalWaitingAttribute])(
-  "waits for %s to release before finding its field",
-  async (attribute) => {
-    host.innerHTML =
-      '<div data-pane-focused><form class="desktop-composer"><textarea aria-label="Ready" /></form></div>'
-    const pane = host.firstElementChild as HTMLElement
-    pane.setAttribute(attribute, "")
-    const stop = focusInFront(host)
-    try {
-      await act(async () => animation.runFrame())
-      expect(caretIn()).not.toBe("Ready")
-      pane.removeAttribute(attribute)
-      await act(async () => animation.runFrame())
-      expect(caretIn()).not.toBe("Ready")
-      await act(async () => animation.runFrame())
-      expect(caretIn()).toBe("Ready")
-    } finally {
-      stop()
-    }
-  },
-)
+it.each([
+  marks.settling,
+  marks.flying,
+  marks.measuring,
+  marks.restoring,
+  arrivalWaitingAttribute,
+])("waits for %s to release before finding its field", async (attribute) => {
+  host.innerHTML =
+    '<div data-pane-focused><form class="desktop-composer"><textarea aria-label="Ready" /></form></div>'
+  const pane = host.firstElementChild as HTMLElement
+  pane.setAttribute(attribute, "")
+  const stop = focusInFront(host)
+  try {
+    await act(async () => animation.runFrame())
+    expect(caretIn()).not.toBe("Ready")
+    pane.removeAttribute(attribute)
+    await act(async () => animation.runFrame())
+    expect(caretIn()).not.toBe("Ready")
+    await act(async () => animation.runFrame())
+    expect(caretIn()).toBe("Ready")
+  } finally {
+    stop()
+  }
+})
 
 it("waits for a window widget's body rather than focusing the pane beneath it", async () => {
   await act(async () =>

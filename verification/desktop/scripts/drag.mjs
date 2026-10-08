@@ -34,6 +34,8 @@
  *   reduced-motion       live panes stay still; releasing commits without motion
  *   compact-drag-card     a row-sized card keeps its size and follows the pointer
  *   stationary-drag-target  chats keep their geometry and material; only the target highlights
+ *   stationary-layout-flight  closing one pane never suppresses stationary chats
+ *   stationary-drop-commit    a committed swap never suppresses untouched chats
  *
  * `--shots <dir>` saves, from compact-drag-card, the copy below a wide
  * pane, beside it, and over its own place.
@@ -80,6 +82,7 @@ const tolerance = 2
 
 register()
 const { restAfter } = await import("../../../src/desktop/split-panes/model/drop.ts")
+const { marks } = await import("../../../src/desktop/split-panes/adapters/dom/marks.ts")
 
 /**
  * How long the copy's glide to its centre may take: `--desktop-base`, read
@@ -351,6 +354,96 @@ async function changeMidDrag(page, layout, name, act, expectAfter) {
   const problem = expectAfter(before, await order(page), await state(page))
   if (problem) failures.push(`${name}: ${problem}`)
   return failures
+}
+
+/** Stationary chats remain live through an actual layout change, frame by frame. */
+async function stationaryThrough(page, { focus, count, change }) {
+  await openPanes(page, 4)
+  await page.locator(css.pane).nth(focus).locator(css.field).focus()
+  await settled(page)
+  await frames(page, 8)
+  const before = await panes(page)
+  const colors = await page.evaluate(
+    (sel) =>
+      [...document.querySelectorAll(sel)].map((pane) => ({
+        key: pane.dataset.paneKey,
+        fill: getComputedStyle(pane).backgroundColor,
+      })),
+    css.pane,
+  )
+  const reduced = await page.evaluate(
+    () => matchMedia("(prefers-reduced-motion: reduce)").matches,
+  )
+  await page.evaluate(
+    ({ selectors, mark }) => {
+      window.__paneFlightFrames = []
+      window.__paneFlightOn = true
+      const take = () => {
+        if (!window.__paneFlightOn) return
+        const root = document.querySelector(selectors.workspace)
+        window.__paneFlightFrames.push({
+          flight: root?.hasAttribute(mark.flipping),
+          measuring: root?.hasAttribute(mark.measuring),
+          panes: [...document.querySelectorAll(selectors.pane)].map((pane) => ({
+            key: pane.dataset.paneKey,
+            quiet: getComputedStyle(pane.querySelector(selectors.paneBody))
+              .contentVisibility,
+            fill: getComputedStyle(pane).backgroundColor,
+            flying: pane.hasAttribute(mark.flying),
+            restoring: pane.hasAttribute(mark.restoring),
+          })),
+        })
+        requestAnimationFrame(take)
+      }
+      requestAnimationFrame(take)
+    },
+    {
+      selectors: { workspace: css.workspace, pane: css.pane, paneBody: css.paneBody },
+      mark: marks,
+    },
+  )
+  let samples
+  try {
+    await change(page, before)
+    await settled(page)
+    await frames(page, 12)
+  } finally {
+    samples = await page.evaluate(() => {
+      window.__paneFlightOn = false
+      return window.__paneFlightFrames
+    })
+  }
+  const after = await panes(page)
+  const stationary = after
+    .filter((pane) => {
+      const old = before.find((item) => item.key === pane.key)
+      return old && ["x", "y", "w", "h"].every((axis) => near(old[axis], pane[axis]))
+    })
+    .map((pane) => pane.key)
+  if (!stationary.length) throw new CannotRun("the layout change left no stationary pane")
+  const failures = []
+  if (after.length !== count)
+    failures.push(`pane count ${after.length}, expected ${count}`)
+  if (
+    !after.some((pane) => {
+      const old = before.find((item) => item.key === pane.key)
+      return old && ["x", "y", "w", "h"].some((axis) => !near(old[axis], pane[axis]))
+    })
+  )
+    failures.push("the action changed no pane geometry")
+  if (!reduced && !samples.some((sample) => sample.flight))
+    failures.push("no layout flight was observed")
+  for (const sample of samples) {
+    if (sample.measuring) failures.push("the temporary measurement hold reached paint")
+    for (const pane of sample.panes) {
+      if (!stationary.includes(pane.key)) continue
+      if (pane.quiet === "hidden" || pane.flying || pane.restoring)
+        failures.push(`stationary pane ${pane.key} was suppressed`)
+      if (pane.fill !== colors.find((old) => old.key === pane.key)?.fill)
+        failures.push(`stationary pane ${pane.key} changed its material`)
+    }
+  }
+  return { stationary, samples, failures: [...new Set(failures)] }
 }
 
 const checks = {
@@ -1196,6 +1289,29 @@ Object.assign(checks, {
     await shapes.stop()
     return { before, during, highlight: box, failures }
   },
+  "stationary-layout-flight": (page) =>
+    stationaryThrough(page, {
+      focus: 3,
+      count: 3,
+      change: (p) => p.keyboard.press(keys.closePane),
+    }),
+  "stationary-drop-commit": (page) =>
+    stationaryThrough(page, {
+      focus: 0,
+      count: 4,
+      change: async (p, before) => {
+        const target = before.at(-1)
+        if (!target) throw new CannotRun("no pane to swap with")
+        await lift(p, 0)
+        await p.mouse.move(target.x + target.w / 2, target.y + target.h / 2, {
+          steps: 15,
+        })
+        if (!(await zoneSays(p, zoneSaid.swap)))
+          throw new CannotRun("no swap was offered")
+        await atRest(p)
+        await p.mouse.up()
+      },
+    }),
   "copy-under-controls": async (page, layout) => {
     await hideColumns(page, layout)
     await openPanes(page, 2)

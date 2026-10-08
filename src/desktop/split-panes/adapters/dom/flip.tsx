@@ -17,8 +17,8 @@
  * - `data-flip="slide"` with `data-flip-id`: slides sideways. A slide inside
  *   another slide moves only by its own difference.
  *
- * While anything flies, the scope's root carries `data-split-flipping`, which the
- * stylesheet uses to pause blur and large shadows.
+ * The scope marks an active flight and each pane it moves. Styles pause the
+ * moving panes' blur and shadows; stationary panes stay live.
  */
 import { Component, type ReactNode, type RefObject } from "react"
 import { slideAnimation } from "../../../adapters/hold-still"
@@ -115,7 +115,7 @@ export function flyPane(
   ]
 }
 
-function play(root: HTMLElement, from: Rects): Animation[] {
+function play(root: HTMLElement, from: Rects) {
   const flying: Animation[] = []
   const shifted = new Map<HTMLElement, number>()
   // Where everything landed, read before anything starts: a slide begun first
@@ -160,7 +160,8 @@ function play(root: HTMLElement, from: Rects): Animation[] {
   })
   // A settled preview can leave nothing to animate. Resolving root styles
   // then does work for no flight (flip.test.tsx holds this no-flight path).
-  if (slides.length === 0 && panes.length === 0) return flying
+  const moving = panes.map(({ landed }) => landed.pane)
+  if (slides.length === 0 && panes.length === 0) return { flying, moving }
   const ease = motionToken(root, "--desktop-ease") ?? "linear"
   const duration = durationToken(root, "--desktop-slow")
   const flight = durationToken(root, "--desktop-flight")
@@ -176,7 +177,7 @@ function play(root: HTMLElement, from: Rects): Animation[] {
   panes.forEach(({ landed, before }) => {
     flying.push(...flyPane(landed, before, flight))
   })
-  return flying
+  return { flying, moving }
 }
 
 export class FlipScope extends Component<{
@@ -186,6 +187,7 @@ export class FlipScope extends Component<{
   children: ReactNode
 }> {
   private flights: Animation[] = []
+  private moving: HTMLElement[] = []
   private scope: HTMLElement | null = null
   private reveal: ReturnType<typeof stagedReveal> | null = null
 
@@ -193,9 +195,14 @@ export class FlipScope extends Component<{
     const flights = this.flights
     this.flights = []
     flights.forEach((flight) => flight.cancel())
+    this.moving.forEach((pane) => pane.removeAttribute(marks.flying))
+    this.moving = []
     this.reveal?.dispose()
     this.reveal = null
-    if (this.scope) reflectMark(this.scope, marks.flipping, false)
+    if (this.scope) {
+      reflectMark(this.scope, marks.flipping, false)
+      this.scope.removeAttribute(marks.measuring)
+    }
     this.scope = null
   }
 
@@ -231,10 +238,13 @@ export class FlipScope extends Component<{
     const hadFlight = root.hasAttribute(marks.flipping)
     this.reveal.stop()
     const previousFlights = this.flights
+    const previousMoving = this.moving
     this.flights = []
+    this.moving = []
     previousFlights.forEach((flight) => flight.cancel())
+    previousMoving.forEach((pane) => pane.removeAttribute(marks.flying))
     if (!from) {
-      if (hadFlight) this.reveal.hold()
+      if (hadFlight) this.reveal.hold(previousMoving)
       reflectMark(root, marks.flipping, false)
       this.reveal.start()
       return
@@ -242,18 +252,32 @@ export class FlipScope extends Component<{
     // Hold expensive bodies before the landing read forces layout, rather
     // than hiding them only after that work has already happened.
     reflectMark(root, marks.flipping, true)
-    const flying = play(root, from)
+    root.setAttribute(marks.measuring, "")
+    let plan: ReturnType<typeof play>
+    try {
+      plan = play(root, from)
+      plan.moving.forEach((pane) => pane.setAttribute(marks.flying, ""))
+      const ended = previousMoving.filter((pane) => !plan.moving.includes(pane))
+      if (ended.length > 0) this.reveal.hold(ended)
+    } finally {
+      root.removeAttribute(marks.measuring)
+    }
+    const { flying, moving } = plan
     this.flights = flying
+    this.moving = moving
     if (flying.length === 0) {
-      if (hadFlight) this.reveal.hold()
+      if (hadFlight) this.reveal.hold(previousMoving)
       reflectMark(root, marks.flipping, false)
       this.reveal.start()
       return
     }
+    this.reveal.start()
     Promise.all(flying.map((flight) => flight.finished))
       .then(() => {
         if (this.flights !== flying || this.scope !== root) return
-        this.reveal?.hold()
+        this.reveal?.hold(moving)
+        moving.forEach((pane) => pane.removeAttribute(marks.flying))
+        this.moving = []
         reflectMark(root, marks.flipping, false)
         this.reveal?.start()
       })

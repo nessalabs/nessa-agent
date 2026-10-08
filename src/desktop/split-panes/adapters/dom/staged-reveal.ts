@@ -17,12 +17,10 @@ export function stagedReveal(scope: HTMLElement, marker: string) {
   }
   return {
     stop,
-    hold() {
+    hold(panes: Iterable<Element> = scope.querySelectorAll("[data-pane-key]")) {
       if (!active) return
       stop()
-      scope.querySelectorAll("[data-pane-key]").forEach((pane) => {
-        pane.setAttribute(marker, "")
-      })
+      for (const pane of panes) if (scope.contains(pane)) pane.setAttribute(marker, "")
     },
     start() {
       if (!active || frame !== null || !scope.querySelector(`[${marker}]`)) return

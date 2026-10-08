@@ -217,6 +217,11 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   and the highlight marks the hovered half or whole pane. Release commits the
   split; cancellation leaves the layout unchanged and removes owned resources.
   _Check:_ `drag.mjs` (`stationary-drag-target`; every drag check's residue).
+- [ ] **A layout flight leaves stationary chats live.** Closing or swapping panes keeps
+  unchanged panes' bodies and material visible. A temporary measurement hold
+  never reaches paint; only moving panes restore one body per frame.
+  _Check:_ `drag.mjs` (`stationary-layout-flight`, `stationary-drop-commit`),
+  `split-panes/adapters/dom/flip.test.tsx` (interrupted subsets).
 - _Harmless, and not a failure:_ a single read of a title's transforms in
   WebKit that mixes two moments. How the two stretch checks read a title is
   `recordShapeFrames` (`scripts/lib/shape-sampler.mjs`), and why, with the runs and probes, is #365.

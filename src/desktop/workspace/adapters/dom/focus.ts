@@ -56,7 +56,7 @@ function caretTarget(scope: ParentNode): HTMLElement | null {
     candidates.find(
       (element) =>
         element.closest(
-          `[inert], [${marks.settling}], [${marks.reflow}], [${marks.flipping}], [${marks.restoring}], [${arrivalWaitingAttribute}]`,
+          `[inert], [${marks.settling}], [${marks.reflow}], [${marks.flying}], [${marks.measuring}], [${marks.restoring}], [${arrivalWaitingAttribute}]`,
         ) === null,
     ) ?? null
   )

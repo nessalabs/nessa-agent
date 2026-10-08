@@ -539,16 +539,32 @@ button carries**; and **the zone settles at rest**.
 
 | phase | event | next | what the window does |
 | --- | --- | --- | --- |
-| idle | press of the primary button on a pane's header or a session's row, not on a control inside it | pressed (no copy yet) | nothing in the press's own frame; in a task once it has painted, the copy is made unseen and the page read once — the grid, the room (`measure`), each pane's box and parts, the side columns drawn, and whether panes can be seen at all |
+| idle | press of the primary button on a pane's header or a session's row, not on a control inside it | pressed (no copy yet) | nothing in the press's own frame; in a task once it has painted, the copy is made unseen and the page read once — the grid, the room (`measure`), each pane's box; parts only for a pane preview, the side columns drawn, and whether panes can be seen at all |
 | idle | any other press: another button, a control inside a header | idle | the press is not the drag's: nothing is made or held for it |
 | pressed (no copy yet) | the copy made (`ready`) | pressed (with its copy) | — |
 | pressed (no copy yet) | the copy cannot be made: no panes laid out | idle | — |
 | pressed (no copy yet) | move | pressed | nothing: a press becomes a drag only once its copy is made, so no event reads the page |
 | pressed | a move of another pointer, or of its own under 4px (`liftDistance`) | pressed | — |
-| pressed (with its copy) | move 4px or more | carrying (aim: none yet) | the copy is shown under the pointer at the carried pane's own size, and glides (`--desktop-base`, transform only) until its centre is under the pointer, where it stays; the zone waits for the next frame |
+| pressed (with its copy) | move 4px or more | carrying (aim: none yet) | show the configured copy under the pointer; the zone waits for the next frame |
 | pressed | release of its pointer | idle | a click; what was made goes |
 | pressed | Escape; any other key but a lone modifier; another button (a move whose `buttons` is not the primary alone — a chorded button reaches the page as a move, never a press); `pointercancel`; the window's blur; a change (below) | idle | the press is let go: no later move can start a drag |
-| carrying | move of its pointer | carrying | the copy moves with the pointer, one to one; the zone is decided from the pointer (below); the panes, the placeholder and the copy's shape change only when the zone does, a frame later (the preview): each pane takes the rect the drop would give it, and the copy the placeholder's size about the pointer — or, with nothing offered, its own (_The workspace carries a compact, fixed-size icon-and-title card. Existing chats
+| carrying | move of its pointer | carrying | move the copy one to one with the pointer and update the accepted target on the next frame; the workspace highlights that target without rearranging live chats |
+| carrying | a move of another pointer, or to where it already is | carrying | — (resting is not restarted) |
+| carrying | no move for 150ms (`restAfter`, `still`) | carrying | the pointer's heading has aged out: the zone is decided again as at rest, and previewed a frame later |
+| carrying | release of its pointer while a shown zone offers a drop (`dropOutcome`) | dropping | commit that owned outcome in the retained room after checking the proposal is still current; the compact card moves/fades into its target without stretching; swallow the resulting click |
+| carrying | release with no accepted zone: a flick, a covered/refused area or its own place | cancelling (home) | return the configured copy home, leave the layout unchanged and swallow the click |
+| carrying | release of another pointer | carrying | — (no click is swallowed for it) |
+| carrying | Escape | cancelling (home) | as above; Escape goes no further |
+| carrying | another button, `lostpointercapture`, `pointercancel`, the window's blur | cancelling (home) | as above; with the press let go, a later move starts nothing |
+| carrying | a change: any key but Escape or a lone modifier (a command — ⌘W, ⌘0, ⌘B, ⌘,, ⌘K, an arrow — ends the drag before it runs); a resize; the panes, the content view or the side columns changing in the store (an agent's dispatch, a session removed); the carried session no longer listed; the window going inert under Settings, seen as it happens (a `MutationObserver` on `inert`). A layout switch unmounts the shell, and the drag with it, taking everything it drew | cancelling (at once) | the copy and the preview go at once, nothing read again, and the change plays as it would with no drag; a key that reaches the window while it is inert is never the drag's, so Settings keeps its Escape |
+| dropping | its flight finishes before the deferred commit/preview release | dropping | retain the resource owner until both finish, including reduced motion (#616) |
+| dropping | the drop's own change to the panes | dropping | (it is the drop) |
+| cancelling (home) | a change of room/view before its return flight ends | cancelling (at once) | remove the retained copy and preview immediately, including a lost pointer followed by resize; keep the resource owner through the flight (#616) |
+| dropping, cancelling | the owned copy's flight ends (`landed`, with its made resources) | idle | an obsolete flight's settlement leaves the current drag and its preview unchanged (#616) |
+| any phase with retained resources | adapter unmounts | idle | cancel owned flights, remove their copy/preview, and fence their later callbacks before cleanup effects (#616) |
+| dropping, cancelling | anything else, a press included | unchanged | a press while the copy still flies starts nothing |
+
+The workspace carries a compact, fixed-size icon-and-title card. Existing chats
 keep their normal material and layout while the pointer moves. Only the target
 zone is highlighted: the corresponding half of the hovered pane, or the whole
 pane for a middle drop. The same drop outcome still commits on release. The
@@ -559,7 +575,7 @@ card copies no transcript or composer and never changes size over a target.
 | lift from a pane or sidebar row | one compact icon/title card follows the pointer; existing pane contents remain visible |
 | enter an accepted target zone | highlight that pane's zone; leave live pane geometry and material unchanged |
 | enter a covered/refused area or the overview | remove the highlight; keep the card compact |
-| release over a target | commit the owned drop outcome; move/fade the card without stretching it; restore committed bodies through the existing staged owner |
+| release over a target | commit the owned drop outcome; move/fade the card without stretching it; only moving panes hold and restore their bodies through the layout-flight owner |
 | cancel, rebind or lose capture | remove owned card/highlight resources; leave the layout unchanged; late callbacks cannot affect a newer drag |
 
 The copy is drawn in a layer that begins below the titlebar row

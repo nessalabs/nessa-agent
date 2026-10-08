@@ -189,9 +189,14 @@ it("names what a flight restyles, so beginning one restyles a few elements, not 
   // The marks a flight and a preview set, as split-panes publishes them.
   const marked = (name: string) =>
     sheet.match(new RegExp(String.raw`^[^{}/]*\[${name}\][^{]*\{`, "gm")) ?? []
-  for (const name of [marks.flipping, marks.reflow])
+  for (const name of [marks.flipping, marks.measuring, marks.flying, marks.reflow])
     expect(marked(name).length, name).toBeGreaterThan(0)
-  const flightRules = [...marked(marks.flipping), ...marked(marks.reflow)]
+  const flightRules = [
+    marks.flipping,
+    marks.measuring,
+    marks.flying,
+    marks.reflow,
+  ].flatMap(marked)
   for (const rule of flightRules) expect(rule, rule).not.toMatch(/(?:>|\s)\*\s*(?:,|\{)/)
 })
 
@@ -358,11 +363,7 @@ it("skips pane bodies on the frame a drop commits them", () => {
     .split("}")[0]
   expect(mask).toMatch(/mask-image:\s*none/)
   const travelling = sheet
-    .slice(
-      sheet.indexOf(
-        ".workspace:is([data-split-flipping], [data-drag-reflow]) .workspace-pane {",
-      ),
-    )
+    .slice(sheet.indexOf(".workspace-pane[data-split-flying] {"))
     .split("}")[0]
   expect(travelling).toMatch(/background:\s*var\(--background\)/)
 })
@@ -454,10 +455,7 @@ it("paints nothing of a pane under the window's controls: its content below the 
   )
   // While panes travel, it waits out of sight.
   expect(
-    body(
-      panes,
-      ".workspace:is([data-split-flipping], [data-drag-reflow]) .desktop-header[data-sliver] {",
-    ),
+    body(panes, ".workspace-pane[data-split-flying] .desktop-header[data-sliver] {"),
   ).toMatch(/opacity:\s*0/)
 })
 
@@ -478,11 +476,12 @@ it("keeps pane bodies out of layout during a flight and staged restoration", () 
   const rule = sheet
     .slice(
       sheet.indexOf(
-        `.workspace[${marks.flipping}] .workspace-pane > .workspace-pane-body,`,
+        `.workspace[${marks.measuring}] .workspace-pane > .workspace-pane-body,`,
       ),
     )
     .split("}")[0]
   expect(rule).toContain(`.workspace-pane[${marks.restoring}] > .workspace-pane-body`)
+  expect(rule).toContain(`.workspace-pane[${marks.flying}] > .workspace-pane-body`)
   expect(rule).toMatch(/content-visibility:\s*hidden/)
 })
 

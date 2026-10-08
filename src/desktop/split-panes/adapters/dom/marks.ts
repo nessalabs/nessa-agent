@@ -39,6 +39,10 @@ export const marks = {
   dragCorner: "data-drag-corner",
   /** On the FLIP root while anything flies. */
   flipping: "data-split-flipping",
+  /** On the root only while final flight geometry is collected, before paint. */
+  measuring: "data-split-measuring",
+  /** On a pane whose geometry changes in the current flight. */
+  flying: "data-split-flying",
   /** On a pane whose body returns one frame at a time after a FLIP flight. */
   restoring: "data-split-restoring",
   /** On the drag's root while a preview draws panes away from where they are laid out. */

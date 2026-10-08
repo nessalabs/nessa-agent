@@ -254,13 +254,13 @@ it("holds bodies before landing reads, rejects an old finish and restores one bo
     return (
       <FlipScope shape={String(step)} root={scope}>
         <div key={String(rebound)} ref={scope} data-step={step}>
-          {["a", "b"].map((id, index) => (
+          {["a", "b", "c"].map((id, index) => (
             <article
               key={id}
               data-pane-key={id}
               data-flip="pane"
               data-flip-id={id}
-              data-left={((index + step) % 2) * 100}
+              data-left={id === "c" ? 200 : ((index + step) % 2) * 100}
             >
               <div />
             </article>
@@ -273,8 +273,10 @@ it("holds bodies before landing reads, rejects an old finish and restores one bo
   const style = globalThis.getComputedStyle
   Element.prototype.getBoundingClientRect = function (this: Element) {
     const scope = this.closest<HTMLElement>("[data-step]")
-    if (scope?.dataset.step === String(landingStep) && this.hasAttribute("data-flip"))
+    if (scope?.dataset.step === String(landingStep) && this.hasAttribute("data-flip")) {
       expect(scope?.hasAttribute(marks.flipping)).toBe(true)
+      expect(scope?.hasAttribute(marks.measuring)).toBe(true)
+    }
     return rect.call(this)
   }
   const current = () => {
@@ -286,6 +288,11 @@ it("holds bodies before landing reads, rejects an old finish and restores one bo
   try {
     await act(async () => root.render(<Panes />))
     await act(async () => change())
+    expect(current().hasAttribute(marks.measuring)).toBe(false)
+    expect(current().querySelectorAll(`[${marks.flying}]`)).toHaveLength(2)
+    expect(
+      current().querySelector('[data-pane-key="c"]')?.hasAttribute(marks.flying),
+    ).toBe(false)
     const firstEnd = finish.length
     await act(async () => change())
     await act(async () => finish.slice(0, firstEnd).forEach((resolve) => resolve()))
@@ -295,6 +302,9 @@ it("holds bodies before landing reads, rejects an old finish and restores one bo
     await act(async () => finish.slice(firstEnd).forEach((resolve) => resolve()))
     expect(scope.hasAttribute(marks.flipping)).toBe(false)
     expect(scope.querySelectorAll(`[${marks.restoring}]`)).toHaveLength(2)
+    expect(
+      scope.querySelector('[data-pane-key="c"]')?.hasAttribute(marks.restoring),
+    ).toBe(false)
     expect(queued.size).toBe(1)
     const pending = [...queued.values()][0]
     queued.clear()
@@ -336,6 +346,80 @@ it("holds bodies before landing reads, rejects an old finish and restores one bo
     await act(async () => root.unmount())
     Element.prototype.getBoundingClientRect = rect
     globalThis.getComputedStyle = style
+    vi.unstubAllGlobals()
+  }
+})
+
+it("stages old-only bodies when an interrupted flight moves a different subset", async () => {
+  const queued = new Map<number, FrameRequestCallback>()
+  let next = 0
+  vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+    queued.set(++next, run)
+    return next
+  })
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => queued.delete(id))
+  const finish: (() => void)[] = []
+  Element.prototype.animate = () =>
+    ({
+      cancel() {},
+      finished: new Promise<void>((resolve) => finish.push(resolve)),
+    }) as unknown as Animation
+  function Panes({ phase }: { phase: number }) {
+    const scope = useRef<HTMLDivElement>(null)
+    const positions =
+      phase === 0
+        ? [0, 100, 200, 400]
+        : phase === 1
+          ? [100, 0, 200, 400]
+          : [100, 0, 300, 400]
+    return (
+      <FlipScope shape={String(phase)} root={scope}>
+        <div ref={scope}>
+          {["a", "b", "c", "d"].map((id, index) => (
+            <article
+              key={id}
+              data-pane-key={id}
+              data-flip="pane"
+              data-flip-id={id}
+              data-left={positions[index]}
+            >
+              <div />
+            </article>
+          ))}
+        </div>
+      </FlipScope>
+    )
+  }
+  const root = createRoot(host)
+  try {
+    await act(async () => root.render(<Panes phase={0} />))
+    await act(async () => root.render(<Panes phase={1} />))
+    const oldEnd = finish.length
+    await act(async () => root.render(<Panes phase={2} />))
+    const scope = host.firstElementChild
+    if (!(scope instanceof HTMLElement)) throw new Error("missing scope")
+    expect(scope.querySelectorAll(`[${marks.flying}]`)).toHaveLength(1)
+    expect(scope.querySelectorAll(`[${marks.restoring}]`)).toHaveLength(2)
+    expect(
+      scope.querySelector('[data-pane-key="d"]')?.hasAttribute(marks.restoring),
+    ).toBe(false)
+    for (const remaining of [1, 0]) {
+      const pending = [...queued.values()][0]
+      queued.clear()
+      await act(async () => pending(0))
+      expect(scope.querySelectorAll(`[${marks.restoring}]`)).toHaveLength(remaining)
+      expect(scope.hasAttribute(marks.flipping)).toBe(true)
+    }
+    await act(async () => finish.slice(0, oldEnd).forEach((resolve) => resolve()))
+    expect(scope.hasAttribute(marks.flipping)).toBe(true)
+    await act(async () => finish.slice(oldEnd).forEach((resolve) => resolve()))
+    expect(scope.hasAttribute(marks.flipping)).toBe(false)
+    expect(scope.querySelectorAll(`[${marks.restoring}]`)).toHaveLength(1)
+    expect(
+      scope.querySelector('[data-pane-key="c"]')?.hasAttribute(marks.restoring),
+    ).toBe(true)
+  } finally {
+    await act(async () => root.unmount())
     vi.unstubAllGlobals()
   }
 })
