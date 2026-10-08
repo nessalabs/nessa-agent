@@ -158,8 +158,16 @@ export const SessionList = memo(function SessionList() {
             />
           ) : null}
           {groups.map((group, index) => (
-            <div key={group.id} role="group" aria-label={group.label}>
+            <div
+              key={group.id}
+              role="group"
+              aria-label={`${group.label} ${group.ids.length}`}
+            >
+              {/* The kit caption is a heading. Hidden here, so the listbox
+                  exposes the group and its options; the group's name keeps
+                  the count the heading would have said. */}
               <GroupHeader
+                aria-hidden="true"
                 className="workspace-group-label"
                 data-first={index === 0 || undefined}
                 level={3}

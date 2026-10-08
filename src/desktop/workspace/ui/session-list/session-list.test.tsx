@@ -58,7 +58,10 @@ it("draws the search, the captions and the rows with the kit", async () => {
   expect(host.querySelector("[data-slot=search-field] input")?.getAttribute("type")).toBe(
     "search",
   )
-  expect(host.querySelectorAll("[data-slot=group-header]").length).toBeGreaterThan(0)
+  const caption = host.querySelector("[data-slot=group-header]")
+  expect(caption).not.toBeNull()
+  expect(caption?.getAttribute("aria-hidden")).toBe("true")
+  expect(caption?.closest("[role=group]")?.getAttribute("aria-label")).toMatch(/ \d+$/)
   expect(host.querySelectorAll(".desktop-list-row").length).toBeGreaterThan(0)
   const row = host.querySelector("[data-session-row]")
   expect(row?.getAttribute("role")).toBe("option")

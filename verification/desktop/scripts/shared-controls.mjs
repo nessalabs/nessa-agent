@@ -692,10 +692,18 @@ const checks = {
     const switcher = await page.evaluate(() => {
       const header = document.querySelector(".workspace-results-group")
       const failures = []
+      const named = header?.closest("[role=group]")
       if (!header || header.getAttribute("data-slot") !== "group-header") {
         failures.push("switcher caption is not the kit's GroupHeader")
         return { failures, height: 0 }
       }
+      if (
+        header.getAttribute("aria-hidden") !== "true" ||
+        !named?.getAttribute("aria-label")
+      )
+        failures.push(
+          "switcher caption is exposed in the listbox instead of naming its group",
+        )
       const box = header.getBoundingClientRect()
       if (Math.abs(box.height - 27) > 1)
         failures.push(`switcher caption ${box.height}px tall, not 27`)
@@ -737,11 +745,19 @@ function measureAdopted(root) {
     if (radius !== want) failures.push(`search corner ${radius}, not ${want}`)
   }
   const input = read("[data-slot=search-field-input]")
-  if (input && getComputedStyle(input).fontSize !== "13px")
+  if (!input) failures.push("session list search has no input")
+  else if (getComputedStyle(input).fontSize !== "13px")
     failures.push(`search type ${getComputedStyle(input).fontSize}, not 13px`)
   const group = read("[data-slot=group-header]")
   if (!group) failures.push("session list caption is not the kit's GroupHeader")
   else {
+    if (
+      group.getAttribute("aria-hidden") !== "true" ||
+      !group.closest("[role=group]")?.getAttribute("aria-label")
+    )
+      failures.push(
+        "session list caption is exposed in the listbox instead of naming its group",
+      )
     const label = group.querySelector("[data-slot=group-header-label]")
     const style = label ? getComputedStyle(label) : null
     const box = group.getBoundingClientRect()
@@ -807,9 +823,10 @@ Checks, per engine and layout (--only badges,empty,identity,keys,list,rims,rows,
              --desktop-muted ink. Measured on load and with the switcher open.
   list       columns only (the sidebar layout folds the list, and the check
              holds without measuring it). The list's search is the kit's
-             SearchField (32px, 13px type, the window's 12px corner), its
-             captions are GroupHeader (11px/600), and its rows are ListRow.
-             The switcher's group caption is a GroupHeader 27px tall.
+             SearchField (32px, 13px type, the window's 12px corner); a missing
+             input fails. Captions are GroupHeader (11px/600), hidden from the
+             listbox, naming a group. Rows are ListRow. The switcher's group
+             caption is a GroupHeader 27px tall, hidden the same way.
   rims       every card set into a surface — a code block, an agent's command,
              a widget's card, "Nothing needs you" — has --desktop-card-rim for
              its edge. On load, in the widget sample, in the overview's peek.
