@@ -802,6 +802,41 @@ describe("the agents overview", () => {
     expect(store.getState().workspace.overview.selected).toBe("first")
   })
 
+  it("lands later when the current row moves past the drawn rows before the opening frame", async () => {
+    const index = sampleIndex()
+    // Newer than "first", so it leads and "first" is not the first row drawn.
+    const earlier = [summary("a", "desktop", 400, "needs-you", { title: "a" })]
+    const { store } = await mount({
+      index: { ...index, sessions: [...earlier, ...index.sessions] },
+    })
+    const shown = (id: string) =>
+      host.querySelector<HTMLElement>(`[data-overview-item="${id}"]`)
+    await act(async () => store.dispatch(selectInOverview({ sessionId: "first" })))
+    await act(async () => entry()?.click())
+    await act(async () => settle(10))
+    for (let frame = 0; frame < 16; frame++) {
+      if (
+        shown("first") !== null &&
+        document.activeElement !== shown("first") &&
+        animation.pending() > 0
+      )
+        break
+      await nextFrame()
+    }
+    // The row is committed and the opening frame is still waiting.
+    expect(shown("first")).not.toBeNull()
+    expect(document.activeElement).not.toBe(shown("first"))
+    expect(animation.pending()).toBeGreaterThan(0)
+    // "rest" is last. The frame already waiting cannot draw it.
+    expect(shown("rest")).toBeNull()
+    await act(async () => store.dispatch(selectInOverview({ sessionId: "rest" })))
+    for (let frame = 0; frame < 16 && document.activeElement !== shown("rest"); frame++)
+      await nextFrame()
+    expect(shown("rest")).not.toBeNull()
+    expect(document.activeElement).toBe(shown("rest"))
+    expect(store.getState().workspace.overview.selected).toBe("rest")
+  })
+
   it("puts the keyboard on the current row under StrictMode too, whose second mount cancels the first try", async () => {
     await mount({ strict: true })
     await open()

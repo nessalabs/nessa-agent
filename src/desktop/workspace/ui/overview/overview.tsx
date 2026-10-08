@@ -230,9 +230,10 @@ export function AgentsOverview({
   // a time, after the title, so a try on the open commit finds nothing and
   // would give up (`overview.test.tsx`). It waits, and lands once, the frame
   // after the row is there, so the caret never makes the frame that drew the
-  // row lay the page out early. A later chunk does not move it again. A
-  // cancelled try (StrictMode's second mount, a quick leave) leaves the next
-  // to land.
+  // row lay the page out early. A later chunk does not move it again. A row
+  // that moved past the rows drawn so far is not a landing: the try stays
+  // open until that row is focused (`overview.test.tsx`). A cancelled try
+  // (StrictMode's second mount, a quick leave) leaves the next to land.
   const landed = useRef(false)
   const cancelLand = useRef<(() => void) | null>(null)
   useEffect(() => () => cancelLand.current?.(), [])
@@ -259,8 +260,18 @@ export function AgentsOverview({
       if (cancelLand.current !== cancel) return
       cancelLand.current = null
       if (landed.current) return
-      landed.current = true
-      focusItem(currentNow.current, false)
+      const id = currentNow.current
+      const column = list.current
+      if (!column) return
+      const item =
+        id === null
+          ? column
+          : column.querySelector<HTMLElement>(`[data-overview-item="${CSS.escape(id)}"]`)
+      // Still past the drawn rows. Marking this landed would leave the
+      // keyboard off the row when it mounts (`overview.test.tsx`).
+      if (!item) return
+      focusItem(id, false)
+      if (document.activeElement === item) landed.current = true
     })
     cancelLand.current = cancel
   }, [ready, drawn, peekDrawn, focusItem])
