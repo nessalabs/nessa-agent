@@ -98,7 +98,13 @@ Only what is mounted on load is covered: the titlebar, pane actions, session\n  
             for (let index = 0; index < count; index++) {
               const button = buttons.nth(index)
               await button.hover()
-              await page.waitForTimeout(250)
+              // Settled, not equal to what is wanted: a wrong hover colour must reach the
+              // comparison below instead of timing out here.
+              await button.evaluate((element) =>
+                Promise.all(
+                  element.getAnimations().map((animation) => animation.finished),
+                ),
+              )
               const result = await button.evaluate((element) => {
                 const probe = document.createElement("div")
                 probe.style.background = "var(--desktop-hover-strong)"
