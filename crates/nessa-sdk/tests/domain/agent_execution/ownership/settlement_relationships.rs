@@ -642,3 +642,30 @@ fn refused_proof_keeps_interrupted_cascade_original_rows_and_no_recovery() {
     assert_eq!(refused.snapshot(), invalid);
     assert!(refused.recovery_records().is_empty());
 }
+
+#[test]
+fn completed_ancestor_refuses_open_descendants_without_repairing_retained_history() {
+    let graph = completed_owned_group(false);
+    let mut history = graph.snapshot();
+    for row in &mut history.lifetimes {
+        if row.lifetime_id != life("outside") {
+            row.state = LifetimeState::Open;
+            row.close_operation = None;
+            row.cause = None;
+            row.initiator = None;
+            row.cascaded_from = None;
+        }
+    }
+    history
+        .settlements
+        .retain(|row| row.target == life("outside"));
+    let mut restored = OwnershipGraph::restore(history.clone());
+    assert_eq!(restored.refusal(), Some(&OwnershipError::Contradictory));
+    assert_eq!(restored.snapshot(), history);
+    assert!(restored.recovery_records().is_empty());
+    assert_eq!(
+        restored.open_root(session("late"), life("late"), Initiator::Runtime),
+        Err(OwnershipError::DispatchRefused)
+    );
+    assert_eq!(restored.snapshot(), history);
+}
