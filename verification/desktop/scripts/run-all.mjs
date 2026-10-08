@@ -27,7 +27,7 @@ import {
   verbose,
   verdictOf,
 } from "./lib/cli.mjs"
-import { target } from "./lib/server.mjs"
+import { functionalPreviewEnv, target } from "./lib/server.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 // workspace-load.mjs stays off this list. CHECKLIST.md › Seeded workspace load.
@@ -68,10 +68,13 @@ Usage: node verification/desktop/scripts/run-all.mjs [options]
 
 In prod, message-sync builds its own fixture preview.
 --url / --mode apply to the functional checks; perf-budget always measures a
-production build unless --url is given. --mode prod leaves out the checks
+production build unless --url is given. A production functional preview is
+still minified, and its inlined application stage is ci
+(functionalPreviewEnv) so a scripted loopback browser socket is admitted.
+perf-budget keeps the prod stage. --mode prod leaves out the checks
 that need the dev server (${devServerOnlyChecks.join(", ")}) and names them
-"${DEV_SERVER_ONLY}". That is not "could not run". Steps inside drag,
-widgets, and mcp-apps that read the dev server's modules are left out the
+"${DEV_SERVER_ONLY}". That is not "could not run". Steps inside drag and
+widgets that read the dev server's modules are left out the
 same way. --engine and --layout, when given, are passed to every check;
 otherwise each uses its own default. Each check's JSON is collected into
 one document on stdout (or --out).
@@ -148,7 +151,7 @@ let page
 try {
   if (scheduled.run.some(sharesPage)) {
     try {
-      page = await target(options)
+      page = await target(options, options.mode === "prod" ? functionalPreviewEnv() : {})
     } catch (error) {
       // No page to test. Each functional check is recorded in the loop below,
       // in check order, so a left-out row stays where that check sits.
