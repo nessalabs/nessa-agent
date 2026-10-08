@@ -274,7 +274,7 @@ Experimental turns it on; the rail stands beside the workspace in
 
 - [ ] **Off by default, and off means absent**: no rail, no toggle, the
   workspace at the window's edge. _Check:_ `columns.mjs --only rail-off`;
-  `smoke.mjs` (Experimental offers one switch, off).
+  `smoke.mjs` (Experimental offers the side rail's switch, off).
 
 - [ ] **No two columns overlap**, and nothing sits under the rail, in any
   combination of the rail, the sidebar, the session list and the Agents

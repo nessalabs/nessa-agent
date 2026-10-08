@@ -31,7 +31,7 @@
  *
  * Every check but rail-off runs with the rail turned on.
  */
-import { attempt } from "./lib/cli.mjs"
+import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { css, keys, selectorFor, storage } from "./lib/selectors.mjs"
@@ -43,6 +43,8 @@ const checks = [
   "rail-view-inert",
   "titlebar-steady",
   "rail-off",
+  "overview-covers",
+  "rail-fold-focus",
 ]
 
 const meta = {
@@ -69,7 +71,11 @@ Checks, per engine, layout and size:
   rail-view-inert  ⌘B, ⌘0 and ⌥⌘S under a full view change nothing behind it
   titlebar-steady  through a rail toggle the titlebar's controls stay between
                    where they were and where they land, every frame
-  rail-off         with the preview off (the default): no rail, no toggle`,
+  rail-off         with the preview off (the default): no rail, no toggle
+  overview-covers  with the Agents overview open, the session list and the
+                   panes under it are inert
+  rail-fold-focus  a rail button with the keyboard on it, folded away for
+                   room, hands the keyboard to the toggle`,
 }
 
 /** The columns in the order they stand; the chat area and the overview share the last place. */
@@ -285,7 +291,7 @@ const body = {
       (frame) => document.querySelector(frame)?.dataset.rail === "open",
       css.workspaceWindow,
     )
-    if (!railDrawn) return "skipped: no room for the side rail at this size"
+    if (!railDrawn) throw new CannotRun("no room for the side rail at this size")
     const failures = []
     const runs = []
     for (const step of ["close", "open"]) {
@@ -302,6 +308,8 @@ const body = {
       await page.locator(css.sideRailToggle).click()
       await rest(page, size)
       const frames = await page.evaluate(() => window.__titlebarFrames)
+      if (!frames.length || frames.some((x) => typeof x !== "number"))
+        throw new Error(`${step}: the titlebar's sidebar toggle was not measured`)
       const from = frames[0]
       const to = frames.at(-1)
       const low = Math.min(from, to) - 1
@@ -345,13 +353,75 @@ const body = {
     return { ...seen, failures }
   },
 
+  "overview-covers": async ({ page, size }) => {
+    await arrange(page, size, { rail: true, sidebar: true })
+    await page.locator(css.composer).first().focus()
+    await page.keyboard.press(keys.overview)
+    await need(page, css.overview, "the Agents overview")
+    await rest(page, size)
+    const reachable = await page.evaluate(
+      (selectors) =>
+        selectors.flatMap((selector) =>
+          [...document.querySelectorAll(selector)]
+            .filter((element) => !element.closest("[inert]"))
+            .map(() => selector),
+        ),
+      [css.sessionList, css.pane],
+    )
+    return {
+      reachable,
+      failures: reachable.length
+        ? [`under the overview, not inert: ${[...new Set(reachable)].join(", ")}`]
+        : [],
+    }
+  },
+
+  "rail-fold-focus": async ({ page, size }) => {
+    await arrange(page, size, { rail: true, sidebar: true })
+    const railDrawn = await page.evaluate(
+      (frame) => document.querySelector(frame)?.dataset.rail === "open",
+      css.workspaceWindow,
+    )
+    if (!railDrawn) throw new CannotRun("no room for the side rail at this size")
+    await page.locator(selectorFor.railItem("notes")).focus()
+    // Narrowed until the rail is the column that gives way (`railFits`).
+    const railAt = () =>
+      page.evaluate(
+        (frame) => document.querySelector(frame)?.dataset.rail,
+        css.workspaceWindow,
+      )
+    let width = size.width
+    while ((await railAt()) === "open" && width > 400) {
+      width -= 20
+      await page.setViewportSize({ width, height: size.height })
+      await settled(page)
+    }
+    await rest(page, { ...size, width })
+    const now = await page.evaluate(
+      ([frame, rail, toggle]) => ({
+        rail: document.querySelector(frame)?.dataset.rail,
+        inRail: document.querySelector(rail)?.contains(document.activeElement) ?? false,
+        onToggle: document.activeElement === document.querySelector(toggle),
+      }),
+      [css.workspaceWindow, css.sideRail, css.sideRailToggle],
+    )
+    await page.setViewportSize(size)
+    if (now.rail === "open")
+      throw new CannotRun(`the rail kept its room down to ${width}px`)
+    const failures = []
+    if (now.inRail) failures.push("folded away, the rail still holds the keyboard")
+    else if (!now.onToggle)
+      failures.push("folded away, the keyboard did not go to the toggle")
+    return { width, now, failures }
+  },
+
   "rail-view-inert": async ({ page, size }) => {
     await arrange(page, size, { rail: true, sidebar: true })
     const railDrawn = await page.evaluate(
       (frame) => document.querySelector(frame)?.dataset.rail === "open",
       css.workspaceWindow,
     )
-    if (!railDrawn) return "skipped: no room for the side rail at this size"
+    if (!railDrawn) throw new CannotRun("no room for the side rail at this size")
     const state = () =>
       page.evaluate(
         ([workspace, overview]) => ({

@@ -522,11 +522,13 @@ html:not(.dark) .agents-request {
  * One row at a time shows its answers: the row pointed at, or else the row
  * the keyboard is visibly on (`:focus-visible`, on the row or a button in it).
  * Being chosen — clicked, or peeked at beside the list — is not enough: the
- * chosen row keeps its time while the pointer is on another row. The
+ * chosen row keeps its time while the pointer is on another row. A button
+ * the keyboard is on always shows, wherever the pointer rests. The
  * keyboard's row is wrapped in `:where` so it weighs what the pointer's does,
  * and the rules for an answered row below still win by order.
  */
 .agents-request:hover .agents-request-actions,
+.agents-request-actions:has(:focus-visible),
 :where(.agents-overview:not(:has(.agents-request:hover)))
   .agents-request:is(:focus-visible, :has(:focus-visible))
   .agents-request-actions {
@@ -540,6 +542,7 @@ html:not(.dark) .agents-request {
 }
 
 .agents-request:hover .agents-row-time,
+.agents-request:has(.agents-request-actions :focus-visible) .agents-row-time,
 :where(.agents-overview:not(:has(.agents-request:hover)))
   .agents-request:is(:focus-visible, :has(:focus-visible))
   .agents-row-time {

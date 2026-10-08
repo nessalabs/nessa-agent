@@ -103,4 +103,15 @@ describe("chordShortcut", () => {
     expect(chordShortcut({ code: "KeyR", command: true }, true)).toBe("Meta+R")
     expect(chordShortcut({ code: "NumpadEnter" }, true)).toBe("Enter")
   })
+
+  it("names punctuation by its key value, not its code", () => {
+    expect(chordShortcut({ code: "Backslash", command: true }, true)).toBe("Meta+\\")
+    expect(
+      chordShortcut({ code: "BracketLeft", command: true, shift: true }, false),
+    ).toBe("Control+Shift+[")
+    expect(chordShortcut({ code: "Comma", command: true }, true)).toBe("Meta+,")
+    expect(chordShortcut({ code: "NumpadAdd" }, true)).toBe("Plus")
+    expect(chordShortcut({ code: "Space", alt: true }, true)).toBe("Alt+Space")
+    expect(chordShortcut({ code: "ArrowLeft" }, true)).toBe("ArrowLeft")
+  })
 })

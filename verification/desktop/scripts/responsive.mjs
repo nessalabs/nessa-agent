@@ -1987,6 +1987,19 @@ checks["overview-row-answers"] = async ({ page, engine, options }) => {
     failures.push(
       `keyboard on ${both[3]?.id}, pointer on ${both[0].id}: answers shown on [${showing(both)}]`,
     )
+  // A button the keyboard is on is seen, wherever the pointer rests.
+  await rows.nth(3).locator('[data-answer="once"]').first().focus()
+  await rows.nth(0).hover({ position: { x: 80, y: 10 } })
+  await page.waitForTimeout(300)
+  const keyboard = await page.evaluate(() =>
+    document.activeElement.matches(":focus-visible"),
+  )
+  const focusedRow = (await answersShown(page))[3]
+  if (!keyboard) failures.push("Allow Once, focused after ↓, is not :focus-visible")
+  else if (!focusedRow?.shown)
+    failures.push(
+      `pointer on another row, ${focusedRow?.id}'s focused Allow Once is hidden`,
+    )
 
   // Less motion: they are there at once.
   await page.mouse.move(5, 890)
