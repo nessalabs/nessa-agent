@@ -43,7 +43,7 @@ flowchart LR
     end
     subgraph Executors
         L["Local executor (in-process today)"]
-        H["Home server executor (same person)"]
+        H["Big machine executor (same person, one conversation at a time)"]
         W["Hosted worker (per organization)"]
     end
     D -- "intents + record subscription" --> A
@@ -72,7 +72,7 @@ commits what they report, under the lease that produced it.
 | --- | --- | --- |
 | **Authority** (the gateway, `crates/nessa-server`) | Authentication and Cedar admission (0010); one active turn per conversation and every receipt (0008); the committed record streams and their catalogue (0009); approvals and their answers; policy verdicts (0014); device, surface and executor credentials; artifact holds; leases; audit | Draw a transcript; keep a second turn state machine in a surface; accept a record from anything but a live lease |
 | **Surface** (desktop, panel, CLI, phone; `src/`, `packages/nessa-client`, `crates/nessa-client-core`) | Folding committed records into a view with the one fold in `nessa-protocol`; drafts and an outbox of intents keyed by `requestId`; presentation and local preferences | Admit or retry a command on its own authority; execute a tool; write a record; infer turn state from provider text |
-| **Executor** (today: the gateway process itself, through the SDK `Agent`; later: a home server or hosted worker) | Harness processes and every OS resource they create, per conversation supervision scope (0008 cleanup contract); translating the harness's events to the normalized payload; forwarding mediated effects (approvals, artifact reads, Nessa tool calls) to the gateway | Decide an approval; hold a credential other than its lease; keep history past the lease; write records |
+| **Executor** (today: the gateway process itself, through the SDK `Agent`; later: a second machine of the same person, or a hosted worker) | Harness processes and every OS resource they create, per conversation supervision scope (0008 cleanup contract); translating the harness's events to the normalized payload; forwarding mediated effects (approvals, artifact reads, Nessa tool calls) to the gateway | Decide an approval; hold a credential other than its lease; keep history past the lease; write records |
 | **Replica** (phone cache, relay, backup) | A verified copy with scope, generation and reset receipts ([read-only sync](read-only-sync-example.md)) | Anything. A replica has no grants. Promotion is an explicit, quarantined restore (#270, #272) |
 
 The test for a role boundary is the one `codebase-structure.md` already uses
@@ -170,6 +170,26 @@ a new file has one place to go.
    sandbox origin. An extension's authority is the opening's token, revoked
    when the opening ends.
 
+## Home server: move the gateway, not the executor
+
+The first way to run agents on another machine needs no executor at all.
+Run `nessa server` on the home server; the laptop and the phone are both
+linked devices to it through the same pairing (steps 2 to 4 below). The
+records, the approvals, the device registry and the credentials live where
+the agents run, which is the simplest trust statement and the one most
+people mean by "my home server runs my agents". Nothing in this map should
+be read as making the executor the home-server answer.
+
+The executor exists for when the authority should **not** move:
+
+- **Hosted workers.** The organization's records and policy stay in one
+  gateway; workers are disposable containers that come and go.
+- **One conversation elsewhere.** A build or a GPU job on a bigger machine
+  while history, approvals and every other conversation stay on the laptop.
+- **Trust asymmetry.** A machine you will run code on but will not give your
+  history, credentials and device registry. A lease hands it one
+  conversation's worth of authority and nothing durable.
+
 ## Execution leases
 
 A **lease** is the gateway's record that one executor may run work for one
@@ -226,7 +246,7 @@ sandbox ([identity direction](auth/identity-tenancy-and-cloud.md#isolation-witho
 - **Local executor**: the person's own account. There is no sandbox and 0008
   forbids claiming one. The ACP binding documents its actual file and tool
   access.
-- **Home server executor**: another machine the same person owns, same
+- **Second-machine executor**: another machine the same person owns, same
   trust, same statement.
 - **Hosted worker**: a container or VM per organization. That boundary is the
   isolation. A worker holds one organization's leases and nothing else; two
@@ -286,7 +306,7 @@ desktop today:
 | Person (owner) | Local bootstrap, OS-protected | Everything on their organization | Setup; recovered offline |
 | Bundled surface (panel, desktop window) | Private surface credential served by the host once the gateway is ready | Product methods for that surface | Provisioning (`--provision-local`) |
 | Linked device | Credential bound to an Ed25519 key, issued after OPAQUE pairing | `conversation.read` first; command grants when #267 lands | The owner, through Settings › Linked devices |
-| Executor | Credential bound to the environment's key | Execution grants only: accept a lease, report events, request mediated effects. No reads outside its leases | The owner for a home server; the organization for hosted workers |
+| Executor | Credential bound to the environment's key | Execution grants only: accept a lease, report events, request mediated effects. No reads outside its leases | The owner for their own second machine; the organization for hosted workers |
 | Extension | The opening's relay token | The tools its server exposes, under policy | The gateway, per harness opening |
 
 Scale is by organization and by executors. One authority per organization
@@ -395,7 +415,7 @@ exists; the execution port is extracted before any remote wire is written.
 | 5. Backup and quarantined restore (#270: #271, #272) | A lost gateway is recoverable | Restore drill proves deletion boundaries and refuses ambiguous authority |
 | 6. Artifacts over the paired channel (#273) | Images and files reach devices, verified | Digest verification; bulk audit bounded |
 | 7. `ExecutionEnvironment` port (new issue) | Today's in-process executor behind a typed port; leases recorded locally | No behavior change; identical records and cleanup evidence before and after |
-| 8. `nessa-executor` and the lease wire (new issue) | A home server runs a conversation's harness | Lease ends on Stop, close and revocation with cleanup evidence; late events dropped; one lease per conversation |
+| 8. `nessa-executor` and the lease wire (new issue) | One conversation's harness runs on another machine while the gateway stays put | Lease ends on Stop, close and revocation with cleanup evidence; late events dropped; one lease per conversation |
 | 9. Hosted workers and organization isolation (new issue) | Executors per organization in containers | Two-organization isolation tests across leases, artifacts, tools and audit |
 | 10. Hosted identity adapter (if hosted) | Login and membership from a provider behind Nessa's model | The adapter contract suite in the identity direction |
 
