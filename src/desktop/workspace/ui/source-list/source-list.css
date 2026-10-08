@@ -203,7 +203,7 @@ html:not(.dark) .workspace-sidebar {
   align-items: center;
   justify-content: center;
   padding: 0 5px;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: var(--desktop-selected);
   color: var(--desktop-muted);
   font-size: var(--desktop-text-caption);
@@ -279,27 +279,9 @@ html:not(.dark) .workspace-sidebar {
   transform: rotate(0deg);
 }
 
+/* Shown with its row's hover; its box, tone and glyph are `IconButton`'s. */
 .workspace-section-add {
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: var(--desktop-radius-sm);
-  background: transparent;
-  color: var(--desktop-faint) !important;
   opacity: 0;
-  transition:
-    opacity var(--desktop-fast) ease,
-    background-color var(--desktop-fast) ease;
-}
-
-.workspace-section-add svg {
-  width: 14px;
-  height: 14px;
-  stroke-width: 1.75;
 }
 
 .workspace-section-head:hover svg,

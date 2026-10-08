@@ -1,0 +1,22 @@
+payload-disposal 101 0
+early-permit-release 101 0
+two-physical-slots 101 0
+input-before-admission 101 0
+ambient-executor 101 0
+definite-secret-delete 101 0
+server-payload-disposal 101 0
+server-early-permit-release 101 0
+server-ambient-executor 101 0
+sqlite-read-as-absence 101 0
+record-read-as-absence 101 0
+definite-secret-publication 101 0
+definite-audit-success 101 0
+call-uncontained 101 0
+queued-drop-uncontained 0 0
+Traceback (most recent call last):
+  File "/tmp/627-mutations.py", line 41, in <module>
+    mutate('queued-drop-uncontained',[sdk],lambda:replace(sdk,'        let _ = self.drop_operation();\n        // Automatic','        drop(self.operation.take());\n        // Automatic'),'nessa-sdk','queued_abort_input_drop_fault_keeps_slot')
+  File "/tmp/627-mutations.py", line 21, in mutate
+    assert r.returncode!=0 and g.returncode==0,name
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: queued-drop-uncontained

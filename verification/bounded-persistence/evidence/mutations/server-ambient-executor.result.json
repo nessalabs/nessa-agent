@@ -1,0 +1,7 @@
+{
+  "mutated_exit": 101,
+  "restored_exit": 0,
+  "restored_sha256": {
+    "crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs": "fad37ae244abcf928e7ad689651f21a20d647a2068e965d29568deefe1697aba"
+  }
+}

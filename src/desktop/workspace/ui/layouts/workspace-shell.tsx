@@ -80,7 +80,7 @@ import {
 } from "../../../split-panes/model/pane-layout"
 import type { SwitcherRow } from "../../model/session-search"
 import { columnWidth, sessionListLimits, type ColumnLimits } from "../../model/window-fit"
-import { IconButton } from "../chrome/icon-button"
+import { IconButton } from "../../../ui/icon-button"
 import { WorkspaceTitlebar } from "../chrome/workspace-titlebar"
 import { OverviewLayer } from "../overview/overview-layer"
 import { PaneGrid } from "../panes/pane-grid"
@@ -409,7 +409,7 @@ export function WorkspaceShell({
                       aria-controls="workspace-sidebar"
                       onClick={() => dispatch(toggleSidebar())}
                     />
-                    <HistoryButtons className="workspace-icon-button" />
+                    <HistoryButtons />
                     {region.sessionList ? (
                       <IconButton
                         icon="sessionList"

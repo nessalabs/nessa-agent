@@ -1,0 +1,76 @@
+   Compiling nessa-local-storage v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-local-storage)
+   Compiling nessa-images v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-images)
+   Compiling nessa-local-database v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-local-database)
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-sdk)
+   Compiling nessa-auth v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-auth)
+   Compiling nessa-gateway-endpoint v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-gateway-endpoint)
+   Compiling nessa-agent-credentials v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-agent-credentials)
+   Compiling nessa-protocol v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-protocol)
+   Compiling nessa-client-core v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-client-core)
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 41s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-cad12ce67ae1d3eb)
+
+running 20 tests
+test mcp_authorization::infrastructure::records::tests::a_tampered_seal_is_unavailable_and_not_a_token ... ok
+test mcp_authorization::infrastructure::records::tests::a_sealed_file_round_trips_and_never_stores_the_token_in_the_clear ... ok
+test mcp_authorization::infrastructure::records::tests::canceled_delete_excludes_replacement ... ok
+test mcp_authorization::infrastructure::records::tests::admission_precedes_owned_input_transfer ... ok
+test mcp_authorization::infrastructure::records::tests::canceled_secret_store_excludes_delete_and_load ... ok
+
+thread 'tokio-rt-worker' (533614) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:201:9:
+physical pre-effect fault
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'tokio-rt-worker' (533614) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:201:9:
+physical pre-effect fault
+
+thread 'tokio-rt-worker' (533614) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:210:9:
+physical post-effect fault
+
+thread 'tokio-rt-worker' (533614) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:210:9:
+physical post-effect fault
+
+thread 'tokio-rt-worker' (533614) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:210:9:
+physical post-effect fault
+test mcp_authorization::infrastructure::records::tests::interrupted_record_operations_are_unavailable_or_unknown ... ok
+test mcp_authorization::infrastructure::records::tests::no_runtime_first_poll_is_typed ... ok
+
+thread 'tokio-rt-worker' (533618) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:210:9:
+physical post-effect fault
+test mcp_authorization::infrastructure::records::tests::detached_caller_faulting_payload_is_contained ... ok
+test mcp_authorization::infrastructure::records::tests::independent_instances_progress ... ok
+
+thread 'tokio-rt-worker' (533627) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:223:13:
+Box<dyn Any>
+
+thread 'tokio-rt-worker' (533627) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:223:13:
+Box<dyn Any>
+
+thread 'tokio-rt-worker' (533627) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:223:13:
+Box<dyn Any>
+
+thread 'tokio-rt-worker' (533627) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:223:13:
+Box<dyn Any>
+
+thread 'tokio-rt-worker' (533627) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:223:13:
+Box<dyn Any>
+test mcp_authorization::infrastructure::records::tests::ready_effect_input_drop_fault_is_uncertain ... ok
+test mcp_authorization::infrastructure::records::tests::operation_panic_input_drop_keeps_slot ... ok
+test mcp_authorization::infrastructure::records::tests::detached_ready_input_drop_fault_is_contained ... ok
+test mcp_authorization::infrastructure::records::tests::queued_send_future_resumes_on_plain_thread ... ok
+627 heartbeat: 1 -> 39 ticks during OS-held 120 ms physical operation
+627 heartbeat: 1 -> 39 ticks during OS-held 120 ms physical operation
+test mcp_authorization::infrastructure::records::tests::record_store_keeps_current_thread_heartbeat_running ... ok
+test mcp_authorization::infrastructure::records::tests::record_load_keeps_current_thread_heartbeat_running ... ok
+627 heartbeat: 1 -> 39 ticks during OS-held 120 ms physical operation
+test mcp_authorization::infrastructure::records::tests::secret_delete_keeps_current_thread_heartbeat_running ... ok
+627 heartbeat: 1 -> 39 ticks during OS-held 120 ms physical operation
+test mcp_authorization::infrastructure::records::tests::secret_load_keeps_current_thread_heartbeat_running ... ok
+627 heartbeat: 1 -> 39 ticks during OS-held 120 ms physical operation
+test mcp_authorization::infrastructure::records::tests::secret_store_keeps_current_thread_heartbeat_running ... ok
+test mcp_authorization::infrastructure::records::tests::worker_input_drop_keeps_slot ... ok
+test mcp_authorization::infrastructure::records::tests::stopped_executor_input_drop_fault_keeps_slot ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 1980 filtered out; finished in 0.94s
+

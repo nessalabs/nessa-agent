@@ -1,0 +1,17 @@
+{
+  "previous_checked_head": "209aedfe3800460aa3d802c95dc732ae6275b020",
+  "base": "d55de88d9c6f5794b225da05b1055c511b9dba74",
+  "source_changed_paths": [
+    "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs"
+  ],
+  "before_sha256": {
+    "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs": "e245bdbf44a08660d91be4b7203507f1e63cda3c6ac52f6c4d3843b1008610b2"
+  },
+  "after_sha256": {
+    "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs": "9594c8c457bb5b3c12b37b8d091f6ca5ab806bea7511d58cc8a2910dacc76b3b"
+  },
+  "change": "Remove .ok() before .expect() in cfg(test) held-admission fixture now that central Interrupted implements Debug; both forms fail when acquisition fails and return the same Admission on success. No production, benchmark, ordering or outcome rule changed.",
+  "original_gates": "209 isolated full SDK and exact six-package tests passed; all-target Clippy then failed ok_expect. Those runs remain original-head evidence, not byte-identical test source proof.",
+  "corrected_checks": "Affected actual SDK ownership matrix, all-target six-package Clippy, rustdoc and architecture on new clean head; hosted CI runs full suites at new head.",
+  "artifact_format": "Nine CI formatting artifacts preserve exact executed originals under raw/*.gz; format-provenance.json records before/after/gzip hashes."
+}

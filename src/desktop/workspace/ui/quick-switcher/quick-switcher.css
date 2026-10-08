@@ -180,11 +180,6 @@ html:not(.dark) .workspace-switcher {
   translate: 0 -50%;
 }
 
-.workspace-result-keys kbd {
-  font: inherit;
-  letter-spacing: 0.02em;
-}
-
 .workspace-hit {
   background: none;
   color: var(--foreground);

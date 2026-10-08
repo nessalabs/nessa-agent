@@ -1,0 +1,11 @@
+--- a/crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs
++++ b/crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs
+@@ -106,7 +106,7 @@
+             completion: Completion(self.probe.clone()),
+             _permit: admission.permit,
+         };
+-        let handle = admission.executor.spawn_blocking(move || job.run());
++        let handle = tokio::task::spawn_blocking(move || job.run());
+         #[cfg(test)]
+         if self.probe.abort_queued.swap(false, Ordering::SeqCst) {
+             handle.abort();

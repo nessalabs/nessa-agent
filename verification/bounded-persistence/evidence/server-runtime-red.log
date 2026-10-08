@@ -1,0 +1,25 @@
+
+running 2 tests
+test mcp_authorization::infrastructure::records::tests::no_runtime_first_poll_is_typed ... FAILED
+test mcp_authorization::infrastructure::audit::tests::no_runtime_first_poll_is_typed ... FAILED
+
+failures:
+
+---- mcp_authorization::infrastructure::records::tests::no_runtime_first_poll_is_typed stdout ----
+
+thread 'mcp_authorization::infrastructure::records::tests::no_runtime_first_poll_is_typed' (452052) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs:85:22:
+there is no reactor running, must be called from the context of a Tokio 1.x runtime
+
+---- mcp_authorization::infrastructure::audit::tests::no_runtime_first_poll_is_typed stdout ----
+
+thread 'mcp_authorization::infrastructure::audit::tests::no_runtime_first_poll_is_typed' (452051) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs:85:22:
+there is no reactor running, must be called from the context of a Tokio 1.x runtime
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    mcp_authorization::infrastructure::audit::tests::no_runtime_first_poll_is_typed
+    mcp_authorization::infrastructure::records::tests::no_runtime_first_poll_is_typed
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1991 filtered out; finished in 0.00s
+

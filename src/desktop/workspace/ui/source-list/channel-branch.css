@@ -94,15 +94,7 @@
   position: absolute;
   top: 0;
   right: 0;
-  width: 28px !important;
-  height: 28px !important;
-  border-radius: var(--desktop-radius-sm) !important;
   opacity: 0;
-}
-
-.workspace-branch-add svg {
-  width: 14px;
-  height: 14px;
 }
 
 .workspace-branch-head:hover .workspace-branch-add {
@@ -167,7 +159,7 @@
 }
 
 .workspace-search-button:hover {
-  background: color-mix(in oklab, var(--foreground) 7.5%, transparent);
+  background: var(--desktop-hover-strong);
   color: var(--desktop-muted) !important;
 }
 

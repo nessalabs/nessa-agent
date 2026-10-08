@@ -808,6 +808,35 @@ publish, and refuses nothing the gateway would judge.
   `mcp-servers-gateway.mjs --only done-when` (needs the agent signed in on the
   machine). "Once" depends on #418's fix (#421) being in the tree.
 
+## Icon buttons (#632)
+
+One component, `ui/icon-button.tsx`, draws every icon-only control outside
+Settings: a box of 26, 28 or 32px, rounded or a pill, named "Label (⌘K)" and
+saying the same in its tooltip, filled by `--desktop-hover-strong` under the
+pointer, and outlined by `--desktop-focus-outline` under the keyboard.
+
+- [ ] **Every icon button holds the contract, and none of the replaced classes
+  is left.** _Check:_ `icon-buttons.mjs` (`contract`, per engine and layout;
+  `--layout classic` for the classic shell). Rule: `ui/icon-button.css`.
+- [ ] **The pointer fills it with the stronger hover.** _Check:_
+  `icon-buttons.mjs` (`hover`).
+- [ ] **Keyboard focus on one draws an outline.** _Check:_ `icon-buttons.mjs`
+  (`focus`). At the base commit the workspace's resets left these with none.
+
+## Shared controls (#632)
+
+Patterns the window drew several ways, each now one component of the kit
+(`@nessa-ui/react`), given the window's inks in one rule. Settings is left out:
+it is redesigned on its own branch.
+
+- [ ] **Every key cap is the kit's `Kbd`, skinned once.** 18px tall and at least
+  as wide, 11px medium type, `--desktop-radius-xs`, a 7% fill and
+  `--desktop-muted` ink — the sidebar's search, the session list's search and
+  the quick switcher's rows alike. _Check:_ `shared-controls.mjs` (`keys`, per
+  engine and layout, on load and with the switcher open). Rule: `chrome.css` ›
+  Keys. At the base commit the session list's and the switcher's keys were
+  bare text, unlike the sidebar's cap.
+
 ## Menus and tooltips
 
 _ADR 238 › Interaction and visual rules_ holds the rules; check each by hand,

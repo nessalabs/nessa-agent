@@ -1,0 +1,31 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-cad12ce67ae1d3eb)
+
+running 7 tests
+test mcp_authorization::infrastructure::audit::tests::no_runtime_first_poll_is_typed ... ok
+
+thread 'tokio-rt-worker' (533669) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:201:9:
+physical pre-effect fault
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'tokio-rt-worker' (533669) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:210:9:
+physical post-effect fault
+
+thread 'tokio-rt-worker' (533674) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:210:9:
+physical post-effect fault
+
+thread '<unnamed>' (533675) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/audit/tests.rs:95:9:
+poison audit mutex
+test mcp_authorization::infrastructure::audit::tests::interrupted_audit_and_poison_are_failures ... ok
+
+thread 'tokio-rt-worker' (533677) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:223:13:
+Box<dyn Any>
+test mcp_authorization::infrastructure::audit::tests::ready_effect_input_drop_fault_is_uncertain ... ok
+627 heartbeat: 1 -> 40 ticks during OS-held 120 ms physical operation
+test mcp_authorization::infrastructure::audit::tests::authorization_audit_keeps_current_thread_heartbeat_running ... ok
+test mcp_authorization::infrastructure::audit::tests::operation_panic_input_drop_keeps_slot ... ok
+test mcp_authorization::infrastructure::audit::tests::canceled_audit_excludes_next_append ... ok
+test mcp_authorization::infrastructure::audit::tests::worker_input_drop_keeps_slot ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1993 filtered out; finished in 0.20s
+

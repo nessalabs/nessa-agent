@@ -1,0 +1,11 @@
+--- a/crates/nessa-local-storage/src/physical_operation.rs
++++ b/crates/nessa-local-storage/src/physical_operation.rs
+@@ -120,7 +120,7 @@
+             operation: Some(operation),
+             _permit: self.permit,
+         };
+-        self.executor.spawn_blocking(move || job.run())
++        tokio::task::spawn_blocking(move || job.run())
+     }
+ }
+ 

@@ -1,0 +1,11 @@
+--- a/crates/nessa-local-storage/src/physical_operation.rs
++++ b/crates/nessa-local-storage/src/physical_operation.rs
+@@ -159,7 +159,7 @@
+             std::mem::forget(payload);
+             Interrupted
+         });
+-        let cleaned = self.drop_operation();
++        let cleaned = { drop(self.operation.take()); true };
+         let result = if cleaned {
+             output
+         } else {

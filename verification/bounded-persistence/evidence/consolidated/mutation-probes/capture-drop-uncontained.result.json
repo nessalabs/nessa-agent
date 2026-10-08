@@ -1,0 +1,42 @@
+{
+  "rule": "capture-drop-uncontained",
+  "historical_clean_head": "393042a3b87339b2475e8335047dcbf3ba1cef6d",
+  "dirty_candidate_manifest": "candidate-source-manifest.json",
+  "mutated_sha256": {
+    "crates/nessa-local-storage/src/physical_operation.rs": "4d0e8b1248b17492ca217ec7ad133b2ef94df8945c6e50c22d481bde010aaf63"
+  },
+  "command": [
+    "/tmp/nessa-browser-libs/usr/bin/tini",
+    "-s",
+    "--",
+    "env",
+    "CARGO_HOME=/tmp/nessa-cargo",
+    "RUSTUP_HOME=/tmp/nessa-rustup",
+    "PATH=/tmp/nessa-cargo/bin:/home/agent/.local/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin/override:/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/node/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin:/opt/codex/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/agent/.local/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin/fallback",
+    "CARGO_TARGET_DIR=/workspace/nessa-agent/target",
+    "CARGO_NET_OFFLINE=true",
+    "CARGO_BUILD_JOBS=2",
+    "CARGO_INCREMENTAL=0",
+    "cargo",
+    "test",
+    "-p",
+    "nessa-local-storage",
+    "--features",
+    "physical-operation",
+    "--lib",
+    "physical_operation::tests::ready_capture_fault_downgrades_and_disposes_output_under_slot",
+    "--",
+    "--nocapture"
+  ],
+  "mutated_exit": 101,
+  "compiled_runtime_failure": true,
+  "direct_child_exit": 101,
+  "restored_sha256": {
+    "crates/nessa-local-storage/src/physical_operation.rs": "ae9e59b06b76759bcb9affeaf71d715c83da638206a1ad3e7647847312b945a7"
+  },
+  "restored_mtime_ns": {
+    "crates/nessa-local-storage/src/physical_operation.rs": 1791392465442156516
+  },
+  "restored_exit": 0,
+  "valid": true
+}

@@ -4,7 +4,9 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react"
+import { Kbd } from "@nessa-ui/react/kbd"
 import { DesktopIcon } from "../../../ui/icons"
+import { IconButton } from "../../../ui/icon-button"
 import {
   openBeside,
   openChannel,
@@ -147,7 +149,7 @@ function TreeTop() {
       >
         <DesktopIcon name="search" />
         <span>Search</span>
-        {shortcut ? <kbd className="workspace-kbd">{shortcut}</kbd> : null}
+        {shortcut ? <Kbd>{shortcut}</Kbd> : null}
       </button>
       <OverviewRow />
     </>
@@ -184,15 +186,14 @@ const SourceSection = memo(function SourceSection({
         </button>
         {variant === "channels" ? (
           // Channels cannot be added yet; the control shows where it will be.
-          <button
-            type="button"
+          <IconButton
             className="workspace-section-add"
-            aria-label={`Add channel to ${name}`}
+            icon="add"
+            label={`Add channel to ${name}`}
+            tone="faint"
             {...tooltip("Adding channels isn’t available yet")}
             disabled
-          >
-            <DesktopIcon name="add" />
-          </button>
+          />
         ) : null}
       </div>
       {collapsed ? null : (

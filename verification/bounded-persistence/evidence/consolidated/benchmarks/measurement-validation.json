@@ -1,0 +1,40 @@
+{
+  "current": {
+    "sqlite_original_rows": 21000,
+    "sqlite_scenarios": 21,
+    "rows_each_scenario": 1000,
+    "batch_wall_rows": 1750,
+    "batch_scenarios": 7,
+    "batches_each_scenario": 250,
+    "oauth_flows": 1000,
+    "oauth_lanes": 4,
+    "flows_each_lane": 250
+  },
+  "inline": {
+    "sqlite_original_rows": 21000,
+    "sqlite_scenarios": 21,
+    "rows_each_scenario": 1000,
+    "batch_wall_rows": 1750,
+    "batch_scenarios": 7,
+    "batches_each_scenario": 250,
+    "oauth_flows": 1000,
+    "oauth_lanes": 4,
+    "flows_each_lane": 250
+  },
+  "current-repeat": {
+    "sqlite_original_rows": 21000,
+    "sqlite_scenarios": 21,
+    "rows_each_scenario": 1000,
+    "batch_wall_rows": 1750,
+    "batch_scenarios": 7,
+    "batches_each_scenario": 250,
+    "oauth_flows": 1000,
+    "oauth_lanes": 4,
+    "flows_each_lane": 250
+  },
+  "totals": {
+    "original_rows": 66000,
+    "batch_wall_rows": 5250,
+    "same_encoded_body_bytes_across_phases": true
+  }
+}

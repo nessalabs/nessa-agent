@@ -1,0 +1,6 @@
+{
+  "crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs": "cba50efecb5d4439d1fffb7cee4a502724f93c5d60ba5f1bf650e3fce7a48521",
+  "crates/nessa-server/src/mcp_authorization/infrastructure/records.rs": "dd01b2b479de27aa89e43335ae15f36de580bf6924ac2cae24f75c1a053a0179",
+  "crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs": "8b6d036d058d7a3b00fbe061340ba3385690959b44ff470642ad0807b552f3be",
+  "crates/nessa-local-storage/src/physical_operation.rs": "ae9e59b06b76759bcb9affeaf71d715c83da638206a1ad3e7647847312b945a7"
+}

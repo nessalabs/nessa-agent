@@ -1,0 +1,12 @@
+--- a/crates/nessa-local-storage/src/physical_operation.rs
++++ b/crates/nessa-local-storage/src/physical_operation.rs
+@@ -70,8 +70,7 @@
+         let permit = self
+             .slot
+             .clone()
+-            .acquire_owned()
+-            .await
++            .try_acquire_owned()
+             .map_err(|_| Interrupted)?;
+         Ok(Admission { permit, executor })
+     }

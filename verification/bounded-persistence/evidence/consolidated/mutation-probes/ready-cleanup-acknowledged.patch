@@ -1,0 +1,11 @@
+--- a/crates/nessa-local-storage/src/physical_operation.rs
++++ b/crates/nessa-local-storage/src/physical_operation.rs
+@@ -160,7 +160,7 @@
+             Interrupted
+         });
+         let cleaned = self.drop_operation();
+-        let result = if cleaned {
++        let result = if cleaned || output.is_ok() {
+             output
+         } else {
+             if let Ok(output) = output {

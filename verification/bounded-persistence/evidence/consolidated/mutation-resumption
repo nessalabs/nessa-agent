@@ -1,0 +1,14 @@
+from pathlib import Path
+s=Path('/tmp/627-consolidated-mutations.py').read_text();exec(s[:s.index("central('slot-capacity-two'")])
+name='audit-ack';paths=[audit];command=['cargo','test','-p','nessa-server','--lib','interrupted_audit_and_poison_are_failures','--','--nocapture']
+record={'rule':name,'historical_clean_head':manifest['historical_clean_head'],'dirty_candidate_manifest':'candidate-source-manifest.json','mutated_sha256':{audit:sha(root/audit)},'command':prefix+command,'mutated_exit':101,'compiled_runtime_failure':'test result: FAILED' in (out/(name+'.log')).read_text(),'resume_note':'Original compiled runtime red log preserved; interrupted runner had not restored source or written result. Exit101 reconstructed from Cargo test failure; restored command run at resumption.'}
+assert record['compiled_runtime_failure'];assert '.unwrap_or(Ok(()))' in (root/audit).read_text()
+(root/audit).write_bytes((freeze/audit).read_bytes());record['restored_sha256']={audit:sha(root/audit)};record['restored_mtime_ns']={audit:(root/audit).stat().st_mtime_ns}
+with (out/(name+'-restored.log')).open('w') as log:g=subprocess.run(prefix+command,cwd=root,stdout=log,stderr=subprocess.STDOUT,timeout=240)
+record['restored_exit']=g.returncode;record['valid']=g.returncode==0
+(out/(name+'.result.json')).write_text(json.dumps(record,indent=2)+'\n');print('RESUMED',name,'GREEN',g.returncode,flush=True);assert record['valid']
+run('sqlite-clone-before-admission',[own],lambda:clone_early(own,'write','snapshot','snapshot.clone()'),'nessa-sdk','admission_precedes_owned_input_transfer')
+run('record-clone-before-admission',[rec],lambda:clone_early(rec,'store','auth','auth.clone()'),'nessa-server','admission_precedes_owned_input_transfer')
+run('secret-clone-before-admission',[rec],lambda:clone_early(rec,'store_secret','secret','secret.clone()'),'nessa-server','canceled_delete_excludes_replacement')
+run('audit-clone-before-admission',[audit],lambda:clone_early(audit,'record','record','record.clone()'),'nessa-server','worker_input_drop_keeps_slot')
+print('ALL26 VALID RESTORED',flush=True)

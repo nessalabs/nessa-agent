@@ -1,0 +1,7 @@
+inline-heartbeat-red 101
+inline-server-heartbeat-red 101
+sqlite-inline 0
+oauth-inline 0
+restored-heartbeat-green 0
+sqlite-worker-repeat 0
+oauth-worker-repeat 0
