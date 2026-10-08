@@ -1,4 +1,4 @@
-@import "../../node_modules/@nessa-ui/react/src/app.css";
+@import "@nessa-ui/react/app.css";
 @source "./";
 
 html,

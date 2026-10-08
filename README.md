@@ -596,12 +596,14 @@ When the package publishes, this becomes `"@nessa-ui/react": "^x.y.z"`.
 
 ### Why the app compiles the design system's CSS from source
 
-[src/styles.css](src/styles.css) imports `@nessa-ui/react/src/app.css`, not the
-package's prebuilt stylesheet. The built CSS only carries the utilities the
-library's own components happen to use, so a class the *app* writes — `size-14`,
-say — silently resolves to nothing. Compiling from source gives the app the full
-utility set and the same tokens. It reverts to the published stylesheet once the
-package ships to npm.
+[src/styles.css](src/styles.css) and [src/desktop/styles.css](src/desktop/styles.css)
+import `@nessa-ui/react/app.css`. The path table sends that name, and
+`styles.css` and `theme.css`, to the package's source stylesheets, not to
+`dist/` and not to `src/components/`. The built CSS only carries the utilities
+the library's own components happen to use, so a class the *app* writes —
+`size-14`, say — silently resolves to nothing. Compiling from source gives the
+app the full utility set and the same tokens. The same import names the
+published stylesheet once the package ships to npm and the path table is gone.
 
 React is deduped in [vite.config.ts](vite.config.ts): the linked checkout carries
 its own React, and without that the app and the library would each load a copy

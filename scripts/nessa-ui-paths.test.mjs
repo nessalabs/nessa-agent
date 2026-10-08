@@ -50,6 +50,9 @@ test("each kind of import lands in its directory of the package's source", () =>
     resolveWith(aliases, "@nessa-ui/react/app-shell"),
     "/ui/src/composites/app-shell",
   )
+  assert.equal(resolveWith(aliases, "@nessa-ui/react/app.css"), "/ui/src/app.css")
+  assert.equal(resolveWith(aliases, "@nessa-ui/react/styles.css"), "/ui/src/styles.css")
+  assert.equal(resolveWith(aliases, "@nessa-ui/react/theme.css"), "/ui/src/theme.css")
   assert.equal(
     resolveWith(aliases, "@nessa-ui/react/lib/size-observer"),
     "/ui/src/lib/size-observer",
@@ -77,6 +80,7 @@ test("a specific rule wins over the prefix it extends, whatever order the table 
     resolveWith(aliases, "@nessa-ui/react/app-shell"),
     "/ui/src/composites/app-shell",
   )
+  assert.equal(resolveWith(aliases, "@nessa-ui/react/app.css"), "/ui/src/app.css")
 })
 
 test("a whole specifier is exact in Vite and TypeScript alike: a path under it is a component", () => {
@@ -85,10 +89,17 @@ test("a whole specifier is exact in Vite and TypeScript alike: a path under it i
     resolveWith(aliases, "@nessa-ui/react/app-shell/app-shell-dock"),
     "/ui/src/components/app-shell/app-shell-dock",
   )
+  // The stylesheet names are exact too: a path under one is a component, not the sheet.
+  assert.equal(
+    resolveWith(aliases, "@nessa-ui/react/app.css/extra"),
+    "/ui/src/components/app.css/extra",
+  )
   // TypeScript: no `app-shell/*` key, so the same import falls to `@nessa-ui/react/*`.
   const keys = Object.keys(tsconfigPaths())
   assert.ok(keys.includes("@nessa-ui/react/app-shell"))
   assert.ok(!keys.includes("@nessa-ui/react/app-shell/*"))
+  assert.ok(keys.includes("@nessa-ui/react/app.css"))
+  assert.ok(!keys.includes("@nessa-ui/react/app.css/*"))
   assert.ok(keys.includes("@nessa-ui/react/*"))
 })
 
