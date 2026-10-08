@@ -140,17 +140,17 @@ describe("first-run setup", () => {
 
   it("offers linger from the shortcut and finishes it with the same agent", () => {
     const summon = atSummon()
-    const offer = { shown: "offer" as const, audit: "not-required" as const }
+    const offer = { shown: "offer" as const }
     const step = showLinger(summon, offer)
     expect(step.step).toBe("linger")
     expect(step.linger).toEqual(offer)
     expect(step.agent).toBe("claude")
-    expect(showLinger(summon, { shown: "not-applicable", audit: "not-required" })).toBe(summon)
+    expect(showLinger(summon, { shown: "not-applicable" })).toBe(summon)
     const welcome = beginOnboarding()
     expect(showLinger(welcome, offer)).toBe(welcome)
-    const enabled = recordLinger(step, { shown: "enabled", audit: "recorded" })
+    const enabled = recordLinger(step, { shown: "enabled" })
     expect(enabled.linger?.shown).toBe("enabled")
-    expect(recordLinger(step, { shown: "not-applicable", audit: "not-required" })).toBe(step)
+    expect(recordLinger(step, { shown: "not-applicable" })).toBe(step)
     expect(completeOnboarding(enabled)).toEqual({
       step: "done",
       outcome: "completed",

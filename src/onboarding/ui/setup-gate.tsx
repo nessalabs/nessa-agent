@@ -1,8 +1,7 @@
 import type { AgentInstallations } from "../application/agent-installations"
 import * as React from "react"
 import { AgentBloom } from "./agent-bloom"
-import { Onboarding } from "./onboarding"
-import { SETUP_HEADING_ID } from "./setup-frame"
+import { Onboarding, SETUP_HEADING_ID } from "./onboarding"
 import { SetupChrome } from "./setup-chrome"
 import { useIntroSound } from "./use-intro-sound"
 import { useOnboarding } from "./use-onboarding"
@@ -235,7 +234,6 @@ export function SetupGate({
           onConfirm={onboarding.confirm}
           onFinish={onboarding.finish}
           onAcceptLinger={onboarding.acceptLinger}
-          onDeclineLinger={onboarding.declineLinger}
           lingerPending={onboarding.lingerPending}
           onRecheck={onboarding.recheck}
           onRetryGateway={onboarding.retryGatewayStartup}

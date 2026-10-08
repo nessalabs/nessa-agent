@@ -10,7 +10,7 @@ sources:
   - "src/onboarding/model/onboarding.test.ts"
   - "src/onboarding/ui/use-onboarding.ts"
   - "src/onboarding/model/linger.ts"
-  - "src/onboarding/ui/linger-step.tsx"
+  - "src/onboarding/ui/onboarding.tsx"
   - "src-tauri/src/linger/domain/show.rs"
   - "src/onboarding/ui/use-onboarding-startup.test.ts"
   - "src/onboarding/application/readiness-check.ts"

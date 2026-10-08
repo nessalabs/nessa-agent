@@ -545,6 +545,19 @@ test("the disposable user manager proves the same session bus and cleans its exa
   assert.equal(script.match(/print_manager_diagnostics/g)?.length, 5)
 })
 
+test("linger acceptance uses a throwaway user and does not enable linger for the runner", () => {
+  const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
+  const script = readFileSync("scripts/desktop/check-linux-linger.sh", "utf8")
+  assert.match(workflow, /bash scripts\/desktop\/check-linux-linger\.sh/)
+  assert.match(script, /useradd -m lt/)
+  assert.match(script, /loginctl disable-linger lt/)
+  assert.match(script, /-p User=lt/)
+  assert.match(script, /NESSA_LINGER_ACCEPTANCE=1/)
+  assert.match(script, /linger_live/)
+  assert.match(script, /refusing to enable linger for the account running this script/)
+  assert.doesNotMatch(script, /loginctl enable-linger/)
+})
+
 test("the frontend job owns top-level script and verification-script tests, and their just dependency", () => {
   const root = JSON.parse(readFileSync("package.json", "utf8"))
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")

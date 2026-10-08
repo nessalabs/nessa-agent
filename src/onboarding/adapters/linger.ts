@@ -1,12 +1,11 @@
 /** The setup linger question, as the host answered it. */
 
-import { lingerAccept, lingerDecline, lingerStatus } from "../../host/window"
+import { lingerAccept, lingerStatus } from "../../host/window"
 import { parseLingerView, type LingerView } from "../model/linger"
 
 export interface LingerSource {
   status(): Promise<LingerView | undefined>
   accept(): Promise<LingerView | undefined>
-  decline(): Promise<LingerView | undefined>
 }
 
 async function asked(read: () => Promise<unknown>): Promise<LingerView | undefined> {
@@ -17,5 +16,4 @@ async function asked(read: () => Promise<unknown>): Promise<LingerView | undefin
 export const hostLinger: LingerSource = {
   status: () => asked(lingerStatus),
   accept: () => asked(lingerAccept),
-  decline: () => asked(lingerDecline),
 }

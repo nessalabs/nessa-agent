@@ -154,9 +154,11 @@ What remains to validate and ship:
   fact. Registration does not require linger (#219 removed that prerequisite).
   Lingering is an explicit account policy, not something the app enables
   silently: `loginctl enable-linger` keeps that user's manager alive from boot
-  and after logout and is protected by the
-  `org.freedesktop.login1.set-user-linger` privilege. Linux setup offers that
-  choice and reports only the confirming logind read
+  and after logout. For the caller's own uid, logind checks
+  `org.freedesktop.login1.set-self-linger`, allowed without an administrator
+  on systemd since v249. `set-user-linger` is the administrator action for a
+  different uid. Linux setup offers the choice and reports only the confirming
+  logind read
   ([#217](https://github.com/nessalabs/nessa-agent/issues/217),
   [ADR 217](../adr/done/217-linux-linger-at-setup.md)). The app does not turn
   linger off, and it does not claim logged-out operation unless that read says

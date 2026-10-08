@@ -15,14 +15,14 @@ import { Onboarding } from "../../../../src/onboarding/ui/onboarding"
 import { useOnboarding } from "../../../../src/onboarding/ui/use-onboarding"
 import "../../../../src/styles.css"
 
-const offer: LingerView = { shown: "offer", audit: "not-required" }
-const enabled: LingerView = { shown: "enabled", audit: "recorded" }
-const declined: LingerView = { shown: "declined", audit: "recorded" }
-const refused: LingerView = { shown: "refused", audit: "recorded" }
-const unsupported: LingerView = { shown: "unsupported", audit: "not-required" }
+const offer: LingerView = { shown: "offer" }
+const enabled: LingerView = { shown: "enabled" }
+const refused: LingerView = { shown: "refused" }
+const failed: LingerView = { shown: "failed" }
+const unsupported: LingerView = { shown: "unsupported" }
 
 const phase = new URL(location.href).searchParams.get("phase") ?? "offer-then-enable"
-const probe = { accepts: 0, declines: 0 }
+const probe = { accepts: 0 }
 
 function source(): LingerSource {
   if (phase === "already-enabled") {
@@ -32,7 +32,6 @@ function source(): LingerSource {
         probe.accepts += 1
         return enabled
       },
-      decline: async () => declined,
     }
   }
   if (phase === "unsupported") {
@@ -41,20 +40,6 @@ function source(): LingerSource {
       accept: async () => {
         probe.accepts += 1
         return unsupported
-      },
-      decline: async () => declined,
-    }
-  }
-  if (phase === "offer-then-decline") {
-    return {
-      status: async () => offer,
-      accept: async () => {
-        probe.accepts += 1
-        return enabled
-      },
-      decline: async () => {
-        probe.declines += 1
-        return declined
       },
     }
   }
@@ -65,17 +50,15 @@ function source(): LingerSource {
         probe.accepts += 1
         return refused
       },
-      decline: async () => declined,
     }
   }
-  if (phase === "waiting") {
+  if (phase === "failed") {
     return {
       status: async () => offer,
-      accept: () =>
-        new Promise(() => {
-          probe.accepts += 1
-        }),
-      decline: async () => declined,
+      accept: async () => {
+        probe.accepts += 1
+        return failed
+      },
     }
   }
   return {
@@ -83,10 +66,6 @@ function source(): LingerSource {
     accept: async () => {
       probe.accepts += 1
       return enabled
-    },
-    decline: async () => {
-      probe.declines += 1
-      return declined
     },
   }
 }
@@ -115,7 +94,6 @@ function Surface() {
         onConfirm={onboarding.confirm}
         onFinish={onboarding.finish}
         onAcceptLinger={onboarding.acceptLinger}
-        onDeclineLinger={onboarding.declineLinger}
         onRecheck={onboarding.recheck}
         onRetryGateway={onboarding.retryGatewayStartup}
       />

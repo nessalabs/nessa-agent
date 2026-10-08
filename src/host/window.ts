@@ -97,23 +97,16 @@ export async function quitNessa(): Promise<void> {
  * chosen. A browser has no logind; the no-op is not a claim that linger is on.
  */
 export async function lingerStatus(): Promise<unknown> {
-  if (!inTauri) return { shown: "not-applicable", audit: "not-required" }
+  if (!inTauri) return { shown: "not-applicable" }
   const { invoke } = await import("@tauri-apps/api/core")
   return invoke("linger_status")
 }
 
-/** Ask logind to enable linger, through polkit. The answer is the confirming read. */
+/** Ask logind to enable linger. The answer is the confirming read. */
 export async function lingerAccept(): Promise<unknown> {
-  if (!inTauri) return { shown: "not-applicable", audit: "not-required" }
+  if (!inTauri) return { shown: "not-applicable" }
   const { invoke } = await import("@tauri-apps/api/core")
   return invoke("linger_accept")
-}
-
-/** Record that setup was asked not to enable linger. No logind call. */
-export async function lingerDecline(): Promise<unknown> {
-  if (!inTauri) return { shown: "not-applicable", audit: "not-required" }
-  const { invoke } = await import("@tauri-apps/api/core")
-  return invoke("linger_decline")
 }
 
 /**

@@ -1,19 +1,13 @@
-//! What setup may claim about logged-out operation, and the records of a choice.
+//! What setup may claim about logged-out operation.
 //!
 //! ```text
-//! observation × attempt ──show()──▶ shown
-//! accept / decline ──▶ intent, outcome, decline
+//! read × call ──show()──▶ shown
 //! ```
 //!
-//! `show` is the claim. A record is evidence of a choice this process made;
-//! it is not a later process's observation.
+//! `show` is the claim. A call that returned is not a later process's read.
 
-mod decision;
 mod show;
 
-pub(crate) use decision::{
-    LingerCause, LingerCorrelation, LingerDecline, LingerInitiator, LingerIntent, LingerOutcome,
-};
 pub(crate) use show::{
-    show, LingerAttempt, LingerCall, LingerObservation, LingerShown, LingerSnapshot, LoginUserId,
+    show, LingerCall, LingerObservation, LingerShown, LingerSnapshot, LoginUserId,
 };

@@ -5,17 +5,15 @@
 //! ([ADR 217](../../../docs/adr/done/217-linux-linger-at-setup.md)).
 //!
 //! ```text
-//! setup command ──▶ LingerOffer (this process's attempt)
-//!                       │
-//!                       ├─ show() ──────────▶ the only logged-out claim
-//!                       ├─ LogindLinger ───▶ read Linger, or SetUserLinger
-//!                       └─ LingerAudit ────▶ intent before the call, outcome after
+//! setup command ──▶ blocking pool ──▶ LingerOffer
+//!                                       ├─ show() ─────────▶ the only logged-out claim
+//!                                       └─ LogindLinger ──▶ read Linger, or SetUserLinger
 //! ```
 //!
-//! Arrows are calls. `show` is pure. The attempt is memory of this process:
-//! a new process starts with no attempt and can claim logged-out operation
-//! only from a fresh read. `SetUserLinger` is reached only from an explicit
-//! accept while that read says linger is off.
+//! Arrows are calls. `show` is pure. `SetUserLinger` is reached only from an
+//! explicit accept while the read just taken says linger is off. For this
+//! process's own uid that call is `set-self-linger`, which stock systemd allows
+//! without an administrator.
 
 pub(crate) mod application;
 pub(crate) mod domain;

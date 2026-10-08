@@ -60,10 +60,7 @@ use crate::linger::application::LingerOffer;
 #[cfg(not(target_os = "linux"))]
 use crate::linger::application::NotApplicableLinger;
 #[cfg(target_os = "linux")]
-use crate::linger::{
-    application::LingerSession,
-    infrastructure::{FileLingerAudit, SystemLogind, UnavailableLingerAudit},
-};
+use crate::linger::{application::LingerSession, infrastructure::SystemLogind};
 use crate::local_data;
 use crate::settings::{SettingsFile, SettingsStore};
 use crate::shortcuts::{ShortcutStore, ShortcutsFile};
@@ -282,31 +279,10 @@ impl HostDependencies {
     }
 }
 
-/// Linux records the choice under the same trusted root as credential audit,
-/// then asks logind. A root that cannot be placed there cannot record an
-/// intent, so accept does not call. Other hosts have no logind API.
+/// Linux asks logind. Other hosts have no logind API, so they cannot enable it.
 #[cfg(target_os = "linux")]
-fn linger_offer(app: &AppHandle, config_root: Option<&std::path::Path>) -> Arc<dyn LingerOffer> {
-    let audit = app
-        .path()
-        .app_config_dir()
-        .ok()
-        .and_then(|trusted_root| {
-            config_root.and_then(|config_root| {
-                config_root
-                    .strip_prefix(&trusted_root)
-                    .ok()
-                    .map(|relative| {
-                        Arc::new(FileLingerAudit::beneath(
-                            trusted_root,
-                            relative.join("linger-audit"),
-                        ))
-                            as Arc<dyn crate::linger::application::LingerAudit>
-                    })
-            })
-        })
-        .unwrap_or_else(|| Arc::new(UnavailableLingerAudit));
-    Arc::new(LingerSession::new(Arc::new(SystemLogind), audit))
+fn linger_offer(_app: &AppHandle, _config_root: Option<&std::path::Path>) -> Arc<dyn LingerOffer> {
+    Arc::new(LingerSession::new(Arc::new(SystemLogind)))
 }
 
 #[cfg(not(target_os = "linux"))]

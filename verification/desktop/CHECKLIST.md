@@ -1102,12 +1102,14 @@ Both cases require zero page errors. The rule is owned by
 `node verification/desktop/scripts/linux-linger.mjs` drives the real setup UI
 and controller in Chromium and WebKit. The fixture supplies the host's linger
 answer; it does not call logind. After the shortcut, an offer shows the choice
-and does not say the gateway keeps running after logout. Accepting shows that
-sentence only when the answer is `enabled`. Declining, a refusal, an unsupported
-host, and a prompt still open claim nothing, and a prompt still open has no
-Continue and no second enable. An account that is already lingering is reported
-without a call. Both engines require zero page errors and painted controls.
-The screen is [ADR 217](../../docs/adr/done/217-linux-linger-at-setup.md).
+and does not say the gateway keeps running after logout, and it does not ask
+for an administrator. Accepting shows that sentence only when the answer is
+`enabled`. Declining finishes setup without a call. A refusal and a failure
+name `loginctl enable-linger` and claim nothing. An unsupported host claims
+nothing. An account that is already lingering is reported without a call. Both
+engines require zero page errors and painted controls. The screen is
+[ADR 217](../../docs/adr/done/217-linux-linger-at-setup.md). The live bus is
+`scripts/desktop/check-linux-linger.sh`, for user `lt` only.
 
 ### Attachment admission races
 

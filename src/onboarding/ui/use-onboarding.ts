@@ -84,12 +84,10 @@ export interface Onboarding {
   /** True while an ask is in flight, so the control that starts one can show
    * that it is working rather than looking like it did nothing. */
   checking: boolean
-  /** True while an explicit linger enable is waiting on the host. */
+  /** True while an explicit linger enable has not returned. */
   lingerPending: boolean
   /** Enable linger. A second call while one is open does nothing. */
   acceptLinger: () => void
-  /** Decline linger. Does nothing while an enable is open. */
-  declineLinger: () => void
 }
 
 /**
@@ -347,10 +345,9 @@ export function useOnboarding(
       setState(confirmAgent)
     }, []),
     finish: React.useCallback(() => {
-      // Linger is the last step when the host has a logind answer. Continue
-      // while the prompt is open would close this window and drop the call.
+      // Linger is the last step when the host has a logind answer. Finishing
+      // it ends setup, including while an accept is still in flight.
       if (state.step === "linger") {
-        if (lingerBusy.current) return
         playCue("celebrate")
         setState(completeOnboarding)
         return
@@ -373,9 +370,12 @@ export function useOnboarding(
           )
         },
         () => {
-          // A failed ask stays on the shortcut. It is not a view, and it is
-          // not a claim that linger is on.
+          // A failed ask is not a view and not a claim. Setup still finishes.
           leavingSummon.current = false
+          playCue("celebrate")
+          setState((current) =>
+            current.step === "summon" ? completeOnboarding(current) : current,
+          )
         },
       )
     }, [linger, state.step]),
@@ -384,13 +384,6 @@ export function useOnboarding(
       lingerBusy.current = true
       setLingerPending(true)
       void linger.accept().then(applyLinger, () => {
-        applyLinger(undefined)
-      })
-    }, [applyLinger, linger, state.step]),
-    declineLinger: React.useCallback(() => {
-      if (state.step !== "linger" || lingerBusy.current) return
-      lingerBusy.current = true
-      void linger.decline().then(applyLinger, () => {
         applyLinger(undefined)
       })
     }, [applyLinger, linger, state.step]),

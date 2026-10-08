@@ -1,8 +1,8 @@
-//! The screen for one logind read and this process's attempt.
+//! The screen for one logind read, and for the call an explicit accept made.
 //!
 //! The table is [ADR 217](../../../../../docs/adr/done/217-linux-linger-at-setup.md).
 //! `enabled` is the only claim that the gateway keeps running after logout,
-//! and it is returned only for a read whose `Linger` property is true.
+//! and it is returned only for a read that says linger is on.
 
 /// The account logind was asked about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,67 +18,31 @@ impl LoginUserId {
     }
 }
 
-/// What the latest logind read said about this user's linger.
+/// What the latest read said about this user's linger.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LingerObservation {
-    /// `org.freedesktop.login1.User.Linger` is true.
+    /// logind's `Linger` property is true, or the linger file is present.
     Enabled,
-    /// logind answered and `Linger` is false.
+    /// The read answered and linger is off.
     Disabled,
     /// The system bus cannot be reached, or logind has no owner.
     Unsupported,
-    /// logind answered and `Linger` could not be read.
+    /// logind answered and linger could not be read.
     Unreadable,
 }
 
-/// What this process has done about the explicit choice.
-///
-/// A process that replaces one which quit mid-prompt starts at [`NotChosen`].
-/// Nothing here is written down for the next process.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LingerAttempt {
-    /// No choice yet.
-    NotChosen,
-    /// The person chose not to enable. No call was made.
-    Declined,
-    /// `SetUserLinger` has been sent and has not returned.
-    InFlight,
-    /// The method returned without an error. Not confirmation.
-    Succeeded,
-    /// The polkit prompt was cancelled or dismissed.
-    Cancelled,
-    /// polkit did not authorize the change.
-    NotAuthorized,
-    /// The wait ended with no reply.
-    TimedOut,
-    /// The call failed because logind was not there to answer it.
-    Unavailable,
-}
-
-/// How a finished `SetUserLinger` call came back, before the confirming read.
+/// How a finished `SetUserLinger` came back, before the confirming read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LingerCall {
     Succeeded,
-    Cancelled,
-    NotAuthorized,
-    TimedOut,
-    Unavailable,
+    /// polkit refused the change, or the wait ended with no reply.
+    Refused,
+    /// The call failed for some other reason. Not a refusal.
+    Failed,
 }
 
-impl LingerCall {
-    pub(crate) fn attempt(self) -> LingerAttempt {
-        match self {
-            Self::Succeeded => LingerAttempt::Succeeded,
-            Self::Cancelled => LingerAttempt::Cancelled,
-            Self::NotAuthorized => LingerAttempt::NotAuthorized,
-            Self::TimedOut => LingerAttempt::TimedOut,
-            Self::Unavailable => LingerAttempt::Unavailable,
-        }
-    }
-}
-
-/// What setup shows. `show` never returns the screen for a host with no
-/// logind API; that screen exists only on such a host.
+/// What setup shows. `not-applicable` is a host with no logind API;
+/// [`show`] never returns it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LingerShown {
     /// This host has no logind API. Setup does not ask.
@@ -86,21 +50,17 @@ pub(crate) enum LingerShown {
     NotApplicable,
     /// Linger is off and the person has not chosen.
     Offer,
-    /// logind says linger is on.
+    /// The read says linger is on.
     Enabled,
-    /// The person chose not to enable, and logind still says it is off.
-    Declined,
-    /// A finished attempt left linger off.
+    /// The call was refused and the read still says linger is off.
     Refused,
-    /// The prompt has not returned, and linger is still off.
-    Waiting,
+    /// The call did not leave linger on, and it was not a refusal.
+    Failed,
     /// There is no logind.
     Unsupported,
-    /// logind did not yield a linger bit. Nothing is claimed.
-    Unconfirmed,
 }
 
-/// One read: which account, and what logind said about it.
+/// One read: which account, and what it said.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LingerSnapshot {
     user: LoginUserId,
@@ -121,80 +81,55 @@ impl LingerSnapshot {
     }
 }
 
-/// The screen for this read and this process's attempt.
+/// The screen for this read and, if an accept just returned, that call.
 ///
 /// `enabled` is returned only when `observation` is [`LingerObservation::Enabled`].
-/// The attempt cannot promote a read.
+/// A successful call cannot promote a read that still says linger is off.
 #[must_use]
-pub(crate) fn show(observation: LingerObservation, attempt: LingerAttempt) -> LingerShown {
+pub(crate) fn show(observation: LingerObservation, call: Option<LingerCall>) -> LingerShown {
     match observation {
         LingerObservation::Enabled => LingerShown::Enabled,
         LingerObservation::Unsupported => LingerShown::Unsupported,
-        LingerObservation::Unreadable => LingerShown::Unconfirmed,
-        LingerObservation::Disabled => match attempt {
-            LingerAttempt::NotChosen => LingerShown::Offer,
-            LingerAttempt::Declined => LingerShown::Declined,
-            LingerAttempt::InFlight => LingerShown::Waiting,
-            LingerAttempt::Succeeded
-            | LingerAttempt::Cancelled
-            | LingerAttempt::NotAuthorized
-            | LingerAttempt::TimedOut
-            | LingerAttempt::Unavailable => LingerShown::Refused,
+        LingerObservation::Unreadable => LingerShown::Failed,
+        LingerObservation::Disabled => match call {
+            None => LingerShown::Offer,
+            Some(LingerCall::Refused) => LingerShown::Refused,
+            Some(LingerCall::Succeeded | LingerCall::Failed) => LingerShown::Failed,
         },
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{show, LingerAttempt, LingerObservation, LingerShown};
+    use super::{show, LingerCall, LingerObservation, LingerShown};
 
-    /// ADR 217's grid. Each pair is one assertion; the lists below are every
-    /// variant, so a new one fails to compile until it has a row.
-    const ROWS: &[(LingerObservation, LingerAttempt, LingerShown)] = &[
-        (Enabled, NotChosen, EnabledShown),
-        (Enabled, Declined, EnabledShown),
-        (Enabled, InFlight, EnabledShown),
-        (Enabled, Succeeded, EnabledShown),
-        (Enabled, Cancelled, EnabledShown),
-        (Enabled, NotAuthorized, EnabledShown),
-        (Enabled, TimedOut, EnabledShown),
-        (Enabled, Unavailable, EnabledShown),
-        (Unsupported, NotChosen, UnsupportedShown),
-        (Unsupported, Declined, UnsupportedShown),
-        (Unsupported, InFlight, UnsupportedShown),
-        (Unsupported, Succeeded, UnsupportedShown),
-        (Unsupported, Cancelled, UnsupportedShown),
-        (Unsupported, NotAuthorized, UnsupportedShown),
-        (Unsupported, TimedOut, UnsupportedShown),
-        (Unsupported, Unavailable, UnsupportedShown),
-        (Unreadable, NotChosen, Unconfirmed),
-        (Unreadable, Declined, Unconfirmed),
-        (Unreadable, InFlight, Unconfirmed),
-        (Unreadable, Succeeded, Unconfirmed),
-        (Unreadable, Cancelled, Unconfirmed),
-        (Unreadable, NotAuthorized, Unconfirmed),
-        (Unreadable, TimedOut, Unconfirmed),
-        (Unreadable, Unavailable, Unconfirmed),
-        (Disabled, NotChosen, Offer),
-        (Disabled, Declined, DeclinedShown),
-        (Disabled, InFlight, Waiting),
-        (Disabled, Succeeded, Refused),
-        (Disabled, Cancelled, Refused),
-        (Disabled, NotAuthorized, Refused),
-        (Disabled, TimedOut, Refused),
-        (Disabled, Unavailable, Refused),
+    const ROWS: &[(LingerObservation, Option<LingerCall>, LingerShown)] = &[
+        (Enabled, None, EnabledShown),
+        (Enabled, Some(Succeeded), EnabledShown),
+        (Enabled, Some(Refused), EnabledShown),
+        (Enabled, Some(Failed), EnabledShown),
+        (Unsupported, None, UnsupportedShown),
+        (Unsupported, Some(Succeeded), UnsupportedShown),
+        (Unsupported, Some(Refused), UnsupportedShown),
+        (Unsupported, Some(Failed), UnsupportedShown),
+        (Unreadable, None, FailedShown),
+        (Unreadable, Some(Succeeded), FailedShown),
+        (Unreadable, Some(Refused), FailedShown),
+        (Unreadable, Some(Failed), FailedShown),
+        (Disabled, None, Offer),
+        (Disabled, Some(Refused), RefusedShown),
+        (Disabled, Some(Succeeded), FailedShown),
+        (Disabled, Some(Failed), FailedShown),
     ];
 
-    use LingerAttempt::{
-        Cancelled, Declined, InFlight, NotAuthorized, NotChosen, Succeeded, TimedOut, Unavailable,
-    };
+    use LingerCall::{Failed, Refused, Succeeded};
     use LingerObservation::{Disabled, Enabled, Unreadable, Unsupported};
     use LingerShown::{
-        Declined as DeclinedShown, Enabled as EnabledShown, Offer, Refused, Unconfirmed,
-        Unsupported as UnsupportedShown, Waiting,
+        Enabled as EnabledShown, Failed as FailedShown, Offer, Refused as RefusedShown,
+        Unsupported as UnsupportedShown,
     };
 
-    fn each_pair(mut visit: impl FnMut(LingerObservation, LingerAttempt)) {
+    fn each_pair(mut visit: impl FnMut(LingerObservation, Option<LingerCall>)) {
         for observation in [Enabled, Disabled, Unsupported, Unreadable] {
             match observation {
                 Enabled => {}
@@ -202,59 +137,30 @@ mod tests {
                 Unsupported => {}
                 Unreadable => {}
             }
-            for attempt in [
-                NotChosen,
-                Declined,
-                InFlight,
-                Succeeded,
-                Cancelled,
-                NotAuthorized,
-                TimedOut,
-                Unavailable,
-            ] {
-                match attempt {
-                    NotChosen => {}
-                    Declined => {}
-                    InFlight => {}
-                    Succeeded => {}
-                    Cancelled => {}
-                    NotAuthorized => {}
-                    TimedOut => {}
-                    Unavailable => {}
+            for call in [None, Some(Succeeded), Some(Refused), Some(Failed)] {
+                match call {
+                    None => {}
+                    Some(Succeeded) => {}
+                    Some(Refused) => {}
+                    Some(Failed) => {}
                 }
-                visit(observation, attempt);
+                visit(observation, call);
             }
         }
     }
 
     #[test]
-    fn every_logind_state_and_attempt_shows_the_decided_row() {
-        // 4 observations × 8 attempts. A lost reply is the `not-chosen` column
-        // on a fresh read: enabled stays a claim, disabled is the offer again,
-        // and unsupported / unreadable claim nothing.
-        assert_eq!(
-            ROWS.len(),
-            32,
-            "ADR 217 has one row per observation × attempt"
-        );
-        each_pair(|observation, attempt| {
+    fn every_read_and_call_shows_the_decided_row() {
+        assert_eq!(ROWS.len(), 16, "ADR 217 has one row per read × call");
+        each_pair(|observation, call| {
             let shown = ROWS
                 .iter()
-                .find(|(row_observation, row_attempt, _)| {
-                    *row_observation == observation && *row_attempt == attempt
+                .find(|(row_observation, row_call, _)| {
+                    *row_observation == observation && *row_call == call
                 })
                 .map(|(_, _, shown)| *shown)
-                .unwrap_or_else(|| panic!("missing row for {observation:?} × {attempt:?}"));
-            assert_ne!(
-                shown,
-                LingerShown::NotApplicable,
-                "not-applicable is a host without logind, not a read"
-            );
-            assert_eq!(
-                show(observation, attempt),
-                shown,
-                "{observation:?} × {attempt:?}"
-            );
+                .unwrap_or_else(|| panic!("missing row for {observation:?} × {call:?}"));
+            assert_eq!(show(observation, call), shown, "{observation:?} × {call:?}");
         });
     }
 }

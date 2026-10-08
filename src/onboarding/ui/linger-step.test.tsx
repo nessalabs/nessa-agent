@@ -3,56 +3,50 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
 import type { LingerView } from "../model/linger"
-import { LingerStep } from "./linger-step"
+import { LingerStep } from "./onboarding"
 
-function markup(view: LingerView | undefined, pending = false) {
+function markup(view: LingerView, pending = false) {
   return renderToStaticMarkup(
     React.createElement(LingerStep, {
       view,
       pending,
-      onAccept: () => {},
-      onDecline: () => {},
-      onFinish: () => {},
+      onAccept: () => undefined,
+      onFinish: () => undefined,
     }),
   )
 }
 
-const views: LingerView[] = [
-  { shown: "offer", audit: "not-required" },
-  { shown: "declined", audit: "recorded" },
-  { shown: "refused", audit: "recorded" },
-  { shown: "waiting", audit: "not-required" },
-  { shown: "unsupported", audit: "not-required" },
-  { shown: "unconfirmed", audit: "not-required" },
-  { shown: "not-applicable", audit: "not-required" },
+const quiet: LingerView[] = [
+  { shown: "offer" },
+  { shown: "refused" },
+  { shown: "failed" },
+  { shown: "unsupported" },
+  { shown: "not-applicable" },
 ]
 
 describe("the linger step", () => {
   it("claims logged-out operation only when the host says enabled", () => {
-    const enabled = markup({ shown: "enabled", audit: "recorded" })
+    const enabled = markup({ shown: "enabled" })
     expect(enabled).toContain("keeps running")
     expect(enabled).toContain('data-linger-claim="yes"')
-    expect(enabled).toContain("Start using Nessa")
-    expect(enabled).not.toContain("Keep it running")
-    for (const view of views) {
+    for (const view of quiet) {
       const html = markup(view)
       expect(html).not.toContain("keeps running")
       expect(html).toContain('data-linger-claim="no"')
     }
   })
 
-  it("offers the choice, a retry, and nothing while the prompt is open", () => {
-    const offer = markup({ shown: "offer", audit: "not-required" })
+  it("offers the choice, and a refusal names the manual command", () => {
+    const offer = markup({ shown: "offer" })
     expect(offer).toContain("Keep it running")
     expect(offer).toContain("Only while I’m signed in")
-    expect(offer).not.toContain("Start using Nessa")
-    const refused = markup({ shown: "refused", audit: "failed" })
+    expect(offer).not.toContain("administrator")
+    const refused = markup({ shown: "refused" })
     expect(refused).toContain("Try again")
     expect(refused).toContain("Start using Nessa")
-    expect(refused).toContain("Nessa could not record that decision.")
-    const waiting = markup({ shown: "offer", audit: "not-required" }, true)
-    expect(waiting).toContain('data-linger="waiting"')
-    expect(waiting).not.toContain("Keep it running")
-    expect(waiting).not.toContain("Start using Nessa")
+    expect(refused).toContain("loginctl enable-linger")
+    const failed = markup({ shown: "failed" })
+    expect(failed).toContain("loginctl enable-linger")
+    expect(failed).not.toContain("keeps running")
   })
 })

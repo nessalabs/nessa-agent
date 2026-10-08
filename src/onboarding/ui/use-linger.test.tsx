@@ -64,7 +64,6 @@ function Surface({ linger }: { linger: LingerSource }) {
         onConfirm={onboarding.confirm}
         onFinish={onboarding.finish}
         onAcceptLinger={onboarding.acceptLinger}
-        onDeclineLinger={onboarding.declineLinger}
         onRecheck={onboarding.recheck}
         onRetryGateway={onboarding.retryGatewayStartup}
       />
@@ -96,12 +95,9 @@ afterEach(async () => {
 describe("linger at the end of setup", () => {
   it("finishes when this host has no logind question", async () => {
     const linger: LingerSource = {
-      status: async () => ({ shown: "not-applicable", audit: "not-required" }),
+      status: async () => ({ shown: "not-applicable" }),
       accept: async () => {
         throw new Error("accept")
-      },
-      decline: async () => {
-        throw new Error("decline")
       },
     }
     await React.act(async () => {
@@ -113,18 +109,13 @@ describe("linger at the end of setup", () => {
     expect(container.querySelector("[data-step]")?.getAttribute("data-step")).toBe("done")
   })
 
-  it("offers the choice and reports the confirming read", async () => {
+  it("offers the choice and finishes without enabling when the person declines", async () => {
     let accepts = 0
-    let declines = 0
     const linger: LingerSource = {
-      status: async () => ({ shown: "offer", audit: "not-required" }),
+      status: async () => ({ shown: "offer" }),
       accept: async () => {
         accepts += 1
-        return { shown: "enabled", audit: "recorded" }
-      },
-      decline: async () => {
-        declines += 1
-        return { shown: "declined", audit: "recorded" }
+        return { shown: "enabled" }
       },
     }
     await React.act(async () => {
@@ -137,9 +128,9 @@ describe("linger at the end of setup", () => {
     await React.act(async () => {
       button("Only while I’m signed in").click()
     })
-    expect(declines).toBe(1)
     expect(accepts).toBe(0)
-    expect(container.textContent).toContain("Nessa runs while you are signed in")
+    expect(container.querySelector("[data-step]")?.getAttribute("data-step")).toBe("done")
+    expect(container.textContent).not.toContain("keeps running")
   })
 
   it("shows the next read when the enable reply is lost", async () => {
@@ -147,14 +138,11 @@ describe("linger at the end of setup", () => {
     const linger: LingerSource = {
       status: async () => {
         statuses += 1
-        return statuses === 1
-          ? { shown: "offer", audit: "not-required" }
-          : { shown: "enabled", audit: "recorded" }
+        return statuses === 1 ? { shown: "offer" } : { shown: "enabled" }
       },
       accept: async () => {
         throw new Error("lost")
       },
-      decline: async () => ({ shown: "declined", audit: "recorded" }),
     }
     await React.act(async () => {
       root.render(<Surface linger={linger} />)
@@ -174,13 +162,12 @@ describe("linger at the end of setup", () => {
     const linger: LingerSource = {
       status: async () => {
         statuses += 1
-        if (statuses === 1) return { shown: "offer", audit: "not-required" }
+        if (statuses === 1) return { shown: "offer" }
         throw new Error("unreadable")
       },
       accept: async () => {
         throw new Error("lost")
       },
-      decline: async () => ({ shown: "declined", audit: "recorded" }),
     }
     await React.act(async () => {
       root.render(<Surface linger={linger} />)
@@ -191,17 +178,18 @@ describe("linger at the end of setup", () => {
     await React.act(async () => {
       button("Keep it running").click()
     })
-    expect(container.querySelector("[data-linger]")?.getAttribute("data-linger")).toBe("offer")
+    expect(container.querySelector("[data-linger]")?.getAttribute("data-linger")).toBe(
+      "offer",
+    )
     expect(container.textContent).not.toContain("keeps running")
   })
 
-  it("stays on the shortcut when the ask fails", async () => {
+  it("finishes when the ask fails", async () => {
     const linger: LingerSource = {
       status: async () => {
         throw new Error("unreachable")
       },
-      accept: async () => ({ shown: "enabled", audit: "recorded" }),
-      decline: async () => ({ shown: "declined", audit: "recorded" }),
+      accept: async () => ({ shown: "enabled" }),
     }
     await React.act(async () => {
       root.render(<Surface linger={linger} />)
@@ -209,7 +197,7 @@ describe("linger at the end of setup", () => {
     await React.act(async () => {
       button("Skip this step").click()
     })
-    expect(container.querySelector("[data-step]")?.getAttribute("data-step")).toBe("summon")
+    expect(container.querySelector("[data-step]")?.getAttribute("data-step")).toBe("done")
     expect(container.textContent).not.toContain("keeps running")
   })
 
@@ -220,13 +208,12 @@ describe("linger at the end of setup", () => {
       release = resolve
     })
     const linger: LingerSource = {
-      status: async () => ({ shown: "offer", audit: "not-required" }),
+      status: async () => ({ shown: "offer" }),
       accept: async () => {
         accepts += 1
         await gate
-        return { shown: "enabled", audit: "recorded" }
+        return { shown: "enabled" }
       },
-      decline: async () => ({ shown: "declined", audit: "recorded" }),
     }
     const calls: { accept?: () => void } = {}
     function Harness() {
@@ -245,7 +232,6 @@ describe("linger at the end of setup", () => {
             onConfirm={onboarding.confirm}
             onFinish={onboarding.finish}
             onAcceptLinger={onboarding.acceptLinger}
-            onDeclineLinger={onboarding.declineLinger}
             onRecheck={onboarding.recheck}
             onRetryGateway={onboarding.retryGatewayStartup}
           />
@@ -263,7 +249,7 @@ describe("linger at the end of setup", () => {
       calls.accept?.()
     })
     expect(accepts).toBe(1)
-    expect(container.textContent).toContain("Waiting for permission")
+    expect(container.textContent).toContain("Keep Nessa running when you log out?")
     await React.act(async () => {
       release?.()
     })

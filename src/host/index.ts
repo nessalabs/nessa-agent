@@ -26,7 +26,6 @@ export {
   gatewayStartup,
   hostStartup,
   lingerAccept,
-  lingerDecline,
   lingerStatus,
   restartNessa,
   quitNessa,
