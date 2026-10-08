@@ -71,6 +71,9 @@ jobs:
   version:
     name: Versions agree with the tag
     runs-on: ubuntu-latest
+    # Resolving the tag and comparing versions finished in under a minute
+    # (runs 35483042120, 35478911855, 35475799232, 35472485973).
+    timeout-minutes: 10
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
       sha: ${{ steps.resolve.outputs.sha }}
@@ -148,6 +151,9 @@ jobs:
     name: Updater key pairing
     needs: version
     runs-on: macos-latest
+    # The pairing test finished in at most 2.6 minutes on those runs. Thirty
+    # minutes covers a cold compile of the one test.
+    timeout-minutes: 30
     env:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -198,6 +204,11 @@ jobs:
             target: x86_64-unknown-linux-gnu
             updater-target: linux-x86_64
     runs-on: ${{ matrix.runner }}
+    # The apt step can run 65 minutes. macOS build jobs on runs 35483042120,
+    # 35478911855, 35475799232 and 35472485973 took at most 25.7 minutes, and
+    # no Linux release job has completed. 65 + 25.7 is 90.7, past the previous
+    # 90 minute bound. 120 minutes sits above that sum.
+    timeout-minutes: 120
     env:
       # Produces each update artifact's .sig beside it — the .app.tar.gz or the
       # .deb. Without it the bundle is built and signs nothing,
@@ -275,7 +286,11 @@ jobs:
       # as on macOS.
       - name: Install the desktop host's Linux build dependencies
         if: runner.os == 'Linux'
+        # The same 65 minute step bound as local-auth (#653), above the
+        # script's 62.75 minute worst case. The script owns the per-command
+        # ceilings: five minutes for each update, 45 for install.
         run: bash scripts/desktop/install-linux-build-deps.sh
+        timeout-minutes: 65
       # --target is passed although it is always the runner's own architecture,
       # and that is the point: prepare-macos.mjs and prepare-linux.mjs refuse a
       # triple that is not the host's, so if a runner image ever changes
@@ -315,6 +330,9 @@ jobs:
     name: Draft release
     needs: [version, build]
     runs-on: ubuntu-latest
+    # Publishing the draft finished in under a minute on the one green release.
+    # Fifteen minutes bounds an artifact upload that stalls.
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:

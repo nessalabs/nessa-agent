@@ -15,8 +15,13 @@ struct AuditGate {
     evidence: Mutex<Option<OwnershipEvidence>>,
     result: Mutex<Option<oneshot::Receiver<Result<(), PortFailure>>>>,
 }
+type SelectedAuditGate = (
+    OwnershipMeaning,
+    Option<nessa_sdk::domain::agent_execution::subagents::CloseEvidenceDetail>,
+    Arc<AuditGate>,
+);
 struct IndependentAudit {
-    next: Mutex<Option<(OwnershipMeaning, Arc<AuditGate>)>>,
+    next: Mutex<Option<SelectedAuditGate>>,
     records: Mutex<Vec<OwnershipEvidence>>,
     failures: Mutex<VecDeque<(OwnershipMeaning, PortFailure)>>,
 }
@@ -38,8 +43,15 @@ impl IndependentAudit {
             evidence: Mutex::new(None),
             result: Mutex::new(Some(receiver)),
         });
-        *self.next.lock().unwrap() = Some((meaning, gate.clone()));
+        *self.next.lock().unwrap() = Some((meaning, None, gate.clone()));
         (gate, sender)
+    }
+    fn observation_gate(&self) -> (Arc<AuditGate>, oneshot::Sender<Result<(), PortFailure>>) {
+        let result = self.gate(OwnershipMeaning::Closing);
+        self.next.lock().unwrap().as_mut().unwrap().1 = Some(nessa_sdk::domain::agent_execution::subagents::CloseEvidenceDetail::ResourceObservation {
+            physical: PhysicalFact::Released, provider_evidence: EvidenceFact::Acknowledged,
+        });
+        result
     }
 }
 #[async_trait]
@@ -48,11 +60,13 @@ impl OwnershipAudit for IndependentAudit {
         self.records.lock().unwrap().push(evidence.clone());
         let gate = {
             let mut next = self.next.lock().unwrap();
-            if next
-                .as_ref()
-                .is_some_and(|(meaning, _)| meaning == &evidence.after)
-            {
-                next.take().map(|(_, gate)| gate)
+            if next.as_ref().is_some_and(|(meaning, detail, _)| {
+                meaning == &evidence.after
+                    && detail
+                        .as_ref()
+                        .is_none_or(|detail| evidence.close_detail.as_ref() == Some(detail))
+            }) {
+                next.take().map(|(_, _, gate)| gate)
             } else {
                 None
             }
@@ -309,10 +323,11 @@ async fn row_8_released_capacity_and_fact_precede_rejected_cleanup_audit() {
     );
     let root = open(&c, "a").await.unwrap();
     let child = c.spawn(command(&root)).await.unwrap().child;
-    // Closing intent consumes the first Closing audit; hold the cleanup's Closed audit.
-    let (gate, release) = audit.gate(OwnershipMeaning::Closed);
+    // Select the actual Released observation independently of intent and Completion.
+    let (gate, release) = audit.observation_gate();
     let closing = tokio::spawn({
         let c = c.clone();
+        let child = child.clone();
         async move { close(&c, &child).await }
     });
     bounded(gate.entered.notified()).await;
@@ -332,7 +347,11 @@ async fn row_8_released_capacity_and_fact_precede_rejected_cleanup_audit() {
                 && r.physical == PhysicalFact::Released
         ));
     release.send(Err(PortFailure::Rejected)).unwrap();
-    let _ = bounded(closing).await.unwrap();
+    assert_eq!(
+        bounded(closing).await.unwrap(),
+        Err(OwnershipFailure::Audit(PortFailure::Rejected))
+    );
+    assert_eq!(c.lifetime_state(&child), Some(LifetimeState::Closing));
 }
 
 #[tokio::test]
@@ -1252,6 +1271,9 @@ async fn row_26_handed_out_gate_blocks_absence_through_rejected_close_and_remain
     assert!(snapshot.settlements.is_empty());
     gate.note_attachment(true, true).await;
     assert!(gate.is_sealed());
+    assert_eq!(c.lifetime_state(&root), Some(LifetimeState::Closing));
+    assert!(c.participation(&root).is_none());
+    bounded(gate.join_descendants()).await.unwrap();
     assert_eq!(c.lifetime_state(&root), Some(LifetimeState::Closed));
     assert!(c.participation(&root).is_none());
 }
@@ -1300,6 +1322,9 @@ async fn row_26_gate_handoff_before_caller_drop_retains_possible_external_owner(
     assert_eq!(c.lifetime_state(&root), Some(LifetimeState::Closing));
     assert!(store.read().await.unwrap().settlements.is_empty());
     gate.note_attachment(true, true).await;
+    assert_eq!(c.lifetime_state(&root), Some(LifetimeState::Closing));
+    assert!(c.participation(&root).is_none());
+    bounded(gate.join_descendants()).await.unwrap();
     assert_eq!(c.lifetime_state(&root), Some(LifetimeState::Closed));
 }
 
@@ -1715,7 +1740,11 @@ async fn row_35_rejected_none_revokes_gate_before_rejected_audit_and_releases_ca
     bounded(gate.entered.notified()).await;
     let supplied = factory.last_gate.lock().unwrap().clone().unwrap();
     assert!(supplied.is_sealed());
-    assert!(!room.try_reserve());
+    assert!(
+        room.try_reserve(),
+        "actual Ready absence returns capacity before fallible startup audit"
+    );
+    room.release();
     release.send(Err(PortFailure::Rejected)).unwrap();
     assert_eq!(
         bounded(spawning).await.unwrap(),
@@ -1735,9 +1764,12 @@ async fn row_35_rejected_none_revokes_gate_before_rejected_audit_and_releases_ca
             .find(|r| r.lifetime_id == snapshot.spawns[0].child_lifetime)
             .unwrap()
             .state,
-        LifetimeState::Closing
+        LifetimeState::Closed
     );
-    assert!(snapshot.settlements.is_empty());
+    assert!(matches!(
+        snapshot.settlements[0].proof,
+        nessa_sdk::domain::agent_execution::subagents::SettlementProof::Absence(_)
+    ));
     let restored = coordinator(
         store,
         IndependentAudit::new(),
@@ -1746,20 +1778,20 @@ async fn row_35_rejected_none_revokes_gate_before_rejected_audit_and_releases_ca
     );
     restored.resume().await.unwrap();
     let child = snapshot.spawns[0].child_lifetime.clone();
-    assert!(restored.participation(&child).unwrap().is_sealed());
-    assert!(c.participation(&child).unwrap().is_sealed());
+    assert!(restored.participation(&child).is_none());
+    assert!(c.participation(&child).is_none());
     let drops = Arc::new(AtomicUsize::new(0));
     let closes = Arc::new(AtomicUsize::new(0));
     for coordinator in [&c, &restored] {
-        // Closing alone records revocation, not authoritative absence. Until
-        // settlement, conservative vacant cleanup reattachment remains legal.
-        coordinator
+        let refusal = coordinator
             .bind_resources(child.clone(), tracked_owner(&drops, &closes))
-            .unwrap();
-        assert!(coordinator.participation(&child).unwrap().is_sealed());
+            .unwrap_err();
+        assert_eq!(refusal.reason, BindResourcesRefusal::Closed);
+        drop(refusal);
+        assert!(coordinator.participation(&child).is_none());
     }
     assert_eq!(closes.load(Ordering::SeqCst), 0);
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
     assert!(room.try_reserve());
     room.release();
 }
@@ -2022,6 +2054,11 @@ async fn row_38_legacy_open_ended_reserved_refuses_transfer_without_claiming_clo
             row.cascaded_from = None;
         }
     }
+    // This fixture represents the old progress-only history, before typed proof existed.
+    history.settlements.retain(|row| row.target != child);
+    history
+        .close_completions
+        .retain(|row| row.close_lifetime() != &child);
     let retained = Arc::new(MemoryOwnershipStore::new());
     retained.write(&history).await.unwrap();
     let restored = coordinator(
@@ -2096,7 +2133,9 @@ async fn row_38_publication_error_matrix_seals_actual_gate_preserves_owner_recei
                 let private = stage == OwnershipMeaning::Reserved
                     && !store_failure
                     && failure == PortFailure::Rejected;
-                if private {
+                let actual_absence =
+                    stage == OwnershipMeaning::Reserved && failure == PortFailure::Rejected;
+                if private || actual_absence {
                     assert!(c.participation(&child).is_none());
                 } else {
                     assert!(c.participation(&child).unwrap().is_sealed());
@@ -2165,7 +2204,11 @@ async fn row_38_publication_error_matrix_seals_actual_gate_preserves_owner_recei
                         restored.lifetime_state(&child),
                         Some(LifetimeState::Closing)
                     );
-                    assert!(restored.participation(&child).unwrap().is_sealed());
+                    if actual_absence {
+                        assert!(restored.participation(&child).is_none());
+                    } else {
+                        assert!(restored.participation(&child).unwrap().is_sealed());
+                    }
                     assert_eq!(restored_factory.prepares(), 0);
                 }
                 let mut available = 0;
@@ -2226,7 +2269,16 @@ async fn row_38_factory_and_submission_failures_revoke_descendants_without_erasi
                     })
                 );
                 let child = factory.last_child.lock().unwrap().clone().unwrap();
-                assert_eq!(c.lifetime_state(&child), Some(LifetimeState::Closing));
+                let definite_absence =
+                    factory_failure && !cleanup && failure == PortFailure::Rejected;
+                assert_eq!(
+                    c.lifetime_state(&child),
+                    Some(if definite_absence {
+                        LifetimeState::Closed
+                    } else {
+                        LifetimeState::Closing
+                    })
+                );
                 assert!(factory
                     .last_gate
                     .lock()
@@ -2234,12 +2286,20 @@ async fn row_38_factory_and_submission_failures_revoke_descendants_without_erasi
                     .as_ref()
                     .unwrap()
                     .is_sealed());
-                assert!(c.participation(&child).unwrap().is_sealed());
+                if definite_absence {
+                    assert!(c.participation(&child).is_none());
+                } else {
+                    assert!(c.participation(&child).unwrap().is_sealed());
+                }
                 let mut descendant = command(&child);
                 descendant.request_id = SpawnRequestId::new("effect-descendant").unwrap();
                 assert_eq!(
                     c.spawn(descendant).await,
-                    Err(OwnershipFailure::Domain(OwnershipError::ParentClosing))
+                    Err(OwnershipFailure::Domain(if definite_absence {
+                        OwnershipError::ParentClosed
+                    } else {
+                        OwnershipError::ParentClosing
+                    }))
                 );
                 assert_eq!(factory.prepares(), 1);
                 assert_eq!(factory.submits(), usize::from(!factory_failure));
@@ -2257,6 +2317,18 @@ async fn row_38_factory_and_submission_failures_revoke_descendants_without_erasi
                         .reason,
                         BindResourcesRefusal::AlreadyBound
                     );
+                } else if definite_absence {
+                    let refusal = c
+                        .bind_resources(
+                            child.clone(),
+                            Arc::new(ScriptResources {
+                                closes: AtomicUsize::new(0),
+                                report: released(),
+                                hold: None,
+                            }),
+                        )
+                        .unwrap_err();
+                    assert_eq!(refusal.reason, BindResourcesRefusal::Closed);
                 } else {
                     c.bind_resources(
                         child,
@@ -2455,4 +2527,254 @@ async fn row_38_uncertain_submission_revokes_before_held_fallback_and_retains_ow
     );
     assert_eq!(factory.prepares(), 1);
     assert_eq!(factory.submits(), 1);
+}
+
+#[tokio::test]
+async fn private_child_completion_is_excluded_while_eligible_neighbor_completion_remains() {
+    use nessa_sdk::domain::agent_execution::subagents::CloseEvidenceDetail;
+
+    let store = Arc::new(MemoryOwnershipStore::new());
+    let audit = IndependentAudit::new();
+    let factory = ScriptFactory::new();
+    let c = coordinator(
+        store.clone(),
+        audit.clone(),
+        factory.clone(),
+        Arc::new(LiveCapacity::new(2)),
+    );
+    let parent = bounded(open(&c, "eligible-parent")).await.unwrap();
+    let neighbor = bounded(open(&c, "eligible-history")).await.unwrap();
+    bounded(close(&c, &neighbor)).await.unwrap();
+    let control = store.read().await.unwrap();
+    let neighbor_completion = control
+        .close_completions
+        .iter()
+        .find(|row| row.close_lifetime() == &neighbor)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        neighbor_completion.acknowledgement(),
+        EvidenceFact::Acknowledged
+    );
+
+    audit
+        .failures
+        .lock()
+        .unwrap()
+        .push_back((OwnershipMeaning::Reserved, PortFailure::Rejected));
+    let request = command(&parent);
+    assert_eq!(
+        bounded(c.spawn(request.clone())).await,
+        Err(OwnershipFailure::Audit(PortFailure::Rejected))
+    );
+    let child = audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|record| {
+            record.parent_lifetime == parent && record.after == OwnershipMeaning::Reserved
+        })
+        .unwrap()
+        .child_lifetime
+        .clone()
+        .unwrap();
+    assert_eq!(c.lifetime_state(&child), Some(LifetimeState::Closing));
+    assert!(c.participation(&child).is_none());
+    assert_eq!(factory.prepares(), 0);
+    assert_eq!(factory.submits(), 0);
+
+    let (gate, release) = audit.gate(OwnershipMeaning::Closed);
+    audit.next.lock().unwrap().as_mut().unwrap().1 = Some(CloseEvidenceDetail::Completion);
+    let closing = tokio::spawn({
+        let c = c.clone();
+        let child = child.clone();
+        async move { close(&c, &child).await }
+    });
+    bounded(gate.entered.notified()).await;
+    let exact = gate.evidence.lock().unwrap().clone().unwrap();
+    assert_eq!(exact.parent_lifetime, child);
+    assert_eq!(exact.child_lifetime.as_ref(), Some(&child));
+    assert_eq!(exact.close_detail, Some(CloseEvidenceDetail::Completion));
+    assert!(exact.close_operation.is_some());
+    // The live graph has an explicit private Completion decision now. An
+    // unrelated eligible commit must filter this row alongside its identity.
+    let unrelated = bounded(open(&c, "unrelated-during-private-completion"))
+        .await
+        .unwrap();
+    let pending = store.read().await.unwrap();
+    assert!(pending
+        .lifetimes
+        .iter()
+        .any(|row| row.lifetime_id == unrelated));
+    assert!(pending.lifetimes.iter().all(|row| row.lifetime_id != child));
+    assert!(pending
+        .spawns
+        .iter()
+        .all(|row| row.binding.request_id != request.request_id));
+    assert!(pending
+        .settlements
+        .iter()
+        .all(|row| row.target != child && row.close_lifetime != child));
+    assert_eq!(pending.close_completions, vec![neighbor_completion.clone()]);
+    assert!(OwnershipGraph::restore(pending).refusal().is_none());
+
+    release.send(Ok(())).unwrap();
+    bounded(closing).await.unwrap().unwrap();
+    assert_eq!(c.lifetime_state(&child), Some(LifetimeState::Closed));
+    let _later = bounded(open(&c, "unrelated-after-private-completion"))
+        .await
+        .unwrap();
+    let closed = store.read().await.unwrap();
+    assert!(closed.lifetimes.iter().all(|row| row.lifetime_id != child));
+    assert!(closed
+        .spawns
+        .iter()
+        .all(|row| row.binding.request_id != request.request_id));
+    assert!(closed
+        .settlements
+        .iter()
+        .all(|row| row.target != child && row.close_lifetime != child));
+    assert_eq!(closed.close_completions, vec![neighbor_completion]);
+    assert_eq!(
+        closed
+            .lifetimes
+            .iter()
+            .find(|row| row.lifetime_id == neighbor)
+            .unwrap()
+            .state,
+        LifetimeState::Closed
+    );
+    assert!(OwnershipGraph::restore(closed).refusal().is_none());
+    assert_eq!(factory.prepares(), 0);
+    assert_eq!(factory.submits(), 0);
+    assert!(factory.children.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn refused_sqlite_history_remains_readable_without_recovery_writes() {
+    use nessa_sdk::infrastructure::session_storage::SqliteOwnershipStore;
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("private");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let path = private.join("refused.sqlite3");
+    let root = AgentLifetimeId::new("root").unwrap();
+    let child = AgentLifetimeId::new("child").unwrap();
+    let operation = CloseOperationId::new("interrupted").unwrap();
+    let mut graph = OwnershipGraph::new();
+    let _ = graph
+        .open_root(
+            SessionId::new("root").unwrap(),
+            root.clone(),
+            Initiator::Runtime,
+        )
+        .unwrap();
+    let _ = graph
+        .admit_spawn(SpawnAdmission {
+            child_lifetime: child.clone(),
+            child_session: SessionId::new("child").unwrap(),
+            binding: SpawnBinding {
+                parent_lifetime: root.clone(),
+                parent_session: SessionId::new("root").unwrap(),
+                request_id: SpawnRequestId::new("child").unwrap(),
+                task_digest: TaskDigest::new("a".repeat(64)).unwrap(),
+                policy: ApprovalPolicy::new("read-only", "ask", "revision").unwrap(),
+                model: None,
+                origin: SpawnOrigin::Host(HostActor::new("person", "desktop", "child").unwrap()),
+            },
+            live_room: true,
+        })
+        .unwrap();
+    let _ = graph
+        .begin_close(
+            &root,
+            operation.clone(),
+            LifetimeCause::HostClose,
+            Initiator::Runtime,
+        )
+        .unwrap();
+    let record = graph
+        .apply_report(
+            &root,
+            &operation,
+            &root,
+            PhysicalFact::Released,
+            EvidenceFact::Acknowledged,
+        )
+        .unwrap();
+    graph
+        .acknowledge_observation(&record, EvidenceFact::Acknowledged)
+        .unwrap();
+    let mut history = graph.snapshot();
+    let row = history
+        .lifetimes
+        .iter_mut()
+        .find(|row| row.lifetime_id == child)
+        .unwrap();
+    row.state = LifetimeState::Open;
+    row.close_operation = None;
+    row.cause = None;
+    row.initiator = None;
+    row.cascaded_from = None;
+    let control = OwnershipGraph::restore(history.clone());
+    assert!(control.refusal().is_none());
+    assert_eq!(control.recovery_records().len(), 1);
+    assert_eq!(control.snapshot().settlements, history.settlements);
+    history.settlements[0].evidence = EvidenceFact::Failed;
+    let store = Arc::new(SqliteOwnershipStore::open(&path).unwrap());
+    store.write(&history).await.unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let body = {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .query_row::<String, _, _>(
+                "SELECT body FROM ownership_snapshot WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    let audit = IndependentAudit::new();
+    let factory = ScriptFactory::new();
+    let c = coordinator(
+        store.clone(),
+        audit.clone(),
+        factory.clone(),
+        Arc::new(LiveCapacity::new(8)),
+    );
+    bounded(c.resume()).await.unwrap();
+    let page = c.children(&root, None, 10).unwrap();
+    assert_eq!(page.children.len(), 1);
+    assert_eq!(page.children[0].lifetime, child);
+    assert_eq!(c.lifetime_state(&child), Some(LifetimeState::Open));
+    assert!(c.participation(&child).unwrap().is_sealed());
+    let owner: Arc<dyn ChildResources> = Arc::new(ScriptResources {
+        closes: AtomicUsize::new(0),
+        report: released(),
+        hold: None,
+    });
+    let refused = c.bind_resources(child, owner.clone()).unwrap_err();
+    assert_eq!(refused.reason, BindResourcesRefusal::RefusedHistory);
+    assert!(Arc::ptr_eq(&refused.resources, &owner));
+    assert_eq!(store.read().await.unwrap(), history);
+    assert_eq!(factory.prepares(), 0);
+    assert!(audit.records.lock().unwrap().is_empty());
+    drop(c);
+    drop(store);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let retained: String = connection
+        .query_row(
+            "SELECT body FROM ownership_snapshot WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(retained, body);
+    assert_eq!(
+        connection
+            .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+            .unwrap(),
+        1
+    );
 }

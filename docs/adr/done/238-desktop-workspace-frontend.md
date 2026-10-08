@@ -503,11 +503,10 @@ size, and at rest the box is exactly the rect it would take. The two differ
 in what the content is laid out at, chosen by measurement:
 
 - **The copy is laid out at the slot's size, once per zone change**, so its
-  words, its composer and its foot read as the pane will; at rest nothing in
-  it is scaled. It is one screen of a conversation in a box of its own
-  (`contain: strict`): in Chrome at 4× CPU throttle, four panes, dragged
-  across six zones, the longest frame was 33ms (median 33ms, four runs;
-  drop and cancel alike).
+  title reads as the pane will; at rest nothing in it is scaled. It is the
+  pane's chrome in a box of its own (`contain: strict`). The conversation
+  is left out of the copy: laying that body out on each shape
+  change misses the frame budget.
 - **A pane keeps its layout and is cut to its would-be shape**: its box
   takes the rect by transform (`overflow: hidden` clips it) and its content,
   scaled back, stays at the size it has, placed as a pane that shape would
@@ -581,12 +580,12 @@ placeholder marks exactly the rect the drop will take — from `dropOutcome`,
 the same outcome the drop's command commits, so nothing jumps
 (`panes.test.ts` holds preview == commit for every zone; every preview rect is
 held inside the grid). A zone the fit rule refuses offers nothing; a session
-already on screen offers "Go to Pane". What is carried is a translucent copy
-of the pane itself — one screen of its conversation, moved to where it was
-scrolled by transform, its composer and chips, in a box of the shape it
-would land in (`contain: strict`); a session from a list is drawn from what the window holds
-of it. Nothing of the page is read after the press's frame: where a preview
-has drawn a pane is known from the preview's own motion, and the preview and
+already on screen offers "Go to Pane". What is carried is an opaque copy
+of the pane's title and chrome, in a box of the shape it would land in
+(`contain: strict`). The conversation is left out of the copy.
+A session from a list is drawn from what the window holds of it. Nothing of
+the page is read after the press's frame: where a preview has drawn a pane is
+known from the preview's own motion, and the preview and
 the drop's command are given the room read as the press began (a resize or a
 side column changing ends the drag, so it is still the room at the release),
 so beginning, previewing, dropping and letting go only write. What is read is
@@ -903,16 +902,24 @@ session as it was, and a refused read mark stays cleared here; each is logged;
 anything a call throws but the source's typed refusal is logged as a fault.
 The consequential calls — an answer to an approval, a pin, an archive — carry
 who asked: the person at the window's controls or an agent dispatching the
-same command. The in-memory source records each the moment it is asked, then
-the session as it found it when it carried the call out, and what became of
-it — refused, or taken with the revision it produced (`WorkspaceSource.approve`,
-`deny`, `setPinned`, `archive`). The gateway's source records nothing itself:
-what it sends, the gateway records as this window's caller, and what it
-refuses without sending is on no record (#248). A message carries who sent it too; the source records
-it when, taken, it lets a waiting approval go — naming the message, the
-approval and the sender. The in-memory source keeps that record (`audit()`),
-and writes it before any subscriber hears of the change: one shown the
-approval gone finds its `let-go` on record already.
+same command. The in-memory source records each as it begins to carry the call
+out, before the effect, then the session as it found it and what became of it
+— refused, or taken with the revision it produced (`WorkspaceSource.approve`,
+`deny`, `setPinned`, `archive`). Calls asked in one tick are carried out in
+that order, one microtask each, so the record's order is that order. The
+gateway's source records nothing itself: what it sends, the gateway records
+as this window's caller, and what it refuses without sending is on no record
+(#248). A message carries who sent it too; the source records it when, taken,
+it lets a waiting approval go — naming the message, the approval and the
+sender — in that same carry-out order. The in-memory source keeps that record
+(`audit()`), and writes the `let-go` before any subscriber hears of the
+change: one shown the approval gone finds it on record already.
+
+| Asked in one tick, an approval waiting | What carrying it out does | `audit()` after both settle |
+| --- | --- | --- |
+| `send` then `approve` | the message lets the approval go; the answer finds nothing waiting | `let-go` taken, then `allow-once` refused `not-waiting` |
+| `approve` then `send` | the answer is taken; the message finds nothing waiting | `allow-once` taken, and no `let-go` |
+
 Each of these commands, and sending a message, answers its caller with what
 became of it — `sent`, `refused` when the source said no, `unknown` for
 `unavailable` (which `model/failure.ts` defines), or `not-asked` when
@@ -1041,19 +1048,6 @@ Remaining — the one list of what this record leaves open; the
   nessa_ui ships it, and is then replaced by it, not kept beside it; the
   composer's access shield stays a masked outline in `styles.css` until
   nessa_ui's `ComposerAccessMode` has an icon slot.
-- **The in-memory source records a same-tick message and answer out of
-  order** ([#249](https://github.com/nessalabs/nessa-agent/issues/249)). A message that lets an approval go is recorded when the source
-  carries it out, while an answer is on record the moment it is asked, so an
-  answer given in the same tick as the message that overtakes it is listed
-  first. Reproduction, against `inMemorySource` with no timers:
-  `send({ sessionId: "signing", messageId: "m1", … })` then, before either
-  settles, `approve("signing", "signing-import", "once", "person")`; the
-  answer is refused `not-waiting`, and `audit()` reads
-  `[allow-once refused not-waiting, let-go m1 taken]` — the refusal before the
-  message whose effect caused it. Each entry is right on its own; the order
-  across them is not causal. The fix belongs to the audit's ordering (record a
-  message when it is asked too, or order by when each was carried out) and is
-  owed before a durable audit adapter copies this one's shape.
 - **Watch: the drop's commit frame under load**
   ([#250](https://github.com/nessalabs/nessa-agent/issues/250)). A drop's `pointerup`
   commits the move, and `FlipScope` reads where the panes landed in that same

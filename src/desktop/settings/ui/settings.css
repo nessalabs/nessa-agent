@@ -744,12 +744,9 @@ html:not(.dark) .settings .settings-card {
 
 /*
  * Not available yet, or not in this layout: the name stays readable, and
- * the control rests, dimmed, taking no pointer — the kit's disabled row.
+ * the control rests, dimmed, taking no pointer — the kit's disabled row,
+ * which dims its own control. A choice drawn in the group dims here.
  */
-.settings .settings-row[data-pending] [data-slot="settings-row-control"] {
-  opacity: 0.55;
-}
-
 .settings-group[data-pending] .settings-choice {
   opacity: 0.45;
 }

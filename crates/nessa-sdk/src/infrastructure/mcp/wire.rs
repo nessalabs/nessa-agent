@@ -2,7 +2,9 @@
 //! `tools/list` page, a `resources/read` of an MCP App, and a tool result's
 //! `structuredContent`.
 use super::McpError;
-use crate::domain::agent_execution::tools::{McpTool, ToolContent, MAX_STRUCTURED_RESULT_BYTES};
+use crate::domain::agent_execution::tools::{
+    McpCallArguments, McpTool, ToolContent, MAX_MCP_ARGUMENTS_BYTES, MAX_STRUCTURED_RESULT_BYTES,
+};
 use crate::domain::agent_execution::ExecutionError;
 use crate::domain::mcp_apps::{
     ListedTool, McpAppError, ToolHints, ToolUi, UiCsp, UiPermissions, UiResource, UiResourceUri,
@@ -64,6 +66,24 @@ pub(crate) fn structured_result(structured: &Value) -> Result<ToolContent, Execu
         return Ok(ToolContent::text(STRUCTURED_RESULT_OMITTED));
     }
     ToolContent::structured(structured.to_string())
+}
+
+/// A `tools/call`'s `arguments`, as the connection saw them. Absent or `null`
+/// is an empty object: the call was made with no arguments. Anything that is
+/// not an object, and an object past [`MAX_MCP_ARGUMENTS_BYTES`], is nothing.
+/// JSON cut short is not the call's arguments. Counted before it is written
+/// out, so arguments of any size cost no more than the bound.
+pub(crate) fn call_arguments(arguments: Option<&Value>) -> Option<McpCallArguments> {
+    let empty = Value::Object(Default::default());
+    let value = match arguments {
+        None | Some(Value::Null) => &empty,
+        Some(value) if value.is_object() => value,
+        Some(_) => return None,
+    };
+    if !json_fits(value, MAX_MCP_ARGUMENTS_BYTES) {
+        return None;
+    }
+    McpCallArguments::new(value.to_string()).ok()
 }
 
 /// One `tools/list` page from `server`.

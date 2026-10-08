@@ -9,7 +9,7 @@ use super::{
 };
 use crate::domain::agent_execution::{
     sessions::SessionId,
-    subagents::{AgentLifetimeId, EvidenceFact, Initiator},
+    subagents::{AgentLifetimeId, Initiator},
 };
 
 struct DeliveryTicket {
@@ -39,6 +39,7 @@ pub(super) async fn open(
     session: SessionId,
     initiator: Initiator,
 ) -> Result<AgentLifetimeId, OwnershipFailure> {
+    let waiter = format!("owned root {}", session.as_str());
     let (sender, receiver) = oneshot::channel();
     let executor = Handle::current();
     let delivery_executor = executor.clone();
@@ -52,7 +53,7 @@ pub(super) async fn open(
         });
         let _ = sender.send(result);
     });
-    receiver
+    crate::application::agent_execution::caller_wake::contain_caller_wake(waiter, receiver)
         .await
         .map_err(|_| OwnershipFailure::Incomplete)?
         .map(DeliveryTicket::claim)
@@ -92,8 +93,7 @@ async fn admit(
 
 async fn reconcile(shared: &Arc<Shared>, lifetime: &AgentLifetimeId) {
     if let Ok(evidence) = shared.retain_and_seal_root(lifetime) {
-        let _ = shared.persist_evidence(&evidence).await;
-        shared.start_drain(lifetime.clone(), false);
+        shared.start_close(lifetime.clone(), false, evidence);
     }
 }
 
@@ -125,23 +125,6 @@ pub(super) async fn settle_never_bound(
         // actual owner; a gate-only handoff still supplies no settlement proof.
         return Ok(());
     };
-    let audit = shared.audit.record(token.evidence()).await;
-    shared
-        .with_graph(|graph| {
-            graph.acknowledge_unbound_root(
-                token,
-                if audit.is_ok() {
-                    EvidenceFact::Acknowledged
-                } else {
-                    EvidenceFact::Failed
-                },
-            )
-        })
-        .map_err(OwnershipFailure::Domain)?;
-    let stored = shared.commit_snapshot().await;
-    match (audit, stored) {
-        (Err(failure), _) => Err(OwnershipFailure::Audit(failure)),
-        (_, Err(failure)) => Err(OwnershipFailure::Store(failure)),
-        _ => Ok(()),
-    }
+    let _ = token;
+    Ok(())
 }

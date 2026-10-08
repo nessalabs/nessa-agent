@@ -71,6 +71,13 @@ import "./overview.css"
  */
 const heldAtMost = 2000
 
+/**
+ * How many overview rows mount on each frame after the card has filled.
+ * One row: the filter, the count buttons and a request's transcript on the
+ * same frame missed the budget (`overview.test.tsx`).
+ */
+const rowsPerOpenFrame = 1
+
 const steps: Partial<Record<string, Step>> = {
   next: "next",
   previous: "previous",
@@ -122,11 +129,59 @@ export function AgentsOverview({
     [settling],
   )
   const now = useNow(60_000)
+  // The minute the clock is on. The read itself is finer than the minute, and
+  // a second render in that minute would build the glance again (`selectors.ts`).
+  const minute = Math.floor(now / 60_000) * 60_000
   const glance = useWorkspaceSelector(
-    (state) => selectGlance(state, held, now),
+    (state) => selectGlance(state, held, minute),
     sameGlance,
   )
   const order = useMemo(() => readingOrder(glance), [glance])
+  // The mount paints the title. The next frame paints the counts as text.
+  // The card fills on the frame after that. The filter, the count buttons
+  // and one row follow, one frame each. Buttons on the counts frame, the
+  // fill sharing a frame with a row, or several rows at once, missed the
+  // budget (`overview.test.tsx`).
+  const [chrome, setChrome] = useState(false)
+  useEffect(() => {
+    if (chrome) return
+    const frame = requestAnimationFrame(() => {
+      flushSync(() => setChrome(true))
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [chrome])
+  const [filled, setFilled] = useState(false)
+  useEffect(() => {
+    if (!chrome || filled) return
+    const frame = requestAnimationFrame(() => {
+      flushSync(() => setFilled(true))
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [chrome, filled])
+  const [drawn, setDrawn] = useState(0)
+  const rowCount = order.length
+  // The peek beside the list follows the first row, so the frame that draws
+  // the row lays out the list alone (`overview.test.tsx`). Committed in the
+  // callback, so the render does not slip into the next row's frame.
+  const [peekDrawn, setPeekDrawn] = useState(false)
+  useEffect(() => {
+    if (drawn === 0) return
+    const frame = requestAnimationFrame(() => {
+      flushSync(() => setPeekDrawn(true))
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [drawn])
+  useEffect(() => {
+    if (!filled || drawn >= rowCount) return
+    // The second row waits until the peek has painted (`overview.test.tsx`).
+    if (drawn === 1 && !peekDrawn) return
+    const frame = requestAnimationFrame(() => {
+      flushSync(() =>
+        setDrawn((current) => Math.min(rowCount, current + rowsPerOpenFrame)),
+      )
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [filled, drawn, rowCount, peekDrawn])
   // The workspace keeps a listed session chosen while it lists one (`keepOverviewChoice`).
   const current = selected !== null && order.includes(selected) ? selected : null
   const choose = useCallback(
@@ -154,14 +209,14 @@ export function AgentsOverview({
   // for it) — and as they were when a drag or key press began.
   const surface = useRef<HTMLDivElement>(null)
   const side = useRef<HTMLDivElement>(null)
-  const [drawn, setDrawn] = useState({ list: 0, surface: 0 })
+  const [widths, setWidths] = useState({ list: 0, surface: 0 })
   const dragFrom = useRef({ list: 0, surface: 0 })
   useEffect(() => {
     const room = surface.current
     const list = side.current
     if (!room || !list || typeof ResizeObserver === "undefined") return
     const observer = new ResizeObserver(() =>
-      setDrawn((was) => {
+      setWidths((was) => {
         const now = { list: list.offsetWidth, surface: room.offsetWidth }
         return was.list === now.list && was.surface === now.surface ? was : now
       }),
@@ -171,7 +226,7 @@ export function AgentsOverview({
     return () => observer.disconnect()
   }, [])
   const focusItem = useCallback(
-    (id: string | null) => {
+    (id: string | null, scroll = true) => {
       const column = list.current
       if (!column) return
       if (id === null) {
@@ -191,6 +246,9 @@ export function AgentsOverview({
       // the page out on its own: scrolling now would make it lay out early.
       if (!item) return choose(id)
       item.focus({ preventScroll: true })
+      // The opening land does not scroll: the row is already in view, and
+      // scrolling forces a layout on its own frame (`overview.test.tsx`).
+      if (!scroll) return
       requestAnimationFrame(() =>
         item.scrollIntoView({
           block: "nearest",
@@ -205,22 +263,55 @@ export function AgentsOverview({
   currentNow.current = current
 
   // Opened — from the sidebar, ⌘0 or an agent — the keyboard is here, on the
-  // current row, once the overview has been laid out and drawn, so the
-  // caret's arrival never makes its first frame lay the page out early. It
-  // lands once: a render meanwhile does not move it again, and a cancelled
-  // try (StrictMode's second mount, a quick leave) leaves the next to land.
+  // current row, once that row is committed. The list arrives a few rows at
+  // a time, after the title, so a try on the open commit finds nothing and
+  // would give up (`overview.test.tsx`). It waits, and lands once, the frame
+  // after the row is there, so the caret never makes the frame that drew the
+  // row lay the page out early. A later chunk does not move it again. A row
+  // that moved past the rows drawn so far is not a landing: the try stays
+  // open until that row is focused (`overview.test.tsx`). A cancelled try
+  // (StrictMode's second mount, a quick leave) leaves the next to land.
   const landed = useRef(false)
+  const cancelLand = useRef<(() => void) | null>(null)
+  useEffect(() => () => cancelLand.current?.(), [])
   useEffect(() => {
-    if (landed.current || !ready) return
-    // A frame asked for now is this frame's; the one after it is the next.
-    let frame = requestAnimationFrame(() => {
-      frame = requestAnimationFrame(() => {
-        landed.current = true
-        focusItem(currentNow.current)
-      })
+    if (landed.current || cancelLand.current !== null || !ready) return
+    // The peek's frame is its own. Focusing in it forces a layout beside
+    // that paint (`overview.test.tsx`).
+    if (drawn > 0 && !peekDrawn) return
+    const id = currentNow.current
+    const column = list.current
+    if (!column) return
+    if (
+      id !== null &&
+      column.querySelector(`[data-overview-item="${CSS.escape(id)}"]`) === null
+    )
+      return
+    let frame = 0
+    const cancel = () => {
+      cancelAnimationFrame(frame)
+      if (cancelLand.current === cancel) cancelLand.current = null
+    }
+    // After this paint. The row is already in view, so the land does not scroll.
+    frame = requestAnimationFrame(() => {
+      if (cancelLand.current !== cancel) return
+      cancelLand.current = null
+      if (landed.current) return
+      const id = currentNow.current
+      const column = list.current
+      if (!column) return
+      const item =
+        id === null
+          ? column
+          : column.querySelector<HTMLElement>(`[data-overview-item="${CSS.escape(id)}"]`)
+      // Still past the drawn rows. Marking this landed would leave the
+      // keyboard off the row when it mounts (`overview.test.tsx`).
+      if (!item) return
+      focusItem(id, false)
+      if (document.activeElement === item) landed.current = true
     })
-    return () => cancelAnimationFrame(frame)
-  }, [ready, focusItem])
+    cancelLand.current = cancel
+  }, [ready, drawn, peekDrawn, focusItem])
 
   const timers = useRef(new Set<number>())
   const watches = useRef(new Set<() => void>())
@@ -404,7 +495,10 @@ export function AgentsOverview({
         ? (event.target.closest<HTMLElement>("[data-overview-item]")?.dataset
             .overviewItem ?? null)
         : null
-    const to = stepFrom(order, from, step)
+    // Only rows on the page. End and the arrows would name one the list has
+    // not drawn yet while it is still arriving, and focus would stay where
+    // it was (`overview.test.tsx`).
+    const to = stepFrom(order.slice(0, drawn), from, step)
     if (to !== null) focusItem(to)
   }
 
@@ -427,14 +521,6 @@ export function AgentsOverview({
     () => new Map(settling.map((entry) => [entry.sessionId, entry])),
     [settling],
   )
-
-  // The overview arrives fading in from nothing; the peek beside its list is
-  // drawn a frame later, so the frame it opens on lays out the list alone.
-  const [peekDrawn, setPeekDrawn] = useState(false)
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => setPeekDrawn(true))
-    return () => cancelAnimationFrame(frame)
-  }, [])
 
   // Wide enough, the peek sits beside the list and follows its choice — a
   // step behind the list, so a key that moves on (an arrow, an answer) draws
@@ -490,36 +576,6 @@ export function AgentsOverview({
     return () => document.removeEventListener("focusin", onFocusIn)
   }, [])
 
-  // Escape leaves whenever the overview is open — wherever the keyboard is,
-  // even before it has landed on a row — but for Escape in a menu or a
-  // dialog over it, which is theirs, and under Settings, whose keys are its
-  // own; and, with one group shown alone, the first Escape shows every group
-  // again and the next leaves.
-  const leaveNow = useRef(onLeave)
-  leaveNow.current = onLeave
-  const groupNow = useRef(group)
-  groupNow.current = group
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return
-      const leave = overviewKeys.find(
-        (binding) =>
-          binding.command === "leave" && matchesChord(event, binding.chord, isMac),
-      )
-      if (!leave) return
-      if (section.current?.closest("[inert]")) return
-      if (
-        event.target instanceof Element &&
-        event.target.closest('[role="dialog"], [role="menu"], [role="listbox"]')
-      )
-        return
-      event.preventDefault()
-      if (groupNow.current !== null) dispatch(showOverviewGroup({ group: null }))
-      else leaveNow.current()
-    }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [dispatch])
   // Escape in a pill: to the list, on the current row, or at its top where
   // it lists none.
   const leaveReply = useCallback(() => focusItem(currentNow.current), [focusItem])
@@ -654,6 +710,7 @@ export function AgentsOverview({
         <div
           ref={surface}
           className="agents-overview-surface"
+          data-bare={filled ? undefined : ""}
           data-list-width={listWidth === null ? undefined : true}
           style={
             {
@@ -668,20 +725,33 @@ export function AgentsOverview({
             <header className="agents-overview-header">
               <div className="agents-overview-title">
                 <h1>Agents</h1>
-                <FilterMenu filter={filter} onChange={setFilter} />
+                {drawn > 0 ? <FilterMenu filter={filter} onChange={setFilter} /> : null}
               </div>
-              <Counts ready={ready} glance={glance} onToggle={toggleGroup} />
+              {drawn > 0 ? (
+                <Counts ready={ready} glance={glance} onToggle={toggleGroup} />
+              ) : (
+                <p className="agents-overview-counts">
+                  {chrome
+                    ? glanceCounts(glance)
+                        .map((count) => count.label)
+                        .join(" · ") || quietLine
+                    : "\u00a0"}
+                </p>
+              )}
             </header>
             <div className="agents-overview-scroll">
               <div
                 ref={list}
                 className="agents-overview-column"
                 tabIndex={-1}
+                data-overview-listed={
+                  ready && (rowCount === 0 || drawn >= rowCount) ? "" : undefined
+                }
                 onKeyDown={onKeyDown}
               >
-                {ready ? (
+                {ready && (rowCount === 0 || drawn > 0) ? (
                   <Groups
-                    glance={glance}
+                    glance={rowCount === 0 ? glance : listedThrough(glance, drawn)}
                     current={current}
                     selected={split ? current : null}
                     expanded={split ? null : expanded}
@@ -704,10 +774,10 @@ export function AgentsOverview({
               <ResizeEdge
                 label="Resize Agents List"
                 className="agents-overview-edge"
-                value={{ now: drawn.list, min: listMin, max: listMax(drawn.surface) }}
+                value={{ now: widths.list, min: listMin, max: listMax(widths.surface) }}
                 onStart={() => {
                   dragFrom.current = {
-                    list: side.current?.getBoundingClientRect().width ?? drawn.list,
+                    list: side.current?.getBoundingClientRect().width ?? widths.list,
                     surface: surface.current?.getBoundingClientRect().width ?? 0,
                   }
                 }}
@@ -721,19 +791,17 @@ export function AgentsOverview({
               />
             ) : null}
           </div>
-          {split && peeked !== null ? (
+          {split && peekDrawn && peeked !== null ? (
             <aside className="agents-overview-peek" aria-label="Peek">
-              {peekDrawn ? (
-                <SessionPeek
-                  key={peeked}
-                  sessionId={peeked}
-                  placement="beside"
-                  settling={settlingOf.get(peeked)}
-                  onOpen={open}
-                  onAnswer={answer}
-                  onLeaveReply={leaveReply}
-                />
-              ) : null}
+              <SessionPeek
+                key={peeked}
+                sessionId={peeked}
+                placement="beside"
+                settling={settlingOf.get(peeked)}
+                onOpen={open}
+                onAnswer={answer}
+                onLeaveReply={leaveReply}
+              />
             </aside>
           ) : null}
         </div>
@@ -753,6 +821,38 @@ export const splitWidth = 820
 const listMin = 340
 const peekMin = 320
 const listMax = (surface: number) => Math.max(listMin, surface - peekMin)
+
+/**
+ * The first `count` sessions of `glance`, in reading order. Counts stay the
+ * full glance's. The footer's "outside this view" waits until the prefix is
+ * the whole list, so it does not sit in the middle while later rows arrive.
+ */
+function listedThrough(glance: AgentsGlance, count: number): AgentsGlance {
+  let left = count
+  const take = (ids: readonly string[]) => {
+    const slice = ids.slice(0, Math.max(0, left))
+    left -= slice.length
+    return slice
+  }
+  const needsYou = take(glance.needsYou)
+  const working = take(glance.working)
+  const finished = take(glance.finished)
+  const earlier = take(glance.earlier)
+  const complete =
+    needsYou.length + working.length + finished.length + earlier.length >=
+    glance.needsYou.length +
+      glance.working.length +
+      glance.finished.length +
+      glance.earlier.length
+  return {
+    ...glance,
+    needsYou,
+    working,
+    finished,
+    earlier,
+    hidden: complete ? glance.hidden : 0,
+  }
+}
 
 /** What Show All chooses: every session, at any time, under any tag. */
 const everySession: AgentsFilter = { scope: "all", range: "any", tags: [] }

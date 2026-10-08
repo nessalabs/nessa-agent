@@ -113,5 +113,12 @@ export function workspaceDragOptions(store: DesktopStore): SplitPanesDragOptions
     covered: sideColumns,
     // A copy is no place to move the window from, and no pane of its own.
     stripped: ["data-tauri-drag-region", focusedPaneAttribute],
+    // The conversation is not painted on the copy, and neither is the header
+    // picture: its night scene is tens of thousands of characters, and shaping
+    // them is the lift's long layout (`split-panes-drag.test.tsx`).
+    dropped: [".workspace-pane-body", "[data-sliver]"],
+    // Nor on the preview: a transform of its own would be a layer that is
+    // never seen (`split-panes-drag.test.tsx`).
+    unscaled: [".workspace-transcript"],
   }
 }

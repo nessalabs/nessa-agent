@@ -259,8 +259,11 @@ describe("what Settings offers", () => {
       .querySelector('[data-setting="open-at-login"]')
       ?.closest(".settings-group")
     expect(general?.textContent?.match(/Not available yet/g)).toHaveLength(1)
-    // And every other control can be used.
-    const available = [...host.querySelectorAll("[data-setting]:not([data-pending])")]
+    // And every other control can be used. A row not available yet is the
+    // kit's disabled row (`data-disabled`); a whole card, the app's `data-pending`.
+    const available = [
+      ...host.querySelectorAll("[data-setting]:not([data-pending], [data-disabled])"),
+    ]
     expect(
       available.every((row) => row.querySelectorAll("button:disabled").length === 0),
     ).toBe(true)

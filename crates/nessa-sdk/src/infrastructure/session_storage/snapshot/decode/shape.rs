@@ -13,7 +13,10 @@ use crate::domain::agent_execution::{
         MAX_KEY_BYTES as MAX_QUESTION_KEY_BYTES, MAX_OPTIONS as MAX_QUESTION_OPTIONS,
         MAX_QUESTIONS, MAX_TEXT_BYTES as MAX_QUESTION_TEXT_BYTES,
     },
-    tools::{FileLocation, ToolContent, MAX_MCP_NAME_BYTES, MAX_STRUCTURED_RESULT_BYTES},
+    tools::{
+        FileLocation, ToolContent, MAX_MCP_ARGUMENTS_BYTES, MAX_MCP_NAME_BYTES,
+        MAX_STRUCTURED_RESULT_BYTES,
+    },
 };
 use crate::infrastructure::session_storage::save_group::{
     GroupCheckpoint as CheckpointMetadata, MetadataValueKind, SaveIdentity as IdentityMetadata,
@@ -215,6 +218,7 @@ impl Shape {
             (Tool, "content") => Content,
             (Tool, "locations") => Locations,
             (Tool, "mcp_tool") => McpTool,
+            (Tool, "mcp_arguments") => Text(MAX_MCP_ARGUMENTS_BYTES),
             (McpTool, "server" | "tool") => Text(MAX_MCP_NAME_BYTES),
             (ContentItem, "Structured") => Text(MAX_STRUCTURED_RESULT_BYTES),
             (Tool, "id") | (Review, "id" | "execution_id" | "tool_id" | "session_id") => Text(256),

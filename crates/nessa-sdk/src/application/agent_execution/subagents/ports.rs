@@ -25,19 +25,21 @@ pub enum PortFailure {
     Uncertain,
 }
 
-/// Physical and audit facts a child cleanup owner reports.
+/// Actual physical outcome and its scoped provider evidence.
+/// Coordinator observation audit and aggregate Completion are separate obligations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResourceReport {
     /// Whether the owner confirmed release.
     pub physical: PhysicalFact,
-    /// Whether required evidence was acknowledged.
+    /// Whether provider evidence for this physical outcome was acknowledged.
     pub evidence: EvidenceFact,
 }
 
 /// Cleanup ownership for one prepared or running child.
 #[async_trait]
 pub trait ChildResources: Send + Sync {
-    /// Close this child. The cause and initiator are the root close, not a new person.
+    /// Close this child under its first close-operation owner
+    /// (which may itself be a child), retaining that cause and initiator.
     async fn close(&self, cause: &LifetimeCause, initiator: &Initiator) -> ResourceReport;
 }
 
@@ -168,6 +170,8 @@ pub trait OwnershipStore: Send + Sync {
     /// Replace the retained snapshot after a transition.
     async fn write(&self, snapshot: &OwnershipSnapshot) -> Result<(), PortFailure>;
     /// Load the retained snapshot. An empty store returns an empty snapshot.
+    /// Decoded refused history remains available for sealed graph inspection;
+    /// graph restoration owns relationship validation before any recovery effect.
     async fn read(&self) -> Result<OwnershipSnapshot, PortFailure>;
 }
 

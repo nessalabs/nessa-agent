@@ -48,9 +48,10 @@
  *                        its own place (no zone) it is its own size; each change of size is
  *                        drawn one way, never past where it goes; nothing under the controls
  *   preview-panes-take-shape  at rest with a zone shown, every pane is drawn at the rect the
- *                        drop then gives it, its transcript held to its top — centred across
- *                        where it grows, held left where it shrinks — and its composer to its
- *                        foot; its title and
+ *                        drop then gives it. The conversation is not painted during the
+ *                        preview, so it is not a positioned part. The composer keeps to the
+ *                        foot. A painted transcript is held to its top — centred across
+ *                        where it grows, held left where it shrinks — and the title and
  *                        the copy's are never drawn stretched, any frame
  *
  * `--shots <dir>` saves, from copy-takes-slot-shape, the copy below a wide

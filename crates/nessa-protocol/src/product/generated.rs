@@ -588,6 +588,8 @@ pub struct ConversationMcpTool {
     pub tool: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments_json: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

@@ -151,7 +151,8 @@ impl fmt::Display for CallerWaiter {
 
 /// Polls `future` with a waker that wakes the caller's waker inside
 /// `catch_unwind`, so a caller's waker panic stays out of whichever task
-/// wakes it. The wait loses that one wake; its result is unaffected.
+/// wakes it. Waker destruction is contained by this same owner. The wait
+/// loses that one wake; its result is unaffected.
 ///
 /// `waiter` is the wait's identity, logged when the caller's waker panics.
 /// Agent waits pass [`CallerWaiter`]. Infrastructure waits pass their own
@@ -165,7 +166,7 @@ where
     let mut future = pin!(future);
     poll_fn(|context| {
         let contained = Waker::from(Arc::new(ContainedWake {
-            caller: context.waker().clone(),
+            caller: Some(context.waker().clone()),
             waiter: waiter.clone(),
         }));
         future.as_mut().poll(&mut Context::from_waker(&contained))
@@ -173,8 +174,8 @@ where
     .await
 }
 
-struct ContainedWake<W> {
-    caller: Waker,
+struct ContainedWake<W: fmt::Display> {
+    caller: Option<Waker>,
     waiter: Arc<W>,
 }
 impl<W> Wake for ContainedWake<W>
@@ -185,11 +186,29 @@ where
         self.wake_by_ref();
     }
     fn wake_by_ref(self: &Arc<Self>) {
-        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| self.caller.wake_by_ref())) {
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+            self.caller
+                .as_ref()
+                .expect("caller held until destruction")
+                .wake_by_ref()
+        })) {
             tracing::warn!(waiter = %self.waiter, "a caller's waker panicked; its wait keeps its result");
             // The payload is caller data too; its drop may panic. Forget a
             // second payload rather than drop it.
             let _ = catch_unwind(AssertUnwindSafe(|| drop(payload))).map_err(std::mem::forget);
+        }
+    }
+}
+
+impl<W: fmt::Display> Drop for ContainedWake<W> {
+    fn drop(&mut self) {
+        if let Some(caller) = self.caller.take() {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(caller))) {
+                // The destructor's payload is also caller-owned. Do not hand
+                // its destruction to the SDK publisher or runtime.
+                std::mem::forget(payload);
+                tracing::warn!(waiter = %self.waiter, "caller waker destruction panicked; fault contained");
+            }
         }
     }
 }

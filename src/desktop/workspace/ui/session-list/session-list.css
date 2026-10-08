@@ -129,13 +129,6 @@
   display: none;
 }
 
-.workspace-search kbd {
-  flex: none;
-  color: var(--desktop-faint);
-  font-family: inherit;
-  font-size: var(--desktop-text-caption);
-}
-
 .workspace-list-scroll {
   flex: 1;
   min-height: 0;

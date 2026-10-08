@@ -370,6 +370,51 @@ describe("the in-memory source", () => {
     expect(after.messages.map((message) => message.id)).toEqual(["m1"])
   })
 
+  it("records a same-tick message before the approval answer it overtakes", async () => {
+    const { source } = started()
+    // The steps from #249: send, then approve, before either settles.
+    const sent = source.send({
+      initiator: "person",
+      sessionId: "signing",
+      messageId: "m1",
+      text: "go on without it",
+      model: { provider: "openai", modelId: "gpt-6-astra" },
+    })
+    const answered = source.approve("signing", "signing-import", "once", "person", "once")
+    await expect(answered).rejects.toMatchObject({ reason: "not-waiting" })
+    await sent
+    // The refusal follows the message that caused it.
+    expect(source.audit()).toMatchObject([
+      {
+        action: "let-go",
+        messageId: "m1",
+        approvalId: "signing-import",
+        outcome: "taken",
+      },
+      {
+        action: "allow-once",
+        approvalId: "signing-import",
+        outcome: { refused: "not-waiting" },
+      },
+    ])
+  })
+
+  it("records an answer taken in the same tick before the message that finds nothing waiting", async () => {
+    const { source } = started()
+    const answered = source.approve("signing", "signing-import", "once", "person", "once")
+    const sent = source.send({
+      initiator: "person",
+      sessionId: "signing",
+      messageId: "m1",
+      text: "after the answer",
+      model: { provider: "openai", modelId: "gpt-6-astra" },
+    })
+    await answered
+    await sent
+    expect(source.audit().map((entry) => entry.action)).toEqual(["allow-once"])
+    expect(source.audit()[0]).toMatchObject({ outcome: "taken" })
+  })
+
   it("lets an approval go when the session is sent to instead, so it rests with nothing asked", async () => {
     const { source, advance } = started()
     const model = { provider: "anthropic", modelId: "claude-opus-5" }

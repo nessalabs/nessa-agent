@@ -149,6 +149,128 @@ test("the app tool's UI resource is listed and read with the MCP Apps MIME type"
   }
 })
 
+/**
+ * The chart app's own script, run against a stub host. The host answers
+ * `ui/initialize`, then sends the tool result. Returns what the app drew
+ * and the messages it posted.
+ */
+async function runChartApp() {
+  const { text } = answer({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "resources/read",
+    params: { uri: CHART_URI },
+  }).result.contents[0]
+  const script = text.match(/<script>([\s\S]*)<\/script>/)[1]
+  const posted = []
+  const parent = { postMessage: (message) => posted.push(message) }
+  const listeners = []
+  const attributes = {}
+  const chart = { textContent: "" }
+  const document = {
+    body: { setAttribute: (name, value) => (attributes[name] = value) },
+    documentElement: { scrollWidth: 320, scrollHeight: 80 },
+    getElementById: () => chart,
+  }
+  const window = {
+    parent,
+    addEventListener: (type, listener) => type === "message" && listeners.push(listener),
+  }
+  const { runInNewContext } = await import("node:vm")
+  runInNewContext(script, {
+    window,
+    document,
+    Promise,
+    ResizeObserver: class {
+      observe() {}
+    },
+  })
+  const deliver = (data) =>
+    listeners.forEach((listener) => listener({ source: parent, data }))
+  return { posted, attributes, chart, deliver }
+}
+
+test("the chart app handshakes, then draws the tool result it was sent", async () => {
+  const { text } = answer({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "resources/read",
+    params: { uri: CHART_URI },
+  }).result.contents[0]
+  for (const said of [
+    '"ui/initialize"',
+    '"ui/notifications/initialized"',
+    '"ui/notifications/size-changed"',
+    '"ui/notifications/tool-result"',
+    '"ui/resource-teardown"',
+  ])
+    assert.ok(text.includes(said), said)
+  assert.ok(!text.includes("${"))
+  // A static page would already say something. This one draws only the result.
+  assert.ok(!text.includes("chart for nessa-test"))
+
+  const { posted, attributes, chart, deliver } = await runChartApp()
+  const initialize = posted.find((message) => message.method === "ui/initialize")
+  assert.equal(initialize.params.protocolVersion, "2026-01-26")
+  assert.equal(chart.textContent, "")
+  deliver({
+    jsonrpc: "2.0",
+    id: initialize.id,
+    result: { hostContext: { displayMode: "inline" } },
+  })
+  await new Promise((done) => setImmediate(done))
+  assert.equal(attributes["data-chart-state"], "live")
+  assert.ok(posted.some((message) => message.method === "ui/notifications/initialized"))
+  assert.ok(posted.some((message) => message.method === "ui/notifications/size-changed"))
+  assert.equal(chart.textContent, "")
+  deliver({
+    jsonrpc: "2.0",
+    method: "ui/notifications/tool-result",
+    params: {
+      structuredContent: {
+        series: [
+          { name: "alpha", value: 10 },
+          { name: "beta", value: 20 },
+        ],
+      },
+    },
+  })
+  assert.equal(chart.textContent, "alpha 10, beta 20")
+  const before = posted.length
+  deliver({
+    jsonrpc: "2.0",
+    id: "nessa-teardown",
+    method: "ui/resource-teardown",
+    params: {},
+  })
+  const teardown = posted[before]
+  assert.equal(posted.length, before + 1)
+  assert.deepEqual(Object.keys(teardown).sort(), ["id", "jsonrpc", "result"])
+  assert.deepEqual(Object.keys(teardown.result), [])
+  assert.deepEqual(JSON.parse(JSON.stringify(teardown)), {
+    jsonrpc: "2.0",
+    id: "nessa-teardown",
+    result: {},
+  })
+  deliver({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "ui/resource-teardown",
+    params: { reason: "closed" },
+  })
+  const withReason = posted[before + 1]
+  assert.equal(posted.length, before + 2)
+  assert.deepEqual(Object.keys(withReason).sort(), ["id", "jsonrpc", "result"])
+  assert.deepEqual(Object.keys(withReason.result), [])
+  assert.deepEqual(JSON.parse(JSON.stringify(withReason)), {
+    jsonrpc: "2.0",
+    id: 1,
+    result: {},
+  })
+  assert.equal(chart.textContent, "alpha 10, beta 20")
+  assert.equal(attributes["data-chart-state"], "live")
+})
+
 test("the review app speaks the ui/* bridge and calls each of its tools by name", () => {
   const { text } = answer({
     jsonrpc: "2.0",

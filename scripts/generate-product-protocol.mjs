@@ -518,10 +518,12 @@ const bounds = {
   maxUiResourceUriBytes:
     schema.$defs.ConversationMcpTool.properties.resourceUri["x-utf8MaxBytes"],
   mcpAppInstanceIdPattern: schema.$defs.McpAppReference.properties.instanceId.pattern,
-  // What an app may send is what its review can show: one bound, stated twice.
+  // What an app may send is what its review can show and what the view
+  // carries of a call the connection saw: one bound.
   maxMcpArgumentsBytes: agreeing("app arguments and review bytes", [
     mcpCall.argumentsJson["x-utf8MaxBytes"],
     schema.$defs.ConversationPermission.properties.argumentsJson["x-utf8MaxBytes"],
+    schema.$defs.ConversationMcpTool.properties.argumentsJson["x-utf8MaxBytes"],
   ]),
   maxMcpResultBytes:
     schema.$defs.McpCallToolResult.properties.resultJson["x-utf8MaxBytes"],

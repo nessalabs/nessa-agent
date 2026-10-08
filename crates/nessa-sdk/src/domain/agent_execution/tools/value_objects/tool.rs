@@ -1,6 +1,9 @@
 #![deny(missing_docs)]
 
-use super::{json::is_json, McpTool, ToolCallId};
+use super::{
+    json::{is_json, is_json_object},
+    McpTool, ToolCallId,
+};
 use crate::domain::agent_execution::ExecutionError;
 
 /// An untrusted path description, not a resolved file or permission to access it.
@@ -93,6 +96,10 @@ pub struct ToolCallUpdate {
     // Boxed: most tools are not MCP calls, and an observation is held (and
     // undone) inline in larger values.
     mcp_tool: Option<Box<McpTool>>,
+    /// Arguments the gateway's connection saw for this call. None leaves any
+    /// already observed as they were: an update that does not repeat them
+    /// does not clear them.
+    mcp_arguments: Option<McpCallArguments>,
 }
 impl ToolCallUpdate {
     /// Own one sparse update for `id`. `title`, `kind`, and `status` replace their
@@ -115,6 +122,7 @@ impl ToolCallUpdate {
             locations,
             content,
             mcp_tool: None,
+            mcp_arguments: None,
         }
     }
     /// This update with `content` as its replacement content collection, which
@@ -133,6 +141,16 @@ impl ToolCallUpdate {
     pub fn with_mcp_tool(self, mcp_tool: McpTool) -> Self {
         Self {
             mcp_tool: Some(Box::new(mcp_tool)),
+            ..self
+        }
+    }
+    /// This update, also carrying the arguments the gateway's connection saw.
+    /// Returns a replacement; the original value is consumed, never changed
+    /// in place. Without them the update leaves any arguments already
+    /// observed as they were.
+    pub fn with_mcp_arguments(self, arguments: McpCallArguments) -> Self {
+        Self {
+            mcp_arguments: Some(arguments),
             ..self
         }
     }
@@ -164,15 +182,20 @@ impl ToolCallUpdate {
     pub fn mcp_tool(&self) -> Option<&McpTool> {
         self.mcp_tool.as_deref()
     }
-    /// Retained title, path, content and MCP identity allocations, including
-    /// vector and box storage. ToolCall accounts for retained identities in addition to
-    /// these observation bytes.
+    /// Arguments the gateway's connection saw; None leaves the observed ones.
+    pub fn mcp_arguments(&self) -> Option<&McpCallArguments> {
+        self.mcp_arguments.as_ref()
+    }
+    /// Retained title, path, content, MCP identity and argument allocations,
+    /// including vector and box storage. ToolCall accounts for retained
+    /// identities in addition to these observation bytes.
     pub fn payload_bytes(&self) -> usize {
         ToolObservation::measure_payload(
             &self.title,
             &self.locations,
             &self.content,
             &self.mcp_tool,
+            &self.mcp_arguments,
         )
     }
 }
@@ -190,11 +213,12 @@ pub struct ToolObservation {
     // Boxed: most tools are not MCP calls, and an observation is held (and
     // undone) inline in larger values.
     mcp_tool: Option<Box<McpTool>>,
+    mcp_arguments: Option<McpCallArguments>,
 }
 /// Moved prior fields for a reversible entity-owned observation replacement.
 pub(crate) struct ToolObservationUndo {
     previous: ToolObservation,
-    changed: [bool; 6],
+    changed: [bool; 7],
 }
 impl ToolObservation {
     /// Last observed display title; None means no title has been observed.
@@ -222,10 +246,21 @@ impl ToolObservation {
     pub fn mcp_tool(&self) -> Option<&McpTool> {
         self.mcp_tool.as_deref()
     }
+    /// Arguments the gateway's connection saw for this call; None where no
+    /// update has carried them.
+    pub fn mcp_arguments(&self) -> Option<&McpCallArguments> {
+        self.mcp_arguments.as_ref()
+    }
     /// Retained payload allocation in bytes, including vector capacity. Saturates at
     /// usize::MAX on overflow; excludes fixed identity/entity storage.
     pub fn payload_bytes(&self) -> usize {
-        Self::measure_payload(&self.title, &self.locations, &self.content, &self.mcp_tool)
+        Self::measure_payload(
+            &self.title,
+            &self.locations,
+            &self.content,
+            &self.mcp_tool,
+            &self.mcp_arguments,
+        )
     }
     /// A complete update for `id` that rebuilds this observation from nothing:
     /// every observed field present, so applying it to an empty observation
@@ -239,6 +274,7 @@ impl ToolObservation {
             locations: self.locations.clone(),
             content: self.content.clone(),
             mcp_tool: self.mcp_tool.clone(),
+            mcp_arguments: self.mcp_arguments.clone(),
         }
     }
     pub(crate) fn payload_bytes_after(&self, update: &ToolCallUpdate) -> usize {
@@ -263,6 +299,11 @@ impl ToolObservation {
             } else {
                 &self.mcp_tool
             },
+            if update.mcp_arguments.is_some() {
+                &update.mcp_arguments
+            } else {
+                &self.mcp_arguments
+            },
         )
     }
     fn measure_payload(
@@ -270,10 +311,14 @@ impl ToolObservation {
         locations: &Option<Vec<FileLocation>>,
         content: &Option<Vec<ToolContent>>,
         mcp_tool: &Option<Box<McpTool>>,
+        mcp_arguments: &Option<McpCallArguments>,
     ) -> usize {
         let mut bytes = title.as_ref().map_or(0, String::capacity);
         bytes = bytes.saturating_add(mcp_tool.as_ref().map_or(0, |tool| {
             size_of::<McpTool>().saturating_add(tool.payload_bytes())
+        }));
+        bytes = bytes.saturating_add(mcp_arguments.as_ref().map_or(0, |arguments| {
+            size_of::<McpCallArguments>().saturating_add(arguments.as_str().len())
         }));
         if let Some(locations) = locations {
             bytes = bytes.saturating_add(
@@ -316,6 +361,7 @@ impl ToolObservation {
             update.locations.is_some(),
             update.content.is_some(),
             update.mcp_tool.is_some(),
+            update.mcp_arguments.is_some(),
         ];
         let mut previous = self;
         let next = Self {
@@ -325,6 +371,9 @@ impl ToolObservation {
             locations: update.locations.or_else(|| previous.locations.take()),
             content: update.content.or_else(|| previous.content.take()),
             mcp_tool: update.mcp_tool.or_else(|| previous.mcp_tool.take()),
+            mcp_arguments: update
+                .mcp_arguments
+                .or_else(|| previous.mcp_arguments.take()),
         };
         (next, ToolObservationUndo { previous, changed })
     }
@@ -336,6 +385,7 @@ impl ToolObservation {
             locations,
             content,
             mcp_tool,
+            mcp_arguments,
         } = self;
         let ToolObservationUndo { previous, changed } = undo;
         Self {
@@ -357,12 +407,61 @@ impl ToolObservation {
             } else {
                 mcp_tool
             },
+            mcp_arguments: if changed[6] {
+                previous.mcp_arguments
+            } else {
+                mcp_arguments
+            },
         }
     }
 }
 /// The largest structured result retained, in UTF-8 bytes of its JSON text.
 /// A result past it is not kept; the adapter says so in text instead.
 pub const MAX_STRUCTURED_RESULT_BYTES: usize = 64 * 1024;
+
+/// The most an MCP tool call's arguments may be, in UTF-8 bytes of their JSON
+/// text. One bound for a review, for an app's own call, and for the arguments
+/// the gateway's connection carries on the conversation view: the product
+/// schema publishes it as `maxMcpArgumentsBytes`, and
+/// `nessa-server/tests/conversation/agreement.rs` holds the three together.
+/// Past it the arguments are not kept. JSON cut short is not the call's
+/// arguments.
+pub const MAX_MCP_ARGUMENTS_BYTES: usize = 32 * 1024;
+
+/// The arguments of one MCP tool call, as the gateway's connection saw them:
+/// one JSON object, encoded, at most [`MAX_MCP_ARGUMENTS_BYTES`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpCallArguments(Box<str>);
+
+impl McpCallArguments {
+    /// Own `json` when it is one JSON object within [`MAX_MCP_ARGUMENTS_BYTES`].
+    /// The length is checked first, so a longer text is refused before it is
+    /// read as JSON.
+    ///
+    /// # Errors
+    ///
+    /// [`ExecutionError::ValueTooLong`] past the bound, and
+    /// [`ExecutionError::InvalidMcpCallArguments`] when `json` is not one
+    /// JSON object.
+    pub fn new(json: impl Into<String>) -> Result<Self, ExecutionError> {
+        let json = json.into();
+        if json.len() > MAX_MCP_ARGUMENTS_BYTES {
+            return Err(ExecutionError::ValueTooLong {
+                field: "mcp tool arguments",
+                max_bytes: MAX_MCP_ARGUMENTS_BYTES,
+            });
+        }
+        if !is_json_object(&json) {
+            return Err(ExecutionError::InvalidMcpCallArguments);
+        }
+        Ok(Self(json.into_boxed_str()))
+    }
+
+    /// The encoded object, exactly as it was kept.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// Immutable provider-reported text, file change, or structured result for
 /// observation and review. Construction preserves exact text, including empty
@@ -578,5 +677,50 @@ mod reversible_tests {
             ToolObservation::default().with_reversible_update(bare().with_mcp_tool(first));
         assert!(named.mcp_tool().is_some());
         assert_eq!(named.restored(undo).mcp_tool(), None);
+    }
+
+    #[test]
+    fn mcp_call_arguments_are_one_object_within_the_bound_and_an_update_keeps_them() {
+        let at_the_bound = format!(r#"{{"a":"{}"}}"#, "x".repeat(MAX_MCP_ARGUMENTS_BYTES - 8));
+        assert_eq!(at_the_bound.len(), MAX_MCP_ARGUMENTS_BYTES);
+        let kept = McpCallArguments::new(at_the_bound.clone()).unwrap();
+        assert_eq!(kept.as_str(), at_the_bound);
+        assert!(matches!(
+            McpCallArguments::new(format!("{at_the_bound} ")),
+            Err(ExecutionError::ValueTooLong {
+                field: "mcp tool arguments",
+                max_bytes: MAX_MCP_ARGUMENTS_BYTES,
+            })
+        ));
+        assert_eq!(
+            McpCallArguments::new("[1]").unwrap_err(),
+            ExecutionError::InvalidMcpCallArguments
+        );
+        assert_eq!(
+            McpCallArguments::new("null").unwrap_err(),
+            ExecutionError::InvalidMcpCallArguments
+        );
+        let id = ToolCallId::new("tool").unwrap();
+        let bare = || ToolCallUpdate::new(id.clone(), None, None, None, None, None);
+        let arguments = McpCallArguments::new(r#"{"city":"Oslo"}"#).unwrap();
+        let original =
+            ToolObservation::default().with_update(bare().with_mcp_arguments(arguments.clone()));
+        assert_eq!(original.mcp_arguments(), Some(&arguments));
+        let (kept, undo) = original.clone().with_reversible_update(bare());
+        assert_eq!(kept.mcp_arguments(), Some(&arguments));
+        assert_eq!(kept.restored(undo).mcp_arguments(), Some(&arguments));
+        let (replaced, undo) = original.with_reversible_update(
+            bare().with_mcp_arguments(McpCallArguments::new("{}").unwrap()),
+        );
+        assert_eq!(
+            replaced.mcp_arguments().map(McpCallArguments::as_str),
+            Some("{}")
+        );
+        let rebuilt = ToolObservation::default().with_update(replaced.clone().as_update(id));
+        assert_eq!(
+            rebuilt.mcp_arguments().map(McpCallArguments::as_str),
+            Some("{}")
+        );
+        assert_eq!(replaced.restored(undo).mcp_arguments(), Some(&arguments));
     }
 }

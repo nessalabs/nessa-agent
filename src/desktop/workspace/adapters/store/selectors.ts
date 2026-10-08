@@ -340,14 +340,15 @@ export const selectListedSessions = listed
  * `held` in their places and the chosen session listed whatever the filter
  * says; compare with `sameGlance`.
  */
-export const selectGlance = (
-  state: Root,
-  held: readonly Held[],
-  now: number,
-): AgentsGlance =>
-  agentsGlance(listed(state), held, {
-    filter: state.workspace.overview.filter,
-    group: state.workspace.overview.group,
-    now,
-    looking: state.workspace.overview.selected,
-  })
+export const selectGlance = createSelector(
+  [
+    listed,
+    (state: Root) => state.workspace.overview.filter,
+    (state: Root) => state.workspace.overview.group,
+    (state: Root) => state.workspace.overview.selected,
+    (_state: Root, held: readonly Held[]) => held,
+    (_state: Root, _held: readonly Held[], now: number) => now,
+  ],
+  (sessions, filter, group, looking, held, now): AgentsGlance =>
+    agentsGlance(sessions, held, { filter, group, now, looking }),
+)

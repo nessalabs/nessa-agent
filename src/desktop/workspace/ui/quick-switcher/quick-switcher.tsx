@@ -6,6 +6,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react"
+import { Kbd } from "@nessa-ui/react/kbd"
 import { DesktopIcon } from "../../../ui/icons"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectChannels, selectListedSessions } from "../../adapters/store/selectors"
@@ -267,7 +268,7 @@ export function QuickSwitcher({
                       </span>
                       {newShortcut ? (
                         <span className="workspace-result-trail">
-                          <kbd className="workspace-kbd">{newShortcut}</kbd>
+                          <Kbd>{newShortcut}</Kbd>
                         </span>
                       ) : null}
                     </>
@@ -292,13 +293,13 @@ function RowKeys({ mode }: { mode: SwitcherMode }) {
     <span className="workspace-result-keys" aria-hidden="true">
       {mode === "split" ? (
         <>
-          Open Beside <kbd>↩</kbd>
+          Open Beside <Kbd>↩</Kbd>
         </>
       ) : (
         <>
-          Open <kbd>↩</kbd>
+          Open <Kbd>↩</Kbd>
           <span aria-hidden="true">·</span>
-          Beside <kbd>{commandLabel(isMac)}↩</kbd>
+          Beside <Kbd>{commandLabel(isMac)}↩</Kbd>
         </>
       )}
     </span>

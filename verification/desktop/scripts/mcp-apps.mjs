@@ -12,26 +12,34 @@
  * its frame for a page without its policy, nor speak as the proxy; the
  * sandbox proxy, handed documents the host's own builder writes, reads every
  * way the app's document is replaced as its departure and nothing else as
- * one; and it is torn down on close — by its pane's close, and by its own
- * request.
+ * one; the test server's chart page handshakes through that proxy and draws
+ * the tool result it is sent; and it is torn down on close — by its pane's
+ * close, and by its own request.
  *
  * The app's documents are cross-origin to the page, so the script reads them
  * through Playwright's frames, never through the page.
  *
  * Every check runs on a fresh page, in each engine and layout.
  */
+import { mkdirSync } from "node:fs"
 import { createServer } from "node:http"
+import { join } from "node:path"
+import {
+  CHART_URI,
+  answer as mcpAnswer,
+} from "../../../scripts/mcp-test-server/server.mjs"
 import { attempt, CannotRun, devServerOnlySteps, recordIfLeftOut } from "./lib/cli.mjs"
 import { appFrame } from "./lib/apps.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
+import { target } from "./lib/server.mjs"
 import { content, css, names, selectorFor } from "./lib/selectors.mjs"
 import { contentIs, paneCount, paneCountIs, settled, until } from "./lib/workspace.mjs"
 
 const meta = {
   name: "mcp-apps",
   summary:
-    "MCP Apps: places, tools/call, CSP, isolation, escapes, forgery, departures, teardown",
+    "MCP Apps: places, tools/call, CSP, isolation, escapes, forgery, departures, the chart app, teardown",
   defaults: { engine: "chromium,webkit" },
   options: { only: { type: "string" } },
   help: `
@@ -79,20 +87,41 @@ Checks, per engine and layout (--only <names> to pick):
                moves to one by script, a first load held by an image the
                fixture leaves unanswered, an app forging departures, and a
                third party forging them and the check's answers at every
-               frame, are not; a deadline no timer can wait loads nothing
+               frame, are not; a host reply with no method of its own, after the
+               app has defined method and params on Object.prototype, is not a
+               check, and that app's departure is still reported; a deadline
+               no timer can wait loads nothing. A javascript: rewrite does not
+               run in Chromium; in WebKit it runs, then the unanswered load
+               is a departure
   departures-back
                on a page of its own: going back across a move to a fragment
                stays in the document, though the frame loads again, and the
                page lives on; an answer to an earlier check, coming after a
                later load, ends no wait
+  chart        the test server's chart page, handed to the real proxy as the host
+               writes a document (dev server only): it reaches live, and #chart
+               shows the series from the tool result it was sent
   forge        forged proxy messages change nothing; a forged report puts no
                words of the app's in the host's chrome
   teardown     closing the pane takes its frames off the page; the app asking to
                go is sent ui/resource-teardown before its pane closes
 
-departures and departures-back read the dev server's modules. Under --mode prod
-those steps are not run.`,
+departures, departures-back and chart read the dev server's modules. Under
+--mode prod those steps are not run. The other fixtures need the sandbox
+proxy, which Vite starts only in configureServer, so a production preview
+has no origin to mount the app. run-all --mode prod leaves this check out.
+Run on its own as --mode prod, it says it could not run, before building a
+preview.`,
 }
+
+/** The chart page `resources/read` serves, and the series this server's rows draw. */
+const chartHtml = mcpAnswer({
+  jsonrpc: "2.0",
+  id: 1,
+  method: "resources/read",
+  params: { uri: CHART_URI },
+}).result.contents[0].text
+const chartSeries = "alpha 10, beta 20"
 
 /** Says hello to the host, as an app would, each time a document of its runs. */
 const hello = `parent.postMessage({ jsonrpc: "2.0", method: "hello-from-app" }, "*");`
@@ -320,7 +349,50 @@ const departureScenarios = {
     }, 200); });</script>`,
     leaves: true,
   },
-  // The same, with the checks real messages from a frame of the app's own,
+  // A host reply has no method of its own (`{ id, result }`). The app lends
+  // `method` and `params` from Object.prototype, then opens and closes its
+  // document. That fires the frame's next load synchronously, during the
+  // call, and the load is check 2. (`location.replace("about:blank")` fires
+  // its load after this turn, so an answer posted in the turn meets it too
+  // late to keep the frame.) The reporter reads only the message's own
+  // data, so it never calls the getter and does not stop the app's
+  // listener: the listener is what opens the document, nothing answers
+  // check 2, and the frame leaves. A reporter that reads `data.method` and
+  // `data.params` does call the getter, which opens the document and
+  // returns check 2; the reporter then posts that answer, the load is
+  // already check 2, and the frame stays.
+  "prototype-reply": {
+    html: `<script>
+      Object.prototype.method = "@appCheck@";
+      var opened = false;
+      function openDocument() {
+        if (opened) return;
+        opened = true;
+        document.open();
+        document.close();
+      }
+      Object.defineProperty(Object.prototype, "params", {
+        configurable: true,
+        get: function () {
+          openDocument();
+          return { check: 2 };
+        }
+      });
+      ${hello}
+      addEventListener("message", function (event) {
+        var data = event.data;
+        if (!data || typeof data !== "object" || !Object.hasOwn(data, "result")) return;
+        openDocument();
+      });
+      addEventListener("load", function () { setTimeout(function () {
+        parent.postMessage({ jsonrpc: "2.0", method: "send-host-reply" }, "*");
+      }, 200); });
+    </script>`,
+    replies: 1,
+    leaves: true,
+    must: ["send-host-reply"],
+  },
+  // As \`forged-checks\`, with the checks real messages from a frame of the app's own,
   // \`source\` patched to say the proxy: the reporter reads the source it
   // took before the app ran, and answers none.
   "forged-checks-from-a-frame": {
@@ -380,6 +452,32 @@ const departureScenarios = {
       document.documentElement.appendChild(frame);</script>`,
     bare: true,
     leaves: true,
+  },
+  // \`location.href = "javascript:…"\` that opens and rewrites the document.
+  // The policy allows inline script, so this is the same class of attempt as
+  // \`document.open()\`. Measured: Chromium does not run the URL (nothing it
+  // posts, no second load, not a departure, the app still there). WebKit runs
+  // it — its post is relayed — and the frame then loads; the pinned document
+  // does not answer, so the departure follows. The app does not see that load
+  // (\`loaded-again\` is neither engine's). The WebKit post before the
+  // departure is the same window as any navigation not yet judged (#388).
+  "javascript-url": {
+    html: `<p id="stay">here</p><script>${hello}
+      var loads = 0;
+      addEventListener("load", function () {
+        loads += 1;
+        if (loads > 1) parent.postMessage({ jsonrpc: "2.0", method: "loaded-again" }, "*");
+      });
+      setTimeout(function () {
+        location.href = "javascript:document.open();document.write('<p>replaced</p>');document.close();parent.postMessage({jsonrpc:'2.0',method:'replaced'},'*')";
+        setTimeout(function () {
+          parent.postMessage({ jsonrpc: "2.0", method: "still-here" }, "*");
+        }, 400);
+      }, 300);
+    </script>`,
+    leaves: { chromium: false, webkit: true },
+    must: ["hello-from-app", "still-here"],
+    never: { chromium: ["replaced", "loaded-again"], webkit: ["loaded-again"] },
   },
 }
 
@@ -488,6 +586,7 @@ async function departuresOn(page, scenarios) {
               .replaceAll("@slot@", frameTokenSlot)
               .replaceAll("@hold@", holdUrl)
           const seen = {}
+          const replies = {}
           const proxies = []
           let handed = 0
           for (const [name, { html, bare, checkWithin, hold }] of Object.entries(
@@ -526,6 +625,18 @@ async function departuresOn(page, scenarios) {
                 )
                 handed += 1
                 return
+              }
+              // A host reply with no method of its own, after the app has
+              // asked: one per check number the scenario names. The proxy
+              // relays it; the app's prototype cannot make it a check.
+              if (method === "send-host-reply") {
+                const count = scenarios[name].replies ?? 0
+                for (let i = 0; i < count; i += 1)
+                  proxy.contentWindow.postMessage(
+                    { jsonrpc: "2.0", id: 1, result: {} },
+                    sandbox.origin,
+                  )
+                replies[name] = count
               }
               seen[name].push(method ?? "?")
             })
@@ -580,7 +691,7 @@ async function departuresOn(page, scenarios) {
           await new Promise((resolve) =>
             setTimeout(resolve, Math.max(0, spoke + wait - performance.now())),
           )
-          return { seen, appLeft: methods.appLeft, forgedAt, handed }
+          return { seen, appLeft: methods.appLeft, forgedAt, handed, replies }
         },
         {
           scenarios,
@@ -608,14 +719,20 @@ async function departuresOn(page, scenarios) {
   // The third party reached every proxy, and the app frame in each that
   // still had one: those that stay, at least.
   // (A scenario whose deadline the proxy refuses has no app frame.)
-  const staying = Object.values(scenarios).filter(
-    (s) => !s.leaves && s.checkWithin === undefined,
-  ).length
+  const engineName = page.context().browser().browserType().name()
+  const staying = Object.values(scenarios).filter((scenario) => {
+    if (scenario.checkWithin !== undefined) return false
+    const leaves = scenario.leaves
+    return typeof leaves === "boolean" ? !leaves : leaves[engineName] !== true
+  }).length
   if (seen.forgedAt.proxies < count || seen.forgedAt.apps < staying)
     failures.push(
       `the third party forged at ${seen.forgedAt.proxies} proxies and ${seen.forgedAt.apps} apps`,
     )
-  for (const [name, { leaves, must = [], never = [] }] of Object.entries(scenarios)) {
+  for (const [
+    name,
+    { leaves, must = [], never = [], replies: wantReplies },
+  ] of Object.entries(scenarios)) {
     const said = seen.seen[name]
     const engine = page.context().browser().browserType().name()
     for (const wrong of Array.isArray(never) ? never : (never[engine] ?? []))
@@ -625,8 +742,10 @@ async function departuresOn(page, scenarios) {
       if (!said.includes(premise))
         failures.push(`${name}: never said ${premise} (${said.join(" ")})`)
     const at = said.indexOf(seen.appLeft)
-    if (!leaves && at !== -1) failures.push(`${name}: departed (${said.join(" ")})`)
-    if (leaves && at === -1) failures.push(`${name}: no departure (${said.join(" ")})`)
+    // `leaves` is that engine's answer when the engines disagree.
+    const leave = typeof leaves === "boolean" ? leaves : leaves[engine] === true
+    if (!leave && at !== -1) failures.push(`${name}: departed (${said.join(" ")})`)
+    if (leave && at === -1) failures.push(`${name}: no departure (${said.join(" ")})`)
     if (at !== -1 && said.lastIndexOf(seen.appLeft) !== at)
       failures.push(`${name}: departed more than once`)
     if (at !== -1 && said.slice(at + 1).includes("hello-from-app"))
@@ -635,6 +754,10 @@ async function departuresOn(page, scenarios) {
       )
     if (said.includes("heard-the-check"))
       failures.push(`${name}: the app heard the check`)
+    if (wantReplies !== undefined && (seen.replies?.[name] ?? 0) !== wantReplies)
+      failures.push(
+        `${name}: sent ${seen.replies?.[name] ?? 0} host replies, not ${wantReplies}`,
+      )
   }
   if (leaked.length > 0)
     failures.push(`requests reached example.com: ${leaked.join(", ")}`)
@@ -788,6 +911,134 @@ async function openPane(page, failures) {
   if (answer !== 'ok: {"mode":"inline"}')
     failures.push(`the card's fullscreen request was answered ${answer}, expected inline`)
   return expectLive(page, "pane", "fullscreen", failures)
+}
+
+/**
+ * The test server's chart page, through the real proxy and the host's own
+ * document builder. The page is the host: it answers `ui/initialize` and then
+ * sends the tool result. The chart goes live and draws that result.
+ */
+async function chartLive(page, layout, shots) {
+  const failures = []
+  const dev = await page.evaluate(async () => {
+    const answer = await fetch("/src/desktop/widgets/app/model/csp.ts")
+    const type = answer.headers.get("content-type") ?? ""
+    return answer.ok && type.includes("javascript")
+  })
+  if (!dev) throw new CannotRun("chart needs the dev server's modules")
+  const ready = await page.evaluate(async (html) => {
+    const csp = await import("/src/desktop/widgets/app/model/csp.ts")
+    const { sandboxMethods: methods } =
+      await import("/src/desktop/widgets/app/model/sandbox-methods.ts")
+    const origin = await import("/src/desktop/widgets/app/adapters/dom/sandbox-origin.ts")
+    const { deadlines } = await import("/src/desktop/widgets/app/application/bridge.ts")
+    const sandbox = origin.pageSandbox(document)
+    if (!sandbox) return { sandbox: false }
+    const applied = csp.appliedCsp({})
+    const proxy = document.createElement("iframe")
+    proxy.id = "chart-probe"
+    proxy.setAttribute("sandbox", origin.proxyFrameSandbox)
+    proxy.title = "Chart probe"
+    proxy.style.cssText =
+      "position:fixed;z-index:9999;left:24px;top:24px;width:420px;height:140px;background:canvas;border:0"
+    proxy.src = sandbox.url
+    const done = { initialized: false }
+    addEventListener("message", (event) => {
+      if (event.source !== proxy.contentWindow) return
+      const message = event.data
+      if (!message || message.jsonrpc !== "2.0") return
+      if (message.method === methods.proxyReady) {
+        proxy.contentWindow.postMessage(
+          {
+            jsonrpc: "2.0",
+            method: methods.resourceReady,
+            params: {
+              html: csp.appDocument(html, applied),
+              policy: csp.cspPolicy(applied),
+              checkWithin: deadlines.initialize,
+            },
+          },
+          sandbox.origin,
+        )
+        return
+      }
+      if (message.method === "ui/initialize") {
+        proxy.contentWindow.postMessage(
+          {
+            jsonrpc: "2.0",
+            id: message.id,
+            result: {
+              protocolVersion: "2026-01-26",
+              hostInfo: { name: "nessa-test", version: "0" },
+              hostCapabilities: {},
+              hostContext: { displayMode: "inline" },
+            },
+          },
+          sandbox.origin,
+        )
+        return
+      }
+      if (message.method === "ui/notifications/initialized") {
+        done.initialized = true
+        proxy.contentWindow.postMessage(
+          {
+            jsonrpc: "2.0",
+            method: "ui/notifications/tool-result",
+            params: {
+              content: [{ type: "text", text: "Chart of two rows." }],
+              structuredContent: {
+                series: [
+                  { name: "alpha", value: 10 },
+                  { name: "beta", value: 20 },
+                ],
+              },
+            },
+          },
+          sandbox.origin,
+        )
+      }
+    })
+    document.body.append(proxy)
+    const started = performance.now()
+    while (!done.initialized && performance.now() - started < 10_000)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    return { sandbox: true, initialized: done.initialized }
+  }, chartHtml)
+  if (!ready.sandbox) throw new CannotRun("the page names no sandbox it may use")
+  if (!ready.initialized)
+    failures.push("the chart never said ui/notifications/initialized")
+  const probe = await page.$("#chart-probe")
+  const proxy = await probe?.contentFrame()
+  const app = proxy?.childFrames()[0]
+  if (!app) {
+    failures.push("the chart's document is not in the proxy")
+    return { failures }
+  }
+  await app
+    .waitForFunction(
+      (series) => document.getElementById("chart")?.textContent === series,
+      chartSeries,
+      { timeout: 5_000 },
+    )
+    .catch(() => {})
+  const said = await app.evaluate(() => ({
+    state: document.body.getAttribute("data-chart-state"),
+    chart: document.getElementById("chart")?.textContent ?? null,
+    heading: document.querySelector("h1")?.textContent ?? null,
+  }))
+  if (said.state !== "live") failures.push(`the chart is ${said.state}, not live`)
+  if (said.chart !== chartSeries)
+    failures.push(`the chart shows ${JSON.stringify(said.chart)}, not the tool result`)
+  if (said.heading !== "Chart (nessa-test)")
+    failures.push(`the chart's document is not the server's: ${said.heading}`)
+  if (shots && probe) {
+    mkdirSync(shots, { recursive: true })
+    const engine = page.context().browser().browserType().name()
+    await probe.screenshot({
+      path: join(shots, `chart-${engine}-${layout}.png`),
+    })
+  }
+  return { said, failures }
 }
 
 const checks = {
@@ -1083,6 +1334,8 @@ const checks = {
 
   "departures-back": (page) => departuresOn(page, backScenarios),
 
+  chart: (page, layout, shots) => chartLive(page, layout, shots),
+
   forge: async (page) => {
     const failures = []
     const { app } = await appFrame(page, "inline")
@@ -1144,26 +1397,39 @@ const checks = {
   },
 }
 
-await main(meta, async ({ options, rep, url, mode }) => {
-  const only = options.only ? options.list(options.only) : Object.keys(checks)
-  for (const name of only)
-    if (!Object.hasOwn(checks, name)) throw new CannotRun(`no check named ${name}`)
-  await withEngines(options, rep, async (engine, browser) => {
-    for (const layout of options.layouts)
-      for (const name of only) {
-        if (
-          recordIfLeftOut(rep, mode, name, devServerOnlySteps["mcp-apps"], {
-            engine,
-            layout,
-          })
-        )
-          continue
-        let opened
-        await attempt(rep, { engine, layout, name }, async () => {
-          opened = await onSample(browser, { url, layout })
-          const result = await checks[name](opened.page, layout)
-          return result
-        }).finally(() => opened?.close())
-      }
-  })
-})
+await main(
+  meta,
+  async ({ options, rep, url, mode }) => {
+    const only = options.only ? options.list(options.only) : Object.keys(checks)
+    for (const name of only)
+      if (!Object.hasOwn(checks, name)) throw new CannotRun(`no check named ${name}`)
+    await withEngines(options, rep, async (engine, browser) => {
+      for (const layout of options.layouts)
+        for (const name of only) {
+          if (
+            recordIfLeftOut(rep, mode, name, devServerOnlySteps["mcp-apps"], {
+              engine,
+              layout,
+            })
+          )
+            continue
+          let opened
+          await attempt(rep, { engine, layout, name }, async () => {
+            opened = await onSample(browser, { url, layout })
+            const result = await checks[name](opened.page, layout, options.shots)
+            return result
+          }).finally(() => opened?.close())
+        }
+    })
+  },
+  // A preview this check would start has no sandbox meta: the plugin publishes
+  // the proxy only from configureServer. Refuse before that build. An explicit
+  // --url may be a dev server, which does have the proxy.
+  async (options) => {
+    if (options.mode === "prod" && !options.url)
+      throw new CannotRun(
+        "MCP Apps fixtures need the dev server's sandbox proxy, which starts in configureServer and is absent from vite preview. Under --mode prod this check is not run.",
+      )
+    return target(options)
+  },
+)

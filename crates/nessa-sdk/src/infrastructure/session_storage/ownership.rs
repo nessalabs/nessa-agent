@@ -11,6 +11,9 @@
 //! exercises cancellation, queue lifetime, poison, and watchdog responsiveness.
 #![deny(missing_docs)]
 
+mod settlement;
+use settlement::{CompletionDto, ProofDto};
+
 use std::{
     path::Path,
     sync::{Arc, Mutex},
@@ -26,10 +29,12 @@ use crate::domain::agent_execution::{
     executions::ExecutionId,
     sessions::SessionId,
     subagents::{
-        AgentLifetimeId, ApprovalPolicy, CloseOperationId, DeliveryState, EvidenceFact, HostActor,
-        Initiator, KnownMilestone, LifetimeCause, LifetimeRow, LifetimeState, ModelChoice,
-        OwnershipSnapshot, PhysicalFact, ReportId, ReportRow, SettlementRow, SpawnBinding,
-        SpawnOrigin, SpawnProgress, SpawnRequestId, SpawnRow, TaskDigest, TaskReceiptId,
+        AbsenceAudit, AbsenceProof, AgentLifetimeId, ApprovalPolicy, CloseCompletionRow,
+        CloseEvidenceDetail, CloseOperationId, DeliveryState, EvidenceFact, HostActor, Initiator,
+        KnownMilestone, LifetimeCause, LifetimeRow, LifetimeState, ModelChoice, OwnershipEvidence,
+        OwnershipMeaning, OwnershipSnapshot, PhysicalFact, ReportId, ReportRow,
+        ResourceObservationAudit, SettlementProof, SettlementRow, SpawnBinding, SpawnOrigin,
+        SpawnProgress, SpawnRequestId, SpawnRow, TaskDigest, TaskReceiptId,
     },
     tools::ToolCallId,
 };
@@ -180,6 +185,7 @@ impl OwnershipState {
 
 #[derive(Serialize, Deserialize)]
 struct SnapshotDto {
+    close_completions: Vec<CompletionDto>,
     lifetimes: Vec<LifetimeDto>,
     spawns: Vec<SpawnDto>,
     settlements: Vec<SettlementDto>,
@@ -244,6 +250,7 @@ struct MilestoneDto {
 
 #[derive(Serialize, Deserialize)]
 struct SettlementDto {
+    proof: ProofDto,
     close_lifetime: String,
     target: String,
     physical: String,
@@ -269,6 +276,11 @@ struct InitiatorDto {
 impl From<&OwnershipSnapshot> for SnapshotDto {
     fn from(snapshot: &OwnershipSnapshot) -> Self {
         Self {
+            close_completions: snapshot
+                .close_completions
+                .iter()
+                .map(CompletionDto::from)
+                .collect(),
             lifetimes: snapshot.lifetimes.iter().map(LifetimeDto::from).collect(),
             spawns: snapshot.spawns.iter().map(SpawnDto::from).collect(),
             settlements: snapshot
@@ -286,6 +298,11 @@ impl TryFrom<SnapshotDto> for OwnershipSnapshot {
 
     fn try_from(dto: SnapshotDto) -> Result<Self, Self::Error> {
         Ok(Self {
+            close_completions: dto
+                .close_completions
+                .into_iter()
+                .map(CompletionDto::try_into)
+                .collect::<Result<_, _>>()?,
             lifetimes: dto
                 .lifetimes
                 .into_iter()
@@ -591,6 +608,7 @@ impl TryFrom<MilestoneDto> for KnownMilestone {
 impl From<&SettlementRow> for SettlementDto {
     fn from(row: &SettlementRow) -> Self {
         Self {
+            proof: ProofDto::from(&row.proof),
             close_lifetime: row.close_lifetime.as_str().to_owned(),
             target: row.target.as_str().to_owned(),
             physical: match row.physical {
@@ -614,6 +632,7 @@ impl TryFrom<SettlementDto> for SettlementRow {
 
     fn try_from(dto: SettlementDto) -> Result<Self, Self::Error> {
         Ok(Self {
+            proof: dto.proof.try_into()?,
             close_lifetime: AgentLifetimeId::new(dto.close_lifetime).map_err(|_| ())?,
             target: AgentLifetimeId::new(dto.target).map_err(|_| ())?,
             physical: match dto.physical.as_str() {

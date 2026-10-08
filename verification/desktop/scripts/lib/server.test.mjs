@@ -5,12 +5,19 @@
  */
 import { strict as assert } from "node:assert"
 import { spawn } from "node:child_process"
-import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs"
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 
-import { pageMode, startPreview, stopPreview } from "./server.mjs"
+import { functionalPreviewEnv, pageMode, startPreview, stopPreview } from "./server.mjs"
 
 const previewPrefix = "nessa-desktop-verify-"
 
@@ -71,6 +78,24 @@ test("a failed production build removes its directory", async () => {
     (name) => name.startsWith(previewPrefix) && !before.has(name),
   )
   assert.deepEqual(leaked, [])
+})
+
+test("the functional production preview inlines the ci stage on both halves", () => {
+  assert.deepEqual(functionalPreviewEnv(), {
+    NESSA_STAGE: "ci",
+    VITE_NESSA_STAGE: "ci",
+  })
+  const scripts = dirname(fileURLToPath(import.meta.url))
+  const server = readFileSync(join(scripts, "server.mjs"), "utf8")
+  assert.match(server, /return startPreview\(options, env\)/)
+  const runAll = readFileSync(join(scripts, "../run-all.mjs"), "utf8")
+  assert.match(
+    runAll,
+    /target\(options, options\.mode === "prod" \? functionalPreviewEnv\(\) : \{\}\)/,
+  )
+  // The budget's preview is its own, at the default prod stage.
+  const budget = readFileSync(join(scripts, "../perf-budget.mjs"), "utf8")
+  assert.doesNotMatch(budget, /functionalPreviewEnv|VITE_NESSA_STAGE/)
 })
 
 test("an explicit --url keeps a named dev or prod mode and otherwise stays given", () => {

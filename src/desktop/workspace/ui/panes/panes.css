@@ -80,12 +80,17 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
 .workspace-pane[data-drag-lifted] {
   background: color-mix(in oklab, var(--foreground) 2%, transparent);
   box-shadow: inset 0 0 0 1px var(--desktop-rim);
+  /* The slot snaps. Interpolating the resting blur shadow would paint a new
+     blur on the lift frame and keep painting it until the preview's own
+     rule takes over (`styles.test.ts`). */
+  transition: none;
 }
 
-/* Its two parts, faded rather than hidden: an inherited property would restyle all they hold. */
+/* Not painted while carried. Opacity would still raster the conversation on
+   the frame it lifts (`styles.test.ts`). */
 .workspace-pane[data-drag-lifted] > .workspace-pane-header,
 .workspace-pane[data-drag-lifted] > .workspace-pane-body {
-  opacity: 0;
+  content-visibility: hidden;
 }
 
 /*
@@ -101,15 +106,42 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
 .workspace:is([data-split-flipping], [data-drag-reflow])
   .workspace-pane
   > .workspace-pane-header,
-.workspace:is([data-split-flipping], [data-drag-reflow])
-  .workspace-pane
-  > .workspace-pane-body {
+.workspace[data-split-flipping] .workspace-pane > .workspace-pane-body {
   will-change: transform;
 }
 
 .workspace:is([data-split-flipping], [data-drag-reflow]) .workspace-pane {
   box-shadow: inset 0 0 0 1px var(--desktop-rim);
   transition: none;
+  /* Opaque while it travels. The resting tint composites the blurred ambient
+     on every frame of the move (`styles.test.ts`). */
+  background: var(--background);
+}
+
+/* The conversation is not painted while a drag's preview moves the pane.
+   Rastering it at each new size misses the frame budget (`styles.test.ts`).
+   The scroller's box stays, so a preview still measures the transcript
+   (`drag.mjs`). The fade at its edges is a mask; it waits until the pane
+   has landed. */
+.workspace[data-drag-reflow] .workspace-transcript {
+  mask-image: none;
+}
+
+.workspace[data-drag-reflow] .workspace-transcript-inner {
+  content-visibility: hidden;
+}
+
+/* A layout that lands — the drop's commit, or the preview letting go — would
+   lay every transcript out on that frame. Bodies wait, and come back one a
+   frame (`styles.test.ts`, `drag.test.tsx`). */
+.workspace-pane[data-drag-settling] > .workspace-pane-body {
+  content-visibility: hidden;
+}
+
+/* The copy omits the conversation. A body pictured in it stays out of its
+   paint (`styles.test.ts`). */
+.split-panes-ghost .workspace-pane-body {
+  content-visibility: hidden;
 }
 
 .workspace:is([data-split-flipping], [data-drag-reflow])
@@ -300,7 +332,10 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
  * of reach, so a pane command measures the room they really have and coming
  * back lays nothing out again. The session list beside it stays in reach.
  */
-.workspace[data-content="widget"] .workspace-chat {
+/* The window widget, marked on the chat by the grid (`pane-grid.tsx`).
+   `data-content` also changes when the overview opens, so a selector on it
+   would restyle the chat on that key. */
+.workspace-chat[data-window-widget] {
   position: relative;
 }
 
@@ -340,7 +375,7 @@ html:not(.dark) .workspace-widget-window {
   opacity: 1;
 }
 
-.workspace[data-content="widget"] .workspace-chat > .split-panes-grid {
+.workspace-chat[data-window-widget] > .split-panes-grid {
   visibility: hidden;
 }
 

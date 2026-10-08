@@ -1567,6 +1567,8 @@ checks["overview-story"] = async ({ page, engine, options }) => {
   await page.setViewportSize({ width: 1440, height: 640 })
   await page.keyboard.press(keys.overview)
   await need(page, css.overview, "the Agents overview")
+  // The list arrives a row a frame (`data-overview-listed` once it has).
+  await need(page, css.overviewListed, "the overview's whole list")
   const item = page.locator(`[data-overview-item="${names.storySessionId}"]`)
   if (!(await item.count()))
     throw new CannotRun(`no overview item ${names.storySessionId}`)
@@ -1869,6 +1871,7 @@ checks["overview-row-answers"] = async ({ page, engine, options }) => {
   const failures = []
   await page.locator(css.overviewEntry).click()
   await need(page, css.overviewRequest, "a request in the Agents overview")
+  await need(page, css.overviewListed, "the overview's whole list")
   await frames(page, 2)
   await settled(page)
   const rows = page.locator(css.overviewRequest)
@@ -2142,6 +2145,7 @@ checks["overview-leave"] = async ({ page, engine, options }) => {
   const failures = []
   await page.locator(css.overviewEntry).click()
   await need(page, css.overviewRequest, "a request in the Agents overview")
+  await need(page, css.overviewListed, "the overview's whole list")
   await frames(page, 2)
   await settled(page)
   const common = (what, moving, word) => {
