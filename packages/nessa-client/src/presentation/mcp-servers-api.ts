@@ -39,17 +39,24 @@ if (
   throw new Error("mcpServers methods do not share one published grant")
 
 /**
- * Whether `session` carries the grant every mcpServers method asks for.
+ * Whether `session` carries the grant every mcpServers method asks for,
+ * for this connected gateway.
  *
- * The grant is `productMethodGrants`, generated from
- * `protocol/product/manifest.json`. Carrying it is not permission: the
- * gateway can still answer `forbidden`, and that answer is the one a
- * surface goes by.
+ * The action is `productMethodGrants`, generated from
+ * `protocol/product/manifest.json`. The resource is the session's
+ * organization and gateway id, the same pair Cedar compares before it
+ * allows the action. Carrying it is not permission: the gateway can still
+ * answer `forbidden`, and that answer is the one a surface goes by.
  */
 export function carriesMcpServersGrant(
-  session: Pick<ProductSessionReady, "grants">,
+  session: Pick<ProductSessionReady, "grants" | "gatewayId" | "organizationId">,
 ): boolean {
-  return session.grants.some((grant) => grant.action === mcpServersGrant)
+  return session.grants.some(
+    (grant) =>
+      grant.action === mcpServersGrant &&
+      grant.resource.organizationId === session.organizationId &&
+      grant.resource.id === session.gatewayId,
+  )
 }
 
 /**
