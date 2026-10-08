@@ -125,9 +125,10 @@
   line-height: 1;
 }
 
+/* The mark's own size is the kit's utility, which any rule of the window's outranks. */
 .workspace-agent-tile svg {
-  width: 64% !important;
-  height: 64% !important;
+  width: 64%;
+  height: 64%;
 }
 
 /*
@@ -136,9 +137,9 @@
  * shouting over them.
  */
 .workspace-agent-tile > span {
-  color: color-mix(in oklab, var(--foreground) 62%, transparent) !important;
-  font-size: 0.86em !important;
-  font-weight: 600 !important;
+  color: color-mix(in oklab, var(--foreground) 62%, transparent);
+  font-size: 0.86em;
+  font-weight: 600;
   letter-spacing: -0.02em;
   line-height: 1;
   transform: translateY(0.02em);

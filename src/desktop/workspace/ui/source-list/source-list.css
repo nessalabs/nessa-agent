@@ -353,14 +353,14 @@ html:not(.dark) .workspace-sidebar {
 
 /* ——— Channels, and the sessions hanging beneath one ——— */
 
-/* A channel's sessions hang beneath it on a faint thread. */
-.workspace-thread {
+/* A channel's sessions hang beneath it on a faint thread (outranking the sidebar's list reset). */
+.workspace-sidebar .workspace-thread {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 1px;
-  margin: 2px 0 4px !important;
-  padding-left: 16px !important;
+  margin: 2px 0 4px;
+  padding-left: 16px;
 }
 
 .workspace-thread::before {
