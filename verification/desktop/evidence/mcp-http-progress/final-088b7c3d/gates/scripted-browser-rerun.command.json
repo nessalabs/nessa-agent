@@ -1,0 +1,1 @@
+["python3", "/tmp/637-verify-subreaper.py", "pnpm", "test:e2e:scripted", "--", "--channel", "bundled", "--evidence", "/workspace/637-overlap-final-evidence/scripted-browser-rerun"]

@@ -1,0 +1,94 @@
+{
+  "head": "088b7c3d1db5adc31b3631bd976b5c252595bfef",
+  "all9required_checks_actual_zero": true,
+  "checks": [
+    {
+      "name": "fmt",
+      "exit": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "clippy",
+      "exit": 0,
+      "sha256": "7933cd4346abe6c4bf7e2f9cbfd3377ca7c5f3c11e34e5aa09530d07b24f2a07"
+    },
+    {
+      "name": "architecture-tests",
+      "exit": 0,
+      "sha256": "b8a0d16f54278c7b7ea401d15f6ae9d26df1d3805d6a9b8d22bb744ddd7a97d3"
+    },
+    {
+      "name": "architecture",
+      "exit": 0,
+      "sha256": "2a2462c6729eeb5ecb05a41a9fb9ed10f97b1bdb34772bac68dd984b7907a5d8"
+    },
+    {
+      "name": "http-progress",
+      "exit": 0,
+      "sha256": "b9d40d857a1f5bee984315069b137caff4e1e9f40b4f31b73a7aafc4cc3044fe"
+    },
+    {
+      "name": "mcp",
+      "exit": 0,
+      "sha256": "0761f71266d1fc959ddc5293d9b4ef81959139b9002bc96537d0920d00d12bdb"
+    },
+    {
+      "name": "six-package-full-suite",
+      "exit": 0,
+      "sha256": "2c28fba10b2bb0bacd1ddb972e1eeb942d75b15e455137b250025337c6055a83"
+    },
+    {
+      "name": "sdk-docs",
+      "exit": 0,
+      "sha256": "af0e2eefed9ddee415ba050622b458eef601376763c90cf73b5ab15fcb33782d"
+    },
+    {
+      "name": "scripted-browser-rerun",
+      "exit": 0,
+      "sha256": "347f1436d60df636c1f73c3202c31f553531ea0c8b3f880002b503ef0b645f7f"
+    }
+  ],
+  "preserved_failure": [
+    {
+      "name": "scripted-browser",
+      "exit": 1,
+      "sha256": "2cbb0aa1d3f4c28844d6ed56ad7c892e0487ee49c1179b6422839c73802f72a0",
+      "disposition": "Known navigation resource abort retained; successful same-source supported umbrella rerun separately verified"
+    }
+  ],
+  "browser_reports": [
+    {
+      "name": "mcp-apps-gateway",
+      "reported_passed": 16,
+      "reported_total": 16,
+      "raw_result_count": 16,
+      "engines": [
+        "chromium",
+        "webkit"
+      ],
+      "sha256": "2de83a6b37e87a1a3db07fe82c5ff4cbfb3cfd740cddac90506ccc040ae732d1"
+    },
+    {
+      "name": "gateway-window",
+      "reported_passed": 13,
+      "reported_total": 13,
+      "raw_result_count": 13,
+      "engines": [
+        "chromium",
+        "webkit"
+      ],
+      "sha256": "fecde9766b7501d544c3ba54c627bc39e4917889341f1381b703c5243796f968"
+    },
+    {
+      "name": "scripted-scenarios",
+      "reported_passed": 8,
+      "reported_total": 8,
+      "raw_result_count": 8,
+      "engines": [
+        "chromium",
+        "webkit"
+      ],
+      "sha256": "d660397a4c6ee8e0746e39b2f96a33e023246c6b0a85b09aff1d233ce534bec6"
+    }
+  ]
+}

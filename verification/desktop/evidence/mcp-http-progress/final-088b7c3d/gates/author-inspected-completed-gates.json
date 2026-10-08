@@ -1,0 +1,52 @@
+[
+  {
+    "name": "fmt",
+    "exit": 0,
+    "raw_log_sha256_verified": true
+  },
+  {
+    "name": "clippy",
+    "exit": 0,
+    "raw_log_sha256_verified": true
+  },
+  {
+    "name": "architecture-tests",
+    "exit": 0,
+    "raw_log_sha256_verified": true
+  },
+  {
+    "name": "architecture",
+    "exit": 0,
+    "raw_log_sha256_verified": true
+  },
+  {
+    "name": "http-progress",
+    "exit": 0,
+    "raw_log_sha256_verified": true
+  },
+  {
+    "name": "mcp",
+    "exit": 0,
+    "raw_log_sha256_verified": true
+  },
+  {
+    "name": "six-package-full-suite",
+    "exit": 0,
+    "raw_log_sha256_verified": true
+  },
+  {
+    "name": "sdk-docs",
+    "exit": 0,
+    "raw_log_sha256_verified": true
+  },
+  {
+    "name": "scripted-browser",
+    "exit": 1,
+    "raw_log_sha256_verified": true
+  },
+  {
+    "name": "scripted-browser-rerun",
+    "exit": 0,
+    "raw_log_sha256_verified": true
+  }
+]

@@ -1,0 +1,95 @@
+$ node verification/desktop/scripts/scripted-e2e.mjs -- --channel bundled --evidence /workspace/637-overlap-final-evidence/scripted-browser
+building nessa-server…
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-sdk)
+   Compiling nessa-protocol v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-protocol)
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-server)
+    Finished `dev` profile [unoptimized] target(s) in 1m 03s
+
+mcp-apps-gateway
+starting a dev server of its own on port 38241…
+warmed 472 modules in 4498 ms
+conversation ready: review_rows completed, in 1204 ms
+ok    setup
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    renders [chromium columns]
+ok    hidden [chromium columns]
+ok    allow [chromium columns]
+ok    deny [chromium columns]
+ok    release [chromium columns]
+ok    message [chromium columns]
+ok    context [chromium columns]
+ok    console
+chromium columns: 12064 ms
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    renders [webkit columns]
+ok    hidden [webkit columns]
+ok    allow [webkit columns]
+ok    deny [webkit columns]
+ok    release [webkit columns]
+ok    message [webkit columns]
+ok    context [webkit columns]
+webkit columns: 13702 ms
+wrote /workspace/637-overlap-final-evidence/scripted-browser/mcp-apps-gateway/result.json
+mcp-apps-gateway: 16/16 held
+
+gateway-window
+starting a dev server of its own on port 39893…
+warmed 472 modules in 3792 ms
+conversation ready in 1195 ms
+ok    setup
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    handshake [chromium columns]
+ok    lists [chromium columns]
+ok    opens [chromium columns]
+ok    live [chromium columns]
+ok    apps [chromium columns]
+ok    handshakes [chromium columns]
+FAIL  console [chromium columns]
+        - requestfailed: http://127.0.0.1:35501/mcp-resources net::ERR_ABORTED
+chromium columns: 13232 ms
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    handshake [webkit columns]
+ok    lists [webkit columns]
+ok    opens [webkit columns]
+ok    live [webkit columns]
+ok    apps [webkit columns]
+ok    handshakes [webkit columns]
+webkit columns: 16713 ms
+wrote /workspace/637-overlap-final-evidence/scripted-browser/gateway-window/result.json
+gateway-window: 13/14 held
+
+scripted-scenarios
+starting a dev server of its own on port 39765…
+warmed 472 modules in 3849 ms
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    permission [chromium columns]
+ok    allow [chromium columns]
+ok    fail [chromium columns]
+ok    cancel [chromium columns]
+chromium columns: 15605 ms
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    permission [webkit columns]
+ok    allow [webkit columns]
+ok    fail [webkit columns]
+ok    cancel [webkit columns]
+webkit columns: 16442 ms
+wrote /workspace/637-overlap-final-evidence/scripted-browser/scripted-scenarios/result.json
+scripted-scenarios: 8/8 held
+
+Verdict: fail
+
+| Check | Chromium | WebKit |
+| --- | --- | --- |
+| mcp-apps-gateway | pass | pass |
+| gateway-window | fail | pass |
+| scripted-scenarios | pass | pass |
+
+Relevant log lines:
+
+- console: requestfailed: http://127.0.0.1:38241/browser/check net::ERR_ABORTED (aborted after a 204 response, #485) (harmless)
+- console chromium: requestfailed: http://127.0.0.1:35501/mcp-resources net::ERR_ABORTED
+- 2026-10-08T07:14:46.284313Z ERROR nessa_server::conversation::application::service: conversation agent opening failed conversation_id=ec748641-8aa7-4be5-8759-794f0c770f8c error=agent: Unsupported("provider does not support restoring a closed session")
+- 2026-10-08T07:15:02.751922Z ERROR nessa_server::conversation::application::service: conversation agent opening failed conversation_id=f87de8c2-f823-4666-b39e-21b22c871967 error=agent: Unsupported("provider does not support restoring a closed session")
+{"verdict":"fail","evidence":"/workspace/637-overlap-final-evidence/scripted-browser","summary":"/workspace/637-overlap-final-evidence/scripted-browser/pr-summary.md"}
+[ELIFECYCLE] Command failed with exit code 1.
+verification init reaped orphan descendants: 19

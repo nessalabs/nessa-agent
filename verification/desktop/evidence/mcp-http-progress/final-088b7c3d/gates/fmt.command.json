@@ -1,0 +1,1 @@
+["cargo", "fmt", "-p", "nessa-local-storage", "-p", "nessa-auth", "-p", "nessa-server", "-p", "nessa-protocol", "-p", "nessa-client-core", "-p", "nessa-sdk", "--", "--check"]

@@ -1,0 +1,18 @@
+{
+  "rendered_head": "a2fdb80f14d186614ec63d245936cf4ad4c5df94",
+  "current_head": "088b7c3d1db5adc31b3631bd976b5c252595bfef",
+  "diagram_count": 8,
+  "diagram_source_sha256": [
+    "c746eb29c16d4fae32dadbc92bfef5fa9e867e5acd3b0159eb15012191fb39d4",
+    "4af81bc254e47d5987c5bb6f93161c7a554a11829d05c8102e3a14b2745127e2",
+    "4da07414d36546aa33371167496c2ff6667863ce6f78ddda8b76c1a5afb09b3b",
+    "82934a4c9fdcf9787979a078e0b4532a6bdc225624c3b89d56f970ae4f82ac57",
+    "801dd7ef6808f79b5f025af33f1d435d40e4786d8b7e1b21bf57b6e055860204",
+    "d1b0b1115f80c7ee1a6730eb0e9344de0ff9df2aa6dcd45a21df79352c0e891f",
+    "c6a1bf8bd47733c2e9d9f76cb2ea7d8573c758136f557f501ebaeabc2a25682f",
+    "66ee0f980e308e73f9caf65c3f5db1577ea83425f308eb3f68b72143eba6878f"
+  ],
+  "source_blocks_exactly_equal": true,
+  "actual_render_results": "/tmp/637-canonical-doc-render-a2fdb80f/results.json",
+  "scope": "Diagram source equivalence only; full ADR text changed J19 contract, not these diagrams"
+}

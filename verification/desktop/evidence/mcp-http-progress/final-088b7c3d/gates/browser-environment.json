@@ -1,0 +1,12 @@
+{
+  "head": "088b7c3d1db5adc31b3631bd976b5c252595bfef",
+  "binary": "/workspace/637-cargo-target/debug/nessa",
+  "binary_sha256": "7067662938797293c50bcb776a1361c2b6894e7f2984429c1a2e1eae77410d4b",
+  "binary_mtime": 1791443597.2978477,
+  "binary_origin": "Supported currenthead scripted umbrella cargo build -p nessa-server with exclusive CARGO_TARGET_DIR, succeeded; MCP_LIVE_NESSA points at this output",
+  "ui_pin": "1f22c0467f935b9f3fcac8a0340c96e8d0c31439",
+  "ui_actual": "1f22c0467f935b9f3fcac8a0340c96e8d0c31439",
+  "libgles2": "/tmp/637-browser-libs/extracted/usr/lib/x86_64-linux-gnu/libGLESv2.so.2.1.0",
+  "libgles2_sha256": "3d07baa9b15672660df7e19f068499310f5922b238991daaf2cefa704d2bb7ef",
+  "host_preflight": "Playwright missingDLOPENLibraries checks system ldconfig cache, ignores local LD_LIBRARY_PATH; local library actually loads. Cache-only preflight skipped, no browser assertion relaxed. Real Chromium/WebKitchecks execute."
+}

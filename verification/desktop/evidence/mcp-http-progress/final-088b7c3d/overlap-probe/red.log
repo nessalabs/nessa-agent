@@ -1,0 +1,22 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-sdk)
+    Finished `test` profile [unoptimized] target(s) in 56.45s
+     Running unittests src/lib.rs (/workspace/637-cargo-target/debug/deps/nessa_sdk-3d68afc9996ff363)
+
+running 1 test
+test infrastructure::mcp::http::shutdown_tests::j19_duplicate_shutdown_fences_effects_after_cleanup_claim ... FAILED
+
+failures:
+
+---- infrastructure::mcp::http::shutdown_tests::j19_duplicate_shutdown_fences_effects_after_cleanup_claim stdout ----
+
+thread 'infrastructure::mcp::http::shutdown_tests::j19_duplicate_shutdown_fences_effects_after_cleanup_claim' (735792) panicked at crates/nessa-sdk/src/infrastructure/mcp/../../../tests/infrastructure/mcp/http_shutdown.rs:54:5:
+assertion failed: matches!(publication, Err(McpError::Closed))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    infrastructure::mcp::http::shutdown_tests::j19_duplicate_shutdown_fences_effects_after_cleanup_claim
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1074 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-sdk --lib`

@@ -1,0 +1,643 @@
+{
+  "source_head": "088b7c3d1db5adc31b3631bd976b5c252595bfef",
+  "base": "aa774e05a0c9d127ba9cab78a7068cc7b56e8388",
+  "status": "All local required gates and fresh two independent reviews complete; known P2 #665 explicitly deferred; current hosted Windows/aggregate pending at publication. Earlier failures retained.",
+  "earlier_17_pair_evidence": "../final-a2fdb80f/probes",
+  "entries": [
+    {
+      "path": "gates/architecture-tests.log",
+      "sha256": "b8a0d16f54278c7b7ea401d15f6ae9d26df1d3805d6a9b8d22bb744ddd7a97d3"
+    },
+    {
+      "path": "gates/clippy.command.json",
+      "sha256": "fb144e29d416bddeb4d8ad2e4efc700be283cae528b360232d684d1279f21167"
+    },
+    {
+      "path": "gates/http-progress.log",
+      "sha256": "b9d40d857a1f5bee984315069b137caff4e1e9f40b4f31b73a7aafc4cc3044fe"
+    },
+    {
+      "path": "gates/scripted-browser-rerun.log",
+      "sha256": "347f1436d60df636c1f73c3202c31f553531ea0c8b3f880002b503ef0b645f7f"
+    },
+    {
+      "path": "gates/review-protocol-final.md",
+      "sha256": "bd8a4248a4b39b0ef05a1b5edd6b66e904ecaa32a710cabbca578423dd7577d8"
+    },
+    {
+      "path": "gates/scripted-browser.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "path": "gates/six-package-full-suite.command.json",
+      "sha256": "435aa8c3ca636c42ac5d1415469d6c7df0bcc88846e88deafed812ffbab3f7fb"
+    },
+    {
+      "path": "gates/six-package-full-suite.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "gates/canonical-diagram-source-equivalence.json",
+      "sha256": "74998a1f38ea1064cf8277ddf97f917523ae0c4f4c7732381636fc797e4dc4a5"
+    },
+    {
+      "path": "gates/review-lifecycle-final.md",
+      "sha256": "0fb34825b19a901b4c63600025de57cc523214e9eed3e65ffbc12221242c9c0d"
+    },
+    {
+      "path": "gates/mermaid-source-equivalence.json",
+      "sha256": "135f839878e24cad4a47f3d1d65cdb7a17152b4d94582881e9e1b98f5c4811f3"
+    },
+    {
+      "path": "gates/architecture.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "gates/scripted-browser-rerun.command.json",
+      "sha256": "bf3dc193b8151c63ade991c042da90760527e659e9c5583144be08d29d4ebfc5"
+    },
+    {
+      "path": "gates/scripted-browser.command.json",
+      "sha256": "b7bd321a75917a8cadcd1a87602cf38f6398d3adc23a4642df7d763b5c537b2e"
+    },
+    {
+      "path": "gates/clippy.log",
+      "sha256": "7933cd4346abe6c4bf7e2f9cbfd3377ca7c5f3c11e34e5aa09530d07b24f2a07"
+    },
+    {
+      "path": "gates/sdk-docs.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "gates/scripted-browser.log",
+      "sha256": "2cbb0aa1d3f4c28844d6ed56ad7c892e0487ee49c1179b6422839c73802f72a0"
+    },
+    {
+      "path": "gates/fmt.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "gates/mcp.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "gates/browser-environment.json",
+      "sha256": "da10953f01e09c815377b857313f9ead32ab2c47bbe3d350d232b9a2a7ae0634"
+    },
+    {
+      "path": "gates/assembled-tree-identity.json",
+      "sha256": "fbf99151c626af08e26fd7dff2b10ba56f400cc1309b0b0d9a67e65ac760daf2"
+    },
+    {
+      "path": "gates/self-review.json",
+      "sha256": "d81a3ff9e876ae1008de452bfa7bfe869ea65731768bb6f77315e455db3237cf"
+    },
+    {
+      "path": "gates/mcp.command.json",
+      "sha256": "a617e8887c13ffa03ebe562213d3d0a3319a830c550761b9ffd0f08368fc7333"
+    },
+    {
+      "path": "gates/http-progress.command.json",
+      "sha256": "cafd828447d3221b59eea91d4a9a713d5b7aa37db83daec51b766af93036b6c7"
+    },
+    {
+      "path": "gates/author-inspected-completed-gates.json",
+      "sha256": "be29c9039174f6bedf1ea7339b74bb0bb34105a6487b3e8626b3be740770b945"
+    },
+    {
+      "path": "gates/fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "gates/architecture.command.json",
+      "sha256": "98a2af81defc0306c3f81fa0851956f2a5385e71d5a920af4a16faf575d45fe7"
+    },
+    {
+      "path": "gates/browser-results-verified.json",
+      "sha256": "7c62a0636beb3f4e8e13b838ae9891cd99913a202d3c37c34f6a2b18ddd2a4c6"
+    },
+    {
+      "path": "gates/http-progress.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "gates/sdk-docs.command.json",
+      "sha256": "5aee479dd687c2b8575a36fb8f7963cb2ac4e440b9d00a030225fdd586c19c81"
+    },
+    {
+      "path": "gates/scripted-browser-rerun.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "gates/six-package-full-suite.log",
+      "sha256": "2c28fba10b2bb0bacd1ddb972e1eeb942d75b15e455137b250025337c6055a83"
+    },
+    {
+      "path": "gates/clippy.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "gates/architecture-tests.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "gates/fmt.command.json",
+      "sha256": "0fdef87d62aa423b0709c951c248cde0dbe9575a0c3553f68194def17ff0522e"
+    },
+    {
+      "path": "gates/manifest.json",
+      "sha256": "9963d87210eb4a06c2935dbe62747a2b5f4feb7cc28019bda60b085da216139e"
+    },
+    {
+      "path": "gates/root-inspected-current-gates.json",
+      "sha256": "a41a8309a62ddadebd317ceb3c33bc609d95ef9099789cad316d847e1c99ca51"
+    },
+    {
+      "path": "gates/architecture.log",
+      "sha256": "2a2462c6729eeb5ecb05a41a9fb9ed10f97b1bdb34772bac68dd984b7907a5d8"
+    },
+    {
+      "path": "gates/sdk-docs.log",
+      "sha256": "af0e2eefed9ddee415ba050622b458eef601376763c90cf73b5ab15fcb33782d"
+    },
+    {
+      "path": "gates/architecture-tests.command.json",
+      "sha256": "20f4092e867c1f6bddfb9520e37af0995c5f781e3594422dc02029397a44bce1"
+    },
+    {
+      "path": "gates/mcp.log",
+      "sha256": "0761f71266d1fc959ddc5293d9b4ef81959139b9002bc96537d0920d00d12bdb"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/pr-summary.md",
+      "sha256": "595ae8ecedfca1a09bd9df3174a76422819228c13d40172ba48bca709b32c7eb"
+    },
+    {
+      "path": "gates/scripted-browser/pr-summary.md",
+      "sha256": "f5d0b1eecf46b34aad5e5bbd850d2b12bf6f5cdf63fb389eb7dce1b62bccd5ef"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/mcp-apps-gateway/mcp.jsonl",
+      "sha256": "479f20f0e8bc6c8a7efcaf7ac05c5be3e007f7a2ef938129d8403f16e001268a"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/mcp-apps-gateway/acp.jsonl",
+      "sha256": "afe7ce45d95c67a2102fa60bc2577c52d14e7cbdd3130b582e98baa834fb316e"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/mcp-apps-gateway/view.json",
+      "sha256": "de052d51bfb7fa326c24a77b3aaf84b537d9899a07ce5009220221def26cc759"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/mcp-apps-gateway/gateway.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/mcp-apps-gateway/result.json",
+      "sha256": "2de83a6b37e87a1a3db07fe82c5ff4cbfb3cfd740cddac90506ccc040ae732d1"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/scripted-scenarios/mcp.jsonl",
+      "sha256": "5e0ad65a3fc8b1badb4ea3033049ff1389c8ec6e1fbb521714700239fe87ccfc"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/scripted-scenarios/acp.jsonl",
+      "sha256": "aac280ba80512adae7af18c7c1ed1ce719c4da0c71f4dd3820c0e7f55a44037a"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/scripted-scenarios/gateway.log",
+      "sha256": "b7df264a4d067678fa57e99c2f277804adefdde45245197c11d9629712912ce4"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/scripted-scenarios/result.json",
+      "sha256": "d660397a4c6ee8e0746e39b2f96a33e023246c6b0a85b09aff1d233ce534bec6"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/gateway-window/mcp.jsonl",
+      "sha256": "3d021e58da76bfb3bf886a620e674f4f88f011b264b75e573dadc31ded9673b6"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/gateway-window/acp.jsonl",
+      "sha256": "c55798121e05b01a62e798fdccea68331b420a7161fec94bf5afc8d0430b50a5"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/gateway-window/view.json",
+      "sha256": "1f4194c0472aa434bf234ed48cf899875c6cf0278a365eda74666b748186f846"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/gateway-window/gateway.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/gateway-window/result.json",
+      "sha256": "fecde9766b7501d544c3ba54c627bc39e4917889341f1381b703c5243796f968"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/mcp-apps-gateway/shots/mcp-apps-gateway-webkit-columns-message.png",
+      "sha256": "c3998b7d89b3fc8f3fd80dbc3d84ea274cc01feffc1df6463daf639d0a2a6ae4"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/mcp-apps-gateway/shots/mcp-apps-gateway-chromium-columns-message.png",
+      "sha256": "114d40984c952be3a936bc3d13a84ca28f29dfa3bc4b5a4d68934d65c2b83195"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/scripted-scenarios/views/webkit-columns-cancel.json",
+      "sha256": "5f36700a2b79c4b28f4ca8f20b784800aa9cb4ea119f2280de17024a117f5017"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/scripted-scenarios/views/chromium-columns-fail.json",
+      "sha256": "9b1349ef24746ae5e5ea31e0d81c3ca55166a2789d9cad561dbbbda3c4c5a440"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/scripted-scenarios/views/chromium-columns-permission.json",
+      "sha256": "fd2d3b1ad99d4f3fc7a2865fc2272051000571b94fbd9b154129bf7680e51f99"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/scripted-scenarios/views/webkit-columns-fail.json",
+      "sha256": "fd9bbcf4cf35f134b5a76fdfd5d0ec96bdbde4e11c8d51619cdc48c179e7c82f"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/scripted-scenarios/views/webkit-columns-allow.json",
+      "sha256": "e1e40d0776056ef68f9fb4f2d0ef9821be582301df74b6351ec09f6f8761bd84"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/scripted-scenarios/views/webkit-columns-permission.json",
+      "sha256": "451ba276d260b36ec8df98f2f5bebee44f12457a889d9baacd975a1e965a55f0"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/scripted-scenarios/views/chromium-columns-cancel.json",
+      "sha256": "742bf06727af1eb82521f03871bb875f0cf66c3d086b30bce0364dc7835cab7a"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/scripted-scenarios/views/chromium-columns-allow.json",
+      "sha256": "77d7abdb3592a21514b4b47fda457ea140cde0b1eaa4c1a016419eb6c2517ddd"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/gateway-window/shots/gateway-window-chromium-columns-apps.png",
+      "sha256": "8c6bae49bda894974c8c8c0902c673f4afbd8a239a3c8b16603cb3323b990bf0"
+    },
+    {
+      "path": "gates/scripted-browser-rerun/gateway-window/shots/gateway-window-webkit-columns-apps.png",
+      "sha256": "d7836108b3d69c9830432b419ecd6241059e2ab7330d396ce13ce7222c567be4"
+    },
+    {
+      "path": "gates/scripted-browser/mcp-apps-gateway/mcp.jsonl",
+      "sha256": "bdb2436ac20fb4c9d0bcac879a77dc1b1593f1f6beecbc9ca1d6001cbba2a50e"
+    },
+    {
+      "path": "gates/scripted-browser/mcp-apps-gateway/acp.jsonl",
+      "sha256": "544d3ed8c76e0153c89160e0b588c90d35fd84149a17c6c861e923d862db98b0"
+    },
+    {
+      "path": "gates/scripted-browser/mcp-apps-gateway/view.json",
+      "sha256": "f35cf8d927eb16afda0b893cb881d392aa1ab20372c6506df516c57d189d865e"
+    },
+    {
+      "path": "gates/scripted-browser/mcp-apps-gateway/gateway.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "gates/scripted-browser/mcp-apps-gateway/result.json",
+      "sha256": "bea158eb96d706e8e379dfb767d954b74d588fbd02460a0aba196695292930d9"
+    },
+    {
+      "path": "gates/scripted-browser/scripted-scenarios/mcp.jsonl",
+      "sha256": "134f67812e64576681c6ce1a6771646d5a8e0c6ac90cfae4e1e0583027dc9873"
+    },
+    {
+      "path": "gates/scripted-browser/scripted-scenarios/acp.jsonl",
+      "sha256": "58fcdd373872729593ca8c87bbc46f56a2f958639b02e131aa1f87aaea7c9ed9"
+    },
+    {
+      "path": "gates/scripted-browser/scripted-scenarios/gateway.log",
+      "sha256": "380b06108a2cb6aef6d57eb295d3b64787f372709f9901234f8f7598c67f4375"
+    },
+    {
+      "path": "gates/scripted-browser/scripted-scenarios/result.json",
+      "sha256": "dde96645848100eeb561b2ebef52016070ea6cbe3d4007cd6a85cb717898f86a"
+    },
+    {
+      "path": "gates/scripted-browser/gateway-window/mcp.jsonl",
+      "sha256": "30cfc4ff0b4e30f5c1dd2e7234e3dc697cfdc794558e0ea30f2d015da91eef46"
+    },
+    {
+      "path": "gates/scripted-browser/gateway-window/acp.jsonl",
+      "sha256": "54d19e0af3cdac896163686af65cfb15c3793cc2c9b315f72bab2aa9df0c4d9f"
+    },
+    {
+      "path": "gates/scripted-browser/gateway-window/view.json",
+      "sha256": "61d62a6bb2b4b975241e73c20e60721b0f26085c686f37b10dd685aefdc92b8f"
+    },
+    {
+      "path": "gates/scripted-browser/gateway-window/gateway.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "gates/scripted-browser/gateway-window/result.json",
+      "sha256": "d4aa5952eb7eedfe15c4479fcdb91bb7b2a8fb6ab772ba5430f1e8d89a6711b3"
+    },
+    {
+      "path": "gates/scripted-browser/mcp-apps-gateway/shots/mcp-apps-gateway-webkit-columns-message.png",
+      "sha256": "6dde74b698f49ec558f67cbaed12003da4a5540285e637b4b02373b3383a7699"
+    },
+    {
+      "path": "gates/scripted-browser/mcp-apps-gateway/shots/mcp-apps-gateway-chromium-columns-message.png",
+      "sha256": "0bdd72263dc89751d3775ac1f76f9471c0b1977acd66af40ef22dacb968df218"
+    },
+    {
+      "path": "gates/scripted-browser/scripted-scenarios/views/webkit-columns-cancel.json",
+      "sha256": "441fb77d26437097f2f07f5149da082d687e2239b436214ef809f819ccdd7929"
+    },
+    {
+      "path": "gates/scripted-browser/scripted-scenarios/views/chromium-columns-fail.json",
+      "sha256": "9485d9e1a98d3d19fd006b9f37e59beb8260aba0ee681902a6c5503f639f4ae9"
+    },
+    {
+      "path": "gates/scripted-browser/scripted-scenarios/views/chromium-columns-permission.json",
+      "sha256": "cd87bb6d54502dae378c0417cdb83b31c62cfaeeade2453893ee57ee6a759a76"
+    },
+    {
+      "path": "gates/scripted-browser/scripted-scenarios/views/webkit-columns-fail.json",
+      "sha256": "3fd9ea00ad856d5dc42691bdfc04a65669b7d2f123a6d6a495cc2468d4b0afdc"
+    },
+    {
+      "path": "gates/scripted-browser/scripted-scenarios/views/webkit-columns-allow.json",
+      "sha256": "1ebeb106c115adc5a80f6b2397ac12928e167566e57dd78f09ffbb4c368e174c"
+    },
+    {
+      "path": "gates/scripted-browser/scripted-scenarios/views/webkit-columns-permission.json",
+      "sha256": "11d02c9ad6c87747dc0320c20776581686513bd6f3bb4abc5b28aae7a005b460"
+    },
+    {
+      "path": "gates/scripted-browser/scripted-scenarios/views/chromium-columns-cancel.json",
+      "sha256": "f9567a38d1e0ddf252ab60b6b938c4b1a2bb69cff8a711bbd95426ee46f25afc"
+    },
+    {
+      "path": "gates/scripted-browser/scripted-scenarios/views/chromium-columns-allow.json",
+      "sha256": "21b561fb13f4bfb441331158632d3bb7ff642bbf4f3e72b049aea69d42d2e4b5"
+    },
+    {
+      "path": "gates/scripted-browser/gateway-window/shots/gateway-window-chromium-columns-apps.png",
+      "sha256": "578d39d71bb6e4d60b4d30264f18673efb5c7e2e0b7ff96e710e7460b895475f"
+    },
+    {
+      "path": "gates/scripted-browser/gateway-window/shots/gateway-window-webkit-columns-apps.png",
+      "sha256": "2cdd6b938c9a805109ceb93014d133126c2aaa611621bf4123fea335905a8630"
+    },
+    {
+      "path": "overlap-probe/red.exit",
+      "sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+    },
+    {
+      "path": "overlap-probe/mutant-http.rs",
+      "sha256": "8d88515157753aac12d31b9e048828cb72aba11148a49bc5f16bb67d1eec1d79"
+    },
+    {
+      "path": "overlap-probe/test-source.rs",
+      "sha256": "f90556fbff3ae3cf3500442882c1f9410b6f1bc288926bdca7310ae379aeafb8"
+    },
+    {
+      "path": "overlap-probe/all-mcp-green.log",
+      "sha256": "1ea967c98965816177188e7d2a8119295236ea6ffad5f008e1c252f292c02ebc"
+    },
+    {
+      "path": "overlap-probe/green.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "overlap-probe/green.log",
+      "sha256": "12770b4481ae35f9f5fd7328b87317975a0a8b55ef3f4fa9109cd1f66aab86a7"
+    },
+    {
+      "path": "overlap-probe/red.log",
+      "sha256": "e5a1d6acde0438872f0762e243a2466ac6ffacadf7ec06b958d5dd6e09b1c032"
+    },
+    {
+      "path": "overlap-probe/all-mcp-green.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "overlap-probe/root-inspected-pair.json",
+      "sha256": "16205a93a4cb8a3c6caffa8e3ef176a4a53d6424844b951b55cc5688bb842148"
+    },
+    {
+      "path": "overlap-probe/fixed-http.rs",
+      "sha256": "b9b8fd0fd676b2e3eb06f4246cffaf4cbd1dc56b23883a51f41b6117d3479374"
+    },
+    {
+      "path": "overlap-probe/manifest.json",
+      "sha256": "4f38eb6eed1670a3d8e0d789901d6793adbe4077d7ab6e08b88c976f10cc8c7e"
+    },
+    {
+      "path": "description-render/results.json",
+      "sha256": "804a8175ce1265c483bdeeabae0df743097a7b5626388cf0f952523123547b55"
+    },
+    {
+      "path": "description-render/diagram-2.svg",
+      "sha256": "cbbd8e9b4f87f856828bfdf7028a4e457156a2b755441af5df4c880da1ae5eef"
+    },
+    {
+      "path": "description-render/diagram-1.svg",
+      "sha256": "f24528ab69c98151d749920cc43c23dfa224e9c874ed4159342af8ca11b8da72"
+    },
+    {
+      "path": "description-render/diagram-0.svg",
+      "sha256": "6f461d3be3f25050a6d068c53a7a1d9752ca61c116c0e3e82ece7ab19b02ef53"
+    },
+    {
+      "path": "description-render/update.json",
+      "sha256": "fee6ad276b7710f9f8daebd2830955d2b930ccbfe395d8347ba4265fcfd07288"
+    },
+    {
+      "path": "description-render/description.md",
+      "sha256": "d984813bc32a8d1fa68bb19a5642b68bf7c2feffb9cbadeb7feb8201adb4e660"
+    }
+  ],
+  "omitted": [
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/mcp-apps-gateway/shots/mcp-apps-gateway-chromium-columns.png",
+      "size": 1482657,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/mcp-apps-gateway/shots/mcp-apps-gateway-webkit-columns.png",
+      "size": 2488131,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/scripted-scenarios/shots/scripted-scenarios-webkit-columns-permission.png",
+      "size": 2564593,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/scripted-scenarios/shots/scripted-scenarios-chromium-columns-fail.png",
+      "size": 1380254,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/scripted-scenarios/shots/scripted-scenarios-webkit-columns-allow.png",
+      "size": 2492987,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/scripted-scenarios/shots/scripted-scenarios-webkit-columns-fail.png",
+      "size": 2540180,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/scripted-scenarios/shots/scripted-scenarios-chromium-columns-permission.png",
+      "size": 1583262,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/scripted-scenarios/shots/scripted-scenarios-chromium-columns-cancel.png",
+      "size": 1365581,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/scripted-scenarios/shots/scripted-scenarios-chromium-columns-allow.png",
+      "size": 1366091,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/scripted-scenarios/shots/scripted-scenarios-webkit-columns-cancel.png",
+      "size": 2554253,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/gateway-window/shots/gateway-window-chromium-columns-handshake.png",
+      "size": 1380910,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/gateway-window/shots/gateway-window-webkit-columns-opens.png",
+      "size": 2554832,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/gateway-window/shots/gateway-window-webkit-columns-handshake.png",
+      "size": 2477763,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/gateway-window/shots/gateway-window-webkit-columns-lists.png",
+      "size": 2499968,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/gateway-window/shots/gateway-window-webkit-columns-live.png",
+      "size": 2615362,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/gateway-window/shots/gateway-window-chromium-columns-opens.png",
+      "size": 1385758,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/gateway-window/shots/gateway-window-chromium-columns-lists.png",
+      "size": 1382980,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser-rerun/gateway-window/shots/gateway-window-chromium-columns-live.png",
+      "size": 1421533,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/mcp-apps-gateway/shots/mcp-apps-gateway-chromium-columns.png",
+      "size": 1482476,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/mcp-apps-gateway/shots/mcp-apps-gateway-webkit-columns.png",
+      "size": 2439145,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/scripted-scenarios/shots/scripted-scenarios-webkit-columns-permission.png",
+      "size": 2567545,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/scripted-scenarios/shots/scripted-scenarios-chromium-columns-fail.png",
+      "size": 1378979,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/scripted-scenarios/shots/scripted-scenarios-webkit-columns-allow.png",
+      "size": 2493001,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/scripted-scenarios/shots/scripted-scenarios-webkit-columns-fail.png",
+      "size": 2541018,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/scripted-scenarios/shots/scripted-scenarios-chromium-columns-permission.png",
+      "size": 1583657,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/scripted-scenarios/shots/scripted-scenarios-chromium-columns-cancel.png",
+      "size": 1369571,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/scripted-scenarios/shots/scripted-scenarios-chromium-columns-allow.png",
+      "size": 1363239,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/scripted-scenarios/shots/scripted-scenarios-webkit-columns-cancel.png",
+      "size": 2556247,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/gateway-window/shots/gateway-window-chromium-columns-handshake.png",
+      "size": 1383804,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/gateway-window/shots/gateway-window-webkit-columns-opens.png",
+      "size": 2560878,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/gateway-window/shots/gateway-window-webkit-columns-handshake.png",
+      "size": 2479339,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/gateway-window/shots/gateway-window-webkit-columns-lists.png",
+      "size": 2504299,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/gateway-window/shots/gateway-window-webkit-columns-live.png",
+      "size": 2618358,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/gateway-window/shots/gateway-window-chromium-columns-opens.png",
+      "size": 1386655,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/gateway-window/shots/gateway-window-chromium-columns-lists.png",
+      "size": 1387215,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-final-evidence/scripted-browser/gateway-window/shots/gateway-window-chromium-columns-live.png",
+      "size": 1422970,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    },
+    {
+      "path": "/workspace/637-overlap-probe-evidence/fixed-sdk-test-binary",
+      "size": 76321856,
+      "reason": "Compiled executable retained locally; source/log outcomes and SHA published"
+    }
+  ]
+}

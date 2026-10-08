@@ -1,0 +1,21 @@
+{
+  "head": "088b7c3d1db5adc31b3631bd976b5c252595bfef",
+  "raw_runtime_and_source_identity_verified": true,
+  "results": {
+    "red": {
+      "exit": 101,
+      "sha256": "e5a1d6acde0438872f0762e243a2466ac6ffacadf7ec06b958d5dd6e09b1c032",
+      "result": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1074 filtered out; finished in 0.00s"
+      ]
+    },
+    "green": {
+      "exit": 0,
+      "sha256": "12770b4481ae35f9f5fd7328b87317975a0a8b55ef3f4fa9109cd1f66aab86a7",
+      "result": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1074 filtered out; finished in 0.00s"
+      ]
+    }
+  },
+  "excluded": "Initial overescaped fixture/compiler failure excluded; only exact final fixture mutated101/restored0 counted"
+}

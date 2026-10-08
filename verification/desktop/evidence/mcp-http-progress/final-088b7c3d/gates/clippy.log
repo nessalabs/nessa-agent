@@ -1,0 +1,5 @@
+    Checking nessa-sdk v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-sdk)
+    Checking nessa-protocol v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-protocol)
+    Checking nessa-client-core v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-client-core)
+    Checking nessa-server v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-server)
+    Finished `dev` profile [unoptimized] target(s) in 1m 40s

@@ -1,0 +1,29 @@
+{
+  "mcp-apps-gateway": {
+    "passed": 16,
+    "total": 16,
+    "engines": [
+      "chromium",
+      "webkit"
+    ],
+    "result_sha256": "2de83a6b37e87a1a3db07fe82c5ff4cbfb3cfd740cddac90506ccc040ae732d1"
+  },
+  "gateway-window": {
+    "passed": 13,
+    "total": 13,
+    "engines": [
+      "chromium",
+      "webkit"
+    ],
+    "result_sha256": "fecde9766b7501d544c3ba54c627bc39e4917889341f1381b703c5243796f968"
+  },
+  "scripted-scenarios": {
+    "passed": 8,
+    "total": 8,
+    "engines": [
+      "chromium",
+      "webkit"
+    ],
+    "result_sha256": "d660397a4c6ee8e0746e39b2f96a33e023246c6b0a85b09aff1d233ce534bec6"
+  }
+}

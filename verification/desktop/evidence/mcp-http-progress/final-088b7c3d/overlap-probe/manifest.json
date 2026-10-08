@@ -1,0 +1,17 @@
+{
+  "rule": "Every shutdown caller fences under readers lock before duplicate early return",
+  "red_exit": 101,
+  "green_exit": 0,
+  "runtime_red": true,
+  "source_restored": true,
+  "fixed_source_sha256": "b9b8fd0fd676b2e3eb06f4246cffaf4cbd1dc56b23883a51f41b6117d3479374",
+  "mutated_source_sha256": "8d88515157753aac12d31b9e048828cb72aba11148a49bc5f16bb67d1eec1d79",
+  "test_source_sha256": "f90556fbff3ae3cf3500442882c1f9410b6f1bc288926bdca7310ae379aeafb8",
+  "fixed_binary_sha256": "d91c3a9e8a3eadc620b5b766d4dc43ee222f2c9f6a485b7a7c33edefb88e1d9b",
+  "red_log_sha256": "e5a1d6acde0438872f0762e243a2466ac6ffacadf7ec06b958d5dd6e09b1c032",
+  "green_log_sha256": "12770b4481ae35f9f5fd7328b87317975a0a8b55ef3f4fa9109cd1f66aab86a7",
+  "prior_attempts_excluded": "Overescaped notification first RED does not provePOSTadmission; E0599 Vec.get.is_none compilerfailure is notruntimeRED.",
+  "fixed_head": "088b7c3d1db5adc31b3631bd976b5c252595bfef",
+  "base": "aa774e05a0c9d127ba9cab78a7068cc7b56e8388",
+  "independently_rechecked_numeric_and_raw_runtime_results": true
+}
