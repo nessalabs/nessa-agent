@@ -235,12 +235,7 @@ impl OwnershipGraph {
         }
         fact.acknowledgement = fact.acknowledgement.observe_acknowledgement(outcome);
         if fact.acknowledgement == EvidenceFact::Acknowledged {
-            let owned: Vec<_> = self
-                .lifetimes
-                .keys()
-                .filter(|id| self.close_owner(id).as_ref() == Some(root))
-                .cloned()
-                .collect();
+            let owned: Vec<_> = self.owned_lifetimes(root).cloned().collect();
             for id in owned {
                 self.lifetimes
                     .get_mut(&id)
@@ -350,6 +345,15 @@ impl OwnershipGraph {
         let mut expected = row.clone();
         refresh_summary(&mut expected);
         expected.physical == row.physical && expected.evidence == row.evidence
+    }
+
+    pub(super) fn owned_lifetimes<'a>(
+        &'a self,
+        root: &'a AgentLifetimeId,
+    ) -> impl Iterator<Item = &'a AgentLifetimeId> {
+        self.lifetimes
+            .keys()
+            .filter(move |id| self.close_owner(id).as_ref() == Some(root))
     }
 
     pub(super) fn completion_ready(&self, root: &AgentLifetimeId) -> bool {

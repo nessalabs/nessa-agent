@@ -549,7 +549,7 @@ fn cyclic_restored_ancestry_keeps_its_first_refusal_and_returns_with_completion(
         assert_eq!(restored.snapshot(), history);
         assert_eq!(
             restored.open_root(session("late"), life("late"), Initiator::Runtime),
-            Err(OwnershipError::DispatchRefused)
+            Err(OwnershipError::Cycle)
         );
         assert_eq!(restored.snapshot(), history);
         return;

@@ -904,9 +904,14 @@ impl OwnershipGraph {
         if let Some(error) = cascade {
             note_refusal(&mut refusal, error);
         }
+        // Refused ancestry cannot authorize dependent traversal. Keep every
+        // retained row, but preserve the structural refusal before proof checks.
+        let structural_refusal = refusal.is_some();
         for row in snapshot.settlements {
             let key = (row.close_lifetime.clone(), row.target.clone());
-            if graph.settlements.contains_key(&key) || !graph.valid_settlement(&row) {
+            if graph.settlements.contains_key(&key)
+                || (!structural_refusal && !graph.valid_settlement(&row))
+            {
                 note_refusal(&mut refusal, OwnershipError::Contradictory);
             }
             graph.settlements.insert(key, Settlement { row });
@@ -914,12 +919,15 @@ impl OwnershipGraph {
         for row in snapshot.close_completions {
             let root = row.close_lifetime.clone();
             if graph.close_completions.contains_key(&root)
-                || row.record.close_detail != Some(CloseEvidenceDetail::Completion)
-                || !graph.valid_record(&root, &root, &row.record)
-                || graph.cascaded_from(&root).is_some()
-                || !graph.completion_ready(&root)
-                || (row.acknowledgement == EvidenceFact::Acknowledged
-                    && graph.lifetime_state(&root) != Some(LifetimeState::Closed))
+                || (!structural_refusal
+                    && (row.record.close_detail != Some(CloseEvidenceDetail::Completion)
+                        || !graph.valid_record(&root, &root, &row.record)
+                        || graph.cascaded_from(&root).is_some()
+                        || !graph.completion_ready(&root)
+                        || (row.acknowledgement == EvidenceFact::Acknowledged
+                            && !graph.owned_lifetimes(&root).all(|id| {
+                                graph.lifetime_state(id) == Some(LifetimeState::Closed)
+                            }))))
             {
                 note_refusal(&mut refusal, OwnershipError::Contradictory);
             }
