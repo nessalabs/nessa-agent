@@ -986,9 +986,10 @@ Admission, recovery, and the inactive-unit cases are described in
 
 The unit runs while its user is signed in: systemd starts it at login and stops
 it with the user's manager after a full logout. Registration does not need
-linger. Keeping the gateway running while logged out does, and Nessa does not
-enable it
-([#217](https://github.com/nessalabs/nessa-agent/issues/217) tracks offering it).
+linger. Linux setup offers linger as an explicit choice and reports only what
+logind confirms
+([ADR 217](../adr/done/217-linux-linger-at-setup.md)). The app does not turn
+linger off.
 
 Updates install the new `.deb` through `pkexec dpkg -i`, which asks for an
 administrator's password. On Linux, `pnpm app:build` builds the `.deb` and

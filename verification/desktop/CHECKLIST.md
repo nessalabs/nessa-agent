@@ -503,10 +503,11 @@ scripts drive the sample plugin the sample workspace registers
 
 ## Subagents
 
-The read-only sample panel (ADR 329, #330, #331): a conversation's widget
-opens a list of the agents it put to work, and one child's conversation.
-The sample fills the retry-budget session only. No composer, no header
-accessory.
+The read-only sample panel (ADR 329, #330, #331, #332): a conversation's
+widget opens a list of the agents it put to work, and one child's
+conversation. The sample fills the retry-budget session only. No composer.
+The same conversation's pane header shows those agents when the preview is
+on.
 
 - [ ] **The card opens a pane beside the conversation**, the list in activity
   order with a closed child called closed, and a child opens on its
@@ -518,6 +519,14 @@ accessory.
   `subagents.mjs --only panel`.
 - [ ] **The list fits a narrow pane in a short window.** _Check:_
   `subagents.mjs --only narrow` (1000 × 560).
+- [ ] **The conversation's header shows its subagents, the busiest first.**
+  Nothing is drawn for a conversation without them, or with the preview off
+  (`subagent-stack.test.tsx`). A click opens the panel beside the
+  conversation. At a narrow width the stack, the header's title and the
+  pane's menu sit in the header without it overflowing and without
+  overlapping, and the title keeps a positive width inside the header.
+  A production Chromium run fails when the open's longest frame exceeds
+  50 ms. _Check:_ `subagents.mjs --only narrow` (1000 × 560).
 
 ## MCP Apps
 
@@ -1284,6 +1293,26 @@ Both cases require zero page errors. The rule is owned by
 `src/onboarding/adapters/agents.ts`; ordering and unit regressions are in the
 [adapter tests](../../src/onboarding/adapters/agents.test.ts) and
 [setup recovery tests](../../src/onboarding/ui/onboarding-readiness-timeout.test.tsx).
+
+### Linux linger at setup
+
+`node verification/desktop/scripts/linux-linger.mjs` drives the real setup UI
+and controller in Chromium and WebKit. The fixture supplies the host's linger
+answer; it does not call logind. After the shortcut, an offer shows the choice
+and does not say the gateway keeps running after logout, and it does not ask
+for an administrator. Accepting shows that sentence only when the answer is
+`enabled`. Declining finishes setup without a call. A refusal and a failure
+name `loginctl enable-linger` and claim nothing. An unsupported host claims
+nothing. An account that is already lingering is reported without a call. Both
+engines require zero page errors and painted controls. The screen is
+[ADR 217](../../docs/adr/done/217-linux-linger-at-setup.md). The live bus is
+`scripts/desktop/check-linux-linger.sh`, for user `lt` only. After the PAM
+login session ends, the user is `lingering`, `user@<uid>` is active, and
+`sleep infinity` is still running. A per-user `systemctl` machine match is
+not that proof: it starts the user manager itself. `terminate-user` stops
+that manager even when the linger file is present, so it is the negative
+control: with linger then disabled, `user@` is inactive and the process is
+gone.
 
 ### Attachment admission races
 

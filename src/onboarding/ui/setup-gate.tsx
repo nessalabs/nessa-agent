@@ -233,6 +233,8 @@ export function SetupGate({
           onChoose={onboarding.choose}
           onConfirm={onboarding.confirm}
           onFinish={onboarding.finish}
+          onAcceptLinger={onboarding.acceptLinger}
+          lingerPending={onboarding.lingerPending}
           onRecheck={onboarding.recheck}
           onRetryGateway={onboarding.retryGatewayStartup}
           gatewayStartup={onboarding.gatewayStartup}

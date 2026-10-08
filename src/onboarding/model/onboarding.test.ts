@@ -12,6 +12,8 @@ import {
   completeOnboarding,
   confirmAgent,
   dismissOnboarding,
+  recordLinger,
+  showLinger,
   isOnboarding,
   isOnboardingCompleted,
   pressSummon,
@@ -134,6 +136,26 @@ describe("first-run setup", () => {
     expect(completeOnboarding(welcome)).toBe(welcome)
     const chosen = chooseAgent(startAgentChoice(withClaudeReady(welcome)), "claude")
     expect(completeOnboarding(chosen)).toBe(chosen)
+  })
+
+  it("offers linger from the shortcut and finishes it with the same agent", () => {
+    const summon = atSummon()
+    const offer = { shown: "offer" as const }
+    const step = showLinger(summon, offer)
+    expect(step.step).toBe("linger")
+    expect(step.linger).toEqual(offer)
+    expect(step.agent).toBe("claude")
+    expect(showLinger(summon, { shown: "not-applicable" })).toBe(summon)
+    const welcome = beginOnboarding()
+    expect(showLinger(welcome, offer)).toBe(welcome)
+    const enabled = recordLinger(step, { shown: "enabled" })
+    expect(enabled.linger?.shown).toBe("enabled")
+    expect(recordLinger(step, { shown: "not-applicable" })).toBe(step)
+    expect(completeOnboarding(enabled)).toEqual({
+      step: "done",
+      outcome: "completed",
+      agent: "claude",
+    })
   })
 
   it("finishes from the summon step with the lesson unlearned", () => {

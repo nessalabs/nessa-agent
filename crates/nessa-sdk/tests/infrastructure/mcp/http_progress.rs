@@ -1,5 +1,7 @@
-//! ADR 392 J1–J20: JSON/initialization progress and replacement cleanup ownership.
-use super::super::connection::{Connection, Outgoing};
+//! ADR 392 J1–J26: JSON/initialization progress and replacement cleanup ownership.
+use super::super::connection::{
+    Connection, Outgoing, OutgoingQueue, Reply, HTTP_CONTROL_RESERVE, OUTGOING_FRAMES,
+};
 use super::super::http::{HttpSession, SendOutcome};
 use super::super::{
     Bearer, HttpBody, HttpExchange, HttpFailure, HttpMethod, HttpRequest, HttpResponse, McpError,
@@ -13,13 +15,50 @@ use crate::infrastructure::clock::{
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
+use std::future::{poll_fn, Future};
+use std::pin::Pin;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
 };
+use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
-use tokio::sync::{mpsc, Notify, Semaphore};
+use tokio::sync::{
+    mpsc::{self, error::TrySendError},
+    Notify, Semaphore,
+};
 use uuid::Uuid;
+
+#[derive(Default)]
+struct ClosingWake {
+    entered: Notify,
+    released: Mutex<bool>,
+    ready: Condvar,
+}
+impl ClosingWake {
+    fn release(&self) {
+        *self.released.lock().unwrap() = true;
+        self.ready.notify_all();
+    }
+}
+impl Wake for ClosingWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.entered.notify_one();
+        let mut released = self.released.lock().unwrap();
+        while !*released {
+            released = self.ready.wait(released).unwrap();
+        }
+    }
+}
+struct ReleaseClosingWake(Arc<ClosingWake>);
+impl Drop for ReleaseClosingWake {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
 
 struct Gate {
     entered: AtomicUsize,
@@ -74,6 +113,7 @@ struct Peer {
     replacement_id: Option<String>,
     ordinary_response_id: Option<String>,
     recovery_exchange_failure: AtomicBool,
+    control_panic: AtomicBool,
 }
 impl Peer {
     fn new() -> Self {
@@ -97,6 +137,7 @@ impl Peer {
             replacement_id: Some("replacement".into()),
             ordinary_response_id: None,
             recovery_exchange_failure: AtomicBool::new(false),
+            control_panic: AtomicBool::new(false),
         }
     }
     async fn observed(&self, predicate: impl Fn(&HttpRequest) -> bool) {
@@ -225,6 +266,10 @@ impl HttpExchange for Peer {
                         if let Some(gate) = gate {
                             gate.enter().await;
                         }
+                        assert!(
+                            !self.control_panic.swap(false, Ordering::SeqCst),
+                            "injected writer exchange panic"
+                        );
                         return Ok(HttpResponse {
                             status,
                             headers: vec![],
@@ -547,7 +592,7 @@ async fn j9_recovery_gate_covers_queued_calls_and_initialized_headers() {
     let peer = Arc::new(peer);
     let (session, _incoming) = transport(peer.clone(), Arc::default());
     let clock = Arc::new(ManualClock::default());
-    let (writer, mut queue) = mpsc::channel(1);
+    let (writer, mut queue) = OutgoingQueue::new(1, 0);
     session.set_writer(writer.clone(), clock.clone());
     initialize(&session).await;
     writer
@@ -608,7 +653,7 @@ async fn j9_expired_queued_handoff_cannot_dispatch_initialized() {
     let peer = Arc::new(Peer::new());
     let (session, mut incoming) = transport(peer.clone(), Arc::default());
     let clock = Arc::new(ManualClock::default());
-    let (writer, mut queue) = mpsc::channel(1);
+    let (writer, mut queue) = OutgoingQueue::new(1, 0);
     session.set_writer(writer, clock.clone());
     initialize(&session).await;
     peer.expire.store(true, Ordering::SeqCst);
@@ -660,7 +705,7 @@ async fn j9_rejected_initialized_does_not_release_admission() {
     peer.initialized_status = 405;
     let peer = Arc::new(peer);
     let (session, _incoming) = transport(peer.clone(), Arc::default());
-    let (writer, mut queue) = mpsc::channel(1);
+    let (writer, mut queue) = OutgoingQueue::new(1, 0);
     session.set_writer(writer, Arc::new(RuntimeClock::new()));
     initialize(&session).await;
     peer.expire.store(true, Ordering::SeqCst);
@@ -726,7 +771,7 @@ async fn j6_recovery_publication_then_close_owns_one_retained_delete() {
     let peer = Arc::new(peer);
     let claims = Arc::new(SessionClaims::default());
     let (session, _incoming) = transport(peer.clone(), claims.clone());
-    let (writer, mut queue) = mpsc::channel(1);
+    let (writer, mut queue) = OutgoingQueue::new(1, 0);
     session.set_writer(writer, Arc::new(RuntimeClock::new()));
     initialize(&session).await;
     peer.expire.store(true, Ordering::SeqCst);
@@ -773,7 +818,7 @@ async fn j9_saturated_queue_budget_expiry_retains_close_ownership() {
     let peer = Arc::new(Peer::new());
     let (session, mut incoming) = transport(peer.clone(), Arc::default());
     let clock = Arc::new(ManualClock::default());
-    let (writer, mut queue) = mpsc::channel(1);
+    let (writer, mut queue) = OutgoingQueue::new(1, 0);
     session.set_writer(writer.clone(), clock.clone());
     initialize(&session).await;
     writer.send(Outgoing::Frame(vec![])).await.unwrap();
@@ -1266,7 +1311,7 @@ async fn j11_accepted_initialized_at_expiry_reports_timeout() {
     peer.initialized_expiry = Some(clock.clone());
     let peer = Arc::new(peer);
     let (session, _incoming) = transport(peer.clone(), Arc::default());
-    let (writer, mut queue) = mpsc::channel(1);
+    let (writer, mut queue) = OutgoingQueue::new(1, 0);
     session.set_writer(writer, clock);
     initialize(&session).await;
     peer.expire.store(true, Ordering::SeqCst);
@@ -1298,7 +1343,7 @@ async fn j11_completion_loss_preserves_writer_failure() {
     peer.initialized_status = 405;
     let peer = Arc::new(peer);
     let (session, mut incoming) = transport(peer.clone(), Arc::default());
-    let (writer, mut queue) = mpsc::channel(1);
+    let (writer, mut queue) = OutgoingQueue::new(1, 0);
     session.set_writer(writer, Arc::new(RuntimeClock::new()));
     initialize(&session).await;
     peer.expire.store(true, Ordering::SeqCst);
@@ -1339,7 +1384,7 @@ async fn j12_lost_completion_cannot_admit_queued_call() {
     peer.initialized_headers = Some(gate.clone());
     let peer = Arc::new(peer);
     let (session, _incoming) = transport(peer.clone(), Arc::default());
-    let (writer, mut queue) = mpsc::channel(2);
+    let (writer, mut queue) = OutgoingQueue::new(2, 0);
     session.set_writer(writer.clone(), Arc::new(RuntimeClock::new()));
     initialize(&session).await;
     peer.expire.store(true, Ordering::SeqCst);
@@ -1439,7 +1484,7 @@ async fn j13_completed_commit_defeats_late_timeout() {
     let peer = Arc::new(Peer::new());
     let (session, mut incoming) = transport(peer.clone(), Arc::default());
     let clock = Arc::new(CommitBeforeExpiryClock::default());
-    let (writer, mut queue) = mpsc::channel(1);
+    let (writer, mut queue) = OutgoingQueue::new(1, 0);
     session.set_writer(writer, clock.clone());
     initialize(&session).await;
     peer.expire.store(true, Ordering::SeqCst);
@@ -1592,7 +1637,7 @@ async fn control_context_ordering(retry: bool, public_writer: bool) {
     } else {
         None
     };
-    let (writer, mut queue) = mpsc::channel(2);
+    let (writer, mut queue) = OutgoingQueue::new(2, 0);
     if let Some(connection) = &connection {
         bounded(connection.call("initialize", None))
             .await
@@ -2237,7 +2282,7 @@ async fn j19_old_reply_cannot_adopt_reused_or_stateless_replacement_binding() {
         peer.bodies.lock().unwrap().push_back(body);
         let peer = Arc::new(peer);
         let (session, mut incoming) = transport(peer.clone(), Arc::default());
-        let (writer, mut queue) = mpsc::channel(8);
+        let (writer, mut queue) = OutgoingQueue::new(8, 0);
         session.set_writer(writer, Arc::new(RuntimeClock::new()));
         if !old_stateless {
             initialize(&session).await;
@@ -2476,7 +2521,7 @@ async fn j19_reply_retry_cannot_adopt_identity_published_during_authorization() 
         Arc::new(ReplyRetryAuthorization { gate: gate.clone() }),
         Arc::default(),
     );
-    let (writer, mut queue) = mpsc::channel(8);
+    let (writer, mut queue) = OutgoingQueue::new(8, 0);
     session.set_writer(writer, Arc::new(RuntimeClock::new()));
     initialize(&session).await;
     bounded(incoming.recv()).await.unwrap().unwrap();
@@ -2775,6 +2820,519 @@ async fn j19_reader_failure_fences_http_owner_before_ended() {
     assert_eq!(peer.count(|r| r.method == HttpMethod::Delete), 1);
     assert_eq!(
         peer.count(|r| method(r).as_deref() == Some("tools/list")),
+        0
+    );
+}
+
+// Poll to an actual queue or reply wait, rather than Tokio's cooperative yield.
+async fn pending<F: Future>(future: Pin<&mut F>) {
+    let mut future = std::pin::pin!(tokio::task::unconstrained(future));
+    assert!(poll_fn(|context| Poll::Ready(future.as_mut().poll(context).is_pending())).await);
+}
+
+fn held_calls(
+    connection: &Connection,
+) -> Vec<Pin<Box<impl Future<Output = Result<Reply, McpError>> + '_>>> {
+    (0..OUTGOING_FRAMES)
+        .map(|_| Box::pin(connection.call("tools/list", None)))
+        .collect()
+}
+
+async fn held_recovery(
+    status: u16,
+) -> (
+    Connection,
+    Arc<HttpSession>,
+    Arc<Peer>,
+    Probe,
+    Arc<Gate>,
+    Arc<ManualClock>,
+) {
+    let (probe, body) = Probe::body();
+    let gate = Arc::new(Gate::default());
+    let peer = Arc::new(Peer::new());
+    *peer.replacement.lock().unwrap() = Some(body);
+    peer.controls
+        .lock()
+        .unwrap()
+        .push_back((status, Some(gate.clone())));
+    let (session, incoming) = transport(peer.clone(), Arc::default());
+    let clock = Arc::new(ManualClock::default());
+    let connection = Connection::open_http(session.clone(), incoming, clock.clone());
+    bounded(connection.call("initialize", None))
+        .await
+        .unwrap()
+        .unwrap();
+    peer.expire.store(true, Ordering::SeqCst);
+    assert_eq!(
+        bounded(connection.call("tools/list", None))
+            .await
+            .unwrap_err(),
+        McpError::SessionExpired
+    );
+    probe.polled(1).await;
+    connection
+        .notify("notifications/cancelled", Some(json!({"requestId":9999})))
+        .await
+        .unwrap();
+    gate.reached().await;
+    (connection, session, peer, probe, gate, clock)
+}
+
+async fn acknowledge_peer_request(connection: &Connection, probe: &Probe, id: u64, method: &str) {
+    let mut notices = connection.notices();
+    probe.event(json!({"id":id,"method":method}));
+    probe.event(json!({"method":"notifications/tools/list_changed"}));
+    bounded(async {
+        tokio::select! {
+            notice = notices.recv() => { notice.unwrap(); }
+            cause = connection.ended() => panic!("peer request admission ended connection: {cause:?}"),
+        }
+    }).await;
+}
+
+fn assert_bound_answer(peer: &Peer, id: u64, method: &str) {
+    let seen = peer.seen.lock().unwrap();
+    let answer = seen
+        .iter()
+        .find(|request| {
+            serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .is_some_and(|message| message["id"] == id)
+        })
+        .unwrap();
+    assert_eq!(header(answer, "Mcp-Session-Id"), Some("replacement"));
+    assert_eq!(header(answer, "MCP-Protocol-Version"), None);
+    let message: Value = serde_json::from_slice(&answer.body).unwrap();
+    if method == "ping" {
+        assert_eq!(message["result"], json!({}));
+    } else {
+        assert_eq!(message["error"]["code"], -32601);
+    }
+}
+
+#[tokio::test]
+async fn j21_saturated_ordinary_queue_preserves_early_recovery_answers() {
+    for method in ["ping", "sampling/createMessage"] {
+        let (connection, session, peer, probe, gate, _) = held_recovery(202).await;
+        let mut calls = held_calls(&connection);
+        for call in &mut calls {
+            pending(call.as_mut()).await;
+        }
+        let mut excess = Box::pin(connection.call("tools/list", None));
+        pending(excess.as_mut()).await;
+        drop(excess);
+        acknowledge_peer_request(&connection, &probe, 70, method).await;
+        assert_eq!(connection.end_cause(), None);
+        gate.release();
+        for call in calls {
+            assert_eq!(bounded(call).await.unwrap_err(), McpError::Busy);
+        }
+        peer.observed(|request| {
+            serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .is_some_and(|message| message["id"] == 70)
+        })
+        .await;
+        assert_bound_answer(&peer, 70, method);
+        assert_eq!(
+            peer.count(|request| method_of(request, "notifications/initialized")),
+            0
+        );
+        assert_eq!(peer.count(|request| method_of(request, "tools/list")), 1);
+        probe.event(json!({"id":0,"result":{"protocolVersion":"2025-06-18"}}));
+        peer.observed(|request| method_of(request, "notifications/initialized"))
+            .await;
+        bounded(connection.call("tools/list", None))
+            .await
+            .unwrap()
+            .unwrap();
+        stop(&session).await;
+        probe.released().await;
+        assert_eq!(
+            peer.count(|request| request.method == HttpMethod::Delete),
+            1
+        );
+    }
+}
+
+fn method_of(request: &HttpRequest, expected: &str) -> bool {
+    method(request).as_deref() == Some(expected)
+}
+
+#[tokio::test]
+async fn j22_matching_initialize_preserves_queued_reply_order() {
+    let (connection, session, peer, probe, gate, _) = held_recovery(202).await;
+    let mut calls = held_calls(&connection);
+    for call in &mut calls {
+        pending(call.as_mut()).await;
+    }
+    acknowledge_peer_request(&connection, &probe, 70, "ping").await;
+    probe.event(json!({"id":0,"result":{"protocolVersion":"2025-06-18"}}));
+    peer.observed(|request| {
+        request.method == HttpMethod::Get
+            && header(request, "Mcp-Session-Id") == Some("replacement")
+    })
+    .await;
+    probe.released().await;
+    assert_eq!(
+        peer.count(|request| method_of(request, "notifications/initialized")),
+        0
+    );
+    gate.release();
+    for call in calls {
+        assert_eq!(bounded(call).await.unwrap_err(), McpError::Busy);
+    }
+    peer.observed(|request| method_of(request, "notifications/initialized"))
+        .await;
+    assert_bound_answer(&peer, 70, "ping");
+    {
+        let seen = peer.seen.lock().unwrap();
+        let answer = seen
+            .iter()
+            .position(|request| {
+                serde_json::from_slice::<Value>(&request.body)
+                    .ok()
+                    .is_some_and(|message| message["id"] == 70)
+            })
+            .unwrap();
+        let initialized = seen
+            .iter()
+            .position(|request| method_of(request, "notifications/initialized"))
+            .unwrap();
+        assert!(answer < initialized);
+    }
+    bounded(connection.call("tools/list", None))
+        .await
+        .unwrap()
+        .unwrap();
+    stop(&session).await;
+}
+
+#[tokio::test]
+async fn j23_control_overflow_retains_first_cause_and_one_cleanup() {
+    let (connection, session, peer, probe, gate, _) = held_recovery(202).await;
+    let mut calls = held_calls(&connection);
+    for call in &mut calls {
+        pending(call.as_mut()).await;
+    }
+    let mut excess = Box::pin(connection.call("tools/list", None));
+    pending(excess.as_mut()).await;
+    let mut notification = Box::pin(connection.notify("notifications/test", None));
+    pending(notification.as_mut()).await;
+    acknowledge_peer_request(&connection, &probe, 70, "ping").await;
+    probe.event(json!({"id":71,"method":"ping"}));
+    let cause = McpError::TooLarge("queued MCP control frames");
+    assert_eq!(bounded(connection.ended()).await, cause);
+    assert_eq!(bounded(excess).await.unwrap_err(), cause);
+    assert_eq!(bounded(notification).await.unwrap_err(), cause);
+    connection.close(McpError::Closed);
+    gate.release();
+    for call in calls {
+        assert_eq!(bounded(call).await.unwrap_err(), cause);
+    }
+    stop(&session).await;
+    probe.released().await;
+    assert_eq!(connection.end_cause(), Some(cause));
+    assert_eq!(
+        peer.count(|request| request.method == HttpMethod::Delete),
+        1
+    );
+    assert_eq!(
+        peer.count(|request| serde_json::from_slice::<Value>(&request.body)
+            .ok()
+            .is_some_and(|message| message["id"] == 70 || message["id"] == 71)),
+        0
+    );
+}
+
+#[tokio::test]
+async fn j23_terminal_admission_wakes_physical_waiters_and_refuses_ended_notifications() {
+    for physical_wait in [true, false] {
+        let (connection, session, peer, probe, gate, clock) = held_recovery(202).await;
+        let cause = if physical_wait {
+            // Controls hold every physical slot while ordinary permits remain free.
+            for id in 0..OUTGOING_FRAMES + HTTP_CONTROL_RESERVE {
+                acknowledge_peer_request(&connection, &probe, 70 + id as u64, "ping").await;
+            }
+            let mut excess = Box::pin(connection.call("tools/list", None));
+            pending(excess.as_mut()).await;
+            let mut notification = Box::pin(connection.notify("notifications/test", None));
+            pending(notification.as_mut()).await;
+            probe.event(
+                json!({"id":70 + (OUTGOING_FRAMES + HTTP_CONTROL_RESERVE) as u64,"method":"ping"}),
+            );
+            let cause = McpError::TooLarge("queued MCP control frames");
+            assert_eq!(bounded(connection.ended()).await, cause);
+            assert_eq!(bounded(excess).await.unwrap_err(), cause);
+            assert_eq!(bounded(notification).await.unwrap_err(), cause);
+            cause
+        } else {
+            // The writer is held, but the queue is empty when the deadline ends admission.
+            clock.advance(INITIALIZE_TIMEOUT);
+            let cause = McpError::Timeout;
+            assert_eq!(bounded(connection.ended()).await, cause);
+            cause
+        };
+        assert_eq!(
+            bounded(connection.notify("notifications/test", None))
+                .await
+                .unwrap_err(),
+            cause
+        );
+        assert_eq!(
+            bounded(connection.call("tools/list", None))
+                .await
+                .unwrap_err(),
+            cause
+        );
+        assert_eq!(
+            peer.count(|request| method_of(request, "notifications/test")),
+            0
+        );
+        assert_eq!(peer.count(|request| method_of(request, "tools/list")), 1);
+        assert_eq!(
+            peer.count(|request| method_of(request, "notifications/cancelled")),
+            1
+        );
+        // Every terminal assertion above completes before this custom exchange drains.
+        gate.release();
+        stop(&session).await;
+        probe.released().await;
+        connection.close(McpError::Closed);
+        assert_eq!(connection.end_cause(), Some(cause));
+        assert_eq!(
+            peer.count(|request| method_of(request, "notifications/test")),
+            0
+        );
+        assert_eq!(
+            peer.count(|request| request.method == HttpMethod::Delete),
+            usize::from(physical_wait)
+        );
+    }
+}
+
+#[tokio::test]
+async fn j23_closed_control_queue_is_explicit() {
+    // A custom exchange can unwind the writer before it publishes an end.
+    // Prove a subsequent peer request turns actual receiver loss into ServerGone.
+    let (connection, session, peer, probe, gate, _) = held_recovery(202).await;
+    peer.control_panic.store(true, Ordering::SeqCst);
+    gate.release();
+    bounded(async {
+        loop {
+            if let Err(error) = connection.notify("notifications/test", None).await {
+                assert_eq!(error, McpError::ServerGone);
+                break;
+            }
+        }
+    })
+    .await;
+    assert_eq!(connection.end_cause(), None);
+    probe.event(json!({"id":70,"method":"ping"}));
+    assert_eq!(bounded(connection.ended()).await, McpError::ServerGone);
+    connection.close(McpError::Closed);
+    stop(&session).await;
+    assert_eq!(connection.end_cause(), Some(McpError::ServerGone));
+    assert_eq!(
+        peer.count(|request| request.method == HttpMethod::Delete),
+        1
+    );
+    assert_eq!(
+        peer.count(|request| serde_json::from_slice::<Value>(&request.body)
+            .ok()
+            .is_some_and(|message| message["id"] == 70)),
+        0
+    );
+
+    let (queue, frames) = OutgoingQueue::new(1, 1);
+    drop(frames);
+    let (completed, _) = tokio::sync::oneshot::channel();
+    assert!(matches!(
+        queue.try_send(Outgoing::RecoveryReady {
+            deadline: ManualClock::default().now(),
+            completed
+        }),
+        Err(TrySendError::Closed(_))
+    ));
+}
+
+#[tokio::test]
+async fn j24_ordinary_capacity_releases_on_dequeue_and_cancellation() {
+    let (queue, mut frames) = OutgoingQueue::new(OUTGOING_FRAMES, 1);
+    for id in 0..OUTGOING_FRAMES {
+        queue
+            .send(Outgoing::Frame(
+                serde_json::to_vec(&json!({"id":id,"method":"tools/list"})).unwrap(),
+            ))
+            .await
+            .unwrap();
+    }
+    let mut waiting = Box::pin(queue.send(Outgoing::Frame(b"waiting".to_vec())));
+    pending(waiting.as_mut()).await;
+    drop(waiting);
+    let mut next = Box::pin(queue.send(Outgoing::Frame(b"next".to_vec())));
+    pending(next.as_mut()).await;
+    let held = frames.recv().await.unwrap();
+    bounded(next).await.unwrap();
+    assert!(matches!(held, Outgoing::Frame(_)));
+    let (completed, _) = tokio::sync::oneshot::channel();
+    queue
+        .try_send(Outgoing::RecoveryReady {
+            deadline: ManualClock::default().now(),
+            completed,
+        })
+        .unwrap();
+    let (completed, _) = tokio::sync::oneshot::channel();
+    assert!(matches!(
+        queue.try_send(Outgoing::RecoveryReady {
+            deadline: ManualClock::default().now(),
+            completed
+        }),
+        Err(TrySendError::Full(_))
+    ));
+    let mut closed = Box::pin(queue.send(Outgoing::Frame(b"closed".to_vec())));
+    pending(closed.as_mut()).await;
+    drop(frames);
+    assert!(bounded(closed).await.is_err());
+
+    // A sender can own an ordinary permit while waiting behind controls.
+    // Dropping that send must release the permit as well as its encoded frame.
+    let (queue, mut frames) = OutgoingQueue::new(1, 1);
+    for _ in 0..2 {
+        let (completed, _) = tokio::sync::oneshot::channel();
+        queue
+            .try_send(Outgoing::RecoveryReady {
+                deadline: ManualClock::default().now(),
+                completed,
+            })
+            .unwrap();
+    }
+    let mut waiting = Box::pin(queue.send(Outgoing::Frame(b"waiting behind controls".to_vec())));
+    pending(waiting.as_mut()).await;
+    drop(waiting);
+    let held_control = frames.recv().await.unwrap();
+    queue
+        .try_send(Outgoing::Frame(b"reuses cancelled permit".to_vec()))
+        .unwrap();
+    assert!(matches!(held_control, Outgoing::RecoveryReady { .. }));
+}
+
+#[tokio::test]
+async fn j25_deadline_refuses_queued_saturated_reply() {
+    let (connection, session, peer, probe, gate, clock) = held_recovery(202).await;
+    let mut calls = held_calls(&connection);
+    for call in &mut calls {
+        pending(call.as_mut()).await;
+    }
+    acknowledge_peer_request(&connection, &probe, 70, "ping").await;
+    clock.advance(INITIALIZE_TIMEOUT);
+    assert_eq!(bounded(connection.ended()).await, McpError::Timeout);
+    gate.release();
+    for call in calls {
+        assert_eq!(bounded(call).await.unwrap_err(), McpError::Timeout);
+    }
+    stop(&session).await;
+    assert_eq!(
+        peer.count(|request| serde_json::from_slice::<Value>(&request.body)
+            .ok()
+            .is_some_and(|message| message["id"] == 70)),
+        0
+    );
+    assert_eq!(
+        peer.count(|request| method_of(request, "notifications/initialized")),
+        0
+    );
+    assert_eq!(
+        peer.count(|request| request.method == HttpMethod::Delete),
+        1
+    );
+    assert_eq!(connection.end_cause(), Some(McpError::Timeout));
+}
+
+#[tokio::test]
+async fn j26_close_or_writer_failure_refuses_queued_saturated_reply() {
+    for status in [202, 401] {
+        let (connection, session, peer, probe, gate, _) = held_recovery(status).await;
+        let mut calls = held_calls(&connection);
+        for call in &mut calls {
+            pending(call.as_mut()).await;
+        }
+        acknowledge_peer_request(&connection, &probe, 70, "ping").await;
+        let expected = if status == 202 {
+            McpError::Closed
+        } else {
+            McpError::Unauthorized
+        };
+        if status == 202 {
+            connection.close(expected.clone());
+        }
+        gate.release();
+        assert_eq!(bounded(connection.ended()).await, expected);
+        connection.close(McpError::Stopped);
+        for call in calls {
+            assert_eq!(bounded(call).await.unwrap_err(), expected);
+        }
+        stop(&session).await;
+        probe.released().await;
+        assert_eq!(connection.end_cause(), Some(expected));
+        assert_eq!(
+            peer.count(|request| serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .is_some_and(|message| message["id"] == 70)),
+            0
+        );
+        assert_eq!(
+            peer.count(|request| method_of(request, "notifications/initialized")),
+            0
+        );
+        assert_eq!(
+            peer.count(|request| request.method == HttpMethod::Delete),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn j26_close_fences_http_and_publishes_before_response_wakes() {
+    let (connection, session, peer, probe, gate, _) = held_recovery(202).await;
+    let connection = Arc::new(connection);
+    let wake = Arc::new(ClosingWake::default());
+    let release = ReleaseClosingWake(wake.clone());
+    let waker = Waker::from(wake.clone());
+    let mut call = Box::pin(connection.call("tools/list", None));
+    {
+        let mut future = std::pin::pin!(tokio::task::unconstrained(call.as_mut()));
+        assert!(future
+            .as_mut()
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending());
+    }
+    let closing_connection = connection.clone();
+    let closing = tokio::task::spawn_blocking(move || closing_connection.close(McpError::Closed));
+    bounded(wake.entered.notified()).await;
+    assert_eq!(connection.end_cause(), Some(McpError::Closed));
+    // Capture all three boundaries while close is paused inside a response wake.
+    let notified = bounded(connection.notify("notifications/test", None)).await;
+    let mut ended = Box::pin(connection.ended());
+    let published = poll_fn(|context| Poll::Ready(ended.as_mut().poll(context))).await;
+    let dispatched = bounded(session.dispatch(br#"{"method":"notifications/direct"}"#)).await;
+    let direct_posts = peer.count(|request| method_of(request, "notifications/direct"));
+    eprintln!(
+        "close snapshot: notify={notified:?}, watch={published:?}, direct_posts={direct_posts}"
+    );
+    drop(release);
+    closing.await.unwrap();
+    gate.release();
+    stop(&session).await;
+    probe.released().await;
+    assert_eq!(notified, Err(McpError::Closed));
+    assert_eq!(published, Poll::Ready(McpError::Closed));
+    assert!(matches!(dispatched, SendOutcome::End(McpError::Closed)));
+    assert_eq!(direct_posts, 0);
+    assert_eq!(bounded(call).await.unwrap_err(), McpError::Closed);
+    assert_eq!(
+        peer.count(|request| method_of(request, "notifications/test")),
         0
     );
 }

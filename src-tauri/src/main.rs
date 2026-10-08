@@ -12,6 +12,7 @@ mod gateway_endpoint;
 mod host;
 mod host_refusal;
 mod launch;
+mod linger;
 mod links;
 mod local_data;
 mod page_load;
@@ -113,6 +114,8 @@ fn main() {
             startup::host_startup,
             startup::restart_nessa,
             startup::quit_nessa,
+            linger::infrastructure::linger_status,
+            linger::infrastructure::linger_accept,
         ])
         .setup(move |app| {
             page_load::watch(app.handle().clone(), loads);

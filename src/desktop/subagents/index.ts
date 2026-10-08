@@ -12,6 +12,7 @@
  *        ▼
  *   ui/plugin.tsx ── useWidget ──▶ application/widget-state.ts
  *        │                              │ preview, listing, source
+ *        ├── SessionAccessory ──▶ ui/subagent-stack.tsx
  *        ▼
  *   ui/subagents-panel.tsx ── list, then one child's read-only transcript
  *        │
@@ -23,7 +24,8 @@
  * `model/` is the child as the panel shows it, and the tagline a seed picks.
  * `application/` is the source, the join, the widget's answer, and which
  * child a conversation has open — other verticals reach that choice through
- * `useOpenSubagent`, not the map. Counts are the desktop's (`../model/counts.ts`);
+ * `useOpenSubagent`, not the map. The header stack opens the panel without
+ * choosing a child. Counts are the desktop's (`../model/counts.ts`);
  * times are the workspace's.
  */
 export { SubagentsProvider } from "./adapters/react/source-context"

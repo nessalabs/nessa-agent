@@ -25,6 +25,8 @@ export {
   finishSetupWindow,
   gatewayStartup,
   hostStartup,
+  lingerAccept,
+  lingerStatus,
   restartNessa,
   quitNessa,
   retrySetupRecord,
