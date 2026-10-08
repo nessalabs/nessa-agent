@@ -49,10 +49,10 @@ flowchart LR
         F["Artifacts (by digest)"]
     end
     subgraph EAs["Environment authorities"]
-        L["Same gateway (local; default)"]
-        H["Bigger machine or peer Nessa"]
-        W["Hosted worker (environment-only gateway, per organization)"]
-        S["Local sandbox (workspace only)"]
+        L["Same gateway (local; default)<br/>agent harness runs here<br/>files and terminals here"]
+        H["Bigger machine or peer Nessa<br/>agent harness runs here under an execution lease"]
+        W["Hosted worker (environment-only gateway, per organization)<br/>agent harness runs here under an execution lease"]
+        S["Local sandbox (workspace only)<br/>no harness; files and terminals only"]
     end
     D -- "intents + record subscription" --> A
     C -- "intents + record subscription" --> A
@@ -72,8 +72,12 @@ flowchart LR
     P -.-> Y
 ```
 
-Arrows are calls. The relay is dotted because it carries bytes it cannot
-read. The dotted edge between environments is a workspace channel: the
+Arrows are calls. The **agent itself**, the Claude, Codex or OpenCode
+process running the model loop, lives inside whichever environment holds
+the execution lease: the laptop by default, a bigger machine, a peer's
+Nessa or a hosted worker when leased there. It never runs in a surface, a
+replica, the relay, or a workspace-only sandbox. The relay is dotted because
+it carries bytes it cannot read. The dotted edge between environments is a workspace channel: the
 harness runs in one environment and its file and terminal operations land in
 another, under a ticket the conversation authority issued. No environment
 touches the record store or the credential store; the conversation authority
