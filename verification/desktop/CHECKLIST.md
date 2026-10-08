@@ -1115,6 +1115,26 @@ Both cases require zero page errors. The rule is owned by
 [adapter tests](../../src/onboarding/adapters/agents.test.ts) and
 [setup recovery tests](../../src/onboarding/ui/onboarding-readiness-timeout.test.tsx).
 
+### Linux linger at setup
+
+`node verification/desktop/scripts/linux-linger.mjs` drives the real setup UI
+and controller in Chromium and WebKit. The fixture supplies the host's linger
+answer; it does not call logind. After the shortcut, an offer shows the choice
+and does not say the gateway keeps running after logout, and it does not ask
+for an administrator. Accepting shows that sentence only when the answer is
+`enabled`. Declining finishes setup without a call. A refusal and a failure
+name `loginctl enable-linger` and claim nothing. An unsupported host claims
+nothing. An account that is already lingering is reported without a call. Both
+engines require zero page errors and painted controls. The screen is
+[ADR 217](../../docs/adr/done/217-linux-linger-at-setup.md). The live bus is
+`scripts/desktop/check-linux-linger.sh`, for user `lt` only. After the PAM
+login session ends, the user is `lingering`, `user@<uid>` is active, and
+`sleep infinity` is still running. A per-user `systemctl` machine match is
+not that proof: it starts the user manager itself. `terminate-user` stops
+that manager even when the linger file is present, so it is the negative
+control: with linger then disabled, `user@` is inactive and the process is
+gone.
+
 ### Attachment admission races
 
 `node verification/desktop/scripts/attachments-races.mjs` drives the actual App,

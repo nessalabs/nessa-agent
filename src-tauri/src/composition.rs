@@ -56,6 +56,11 @@ use crate::gateway::{
     application::{Gateway, GatewayRuntimeDependencies, SystemMonotonicClock},
 };
 use crate::gateway_endpoint::{self, application::GatewayEndpointAccess};
+use crate::linger::application::LingerOffer;
+#[cfg(not(target_os = "linux"))]
+use crate::linger::application::NotApplicableLinger;
+#[cfg(target_os = "linux")]
+use crate::linger::{application::LingerSession, infrastructure::SystemLogind};
 use crate::local_data;
 use crate::settings::{SettingsFile, SettingsStore};
 use crate::shortcuts::{ShortcutStore, ShortcutsFile};
@@ -138,6 +143,9 @@ pub struct HostDependencies {
     /// replaced by its store, not by itself.
     #[cfg(desktop)]
     pub releases: Arc<dyn ReleaseSource>,
+    /// Whether setup may offer linger. Linux asks logind. Every other host
+    /// answers `not-applicable` and has no call that enables it.
+    pub linger: Arc<dyn LingerOffer>,
 }
 
 impl HostDependencies {
@@ -199,6 +207,7 @@ impl HostDependencies {
                 })
             })
             .unwrap_or_else(|| Arc::new(UnavailableCredentialSaveAudit));
+        let linger = linger_offer(app, config_root.as_deref());
 
         // A development build has no staged runtime to register, exactly as
         // before: the branch is on the profile, not on whether a path exists.
@@ -265,8 +274,20 @@ impl HostDependencies {
             gateway,
             #[cfg(desktop)]
             releases: updater::release_source(app),
+            linger,
         })
     }
+}
+
+/// Linux asks logind. Other hosts have no logind API, so they cannot enable it.
+#[cfg(target_os = "linux")]
+fn linger_offer(_app: &AppHandle, _config_root: Option<&std::path::Path>) -> Arc<dyn LingerOffer> {
+    Arc::new(LingerSession::new(Arc::new(SystemLogind)))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn linger_offer(_app: &AppHandle, _config_root: Option<&std::path::Path>) -> Arc<dyn LingerOffer> {
+    Arc::new(NotApplicableLinger)
 }
 
 /// The bundle, for a handler the framework calls with only an app handle.

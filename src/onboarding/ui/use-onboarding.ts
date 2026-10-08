@@ -2,6 +2,8 @@ import * as React from "react"
 import type { ShortcutsDocument } from "@nessa/client"
 import defaults from "../../../protocol/defaults/shortcuts.v1.json"
 import { host, loadShortcuts, matchesAccelerator, onSummoned } from "../../host"
+import { hostLinger, type LingerSource } from "../adapters/linger"
+import type { LingerView } from "../model/linger"
 import { nativeGatewayStartup } from "../../startup/adapters/gateway-startup"
 import {
   createGatewayStartupMonitor,
@@ -22,8 +24,10 @@ import {
   dismissOnboarding,
   isOnboarding,
   pressSummon,
+  recordLinger,
   recordReadiness,
   recordReadinessFailure,
+  showLinger,
   startAgentChoice,
   type AgentId,
   type OnboardingState,
@@ -80,6 +84,10 @@ export interface Onboarding {
   /** True while an ask is in flight, so the control that starts one can show
    * that it is working rather than looking like it did nothing. */
   checking: boolean
+  /** True while an explicit linger enable has not returned. */
+  lingerPending: boolean
+  /** Enable linger. A second call while one is open does nothing. */
+  acceptLinger: () => void
 }
 
 /**
@@ -102,6 +110,7 @@ export interface Onboarding {
 export function useOnboarding(
   agents: AgentReadinessSource,
   initial?: OnboardingState,
+  linger: LingerSource = hostLinger,
 ): Onboarding {
   const [state, setState] = React.useState<OnboardingState>(
     () => initial ?? beginOnboarding(),
@@ -194,6 +203,9 @@ export function useOnboarding(
     }
   }, [readiness, startup])
 
+  const lingerBusy = React.useRef(false)
+  const leavingSummon = React.useRef(false)
+  const [lingerPending, setLingerPending] = React.useState(false)
   const recheck = React.useCallback(() => {
     if (
       gatewayStartupState.state === "ready" ||
@@ -289,6 +301,34 @@ export function useOnboarding(
     }
   }, [practising])
 
+  // A reply the shell cannot read is not a claim. Ask again, and show that read.
+  // The accept stays pending until the confirming read settles, so a second
+  // click cannot start a newer call that this read would overwrite.
+  const applyLinger = React.useCallback(
+    (view: LingerView | undefined) => {
+      const settle = (next: LingerView) => {
+        lingerBusy.current = false
+        setLingerPending(false)
+        setState((current) => recordLinger(current, next))
+      }
+      if (view) {
+        settle(view)
+        return
+      }
+      void linger.status().then(
+        (fresh) => {
+          // The confirming read decides the screen. A payload this shell cannot
+          // read is the same as no read: failed claims nothing.
+          settle(fresh ?? { shown: "failed" })
+        },
+        () => {
+          settle({ shown: "failed" })
+        },
+      )
+    },
+    [linger],
+  )
+
   return {
     state,
     active,
@@ -311,17 +351,48 @@ export function useOnboarding(
       setState(confirmAgent)
     }, []),
     finish: React.useCallback(() => {
-      if (!practising) return
-      playCue("celebrate")
-      setState(completeOnboarding)
-      // Finishing is recorded in the state rather than persisted from here.
-      // `completeOnboarding` keeps the agent and marks the ending a completion;
-      // `dismissOnboarding` keeps nothing and marks it a dismissal. Which of
-      // the two happened is half of what decides whether setup is written off
-      // for good — the other half is whether the panel actually came up, which
-      // this callback cannot know. The surface that learns it makes that call
-      // (see `recordsSetupCompletion`).
-    }, [practising]),
+      // Linger is the last step when the host has a logind answer. Finishing
+      // it ends setup, including while an accept is still in flight.
+      if (state.step === "linger") {
+        playCue("celebrate")
+        setState(completeOnboarding)
+        return
+      }
+      if (state.step !== "summon" || leavingSummon.current) return
+      leavingSummon.current = true
+      void linger.status().then(
+        (view) => {
+          leavingSummon.current = false
+          if (!view || view.shown === "not-applicable") {
+            playCue("celebrate")
+            setState((current) =>
+              current.step === "summon" ? completeOnboarding(current) : current,
+            )
+            return
+          }
+          playCue("advance")
+          setState((current) =>
+            current.step === "summon" ? showLinger(current, view) : current,
+          )
+        },
+        () => {
+          // A failed ask is not a view and not a claim. Setup still finishes.
+          leavingSummon.current = false
+          playCue("celebrate")
+          setState((current) =>
+            current.step === "summon" ? completeOnboarding(current) : current,
+          )
+        },
+      )
+    }, [linger, state.step]),
+    acceptLinger: React.useCallback(() => {
+      if (state.step !== "linger" || lingerBusy.current) return
+      lingerBusy.current = true
+      setLingerPending(true)
+      void linger.accept().then(applyLinger, () => {
+        applyLinger(undefined)
+      })
+    }, [applyLinger, linger, state.step]),
     // Leaving part-way is not an accomplishment and does not announce itself.
     // Leaving from the last step is a different act: the lesson is the final
     // thing setup has to say, so closing it there ends setup exactly as the way
@@ -334,5 +405,6 @@ export function useOnboarding(
     recheck,
     retryGatewayStartup: retryStartup,
     checking,
+    lingerPending,
   }
 }
