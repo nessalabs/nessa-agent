@@ -169,7 +169,7 @@ html:not(.dark) .agents-overview-surface {
   line-height: 1.2;
 }
 
-.agents-overview-header p {
+.agents-overview-header .agents-overview-counts {
   margin: 4px 0 0;
   color: var(--desktop-muted);
   font-size: var(--desktop-text-body);
@@ -183,6 +183,7 @@ html:not(.dark) .agents-overview-surface {
  */
 .agents-overview-header .agents-overview-counts {
   display: flex;
+  gap: 0;
   min-height: 22px;
   flex-wrap: wrap;
   align-items: center;
@@ -205,16 +206,20 @@ html:not(.dark) .agents-overview-surface {
   color: var(--desktop-fainter);
 }
 
-.agents-overview-count button {
+/* A count: the kit's segmented option, bare, in the line's own type and the window's fills. */
+.agents-overview-count [data-slot="segmented-control-option"] {
   height: 22px;
   padding: 0 7px;
   border: 0;
   border-radius: var(--desktop-radius-pill);
   background: transparent;
-  color: var(--desktop-muted) !important;
+  box-shadow: none;
+  color: var(--desktop-muted);
   font: inherit;
-  font-size: var(--desktop-text-body) !important;
+  font-size: var(--desktop-text-body);
   font-variant-numeric: tabular-nums;
+  letter-spacing: inherit;
+  translate: none;
   cursor: default;
   outline: none;
   transition:
@@ -222,17 +227,18 @@ html:not(.dark) .agents-overview-surface {
     color var(--desktop-fast) ease;
 }
 
-.agents-overview-count button:is(:hover, :focus-visible) {
+.agents-overview-count [data-slot="segmented-control-option"]:is(:hover, :focus-visible) {
   background: var(--desktop-hover);
-  color: var(--foreground) !important;
+  color: var(--foreground);
 }
 
-.agents-overview-count button[aria-pressed="true"] {
+.agents-overview-count [data-slot="segmented-control-option"][aria-pressed="true"] {
   background: var(--desktop-selected);
-  color: var(--foreground) !important;
+  color: var(--foreground);
 }
 
-.agents-overview-count button[aria-pressed="true"]:focus-visible {
+.agents-overview-count
+  [data-slot="segmented-control-option"][aria-pressed="true"]:focus-visible {
   background: var(--desktop-press);
 }
 

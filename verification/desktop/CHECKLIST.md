@@ -998,6 +998,13 @@ it is redesigned on its own branch.
   (`ClosePaneButton`). _Check:_ `pane-header-frame.test.tsx`; the markup of
   every header is unchanged from the base (scratch comparison in #657's pull
   request); `drag.mjs`, `widgets.mjs` and `safe-area.mjs` hold the behaviour.
+- [ ] **The overview's counts are the kit's `SegmentedControl` (#657).**
+  Bare, in the line's own type: none pressed while every group shows,
+  `--desktop-hover` under the pointer, `--desktop-selected` pressed, nothing
+  moving as one is chosen, and the pressed one chosen again letting go. The
+  side rail's lens and Settings' own controls stay with their owners.
+  _Check:_ `shared-controls.mjs` (`segmented`); `overview.test.tsx` for
+  what each count shows. Rule: `overview.css` › counts.
 
 ## Menus and tooltips
 

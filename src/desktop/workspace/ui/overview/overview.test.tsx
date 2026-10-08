@@ -321,7 +321,7 @@ describe("the agents overview", () => {
       "security import build.p12",
     )
     expect(host.querySelector(".agents-row")?.textContent).toContain("Split panes")
-    expect(host.querySelector(".agents-overview-header p")?.textContent).toBe(
+    expect(host.querySelector(".agents-overview-counts")?.textContent).toBe(
       "2 need you · 1 working",
     )
     // The panes are kept, laid out, under the overview.
@@ -855,7 +855,7 @@ describe("the agents overview", () => {
     })
     expect(filter.writes.at(-1)).toEqual({ scope: "all", range: "any", tags: [] })
     expect(row("rest")).not.toBeNull()
-    expect(host.querySelector(".agents-overview-header p")?.textContent).toBe(
+    expect(host.querySelector(".agents-overview-counts")?.textContent).toBe(
       "2 need you · 1 working · 1 earlier",
     )
     expect(host.querySelector(".agents-filter")?.textContent).toBe("All")

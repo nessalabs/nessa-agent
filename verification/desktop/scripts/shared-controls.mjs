@@ -420,6 +420,68 @@ const checks = {
     failures.push(...inOverview.failures.map((f) => `in the overview: ${f}`))
     return { failures, measured: { onLoad, inOverview } }
   },
+  segmented: async (page) => {
+    const failures = []
+    const scale = await page.evaluate(windowScale)
+    await page.keyboard.press(keys.overview)
+    await need(page, css.overviewCount, "the overview's counts")
+    await page.waitForTimeout(400)
+    const read = () =>
+      page.evaluate((selector) => {
+        const options = [...document.querySelectorAll(selector)]
+        return {
+          group: options[0]
+            ?.closest('[data-slot="segmented-control"]')
+            ?.getAttribute("role"),
+          options: options.map((option) => ({
+            kit: option.dataset.slot === "segmented-control-option",
+            pressed: option.getAttribute("aria-pressed") === "true",
+            fill: getComputedStyle(option).backgroundColor,
+            box: [...Object.values(option.getBoundingClientRect().toJSON())].map(
+              (n) => Math.round(n * 10) / 10,
+            ),
+          })),
+        }
+      }, css.overviewCount)
+    const before = await read()
+    if (before.group !== "group")
+      failures.push("the counts are not the kit's segmented control")
+    if (before.options.some((option) => !option.kit))
+      failures.push("a count is not the kit's segmented option")
+    if (before.options.some((option) => option.pressed))
+      failures.push("a count is pressed while every group shows")
+    const second = page.locator(css.overviewCount).nth(1)
+    await second.hover()
+    await page.waitForTimeout(250)
+    const hover = await second.evaluate(
+      (element) => getComputedStyle(element).backgroundColor,
+    )
+    if (hover !== scale.hover)
+      failures.push(`a count under the pointer is ${hover}, not ${scale.hover}`)
+    await second.click()
+    await page.mouse.move(1, 1)
+    await page.waitForTimeout(400)
+    const pressed = await read()
+    const chosen = pressed.options[1]
+    if (!chosen?.pressed) failures.push("the chosen count is not pressed")
+    else if (chosen.fill !== scale.selected)
+      failures.push(`the pressed count is ${chosen.fill}, not ${scale.selected}`)
+    // Every count has the same box pressed or not, so choosing one moves nothing.
+    if (
+      JSON.stringify(pressed.options.map((o) => o.box)) !==
+      JSON.stringify(before.options.map((o) => o.box))
+    )
+      failures.push("choosing a count moved the counts")
+    await page.locator(css.overviewCount).nth(1).click()
+    await page.waitForTimeout(400)
+    const released = await read()
+    if (released.options.some((option) => option.pressed))
+      failures.push("choosing the pressed count again did not let it go")
+    return {
+      failures,
+      measured: { counts: before.options.length, hover, pressed: chosen?.fill },
+    }
+  },
   rims: async (page) => {
     const failures = []
     const seen = {}
@@ -549,7 +611,7 @@ await main(
       only: { type: "string" },
     },
     help: `
-Checks, per engine and layout (--only badges,empty,identity,keys,rims,rows):
+Checks, per engine and layout (--only badges,empty,identity,keys,rims,rows,segmented):
   badges     every count is the kit's Badge as a row's caption (16px tall, at
              least 18 wide, no border, the needs light for what waits); every
              lit point — unread, needs you, the overview's heading included —
@@ -575,6 +637,10 @@ Checks, per engine and layout (--only badges,empty,identity,keys,rims,rows):
              --desktop-hover, a chosen row with --desktop-selected, and an unread
              title weighs --desktop-unread-weight. On load, in the overview and
              with the switcher open.
+  segmented  the overview's counts are the kit's SegmentedControl (bare): none
+             pressed while every group shows, --desktop-hover under the pointer,
+             --desktop-selected pressed, nothing moves as one is chosen, and the
+             pressed one chosen again lets go.
 
 Settings is left out (#632 › Settings is redesigned on its own branch).`,
   },

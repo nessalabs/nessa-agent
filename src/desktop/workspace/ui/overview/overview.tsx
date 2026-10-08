@@ -8,6 +8,10 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react"
+import {
+  SegmentedControl,
+  SegmentedControlOption,
+} from "@nessa-ui/react/segmented-control"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { EmptyState } from "@nessa-ui/react/empty-state"
 import { flushSync } from "react-dom"
@@ -782,21 +786,27 @@ function Counts({
   if (!ready) return <p className="agents-overview-counts">{"\u00a0"}</p>
   if (counts.length === 0) return <p className="agents-overview-counts">{quietLine}</p>
   return (
-    <p className="agents-overview-counts" role="group" aria-label="Show only">
+    // The kit's segmented control, bare: a count shown alone is pressed, none
+    // is while every group shows, and choosing the pressed one lets it go.
+    <SegmentedControl
+      variant="bare"
+      className="agents-overview-counts"
+      aria-label="Show only"
+      value={glance.group ?? ""}
+      onValueChange={(value) => {
+        const chosen = counts.find((count) => count.group === value)
+        if (chosen) onToggle(chosen.group)
+      }}
+    >
       {counts.map(({ group, label }, index) => (
         <span key={group} className="agents-overview-count">
           {index > 0 ? <span aria-hidden="true">{" · "}</span> : null}
-          <button
-            type="button"
-            aria-pressed={glance.group === group}
-            data-group={group}
-            onClick={() => onToggle(group)}
-          >
+          <SegmentedControlOption value={group} data-group={group}>
             {label}
-          </button>
+          </SegmentedControlOption>
         </span>
       ))}
-    </p>
+    </SegmentedControl>
   )
 }
 
