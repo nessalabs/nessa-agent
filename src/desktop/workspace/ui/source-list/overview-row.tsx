@@ -14,11 +14,22 @@ export function OverviewRow() {
   const dispatch = useWorkspaceDispatch()
   const frame = useWorkspaceFrame()
   const open = useWorkspaceSelector(selectOverviewOpen)
-  // After the open paint. Marking the row on the key restyles it inside the
-  // sidebar's blur (`overview-layer.tsx`). Tests flush this effect in `act`.
+  // Not on the open's own paint. A click flushes this effect before that
+  // paint, so the mark waits two frames (`layouts.test.tsx`).
   const [marked, setMarked] = useState(false)
   useEffect(() => {
-    setMarked(open)
+    if (!open) {
+      setMarked(false)
+      return
+    }
+    let inner = 0
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => setMarked(true))
+    })
+    return () => {
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
   }, [open])
   const waiting = useWorkspaceSelector((state) => selectStatusCounts(state).needsYou)
   return (
