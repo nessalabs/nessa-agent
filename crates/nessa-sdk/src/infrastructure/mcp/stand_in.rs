@@ -4,7 +4,7 @@
 //! harness ──initialize──────────────▶ answered here, from the upstream's own answer
 //!         ──request (its id)────────▶ Connection::call (an id of the connection's)
 //!         ◀─answer (its id)─────────┘   tools/list: without the model's hidden tools
-//!                                           tools/call: structuredContent kept first
+//!                                           tools/call: arguments kept, then structuredContent
 //!         ──notifications/cancelled─▶ that call dropped: cancelled upstream
 //!         ◀─*/list_changed────────── the connection's notices
 //! ```
@@ -125,9 +125,10 @@ impl Visibility {
 /// either ends. `initialized` is the upstream's answer to the client's own
 /// `initialize`; the harness gets it, without `resources.subscribe`.
 /// `visibility` is the session's: what its lists, and this stand-in's, said
-/// the model may not see. `forwarded` is its grant's: where a `tools/call`
-/// result's `structuredContent` is kept, under the harness's id for the call,
-/// before the harness is answered.
+/// the model may not see. `forwarded` is its grant's: where a `tools/call`'s
+/// arguments are kept when the call is accepted, and where its result's
+/// `structuredContent` is kept, under the harness's id for the call, before
+/// the harness is answered.
 pub(crate) async fn serve(
     connection: Arc<Connection>,
     initialized: Arc<Value>,
@@ -244,6 +245,16 @@ pub(crate) async fn serve(
                 } else {
                     None
                 };
+                // Kept as the request is accepted, so an update the harness
+                // reports while the call runs can carry them. A hidden tool
+                // was refused above and never reaches here.
+                if let Some(id) = call.clone() {
+                    if let Some(arguments) = wire::call_arguments(
+                        params.as_ref().and_then(|params| params.get("arguments")),
+                    ) {
+                        forwarded.record_arguments(id, server, arguments);
+                    }
+                }
                 let call = calls.spawn({
                     let key = key.clone();
                     async move {

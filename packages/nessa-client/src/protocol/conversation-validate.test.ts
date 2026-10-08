@@ -148,17 +148,19 @@ describe("conversation view agreement", () => {
   })
 
   it("accepts a tool's MCP identity and structured result within the published bounds", () => {
+    const atBound = `{"a":"${"x".repeat(bounds.maxMcpArgumentsBytes - 8)}"}`
     const value = view()
     Object.assign(value.tools[0]!, {
       mcp: {
         server: "é".repeat(bounds.maxMcpNameBytes / 2),
         tool: "show",
         resourceUri: `ui://${"é".repeat((bounds.maxUiResourceUriBytes - 6) / 2)}`,
+        argumentsJson: atBound,
       },
       structuredContent: "a".repeat(bounds.maxToolStructuredContentBytes),
     })
     expect(conversationView(value, "conversation").tools[0]).toMatchObject({
-      mcp: { tool: "show" },
+      mcp: { tool: "show", argumentsJson: atBound },
     })
     // Without them the tool reads as it always has.
     expect(conversationView(view(), "conversation").tools[0]?.mcp).toBeUndefined()
@@ -183,6 +185,13 @@ describe("conversation view agreement", () => {
       { mcp: "charts" },
       { structuredContent: "a".repeat(bounds.maxToolStructuredContentBytes + 1) },
       { structuredContent: { rows: 2 } },
+      {
+        mcp: {
+          server: "charts",
+          tool: "show",
+          argumentsJson: `{"a":"${"x".repeat(bounds.maxMcpArgumentsBytes - 7)}"}`,
+        },
+      },
     ]
     for (const mutation of mutations) {
       const value = view()

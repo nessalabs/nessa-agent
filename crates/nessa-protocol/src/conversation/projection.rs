@@ -941,12 +941,26 @@ impl Projection {
                     .into();
                 }
                 if let Some(mcp) = update.mcp_tool() {
+                    let carried = update
+                        .mcp_arguments()
+                        .map(|arguments| arguments.as_str().to_owned());
+                    // An update that does not repeat the arguments leaves the
+                    // ones already carried, and only for the same server and
+                    // tool: a different identity is a different call.
+                    let arguments_json = carried.or_else(|| {
+                        tool.mcp.as_ref().and_then(|existing| {
+                            (existing.server == mcp.server() && existing.tool == mcp.tool())
+                                .then(|| existing.arguments_json.clone())
+                                .flatten()
+                        })
+                    });
                     tool.mcp = Some(ConversationMcpTool {
                         server: mcp.server().into(),
                         tool: mcp.tool().into(),
                         // Filled when the view is read, from the tools as
                         // last listed: see `read_with_mode_change`.
                         resource_uri: None,
+                        arguments_json,
                     });
                 }
                 if let Some(content) = update.content() {
@@ -1169,6 +1183,24 @@ pub fn bound_view_within(
         if !interactions && !gives_up_anything_but_interactions(&view) {
             break;
         }
+        // Arguments are what an app is told its call with. They yield once
+        // the history has nothing left to give, and before the tool row
+        // itself does: a row removed here would leave the desktop on the
+        // previous state. Dropping them does not say the view was truncated.
+        // The tool and its status stay, as when a structured result is left
+        // out.
+        if !transcript_can_yield(&view) {
+            if let Some(tool) = view.tools.iter_mut().find(|tool| {
+                tool.mcp
+                    .as_ref()
+                    .is_some_and(|mcp| mcp.arguments_json.is_some())
+            }) {
+                if let Some(mcp) = &mut tool.mcp {
+                    mcp.arguments_json = None;
+                }
+                continue;
+            }
+        }
         view.truncated = true;
         if view.messages.len() > 1 {
             view.messages.remove(0);
@@ -1219,9 +1251,9 @@ pub fn bound_view_within(
     view
 }
 
-/// Whether `view` still has anything a bound may give up before its
-/// interactions: its transcript, tool calls or queue.
-fn gives_up_anything_but_interactions(view: &ConversationView) -> bool {
+/// Whether `view`'s transcript still has a message, part, or linked file a
+/// bound may give up.
+fn transcript_can_yield(view: &ConversationView) -> bool {
     view.messages.len() > 1
         || view.messages.first().is_some_and(|message| {
             !message.parts.is_empty()
@@ -1229,8 +1261,12 @@ fn gives_up_anything_but_interactions(view: &ConversationView) -> bool {
                 || !message.files.is_empty()
                 || !message.attachments.is_empty()
         })
-        || !view.tools.is_empty()
-        || !view.pending.is_empty()
+}
+
+/// Whether `view` still has anything a bound may give up before its
+/// interactions: its transcript, tool calls or queue.
+fn gives_up_anything_but_interactions(view: &ConversationView) -> bool {
+    transcript_can_yield(view) || !view.tools.is_empty() || !view.pending.is_empty()
 }
 
 /// Whether `view` may offer an ask or review from `execution`: only while its

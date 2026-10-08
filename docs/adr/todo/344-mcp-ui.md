@@ -254,8 +254,7 @@ app widgets alike.
   (`bridge.test.ts`, L1b).
 - **Limits, each its own issue**: a release fences the mount, so a call still
   in admission opens no review and a read is issued no ticket (#397); one
-  mount holds at most 3 of the socket's 4 app slots (#398); an app is
-  told `{}` for arguments the view does not carry (#394); a frame the gateway
+  mount holds at most 3 of the socket's 4 app slots (#398); a frame the gateway
   cannot decode is answered `invalid_request` when the envelope parser reads
   one JSON object, no decoded envelope name appears twice, `type` is `req`,
   and `id` is one Unicode string of 1 to 256 bytes. An envelope name that is

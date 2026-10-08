@@ -242,7 +242,10 @@ pub(super) enum ChangeUndo {
     Input(ExecutionId),
     Queue(QueueReplayUndo),
     Scheduling(usize),
-    Observation(usize, InvocationObservationUndo),
+    // Boxed: a tool observation carried inline made this variant larger than
+    // the rest of the undo by enough to trip the size lint, once an MCP
+    // call's arguments joined the observation.
+    Observation(usize, Box<InvocationObservationUndo>),
     Receipt(usize, SubmissionAcknowledgement),
     Stop(usize),
     Report(usize),
@@ -513,7 +516,7 @@ impl continuation::Continuation {
                 let index = positions[event.execution_id()];
                 let observation_undo =
                     invocations[index].observe(&context, record, record.events.len(), event)?;
-                undo.push(ChangeUndo::Observation(index, observation_undo));
+                undo.push(ChangeUndo::Observation(index, Box::new(observation_undo)));
                 if context_witness.is_none()
                     && matches!(event.update(), ExecutionUpdate::PermissionCancelled(_))
                 {
@@ -736,7 +739,7 @@ impl continuation::Continuation {
                     .saturating_sub(super::retained::scheduling_payload(&event));
             }
             ChangeUndo::Observation(index, undo) => {
-                self.invocations[index].restore_observation(undo);
+                self.invocations[index].restore_observation(*undo);
                 let event = self.snapshot.as_mut().expect("open").invocations[index]
                     .events
                     .pop()

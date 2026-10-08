@@ -50,7 +50,7 @@ use nessa_sdk::domain::agent_execution::sessions::{
     ExecutionSessionId, ProviderContext, SessionId,
 };
 use nessa_sdk::domain::agent_execution::tools::{
-    McpTool, ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus,
+    McpCallArguments, McpTool, ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus,
 };
 use uuid::Uuid;
 
@@ -488,6 +488,141 @@ fn a_view_past_its_budget_gives_up_structured_results_before_any_message() {
     assert_eq!(
         view.tools[2].structured_content.as_deref(),
         Some(json.as_str())
+    );
+}
+
+#[test]
+fn an_mcp_tool_carries_the_arguments_its_connection_saw_and_a_later_update_keeps_them() {
+    let tool = ToolCallId::new("chart").unwrap();
+    let arguments = McpCallArguments::new(r#"{"city":"Oslo"}"#).unwrap();
+    let mut events = vec![event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(
+            tool.clone(),
+            Some("mcp.charts.show".into()),
+            None,
+            None,
+            None,
+            None,
+        )
+        .with_mcp_tool(McpTool::new("charts", "show").unwrap())
+        .with_mcp_arguments(arguments),
+    ))];
+    let view = committed_tool_view(&events);
+    assert_eq!(
+        view.tools[0]
+            .mcp
+            .as_ref()
+            .unwrap()
+            .arguments_json
+            .as_deref(),
+        Some(r#"{"city":"Oslo"}"#)
+    );
+    assert_eq!(
+        serde_json::to_value(&view.tools[0]).unwrap()["mcp"]["argumentsJson"],
+        r#"{"city":"Oslo"}"#
+    );
+    // The same server and tool, without repeating the arguments, keeps them.
+    events.push(event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(
+            tool.clone(),
+            None,
+            None,
+            Some(ToolStatus::Completed),
+            None,
+            None,
+        )
+        .with_mcp_tool(McpTool::new("charts", "show").unwrap()),
+    )));
+    assert_eq!(
+        committed_tool_view(&events).tools[0]
+            .mcp
+            .as_ref()
+            .unwrap()
+            .arguments_json
+            .as_deref(),
+        Some(r#"{"city":"Oslo"}"#)
+    );
+    // A different tool does not.
+    events.push(event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(tool, None, None, None, None, None)
+            .with_mcp_tool(McpTool::new("charts", "other").unwrap()),
+    )));
+    let replaced = committed_tool_view(&events);
+    let mcp = replaced.tools[0].mcp.as_ref().unwrap();
+    assert_eq!(mcp.tool, "other");
+    assert_eq!(mcp.arguments_json, None);
+    assert!(serde_json::to_value(mcp)
+        .unwrap()
+        .get("argumentsJson")
+        .is_none());
+}
+
+#[test]
+fn a_view_past_its_budget_gives_up_call_arguments_after_its_history_and_before_the_tool() {
+    let mut view = committed_tool_view(&[event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(
+            ToolCallId::new("chart").unwrap(),
+            None,
+            None,
+            None,
+            None,
+            Some(vec![ToolContent::text("out")]),
+        )
+        .with_mcp_tool(McpTool::new("charts", "show").unwrap())
+        .with_mcp_arguments(
+            McpCallArguments::new(format!(r#"{{"a":"{}"}}"#, "x".repeat(4_000))).unwrap(),
+        ),
+    ))]);
+    // Nothing of the history can yield, so the arguments are why the tool
+    // would go. They are left out and the tool stays, and the view does not
+    // say it was truncated.
+    let message = &mut view.messages[0];
+    message.parts.clear();
+    message.user_text.clear();
+    message.files.clear();
+    message.attachments.clear();
+    message.retained_text = 0;
+    let full = serde_json::to_vec(&view).unwrap().len();
+    let bounded = bound_view_within(view, full - 1, true);
+    assert_eq!(bounded.messages.len(), 1);
+    assert_eq!(bounded.tools.len(), 1);
+    assert!(bounded.tools[0]
+        .mcp
+        .as_ref()
+        .unwrap()
+        .arguments_json
+        .is_none());
+    assert!(!bounded.truncated);
+
+    // An older message is why the view is over, so it yields and the
+    // arguments stay.
+    let mut view = committed_tool_view(&[event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(
+            ToolCallId::new("chart").unwrap(),
+            None,
+            None,
+            None,
+            None,
+            Some(vec![ToolContent::text("out")]),
+        )
+        .with_mcp_tool(McpTool::new("charts", "show").unwrap())
+        .with_mcp_arguments(McpCallArguments::new(r#"{"a":1}"#).unwrap()),
+    ))]);
+    let older = view.messages[0].clone();
+    view.messages.insert(0, older);
+    let full = serde_json::to_vec(&view).unwrap().len();
+    let bounded = bound_view_within(view, full - 1, true);
+    assert!(bounded.truncated);
+    assert_eq!(bounded.messages.len(), 1);
+    assert_eq!(bounded.tools.len(), 1);
+    assert_eq!(
+        bounded.tools[0]
+            .mcp
+            .as_ref()
+            .unwrap()
+            .arguments_json
+            .as_deref(),
+        Some(r#"{"a":1}"#)
     );
 }
 

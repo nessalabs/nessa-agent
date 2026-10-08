@@ -96,9 +96,10 @@ end of input (Nessa's own shell server) still does.
   falls too far behind to have them all, it is sent all three, which are
   idempotent; its other notifications (progress, logging) are not. A server's own requests are
   answered by the gateway: `ping` with `{}`, anything else with `-32601`,
-  since the gateway declared none of them. A `tools/call` answer's
-  `structuredContent` is kept for the call's tool call before the harness is
-  answered ([forwarded results](#forwarded-results), #435).
+  since the gateway declared none of them. A `tools/call`'s arguments are
+  kept when the call is accepted, and its answer's `structuredContent`
+  before the harness is answered ([forwarded arguments](#forwarded-arguments),
+  [forwarded results](#forwarded-results), #394, #435).
 - **Tool UI.** `tools/list` (paged by `nextCursor`) gives each tool's
   `_meta.ui`: an optional `resourceUri` (a `ui://` URI) and `visibility`
   (`model`, `app`), each read on its own. Who may see and call the tool is
@@ -191,6 +192,7 @@ reopen an entry it does not contain.
 | Tool names whose visibility a session remembers | 4096 | only the names the list asked latest gave are kept (a list answered late cannot evict a later one's), then none if that list alone passes it, and a name not remembered is hidden; tools paged past it are callable only from the latest pages |
 | Live grants | one per open provider session | — |
 | Forwarded results a grant keeps | 32, each a call id of at most 256 bytes, the answering server's name (at most 64 bytes) and a result of at most 64 KiB (`MAX_STRUCTURED_RESULT_BYTES`) | the oldest is dropped; a larger result is kept as the "omitted: too large" text |
+| Forwarded arguments a grant keeps | 32, apart from the results, each a call id of at most 256 bytes, the server's name and one JSON object of at most 32 KiB (`MAX_MCP_ARGUMENTS_BYTES`, the schema's `maxMcpArgumentsBytes`) | the oldest is dropped; a larger object, or one that is not an object, is not kept — never cut |
 | Sessions a grant remembers | its open ones, and those ended since its last opening | dropped as the next opens; all taken when it is revoked |
 | Open sessions | not bounded here | each is a harness's stand-in, started by a process of the gateway's own user |
 
@@ -346,6 +348,77 @@ through a stand-in and keeps nothing. Appending a result counts toward the
 execution's retained tool bytes like any other content, as Codex's
 structured results already do.
 
+### Forwarded arguments
+
+A call's arguments reach the conversation view, today, only when a permission
+request showed them (`ConversationTool.input`). The gateway's MCP connection
+sees every `tools/call`'s arguments, and an MCP App is told its call's
+arguments in `ui/notifications/tool-input` before `tool-result`. Sending `{}`
+while they are still unknown locks that notification: the spec sends it at
+most once. The stand-in therefore keeps the encoded object, under the same
+call id and in the same grant store as a forwarded result, when it accepts
+the request — before the upstream server answers — so a later ACP update can
+carry them (`attach_arguments`). They wait in their own deque, so a burst of
+results cannot push them out, and a burst of arguments cannot push a result
+out.
+
+```mermaid
+sequenceDiagram
+    participant Harness
+    participant StandIn as MCP stand-in
+    participant Store as ForwardedResults
+    participant Worker as ACP worker
+    participant View as Conversation view
+    participant App as MCP App
+    Harness->>StandIn: tools/call arguments, call id
+    StandIn->>Store: record arguments when accepted
+    StandIn->>Harness: tools/call result
+    Harness->>Worker: tool call update
+    Worker->>Store: take arguments for that server
+    Worker->>View: update carries argumentsJson
+    View->>App: tool-input, then tool-result
+```
+
+The same limit as a forwarded result applies to correlation. Claude names the
+call (`_meta["claudecode/toolUseId"]`). Codex and OpenCode send no usable
+call id, so a call of theirs keeps nothing here (A5, as S5). The desktop
+does not invent arguments from `rawInput`. While a running call's view has
+no arguments, it sends no `tool-input`. When the call is done and the view
+still has none — no correlation, arguments that were not an object, or
+arguments past the bound — it sends `{}` and then the result. `{}` kept
+here is the call's real empty arguments (A2), and the desktop sends those
+as soon as the view carries them.
+
+An error answer still keeps the arguments (the request was seen); a result
+of that call keeps nothing (S4). A call cancelled after it was accepted
+keeps its arguments until they are taken or evicted; its result keeps
+nothing (S6). A `failed` update takes them (A10): they were the request.
+The view keeps what an update carried when a later update of the same server
+and tool does not repeat them. Past the view's byte budget, history yields
+first; arguments are then left off the tool, which stays, and the view does
+not say it was truncated for that. A tool row removed instead would leave
+the desktop on the previous state.
+
+| # | Event | Effect |
+| --- | --- | --- |
+| A1 | `tools/call` accepted, arguments a JSON object that fits, the request naming a call id | the encoded object kept under that id and server, when the request is accepted |
+| A2 | arguments absent or `null` | `{}` kept |
+| A3 | arguments not an object | nothing |
+| A4 | arguments past 32 KiB | nothing; at 32 KiB exactly, kept. Never cut |
+| A5 | no usable call id (Codex, OpenCode), under S5's rule | nothing |
+| A6 | a hidden tool, refused and never forwarded | nothing |
+| A7 | an id kept again | the later arguments, once, whichever server kept the earlier ones |
+| A8 | 32 argument sets kept already | the oldest dropped; the results deque is untouched |
+| A9 | a stand-in of one grant keeps arguments | no other grant sees them |
+| A10 | an MCP tool update of any status, arguments kept for its id and server | taken onto the update |
+| A11 | an update naming no MCP tool, or another server | nothing taken |
+| A12 | a second update of the call | nothing more: taken. The view keeps what the first carried when it names the same server and tool |
+| A13 | an open without a grant | the update unchanged |
+| A14 | an ACP update before the request is seen | that update carries none; a later update after the request takes them. The harness sends `tools/call` before it can report the call completed, so the update that arrives first is the running announcement. A last update that still arrived first leaves the arguments in the store until they are dropped, and the app is told `{}` |
+| V1 | the arguments fit the view's byte budget | on `ConversationMcpTool.argumentsJson` |
+| V2 | the view is over budget and the arguments are why a tool row would be removed | the arguments omitted, the tool kept; the view does not say it was truncated |
+| V3 | the view is over budget because of an older message | the message yields first; the arguments stay |
+
 ## What one connection per harness session means
 
 - **Restoration identity.** The server list is not part of it; what follows
@@ -401,7 +474,7 @@ Each row above has at least one test, named after it:
   revoked off any runtime killing at once, a grant revoked
   while its session opens refusing that opening, a grant revoked while its
   session closes leaving every close waiting for the stop, stop racing an
-  opening; forwarded results kept by the stand-in, S1–S8 and S11 (`forwarded.rs`); a provider open holding its session's grant until it ends and
+  opening; forwarded results kept by the stand-in, S1–S8 and S11, and forwarded arguments A1–A6 and A9, an error answer keeping the arguments (`an_error_answer_keeps_the_call_arguments`) (`forwarded.rs`); a provider open holding its session's grant until it ends and
   through a relaunch of its process, the open naming the manager's session, every
   `mcpServers` entry carrying the open's environment, and grants and the MCP
   server list left out of the fingerprint, with a restore resuming under the
@@ -427,12 +500,20 @@ Each row above has at least one test, named after it:
   its environment, the stand-ins and digest in `session/new`, a relay process killed outright ending its server's
   process group, a relay exiting when its server ends with its stdin still
   open, the view's `resourceUri` and revision, the schema bound.
-- SDK, ACP: the store's S9 and S10, and W1–W8
+- SDK, ACP: the store's S9, S10, A7 and A8, and W1–W8, A10–A14
   (`tests/infrastructure/acp/sessions/forwarded.rs`), and
   Claude's recorded frames (`report_rows` completed, `always_fails` failed)
   replayed through the worker with a grant holding a result for each
   (`contracts/tools.rs`).
-- Desktop: a gateway tool with a `resourceUri` maps to a `widget` part.
+- Protocol: a call's arguments are on `ConversationMcpTool.argumentsJson` and
+  stay when a later update of the same server and tool does not repeat them
+  (V1); past the view's budget they yield after the history and before the
+  tool row (V2, V3) (`crates/nessa-protocol/tests/conversation/projection.rs`).
+  The schema bound is the SDK's (`nessa-server/tests/conversation/agreement.rs`).
+- Desktop: a gateway tool with a `resourceUri` maps to a `widget` part. A
+  running call with no arguments sends no `tool-input`; the arguments the
+  connection carried are `tool-input` before `tool-result`
+  (`app-calls.test.ts`, `tool-call.test.ts`).
 - Live: `scripts/mcp-test-server/live-check.mjs` with Claude and Codex.
 
 ## The live server set (#391)

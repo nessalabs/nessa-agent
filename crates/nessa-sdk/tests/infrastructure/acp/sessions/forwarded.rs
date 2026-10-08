@@ -1,8 +1,8 @@
-//! The store of forwarded results, and attaching one to the call it answers:
-//! rows S9, S10 and W1–W8 of the "Forwarded results" table in
-//! `docs/design/mcp-connections.md`, each test named after its row.
+//! The store of forwarded results and arguments, and attaching each to the
+//! call it belongs to: rows S9, S10, A7, A8 and W1–W8, A10–A13 of the tables
+//! in `docs/design/mcp-connections.md`, each test named after its row.
 use super::*;
-use crate::domain::agent_execution::tools::{McpTool, ToolCallId};
+use crate::domain::agent_execution::tools::{McpCallArguments, McpTool, ToolCallId};
 
 /// A call's update with `status` and `content`, naming an MCP tool when `mcp`.
 fn call_update(
@@ -152,6 +152,142 @@ fn s9_past_the_bound_the_oldest_result_is_dropped() {
         forwarded.take(&id(&last), "mcptest"),
         Some(structured(&MAX_FORWARDED_RESULTS.to_string()))
     );
+}
+
+fn arguments(json: &str) -> McpCallArguments {
+    McpCallArguments::new(json).unwrap()
+}
+
+#[test]
+fn a7_an_id_kept_again_holds_the_later_arguments_once() {
+    let forwarded = ForwardedResults::new();
+    forwarded.record_arguments(id("toolu_1"), "mcptest", arguments(r#"{"n":1}"#));
+    forwarded.record_arguments(id("toolu_1"), "other", arguments(r#"{"n":2}"#));
+    assert_eq!(forwarded.arguments_len(), 1);
+    // Replacing by id drops the first server's: a take as that server finds nothing.
+    assert_eq!(forwarded.take_arguments(&id("toolu_1"), "mcptest"), None);
+    assert_eq!(
+        forwarded
+            .take_arguments(&id("toolu_1"), "other")
+            .as_ref()
+            .map(McpCallArguments::as_str),
+        Some(r#"{"n":2}"#)
+    );
+    assert_eq!(forwarded.take_arguments(&id("toolu_1"), "other"), None);
+}
+
+#[test]
+fn a8_past_the_bound_the_oldest_arguments_are_dropped_and_results_stay() {
+    let forwarded = ForwardedResults::new();
+    forwarded.record(id("toolu_result"), "mcptest", rows());
+    for call in 0..=MAX_FORWARDED_RESULTS {
+        forwarded.record_arguments(
+            id(&format!("toolu_{call}")),
+            "mcptest",
+            arguments(&format!(r#"{{"n":{call}}}"#)),
+        );
+    }
+    assert_eq!(forwarded.arguments_len(), MAX_FORWARDED_RESULTS);
+    assert_eq!(forwarded.take_arguments(&id("toolu_0"), "mcptest"), None);
+    assert_eq!(
+        forwarded
+            .take_arguments(&id("toolu_1"), "mcptest")
+            .as_ref()
+            .map(McpCallArguments::as_str),
+        Some(r#"{"n":1}"#)
+    );
+    assert_eq!(forwarded.len(), 1);
+    assert_eq!(forwarded.take(&id("toolu_result"), "mcptest"), Some(rows()));
+}
+
+#[test]
+fn a10_any_update_naming_the_call_s_server_takes_its_arguments() {
+    for status in [
+        None,
+        Some(ToolStatus::Pending),
+        Some(ToolStatus::Running),
+        Some(ToolStatus::Failed),
+        Some(ToolStatus::Completed),
+    ] {
+        let forwarded = ForwardedResults::new();
+        forwarded.record_arguments(id("toolu_1"), "mcptest", arguments(r#"{"city":"Oslo"}"#));
+        let update = attach_arguments(call_update(status, None, true), Some(&forwarded));
+        assert_eq!(
+            update.mcp_arguments().map(McpCallArguments::as_str),
+            Some(r#"{"city":"Oslo"}"#),
+            "{status:?}"
+        );
+        assert_eq!(forwarded.arguments_len(), 0);
+    }
+}
+
+#[test]
+fn a11_an_update_naming_no_mcp_tool_or_another_server_takes_nothing() {
+    let forwarded = ForwardedResults::new();
+    forwarded.record_arguments(id("toolu_1"), "mcptest", arguments(r#"{"city":"Oslo"}"#));
+    let unnamed = attach_arguments(
+        call_update(Some(ToolStatus::Running), None, false),
+        Some(&forwarded),
+    );
+    assert_eq!(unnamed.mcp_arguments(), None);
+    let other = ToolCallUpdate::new(
+        id("toolu_1"),
+        None,
+        None,
+        Some(ToolStatus::Running),
+        None,
+        None,
+    )
+    .with_mcp_tool(McpTool::new("other", "report_rows").unwrap());
+    let update = attach_arguments(other, Some(&forwarded));
+    assert_eq!(update.mcp_arguments(), None);
+    assert_eq!(forwarded.arguments_len(), 1);
+}
+
+#[test]
+fn a12_a_second_update_gets_nothing_more() {
+    let forwarded = ForwardedResults::new();
+    forwarded.record_arguments(id("toolu_1"), "mcptest", arguments(r#"{"city":"Oslo"}"#));
+    attach_arguments(
+        call_update(Some(ToolStatus::Running), None, true),
+        Some(&forwarded),
+    );
+    let again = attach_arguments(
+        call_update(Some(ToolStatus::Completed), Some(vec![]), true),
+        Some(&forwarded),
+    );
+    assert_eq!(again.mcp_arguments(), None);
+}
+
+#[test]
+fn a14_an_update_before_the_request_is_seen_leaves_the_arguments_for_a_later_one() {
+    let forwarded = ForwardedResults::new();
+    let early = attach_arguments(
+        call_update(Some(ToolStatus::Running), None, true),
+        Some(&forwarded),
+    );
+    assert_eq!(early.mcp_arguments(), None);
+    forwarded.record_arguments(id("toolu_1"), "mcptest", arguments(r#"{"city":"Oslo"}"#));
+    let later = attach_arguments(
+        call_update(Some(ToolStatus::Running), None, true),
+        Some(&forwarded),
+    );
+    assert_eq!(
+        later.mcp_arguments().map(McpCallArguments::as_str),
+        Some(r#"{"city":"Oslo"}"#)
+    );
+    assert_eq!(forwarded.arguments_len(), 0);
+}
+
+#[test]
+fn a13_an_open_without_forwarded_arguments_leaves_the_update_as_it_was() {
+    let update = attach_arguments(call_update(Some(ToolStatus::Running), None, true), None);
+    assert_eq!(update.mcp_arguments(), None);
+    let empty = attach_arguments(
+        call_update(Some(ToolStatus::Running), None, true),
+        Some(&ForwardedResults::new()),
+    );
+    assert_eq!(empty.mcp_arguments(), None);
 }
 
 #[test]
