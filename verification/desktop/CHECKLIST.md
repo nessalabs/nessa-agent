@@ -427,10 +427,11 @@ scripts drive the sample plugin the sample workspace registers
 
 ## Subagents
 
-The read-only sample panel (ADR 329, #330, #331): a conversation's widget
-opens a list of the agents it put to work, and one child's conversation.
-The sample fills the retry-budget session only. No composer, no header
-accessory.
+The read-only sample panel (ADR 329, #330, #331, #332): a conversation's
+widget opens a list of the agents it put to work, and one child's
+conversation. The sample fills the retry-budget session only. No composer.
+The same conversation's pane header shows those agents when the preview is
+on.
 
 - [ ] **The card opens a pane beside the conversation**, the list in activity
   order with a closed child called closed, and a child opens on its
@@ -442,6 +443,12 @@ accessory.
   `subagents.mjs --only panel`.
 - [ ] **The list fits a narrow pane in a short window.** _Check:_
   `subagents.mjs --only narrow` (1000 × 560).
+- [ ] **The conversation's header shows its subagents, the busiest first.**
+  Nothing is drawn for a conversation without them, or with the preview off
+  (`subagent-stack.test.tsx`). A click opens the panel beside the
+  conversation. At a narrow width the stack, the header's title and the
+  pane's menu sit in the header without it overflowing and without
+  overlapping. _Check:_ `subagents.mjs --only narrow` (1000 × 560).
 
 ## MCP Apps
 
