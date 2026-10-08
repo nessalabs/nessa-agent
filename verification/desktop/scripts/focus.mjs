@@ -24,13 +24,14 @@
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { content, css, keys, names } from "./lib/selectors.mjs"
+import { content, css, keys, names, storage } from "./lib/selectors.mjs"
 import {
   contentIs,
   focusComposer,
   frames,
   hideColumns,
   leaveSettings,
+  overviewListed,
   paneCount,
   requestCount,
   settled,
@@ -116,7 +117,10 @@ function overviewSteps() {
     ],
     [
       "⌘0 opens",
-      (p) => p.keyboard.press(keys.overview),
+      async (p) => {
+        await p.keyboard.press(keys.overview)
+        await onOverviewRow(p)
+      },
       (s) => ((last = s.activeOverviewItem), onItem(s)),
     ],
     [
@@ -143,7 +147,7 @@ function overviewSteps() {
       async (p) => {
         await p.keyboard.press(keys.focusPane(1))
         await p.keyboard.press(keys.overview)
-        await settled(p)
+        await onOverviewRow(p)
         await p.keyboard.press(keys.focusPane(1))
       },
       backInComposer,
@@ -152,7 +156,7 @@ function overviewSteps() {
       "⇧⌘[ at the first pane, from the overview",
       async (p) => {
         await p.keyboard.press(keys.overview)
-        await settled(p)
+        await onOverviewRow(p)
         await p.keyboard.press(keys.focusPrevious)
       },
       backInComposer,
@@ -161,7 +165,7 @@ function overviewSteps() {
       "⌃⌥← at the left edge, from the overview",
       async (p) => {
         await p.keyboard.press(keys.overview)
-        await settled(p)
+        await onOverviewRow(p)
         await p.keyboard.press(keys.moveLeft)
       },
       onItem,
@@ -185,11 +189,29 @@ async function openInPane(page, title) {
   return card.first()
 }
 
+/**
+ * The caret lands the frame after the current row is drawn. Rows arrive one
+ * a frame, so that is later than the peek's animation (`overview.tsx`).
+ */
+async function onOverviewRow(page) {
+  if (!(await overviewListed(page)))
+    throw new CannotRun("the overview list did not finish drawing")
+  const landed = await until(
+    page,
+    (sel) => document.activeElement?.closest(sel) != null,
+    css.overviewItem,
+    1000,
+  )
+  if (!landed) throw new CannotRun("the keyboard did not land on an overview row")
+}
+
 /** How many requests the overview lists now: opened, counted, left. */
 async function requestsNow(page) {
   await page.keyboard.press(keys.overview)
   await contentIs(page, content.overview)
   await settled(page)
+  if (!(await overviewListed(page)))
+    throw new CannotRun("the overview list did not finish drawing")
   const count = await requestCount(page)
   await page.keyboard.press(keys.escape)
   await contentIs(page, content.panes)
@@ -238,6 +260,17 @@ async function answerOnceInOverview(page) {
   await page.keyboard.press(keys.overview)
   await contentIs(page, content.overview)
   await settled(page)
+  // The list arrives a few rows at a time, and the caret the frame after
+  // the current row. Nothing animating is not that landing (`overview.tsx`).
+  const onRow = await until(
+    page,
+    (sel) => document.activeElement?.closest(sel) != null,
+    css.overviewItem,
+    1000,
+  )
+  if (!onRow) throw new CannotRun("the keyboard did not land on an overview row")
+  if (!(await overviewListed(page)))
+    throw new CannotRun("the overview list did not finish drawing")
   const start = await requestCount(page)
   if (start < 2)
     throw new CannotRun(`the overview lists ${start} requests; two are needed`)
@@ -317,6 +350,9 @@ async function answerOnceOnCard(page) {
     // while after, in case a second one was taken.
     await page.keyboard.press(keys.overview)
     await contentIs(page, content.overview)
+    // The list is drawn a few rows at a time. An empty prefix is not "fewer".
+    if (!(await overviewListed(page)))
+      throw new CannotRun("the overview list did not finish drawing")
     const once = (await fewer(page, before - 1)) && (await noFewer(page, before - 1))
     const after = await requestCount(page)
     await page.keyboard.press(keys.escape)
@@ -355,8 +391,7 @@ async function replyKeepsCaret(page) {
   const trail = []
   await page.keyboard.press(keys.overview)
   await contentIs(page, content.overview)
-  await settled(page)
-  await frames(page, 4)
+  await onOverviewRow(page)
   const start = (await state(page)).activeOverviewItem
   // ↓ and ⌘R in one breath, then the words at once: the peek may not have followed ↓ yet.
   await page.keyboard.press(keys.down)
@@ -433,8 +468,7 @@ async function regroupKeepsKeyboard(page, from) {
   const trail = []
   await page.keyboard.press(keys.overview)
   await contentIs(page, content.overview)
-  await settled(page)
-  await frames(page, 4)
+  await onOverviewRow(page)
   const on = (await state(page)).activeOverviewItem
   if (!on) throw new CannotRun("the keyboard did not land on an overview row")
   await page.keyboard.press(keys.reply)
@@ -573,8 +607,9 @@ async function givesBackLostFocus(page, cause) {
   const trail = []
   await page.keyboard.press(keys.overview)
   await contentIs(page, content.overview)
-  await settled(page)
-  await frames(page, 4)
+  await onOverviewRow(page)
+  if (!(await overviewListed(page)))
+    throw new CannotRun("the overview list did not finish drawing")
   let scrolledTo = null
   if (cause === "moved") {
     // Scrolled away from the focused row, as when reading further down.
@@ -679,6 +714,223 @@ async function givesBackLostFocus(page, cause) {
   return { trail, failures }
 }
 
+async function firstMessageHandoff(page, reduced = false) {
+  const prompt = "one composer through the first message"
+  await page.keyboard.press(keys.newSession)
+  const ready = await until(
+    page,
+    ([pane, home, field]) => {
+      const current = document.querySelector(pane)
+      const input = current?.querySelector(`${home} ${field}`)
+      return input != null && document.activeElement === input
+    },
+    [css.focusedPane, css.paneHome, css.field],
+  )
+  if (!ready) return { failures: ["new-session home did not receive the caret"] }
+  await page.evaluate(
+    ([pane, composer]) => {
+      const current = document.querySelector(pane)
+      const counts = []
+      const flights = new Map()
+      const seen = new Set()
+      const sample = () => counts.push(current.querySelectorAll(composer).length)
+      const observer = new MutationObserver(sample)
+      observer.observe(current, { childList: true, subtree: true })
+      let frame = 0
+      const sampleMotion = () => {
+        for (const animation of current.getAnimations({ subtree: true })) {
+          if (animation.id.startsWith("first-send-")) {
+            seen.add(animation)
+            flights.set(animation.id, animation.effect?.getKeyframes())
+          }
+        }
+        frame = requestAnimationFrame(sampleMotion)
+      }
+      frame = requestAnimationFrame(sampleMotion)
+      sample()
+      window.__focusHomeHandoff = () => {
+        sample()
+        observer.disconnect()
+        cancelAnimationFrame(frame)
+        delete window.__focusHomeHandoff
+        return { counts, flights: Object.fromEntries(flights), motionCount: seen.size }
+      }
+    },
+    [css.focusedPane, css.composerCard],
+  )
+  let counts
+  let flights
+  let motionCount
+  const failures = []
+  try {
+    await page.keyboard.type(prompt)
+    await page.keyboard.press(keys.enter)
+    const arrived = await until(
+      page,
+      ([pane, home, dock, field, bubble, text]) => {
+        const current = document.querySelector(pane)
+        const input = current?.querySelector(`${dock} ${field}`)
+        return (
+          input != null &&
+          !current.querySelector(home) &&
+          [...current.querySelectorAll(bubble)].some(
+            (part) => part.textContent.trim() === text,
+          ) &&
+          document.activeElement === input
+        )
+      },
+      [
+        css.focusedPane,
+        css.paneHome,
+        css.conversationDock,
+        css.field,
+        css.bubble,
+        prompt,
+      ],
+    )
+    if (!arrived) failures.push("first message did not arrive with the reply caret")
+    else {
+      await page.keyboard.type("next reply")
+      const value = await page
+        .locator(`${css.focusedPane} ${css.conversationDock} ${css.field}`)
+        .inputValue()
+      if (value !== "next reply") failures.push(`reply draft is ${JSON.stringify(value)}`)
+      await frames(page, 2)
+      await page.evaluate((pane) => {
+        for (const animation of document
+          .querySelector(pane)
+          .getAnimations({ subtree: true }))
+          if (animation.id.startsWith("first-send-")) animation.pause()
+      }, css.focusedPane)
+      await page.keyboard.press(keys.newSession)
+      await page.locator(css.sessionRow).filter({ hasText: prompt }).first().click()
+      const returned = await until(
+        page,
+        ([pane, dock, field]) => {
+          const input = document.querySelector(pane)?.querySelector(`${dock} ${field}`)
+          return input?.value === "next reply"
+        },
+        [css.focusedPane, css.conversationDock, css.field],
+      )
+      if (!returned) failures.push("returning to the sent chat lost its reply draft")
+      await frames(page, 4)
+    }
+  } finally {
+    const observed = await page.evaluate(
+      () => window.__focusHomeHandoff?.() ?? { counts: [], flights: {}, motionCount: 0 },
+    )
+    counts = observed.counts
+    flights = observed.flights
+    motionCount = observed.motionCount
+  }
+  if (counts.length === 0) failures.push("handoff had no observed composer counts")
+  if (counts.some((count) => count > 1))
+    failures.push(`overlapping composers during handoff: ${counts.join(" ")}`)
+  if (reduced) {
+    if (Object.keys(flights).length)
+      failures.push("first send animated with reduced motion")
+  } else {
+    if (motionCount !== 2)
+      failures.push(
+        `first-send motion replayed or was missing: ${motionCount} flights, expected 2`,
+      )
+    for (const id of ["first-send-composer", "first-send-message"]) {
+      const frames = flights[id]
+      if (!frames || !frames[0]?.transform?.startsWith("translate("))
+        failures.push(`${id} did not glide from its origin`)
+    }
+  }
+  return { counts, flights, motionCount, after: await state(page), failures }
+}
+
+/**
+ * End, ↓ and Home while rows are still arriving one a frame. End lands on the
+ * last row mounted so far, ↓ stays there, and Home returns to the first.
+ * Aiming at a row not drawn yet leaves focus on the old one (`overview.tsx`).
+ * The keys run in one turn, before another frame can mount the row they name.
+ */
+async function keysWhileRowsArrive(page) {
+  await page.keyboard.press(keys.overview)
+  const open = await until(
+    page,
+    (sel) => {
+      const column = document.querySelector(sel.column)
+      if (!column || column.hasAttribute("data-overview-listed")) return false
+      const rows = [...column.querySelectorAll(sel.item)]
+      if (rows.length < 2) return false
+      const focused = document.activeElement?.closest(sel.item)
+      return focused != null && focused !== rows[rows.length - 1]
+    },
+    { column: css.overviewColumn, item: css.overviewItem },
+    2000,
+  )
+  if (!open)
+    throw new CannotRun(
+      "the overview finished its list before two rows were mounted with focus still above the last",
+    )
+  const read = await page.evaluate(
+    (sel) => {
+      const column = document.querySelector(sel.column)
+      const rows = [...(column?.querySelectorAll(sel.item) ?? [])]
+      const ids = rows.map((row) => row.getAttribute("data-overview-item"))
+      const focused = document.activeElement?.closest(sel.item)
+      if (
+        !column ||
+        column.hasAttribute("data-overview-listed") ||
+        ids.length < 2 ||
+        !focused ||
+        focused === rows[rows.length - 1]
+      )
+        return { missed: true }
+      const press = (code) => {
+        const target = document.activeElement
+        if (!(target instanceof HTMLElement)) return
+        target.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            code,
+            key: code,
+            bubbles: true,
+            cancelable: true,
+          }),
+        )
+      }
+      const now = () => {
+        const row = document.activeElement?.closest(sel.item)
+        const tabbable = rows.find((item) => item.tabIndex === 0)
+        return {
+          focused: row?.getAttribute("data-overview-item") ?? null,
+          tabbable: tabbable?.getAttribute("data-overview-item") ?? null,
+        }
+      }
+      const first = ids[0]
+      const last = ids[ids.length - 1]
+      press("End")
+      const afterEnd = now()
+      press("ArrowDown")
+      const afterDown = now()
+      press("Home")
+      const afterHome = now()
+      return { missed: false, first, last, afterEnd, afterDown, afterHome }
+    },
+    { column: css.overviewColumn, item: css.overviewItem },
+  )
+  if (read.missed)
+    throw new CannotRun("the overview finished its list before End could be pressed")
+  const failures = []
+  const aligned = (label, step, want) => {
+    if (step.focused !== want)
+      failures.push(`${label} left focus on ${step.focused}, not the mounted row ${want}`)
+    else if (step.tabbable !== step.focused)
+      failures.push(
+        `${label} marked ${step.tabbable} current while focus stayed on ${step.focused}`,
+      )
+  }
+  aligned("End", read.afterEnd, read.last)
+  aligned("↓", read.afterDown, read.last)
+  aligned("Home", read.afterHome, read.first)
+  return { ...read, failures }
+}
+
 const meta = {
   name: "focus",
   summary:
@@ -719,6 +971,8 @@ Steps (each asserts where the caret is afterwards):
   the caret kept in the pill and the next keys in it; focus in the peek beside the list as the window narrows
   to 700; Show All pressed once nothing is left out → the keyboard is on a
   row, and ↓ walks the list
+  focus-home-handoff: the first message replaces the home with one composer;
+    the reply receives the caret and keeps the next draft.
   focus-home-scene: Customize focused in a new session's home, the window
   shortened so the home takes a small pane's shape → focus stays on Customize`,
 }
@@ -795,6 +1049,10 @@ await main(meta, async ({ options, rep, url }) => {
             return { trail, failures }
           })
 
+        await attempt(rep, { name: "focus-overview-arriving", engine, layout }, () =>
+          keysWhileRowsArrive(page),
+        )
+
         const mash = Number(options.mash)
         if (mash > 0)
           await attempt(rep, { name: "focus-mash", engine, layout }, async () => {
@@ -826,6 +1084,33 @@ await main(meta, async ({ options, rep, url }) => {
       } finally {
         await opened.close()
       }
+      await attempt(rep, { name: "focus-home-handoff", engine, layout }, async () => {
+        const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
+        try {
+          const result = await firstMessageHandoff(fresh.page)
+          return result
+        } finally {
+          await fresh.close()
+        }
+      })
+      await attempt(
+        rep,
+        { name: "focus-home-handoff-reduced", engine, layout },
+        async () => {
+          const fresh = await openPage(browser, {
+            url,
+            layout,
+            width: 1440,
+            height: 900,
+            prefs: { [storage.motion]: "reduced" },
+          })
+          try {
+            return await firstMessageHandoff(fresh.page, true)
+          } finally {
+            await fresh.close()
+          }
+        },
+      )
       for (const [name, answer] of [
         ["focus-answers-overview", answerOnceInOverview],
         ["focus-answers-card", answerOnceOnCard],

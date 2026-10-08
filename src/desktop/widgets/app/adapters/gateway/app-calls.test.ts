@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest"
 import { createWidgetRegistry } from "../../../application/registry"
 import type { WidgetPlugin } from "../../../ui/plugin"
 import { appPluginId } from "../../model/app-ref"
+import { nothingTold, toolNotifications } from "../../model/tool-call"
 import { gatewayAppCall, gatewayAppCalls } from "./app-calls"
 import { gatewayApps } from "./gateway-apps"
 
@@ -43,7 +44,7 @@ describe("a view's tool as an app call", () => {
         toolId: "call-1",
         tool: "show_chart",
         resourceUri: "ui://nessa-test/chart.html",
-        phase: { kind: "running", arguments: {} },
+        phase: { kind: "running" },
       },
     })
   })
@@ -96,15 +97,58 @@ describe("a view's tool as an app call", () => {
     })
   })
 
-  it("C6: arguments are the input when it is a JSON object, else none", () => {
+  it("C6: a running call with no arguments is not told {}", () => {
     for (const input of ["", "not json", "[1]", "3", "null"])
       expect(gatewayAppCall(conversationId, tool({ input }))?.call.phase).toEqual({
         kind: "running",
-        arguments: {},
       })
     expect(
       gatewayAppCall(conversationId, tool({ input: '{"a":1}' }))?.call.phase,
     ).toEqual({ kind: "running", arguments: { a: 1 } })
+  })
+
+  it("C6: arguments the connection carried replace the permission input", () => {
+    const mcp = {
+      server: "mcptest",
+      tool: "show_chart",
+      resourceUri: "ui://nessa-test/chart.html",
+      argumentsJson: '{"city":"Oslo"}',
+    }
+    expect(
+      gatewayAppCall(conversationId, tool({ input: '{"a":1}', mcp }))?.call.phase,
+    ).toEqual({ kind: "running", arguments: { city: "Oslo" } })
+    expect(
+      gatewayAppCall(
+        conversationId,
+        tool({ input: "", mcp: { ...mcp, argumentsJson: "{}" } }),
+      )?.call.phase,
+    ).toEqual({ kind: "running", arguments: {} })
+    // Present and not an object: the connection is authoritative, so the
+    // permission input is not used, and a running call is not told {}.
+    expect(
+      gatewayAppCall(
+        conversationId,
+        tool({ input: '{"a":1}', mcp: { ...mcp, argumentsJson: "[1]" } }),
+      )?.call.phase,
+    ).toEqual({ kind: "running" })
+    expect(
+      gatewayAppCall(
+        conversationId,
+        tool({
+          status: "completed",
+          mcp: { ...mcp, argumentsJson: "[1]" },
+        }),
+      )?.call.phase,
+    ).toEqual({ kind: "done", arguments: {}, result: { content: [] } })
+    // A failed call still has the arguments the connection saw.
+    expect(
+      gatewayAppCall(conversationId, tool({ status: "failed", details: "No", mcp }))?.call
+        .phase,
+    ).toEqual({
+      kind: "done",
+      arguments: { city: "Oslo" },
+      result: { content: [{ type: "text", text: "No" }], isError: true },
+    })
   })
 
   it("C4: structured content that is not a JSON object is left out", () => {
@@ -114,6 +158,32 @@ describe("a view's tool as an app call", () => {
         tool({ status: "completed", structuredContent: "[1]" }),
       )?.call.phase,
     ).toEqual({ kind: "done", arguments: {}, result: { content: [] } })
+  })
+
+  it("C6: tool-input waits for real arguments, then precedes the result", () => {
+    const running = gatewayAppCall(conversationId, tool())
+    expect(toolNotifications(nothingTold, running!.call.phase).send).toEqual([])
+    const done = gatewayAppCall(
+      conversationId,
+      tool({
+        status: "completed",
+        details: "Sunny",
+        mcp: {
+          server: "mcptest",
+          tool: "show_chart",
+          resourceUri: "ui://nessa-test/chart.html",
+          argumentsJson: '{"city":"Oslo"}',
+        },
+      }),
+    )
+    expect(
+      toolNotifications(nothingTold, done!.call.phase).send.map((message) =>
+        "method" in message ? [message.method, message.params] : message,
+      ),
+    ).toEqual([
+      ["ui/notifications/tool-input", { arguments: { city: "Oslo" } }],
+      ["ui/notifications/tool-result", { content: [{ type: "text", text: "Sunny" }] }],
+    ])
   })
 })
 

@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
  * Runs every desktop check and summarises them. The functional checks share
- * one page (the dev server by default); perf-budget builds and previews
- * production itself, as its budget requires. In prod, message-sync previews
- * its dedicated fixture build instead of sharing the ordinary app build.
+ * one page (the dev server by default); perf-budget and message-sync each
+ * build and preview production themselves, as their budgets require.
  * Takes minutes — run it before
  * handing off UI work, not on every change; while iterating, run the check
  * that covers the change with `--quick` (one engine, layout and size).
@@ -27,7 +26,7 @@ import {
   verbose,
   verdictOf,
 } from "./lib/cli.mjs"
-import { target } from "./lib/server.mjs"
+import { functionalPreviewEnv, target } from "./lib/server.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 // workspace-load.mjs stays off this list. CHECKLIST.md › Seeded workspace load.
@@ -70,12 +69,16 @@ Usage: node verification/desktop/scripts/run-all.mjs [options]
   --skip-perf      Leave out perf-budget (the production build and its runs).
   --runs <n>       Passed to perf-budget.
 
-In prod, message-sync builds its own fixture preview.
+message-sync builds its own production fixture preview in either mode; its
+retained-app functional check is run separately in dev with the sandbox listener.
 --url / --mode apply to the functional checks; perf-budget always measures a
-production build unless --url is given. --mode prod leaves out the checks
+production build unless --url is given. A production functional preview is
+still minified, and its inlined application stage is ci
+(functionalPreviewEnv) so a scripted loopback browser socket is admitted.
+perf-budget keeps the prod stage. --mode prod leaves out the checks
 that need the dev server (${devServerOnlyChecks.join(", ")}) and names them
-"${DEV_SERVER_ONLY}". That is not "could not run". Steps inside drag,
-widgets, and mcp-apps that read the dev server's modules are left out the
+"${DEV_SERVER_ONLY}". That is not "could not run". Steps inside drag and
+widgets that read the dev server's modules are left out the
 same way. --engine and --layout, when given, are passed to every check;
 otherwise each uses its own default. Each check's JSON is collected into
 one document on stdout (or --out).
@@ -143,8 +146,7 @@ try {
 }
 const scheduled = checksUnder(options.mode, checks)
 const leftOutSet = new Set(scheduled.leftOut)
-const sharesPage = (check) =>
-  functional.includes(check) && !(check === "message-sync" && options.mode === "prod")
+const sharesPage = (check) => functional.includes(check) && check !== "message-sync"
 const dir = mkdtempSync(join(tmpdir(), "nessa-desktop-verify-all-"))
 const summary = []
 const documents = {}
@@ -152,7 +154,7 @@ let page
 try {
   if (scheduled.run.some(sharesPage)) {
     try {
-      page = await target(options)
+      page = await target(options, options.mode === "prod" ? functionalPreviewEnv() : {})
     } catch (error) {
       // No page to test. Each functional check is recorded in the loop below,
       // in check order, so a left-out row stays where that check sits.
@@ -174,9 +176,9 @@ try {
     const out = join(dir, `${check}.json`)
     const args = [...passThrough(), "--out", out]
     if (!sharesPage(check)) {
-      if (options.url) args.push("--url", options.url)
+      if (check === "perf-budget" && options.url) args.push("--url", options.url)
       if (options.runs) args.push("--runs", options.runs)
-      if (check === "message-sync") args.push("--mode", options.mode)
+      if (check === "message-sync") args.push("--mode", "prod")
     } else {
       args.push("--url", page.url)
       // The shared page is already started. The child must still hear prod,

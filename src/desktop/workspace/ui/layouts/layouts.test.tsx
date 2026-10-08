@@ -21,7 +21,7 @@ import {
   showContent,
 } from "../../adapters/store/commands"
 import { layoutShape, panesOf } from "../../../split-panes/model/pane-layout"
-import { settle, shownBy, testStore } from "../../testing"
+import { controlledAnimationFrames, settle, shownBy, testStore } from "../../testing"
 import { paneItemOf } from "../../model/pane-item"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../../../ui/menu"
 import { PaneMenuItems } from "../panes/pane-menu"
@@ -208,6 +208,17 @@ describe("Agents in the sidebar is a place to go, like a channel", () => {
       expect(shown()).toBe("agents")
       await act(async () => agents()?.click())
       expect(shown()).toBe("agents")
+      // The rows' current page waits out the overview's own frames
+      // (`overview-quiet.ts`).
+      for (
+        let frame = 0;
+        frame < 48 && current().some((row) => !row?.startsWith("Agents"));
+        frame++
+      )
+        await act(
+          async () =>
+            new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+        )
       expect(current()).toEqual([expect.stringMatching(/^Agents/)])
 
       await act(async () => channel()?.click())
@@ -266,6 +277,33 @@ describe("every key of the shared map does the same in both layouts", () => {
     })
 })
 
+describe("the Agents entry is not marked on the open's own paint", () => {
+  it("waits two frames, then takes the current page", async () => {
+    const frames = controlledAnimationFrames()
+    try {
+      const { root } = await render(SessionsInSidebar)
+      // Mount may have queued frames of its own. The open's frames are the ones after those.
+      await act(async () => {
+        for (let step = 0; step < 12 && frames.pending() > 0; step++) frames.runFrame()
+      })
+      expect(frames.pending()).toBe(0)
+      const entry = () => host.querySelector<HTMLButtonElement>(".agents-overview-entry")
+      await act(async () => entry()?.click())
+      expect(entry()?.getAttribute("data-active")).not.toBe("true")
+      expect(entry()?.getAttribute("aria-current") ?? null).toBeNull()
+      await act(async () => frames.runFrame())
+      expect(entry()?.getAttribute("data-active")).not.toBe("true")
+      await act(async () => frames.runFrame())
+      // The kit's row writes data-active either way; "true" is the mark.
+      expect(entry()?.getAttribute("data-active")).toBe("true")
+      expect(entry()?.getAttribute("aria-current")).toBe("page")
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+})
+
 describe("⌘0 and the sidebar's Agents entry always open the overview, with nothing to turn on", () => {
   for (const [name, Layout] of [
     ["three columns", ThreeColumns],
@@ -309,6 +347,17 @@ describe("a widget over the panes keeps the sidebar's choice, and ⌘W closes it
       // The channel and the focused session stay chosen beside it.
       expect(current()).toEqual(overPanes)
       await act(async () => store.dispatch(showContent({ content: "agents" })))
+      // The rows' current page waits out the overview's own frames
+      // (`overview-quiet.ts`).
+      for (
+        let frame = 0;
+        frame < 48 && current().some((row) => !row?.startsWith("Agents"));
+        frame++
+      )
+        await act(
+          async () =>
+            new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+        )
       expect(current()).toEqual([expect.stringMatching(/^Agents/)])
 
       await act(async () => store.dispatch(openWidget({ widget: run, place: "window" })))

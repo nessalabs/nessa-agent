@@ -38,6 +38,22 @@ const wide = { width: 1200, height: 300 }
 const square = { width: 600, height: 600 }
 
 describe("where on a pane a drop lands", () => {
+  it("keeps the exact midpoint available after holding an edge in a narrow pane", () => {
+    for (const size of [
+      { width: 240, height: 900 },
+      { width: 900, height: 240 },
+      { width: 150, height: 150 },
+    ]) {
+      for (const previous of zones) {
+        for (const velocity of [still, { x: 0.1, y: 0 }, { x: 0, y: 0.1 }]) {
+          expect(
+            zoneAt(at(size.width / 2, size.height / 2, velocity), size, previous),
+          ).toBe("center")
+        }
+      }
+    }
+  })
+
   it("lands on the side it is nearest in pixels, and in the middle well within every edge", () => {
     expect(zoneAt(at(20, 300), square)).toBe("left")
     expect(zoneAt(at(580, 300), square)).toBe("right")
@@ -233,6 +249,19 @@ describe("where on a pane a drop lands", () => {
     )
     // On a refused side's edge, well away from the corner: the middle, not the side beside it.
     expect(zoneAt(at(600, 90), square, null, new Set(["right"]))).toBe("center")
+  })
+
+  it("keeps a slow fresh horizontal move out of the upper edge", () => {
+    expect(zoneAt(at(150, 30, { x: -0.01, y: 0 }), tall)).toBe("center")
+  })
+
+  it("reads sparse adjacent motion without treating a fresh move as rest", () => {
+    const path = [
+      { x: 300, y: 30, t: 0 },
+      { x: 240, y: 30, t: 120 },
+    ]
+    expect(pointerVelocity(path, 120)).toEqual({ x: -0.5, y: 0 })
+    expect(pointerVelocity(path, 120 + restAfter)).toEqual({ x: 0, y: 0 })
   })
 
   it("reads the pointer's heading from the last tenth of a second, and none once it has rested", () => {

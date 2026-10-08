@@ -1,0 +1,83 @@
+{
+  "kind": "native-zone-recorder-owned-lifetime",
+  "records": [
+    {
+      "engine": "chromium",
+      "runs": [
+        {
+          "run": 1,
+          "samples": [
+            {
+              "said": "Swap 1",
+              "at": 61,
+              "lastMoveAt": 44.20000000298023
+            }
+          ],
+          "live": 0
+        },
+        {
+          "run": 2,
+          "samples": [
+            {
+              "said": "Swap 2",
+              "at": 77.70000000298023,
+              "lastMoveAt": 68.70000000298023
+            }
+          ],
+          "live": 0
+        },
+        {
+          "run": 3,
+          "samples": [
+            {
+              "said": "Swap 3",
+              "at": 93.20000000298023,
+              "lastMoveAt": 80.29999999701977
+            }
+          ],
+          "live": 0
+        }
+      ],
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "runs": [
+        {
+          "run": 1,
+          "samples": [
+            {
+              "said": "Swap 1",
+              "at": 88,
+              "lastMoveAt": 51
+            }
+          ],
+          "live": 0
+        },
+        {
+          "run": 2,
+          "samples": [
+            {
+              "said": "Swap 2",
+              "at": 106,
+              "lastMoveAt": 90
+            }
+          ],
+          "live": 0
+        },
+        {
+          "run": 3,
+          "samples": [
+            {
+              "said": "Swap 3",
+              "at": 121,
+              "lastMoveAt": 108
+            }
+          ],
+          "live": 0
+        }
+      ],
+      "ok": true
+    }
+  ]
+}

@@ -364,7 +364,7 @@ fn an_mcp_identity_is_observed_once_carried_through_sparse_updates_and_counted()
     let retained = std::mem::size_of::<McpTool>() + mcp.payload_bytes();
     assert_eq!(named.payload_bytes(), retained);
     let mut session = session(&execution);
-    session.observe_tool(&execution, named).unwrap();
+    session.observe_tool(&execution, named.clone()).unwrap();
     // A later update that names nothing keeps what was observed.
     let status = ToolCallUpdate::new(
         id.clone(),
@@ -376,12 +376,42 @@ fn an_mcp_identity_is_observed_once_carried_through_sparse_updates_and_counted()
     );
     let tool = session.tool(&id).unwrap();
     assert_eq!(tool.payload_bytes_after(&status), tool.payload_bytes());
-    session.observe_tool(&execution, status).unwrap();
+    session.observe_tool(&execution, status.clone()).unwrap();
     let tool = session.tool(&id).unwrap();
     assert_eq!(tool.observation().mcp_tool(), Some(&mcp));
     assert_eq!(
         tool.payload_bytes(),
         execution.as_str().len() + id.as_str().len() + retained
+    );
+    // Arguments are counted with the identity: on the update, on the tool,
+    // and after a later update that replaces them or leaves them.
+    let json = r#"{"city":"Oslo"}"#;
+    let arguments = McpCallArguments::new(json).unwrap();
+    assert_eq!(
+        format!("{arguments:?}"),
+        format!("McpCallArguments({json:?})")
+    );
+    let with_arguments = named.clone().with_mcp_arguments(arguments);
+    let argument_bytes = std::mem::size_of::<McpCallArguments>() + json.len();
+    assert_eq!(with_arguments.payload_bytes(), retained + argument_bytes);
+    session.observe_tool(&execution, with_arguments).unwrap();
+    let tool = session.tool(&id).unwrap();
+    let held = execution.as_str().len() + id.as_str().len() + retained + argument_bytes;
+    assert_eq!(tool.payload_bytes(), held);
+    assert_eq!(tool.payload_bytes_after(&status), held);
+    // Naming the tool again keeps the arguments just counted. Both the
+    // identity branch and the argument branch of the prediction have to run:
+    // each is a retained allocation.
+    assert_eq!(tool.payload_bytes_after(&named), held);
+    let replaced = "{}";
+    let replacement = update("tool").with_mcp_arguments(McpCallArguments::new(replaced).unwrap());
+    assert_eq!(
+        tool.payload_bytes_after(&replacement),
+        execution.as_str().len()
+            + id.as_str().len()
+            + retained
+            + std::mem::size_of::<McpCallArguments>()
+            + replaced.len()
     );
     // A tool no update named stays without one.
     session.observe_tool(&execution, update("plain")).unwrap();

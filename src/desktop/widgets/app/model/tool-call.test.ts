@@ -51,6 +51,21 @@ describe("the order of the spec's notifications", () => {
     ])
   })
 
+  it("a running call with no arguments yet tells the app nothing; the real ones come before the result", () => {
+    const running = toolNotifications(nothingTold, { kind: "running" })
+    expect(running.send).toEqual([])
+    expect(
+      methods(running.told, {
+        kind: "done",
+        arguments: { city: "Oslo" },
+        result: { content: [] },
+      }),
+    ).toEqual([
+      ["ui/notifications/tool-input", { arguments: { city: "Oslo" } }],
+      ["ui/notifications/tool-result", { content: [] }],
+    ])
+  })
+
   it("O2: no partial once the input is complete; input and result once each", () => {
     const running = toolNotifications(nothingTold, {
       kind: "running",

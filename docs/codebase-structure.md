@@ -228,7 +228,8 @@ writing the full defaults on first launch is buying.
   the split panes' source in `store/`; the gateway's source and its mapping
   of conversation views in `gateway/`; the in-memory source in `in-memory/`;
   focus, Escape for the widget in front (`widget-escape.ts`), the panes'
-  room, what the workspace adds to a drag, keys and the clock in `dom/`; the
+  room, what the workspace adds to a drag, first-send motion (`arrival.ts`),
+  keys and the clock in `dom/`; the
   host callbacks each place gives a widget's view in
   `store/widget-hosts.ts`) and `ui/` (each component once, and `layouts/`
   that only arrange them; `ui/panes/` a session's pane, a widget's
@@ -262,6 +263,11 @@ writing the full defaults on first launch is buying.
   `ui/linked-devices-tab.tsx`, which composes the UI kit's settings rows,
   switch, pairing code, fingerprint and orbs. See
   [adr/done/238-desktop-workspace-frontend.md](adr/done/238-desktop-workspace-frontend.md).
+  `ui/source-list/overview-quiet.ts` owns delayed sidebar metadata for one
+  workspace store and DOM root; `WorkspaceShell` supplies that pair through
+  `OverviewQuietProvider`. The overview owns interaction suppression on
+  `.workspace-content`, leaving each region’s independent state intact.
+
 - Widgets are the desktop window's vertical for what a plugin draws
   ([ADR 326](adr/todo/326-widgets.md)): `src/desktop/widgets/` (its map is
   `index.ts`) owns the reference (`model/widget-ref.ts`), the states and
@@ -328,7 +334,8 @@ writing the full defaults on first launch is buying.
 - Split panes are a module of the desktop window's, not of the workspace:
   `src/desktop/split-panes/` (its map is `index.ts`) owns the pane layout, its
   sizing, drops and the drag's phases (`model/`, pure), the port a host
-  implements (`application/ports.ts`, `SplitPanesSource`), the drag, FLIP,
+  implements (`application/ports.ts`, `SplitPanesSource`), the drag, FLIP and
+  their shared cancellable body restoration (`adapters/dom/staged-reveal.ts`),
   Tab order and the names a host may see of the page (`adapters/dom/`,
   `marks.ts`), and the grid and its stylesheet (`ui/`). A host supplies one
   source that reads its layout and carries out every change through its own
@@ -398,15 +405,15 @@ own current lifecycle and API contracts.
 | `domain/model_metadata/`, `domain/effective_capabilities/` | Model catalog invariants and immutable admission capabilities. |
 | `domain/agent_execution/` | Sessions, execution ordering, tools, permissions, prompts, and the subagent lifetime graph; DDD roles beneath each feature. |
 | `application/agent_execution/agents/` | Public Agent, scheduling, submission retry recovery, and one lifecycle owner for work generations, active work, and shutdown. An installed owned lifetime seals descendant admission; `Agent::close` stays attachment-only. |
-| `application/agent_execution/subagents/` | Ownership coordinator for admitted child attempts, retained cleanup owners and tree drains. `publication.rs` owns audit eligibility and durable projection through the write fence; `root.rs` owns admission through ID delivery and unclaimed-result reconciliation. Domain graph and actual Agent gates own lifecycle and runnable admission. Stage-specific failure/capacity semantics and named enforcers live in the [ADR329 ordering table](adr/todo/329-subagents.md#sdk-audit-eligibility-and-owned-root-delivery-628). |
+| `application/agent_execution/subagents/` | Ownership coordinator for admitted child attempts, retained cleanup owners and tree drains. `publication.rs` owns audit eligibility and durable projection through the write fence; `root.rs` owns admission through ID delivery and unclaimed-result reconciliation. Domain graph and actual Agent gates own lifecycle and runnable admission. Stage-specific publication semantics live in the [ADR329 audit-eligibility table](adr/todo/329-subagents.md#sdk-audit-eligibility-and-owned-root-delivery-628). `supervision.rs` contains injected effect phases after Ready capture; first-owner drain generations and bounded debt follow the [owned settlement table](adr/todo/329-subagents.md#owned-settlement-and-supervision-625-646-649). |
 | `application/agent_execution/providers/`, `hooks/` | Injected execution ports, operation capabilities, and typed invocation callbacks. |
 | `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, backend-issued load/save bindings and immutable semantic units in `storage/save.rs`, retained attachment resources, snapshot evidence mapped through domain history rules, which apps a message may name (`app_sources.rs`: an MCP tool call of an earlier turn, asked at admission and of restored history), where a steered message stands in its target turn (`steering_position.rs`: target and offset taken at admission and read from saved history in one place), the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
 | `application/agent_execution/executions/`, `permissions/`, `tools/` | Domain coordination, weak permission authority carriers, attributed decisions, and observation/review projections. |
 | `infrastructure/acp/`, `claude_acp/`, `codex_acp/`, `opencode_acp/` | Shared transport lifecycle, and one module per provider for its own configuration and tool translation. Verification shared by more than one provider moves up into `acp/`, as ordered session configuration did once Codex and Opencode both needed it. |
-| `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, shared unpublished-unit/completion lineage codec in `save_group.rs`, explicit evidence serialization, physical source identity/construction, shared framing validation and bounded terminal-discovery progress for sync-engine, chunked semantic checkpoints, shared read/write admission and shutdown ownership, the Tokio streaming commit clock adapter, and the ownership snapshot file `ownership.sqlite3`: `nessa-local-storage::physical_operation` owns physical admission and captured cleanup, with an independent Worker per adapter; sibling `ownership/tests.rs` holds queue, cancellation, poison and runtime watchdog regressions. |
+| `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, shared unpublished-unit/completion lineage codec in `save_group.rs`, explicit evidence serialization, physical source identity/construction, shared framing validation and bounded terminal-discovery progress for sync-engine, chunked semantic checkpoints, shared read/write admission and shutdown ownership, the Tokio streaming commit clock adapter, and the ownership snapshot file `ownership.sqlite3`: `nessa-local-storage::physical_operation` owns physical admission and captured cleanup, with an independent Worker per adapter; sibling `ownership/tests.rs` holds queue, cancellation, poison and runtime watchdog regressions; `ownership/settlement.rs` owns the strict typed close-proof/Completion codec and `ownership/tests/settlement.rs` its real reopen and contradiction cases. |
 | `infrastructure/json_rpc/`, `process.rs`, `model_metadata_json.rs` | Framing, process supervision, and model catalog parsing. |
 | `infrastructure/clock.rs` | The clock every ACP protocol deadline is measured on: `RuntimeClock` from composition, and `tests/infrastructure/manual_clock.rs` in tests, which moves only when the test moves it. |
-| `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. SDK ownership publication interleavings use independent audit gates in `tests/application/agent_execution/subagents/publication.rs`; pure targeted-discard and absence-token correlation cases remain in `tests/domain/agent_execution/ownership.rs`. Public memory binding/retry/reset observations live in `tests/infrastructure/session_storage/memory.rs`; `record.rs` owns public writer/watch/interruption/retry cases, `record_source.rs` owns publication/restored-extension cases, `discovery.rs` owns bounded query ordering/physical faults, and `save_group.rs` owns emitted checkpoint contradictions. Their boundary fixture module constructs exported immutable data and obtains actual producer receipts. All are rooted from the external public storage integration module; the inherited internal discovery fixture remains separate. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
+| `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. SDK ownership publication interleavings use independent audit gates in `tests/application/agent_execution/subagents/publication.rs`; pure targeted-discard and absence-token correlation cases remain in `tests/domain/agent_execution/ownership.rs`, with `ownership/{settlement,settlement_relationships}.rs` children for bounded debt, Completion and retained-history refusals. Public `subagents/{supervision,effects,transfers,settlement,inflight_absence,gate_waiters}.rs` children cover effect faults, Ready capture, immutable generations, live admission exclusion and participation-gate notifications. Public ownership SQLite proof/Completion refusal lives in `tests/infrastructure/session_storage/ownership_settlement.rs`. Public memory binding/retry/reset observations live in `tests/infrastructure/session_storage/memory.rs`; `record.rs` owns public writer/watch/interruption/retry cases, `record_source.rs` owns publication/restored-extension cases, `discovery.rs` owns bounded query ordering/physical faults, and `save_group.rs` owns emitted checkpoint contradictions. Their boundary fixture module constructs exported immutable data and obtains actual producer receipts. All are rooted from the external public storage integration module; the inherited internal discovery fixture remains separate. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
 
 Composition chooses models, provider configuration, storage, and the required
 permission audit sink. Agent owns admitted work; UI adapters and gateway code call
@@ -764,7 +771,14 @@ forwarded `tools/call` result's `structuredContent` for the ACP worker to
 attach, `servers` for the live configured set (replaced whole, read at each
 opening), the open sessions and their tool lists, and a session opened once
 for no conversation (`open_once`, a host's look at a server), `process` for a
-server's process group, `wire` for MCP's JSON), tested in
+server's process group, `wire` for MCP's JSON, and `http` for remote identity,
+bounded JSON/SSE body and recovery ownership over injected `http_exchange`.
+HTTP replacement handoff and immutable peer-reply binding use `connection`'s
+existing bounded writer queue; `http` owns provisional/validated binding claims
+and the modern POST authorization/status policy shared by startup and recovery;
+[ADR 392](adr/todo/392-remote-mcp-servers.md) maps its orderings to
+`http_progress`, the owning `http_shutdown` close-fence tests, `post_streams`
+and their shared `post_body` test fixture, tested in
 `tests/infrastructure/mcp/` against in-process and process fixtures. The
 gateway's `src/mcp_servers/` owns the stand-in rules, the session token and
 the resource ticket, and a user's server as stored with the edits made to
@@ -837,7 +851,8 @@ once (`McpServerList` in `acp/sessions/config.rs`, beside the one owner of
 the server rules, `StdioMcpServer::problem_in`), holds the open's grant
 (`acp/sessions/stand_ins.rs`), and puts its environment in every MCP server
 entry; its worker attaches the grant's forwarded results to the completed
-calls they answer (`acp/sessions/forwarded.rs`). The desktop's
+calls they answer, and the arguments kept when each call was accepted to
+the update that names that call (`acp/sessions/forwarded.rs`). The desktop's
 `workspace/adapters/gateway/tool-widget.ts` reads a gateway tool into the
 transcript's `widget` part. The MCP server list is not part of the
 restoration fingerprint (`acp/sessions/identity.rs`, ADR 344).

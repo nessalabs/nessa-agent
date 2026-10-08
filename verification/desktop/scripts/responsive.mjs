@@ -555,6 +555,15 @@ const checks = {
     const settling = () =>
       page.evaluate(() => window.__homeSettling.splice(0, window.__homeSettling.length))
     const settles = async (tag, name) => {
+      // ResizeObserver and animationstart are separate browser deliveries.
+      // Wait on the owner's event instead of assuming two RAFs delivered it.
+      if (name)
+        await until(
+          page,
+          (expected) => window.__homeSettling.some((event) => event.name === expected),
+          name,
+          1_000,
+        )
       const moved = await settling()
       if (!name) {
         if (moved.length)
@@ -1325,6 +1334,9 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
 checks["overview-counts"] = async ({ page, engine, options }) => {
   await page.keyboard.press(keys.overview)
   await need(page, css.overview, "the Agents overview")
+  // The header draws its counts a few frames after the overview opens
+  // (`overview.tsx`); WebKit's frames can outrun two.
+  await need(page, css.overviewCount, "the header's counts")
   await frames(page, 2)
   await settled(page)
   const read = () =>
@@ -1567,6 +1579,8 @@ checks["overview-story"] = async ({ page, engine, options }) => {
   await page.setViewportSize({ width: 1440, height: 640 })
   await page.keyboard.press(keys.overview)
   await need(page, css.overview, "the Agents overview")
+  // The list arrives a row a frame (`data-overview-listed` once it has).
+  await need(page, css.overviewListed, "the overview's whole list")
   const item = page.locator(`[data-overview-item="${names.storySessionId}"]`)
   if (!(await item.count()))
     throw new CannotRun(`no overview item ${names.storySessionId}`)
@@ -1869,6 +1883,7 @@ checks["overview-row-answers"] = async ({ page, engine, options }) => {
   const failures = []
   await page.locator(css.overviewEntry).click()
   await need(page, css.overviewRequest, "a request in the Agents overview")
+  await need(page, css.overviewListed, "the overview's whole list")
   await frames(page, 2)
   await settled(page)
   const rows = page.locator(css.overviewRequest)
@@ -2142,6 +2157,7 @@ checks["overview-leave"] = async ({ page, engine, options }) => {
   const failures = []
   await page.locator(css.overviewEntry).click()
   await need(page, css.overviewRequest, "a request in the Agents overview")
+  await need(page, css.overviewListed, "the overview's whole list")
   await frames(page, 2)
   await settled(page)
   const common = (what, moving, word) => {

@@ -1,0 +1,7248 @@
+{
+  "check": "perf-budget",
+  "ok": false,
+  "started": "2026-10-07T18:48:43.591Z",
+  "finished": "2026-10-07T18:55:39.509Z",
+  "target": {
+    "url": "http://127.0.0.1:60957/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:60957/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "calibration",
+      "engine": "chromium",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 21,
+        "throttledMs": 65,
+        "ratio": 3.07,
+        "ok": true
+      },
+      "calibrationFrame": {
+        "cost": 120,
+        "measuredMs": 116.70000000000005,
+        "attributed": true,
+        "ok": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "split-right",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 33.299999999999955,
+      "median": 33,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 33,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 1088,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 33.299999999999955,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 1088,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 32.799999999999955,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 1088,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "split-down",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 33.299999999999955,
+      "median": 33,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 17.700000000000045,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 488
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 576,
+                "y": 504,
+                "w": 1016,
+                "h": 488
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 33.299999999999955,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 488
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 576,
+                "y": 504,
+                "w": 1016,
+                "h": 488
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 32.69999999999982,
+          "over": 0,
+          "frames": 61,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 488
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 576,
+                "y": 504,
+                "w": 1016,
+                "h": 488
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "move",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 17.699999999999818,
+      "median": 18,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 17.5,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 1088,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 1088,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              }
+            ],
+            "order": "2,1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.59999999999991,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 1088,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 1088,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              }
+            ],
+            "order": "2,1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.699999999999818,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 1088,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 1088,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              }
+            ],
+            "order": "2,1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "close",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 17.699999999999818,
+      "median": 18,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 17.699999999999818,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 1088,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.600000000000364,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 1088,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.59999999999991,
+          "over": 0,
+          "frames": 63,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 1088,
+                "y": 8,
+                "w": 504,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "sidebar",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 17.700000000000045,
+      "median": 18,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 17.600000000000136,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 320,
+                "y": 8,
+                "w": 1272,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.700000000000045,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 320,
+                "y": 8,
+                "w": 1272,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.600000000000364,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 320,
+                "y": 8,
+                "w": 1272,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "session-list",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 17.700000000000045,
+      "median": 18,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 17.59999999999991,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 256,
+                "y": 8,
+                "w": 1336,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.40000000000009,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 256,
+                "y": 8,
+                "w": 1336,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.700000000000045,
+          "over": 0,
+          "frames": 61,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 256,
+                "y": 8,
+                "w": 1336,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "send-home",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 17.800000000000182,
+      "median": 18,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 17.699999999999818,
+          "over": 0,
+          "frames": 92,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.800000000000182,
+          "over": 0,
+          "frames": 92,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.600000000000364,
+          "over": 0,
+          "frames": 92,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "typing",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 17.700000000000273,
+      "median": 18,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 17.699999999999818,
+          "over": 0,
+          "frames": 180,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.700000000000273,
+          "over": 0,
+          "frames": 180,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.699999999999818,
+          "over": 0,
+          "frames": 181,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "stream-1-of-4",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 17.700000000000728,
+      "median": 18,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 17.700000000000728,
+          "over": 0,
+          "frames": 361,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.700000000000273,
+          "over": 0,
+          "frames": 361,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.700000000000728,
+          "over": 0,
+          "frames": 361,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "drag-drop",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 33.900000000000546,
+      "median": 34,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 33.600000000000364,
+          "over": 0,
+          "frames": 257,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1289.59375,
+                "y": 258,
+                "w": 302.3984375,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 705.59375,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 8,
+                "w": 302.3984375,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 508,
+                "w": 302.3984375,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 33.900000000000546,
+          "over": 0,
+          "frames": 255,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1289.59375,
+                "y": 258,
+                "w": 302.3984375,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 705.59375,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 8,
+                "w": 302.3984375,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 508,
+                "w": 302.3984375,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 33.69999999999982,
+          "over": 0,
+          "frames": 258,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1289.59375,
+                "y": 258,
+                "w": 302.3984375,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 705.59375,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 8,
+                "w": 302.3984375,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1289.59375,
+                "y": 508,
+                "w": 302.3984375,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "drag-cancel",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 34.40000000000009,
+      "median": 34,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 33.5,
+          "over": 0,
+          "frames": 120,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.699999999999818,
+          "over": 0,
+          "frames": 118,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 34.40000000000009,
+          "over": 0,
+          "frames": 118,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "thinking-walk",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 17.700000000000273,
+      "median": 18,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 17.699999999999818,
+          "over": 0,
+          "frames": 111,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": "0",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": "4",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.700000000000273,
+          "over": 0,
+          "frames": 110,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": "0",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": "4",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.600000000000364,
+          "over": 0,
+          "frames": 111,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": "0",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": "4",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "thinking-drag",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 17.700000000000273,
+      "median": 18,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 17.700000000000273,
+          "over": 0,
+          "frames": 102,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": "0",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": "4",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.700000000000273,
+          "over": 0,
+          "frames": 101,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": "0",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": "4",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.700000000000273,
+          "over": 0,
+          "frames": 101,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": "0",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": "4",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": false,
+      "failures": ["longest frame 84.19999999999982 ms > 50 ms (runs: 84 67 67)"],
+      "name": "overview-open",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 84.19999999999982,
+      "median": 67,
+      "over50": 3,
+      "runs": [
+        {
+          "maxFrame": 84.19999999999982,
+          "over": 1,
+          "frames": 62,
+          "slow": [
+            {
+              "at": 2,
+              "frame": 84.19999999999982,
+              "longTask": 63,
+              "loaf": {
+                "duration": 99,
+                "blocking": 7,
+                "styleAndLayout": 6,
+                "scripts": [
+                  {
+                    "duration": 29,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "s",
+                    "source": "desktop-DYRWC_aw.js:174239",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 66.79999999999995,
+          "over": 1,
+          "frames": 63,
+          "slow": [
+            {
+              "at": 17,
+              "frame": 66.79999999999995,
+              "longTask": 60,
+              "loaf": {
+                "duration": 85,
+                "blocking": 6,
+                "styleAndLayout": 7,
+                "scripts": [
+                  {
+                    "duration": 28,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "s",
+                    "source": "desktop-DYRWC_aw.js:174239",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 66.70000000000005,
+          "over": 1,
+          "frames": 62,
+          "slow": [
+            {
+              "at": 18,
+              "frame": 66.70000000000005,
+              "longTask": 59,
+              "loaf": {
+                "duration": 81,
+                "blocking": 4,
+                "styleAndLayout": 6,
+                "scripts": [
+                  {
+                    "duration": 26,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "s",
+                    "source": "desktop-DYRWC_aw.js:174239",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "overview-select",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 17.700000000000045,
+      "median": 18,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 17.699999999999818,
+          "over": 0,
+          "frames": 99,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Command base direction. Codex wants to run שלום {\"to\":\"bob@example.com\"}.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "command-order-rtl",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.700000000000045,
+          "over": 0,
+          "frames": 99,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Command base direction. Codex wants to run שלום {\"to\":\"bob@example.com\"}.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "command-order-rtl",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.600000000000136,
+          "over": 0,
+          "frames": 99,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Command base direction. Codex wants to run שלום {\"to\":\"bob@example.com\"}.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "command-order-rtl",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "overview-answer",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 33,
+      "median": 18,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 17.700000000000273,
+          "over": 0,
+          "frames": 92,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "signing",
+            "focusedPane": "1",
+            "requests": 5,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 17.700000000000045,
+          "over": 0,
+          "frames": 92,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "signing",
+            "focusedPane": "1",
+            "requests": 5,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 33,
+          "over": 0,
+          "frames": 92,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "signing",
+            "focusedPane": "1",
+            "requests": 5,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": false,
+      "failures": ["longest frame 51.100000000000136 ms > 50 ms (runs: 33 51 33)"],
+      "name": "overview-leave",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 51.100000000000136,
+      "median": 33,
+      "over50": 1,
+      "runs": [
+        {
+          "maxFrame": 33.299999999999955,
+          "over": 0,
+          "frames": 61,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 51.100000000000136,
+          "over": 1,
+          "frames": 61,
+          "slow": [
+            {
+              "at": 7,
+              "frame": 51.100000000000136,
+              "longTask": null,
+              "loaf": {
+                "duration": 64,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": [
+                  {
+                    "duration": 22,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "z",
+                    "source": "desktop-DYRWC_aw.js:211010",
+                    "forcedLayout": 8
+                  },
+                  {
+                    "duration": 11,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "o",
+                    "source": "desktop-DYRWC_aw.js:152249",
+                    "forcedLayout": 8
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 33.299999999999955,
+          "over": 0,
+          "frames": 61,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "split-right",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 50,
+      "median": 34,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 33.59999999999991,
+          "over": 0,
+          "frames": 61,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 936,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 33.200000000000045,
+          "over": 0,
+          "frames": 63,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 936,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 50,
+          "over": 0,
+          "frames": 61,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 936,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "split-down",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 35.299999999999955,
+      "median": 34,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 35.299999999999955,
+          "over": 0,
+          "frames": 60,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 488
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 272,
+                "y": 504,
+                "w": 1320,
+                "h": 488
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 34,
+          "over": 0,
+          "frames": 61,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 488
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 272,
+                "y": 504,
+                "w": 1320,
+                "h": 488
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 32.59999999999991,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 488
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 272,
+                "y": 504,
+                "w": 1320,
+                "h": 488
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "move",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 32.80000000000018,
+      "median": 19,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 32.80000000000018,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 936,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 936,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              }
+            ],
+            "order": "2,1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 18.299999999999955,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 936,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 936,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              }
+            ],
+            "order": "2,1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 18.5,
+          "over": 0,
+          "frames": 63,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 936,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 936,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              }
+            ],
+            "order": "2,1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "close",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 48.100000000000136,
+      "median": 19,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 18.59999999999991,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 936,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 48.100000000000136,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 936,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 18.700000000000045,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 2,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": true,
+                "x": 936,
+                "y": 8,
+                "w": 656,
+                "h": 984
+              }
+            ],
+            "order": "1,2",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "2",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "2",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "sidebar",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 49.399999999999864,
+      "median": 35,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 34.69999999999982,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 8,
+                "y": 8,
+                "w": 1584,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 49.399999999999864,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 8,
+                "y": 8,
+                "w": 1584,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 32,
+          "over": 0,
+          "frames": 62,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 8,
+                "y": 8,
+                "w": 1584,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "BODY",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": false,
+      "failures": ["longest frame 100.59999999999991 ms > 50 ms (runs: 52 51 101)"],
+      "name": "send-home",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 100.59999999999991,
+      "median": 52,
+      "over50": 3,
+      "runs": [
+        {
+          "maxFrame": 51.90000000000009,
+          "over": 1,
+          "frames": 91,
+          "slow": [
+            {
+              "at": 16,
+              "frame": 51.90000000000009,
+              "longTask": 52,
+              "loaf": {
+                "duration": 61,
+                "blocking": 7,
+                "styleAndLayout": 2,
+                "scripts": [
+                  {
+                    "duration": 51,
+                    "invoker": "DIV#root.onkeydown",
+                    "type": "event-listener",
+                    "fn": "O_",
+                    "source": "index-Bxf_Gyg8.js:185686",
+                    "forcedLayout": 20
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 51.29999999999973,
+          "over": 1,
+          "frames": 92,
+          "slow": [
+            {
+              "at": 6,
+              "frame": 51.29999999999973,
+              "longTask": 52,
+              "loaf": {
+                "duration": 69,
+                "blocking": 9,
+                "styleAndLayout": 2,
+                "scripts": [
+                  {
+                    "duration": 53,
+                    "invoker": "DIV#root.onkeydown",
+                    "type": "event-listener",
+                    "fn": "O_",
+                    "source": "index-Bxf_Gyg8.js:185686",
+                    "forcedLayout": 19
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 100.59999999999991,
+          "over": 1,
+          "frames": 91,
+          "slow": [
+            {
+              "at": 14,
+              "frame": 100.59999999999991,
+              "longTask": 101,
+              "loaf": {
+                "duration": 112,
+                "blocking": 57,
+                "styleAndLayout": 2,
+                "scripts": [
+                  {
+                    "duration": 100,
+                    "invoker": "DIV#root.onkeydown",
+                    "type": "event-listener",
+                    "fn": "O_",
+                    "source": "index-Bxf_Gyg8.js:185686",
+                    "forcedLayout": 43
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "typing",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 18.699999999999818,
+      "median": 19,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 18.599999999999454,
+          "over": 0,
+          "frames": 184,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 18.699999999999818,
+          "over": 0,
+          "frames": 183,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 18.699999999999818,
+          "over": 0,
+          "frames": 184,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "stream-1-of-4",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 32.19999999999982,
+      "median": 19,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 18.699999999999818,
+          "over": 0,
+          "frames": 362,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 18.699999999999818,
+          "over": 0,
+          "frames": 362,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 32.19999999999982,
+          "over": 0,
+          "frames": 361,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": false,
+      "failures": ["longest frame 67.70000000000073 ms > 50 ms (runs: 68 48 65)"],
+      "name": "drag-drop",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 67.70000000000073,
+      "median": 65,
+      "over50": 3,
+      "runs": [
+        {
+          "maxFrame": 67.70000000000073,
+          "over": 2,
+          "frames": 285,
+          "slow": [
+            {
+              "at": 455,
+              "frame": 50.5,
+              "longTask": 51,
+              "loaf": null
+            },
+            {
+              "at": 3770,
+              "frame": 67.70000000000073,
+              "longTask": 72,
+              "loaf": {
+                "duration": 84,
+                "blocking": 23,
+                "styleAndLayout": 5,
+                "scripts": [
+                  {
+                    "duration": 58,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-DYRWC_aw.js:58946",
+                    "forcedLayout": 48
+                  },
+                  {
+                    "duration": 6,
+                    "invoker": "DOMWindow.onpointerup",
+                    "type": "event-listener",
+                    "fn": "A",
+                    "source": "desktop-DYRWC_aw.js:61983",
+                    "forcedLayout": 4
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1264,
+                "y": 258,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 984,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1264,
+                "y": 8,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1264,
+                "y": 508,
+                "w": 328,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 48.100000000000364,
+          "over": 0,
+          "frames": 277,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1264,
+                "y": 258,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 984,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1264,
+                "y": 8,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1264,
+                "y": 508,
+                "w": 328,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 64.90000000000055,
+          "over": 1,
+          "frames": 268,
+          "slow": [
+            {
+              "at": 3326,
+              "frame": 64.90000000000055,
+              "longTask": 69,
+              "loaf": {
+                "duration": 75,
+                "blocking": 18,
+                "styleAndLayout": 4,
+                "scripts": [
+                  {
+                    "duration": 56,
+                    "invoker": "FrameRequestCallback",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "desktop-DYRWC_aw.js:58946",
+                    "forcedLayout": 45
+                  },
+                  {
+                    "duration": 6,
+                    "invoker": "DOMWindow.onpointerup",
+                    "type": "event-listener",
+                    "fn": "A",
+                    "source": "desktop-DYRWC_aw.js:61983",
+                    "forcedLayout": 3
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 1264,
+                "y": 258,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 984,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1264,
+                "y": 8,
+                "w": 328,
+                "h": 242
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1264,
+                "y": 508,
+                "w": 328,
+                "h": 484
+              }
+            ],
+            "order": "2,4,1,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": false,
+      "failures": ["longest frame 51.70000000000027 ms > 50 ms (runs: 52 34 32)"],
+      "name": "drag-cancel",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 51.70000000000027,
+      "median": 34,
+      "over50": 1,
+      "runs": [
+        {
+          "maxFrame": 51.70000000000027,
+          "over": 1,
+          "frames": 126,
+          "slow": [
+            {
+              "at": 960,
+              "frame": 51.70000000000027,
+              "longTask": null,
+              "loaf": {
+                "duration": 61,
+                "blocking": 0,
+                "styleAndLayout": 11,
+                "scripts": [
+                  {
+                    "duration": 25,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "ne",
+                    "source": "desktop-DYRWC_aw.js:62420",
+                    "forcedLayout": 17
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 33.70000000000027,
+          "over": 0,
+          "frames": 119,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 31.700000000000273,
+          "over": 0,
+          "frames": 124,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": false,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "thinking-walk",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 18.700000000000273,
+      "median": 19,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 18.59999999999991,
+          "over": 0,
+          "frames": 111,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": "0",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": "4",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 18.700000000000273,
+          "over": 0,
+          "frames": 110,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": "0",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": "4",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 18.59999999999991,
+          "over": 0,
+          "frames": 113,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": "0",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": "4",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "thinking-drag",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 18.699999999999818,
+      "median": 19,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 18.699999999999818,
+          "over": 0,
+          "frames": 112,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": "0",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": "4",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 18.40000000000009,
+          "over": 0,
+          "frames": 109,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": "0",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": "4",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 18.699999999999818,
+          "over": 0,
+          "frames": 110,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": "0",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": "4",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "SPAN",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": false,
+      "failures": ["longest frame 252 ms > 50 ms (runs: 252 118 99)"],
+      "name": "overview-open",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 252,
+      "median": 118,
+      "over50": 6,
+      "runs": [
+        {
+          "maxFrame": 252,
+          "over": 2,
+          "frames": 61,
+          "slow": [
+            {
+              "at": 19,
+              "frame": 252,
+              "longTask": 93,
+              "loaf": {
+                "duration": 268,
+                "blocking": 167,
+                "styleAndLayout": 17,
+                "scripts": [
+                  {
+                    "duration": 92,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "s",
+                    "source": "desktop-DYRWC_aw.js:174239",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 271,
+              "frame": 81.40000000000009,
+              "longTask": 180,
+              "loaf": {
+                "duration": 268,
+                "blocking": 167,
+                "styleAndLayout": 17,
+                "scripts": [
+                  {
+                    "duration": 92,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "s",
+                    "source": "desktop-DYRWC_aw.js:174239",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 118.40000000000009,
+          "over": 2,
+          "frames": 61,
+          "slow": [
+            {
+              "at": 6,
+              "frame": 118.40000000000009,
+              "longTask": 88,
+              "loaf": {
+                "duration": 139,
+                "blocking": 32,
+                "styleAndLayout": 13,
+                "scripts": [
+                  {
+                    "duration": 47,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "s",
+                    "source": "desktop-DYRWC_aw.js:174239",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 125,
+              "frame": 64.69999999999982,
+              "longTask": 88,
+              "loaf": {
+                "duration": 139,
+                "blocking": 32,
+                "styleAndLayout": 13,
+                "scripts": [
+                  {
+                    "duration": 47,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "s",
+                    "source": "desktop-DYRWC_aw.js:174239",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 99.09999999999991,
+          "over": 2,
+          "frames": 62,
+          "slow": [
+            {
+              "at": 18,
+              "frame": 99.09999999999991,
+              "longTask": 83,
+              "loaf": {
+                "duration": 115,
+                "blocking": 27,
+                "styleAndLayout": 11,
+                "scripts": [
+                  {
+                    "duration": 39,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "s",
+                    "source": "desktop-DYRWC_aw.js:174239",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            },
+            {
+              "at": 117,
+              "frame": 52,
+              "longTask": 83,
+              "loaf": {
+                "duration": 115,
+                "blocking": 27,
+                "styleAndLayout": 11,
+                "scripts": [
+                  {
+                    "duration": 39,
+                    "invoker": "DOMWindow.onkeydown",
+                    "type": "event-listener",
+                    "fn": "s",
+                    "source": "desktop-DYRWC_aw.js:174239",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "overview-select",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 33.5,
+      "median": 19,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 33.5,
+          "over": 0,
+          "frames": 98,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Command base direction. Codex wants to run שלום {\"to\":\"bob@example.com\"}.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "command-order-rtl",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 18.59999999999991,
+          "over": 0,
+          "frames": 100,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Command base direction. Codex wants to run שלום {\"to\":\"bob@example.com\"}.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "command-order-rtl",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 18.600000000000136,
+          "over": 0,
+          "frames": 99,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Command base direction. Codex wants to run שלום {\"to\":\"bob@example.com\"}.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "command-order-rtl",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "overview-answer",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 50,
+      "median": 35,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 34.799999999999955,
+          "over": 0,
+          "frames": 92,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "signing",
+            "focusedPane": "1",
+            "requests": 5,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 18.700000000000273,
+          "over": 0,
+          "frames": 92,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "signing",
+            "focusedPane": "1",
+            "requests": 5,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 50,
+          "over": 0,
+          "frames": 92,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "signing",
+            "focusedPane": "1",
+            "requests": 5,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "overview-leave",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 48,
+      "median": 34,
+      "over50": 0,
+      "runs": [
+        {
+          "maxFrame": 33.600000000000136,
+          "over": 0,
+          "frames": 61,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 33.700000000000045,
+          "over": 0,
+          "frames": 61,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "maxFrame": 48,
+          "over": 0,
+          "frames": 61,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "agents",
+            "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": "retry-budget",
+            "focusedPane": "1",
+            "requests": 6,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    }
+  ]
+}

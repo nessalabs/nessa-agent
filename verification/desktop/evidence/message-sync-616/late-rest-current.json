@@ -1,0 +1,52 @@
+{
+  "check": "drag",
+  "ok": true,
+  "started": "2026-10-07T10:06:34.308Z",
+  "finished": "2026-10-07T10:06:58.811Z",
+  "target": {
+    "url": "http://127.0.0.1:58955/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:58955/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "sideways-top",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "sideways-top",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "sideways-top",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "sideways-top",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700"
+    }
+  ]
+}

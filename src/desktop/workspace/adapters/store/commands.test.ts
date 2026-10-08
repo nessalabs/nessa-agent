@@ -1919,6 +1919,13 @@ describe("the overview shows one group alone (ADR 238, the group's table)", () =
     expect(quietOf(glance)).toBe("needsYou")
   })
 
+  it("reads the same glance while the list, the filter and the clock are unchanged", async () => {
+    const { store } = await ready()
+    const state = store.getState()
+    const held: readonly [] = []
+    expect(selectGlance(state, held, 1000)).toBe(selectGlance(state, held, 1000))
+  })
+
   it("chooses nothing once the group's last session is removed", async () => {
     const { store, source } = await ready()
     store.dispatch(followWorkspace())

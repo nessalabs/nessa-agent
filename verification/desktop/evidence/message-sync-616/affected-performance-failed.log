@@ -1,0 +1,31 @@
+building production into /var/folders/1w/wp9n0wwd22qgrf0zkhb2fk6r0000gn/T/nessa-desktop-verify-L7wlSH…
+previewing production at http://127.0.0.1:63542/desktop.html
+ok    console
+calibration: busy loop 66 ms → 205 ms at 4× (ratio 3.1)
+calibration: a 120 ms frame measured 133.4000000000001 ms, attributed by LoAF: true
+ok    calibration [chromium]
+FAIL  stream-1-of-4 [chromium columns]
+        - longest frame 116.70000000000027 ms > 50 ms (runs: 67 67 117)
+FAIL  drag-drop [chromium columns]
+        - longest frame 265.60000000000036 ms > 50 ms (runs: 266 216 134)
+FAIL  drag-cancel [chromium columns]
+        - longest frame 201.09999999999945 ms > 50 ms (runs: 199 167 201)
+FAIL  stream-1-of-4 [chromium sidebar]
+        - longest frame 116.70000000000027 ms > 50 ms (runs: 117 117 100)
+FAIL  drag-drop [chromium sidebar]
+        - longest frame 232.29999999999973 ms > 50 ms (runs: 184 232 200)
+FAIL  drag-cancel [chromium sidebar]
+        - longest frame 166.5999999999999 ms > 50 ms (runs: 150 150 167)
+
+layout   name           max  median  over50  runs       
+-------  -------------  ---  ------  ------  -----------
+columns  stream-1-of-4  117  67      7       67 67 117  
+columns  drag-drop      266  216     46      266 216 134
+columns  drag-cancel    201  199     25      199 167 201
+sidebar  stream-1-of-4  117  117     4       117 117 100
+sidebar  drag-drop      232  200     37      184 232 200
+sidebar  drag-cancel    167  150     23      150 150 167
+(ms; budget 50 ms at 4× throttle)
+
+wrote /tmp/616-stress-affected-perf.json
+perf-budget: 2/8 held

@@ -31,6 +31,7 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Pipes"] }
 
 [dev-dependencies]
+shepherd = { git = "https://github.com/nessalabs/shepherd", rev = "26bd7cb8843c1bc6c3eccfbbae8be926f8c49103" }
 markdown = "1.0"
 percent-encoding = "2"
 rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }

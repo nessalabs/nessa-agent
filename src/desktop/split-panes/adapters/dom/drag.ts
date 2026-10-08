@@ -1,48 +1,20 @@
 /**
- * Drag and drop between split panes, carried by the pointer rather than the
- * browser's own drag, so what is carried looks like the window it will be.
- * What a press becomes, event by event, is `model/drag.ts` (ADR 238 › _Drag
- * and drop_ has its table); this is the page's side of it — every event is
- * sent there, and each phase it answers with is drawn here:
+ * Drag and drop between split panes. The pure model owns the phases; this
+ * adapter owns the pointer, copy, target highlight and cancellable resources.
  *
- * - **pressed**: nothing in the press's own frame; in a task once it has
- *   painted, the copy is made unseen — the pane itself, or for an item from
- *   outside the grid what the host makes of it (`copyOf`) — and what the drag
- *   needs of the page is read, once: the grid and its room, each pane's box
- *   and parts, what the host covers (`covered`). Until then a move does not
- *   lift it;
- * - **carrying**: the copy is shown under the pointer and glides so its
- *   centre comes under it, then stays there; the zone the pointer is in
- *   (`aimAt`) shows what dropping there would do — the panes take the rects
- *   the drop would give them and a placeholder marks the rect it takes, from
- *   the one outcome the drop commits (`dropOutcome` of the layout the source
- *   reads), and the copy takes the placeholder's shape about the pointer
- *   (`copyShape`);
- * - **dropping**: released while a zone is shown, the copy flies into the
- *   placeholder's rect. The source commits what is shown (`commitDrop`) on
- *   the next frame, in the room the press read, so that pointerup does not
- *   also lay the new arrangement out (`drag.test.tsx`). That frame commits
- *   only while the preview still holds — the panes and watched values the
- *   press read, a carried item still held, and no resize since the release —
- *   and not at all if the drag is gone before it (`drag.test.tsx`);
- * - **cancelling**: the copy flies home as the panes go back — or, when the
- *   room, the panes or the view changed under it, both go at once and the
- *   change plays as it would with no drag.
+ * The host supplies the copy and its size. A fixed copy stays compact over
+ * every zone; a natural copy may take its destination's shape. The host also
+ * chooses whether live panes preview the proposal or remain stationary while
+ * only the hovered target highlights. The workspace uses compact copies and
+ * stationary chats (ADR 238 owns that product behavior).
  *
- * Everything moves by transform, in animations the compositor runs; the
- * pointer is followed without rendering anything, and the outcome is asked
- * for only when the zone changes. What changes shape grows or shrinks into it by
- * a scale its content undoes step by step, so no text is ever drawn
- * stretched: a pane the preview resizes is cut to the shape it would take;
- * the copy is laid out once at it, as the zone changes. No frame of a drag
- * makes the page lay out early: after the press's frame nothing is read again — a change that would
- * make what was read wrong ends the drag instead. Where a preview has drawn a
- * pane is known from the preview's own motion, never read back. The
- * preview's motion is marked (`dragPreview`) so `FlipScope` measures through
- * it at the drop and lets it go before it measures where things landed. With
- * less motion, nothing glides: the copy follows the pointer, and the panes
- * and the copy take the drop's rects at once. The zone is said to assistive
- * technology as it changes.
+ * Preparation runs after the press's paint and reads the room once. Carrying
+ * updates compositor transforms and the accepted proposal. Release commits
+ * that proposal on the next frame only while its layout, watched values and
+ * carried item are still held. Cancellation and cleanup retain resource
+ * identity so a late frame or finished flight cannot affect a newer drag.
+ * The target is announced as it changes. Reduced motion follows the same
+ * phases with zero-duration flights.
  *
  * A host takes part by marking what can be carried: `data-drag-pane` (a
  * pane's key, on its header) or `data-drag-item` (an item's id, on a row
@@ -51,7 +23,6 @@
  * ways — whatever moves a host gives a pane — are untouched.
  */
 import { useEffect, type RefObject } from "react"
-import { reducedMotion } from "../../../adapters/motion-preference"
 import type { SplitPanesSource } from "../../application/ports"
 import {
   copyShape,
@@ -78,7 +49,8 @@ import type { PaneKey, PaneLayout, Zone } from "../../model/pane-layout"
 import { paneLimits } from "../../model/pane-layout"
 import { placements, type PanePlacement, type PaneRoom } from "../../model/pane-sizing"
 import { durationToken, motionToken } from "../../../adapters/motion"
-import { classes, gridOf, marks } from "./marks"
+import { classes, gridOf, marks, reflectMark } from "./marks"
+import { stagedReveal } from "./staged-reveal"
 
 /** Marks the preview's own motion. */
 const dragPreview = "split-panes-preview"
@@ -120,6 +92,18 @@ function track(root: Element, animation: Animation): Animation {
   return animation
 }
 
+/**
+ * The element an animation was built on. The base `AnimationEffect` type
+ * does not promise a target; validate the keyframe effect's element before
+ * writing its styles.
+ */
+function effectElement(effect: AnimationEffect | null | undefined): HTMLElement | null {
+  if (typeof effect !== "object" || effect === null) return null
+  if (!("target" in effect)) return null
+  const target = effect.target
+  return target instanceof HTMLElement ? target : null
+}
+
 /** A pane drawn away from where it is laid out, about its centre: moved, scaled, faded. */
 interface Drawn {
   readonly dx: number
@@ -141,14 +125,6 @@ const transformOf = ({ dx, dy, sx, sy }: Drawn) =>
 const shapeSteps = 12
 
 const lerp = (a: number, b: number, progress: number) => a + (b - a) * progress
-
-/** Part of the way from one rect to another: its centre and its size, each on a line. */
-const boxPartWay = (from: Box, to: Box, progress: number): Box => ({
-  left: lerp(from.left, to.left, progress),
-  top: lerp(from.top, to.top, progress),
-  width: lerp(from.width, to.width, progress),
-  height: lerp(from.height, to.height, progress),
-})
 
 const sameSize = (a: Size, b: Size) =>
   Math.abs(a.width - b.width) < 0.5 && Math.abs(a.height - b.height) < 0.5
@@ -461,7 +437,7 @@ function partsOf(pane: HTMLElement): PanePart[] {
 /** What the host adds to a drag of its own: what only it knows of its page. */
 export interface SplitPanesDragOptions {
   /**
-   * The copy carried for an item pressed outside the grid (`data-drag-item`),
+   * The copy carried for a pane or an item pressed outside the grid,
    * built detached — never put on the page, and nothing on the page read
    * after the press. `pressed` is what was pressed; `picture` copies an
    * element as the drag copies a pane (ids, labels, and the marks that
@@ -469,13 +445,18 @@ export interface SplitPanesDragOptions {
    * `alwaysStripped`); `focusedPane` is the focused pane's element, if drawn.
    */
   readonly copyOf: (
-    item: string,
+    carried: Carried,
     context: {
       readonly pressed: HTMLElement
+      readonly pane: HTMLElement | null
       readonly picture: (element: Element) => HTMLElement
       readonly focusedPane: HTMLElement | null
     },
   ) => HTMLElement
+  /** A fixed compact copy, or the source pane's natural size. */
+  readonly copySize: Size | null
+  /** Whether live panes preview the proposal, or only the hovered target highlights. */
+  readonly previewPanes: boolean
   /**
    * What the host draws over or beside the grid under `root` as the press
    * begins, never a target whatever is under it (side columns, docked or
@@ -484,6 +465,18 @@ export interface SplitPanesDragOptions {
   readonly covered: (root: HTMLElement) => readonly Element[]
   /** Attributes of the host's a copy leaves out, beside the module's own. */
   readonly stripped?: readonly string[]
+  /**
+   * Subtrees a copy does not picture, matched on the pane's own children.
+   * The conversation is one: it is not painted, and cloning it is the press's
+   * long frame (`split-panes-drag.test.tsx`).
+   */
+  readonly dropped?: readonly string[]
+  /**
+   * Parts a preview does not scale back. The conversation is one: it is not
+   * painted while the preview moves, so a transform of its own would be a
+   * layer that is never seen (`split-panes-drag.test.tsx`).
+   */
+  readonly unscaled?: readonly string[]
 }
 
 /**
@@ -507,6 +500,11 @@ const alwaysStripped = [
   marks.carrying,
   marks.lifted,
   marks.waiting,
+  marks.settling,
+  marks.restoring,
+  marks.flying,
+  marks.measuring,
+  marks.card,
 ]
 
 /**
@@ -536,8 +534,50 @@ export function useSplitPanesDrag(
 
     /** The press's frame, then the task after it, that make what a drag needs. */
     let waiting: { frame: number; timer: number } | null = null
+    let active = true
+    let glassFrame: number | null = null
+    const reveal = stagedReveal(scope, marks.settling)
+    const stopReveal = reveal.stop
+    const startReveal = () => {
+      if (active) reveal.start()
+    }
+    /** Bumped whenever glass blur is held or released, so a late release cannot drop a new drag's hold. */
+    let glass = 0
+    const holdGlass = (on: boolean) => {
+      if (!active) return
+      if (glassFrame !== null) cancelAnimationFrame(glassFrame)
+      glassFrame = null
+      const generation = ++glass
+      if (on) {
+        stopReveal()
+        reflectMark(scope, marks.pressing, options.previewPanes)
+        return
+      }
+      // A frame after the preview's own paint is gone, so that frame does not
+      // also rebuild the glass blur (`styles.test.ts`).
+      glassFrame = requestAnimationFrame(() => {
+        if (!active || generation !== glass) return
+        glassFrame = null
+        reflectMark(scope, marks.pressing, false)
+      })
+    }
     /** Drops the pending commit's frame and its listeners, if a drop is waiting on one. */
     let releaseDrop: (() => void) | null = null
+
+    /**
+     * Drops the preview's mark. Bodies are already waiting, or start waiting
+     * now, and return one a frame: clearing the mark alone lays every
+     * transcript out on that frame (`drag.test.tsx`).
+     */
+    const releaseReflow = () => {
+      if (!scope.hasAttribute(marks.reflow)) return
+      const waiting = scope.querySelector(`[${marks.settling}]`) !== null
+      if (!waiting) {
+        reveal.hold()
+      }
+      startReveal()
+      reflectMark(scope, marks.reflow, false)
+    }
 
     /**
      * What the press found: the panes' arrangement — not which has focus:
@@ -572,8 +612,15 @@ export function useSplitPanesDrag(
       const held = previewed.get(pane)
       if (!held) return { box: real, opacity: 1 }
       const progress = progressOf(held.motion)
+      // Size is the target from the first frame. The place is what glides
+      // (`reflow`), so a later zone starts from that size, not a size in between.
       return {
-        box: boxPartWay(held.from, held.to, progress),
+        box: {
+          left: lerp(held.from.left, held.to.left, progress),
+          top: lerp(held.from.top, held.to.top, progress),
+          width: held.to.width,
+          height: held.to.height,
+        },
         opacity: lerp(held.opacity.from, held.opacity.to, progress),
       }
     }
@@ -582,7 +629,10 @@ export function useSplitPanesDrag(
       if (!held) return
       previewed.delete(pane)
       markCorner(scope, pane, null)
+      if (pane.style.clipPath) pane.style.clipPath = ""
       for (const animation of [held.motion, ...held.parts]) {
+        const target = effectElement(animation.effect)
+        if (target?.style.clipPath) target.style.clipPath = ""
         animation.cancel()
         previews.get(scope)?.delete(animation)
       }
@@ -617,24 +667,30 @@ export function useSplitPanesDrag(
       const parts = made.parts.get(pane) ?? []
       // What keeps to the top ends where a composer at the foot begins: cut
       // by as much as the pane is shorter, it never runs under the composer.
+      // The cut is set once. Animating it would lay the transcript out on
+      // every frame of the glide (`drag.test.tsx`).
       const docked = parts.some(({ keeps }) => keeps === "foot")
       const box: Keyframe[] = []
       const counter: Keyframe[] = []
-      const cut: Keyframe[] = []
       for (let step = 0; step <= shapeSteps; step++) {
         const progress = step / shapeSteps
-        const drawing = between(
-          real,
-          boxPartWay(from.box, target, progress),
-          lerp(opacity.from, opacity.to, progress),
-        )
-        box.push({ transform: transformOf(drawing), opacity: drawing.opacity })
-        const scale = `scale(${1 / drawing.sx}, ${1 / drawing.sy})`
-        counter.push({ transform: scale })
-        cut.push({
-          transform: scale,
-          clipPath: `inset(0 0 ${Math.max(0, real.height * (1 - drawing.sy))}px 0)`,
-        })
+        // The size is the target on every frame, including the first, and the
+        // place glides. The content's scale cancels that size
+        // (`split-panes-drag.test.tsx`).
+        const placed = {
+          left: lerp(from.box.left, target.left, progress),
+          top: lerp(from.box.top, target.top, progress),
+          width: target.width,
+          height: target.height,
+        }
+        const drawing = between(real, placed, lerp(opacity.from, opacity.to, progress))
+        // Opacity stays off the keyframes while the pane is opaque. An opacity
+        // track, even one that holds at 1, makes the compositor blend the pane
+        // with the blur on every frame of the glide.
+        const frame: Keyframe = { transform: transformOf(drawing) }
+        if (opacity.from !== 1 || opacity.to !== 1) frame.opacity = drawing.opacity
+        box.push(frame)
+        counter.push({ transform: `scale(${1 / drawing.sx}, ${1 / drawing.sy})` })
       }
       pane.style.transformOrigin = "50% 50%"
       const motion = track(
@@ -642,18 +698,24 @@ export function useSplitPanesDrag(
         pane.animate(box, { ...made.motion, fill: "forwards", id: dragPreview }),
       )
       // The content keeps its size, as in a flight (`flip.tsx`), scaled back
-      // about the point of the pane each part keeps to (`PanePart`) — cut to
-      // the shape where it is smaller.
+      // about the point of the pane each part keeps to (`PanePart`).
       const shrinks = target.width < real.width
-      const undone = parts.map(({ element, left, top, keeps }) => {
+      const clip =
+        docked && target.height < real.height - 0.5
+          ? `inset(0 0 ${real.height - target.height}px 0)`
+          : ""
+      const unscaled = options.unscaled ?? []
+      const undone = parts.flatMap(({ element, left, top, keeps }) => {
+        if (unscaled.some((selector) => element.matches(selector))) return []
         const across =
           keeps === "top-left" || (keeps !== "middle" && shrinks) ? 0 : real.width / 2
         const down =
           keeps === "foot" ? real.height : keeps === "middle" ? real.height / 2 : 0
         element.style.transformOrigin = `${across - left}px ${down - top}px`
+        element.style.clipPath = keeps === "top" ? clip : ""
         return track(
           scope,
-          element.animate(docked && keeps === "top" ? cut : counter, {
+          element.animate(counter, {
             ...made.motion,
             fill: "forwards",
             id: dragPreview,
@@ -673,7 +735,8 @@ export function useSplitPanesDrag(
     /**
      * The calm placeholder where the drop would land: a soft fill and a
      * hairline in the theme's edge light, at exactly the rect the pane will
-     * take. It moves between zones on its own short transition.
+     * take. It glides between zones by transform. Its width and height are
+     * set at once — transitioning them would lay the page out every frame.
      */
     const placeholder = (made: Made, box: Box | null) => {
       const { drawing } = made
@@ -701,6 +764,29 @@ export function useSplitPanesDrag(
       if (!layout) return
       const { grid, room } = made
       const real = boxes(layout, grid)
+      if (!options.previewPanes) {
+        const target = aim ? real.get(aim.target) : null
+        const box = target && outcome ? inside(target, grid) : null
+        if (box && aim) {
+          const horizontal = aim.zone === "left" || aim.zone === "right"
+          const vertical = aim.zone === "top" || aim.zone === "bottom"
+          placeholder(made, {
+            left: box.left + (aim.zone === "right" ? box.width / 2 : 0),
+            top: box.top + (aim.zone === "bottom" ? box.height / 2 : 0),
+            width: horizontal ? box.width / 2 : box.width,
+            height: vertical ? box.height / 2 : box.height,
+          })
+        } else placeholder(made, null)
+        announcer.textContent =
+          outcome && aim
+            ? saying(
+                outcome,
+                aim.zone,
+                paneElement(aim.target)?.getAttribute("aria-label") ?? "the pane",
+              )
+            : ""
+        return
+      }
       const spare = outcome?.takesSpare ? (room?.spare ?? 0) : 0
       const landing = outcome ? boxes(outcome.layout, landingGrid(grid, spare)) : null
       const corners = new Set(
@@ -713,7 +799,7 @@ export function useSplitPanesDrag(
       if (scope.hasAttribute(marks.takesSpare) !== Boolean(outcome?.takesSpare))
         scope.toggleAttribute(marks.takesSpare, Boolean(outcome?.takesSpare))
       if (outcome && landing && !scope.hasAttribute(marks.reflow))
-        scope.setAttribute(marks.reflow, "")
+        reflectMark(scope, marks.reflow, true)
       // With less motion too: the panes take their rects at once
       // (`--desktop-base` is 0ms), or a swap's placeholder, under the copy,
       // would be all that showed.
@@ -764,7 +850,7 @@ export function useSplitPanesDrag(
       preview(made, outcome, aim)
       // The copy takes the shape of the slot it would land in, or — with
       // nothing offered — its own, its centre still on the pointer.
-      const shape = copyShape(made.size, drawing.landing)
+      const shape = options.copySize ?? copyShape(made.size, drawing.landing)
       if (!sameSize(shape, drawing.shape.to)) reshape(made, shape)
     }
 
@@ -779,23 +865,14 @@ export function useSplitPanesDrag(
       }
     }
 
-    /** The size the copy is drawn at now, part way through a change of shape. */
-    const shapeNow = ({ drawing: { shape } }: Made): Size => {
-      const progress = progressOf(shape.motion)
-      return {
-        width: lerp(shape.from.width, shape.to.width, progress),
-        height: lerp(shape.from.height, shape.to.height, progress),
-      }
-    }
-
     /**
-     * Draws the copy from the size and the place it is drawn at now to
-     * `size`, its centre moved by `by` from the pointer, in `made.motion`'s
-     * time. Its box is laid out at `size` — once, as the shape is asked for —
-     * and scaled from what it is drawn at, its content scaled back at every
-     * step (`shapeSteps`), so the words keep their size and are laid out as
-     * they will be; at rest nothing is scaled. Only a shape it is not laid
-     * out at already lays anything out.
+     * Draws the copy at `size`, its centre moved by `by` from the pointer, in
+     * `made.motion`'s time. Its width is laid out at `size` — once, as the
+     * shape is asked for — and drawn at that width the whole way, scale 1,
+     * so the glide only moves it (`split-panes-drag.test.tsx`). Its height
+     * is `size`'s, so the copy's centre stays on the pointer
+     * (`split-panes-drag.test.tsx`). Only a shape it is not laid out at
+     * already lays anything out.
      */
     const reshape = (
       made: Made,
@@ -804,7 +881,6 @@ export function useSplitPanesDrag(
       opacity?: { from: number; to: number },
     ): Animation => {
       const { ghost, inner, drawing } = made
-      const from = shapeNow(made)
       drawing.shape.motion?.cancel()
       drawing.shape.counter?.cancel()
       if (!sameSize(size, drawing.laid)) {
@@ -814,23 +890,22 @@ export function useSplitPanesDrag(
       }
       const box: Keyframe[] = []
       const counter: Keyframe[] = []
+      // Laid out at the target size already. Scale stays 1, so the glide only
+      // moves the copy; a changing scale would raster it on every frame
+      // (`split-panes-drag.test.tsx`).
       for (let step = 0; step <= shapeSteps; step++) {
         const progress = step / shapeSteps
-        const width = lerp(from.width, size.width, progress)
-        const height = lerp(from.height, size.height, progress)
-        const sx = width / size.width
-        const sy = height / size.height
         box.push({
-          transform: `translate(${by.x * progress - width / 2}px, ${by.y * progress - height / 2}px) scale(${sx}, ${sy})`,
+          transform: `translate(${by.x * progress - size.width / 2}px, ${by.y * progress - size.height / 2}px) scale(1, 1)`,
           ...(opacity ? { opacity: lerp(opacity.from, opacity.to, progress) } : {}),
         })
-        counter.push({ transform: `scale(${1 / sx}, ${1 / sy})` })
+        counter.push({ transform: "scale(1, 1)" })
       }
       const options: KeyframeAnimationOptions = { ...made.motion, fill: "forwards" }
       const motion = ghost.animate(box, options)
       const undone = inner.animate(counter, options)
       together([motion, undone])
-      drawing.shape = { from, to: size, motion, counter: undone }
+      drawing.shape = { from: drawing.shape.to, to: size, motion, counter: undone }
       return motion
     }
 
@@ -849,7 +924,7 @@ export function useSplitPanesDrag(
         x: box.left + box.width / 2 - drawing.pointer.x - glide.x,
         y: box.top + box.height / 2 - drawing.pointer.y - glide.y,
       }
-      return reshape(made, box, by, { from: 1, to: fade ? 0 : 1 })
+      return reshape(made, options.copySize ?? box, by, { from: 1, to: fade ? 0 : 1 })
     }
 
     const ghostFor = (
@@ -874,7 +949,18 @@ export function useSplitPanesDrag(
         element: Element,
         prune?: (from: Element, copy: Element) => void,
       ): HTMLElement => {
-        const clone = element.cloneNode(true) as HTMLElement
+        // Shallow, then each child whole — except a dropped subtree, which is
+        // never built (`SplitPanesDragOptions.dropped`).
+        const clone = element.cloneNode(false) as HTMLElement
+        const omit = options.dropped ?? []
+        for (const child of element.childNodes) {
+          if (
+            child instanceof Element &&
+            omit.some((selector) => child.matches(selector))
+          )
+            continue
+          clone.append(child.cloneNode(true))
+        }
         prune?.(element, clone)
         for (const node of [clone, ...clone.querySelectorAll<HTMLElement>("*")]) {
           for (const name of stripped) node.removeAttribute(name)
@@ -913,27 +999,15 @@ export function useSplitPanesDrag(
         if (scroller.scrollTop > 0)
           copied.style.transform = `translateY(${-scroller.scrollTop}px)`
       }
-      if (carried.kind === "pane") {
-        const pane = paneElement(carried.pane)
-        if (pane) {
-          const copy = picture(pane, onScreenOnly)
-          copy.removeAttribute("style")
-          copy.classList.add("split-panes-ghost-pane")
-          const typed = pane.querySelectorAll("textarea")
-          copy.querySelectorAll("textarea").forEach((field, index) => {
-            field.value = typed[index]?.value ?? ""
-          })
-          inner.append(copy)
-          return { ghost, inner }
-        }
-      }
-      // An item with no pane yet: what the host makes of it.
       const layout = layoutNow()
-      const copy = options.copyOf(carried.kind === "item" ? carried.item : "", {
+      const pane = carried.kind === "pane" ? paneElement(carried.pane) : null
+      const copy = options.copyOf(carried, {
         pressed,
-        picture,
+        pane,
+        picture: (element) => picture(element, onScreenOnly),
         focusedPane: layout ? paneElement(layout.focused) : null,
       })
+      copy.removeAttribute("style")
       copy.classList.add("split-panes-ghost-pane")
       inner.append(copy)
       return { ghost, inner }
@@ -969,22 +1043,25 @@ export function useSplitPanesDrag(
         carried.kind === "pane"
           ? paneElement(carried.pane)?.getBoundingClientRect()
           : paneElement(layout.focused)?.getBoundingClientRect()
-      const size = {
+      const size = options.copySize ?? {
         width: from?.width ?? 480,
         height: from?.height ?? 360,
       }
       // Held where it was grabbed: a pane by its header, a card by its top.
-      const home: Box =
-        carried.kind === "pane" && from
+      const home: Box = options.copySize
+        ? { left: x - size.width / 2, top: y - size.height / 2, ...size }
+        : carried.kind === "pane" && from
           ? boxOf(from)
           : { left: x - size.width / 2, top: y - 20, ...size }
       // What the host covers the grid with is never a target.
       const covered = options.covered(scope).map(settledBox)
       const parts = new Map(
-        Array.from(scope.querySelectorAll<HTMLElement>("[data-pane-key]"), (pane) => [
-          pane,
-          partsOf(pane),
-        ]),
+        Array.from(
+          options.previewPanes
+            ? scope.querySelectorAll<HTMLElement>("[data-pane-key]")
+            : [],
+          (pane) => [pane, partsOf(pane)],
+        ),
       )
       const motion = {
         duration: durationToken(scope, "--desktop-base"),
@@ -1055,10 +1132,16 @@ export function useSplitPanesDrag(
     /** The press became a drag: the copy is shown under the pointer, and glides to its centre. */
     const begin = (made: Made, what: Carried, pointerId: number, at: PointerSample) => {
       const { carrier, glider, ghost, grab, size, shield, pressed, drawing } = made
+      // Before the copy is shown. A backdrop blur would be sampled again on
+      // every frame the copy moves (`styles.test.ts`).
+      holdGlass(true)
+      scope.toggleAttribute(marks.card, options.copySize !== null)
       drawing.pointer = { x: at.x, y: at.y }
       shield.addEventListener("lostpointercapture", onLost)
       window.getSelection()?.removeAllRanges()
-      // With the pointer from its first frame, and seen from it.
+      // With the pointer from its first frame, and seen from it. The glass
+      // blur is already off, so showing the copy does not sample it
+      // (`styles.test.ts`).
       carrier.style.transform = `translate(${at.x}px, ${at.y}px)`
       ghost.removeAttribute(marks.waiting)
       drawing.glide = glider.animate(
@@ -1116,12 +1199,15 @@ export function useSplitPanesDrag(
       const unmark = () => {
         outline?.remove()
         scope.removeAttribute(marks.carrying)
+        scope.removeAttribute(marks.card)
         pressed.removeAttribute(marks.carrying)
         scope
           .querySelectorAll(`[${marks.lifted}]`)
           .forEach((pane) => pane.removeAttribute(marks.lifted))
         // Blur and shadows come back; a flight of the drop's own holds them itself.
-        scope.removeAttribute(marks.reflow)
+        // Bodies were held out of the preview and come back one a frame.
+        releaseReflow()
+        holdGlass(false)
         announcer.textContent = ""
       }
       // A frame after the one that commits the drop.
@@ -1134,15 +1220,20 @@ export function useSplitPanesDrag(
       else unmark()
     }
 
+    /** Release retained pane styles before dropping their ownership map. */
+    const releasePreview = () => {
+      ;[...previewed.keys()].forEach(letGo)
+      letGoOfDragPreview(scope)
+      previewed.clear()
+    }
+
     /** Releases the copy and preview resources retained by this drag. */
     const releaseMade = (made: Made) => {
       made.drawing.fade?.cancel()
       made.drawing.glide?.cancel()
       made.drawing.shape.motion?.cancel()
       made.drawing.shape.counter?.cancel()
-      ;[...previewed.keys()].forEach(letGo)
-      letGoOfDragPreview(scope)
-      previewed.clear()
+      releasePreview()
       scope.removeAttribute(marks.takesSpare)
       tidy(made)
       made.layer.remove()
@@ -1160,6 +1251,9 @@ export function useSplitPanesDrag(
      * the panes go back, from where the pointer left it — known, not read.
      * The room, the panes or the view changed (`at-once`): the copy and the
      * preview go now, and the change plays as it would with no drag.
+     * Flying home keeps the preview's cheap paint for two frames (`tidy`'s
+     * `later`), the same handoff a drop uses, so this turn does not also
+     * restore blur and shadows.
      */
     const cancel = (made: Made, how: "home" | "at-once") => {
       if (how === "at-once") {
@@ -1169,8 +1263,18 @@ export function useSplitPanesDrag(
       preview(made, null, null)
       const back = flyTo(made, made.home, true)
       scope.removeAttribute(marks.takesSpare)
-      tidy(made)
-      void back.finished.catch(() => undefined).then(() => landed(made))
+      // The preview's cheap paint stays two frames, the same handoff a drop
+      // uses, so this turn does not also restore blur and shadows
+      // (`drag.test.tsx`). A flight that finishes after a newer drag owns the
+      // page leaves that drag alone (`split-panes-drag.test.tsx`).
+      tidy(made, true)
+      void back.finished
+        .catch(() => undefined)
+        .then(() => {
+          if (!ownsDragResources(phase, made)) return
+          releaseReflow()
+          landed(made)
+        })
     }
 
     /** Let go with a zone shown: the copy flies, and what is shown is committed on the next frame. */
@@ -1189,7 +1293,7 @@ export function useSplitPanesDrag(
       // The frame commits the preview, not whatever the panes became while it
       // waited: a resize, a watched change, or a carried item let go. The
       // dropping phase ignores those, so the frame itself checks.
-      const previewHolds = () => {
+      const proposalHolds = () => {
         const watched = source.watched()
         if (
           layoutNow()?.columns !== seen.columns ||
@@ -1205,19 +1309,22 @@ export function useSplitPanesDrag(
       }
       window.addEventListener("resize", refuse)
       const unsubscribe = source.subscribe(() => {
-        if (!previewHolds()) refuse()
+        if (!proposalHolds()) refuse()
       })
       const frame = requestAnimationFrame(() => {
         release()
         if (!ownsDragResources(phase, made)) return
-        if (accept && previewHolds()) {
+        if (accept && proposalHolds()) {
+          // A pane preview releases all its bodies through this owner. A
+          // target-only drop leaves that work to the affected layout flights.
+          if (options.previewPanes) reveal.hold()
           source.commitDrop({ carried: what, target: aim.target, zone: aim.zone, room })
+          if (options.previewPanes) startReveal()
           return
         }
         // The preview was the arrangement this frame is not committing.
         scope.removeAttribute(marks.takesSpare)
-        letGoOfDragPreview(scope)
-        previewed.clear()
+        releasePreview()
       })
       const release = () => {
         cancelAnimationFrame(frame)
@@ -1233,8 +1340,7 @@ export function useSplitPanesDrag(
           requestAnimationFrame(() => {
             if (ownsDragResources(phase, made)) {
               scope.removeAttribute(marks.takesSpare)
-              letGoOfDragPreview(scope)
-              previewed.clear()
+              releasePreview()
             }
             resolve()
           }),
@@ -1247,8 +1353,10 @@ export function useSplitPanesDrag(
       ])
         .then(() => {
           if (!ownsDragResources(phase, made)) return
+          // Gone at once. A fade would blend the copy with the blur after it
+          // landed (`drag.test.tsx`).
           const fade = ghost.animate([{ opacity: 0.85 }, { opacity: 0 }], {
-            duration: reducedMotion() ? 0 : 120,
+            duration: 0,
             fill: "forwards",
           })
           drawing.fade = fade
@@ -1465,6 +1573,10 @@ export function useSplitPanesDrag(
     window.addEventListener("keydown", onKeyDown, true)
     document.addEventListener("selectstart", onSelectStart)
     return () => {
+      active = false
+      stopReveal()
+      if (glassFrame !== null) cancelAnimationFrame(glassFrame)
+      glassFrame = null
       unsubscribe()
       inert.disconnect()
       scope.removeEventListener("pointerdown", onPointerDown)
@@ -1479,6 +1591,9 @@ export function useSplitPanesDrag(
       releaseDrop?.()
       const made = phase.kind === "idle" ? null : phase.made
       if (made) releaseMade(made)
+      reveal.dispose()
+      reflectMark(scope, marks.reflow, false)
+      reflectMark(scope, marks.pressing, false)
       phase = idle
       announcer.remove()
     }

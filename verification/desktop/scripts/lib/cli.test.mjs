@@ -4,10 +4,12 @@
  * sums its checks. Run with `node --test verification/desktop/scripts/lib/`.
  */
 import assert from "node:assert/strict"
-import { describe, it } from "node:test"
-
-import { readFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { createRequire } from "node:module"
+import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import { describe, it } from "node:test"
 import { fileURLToPath } from "node:url"
 
 import {
@@ -21,11 +23,14 @@ import {
   overallStatus,
   parseOptions,
   recordIfLeftOut,
+  report,
   resultOfThrown,
   statusOf,
   UsageError,
   verdictOf,
 } from "./cli.mjs"
+
+const require = createRequire(import.meta.url)
 
 // What `log` writes to stderr while `body` runs; stderr is put back after.
 const stderrOf = async (body) => {
@@ -221,6 +226,7 @@ describe("run-all's sum", () => {
       "committed-transcript",
       "app-review",
       "gateway-states",
+      "mcp-apps",
     ])
     assert.deepEqual(checksUnder("prod", ["smoke", ...devServerOnlyChecks]), {
       run: ["smoke"],
@@ -260,5 +266,65 @@ describe("run-all's sum", () => {
         readFileSync(join(scripts, file), "utf8"),
         new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
       )
+    // A production preview has no sandbox origin. The check says so before
+    // it builds one, and before any fixture waits for a frame.
+    assert.match(
+      readFileSync(join(scripts, "../mcp-apps.mjs"), "utf8"),
+      /absent from vite preview[\s\S]*return target\(options\)/,
+    )
+  })
+})
+
+describe("report", () => {
+  it("writes --out JSON that prettier accepts", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nessa-json-"))
+    const path = join(dir, "perf-budget.json")
+    try {
+      const rep = report("perf-budget", { out: path })
+      rep.add({
+        name: "drag-drop",
+        failures: ["longest frame 66.69999999999982 ms > 50 ms (runs: 67)"],
+      })
+      assert.equal(rep.finish(), 1)
+      const bin = require.resolve("prettier/bin/prettier.cjs")
+      const result = spawnSync(process.execPath, [bin, "--check", path], {
+        encoding: "utf8",
+      })
+      assert.equal(result.status, 0, result.stderr)
+      const document = JSON.parse(readFileSync(path, "utf8"))
+      assert.equal(
+        document.results[0].failures[0],
+        "longest frame 66.69999999999982 ms > 50 ms (runs: 67)",
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("report", () => {
+  it("writes --out JSON that prettier accepts", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nessa-json-"))
+    const path = join(dir, "perf-budget.json")
+    try {
+      const rep = report("perf-budget", { out: path })
+      rep.add({
+        name: "drag-drop",
+        failures: ["longest frame 66.69999999999982 ms > 50 ms (runs: 67)"],
+      })
+      assert.equal(rep.finish(), 1)
+      const bin = require.resolve("prettier/bin/prettier.cjs")
+      const result = spawnSync(process.execPath, [bin, "--check", path], {
+        encoding: "utf8",
+      })
+      assert.equal(result.status, 0, result.stderr)
+      const document = JSON.parse(readFileSync(path, "utf8"))
+      assert.equal(
+        document.results[0].failures[0],
+        "longest frame 66.69999999999982 ms > 50 ms (runs: 67)",
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

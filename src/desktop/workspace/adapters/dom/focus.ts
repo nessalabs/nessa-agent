@@ -25,13 +25,14 @@
  * handler is the other direction (a click or Tab into a pane focuses it).
  */
 import { useEffect, type RefObject } from "react"
-import { gridOf } from "../../../split-panes"
+import { gridOf, marks } from "../../../split-panes"
 import { focusedPane } from "../../../split-panes/model/pane-layout"
-import { modalSelector } from "../../../adapters/modal"
+import { inModal } from "../../../adapters/modal"
 import type { DesktopStore } from "../../../store"
 import { widgetBodyAttribute } from "../../../widgets"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
 import { selectContentKind, selectWindowWidget } from "../store/selectors"
+import { arrivalWaitingAttribute } from "./arrival"
 
 /** Marks the focused pane, whichever layout draws it, for the caret to find. */
 export const focusedPaneAttribute = "data-pane-focused"
@@ -45,13 +46,19 @@ export const widgetWindowAttribute = "data-widget-window"
  * it is on the page.
  */
 function caretTarget(scope: ParentNode): HTMLElement | null {
+  const windowWidget = scope.querySelector<HTMLElement>(`[${widgetWindowAttribute}]`)
+  const region = windowWidget ?? scope
+  const selector = windowWidget
+    ? `[${widgetBodyAttribute}]`
+    : `[${focusedPaneAttribute}] .desktop-composer textarea, [${focusedPaneAttribute}] [${widgetBodyAttribute}]`
+  const candidates = [...region.querySelectorAll<HTMLElement>(selector)]
   return (
-    scope.querySelector<HTMLElement>(
-      `[${widgetWindowAttribute}] [${widgetBodyAttribute}]`,
-    ) ??
-    scope.querySelector<HTMLElement>(
-      `[${focusedPaneAttribute}] .desktop-composer textarea, [${focusedPaneAttribute}] [${widgetBodyAttribute}]`,
-    )
+    candidates.find(
+      (element) =>
+        element.closest(
+          `[inert], [${marks.settling}], [${marks.reflow}], [${marks.flying}], [${marks.measuring}], [${marks.restoring}], [${arrivalWaitingAttribute}]`,
+        ) === null,
+    ) ?? null
   )
 }
 
@@ -64,18 +71,44 @@ export function focusInFront(
   scope: ParentNode = document,
   done: () => void = () => {},
 ): () => void {
+  return focusAfterPaint(() => caretTarget(scope), done)
+}
+
+/** Resolves a caller-owned target, waits for its paint, then rechecks focus authority. */
+export function focusAfterPaint(
+  target: () => HTMLElement | null,
+  done: () => void = () => {},
+): () => void {
   let frame = 0
   let tries = 0
+  let active = true
+  const held = document.activeElement
   const attempt = () => {
-    const field = caretTarget(scope)
-    if (field) {
+    if (!active) return
+    if (tries++ >= 30) return done()
+    const field = target()
+    if (!field) {
+      frame = requestAnimationFrame(attempt)
+      return
+    }
+    // A pane may have filled on this frame. Let its layout paint before focus
+    // asks the browser for geometry; recheck the target after that paint.
+    frame = requestAnimationFrame(() => {
+      if (!active) return
+      const focus = document.activeElement
+      if (inModal(focus) || field.closest("[inert]")) return done()
+      // A deliberate focus move during the wait belongs to the person.
+      if (focus !== held && focus !== document.body && focus !== field) return done()
+      if (target() !== field) return attempt()
       field.focus({ preventScroll: true })
       done()
-    } else if (tries++ < 30) frame = requestAnimationFrame(attempt)
-    else done()
+    })
   }
   frame = requestAnimationFrame(attempt)
-  return () => cancelAnimationFrame(frame)
+  return () => {
+    active = false
+    cancelAnimationFrame(frame)
+  }
 }
 
 /**
@@ -127,7 +160,7 @@ export function useFocusFollowsPane(
     const settle = (moved: boolean) => {
       const active = document.activeElement
       const lost = !active || active === document.body
-      if (!lost && active.closest(modalSelector)) return
+      if (inModal(active)) return
       const inFocused = !lost && active.closest(`[${focusedPaneAttribute}]`) !== null
       const grid = gridOf(scope)
       const inOtherPane = !lost && !inFocused && grid?.contains(active) === true
@@ -136,7 +169,7 @@ export function useFocusFollowsPane(
     /** A widget opened in the window: the caret goes into it, from anywhere but a dialog or a menu. */
     const intoWindow = () => {
       const active = document.activeElement
-      if (active && active !== document.body && active.closest(modalSelector)) return
+      if (inModal(active)) return
       follow()
     }
 
@@ -157,8 +190,11 @@ export function useFocusFollowsPane(
       // Another pane took focus, or the panes came back from under the
       // overview or the window — by a command that changed nothing else, too.
       const moved = back || next.pane !== was.pane
-      // After the change reaches the page.
-      requestAnimationFrame(() => settle(moved))
+      // After the change reaches the page. Coming back from the overview,
+      // one frame later still: the leave's own frame only lifts the cover
+      // (`overview-layer.tsx`).
+      if (back) requestAnimationFrame(() => requestAnimationFrame(() => settle(moved)))
+      else requestAnimationFrame(() => settle(moved))
     })
 
     // Focus falls to the page when what held it is taken away, or hidden by

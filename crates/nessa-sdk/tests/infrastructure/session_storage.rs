@@ -4,12 +4,14 @@
 //!                 -> record_source public publication / restored extension
 //!                 -> discovery public bounded query ordering / physical faults
 //!                 -> save_group public leases / emitted records / checkpoints
+//!                 -> ownership_settlement public SQLite proof / Completion refusal
 //!                 -> fixtures public immutable data / actual emitted donor output
 
 mod caller_wakes;
 mod discovery;
 mod fixtures;
 mod memory;
+mod ownership_settlement;
 mod record;
 mod record_source;
 mod save_group;

@@ -1154,10 +1154,11 @@ impl McpSession {
     /// requests are forwarded under ids of the connection's and answered
     /// under its own; its cancellations cancel upstream; tools the model may
     /// not see are left out of its lists and refused if called; the server's
-    /// `*/list_changed` notices are passed on. A `tools/call` result's
-    /// `structuredContent` is kept in the grant's [`McpOwner::forwarded`]
-    /// under the harness's id for the call, with this server's name, before
-    /// the harness is answered.
+    /// `*/list_changed` notices are passed on. A `tools/call`'s arguments are
+    /// kept when the call is accepted, and its result's `structuredContent`
+    /// before the harness is answered, both in the grant's
+    /// [`McpOwner::forwarded`] under the harness's id for the call, with this
+    /// server's name.
     pub async fn serve(self, input: impl AsyncRead + Unpin, output: impl AsyncWrite + Unpin) {
         let server = self.server().to_owned();
         contain_caller_wake(format!("MCP serve of {server}"), async move {

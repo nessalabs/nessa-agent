@@ -39,16 +39,32 @@ export const marks = {
   dragCorner: "data-drag-corner",
   /** On the FLIP root while anything flies. */
   flipping: "data-split-flipping",
+  /** On the root only while final flight geometry is collected, before paint. */
+  measuring: "data-split-measuring",
+  /** On a pane whose geometry changes in the current flight. */
+  flying: "data-split-flying",
+  /** On a pane whose body returns one frame at a time after a FLIP flight. */
+  restoring: "data-split-restoring",
   /** On the drag's root while a preview draws panes away from where they are laid out. */
   reflow: "data-drag-reflow",
+  /**
+   * On the drag's root from the moment a press becomes a drag until a frame
+   * after the preview's paint is gone. Glass blur stays off for that span
+   * (`styles.test.ts`).
+   */
+  pressing: "data-drag-pressing",
   /** On the drag's root while carrying (`pane` or `item`), and on what was pressed. */
   carrying: "data-drag-carrying",
+  /** On the root while a compact card is carried and live panes remain visible. */
+  card: "data-drag-card",
   /** On the pane being carried: its slot, left behind. */
   lifted: "data-drag-lifted",
   /** On the copy while it waits, unseen, for the press to become a drag. */
   waiting: "data-drag-waiting",
   /** On the drag's root while a drop shown would take the host's spare room (`takesSpare`). */
   takesSpare: "data-drag-takes-spare",
+  /** On a pane whose body waits out a layout, one pane a frame: the drop's commit, or the preview letting go. */
+  settling: "data-drag-settling",
 } as const
 
 /** The module's own elements a host may style or find. */
@@ -65,6 +81,17 @@ export const classes = {
   /** Over the page while carrying. */
   shield: "split-panes-shield",
 } as const
+
+/**
+ * Sets or clears `name` on `root` and on the document element. The panes read
+ * it on the workspace; the ambient blur behind the shell reads it on the
+ * document (`styles.css`). One write, so the two cannot disagree.
+ */
+export function reflectMark(root: HTMLElement, name: string, on: boolean): void {
+  root.toggleAttribute(name, on)
+  const documentElement = root.ownerDocument.documentElement
+  if (documentElement !== root) documentElement.toggleAttribute(name, on)
+}
 
 /** The grid under `root`, if one is drawn: what a host measures the panes' room by. */
 export function gridOf(root: ParentNode): HTMLElement | null {

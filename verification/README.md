@@ -31,6 +31,7 @@ verification/
     evidence/
       conversation-unread/  screenshots the pull request shows for that check
     fixtures/
+      sandbox-probes/      labelled host for visible isolation and navigation probes
       attachments-races/    real panel with controlled attachment host and scenario gateway effects
       onboarding-readiness/ real setup with stalled HTTP response and retry cases
       provider-sign-in/     real transcript with typed auth refusal and controlled login launch
@@ -62,7 +63,7 @@ verification/
       widgets.mjs           widget hosts: a card, its pane, the window, Escape's order, focus, drag over the window
       message-sync.mjs      active DOM delivery, stalled list/read independence and idle cost
       app-review.mjs        an MCP App's review: read while the app's call waits, drawn and answered, the card and the overview row naming the app (dev server)
-      mcp-apps.mjs          MCP Apps: each place, tools/call allowed and refused, CSP, isolation, escapes, forgery, departures and departures-back (dev server: imports the host's own builder), teardown
+      mcp-apps.mjs          MCP Apps: each place, tools/call allowed and refused, CSP, isolation, escapes, forgery, departures and departures-back, the test server's chart app going live (dev server: the sandbox proxy starts in configureServer, so a preview cannot mount the fixture and run-all --mode prod leaves the check out; departures, departures-back and chart import the host's own builder), teardown
       mcp-apps-gateway.mjs  MCP Apps over a real gateway (#384): the test MCP server's app, its reviews, refusals and release; with `--scripted`, also an app's message and context update, and no model key (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in, or `--scripted` for none)
       mcp-servers-gateway.mjs Settings › Integrations over a real gateway (#391): add, inspect, focus, toggle, rename, narrow, conflict, remove, reconnect, non-admin, and the chart's app from a server added there (starts its own gateway and dev server; done-when needs the agent signed in)
       lib/
@@ -96,6 +97,12 @@ guessing; a step that began and then waited in vain for the product has
 failed. Steps wait on conditions (`until`, `settled`, `contentIs`,
 `paneCountIs` in `lib/workspace.mjs`), not on fixed times; where a check
 asserts that something does not happen, its window is named and explained.
+
+The standalone MCP sandbox departure and chart checks use
+`desktop/fixtures/sandbox-probes/index.html`. Their visible frames stay on that
+labelled verification page, separate from the product UI. Every check releases
+its message-listener owner and removes its frames before closing the page;
+cleanup assertions report any remaining frames or product markup.
 
 ## Prerequisites
 

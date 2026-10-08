@@ -5,12 +5,12 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store
 import {
   selectChannel,
   selectChannelActivity,
-  selectOverviewOpen,
   selectPinnedIds,
   selectView,
 } from "../../adapters/store/selectors"
 import { ThreadRow } from "./thread-row"
 import { SidebarRow } from "./sidebar-row"
+import { useOverviewQuiet } from "./overview-quiet"
 
 /**
  * A channel in the sidebar beside a session list: choosing it shows its
@@ -20,18 +20,20 @@ import { SidebarRow } from "./sidebar-row"
 export const ChannelRow = memo(function ChannelRow({ channelId }: { channelId: string }) {
   const dispatch = useWorkspaceDispatch()
   const channel = useWorkspaceSelector((state) => selectChannel(state, channelId))
-  // Chosen beside the panes or a widget over them: over both, the Agents
-  // overview is what is chosen.
-  const active = useWorkspaceSelector((state) => {
-    const view = selectView(state)
-    return view.channelId === channelId && !selectOverviewOpen(state)
-  })
+  // Chosen beside the panes. The overview paints the row quiet from
+  // `data-overview-glass` (`source-list.css`) instead of re-rendering it.
+  const active = useWorkspaceSelector(
+    (state) => selectView(state).channelId === channelId,
+  )
+  // After the open paint, so the key does not render the row (`layouts.test.tsx`).
+  const quiet = useOverviewQuiet()
   const activity = useWorkspaceSelector(
     (state) => selectChannelActivity(state, channelId),
     shallowEqual,
   )
   const pinned = useWorkspaceSelector(
-    (state) => (active ? selectPinnedIds(state, channelId) : []),
+    (state) =>
+      selectView(state).channelId === channelId ? selectPinnedIds(state, channelId) : [],
     shallowEqual,
   )
   if (!channel) return null
@@ -41,6 +43,7 @@ export const ChannelRow = memo(function ChannelRow({ channelId }: { channelId: s
       label={channel.name}
       title={channel.topic}
       active={active}
+      current={active && !quiet}
       unread={activity.unread}
       badge={activity.waiting}
       badgeTone="needs"

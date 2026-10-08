@@ -31,6 +31,8 @@ pub enum ExecutionError {
     InvalidStructuredResult,
     /// An app's structured context is not the JSON text of one object.
     InvalidStructuredContent,
+    /// Arguments of an MCP tool call are not the JSON text of one object.
+    InvalidMcpCallArguments,
     /// An update names a different MCP server or tool than the one already
     /// observed for this tool call. The first identity stands.
     DifferentMcpTool,

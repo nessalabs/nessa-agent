@@ -33,10 +33,6 @@
   animation: workspace-fade-in var(--desktop-base) ease both;
 }
 
-.workspace-transcript-inner[data-arriving] {
-  animation: none;
-}
-
 /* Messages that arrive while the conversation is open rise into place. */
 .workspace-transcript-inner > [data-new] {
   animation: workspace-message-in var(--desktop-slow) var(--desktop-out) both;

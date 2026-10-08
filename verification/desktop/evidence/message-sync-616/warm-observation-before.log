@@ -1,0 +1,39 @@
+   Compiling tokio v1.53.1
+   Compiling nessa-auth v0.1.0 (/Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/crates/nessa-auth)
+   Compiling tokio-util v0.7.19
+   Compiling event-stream v0.1.0 (https://github.com/nessalabs/event-stream?rev=59624a2#59624a2d)
+   Compiling tower v0.5.3
+   Compiling tokio-rustls v0.26.5
+   Compiling tokio-tungstenite v0.29.0
+   Compiling tower-http v0.6.11
+   Compiling h2 v0.4.19
+   Compiling hyper v1.11.1
+   Compiling nessa-sdk v0.1.0 (/Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/crates/nessa-sdk)
+   Compiling hyper-util v0.1.20
+   Compiling hyper-rustls v0.27.9
+   Compiling axum v0.8.9
+   Compiling reqwest v0.13.4
+   Compiling nessa-protocol v0.1.0 (/Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/crates/nessa-protocol)
+   Compiling nessa-client-core v0.1.0 (/Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/crates/nessa-client-core)
+   Compiling nessa-server v0.1.0 (/Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/crates/nessa-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 16s
+     Running unittests src/lib.rs (/private/tmp/616-cargo-target/debug/deps/nessa_server-9294fb155a431f89)
+
+running 1 test
+test composition::current_agent::tests::proactive_current_warm_up_opens_and_closes_without_a_conversation_or_prompt ... FAILED
+
+failures:
+
+---- composition::current_agent::tests::proactive_current_warm_up_opens_and_closes_without_a_conversation_or_prompt stdout ----
+
+thread 'composition::current_agent::tests::proactive_current_warm_up_opens_and_closes_without_a_conversation_or_prompt' (2835559) panicked at crates/nessa-server/src/composition/../../tests/composition/current_agent.rs:963:6:
+managed ACP fixture launched: Elapsed(())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    composition::current_agent::tests::proactive_current_warm_up_opens_and_closes_without_a_conversation_or_prompt
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1945 filtered out; finished in 5.73s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

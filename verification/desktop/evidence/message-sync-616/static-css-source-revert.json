@@ -1,0 +1,47 @@
+{
+  "kind": "static-rain-source-only-css-revert",
+  "sourceHash": "31b93e39c690a9afc38f74d7746df0e383b695cf2e2d83f881cd957c3ae09cb5",
+  "exactRestoration": true,
+  "records": [
+    {
+      "engine": "chromium",
+      "fixed": true,
+      "sourceRevertFails": true,
+      "restored": true,
+      "brokenTransforms": [
+        "matrix(1, 0, 0, 1, 0, -810)",
+        "matrix(1, 0, 0, 1, 0, -810)",
+        "matrix(1, 0, 0, 1, 0, -810)",
+        "matrix(1, 0, 0, 1, 0, -810)",
+        "matrix(1, 0, 0, 1, 0, -810)",
+        "matrix(1, 0, 0, 1, 0, -810)",
+        "none",
+        "none",
+        "none",
+        "none",
+        "none",
+        "none"
+      ]
+    },
+    {
+      "engine": "webkit",
+      "fixed": true,
+      "sourceRevertFails": true,
+      "restored": true,
+      "brokenTransforms": [
+        "matrix(1, 0, 0, 1, 0, -810)",
+        "matrix(1, 0, 0, 1, 0, -810)",
+        "matrix(1, 0, 0, 1, 0, -810)",
+        "matrix(1, 0, 0, 1, 0, -810)",
+        "matrix(1, 0, 0, 1, 0, -810)",
+        "matrix(1, 0, 0, 1, 0, -810)",
+        "none",
+        "none",
+        "none",
+        "none",
+        "none",
+        "none"
+      ]
+    }
+  ]
+}

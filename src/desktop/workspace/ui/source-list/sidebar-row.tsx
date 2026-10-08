@@ -18,6 +18,7 @@ export function SidebarRow({
   shortcut,
   className,
   active,
+  current,
   unread,
   badge,
   badgeTone,
@@ -34,6 +35,8 @@ export function SidebarRow({
   /** A hook for a surface that styles or finds its one row. */
   className?: string
   active: boolean
+  /** The sidebar's current page. Lags `active` while the overview opens. */
+  current: boolean
   unread?: boolean
   /** A count, shown instead of the running glyph. */
   badge?: number
@@ -51,7 +54,7 @@ export function SidebarRow({
       className={className}
       isActive={active}
       unread={unread}
-      aria-current={active ? "page" : undefined}
+      aria-current={current ? "page" : undefined}
       // The kit lays the count and the glyph beside the control, not in it:
       // its name says them once, and they stay silent beside it.
       aria-label={[

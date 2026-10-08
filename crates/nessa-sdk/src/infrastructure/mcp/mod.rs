@@ -16,7 +16,9 @@
 //!     └── revoke (a grant's sessions closed, none opened under it after)
 //!
 //! Connection: framing (bounded newline JSON-RPC) ─ wire (MCP JSON → domain)
-//! Remote: HttpExchange (injected) ─ HttpSession (streamable HTTP, legacy SSE) ─ the same Connection
+//! Remote: HttpExchange (injected) ─ HttpSession (owned JSON/SSE bodies and recovery) ─ the same Connection
+//! RecoveryReady / captured peer reply ──existing queue──▶ Connection writer
+//! HttpSession owns binding claims and the shared authorized modern POST policy.
 //! ```
 //!
 //! Arrows are calls. `McpServers` owns the configured set, which a host
@@ -27,8 +29,9 @@
 //! process (its process group) and its connection, closed when its harness
 //! session ends or its grant is revoked; `Connection` owns
 //! request ids, answers, cancellation and the end of a connection; `stand_in`
-//! owns what a harness sees, and keeps a forwarded `tools/call` result's
-//! `structuredContent` in the grant's store for the ACP worker to attach;
+//! owns what a harness sees, and keeps a forwarded `tools/call`'s arguments
+//! and its result's `structuredContent` in the grant's store for the ACP
+//! worker to attach;
 //! `process` launching and stopping; `wire` the
 //! shapes, and the domain (`domain::mcp_apps`) the values and their bounds.
 //! The states and orderings are tabled in `docs/design/mcp-connections.md`.

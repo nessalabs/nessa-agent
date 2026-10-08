@@ -130,7 +130,11 @@ reporter alone.
 The proxy pins the first; another named, or a `load` of the frame whose
 latest check that one does not answer within the host's initialize
 deadline, is the app's departure. The proxy then stops relaying, removes
-the frame and tells the host, which fails the view. The reporter's word on
+the frame and tells the host, which fails the view. The reporter answers a
+check only by reading that message's own data, in strict mode: a host reply
+with no `method` of its own is not a check, even where the app has defined
+`method` and `params` on `Object.prototype`, and the app cannot reach the
+reporter's functions through `caller` (#388). The reporter's word on
 `pagehide` says it sooner while the app leaves it in place; the guarantee
 is not its (round 3 on #349 erased it with `document.open()`). An
 `about:srcdoc` document resolves a link to a fragment against the proxy's
@@ -150,7 +154,13 @@ and never closes fires no `load`, so is never checked, nor is one that holds
 its own first load back; and a move to
 a fragment by its own script (`location.href = "#x"`, `location.assign`)
 resolves against the proxy's URL like a link, which the reporter cannot
-intercept, and ends its view (an app sets `location.hash`).
+intercept, and ends its view (an app sets `location.hash`). A
+`javascript:` rewrite of the app's own document was measured in both
+engines (`mcp-apps.mjs`, `javascript-url`, #388): Chromium does not run
+it, and it is not a departure; WebKit runs it, relays the URL's own post,
+and the frame's load then goes unanswered, so the departure follows. That
+post is the same window as any navigation the proxy has not yet judged. It
+is not a second way past the proxy.
 
 **Teardown.** The host sends `ui/resource-teardown` and waits for the answer
 (or a deadline) where it ends an app itself and the place stays: an app in a
@@ -254,8 +264,7 @@ app widgets alike.
   (`bridge.test.ts`, L1b).
 - **Limits, each its own issue**: a release fences the mount, so a call still
   in admission opens no review and a read is issued no ticket (#397); one
-  mount holds at most 3 of the socket's 4 app slots (#398); an app is
-  told `{}` for arguments the view does not carry (#394); a frame the gateway
+  mount holds at most 3 of the socket's 4 app slots (#398); a frame the gateway
   cannot decode is answered `invalid_request` when the envelope parser reads
   one JSON object, no decoded envelope name appears twice, `type` is `req`,
   and `id` is one Unicode string of 1 to 256 bytes. An envelope name that is

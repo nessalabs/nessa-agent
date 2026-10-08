@@ -11,8 +11,10 @@
  *
  * A call that ended before the view was ready is held and told in that
  * order when it is (`toolNotifications` is asked again on `initialized`).
- * A result cannot come without its arguments: the phase that holds one
- * holds the other (gate 11).
+ * A result cannot come without its arguments: a finished phase holds them.
+ * A running call may not yet: `tool-input` waits until they are known, and
+ * a finished call whose view never carried any holds `{}` so the result
+ * can follow.
  */
 import { notify, type JsonObject, type Outgoing } from "./json-rpc"
 
@@ -20,7 +22,7 @@ import { notify, type JsonObject, type Outgoing } from "./json-rpc"
 export type CallPhase =
   /** The agent is still writing the arguments: the best reading of them so far. */
   | { readonly kind: "streaming"; readonly partial: JsonObject }
-  | { readonly kind: "running"; readonly arguments: JsonObject }
+  | { readonly kind: "running"; readonly arguments?: JsonObject }
   /** Finished, with its `CallToolResult` — an error result included. */
   | { readonly kind: "done"; readonly arguments: JsonObject; readonly result: JsonObject }
   /** Cancelled, with its arguments if they were complete. */

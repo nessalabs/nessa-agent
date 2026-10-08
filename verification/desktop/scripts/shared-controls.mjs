@@ -136,8 +136,12 @@ function rowsOnPage(sel) {
       background: getComputedStyle(row).backgroundColor,
       weight: label(row) ? getComputedStyle(label(row)).fontWeight : null,
       unread: row.hasAttribute("data-unread"),
+      // A sidebar row is current by its page; with the overview open the
+      // channel and the session keep their marks but are painted quiet (#642).
       current:
-        row.getAttribute("data-active") === "true" || row.hasAttribute("data-selected"),
+        (row.getAttribute("data-active") === "true" ||
+          row.hasAttribute("data-selected")) &&
+        (!row.closest(sel.sidebar) || row.getAttribute("aria-current") === "page"),
       beside: besideFailure,
       besides: beside ? (beside.matches(sel.countBadge) ? "count" : "glyph") : null,
     }

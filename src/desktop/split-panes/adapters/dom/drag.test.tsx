@@ -9,7 +9,7 @@
  */
 import { act, useRef, useSyncExternalStore, type RefObject } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { afterEach, beforeEach, expect, it } from "vitest"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import type { Drop, SplitPanesSource } from "../../application/ports"
 import { dropOutcome } from "../../model/drop"
 import { panesOf, singlePane, splitPane, type PaneLayout } from "../../model/pane-layout"
@@ -184,9 +184,12 @@ function Page({
 const options = (
   overrides: Partial<SplitPanesDragOptions> = {},
 ): SplitPanesDragOptions => ({
-  copyOf: (item) => {
+  copySize: null,
+  previewPanes: true,
+  copyOf: (carried, { pane, picture }) => {
+    if (carried.kind === "pane" && pane) return picture(pane)
     const copy = document.createElement("article")
-    copy.textContent = `copy of ${item}`
+    copy.textContent = `copy of ${carried.kind === "item" ? carried.item : ""}`
     return copy
   },
   covered: () => [],
@@ -436,6 +439,27 @@ it("keeps a ready failure that is not cancellation", async () => {
   }
 })
 
+it("a target-only drop leaves body restoration to the layout owner", async () => {
+  const fake = fakeSource(two())
+  const commit = fake.source.commitDrop
+  vi.spyOn(fake.source, "commitDrop").mockImplementation((drop) => {
+    expect(host.querySelector(`[${marks.settling}]`)).toBeNull()
+    commit(drop)
+  })
+  const root = await mounted(
+    fake,
+    options({ previewPanes: false, copySize: { width: 280, height: 44 } }),
+  )
+  await liftOntoTwo()
+  expect(said()).toBe("Swap with Pane b")
+  pointer("pointerup", 827, 400)
+  await frames()
+  expect(fake.state.drops).toHaveLength(1)
+  expect(items(fake)).toEqual(["b", "a"])
+  expect(host.querySelector(`[${marks.settling}]`)).toBeNull()
+  await act(async () => root.unmount())
+})
+
 it("previews the outcome of the layout the source holds, and commits it through the source in the room the press read", async () => {
   const fake = fakeSource(two())
   const root = await mounted(fake)
@@ -457,7 +481,53 @@ it("previews the outcome of the layout the source holds, and commits it through 
   // Measured once, as the press began.
   expect(fake.state.measured).toBe(1)
   expect(items(fake)).toEqual(["b", "a"])
+  // Bodies were held out of the commit's layout, then brought back.
+  expect(host.querySelector("[data-drag-settling]")).toBeNull()
   expect(carrying()).toBe(false)
+  await act(async () => root.unmount())
+})
+
+it("holds pane bodies out of the frame a cancel lets the preview go, and brings one back each frame after", async () => {
+  const fake = fakeSource(two())
+  const root = await mounted(fake)
+  await liftOntoTwo()
+  expect(document.documentElement.hasAttribute(marks.reflow)).toBe(true)
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
+  pointer("pointerup", 827, 400)
+  // The preview's mark drops as the copy flies home, and the bodies are
+  // waiting on that turn — one comes back on the frame after.
+  await act(async () => {})
+  expect(document.documentElement.hasAttribute(marks.reflow)).toBe(false)
+  expect(host.querySelectorAll("[data-drag-settling]").length).toBeGreaterThan(1)
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(host.querySelectorAll("[data-drag-settling]").length).toBe(1)
+  await frames()
+  expect(host.querySelector("[data-drag-settling]")).toBeNull()
+  expect(fake.state.drops).toEqual([])
+  await act(async () => root.unmount())
+})
+
+it("holds pane bodies out of the commit frame and brings one back each frame after", async () => {
+  const fake = fakeSource(two())
+  const root = await mounted(fake)
+  await liftOntoTwo()
+  pointer("pointerup", 827, 400)
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(host.querySelectorAll("[data-drag-settling]").length).toBeGreaterThan(0)
+  await frames()
+  expect(host.querySelector("[data-drag-settling]")).toBeNull()
+  expect(fake.state.drops).toHaveLength(1)
+  // The copy is gone on that landing. Fading it would blend it with the blur.
+  const handoff = animated.filter(
+    (asked) =>
+      asked.element.classList.contains(classes.ghost) &&
+      asked.keyframes.some((frame) => frame.opacity === 0),
+  )
+  expect(handoff.at(-1)?.duration).toBe(0)
   await act(async () => root.unmount())
 })
 
@@ -561,6 +631,76 @@ it("does not commit a drop whose frame was cancelled by unmount", async () => {
   expect(fake.state.subscribed).toBe(0)
 })
 
+it.each([
+  { kind: "bodies", rebind: true },
+  { kind: "glass", rebind: true },
+  { kind: "bodies", rebind: false },
+] as const)(
+  "rejects old $kind restoration callbacks (rebound owner: $rebind)",
+  async ({ kind, rebind }) => {
+    const first = fakeSource(two())
+    const root = await mounted(first)
+    await liftOntoTwo()
+    const request = window.requestAnimationFrame
+    const cancel = window.cancelAnimationFrame
+    const queued = new Map<number, FrameRequestCallback>()
+    let next = 10000
+    const control = () => {
+      window.requestAnimationFrame = (callback) => {
+        const id = next++
+        queued.set(id, callback)
+        return id
+      }
+      window.cancelAnimationFrame = (id) => {
+        queued.delete(id)
+      }
+    }
+    try {
+      control()
+      await act(async () =>
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        ),
+      )
+      const obsolete = [...queued.values()]
+      expect(obsolete.length).toBeGreaterThan(0)
+      if (rebind) {
+        const second = fakeSource(two())
+        await act(async () => root.render(<Host fake={second} options={options()} />))
+        obsolete.push(...queued.values())
+      }
+      queued.clear()
+      window.requestAnimationFrame = request
+      window.cancelAnimationFrame = cancel
+      layOut()
+      await liftOntoTwo()
+      expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
+      control()
+      if (kind === "bodies") {
+        pointer("pointerup", 827, 400)
+        await act(async () => {
+          for (const [id, callback] of [...queued]) {
+            queued.delete(id)
+            callback(performance.now())
+          }
+        })
+        expect(host.querySelectorAll(`[${marks.settling}]`)).toHaveLength(2)
+      }
+      await act(async () => obsolete.forEach((callback) => callback(performance.now())))
+      if (kind === "bodies")
+        expect(host.querySelectorAll(`[${marks.settling}]`)).toHaveLength(2)
+      else expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
+    } finally {
+      await act(async () => root.unmount())
+      window.requestAnimationFrame = request
+      window.cancelAnimationFrame = cancel
+      queued.clear()
+      document.documentElement.removeAttribute(marks.pressing)
+      document.documentElement.removeAttribute(marks.reflow)
+    }
+  },
+)
+
 it("with less motion, previews a swap at once — the other pane drawn where the drop puts it — and lets it go as the drop lands", async () => {
   // As the person's window is set: Settings › Appearance › Motion, Reduced (#286).
   document.documentElement.dataset.motion = "reduced"
@@ -582,6 +722,13 @@ it("with less motion, previews a swap at once — the other pane drawn where the
       /^translate\(554px, 0px\) scale\(1, 1\)$/,
     )
     expect(drawnAt(2)?.duration).toBe(0)
+    // The transcript's clip is a style, set once. Keyframes that animate it
+    // lay the transcript out on every frame of the glide.
+    expect(
+      animated.every(({ keyframes }) =>
+        keyframes.every((frame) => frame?.clipPath == null),
+      ),
+    ).toBe(true)
     // Dropped: the panes are laid out where the preview drew them, and the
     // preview is let go as they are — left on, it would draw them moved again.
     const preview = animated.filter(({ element: of }) => of.closest("[data-pane-key]"))
@@ -792,6 +939,9 @@ it("carries the host's copy of an item, and a picture of a pane without the host
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
   pointer("pointerup", 40, 40)
   await frames()
+  element('[data-pane-key="1"]').setAttribute(marks.restoring, "")
+  element('[data-pane-key="1"]').setAttribute(marks.flying, "")
+  element('[data-pane-key="1"]').setAttribute(marks.measuring, "")
   await liftOntoTwo()
   const copy = element(`.${classes.ghost} header`)
   // A picture of the pane as it looks — in the corner, its header starts
@@ -799,7 +949,15 @@ it("carries the host's copy of an item, and a picture of a pane without the host
   expect(element(`.${classes.ghost} article`).hasAttribute(marks.corner)).toBe(true)
   // Only `dragPane` is on the pane as it is pictured; the others are set
   // after the copy is made, and are listed so that stays true.
-  for (const name of [marks.dragPane, marks.dragItem, marks.carrying, marks.lifted])
+  for (const name of [
+    marks.dragPane,
+    marks.dragItem,
+    marks.carrying,
+    marks.lifted,
+    marks.restoring,
+    marks.flying,
+    marks.measuring,
+  ])
     expect(element(`.${classes.ghost}`).querySelector(`[${name}]`), name).toBeNull()
   expect(copy.hasAttribute("data-host-mark")).toBe(false)
   expect(copy.hasAttribute("data-drag-pane")).toBe(false)
@@ -807,6 +965,47 @@ it("carries the host's copy of an item, and a picture of a pane without the host
   expect(element('[data-pane-key="1"] header').hasAttribute("data-host-mark")).toBe(true)
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
   pointer("pointerup", 827, 400)
+  await act(async () => root.unmount())
+})
+
+it("clears a sliver's inline clip when a committed drop releases the preview", async () => {
+  const finished = Promise.resolve()
+  Element.prototype.animate = function (this: Element, keyframes, timing) {
+    const asked = {
+      element: this,
+      keyframes: keyframes as Keyframe[],
+      duration: typeof timing === "object" ? timing.duration : timing,
+      cancelled: false,
+    }
+    animated.push(asked)
+    return {
+      cancel() {
+        asked.cancelled = true
+      },
+      finished,
+      id: "",
+      effect: { target: asked.element, getComputedTiming: () => ({ progress: 1 }) },
+    } as unknown as Animation
+  }
+  const fake = fakeSource(two())
+  const root = await mounted(fake)
+  const pane = element('[data-pane-key="2"]')
+  const sliver = document.createElement("div")
+  sliver.setAttribute("data-sliver", "")
+  pane.prepend(sliver)
+  await press(60, 16, element('[data-drag-pane="1"]'))
+  // Up pane b's middle: above it. Pane b goes below, shorter, and the sliver is cut.
+  for (const y of [400, 300, 200, 100, 30]) {
+    pointer("pointermove", 827, y)
+    await new Promise((resolve) => setTimeout(resolve, 4))
+  }
+  await frames()
+  expect(said()).toBe("Move above Pane b")
+  expect(sliver.style.clipPath).not.toBe("")
+  pointer("pointerup", 827, 30)
+  await frames()
+  expect(fake.state.drops).toHaveLength(1)
+  expect(sliver.style.clipPath).toBe("")
   await act(async () => root.unmount())
 })
 

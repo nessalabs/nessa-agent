@@ -3,7 +3,6 @@ import { shallowEqual } from "react-redux"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
   selectFocusedSessionId,
-  selectOverviewOpen,
   selectSession,
   selectShownSessionIds,
 } from "../../adapters/store/selectors"
@@ -18,6 +17,7 @@ import { StatusGlyph } from "../chrome/status-glyph"
 import { SessionMenuItems, useOpenFromRow } from "../session-actions"
 import { tooltip } from "../../../ui/tooltip"
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "../../../ui/menu"
+import { useOverviewQuiet } from "./overview-quiet"
 
 /**
  * A session hanging beneath its channel in the sidebar. `pinned`: one of the
@@ -36,12 +36,13 @@ export const ThreadRow = memo(function ThreadRow({
   kind: "pinned" | "branch"
 }) {
   const session = useWorkspaceSelector((state) => selectSession(state, sessionId))
+  // After the open paint, so the key does not render the row (`layouts.test.tsx`).
+  const quiet = useOverviewQuiet()
   const { open, focused } = useWorkspaceSelector(
     (state) => ({
       open: selectShownSessionIds(state).includes(sessionId),
-      // The focused pane's, beside the panes or a widget over them: only the
-      // Agents overview takes the sidebar's choice for itself.
-      focused: selectFocusedSessionId(state) === sessionId && !selectOverviewOpen(state),
+      // The focused pane's, beside the panes or a widget over them.
+      focused: selectFocusedSessionId(state) === sessionId,
     }),
     shallowEqual,
   )
@@ -60,7 +61,7 @@ export const ThreadRow = memo(function ThreadRow({
             data-open={open || undefined}
             selected={kind === "branch" && focused}
             unread={kind === "branch" && session.unread}
-            aria-current={focused ? "page" : undefined}
+            aria-current={focused && !quiet ? "page" : undefined}
             // Carried by the pointer to a pane (`split-panes/adapters/dom/drag.ts`).
             data-drag-item={paneItemKey(sessionItem(session.id))}
             onClick={(event) => actions.activate(event, session.id)}

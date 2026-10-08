@@ -86,6 +86,13 @@ export const frames = (page, n = 2) =>
     n,
   )
 
+/**
+ * Waits until this open has drawn every overview row (`data-overview-listed`).
+ * A count taken before that is the prefix, not the list.
+ */
+export const overviewListed = (page, timeout = 2000) =>
+  until(page, (sel) => document.querySelector(sel) !== null, css.overviewListed, timeout)
+
 /** How many requests the Agents overview lists (it must be open). */
 export const requestCount = (page) => page.locator(css.overviewRequest).count()
 
@@ -168,26 +175,45 @@ export function switchLayout(page, layout) {
   )
 }
 
-/** Starts recording the drop zones the drag announces; `take()` returns and clears them. */
+/** Records announced drop zones; one-shot `take()` stops recording and releases its resources. */
 export async function recordZones(page) {
-  const found = await page.evaluate((sel) => {
+  const recorder = await page.evaluateHandle((sel) => {
     const status = document.querySelector(sel)
-    if (!status) return false
-    window.__verifyZones = []
-    new MutationObserver(() => window.__verifyZones.push(status.textContent)).observe(
-      status,
-      {
-        childList: true,
-        characterData: true,
-        subtree: true,
+    if (!status) return null
+    const records = []
+    let lastMoveAt = performance.now()
+    let position
+    const moved = (event) => {
+      if (position?.x === event.clientX && position?.y === event.clientY) return
+      position = { x: event.clientX, y: event.clientY }
+      lastMoveAt = event.timeStamp
+    }
+    document.addEventListener("pointermove", moved, true)
+    const observer = new MutationObserver(() => {
+      if (status.textContent)
+        records.push({ said: status.textContent, at: performance.now(), lastMoveAt })
+    })
+    observer.observe(status, { childList: true, characterData: true, subtree: true })
+    return {
+      take() {
+        observer.disconnect()
+        document.removeEventListener("pointermove", moved, true)
+        return records.splice(0)
       },
-    )
-    return true
+    }
   }, css.dropAnnouncer)
-  if (!found) throw new CannotRun(`no drop announcer (${css.dropAnnouncer})`)
+  if (!(await recorder.evaluate((value) => value !== null))) {
+    await recorder.dispose()
+    throw new CannotRun(`no drop announcer (${css.dropAnnouncer})`)
+  }
   return {
-    take: () => page.evaluate(() => window.__verifyZones.splice(0).filter(Boolean)),
-    clear: () => page.evaluate(() => (window.__verifyZones = [])),
+    take: async () => {
+      try {
+        return await recorder.evaluate((value) => value.take())
+      } finally {
+        await recorder.dispose()
+      }
+    },
   }
 }
 
@@ -295,6 +321,12 @@ export function dragResidue(page) {
         .filter((p) => !p.closest(sel.dragGhost))
         .filter((p) => p.style.width || p.style.height)
         .map((p) => p.dataset.paneKey),
+      // An inline clip a shorter preview put on a sliver, still there after
+      // the drop (`drag.test.tsx`).
+      clipped: [...document.querySelectorAll(sel.pictureBand)]
+        .filter((el) => !el.closest(sel.dragGhost))
+        .filter((el) => el.style.clipPath)
+        .map((el) => el.closest(sel.pane)?.dataset.paneKey ?? "page"),
     }),
     css,
   )
@@ -309,6 +341,8 @@ export function residueFailures(residue) {
     out.push(`panes left drawn off their place: ${residue.transformed.join(",")}`)
   if (residue.sized.length)
     out.push(`panes left at a size of the drag's: ${residue.sized.join(",")}`)
+  if (residue.clipped?.length)
+    out.push(`slivers left clipped: ${residue.clipped.join(",")}`)
   return out
 }
 

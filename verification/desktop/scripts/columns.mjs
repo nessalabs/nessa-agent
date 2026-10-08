@@ -90,6 +90,14 @@ function measure(columns) {
     const style = getComputedStyle(element)
     const box = element.getBoundingClientRect()
     if (style.display === "none" || style.visibility === "hidden") continue
+    // Under the open overview the list and the chat area keep their layout,
+    // covered rather than hidden (`data-overview-covered`, `overview-layer.tsx`).
+    if (element.closest("[inert]")) continue
+    if (
+      (name === "list" || name === "chat") &&
+      element.closest("[data-overview-covered]")
+    )
+      continue
     if (Number(style.opacity) === 0 || box.width < 2 || box.right <= 0) continue
     if (box.left >= window.innerWidth) continue
     drawn.push({ name, left: Math.round(box.left), right: Math.round(box.right) })

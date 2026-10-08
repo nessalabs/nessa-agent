@@ -7,11 +7,15 @@
  * something could not run — the server did not start, a browser is missing,
  * or what a step needs to begin was not on the page.
  */
+import { spawnSync } from "node:child_process"
 import { mkdirSync, writeFileSync } from "node:fs"
+import { createRequire } from "node:module"
 import { dirname, resolve } from "node:path"
 import { parseArgs } from "node:util"
 
 import { applyLines } from "./page-lines.mjs"
+
+const require = createRequire(import.meta.url)
 
 /** Options every check takes. */
 export const commonOptions = {
@@ -126,6 +130,8 @@ export const devServerOnlyChecks = [
   "committed-transcript",
   "app-review",
   "gateway-states",
+  // The sandbox proxy is provided by the dev server, not vite preview.
+  "mcp-apps",
 ]
 
 /**
@@ -135,7 +141,7 @@ export const devServerOnlyChecks = [
 export const devServerOnlySteps = {
   drag: ["boundary-jitter"],
   widgets: ["off-missing"],
-  "mcp-apps": ["departures", "departures-back"],
+  "mcp-apps": ["departures", "departures-back", "chart"],
   "message-sync": ["retained-app"],
 }
 
@@ -236,6 +242,30 @@ export function chosen(only, available, list) {
 }
 
 /**
+ * The evidence file is read by `prettier --check` in CI. `JSON.stringify`
+ * does not wrap to the project's print width, so a check that writes `--out`
+ * asks Prettier to format that file before it is written.
+ */
+function formattedJson(json, filepath) {
+  let bin
+  try {
+    bin = require.resolve("prettier/bin/prettier.cjs")
+  } catch {
+    log("prettier was not found; wrote the evidence file without formatting it")
+    return json
+  }
+  const result = spawnSync(process.execPath, [bin, "--stdin-filepath", filepath], {
+    input: json,
+    encoding: "utf8",
+  })
+  if (result.status !== 0 || !result.stdout) {
+    log(result.stderr?.trim() || "prettier did not format the result")
+    return json
+  }
+  return result.stdout.endsWith("\n") ? result.stdout : `${result.stdout}\n`
+}
+
+/**
  * Collects named results, each with its own failures, and finishes the
  * process with the JSON document and the right exit status.
  */
@@ -278,7 +308,8 @@ export function report(check, options) {
         ...extra,
         results,
       }
-      const json = `${JSON.stringify(document, null, 2)}\n`
+      const raw = `${JSON.stringify(document, null, 2)}\n`
+      const json = options.out ? formattedJson(raw, options.out) : raw
       if (options.out) {
         const path = resolve(options.out)
         mkdirSync(dirname(path), { recursive: true })

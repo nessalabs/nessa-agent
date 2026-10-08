@@ -1,0 +1,409 @@
+{
+  "elements": 1083,
+  "subtrees": [
+    {
+      "selector": ".workspace-pane",
+      "className": "workspace-pane",
+      "elements": 136,
+      "textCharacters": 109782,
+      "rect": {
+        "width": 400,
+        "height": 984
+      },
+      "visible": "visible",
+      "display": "flex"
+    },
+    {
+      "selector": ".workspace-pane",
+      "className": "workspace-pane",
+      "elements": 114,
+      "textCharacters": 109181,
+      "rect": {
+        "width": 300,
+        "height": 984
+      },
+      "visible": "visible",
+      "display": "flex"
+    },
+    {
+      "selector": ".workspace-pane",
+      "className": "workspace-pane",
+      "elements": 411,
+      "textCharacters": 110936,
+      "rect": {
+        "width": 300,
+        "height": 488
+      },
+      "visible": "visible",
+      "display": "flex"
+    },
+    {
+      "selector": ".workspace-pane",
+      "className": "workspace-pane",
+      "elements": 117,
+      "textCharacters": 109321,
+      "rect": {
+        "width": 300,
+        "height": 488
+      },
+      "visible": "visible",
+      "display": "flex"
+    },
+    {
+      "selector": ".workspace-pane-body",
+      "className": "workspace-pane-body",
+      "elements": 103,
+      "textCharacters": 934,
+      "rect": {
+        "width": 400,
+        "height": 944
+      },
+      "visible": "visible",
+      "display": "flex"
+    },
+    {
+      "selector": ".workspace-pane-body",
+      "className": "workspace-pane-body",
+      "elements": 81,
+      "textCharacters": 343,
+      "rect": {
+        "width": 300,
+        "height": 944
+      },
+      "visible": "visible",
+      "display": "flex"
+    },
+    {
+      "selector": ".workspace-pane-body",
+      "className": "workspace-pane-body",
+      "elements": 378,
+      "textCharacters": 2091,
+      "rect": {
+        "width": 300,
+        "height": 448
+      },
+      "visible": "visible",
+      "display": "flex"
+    },
+    {
+      "selector": ".workspace-pane-body",
+      "className": "workspace-pane-body",
+      "elements": 84,
+      "textCharacters": 480,
+      "rect": {
+        "width": 300,
+        "height": 448
+      },
+      "visible": "visible",
+      "display": "flex"
+    },
+    {
+      "selector": ".workspace-pane-header",
+      "className": "workspace-pane-header",
+      "elements": 18,
+      "textCharacters": 34,
+      "rect": {
+        "width": 400,
+        "height": 32
+      },
+      "visible": "visible",
+      "display": "flex"
+    },
+    {
+      "selector": ".workspace-pane-header",
+      "className": "workspace-pane-header",
+      "elements": 18,
+      "textCharacters": 24,
+      "rect": {
+        "width": 300,
+        "height": 32
+      },
+      "visible": "visible",
+      "display": "flex"
+    },
+    {
+      "selector": ".workspace-pane-header",
+      "className": "workspace-pane-header",
+      "elements": 18,
+      "textCharacters": 31,
+      "rect": {
+        "width": 300,
+        "height": 32
+      },
+      "visible": "visible",
+      "display": "flex"
+    },
+    {
+      "selector": ".workspace-pane-header",
+      "className": "workspace-pane-header",
+      "elements": 18,
+      "textCharacters": 27,
+      "rect": {
+        "width": 300,
+        "height": 32
+      },
+      "visible": "visible",
+      "display": "flex"
+    },
+    {
+      "selector": ".desktop-night-scene",
+      "className": "desktop-night-scene",
+      "elements": 11,
+      "textCharacters": 108814,
+      "rect": {
+        "width": 400,
+        "height": 340
+      },
+      "visible": "visible",
+      "display": "block"
+    },
+    {
+      "selector": ".desktop-night-scene",
+      "className": "desktop-night-scene",
+      "elements": 11,
+      "textCharacters": 108814,
+      "rect": {
+        "width": 300,
+        "height": 340
+      },
+      "visible": "visible",
+      "display": "block"
+    },
+    {
+      "selector": ".desktop-night-scene",
+      "className": "desktop-night-scene",
+      "elements": 11,
+      "textCharacters": 108814,
+      "rect": {
+        "width": 0,
+        "height": 0
+      },
+      "visible": "visible",
+      "display": "block"
+    },
+    {
+      "selector": ".desktop-night-scene",
+      "className": "desktop-night-scene",
+      "elements": 11,
+      "textCharacters": 108814,
+      "rect": {
+        "width": 0,
+        "height": 0
+      },
+      "visible": "visible",
+      "display": "block"
+    },
+    {
+      "selector": ".workspace-transcript",
+      "className": "workspace-transcript",
+      "elements": 62,
+      "textCharacters": 914,
+      "rect": {
+        "width": 400,
+        "height": 820
+      },
+      "visible": "visible",
+      "display": "block"
+    },
+    {
+      "selector": ".workspace-transcript",
+      "className": "workspace-transcript",
+      "elements": 40,
+      "textCharacters": 325,
+      "rect": {
+        "width": 300,
+        "height": 820
+      },
+      "visible": "visible",
+      "display": "block"
+    },
+    {
+      "selector": ".workspace-transcript",
+      "className": "workspace-transcript",
+      "elements": 337,
+      "textCharacters": 2073,
+      "rect": {
+        "width": 300,
+        "height": 356
+      },
+      "visible": "visible",
+      "display": "block"
+    },
+    {
+      "selector": ".workspace-transcript",
+      "className": "workspace-transcript",
+      "elements": 43,
+      "textCharacters": 462,
+      "rect": {
+        "width": 300,
+        "height": 356
+      },
+      "visible": "visible",
+      "display": "block"
+    },
+    {
+      "selector": ".workspace-sidebar",
+      "className": "workspace-sidebar",
+      "elements": 153,
+      "textCharacters": 203,
+      "rect": {
+        "width": 240,
+        "height": 984
+      },
+      "visible": "visible",
+      "display": "flex"
+    }
+  ],
+  "largest": [
+    {
+      "tag": "HTML",
+      "className": "dark",
+      "n": 1082,
+      "textCharacters": 452134
+    },
+    {
+      "tag": "BODY",
+      "className": "",
+      "n": 1071,
+      "textCharacters": 448091
+    },
+    {
+      "tag": "DIV",
+      "className": "",
+      "n": 1069,
+      "textCharacters": 440215
+    },
+    {
+      "tag": "DIV",
+      "className": "desktop-window-under",
+      "n": 1068,
+      "textCharacters": 440215
+    },
+    {
+      "tag": "DIV",
+      "className": "workspace",
+      "n": 1067,
+      "textCharacters": 440215
+    },
+    {
+      "tag": "MAIN",
+      "className": "workspace-chat",
+      "n": 786,
+      "textCharacters": 439220
+    },
+    {
+      "tag": "DIV",
+      "className": "split-panes-grid",
+      "n": 785,
+      "textCharacters": 439220
+    },
+    {
+      "tag": "ARTICLE",
+      "className": "workspace-pane",
+      "n": 411,
+      "textCharacters": 110936
+    },
+    {
+      "tag": "DIV",
+      "className": "workspace-pane-body",
+      "n": 378,
+      "textCharacters": 2091
+    },
+    {
+      "tag": "DIV",
+      "className": "workspace-conversation",
+      "n": 377,
+      "textCharacters": 2091
+    },
+    {
+      "tag": "DIV",
+      "className": "workspace-transcript",
+      "n": 337,
+      "textCharacters": 2073
+    },
+    {
+      "tag": "DIV",
+      "className": "workspace-transcript-inner",
+      "n": 336,
+      "textCharacters": 2073
+    },
+    {
+      "tag": "ASIDE",
+      "className": "workspace-sidebar",
+      "n": 153,
+      "textCharacters": 203
+    },
+    {
+      "tag": "DIV",
+      "className": "workspace-sidebar-scroll",
+      "n": 140,
+      "textCharacters": 191
+    },
+    {
+      "tag": "ARTICLE",
+      "className": "workspace-pane",
+      "n": 136,
+      "textCharacters": 109782
+    },
+    {
+      "tag": "NAV",
+      "className": "",
+      "n": 128,
+      "textCharacters": 184
+    },
+    {
+      "tag": "DIV",
+      "className": "workspace-message",
+      "n": 120,
+      "textCharacters": 668
+    },
+    {
+      "tag": "DIV",
+      "className": "workspace-message-body",
+      "n": 119,
+      "textCharacters": 668
+    },
+    {
+      "tag": "ARTICLE",
+      "className": "workspace-pane",
+      "n": 117,
+      "textCharacters": 109321
+    },
+    {
+      "tag": "ARTICLE",
+      "className": "workspace-pane",
+      "n": 114,
+      "textCharacters": 109181
+    },
+    {
+      "tag": "DIV",
+      "className": "workspace-pane-body",
+      "n": 103,
+      "textCharacters": 934
+    },
+    {
+      "tag": "DIV",
+      "className": "workspace-conversation",
+      "n": 102,
+      "textCharacters": 934
+    },
+    {
+      "tag": "SECTION",
+      "className": "workspace-list",
+      "n": 98,
+      "textCharacters": 792
+    },
+    {
+      "tag": "DIV",
+      "className": "workspace-list-inner",
+      "n": 97,
+      "textCharacters": 792
+    },
+    {
+      "tag": "DIV",
+      "className": "workspace-message",
+      "n": 87,
+      "textCharacters": 665
+    }
+  ]
+}
