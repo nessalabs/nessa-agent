@@ -68,7 +68,7 @@ Checks, per engine and layout (--only <names> to pick):
            opens the panel; the title, the stack and the menu stay inside
            the header, and the title keeps a positive width. A production
            Chromium run fails when the click's longest frame exceeds the
-           frame budget (`budgetMs`).
+           frame budget (budgetMs).
 
 The panel check waits on the sample's follow-up lines, so it takes about
 half a minute.`,
