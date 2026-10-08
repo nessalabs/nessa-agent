@@ -3,7 +3,7 @@ import { statusLabels } from "../../model/session-groups"
 import { tooltip } from "../../../ui/tooltip"
 
 /** What a glyph can say: a session's state, or that a row holds something not yet seen. */
-export type GlyphKind = SessionStatus | "unread"
+type GlyphKind = SessionStatus | "unread"
 
 const glyphLabels: Readonly<Record<GlyphKind, string>> = {
   ...statusLabels,

@@ -54,7 +54,8 @@ export function PaneHeaderFrame({
 
 /**
  * A pane's ×. It keeps its room when there is nothing to close — a new
- * session's home alone — so the controls beside it never move.
+ * session's home alone — so the controls beside it stay put (`data-reserved`,
+ * `ui/icon-button.css`; `layouts.test.tsx` holds it).
  */
 export function ClosePaneButton({ pane }: { pane: PaneKey }) {
   const dispatch = useWorkspaceDispatch()

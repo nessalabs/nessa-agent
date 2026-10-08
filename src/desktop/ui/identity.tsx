@@ -52,7 +52,7 @@ export function IdentityButton({
  * the control inset from the card's side as the titlebar's controls are
  * from its top. `className` is a hook for the surface that places it.
  */
-export function IdentityFooter({
+export function IdentityRow({
   as: Element = "footer",
   className,
   children,

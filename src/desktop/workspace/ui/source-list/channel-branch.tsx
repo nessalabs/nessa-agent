@@ -94,7 +94,10 @@ export const ChannelBranch = memo(function ChannelBranch({
       // its + takes under the pointer.
       badge={
         summary ? (
-          <StatusGlyph status={activity.waiting > 0 ? "needs-you" : "running"} />
+          <StatusGlyph
+            status={activity.waiting > 0 ? "needs-you" : "running"}
+            decorative
+          />
         ) : undefined
       }
       trailing={

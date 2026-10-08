@@ -119,7 +119,13 @@ export const css = {
   // Shared controls (#632): the kit's components, by the slot each draws
   keyCap: "kbd", // every key cap; each must be the kit's (data-slot="kbd")
   kitRow: '[data-slot="sidebar-menu-item-row"] > [data-size]', // the kit's SidebarMenuItem control (data-size is always written; a context menu's trigger replaces data-slot)
+  kitRowFrame: '[data-slot="sidebar-menu-item-row"]', // the kit's row around its control and what it lays beside it
+  rowLabel: '[data-slot="sidebar-menu-item-label"], .desktop-list-row-label', // class: a row's words, in either row component
   listRow: ".desktop-list-row", // class: the window's ListRow (src/desktop/ui/list-row.tsx)
+  segmentedControl: '[data-slot="segmented-control"]', // the kit's SegmentedControl
+  emptyTitle: '[data-slot="empty-state-title"]', // the kit's EmptyState's words
+  identityRow: ".desktop-identity", // class: the row holding the identity
+  identityProduct: ".desktop-identity-words > span", // class: the identity's word after "nessa"
   identityButton: ".desktop-identity-button", // class: "nessa Studio" / "‹ nessa Agent" (src/desktop/ui/identity.tsx)
   emptyState: '[data-slot="empty-state"]', // the kit's EmptyState
   countBadge: ".workspace-badge", // class: a sidebar row's count, the kit's Badge

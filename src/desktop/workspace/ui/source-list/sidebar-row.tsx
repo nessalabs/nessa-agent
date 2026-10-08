@@ -70,13 +70,16 @@ export function SidebarRow({
             variant="secondary"
             className="workspace-badge"
             data-tone={badgeTone}
-            aria-label={badgeLabel}
+            // Said with the row's name; beside the control it would be said twice.
+            aria-hidden
           >
             {badge}
           </Badge>
         ) : undefined
       }
-      trailing={!badge && running ? <StatusGlyph status="running" /> : undefined}
+      trailing={
+        !badge && running ? <StatusGlyph status="running" decorative /> : undefined
+      }
       submenu={submenu}
     >
       {label}

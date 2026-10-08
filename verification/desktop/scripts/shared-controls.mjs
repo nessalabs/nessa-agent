@@ -96,10 +96,7 @@ function windowScale() {
 function rowsOnPage(sel) {
   const kit = (element) => element.matches(sel.kitRow)
   const listRow = (element) => element.matches(sel.listRow)
-  const label = (element) =>
-    element.querySelector(
-      '[data-slot="sidebar-menu-item-label"], .desktop-list-row-label',
-    )
+  const label = (element) => element.querySelector(sel.rowLabel)
   const rows = [
     ...document.querySelectorAll(
       [
@@ -112,23 +109,36 @@ function rowsOnPage(sel) {
     ),
   ].filter((row) => row.getBoundingClientRect().height > 0 && !row.dataset.section)
   return rows.map((row) => {
-    // What a kit row lays beside its control (a count, a glyph) must still be in its name.
-    const beside = row
-      .closest('[data-slot="sidebar-menu-item-row"]')
-      ?.querySelector(`${sel.countBadge}, [role="img"]`)
-    const said = beside?.getAttribute("aria-label") ?? beside?.textContent.trim() ?? null
+    // What a kit row lays beside its control (a count, a glyph) is said once, in
+    // the control's name: the thing beside it stays silent.
+    const beside = kit(row)
+      ? row
+          .closest(sel.kitRowFrame)
+          ?.querySelector(`${sel.countBadge}, .workspace-status`)
+      : null
+    const name = row.getAttribute("aria-label") ?? ""
+    const words = label(row)?.textContent.trim() ?? ""
+    const shown = beside?.textContent.trim() || beside?.dataset.status
+    const besideFailure = !beside
+      ? null
+      : beside.getAttribute("aria-hidden") !== "true"
+        ? `"${shown}" beside it is said again`
+        : beside.matches(sel.countBadge)
+          ? name.includes(beside.textContent.trim())
+            ? null
+            : `its name does not say "${shown}"`
+          : name.length > words.length
+            ? null
+            : `its name does not say its ${shown} glyph`
     return {
-      text: (label(row)?.textContent ?? row.textContent).trim().slice(0, 40),
+      text: (words || row.textContent.trim()).slice(0, 40),
       component: kit(row) ? "kit" : listRow(row) ? "list-row" : "other",
       background: getComputedStyle(row).backgroundColor,
       weight: label(row) ? getComputedStyle(label(row)).fontWeight : null,
       unread: row.hasAttribute("data-unread"),
       current:
         row.getAttribute("data-active") === "true" || row.hasAttribute("data-selected"),
-      unsaid:
-        kit(row) && said && !(row.getAttribute("aria-label") ?? "").includes(said)
-          ? said
-          : null,
+      beside: besideFailure,
     }
   })
 }
@@ -143,8 +153,7 @@ function rowFailures(rows, scale, where) {
       failures.push(
         `${where}: unread "${row.text}" weighs ${row.weight}, not ${scale.unread}`,
       )
-    if (row.unsaid)
-      failures.push(`${where}: "${row.text}" does not say "${row.unsaid}" in its name`)
+    if (row.beside) failures.push(`${where}: "${row.text}": ${row.beside}`)
     if (row.current && row.background !== scale.selected)
       failures.push(
         `${where}: chosen "${row.text}" is filled ${row.background}, not ${scale.selected}`,
@@ -173,7 +182,7 @@ async function hovered(page, selector) {
  * The window's name at a sidebar's foot (`ui/identity.tsx`): its pill, its
  * words and its row, against the corner controls' scale. In the page.
  */
-function measureIdentity(selector) {
+function measureIdentity([selector, sel]) {
   const button = [...document.querySelectorAll(selector)].find(
     (candidate) => candidate.getClientRects().length > 0 && candidate.checkVisibility(),
   )
@@ -193,7 +202,7 @@ function measureIdentity(selector) {
   probe.remove()
   const style = getComputedStyle(button)
   const box = button.getBoundingClientRect()
-  const product = button.querySelector(".desktop-identity-words > span")
+  const product = button.querySelector(sel.identityProduct)
   const failures = []
   if (Math.abs(box.height - Number.parseFloat(scale.size)) > 0.5)
     failures.push(`its pill is ${box.height}px tall, not ${scale.size}`)
@@ -204,7 +213,7 @@ function measureIdentity(selector) {
   if (!product || getComputedStyle(product).color !== scale.muted)
     failures.push(`its product word is not --desktop-muted at rest`)
   if (!button.getAttribute("aria-label")) failures.push("it has no accessible name")
-  const row = button.closest(".desktop-identity")?.getBoundingClientRect() ?? null
+  const row = button.closest(sel.identityRow)?.getBoundingClientRect() ?? null
   return {
     failures,
     text: button.textContent.trim(),
@@ -251,7 +260,7 @@ function measureEmptyStates(sel) {
   const shown = (element) => element.getClientRects().length > 0
   for (const empty of document.querySelectorAll(sel.emptyState)) {
     if (!shown(empty)) continue
-    const title = empty.querySelector('[data-slot="empty-state-title"]')
+    const title = empty.querySelector(sel.emptyTitle)
     const style = getComputedStyle(title)
     const words = title.textContent.trim()
     const quiet = empty.dataset.variant === "compact"
@@ -369,7 +378,7 @@ const checks = {
   identity: async (page, { open }) => {
     const scale = await page.evaluate(windowScale)
     const failures = []
-    const inWindow = await page.evaluate(measureIdentity, css.studio)
+    const inWindow = await page.evaluate(measureIdentity, [css.studio, css])
     if (!inWindow) return { failures: ["no identity at the sidebar's foot"] }
     failures.push(...inWindow.failures.map((f) => `"${inWindow.text}": ${f}`))
     failures.push(
@@ -381,10 +390,10 @@ const checks = {
     await need(page, css.settings, "Settings")
     await page.waitForTimeout(500)
     // Measured inside Settings: the window under it keeps its own, inert but drawn.
-    const inSettings = await page.evaluate(
-      measureIdentity,
+    const inSettings = await page.evaluate(measureIdentity, [
       `${css.settings} ${css.identityButton}`,
-    )
+      css,
+    ])
     if (!inSettings) failures.push("no identity at Settings' foot")
     else {
       failures.push(...inSettings.failures.map((f) => `"${inSettings.text}": ${f}`))
@@ -407,7 +416,7 @@ const checks = {
     const classic = await open("classic")
     let inClassic
     try {
-      inClassic = await classic.evaluate(measureIdentity, css.identityButton)
+      inClassic = await classic.evaluate(measureIdentity, [css.identityButton, css])
       if (!inClassic) failures.push("no identity in the classic shell")
       else {
         failures.push(
@@ -450,12 +459,10 @@ const checks = {
     await need(page, css.overviewCount, "the overview's counts")
     await page.waitForTimeout(400)
     const read = () =>
-      page.evaluate((selector) => {
-        const options = [...document.querySelectorAll(selector)]
+      page.evaluate((sel) => {
+        const options = [...document.querySelectorAll(sel.overviewCount)]
         return {
-          group: options[0]
-            ?.closest('[data-slot="segmented-control"]')
-            ?.getAttribute("role"),
+          group: options[0]?.closest(sel.segmentedControl)?.getAttribute("role"),
           options: options.map((option) => ({
             kit: option.dataset.slot === "segmented-control-option",
             pressed: option.getAttribute("aria-pressed") === "true",
@@ -465,7 +472,7 @@ const checks = {
             ),
           })),
         }
-      }, css.overviewCount)
+      }, css)
     const before = await read()
     if (before.group !== "group")
       failures.push("the counts are not the kit's segmented control")
@@ -582,6 +589,8 @@ const checks = {
     const measured = { scale, hover: {} }
     const onLoad = await page.evaluate(rowsOnPage, css)
     failures.push(...rowFailures(onLoad, scale, "on load"))
+    // The sample's unread session shows in the session list and in the tree.
+    if (!onLoad.some((row) => row.unread)) failures.push("no unread row on load to weigh")
     for (const [kind, selector] of Object.entries(rowKinds[layout] ?? {})) {
       const fill = await hovered(page, selector)
       measured.hover[kind] = fill
