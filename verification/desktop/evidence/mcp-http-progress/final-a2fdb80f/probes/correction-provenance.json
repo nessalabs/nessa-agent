@@ -1,0 +1,42 @@
+{
+  "original_remote_review_head": "00ebdc4302adf9103a5ac4f3bcee3e71fbacd713",
+  "preserved_original_ref": "codex/637-original-review-head",
+  "pre_correction_checkpoint": "f109b0eec334bd1949cee0effa8aa759ac36d011",
+  "preserved_checkpoint_ref": "codex/637-before-final-correction-f109",
+  "pre_correction_base": "10a5f67f41da6cd3acbea42daa3ccdd328685afd",
+  "selected_fetched_main": "9d63a1f16eddbebaf95af5f8d598130b5baf28d8",
+  "restacked_head": "0576f7cc97c481ae50f8aed7d293ddc250cbb3da",
+  "correction_head": "c68b4e4086fac3537e235427be32ea7f7a5e6462",
+  "restack": "seven commits rebased cleanly; main composition/#631 diff empty",
+  "push": "exact remote00eb lease; ls-remote confirmed c68b",
+  "review_history": "five formal rounds retained; user-authorized narrow exception for two confirmed owner defects; fresh current-head review still required",
+  "before_patch_actual_red": [
+    "J8 actual reply SID None versus replacement",
+    "J20 first401/no-retry SessionExpired versus Unauthorized"
+  ],
+  "before_patch_healthy_control": "J4 invalid-version no-claim passed",
+  "corrected_checks": {
+    "http_progress": "46 passed; no failures",
+    "mcp": "203 passed,1 intentional child-process ignored; parent subprocess enforcer passed",
+    "sdk_clippy_all_targets": "-D warnings passed",
+    "architecture_tests": "74 passed",
+    "architecture_check": "passed"
+  },
+  "retained_intermediate_failures": [
+    "default PATH cargo absent; no source rule failure",
+    "envelope Result equality assertion compile failure, changed to typed matches",
+    "iterator last/next_back clippy failures, changed to rfind",
+    "two SSE fixtures carried JSON content type; 43/45 initial run, fixture call_sse corrected,46/46 corrected run"
+  ],
+  "target": "/workspace/637-cargo-target",
+  "former_target_path": "/tmp/637-cargo-target symlink to relocated target; prior artifact paths retained",
+  "baseline_binary_compilation": "0576 head with uncommitted correction; byte-identical source committed as c68b after MCP checks",
+  "planned_remaining": [
+    "actual owner mutation probes",
+    "six-package all-target clippy and actual parallel test runner",
+    "SDK docs/doctests/checker",
+    "corrected assembled gateway scripted Chromium/WebKit evidence",
+    "fresh independent reviews",
+    "current-head required hosted CI; parent owns merge/closure"
+  ]
+}

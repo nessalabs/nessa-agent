@@ -1,0 +1,16 @@
+diff --git a/crates/nessa-sdk/src/infrastructure/mcp/http.rs b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+index a576a33c..9872ac2e 100644
+--- a/crates/nessa-sdk/src/infrastructure/mcp/http.rs
++++ b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+@@ -594,10 +594,7 @@ impl HttpSession {
+         };
+         let mut context = if initialize {
+             ResponseContext::Initialize {
+-                legacy_allowed: matches!(purpose, PostPurpose::Ordinary)
+-                    && !phase.open
+-                    && phase.binding.is_none()
+-                    && matches!(phase.recovery, Recovery::Available),
++                legacy_allowed: true,
+             }
+         } else if matches!(purpose, PostPurpose::PeerReply(_)) {
+             ResponseContext::PeerReplyStateless

@@ -1,0 +1,104 @@
+{
+  "check": "gateway-window",
+  "ok": false,
+  "started": "2026-10-08T06:37:16.015Z",
+  "finished": "2026-10-08T06:37:52.603Z",
+  "target": {
+    "url": "http://127.0.0.1:37279/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "setup",
+      "seen": {
+        "title": "W9955a83b: reply with exactly that word and noth"
+      },
+      "timings": {
+        "gatewayMs": 285,
+        "devServerMs": 4384,
+        "agentTurnMs": 1185
+      }
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:37279/src/desktop/workspace/ui/session-list/session-list.tsx)",
+        "requestfailed: http://127.0.0.1:37279/src/desktop/workspace/ui/session-list/session-list.tsx net::ERR_ABORTED",
+        "console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:37279/src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx)",
+        "requestfailed: http://127.0.0.1:37279/src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx net::ERR_ABORTED",
+        "console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:37279/src/desktop/workspace/ui/source-list/source-list.tsx)",
+        "requestfailed: http://127.0.0.1:37279/src/desktop/workspace/ui/source-list/source-list.tsx net::ERR_ABORTED"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: [nessa] Could not load http://127.0.0.1:37279/desktop.html. The dev server did not serve /src/desktop/main.tsx. (http://127.0.0.1:37279/desktop.html)"
+      ]
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "open",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "could not run: the desktop page did not render [data-pane-key], [data-surface] at http://127.0.0.1:37279/desktop.html: page.waitForSelector: Timeout 30000ms exceeded."
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "handshake",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: the page did not open"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "lists",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: the page did not open"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "opens",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: the page did not open"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "live",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: the page did not open"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "apps",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: the page did not open"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "launch",
+      "engine": "webkit",
+      "cannotRun": true,
+      "error": "webkit did not launch (browserType.launch: ). Run: pnpm exec playwright install webkit"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+diff --git a/crates/nessa-sdk/src/infrastructure/mcp/http.rs b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+index a576a33c..ee7c8a15 100644
+--- a/crates/nessa-sdk/src/infrastructure/mcp/http.rs
++++ b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+@@ -1178,10 +1178,7 @@ async fn consume_body(
+     inbound: &mpsc::Sender<Result<HttpMessage, McpError>>,
+     origin: &ReplyContext,
+ ) -> Result<bool, McpError> {
+-    let header = if matches!(
+-        purpose,
+-        BodyPurpose::Initialize(_) | BodyPurpose::RecoveryInitialize
+-    ) {
++    let header = if true {
+         bounded_session_id(response.header("mcp-session-id"))?.map(str::to_owned)
+     } else {
+         None

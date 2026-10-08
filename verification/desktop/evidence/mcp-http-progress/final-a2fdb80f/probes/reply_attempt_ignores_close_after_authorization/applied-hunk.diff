@@ -1,0 +1,14 @@
+diff --git a/crates/nessa-sdk/src/infrastructure/mcp/http.rs b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+index a576a33c..e15840b9 100644
+--- a/crates/nessa-sdk/src/infrastructure/mcp/http.rs
++++ b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+@@ -566,9 +566,6 @@ impl HttpSession {
+         purpose: &PostPurpose,
+     ) -> Result<(HttpRequest, ResponseContext, ReplyContext), McpError> {
+         let _readers = self.readers.lock().expect("http readers");
+-        if self.closing.load(Ordering::SeqCst) {
+-            return Err(McpError::Closed);
+-        }
+         let phase = self.phase.lock().expect("http phase");
+         let initialize = body_is_initialize(body);
+         let binding = match purpose {

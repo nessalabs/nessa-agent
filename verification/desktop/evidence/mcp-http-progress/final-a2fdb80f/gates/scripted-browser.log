@@ -1,0 +1,176 @@
+$ node verification/desktop/scripts/scripted-e2e.mjs -- --channel bundled --evidence /workspace/637-final-evidence/scripted-browser
+building nessa-server…
+   Compiling tokio v1.53.1
+   Compiling tokio-util v0.7.19
+   Compiling h2 v0.4.19
+   Compiling nessa-local-storage v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-local-storage)
+   Compiling hyper v1.11.1
+   Compiling cedar-policy-core v4.12.0
+   Compiling rand_chacha v0.9.0
+   Compiling hyper-util v0.1.20
+   Compiling cedar-policy-formatter v4.12.0
+   Compiling rand v0.9.5
+   Compiling tower v0.5.3
+   Compiling event-stream v0.1.0 (https://github.com/nessalabs/event-stream?rev=59624a2#59624a2d)
+   Compiling tungstenite v0.29.0
+   Compiling cedar-policy v4.12.0
+   Compiling nessa-local-database v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-local-database)
+   Compiling tokio-rustls v0.26.5
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-sdk)
+   Compiling hyper-rustls v0.27.9
+   Compiling nessa-auth v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-auth)
+   Compiling tokio-tungstenite v0.29.0
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling tower-http v0.6.11
+   Compiling filetime v0.2.29
+   Compiling axum v0.8.9
+   Compiling tar v0.4.46
+   Compiling reqwest v0.13.4
+   Compiling nessa-protocol v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-protocol)
+   Compiling nessa-gateway-endpoint v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-gateway-endpoint)
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-server)
+    Finished `dev` profile [unoptimized] target(s) in 4m 35s
+
+mcp-apps-gateway
+starting a dev server of its own on port 45325…
+warmed 458 modules in 3659 ms
+conversation ready: review_rows completed, in 1191 ms
+ok    setup
+FAIL  console
+        - console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:45325/src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx)
+        - requestfailed: http://127.0.0.1:45325/src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx net::ERR_ABORTED
+        - console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:45325/src/desktop/workspace/ui/session-list/session-list.tsx)
+        - requestfailed: http://127.0.0.1:45325/src/desktop/workspace/ui/session-list/session-list.tsx net::ERR_ABORTED
+        - console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:45325/src/desktop/workspace/ui/source-list/source-list.tsx)
+        - requestfailed: http://127.0.0.1:45325/src/desktop/workspace/ui/source-list/source-list.tsx net::ERR_ABORTED
+ERROR open [chromium columns]
+        ! could not run: the desktop page did not render [data-pane-key], [data-surface] at http://127.0.0.1:45325/desktop.html?gateway: page.waitForSelector: Timeout 30000ms exceeded.
+ERROR renders [chromium columns]
+        ! not run: the page did not open
+ERROR hidden [chromium columns]
+        ! not run: the page did not open
+ERROR allow [chromium columns]
+        ! not run: the page did not open
+ERROR deny [chromium columns]
+        ! not run: the page did not open
+ERROR release [chromium columns]
+        ! not run: the page did not open
+ERROR message [chromium columns]
+        ! not run: the page did not open
+ERROR context [chromium columns]
+        ! not run: the page did not open
+ERROR launch [webkit]
+        ! webkit did not launch (browserType.launch: ). Run: pnpm exec playwright install webkit
+wrote /workspace/637-final-evidence/scripted-browser/mcp-apps-gateway/result.json
+mcp-apps-gateway: 1/11 held (some could not run)
+
+gateway-window
+starting a dev server of its own on port 37279…
+warmed 458 modules in 3965 ms
+conversation ready in 1185 ms
+ok    setup
+FAIL  console [chromium columns]
+        - console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:37279/src/desktop/workspace/ui/session-list/session-list.tsx)
+        - requestfailed: http://127.0.0.1:37279/src/desktop/workspace/ui/session-list/session-list.tsx net::ERR_ABORTED
+        - console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:37279/src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx)
+        - requestfailed: http://127.0.0.1:37279/src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx net::ERR_ABORTED
+        - console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:37279/src/desktop/workspace/ui/source-list/source-list.tsx)
+        - requestfailed: http://127.0.0.1:37279/src/desktop/workspace/ui/source-list/source-list.tsx net::ERR_ABORTED
+ERROR open [chromium columns]
+        ! could not run: the desktop page did not render [data-pane-key], [data-surface] at http://127.0.0.1:37279/desktop.html: page.waitForSelector: Timeout 30000ms exceeded.
+ERROR handshake [chromium columns]
+        ! not run: the page did not open
+ERROR lists [chromium columns]
+        ! not run: the page did not open
+ERROR opens [chromium columns]
+        ! not run: the page did not open
+ERROR live [chromium columns]
+        ! not run: the page did not open
+ERROR apps [chromium columns]
+        ! not run: the page did not open
+ERROR launch [webkit]
+        ! webkit did not launch (browserType.launch: ). Run: pnpm exec playwright install webkit
+wrote /workspace/637-final-evidence/scripted-browser/gateway-window/result.json
+gateway-window: 1/9 held (some could not run)
+
+scripted-scenarios
+starting a dev server of its own on port 37917…
+warmed 458 modules in 3879 ms
+FAIL  console [chromium columns]
+        - console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:37917/src/desktop/workspace/ui/session-list/session-list.tsx)
+        - requestfailed: http://127.0.0.1:37917/src/desktop/workspace/ui/session-list/session-list.tsx net::ERR_ABORTED
+        - console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:37917/src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx)
+        - requestfailed: http://127.0.0.1:37917/src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx net::ERR_ABORTED
+        - console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:37917/src/desktop/workspace/ui/source-list/source-list.tsx)
+        - requestfailed: http://127.0.0.1:37917/src/desktop/workspace/ui/source-list/source-list.tsx net::ERR_ABORTED
+ERROR open [chromium columns]
+        ! could not run: the desktop page did not render [data-pane-key], [data-surface] at http://127.0.0.1:37917/desktop.html: page.waitForSelector: Timeout 30000ms exceeded.
+ERROR permission [chromium columns]
+        ! not run: the page did not open
+ERROR allow [chromium columns]
+        ! not run: the page did not open
+ERROR fail [chromium columns]
+        ! not run: the page did not open
+ERROR cancel [chromium columns]
+        ! not run: the page did not open
+ERROR launch [webkit]
+        ! webkit did not launch (browserType.launch: ). Run: pnpm exec playwright install webkit
+wrote /workspace/637-final-evidence/scripted-browser/scripted-scenarios/result.json
+scripted-scenarios: 0/7 held (some could not run)
+
+Verdict: fail
+
+| Check | Chromium | WebKit |
+| --- | --- | --- |
+| mcp-apps-gateway | could-not-run | could-not-run |
+| gateway-window | fail | could-not-run |
+| scripted-scenarios | fail | could-not-run |
+
+Relevant log lines:
+
+- console: console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:45325/src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx)
+- console: requestfailed: http://127.0.0.1:45325/src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx net::ERR_ABORTED
+- console: console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:45325/src/desktop/workspace/ui/session-list/session-list.tsx)
+- console: requestfailed: http://127.0.0.1:45325/src/desktop/workspace/ui/session-list/session-list.tsx net::ERR_ABORTED
+- console: console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:45325/src/desktop/workspace/ui/source-list/source-list.tsx)
+- console: requestfailed: http://127.0.0.1:45325/src/desktop/workspace/ui/source-list/source-list.tsx net::ERR_ABORTED
+- console: console.error: [nessa] Could not load http://127.0.0.1:45325/desktop.html?gateway. The dev server did not serve /src/desktop/main.tsx. (http://127.0.0.1:45325/desktop.html?gateway) (harmless)
+- open chromium: could not run: the desktop page did not render [data-pane-key], [data-surface] at http://127.0.0.1:45325/desktop.html?gateway: page.waitForSelector: Timeout 30000ms exceeded.
+- renders chromium: not run: the page did not open
+- hidden chromium: not run: the page did not open
+- allow chromium: not run: the page did not open
+- deny chromium: not run: the page did not open
+- release chromium: not run: the page did not open
+- message chromium: not run: the page did not open
+- context chromium: not run: the page did not open
+- launch webkit: webkit did not launch (browserType.launch: ). Run: pnpm exec playwright install webkit
+- console chromium: console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:37279/src/desktop/workspace/ui/session-list/session-list.tsx)
+- console chromium: requestfailed: http://127.0.0.1:37279/src/desktop/workspace/ui/session-list/session-list.tsx net::ERR_ABORTED
+- console chromium: console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:37279/src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx)
+- console chromium: requestfailed: http://127.0.0.1:37279/src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx net::ERR_ABORTED
+- console chromium: console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:37279/src/desktop/workspace/ui/source-list/source-list.tsx)
+- console chromium: requestfailed: http://127.0.0.1:37279/src/desktop/workspace/ui/source-list/source-list.tsx net::ERR_ABORTED
+- console chromium: console.error: [nessa] Could not load http://127.0.0.1:37279/desktop.html. The dev server did not serve /src/desktop/main.tsx. (http://127.0.0.1:37279/desktop.html) (harmless)
+- open chromium: could not run: the desktop page did not render [data-pane-key], [data-surface] at http://127.0.0.1:37279/desktop.html: page.waitForSelector: Timeout 30000ms exceeded.
+- handshake chromium: not run: the page did not open
+- lists chromium: not run: the page did not open
+- opens chromium: not run: the page did not open
+- live chromium: not run: the page did not open
+- apps chromium: not run: the page did not open
+- launch webkit: webkit did not launch (browserType.launch: ). Run: pnpm exec playwright install webkit
+- console chromium: console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:37917/src/desktop/workspace/ui/session-list/session-list.tsx)
+- console chromium: requestfailed: http://127.0.0.1:37917/src/desktop/workspace/ui/session-list/session-list.tsx net::ERR_ABORTED
+- console chromium: console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:37917/src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx)
+- console chromium: requestfailed: http://127.0.0.1:37917/src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx net::ERR_ABORTED
+- console chromium: console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:37917/src/desktop/workspace/ui/source-list/source-list.tsx)
+- console chromium: requestfailed: http://127.0.0.1:37917/src/desktop/workspace/ui/source-list/source-list.tsx net::ERR_ABORTED
+- console chromium: console.error: [nessa] Could not load http://127.0.0.1:37917/desktop.html. The dev server did not serve /src/desktop/main.tsx. (http://127.0.0.1:37917/desktop.html) (harmless)
+- open chromium: could not run: the desktop page did not render [data-pane-key], [data-surface] at http://127.0.0.1:37917/desktop.html: page.waitForSelector: Timeout 30000ms exceeded.
+- permission chromium: not run: the page did not open
+- allow chromium: not run: the page did not open
+- fail chromium: not run: the page did not open
+- cancel chromium: not run: the page did not open
+- launch webkit: webkit did not launch (browserType.launch: ). Run: pnpm exec playwright install webkit
+{"verdict":"fail","evidence":"/workspace/637-final-evidence/scripted-browser","summary":"/workspace/637-final-evidence/scripted-browser/pr-summary.md"}
+[ELIFECYCLE] Command failed with exit code 1.
+verification init reaped orphan descendants: 10

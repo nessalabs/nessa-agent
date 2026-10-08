@@ -1,0 +1,13 @@
+diff --git a/crates/nessa-sdk/src/infrastructure/mcp/http.rs b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+index a576a33c..fc987b2c 100644
+--- a/crates/nessa-sdk/src/infrastructure/mcp/http.rs
++++ b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+@@ -1376,7 +1376,7 @@ fn response_failure(status: u16, context: ResponseContext) -> Option<McpError> {
+             Some(McpError::SessionExpired)
+         }
+         500.. => Some(if matches!(context, ResponseContext::Initialize { .. }) {
+-            McpError::Unreachable
++            McpError::SessionExpired
+         } else {
+             McpError::Unconfirmed
+         }),

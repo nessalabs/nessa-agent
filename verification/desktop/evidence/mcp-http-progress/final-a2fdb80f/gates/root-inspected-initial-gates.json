@@ -1,0 +1,26 @@
+{
+  "review_source": "a2fdb80f14d186614ec63d245936cf4ad4c5df94",
+  "rust_checks_source": "3add1c500da6de3c65d35dc74a1cd46c1be240a2 with exact non-ADR equivalence",
+  "checks": [
+    {
+      "gate": "fmt",
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "gate": "clippy",
+      "exit": 0,
+      "log_sha256": "498284797e3adec08853d7ce8a909358ac13031bd53e9b870312582812b81c03"
+    },
+    {
+      "gate": "architecture-tests",
+      "exit": 0,
+      "log_sha256": "d3a65905317e6c64ef3f9ade937c7d2efc3f4f3a31fb31da36f4ca329039c9e0"
+    },
+    {
+      "gate": "architecture",
+      "exit": 0,
+      "log_sha256": "2a2462c6729eeb5ecb05a41a9fb9ed10f97b1bdb34772bac68dd984b7907a5d8"
+    }
+  ]
+}

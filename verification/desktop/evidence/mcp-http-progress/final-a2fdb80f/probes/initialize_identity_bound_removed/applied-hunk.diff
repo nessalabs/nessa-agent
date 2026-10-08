@@ -1,0 +1,13 @@
+diff --git a/crates/nessa-sdk/src/infrastructure/mcp/http.rs b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+index a576a33c..f47c86cc 100644
+--- a/crates/nessa-sdk/src/infrastructure/mcp/http.rs
++++ b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+@@ -1614,7 +1614,7 @@ async fn authorized_modern_post(
+ /// The single initialize identity bound, applied before copying authoritative headers.
+ fn bounded_session_id(header: Option<&str>) -> Result<Option<&str>, McpError> {
+     let id = header.filter(|id| !id.is_empty());
+-    if id.is_some_and(|id| id.len() > 1024) {
++    if false && id.is_some_and(|id| id.len() > 1024) {
+         Err(McpError::TooLarge("Mcp-Session-Id"))
+     } else {
+         Ok(id)

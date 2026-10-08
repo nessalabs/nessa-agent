@@ -1,0 +1,230 @@
+diff --git a/crates/nessa-sdk/src/infrastructure/mcp/connection.rs b/crates/nessa-sdk/src/infrastructure/mcp/connection.rs
+index f429c24c..dc358912 100644
+--- a/crates/nessa-sdk/src/infrastructure/mcp/connection.rs
++++ b/crates/nessa-sdk/src/infrastructure/mcp/connection.rs
+@@ -22,7 +22,7 @@ use std::{
+     collections::HashMap,
+     sync::{
+         atomic::{AtomicU64, Ordering},
+-        Arc, Mutex,
++        Arc, Mutex, Weak,
+     },
+     time::Duration,
+ };
+@@ -207,6 +207,7 @@ impl Connection {
+                             }
+                         }
+                         SendOutcome::End(error) => {
++                            session.shutdown();
+                             shared.end(error);
+                             return;
+                         }
+@@ -214,7 +215,12 @@ impl Connection {
+                 }
+             }
+         });
+-        let reader = tokio::spawn(read_messages(incoming, shared.clone(), outgoing.clone()));
++        let reader = tokio::spawn(read_messages(
++            incoming,
++            shared.clone(),
++            outgoing.clone(),
++            Arc::downgrade(&session),
++        ));
+         Self {
+             shared,
+             outgoing,
+@@ -492,6 +498,7 @@ async fn read_messages(
+     mut incoming: mpsc::Receiver<Result<super::http::HttpMessage, McpError>>,
+     shared: Arc<Shared>,
+     outgoing: mpsc::Sender<Outgoing>,
++    session: Weak<HttpSession>,
+ ) {
+     let cause = loop {
+         let bytes = match incoming.recv().await {
+@@ -506,5 +513,8 @@ async fn read_messages(
+             break cause;
+         }
+     };
++    if let Some(session) = session.upgrade() {
++        session.shutdown();
++    }
+     shared.end(cause);
+ }
+diff --git a/crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs b/crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs
+index 181bd4a9..16572755 100644
+--- a/crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs
++++ b/crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs
+@@ -2011,12 +2011,23 @@ async fn j19_peer_answer_404_ends_without_recovery_or_replay() {
+             expected
+         );
+         assert_eq!(bounded(connection.ended()).await, expected);
++        assert!(matches!(
++            session
++                .dispatch(br#"{"method":"notifications/cancelled"}"#)
++                .await,
++            SendOutcome::End(McpError::Closed)
++        ));
++        assert_eq!(connection.end_cause(), Some(expected));
+         assert_eq!(
+             peer.count(|r| method(r).as_deref() == Some("initialize")),
+             1
+         );
+         assert_eq!(peer.count(|r| r.method == HttpMethod::Get), 0);
+         stop(&session).await;
++        assert_eq!(
++            peer.count(|r| r.method == HttpMethod::Delete),
++            usize::from(bound)
++        );
+         probe.released().await;
+     }
+ }
+@@ -2634,3 +2645,136 @@ async fn j17_ordinary_terminal_ignores_non_authoritative_oversized_header() {
+     );
+     stop(&session).await;
+ }
++
++async fn preterminal_recovery(stale_request: bool) {
++    let (old, old_body) = Probe::body();
++    let (replacement, replacement_body) = Probe::body();
++    let mut peer = Peer::new();
++    peer.call_sse = true;
++    peer.bodies.lock().unwrap().push_back(old_body);
++    *peer.replacement.lock().unwrap() = Some(replacement_body);
++    let peer = Arc::new(peer);
++    let (session, incoming) = transport(peer.clone(), Arc::default());
++    let connection = Arc::new(Connection::open_http(
++        session.clone(),
++        incoming,
++        Arc::new(RuntimeClock::new()),
++    ));
++    bounded(connection.call("initialize", None))
++        .await
++        .unwrap()
++        .unwrap();
++    let waiting = tokio::spawn({
++        let connection = connection.clone();
++        async move { connection.call("tools/list", None).await }
++    });
++    old.polled(1).await;
++    peer.expire.store(true, Ordering::SeqCst);
++    assert!(matches!(
++        bounded(connection.call("tools/list", None)).await,
++        Err(McpError::SessionExpired)
++    ));
++    replacement.polled(1).await;
++    if stale_request {
++        old.event(json!({"id":70,"method":"ping"}));
++        assert_eq!(bounded(connection.ended()).await, McpError::SessionExpired);
++        assert!(matches!(
++            bounded(waiting).await.unwrap(),
++            Err(McpError::SessionExpired)
++        ));
++    } else {
++        old.event(json!({"id":2,"result":{"tools":[]}}));
++        bounded(waiting).await.unwrap().unwrap().unwrap();
++    }
++    // Retirement is a finite barrier after the late terminal is consumed,
++    // rather than a delay used to infer absence of replacement effects.
++    let _ = replacement.send.send(Ok(Some(
++        format!(
++            "data: {}\n\n",
++            json!({"id":0,"result":{"protocolVersion":"2025-06-18"}})
++        )
++        .into_bytes(),
++    )));
++    replacement.released().await;
++    if stale_request {
++        let outcome = session
++            .dispatch(br#"{"method":"notifications/cancelled"}"#)
++            .await;
++        assert!(
++            matches!(
++                outcome,
++                SendOutcome::End(McpError::SessionExpired | McpError::Closed)
++            ),
++            "ended connection's HTTP owner admitted a late notification: {outcome:?}"
++        );
++        assert_eq!(connection.end_cause(), Some(McpError::SessionExpired));
++        assert_eq!(
++            peer.count(|r| r.method == HttpMethod::Get
++                && header(r, "Mcp-Session-Id") == Some("replacement")),
++            0
++        );
++        assert_eq!(
++            peer.count(
++                |r| method(r).as_deref() == Some("notifications/initialized")
++                    && header(r, "Mcp-Session-Id") == Some("replacement")
++            ),
++            0
++        );
++    } else {
++        peer.observed(|r| {
++            method(r).as_deref() == Some("notifications/initialized")
++                && header(r, "Mcp-Session-Id") == Some("replacement")
++        })
++        .await;
++        bounded(connection.call("tools/list", None))
++            .await
++            .unwrap()
++            .unwrap();
++        assert_eq!(connection.end_cause(), None);
++        assert_eq!(
++            peer.count(|r| r.method == HttpMethod::Get
++                && header(r, "Mcp-Session-Id") == Some("replacement")),
++            1
++        );
++    }
++    connection.close(McpError::Closed);
++    stop(&session).await;
++    old.released().await;
++    assert_eq!(
++        peer.count(|r| method(r).as_deref() == Some("initialize")),
++        2
++    );
++}
++
++#[tokio::test]
++async fn j19_preterminal_stale_request_cannot_revive_ended_connection() {
++    preterminal_recovery(true).await;
++}
++
++#[tokio::test]
++async fn j19_preterminal_ordinary_terminal_preserves_recovery_control() {
++    preterminal_recovery(false).await;
++}
++
++#[tokio::test]
++async fn j19_reader_failure_fences_http_owner_before_ended() {
++    let peer = Arc::new(Peer::new());
++    let (session, _incoming) = transport(peer.clone(), Arc::default());
++    initialize(&session).await;
++    let (inbound, incoming) = mpsc::channel(1);
++    let connection =
++        Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
++    inbound.send(Err(McpError::Unreachable)).await.unwrap();
++    assert_eq!(bounded(connection.ended()).await, McpError::Unreachable);
++    assert!(matches!(
++        call(&session, 2).await,
++        SendOutcome::End(McpError::Closed)
++    ));
++    assert_eq!(connection.end_cause(), Some(McpError::Unreachable));
++    stop(&session).await;
++    assert_eq!(peer.count(|r| r.method == HttpMethod::Delete), 1);
++    assert_eq!(
++        peer.count(|r| method(r).as_deref() == Some("tools/list")),
++        0
++    );
++}
+diff --git a/docs/adr/todo/392-remote-mcp-servers.md b/docs/adr/todo/392-remote-mcp-servers.md
+index 001c5be9..ad9c07fe 100644
+--- a/docs/adr/todo/392-remote-mcp-servers.md
++++ b/docs/adr/todo/392-remote-mcp-servers.md
+@@ -516,7 +516,7 @@ stateDiagram-v2
+ | --- | --- | --- | --- |
+ | J17 | Initial/replacement SSE request precedes matching result; peer waits for answer | Answer carries originating ID, without negotiated version. Provisional claim starts no GET/initialized/admission; valid result promotes same binding. No-ID response remains stateless | `j17_initial_peer_reply_keeps_response_binding_before_validation`, `j17_public_open_waits_for_bound_peer_answer_before_validation`, `j8_recovery_server_ping_reply_dispatches_before_initialize_result`, `j17_ordinary_body_reply_keeps_request_binding_and_ignores_returned_identity`, `j17_ordinary_terminal_ignores_non_authoritative_oversized_header` |
+ | J18 | Provisional ID collides, exceeds 1024 bytes, or close wins | Typed refusal before answer effect/publication. Collision loser DELETE=0; owning close retains provisional claim through sole DELETE | `j18_early_peer_claim_refuses_collision_and_oversize_before_answer`, `j18_provisional_claim_is_retained_through_close_delete`, `j18_public_open_error_closes_provisional_binding` |
+-| J19 | Reply queues before replacement, timeout, failure or close; peer answer returns 404 | Stale answer cannot acquire current identity. Refuse before dispatch after close/failure; bound peer-answer404 ends SessionExpired (stateless404 is Malformed), without recovery/replay. Ordinary-call404 positive control recovers | `j19_queued_reply_keeps_unnegotiated_version_and_is_refused_after_close`, `j19_old_reply_cannot_adopt_reused_or_stateless_replacement_binding`, `j19_peer_answer_404_ends_without_recovery_or_replay`, `j19_close_during_reply_authorization_refuses_post_effect`, `j19_reply_retry_cannot_adopt_identity_published_during_authorization`; ordinary recovery control in J20 |
++| J19 | Reply queues before replacement, timeout, failure or close; peer answer returns 404 | Stale answer cannot acquire current identity. Refuse before dispatch after close/failure; a stale preterminal request ending the connection fences private startup against late replacement publication/admission. An ordinary neighboring terminal preserves healthy recovery; bound peer-answer404 ends SessionExpired (stateless404 is Malformed), without recovery/replay. Ordinary-call404 positive control recovers | `j19_queued_reply_keeps_unnegotiated_version_and_is_refused_after_close`, `j19_old_reply_cannot_adopt_reused_or_stateless_replacement_binding`, `j19_peer_answer_404_ends_without_recovery_or_replay`, `j19_close_during_reply_authorization_refuses_post_effect`, `j19_reply_retry_cannot_adopt_identity_published_during_authorization`, `j19_preterminal_stale_request_cannot_revive_ended_connection`, `j19_preterminal_ordinary_terminal_preserves_recovery_control`; ordinary recovery control in J20 |
+ | J20 | Private initialize receives 401/retry, 403, 5xx, 400/404/405, 202 or exchange failure | One rejected retry maximum; observe exact scope challenge; Unauthorized/InsufficientScope/Unreachable/Malformed remain typed. 202/missing terminal is SessionExpired. No legacy GET, replacement GET/initialized or replay on failure; healthy and retry-success controls remain accepted | `j20_private_initialize_preserves_shared_authorization_and_status_policy`, `j20_private_initialize_healthy_and_retry_success_controls`, `j20_private_initialize_exchange_failure_is_unreachable`, J10 missing-terminal controls |
+ 
+ J4/J5/J10's no-claim requirements describe bodies without an early claim for a peer answer.

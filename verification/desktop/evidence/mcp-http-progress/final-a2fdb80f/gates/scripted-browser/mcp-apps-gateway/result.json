@@ -1,0 +1,121 @@
+{
+  "check": "mcp-apps-gateway",
+  "ok": false,
+  "started": "2026-10-08T06:36:37.849Z",
+  "finished": "2026-10-08T06:37:15.424Z",
+  "target": {
+    "url": "http://127.0.0.1:45325/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "setup",
+      "seen": {
+        "title": "Use the tools of the \"mcptest\" MCP server. If th"
+      },
+      "timings": {
+        "gatewayMs": 292,
+        "devServerMs": 4741,
+        "agentTurnMs": 1191
+      }
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:45325/src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx)",
+        "requestfailed: http://127.0.0.1:45325/src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx net::ERR_ABORTED",
+        "console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:45325/src/desktop/workspace/ui/session-list/session-list.tsx)",
+        "requestfailed: http://127.0.0.1:45325/src/desktop/workspace/ui/session-list/session-list.tsx net::ERR_ABORTED",
+        "console.error: Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1:45325/src/desktop/workspace/ui/source-list/source-list.tsx)",
+        "requestfailed: http://127.0.0.1:45325/src/desktop/workspace/ui/source-list/source-list.tsx net::ERR_ABORTED"
+      ],
+      "name": "console",
+      "harmless": [
+        "console.error: [nessa] Could not load http://127.0.0.1:45325/desktop.html?gateway. The dev server did not serve /src/desktop/main.tsx. (http://127.0.0.1:45325/desktop.html?gateway)"
+      ]
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "open",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "could not run: the desktop page did not render [data-pane-key], [data-surface] at http://127.0.0.1:45325/desktop.html?gateway: page.waitForSelector: Timeout 30000ms exceeded.",
+      "detail": "the desktop page did not render [data-pane-key], [data-surface] at http://127.0.0.1:45325/desktop.html?gateway: page.waitForSelector: Timeout 30000ms exceeded."
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "renders",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: the page did not open"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "hidden",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: the page did not open"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "allow",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: the page did not open"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "deny",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: the page did not open"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "release",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: the page did not open"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "message",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: the page did not open"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "context",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: the page did not open"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "launch",
+      "engine": "webkit",
+      "cannotRun": true,
+      "error": "webkit did not launch (browserType.launch: ). Run: pnpm exec playwright install webkit"
+    }
+  ]
+}

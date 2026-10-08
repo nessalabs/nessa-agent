@@ -1,0 +1,6 @@
+
+running 1 test
+test infrastructure::mcp::tests::http_progress::j19_peer_answer_404_ends_without_recovery_or_replay ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1072 filtered out; finished in 0.00s
+

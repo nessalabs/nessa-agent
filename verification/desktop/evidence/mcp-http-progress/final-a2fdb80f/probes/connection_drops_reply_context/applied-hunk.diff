@@ -1,0 +1,13 @@
+diff --git a/crates/nessa-sdk/src/infrastructure/mcp/connection.rs b/crates/nessa-sdk/src/infrastructure/mcp/connection.rs
+index f429c24c..0751c413 100644
+--- a/crates/nessa-sdk/src/infrastructure/mcp/connection.rs
++++ b/crates/nessa-sdk/src/infrastructure/mcp/connection.rs
+@@ -453,7 +453,7 @@ fn deliver(
+             // is not draining would stop reading what it writes.
+             if let Ok(frame) = framing::encode(&answer) {
+                 let frame = match reply {
+-                    Some(context) => Outgoing::PeerReply { frame, context },
++                    Some(_context) => Outgoing::Frame(frame),
+                     None => Outgoing::Frame(frame),
+                 };
+                 let _ = outgoing.try_send(frame);

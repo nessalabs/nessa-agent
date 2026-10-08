@@ -1,0 +1,33 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-sdk)
+warning: variant `PeerReply` is never constructed
+  --> crates/nessa-sdk/src/infrastructure/mcp/connection.rs:94:5
+   |
+92 | pub(crate) enum Outgoing {
+   |                 -------- variant in this enum
+93 |     Frame(Vec<u8>),
+94 |     PeerReply {
+   |     ^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `nessa-sdk` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 1m 01s
+     Running unittests src/lib.rs (/workspace/637-cargo-target/debug/deps/nessa_sdk-3bf8b30c97a3925a)
+
+running 1 test
+
+thread 'infrastructure::mcp::tests::http_progress::j3_public_open_held_initialize_dispatches_initialized_list_and_ping' (666825) panicked at crates/nessa-sdk/src/infrastructure/mcp/../../../tests/infrastructure/mcp/http_progress.rs:431:5:
+assertion `left == right` failed
+  left: Some("2025-06-18")
+ right: None
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test infrastructure::mcp::tests::http_progress::j3_public_open_held_initialize_dispatches_initialized_list_and_ping ... FAILED
+
+failures:
+
+failures:
+    infrastructure::mcp::tests::http_progress::j3_public_open_held_initialize_dispatches_initialized_list_and_ping
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1042 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-sdk --lib`

@@ -1,0 +1,12 @@
+{
+  "head": "a2fdb80f14d186614ec63d245936cf4ad4c5df94",
+  "binary": "/workspace/637-cargo-target/debug/nessa",
+  "binary_sha256": "18503c04b1e55e01fe1fde24707d9f0108fdc73dd6e23c473b901dcc5e2e0837",
+  "binary_mtime": 1791441397.413489,
+  "binary_origin": "Supported scripted umbrella cargo build -p nessa-server with exclusive CARGO_TARGET_DIR; MCP_LIVE_NESSA points at this output",
+  "ui_pin": "1f22c0467f935b9f3fcac8a0340c96e8d0c31439",
+  "ui_actual": "1f22c0467f935b9f3fcac8a0340c96e8d0c31439",
+  "libgles2": "/tmp/637-browser-libs/extracted/usr/lib/x86_64-linux-gnu/libGLESv2.so.2.1.0",
+  "libgles2_sha256": "3d07baa9b15672660df7e19f068499310f5922b238991daaf2cefa704d2bb7ef",
+  "host_preflight": "Playwright missingDLOPENLibraries only checks system ldconfig cache, ignores LD_LIBRARY_PATH; unprivileged library is actually loaded. Host requirements preflight skipped; no browser assertions relaxed. Actual headless WebKit launch0 and bothengine checks execute."
+}

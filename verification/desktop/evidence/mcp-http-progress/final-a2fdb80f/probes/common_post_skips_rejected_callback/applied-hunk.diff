@@ -1,0 +1,13 @@
+diff --git a/crates/nessa-sdk/src/infrastructure/mcp/http.rs b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+index a576a33c..66f1a9f9 100644
+--- a/crates/nessa-sdk/src/infrastructure/mcp/http.rs
++++ b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+@@ -1572,7 +1572,7 @@ async fn authorized_modern_post(
+                 .unwrap_or("Bearer")
+                 .to_owned();
+             drop(response);
+-            bearer = authorization.rejected(server, &challenge).await?;
++            bearer = None; let _ = challenge;
+             if bearer.is_some() {
+                 continue;
+             }

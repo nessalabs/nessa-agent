@@ -1,0 +1,1 @@
+["cargo", "test", "-p", "nessa-sdk", "--lib", "infrastructure::mcp::tests::http_progress::j19_preterminal_stale_request_cannot_revive_ended_connection", "--", "--exact", "--nocapture"]

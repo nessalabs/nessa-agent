@@ -1,0 +1,101 @@
+{
+  "status": "Author review complete, no outstanding source finding; ready for fresh independent review of complete assembled diff",
+  "checkout": "/workspace/nessa-agent-http-progress",
+  "base": "aa774e05a0c9d127ba9cab78a7068cc7b56e8388",
+  "prior_rounds": 5,
+  "authorization": "Narrow user exception for PR637 correction and fresh reviews; history remains counted.",
+  "dimensions": {
+    "authority_and_identity": "Phase.binding is the single claimed immutable SessionBinding owner. ReplyContext transports evidence, not mutable authority; check_reply_binding compares Arc identity so reused IDs/stateless replacement cannot revive old replies. Shared owns the first connection cause; HttpSession.shutdown owns the closing fence and DELETE. Writer End and reader terminal invoke that existing owner synchronously before publishing Shared.end.",
+    "domain_invariants": "HTTP adapter ordering is owned in Phase/Recovery; publish_initialize validates matching initialize result through wire::initialized before validated readiness. Provisional binding permits peer answers only. validate_handoff/recovery_failure/complete_recovery distinguish identity publication, initialized acknowledgement, delivery and ordinary admission with first failure retained.",
+    "admission_and_concurrency": "Reader registry fence precedes phase mutation. Recovery registers startup before headers and holds one budget through POST body, writer queue and initialized handoff. Ordinary calls remain Busy until completion; cancellation/answers use writer. J19 proves late stale requests cannot revive ended HTTP owner, genuine old ordinary terminal preserves recovery, and reader failure fences before ended publication. Weak reader does not retain session across waits.",
+    "failure_and_cleanup": "Modern authorized POST classifies each actual attempt by its emitted headers/purpose. Bound reply404 ends SessionExpired; stateless reply404 stays Malformed, neither starts recovery/replay. Shutdown fences admission before abort/join and keeps provisional or validated ID claim until sole DELETE finishes. Primary Shared cause remains distinct from later Closed dispatch; public open-error cleanup retains claim ownership correctly.",
+    "observations_and_restoration": "Single receive_message/completed_body owner handles JSON/SSE buffered/streamed bodies, correlated retirement, neighboring outcomes and initialized validation. Non-authoritative ordinary response ID is ignored; actual originating context survives retry/queue/replacement. No persistence/snapshot model is changed; settlement restoration landed separately on main.",
+    "audit": "No durable audit contract or new audit port changed by this HTTP slice. Existing outer MCP registry/composition audit ownership is retained from main; PR637 does not reintroduce extracted #631 changes. Terminal cause is preserved in Shared and inherited public manager reporting; full grouped suites cover outer ownership. This is not evidence of live remote cleanup acknowledgement.",
+    "representation_boundaries": "Bounded session-ID validator runs before authoritative header copies/claims. Matching own response, valid wire initialize version and typed HTTP response context govern effects. ResponsePurpose/ReplyContext are internal typed values. Incoming and outgoing frame parsing preserves malformed/oversize/unconfirmed types and neighboring valid evidence; pure helpers lint on supported platforms, Unix HTTP fixtures exclude Windows execution.",
+    "resource_bounds": "POST/startup owners share MAX_POST_STREAMS=256 permit lifetime through physical body destruction/join. Inbound/outgoing queues are64; pending RPC256. Immutable binding ID <=1024 UTF8 bytes copied only after owner validation; contexts share Arc identity. GET replacement aborts prior readers, close drains registry, no second queue/controller/generation ledger added.",
+    "public_surface_and_organization": "Correction remains in MCP HTTP Connection ownership and existing http_progress fixture/module map. Weak imported at owning module top, no new exports/dependencies/process fixtures. Existing new private evidence types carry intent comments; HttpSession rustdoc missing_docs denial and SDK docs checker cover library surface. Only canonical ADR392 J19 behavioral contract is amended, no Markdown cleanup. Main's composition/#631 and Shepherd helpers retained unchanged."
+  },
+  "agreement": {
+    "authorities": {
+      "connection_end_cause": "Shared.state.ended first cause",
+      "HTTP_effect_admission": "HttpSession.closing under readers fence",
+      "identity": "Phase.binding / SessionClaims URL+ID+local",
+      "validated_readiness": "Phase.open/version after wire::initialized",
+      "recovery_admission": "Recovery / complete_recovery",
+      "physical_cleanup": "HttpSession.shutdown and finished / retained claim until DELETE attempt completion",
+      "actual_request_policy": "modern_request ResponseContext and origin per emitted authorized attempt"
+    },
+    "relationships_checked": "Immutable captured identity/version cannot change into current binding; bound/stateless404 differs by actual request context, not current phase or error shape. Connection terminal and HTTP closing are correlated before Shared ended becomes observable. Shutdown can produce Closed on later direct dispatch while first connection cause remains SessionExpired/Unreachable/Malformed. Healthy neighboring terminal leaves recovery open, one GET and initialized, later call accepted. DELETE claim stays with owning local opening through physical attempt and release.",
+    "boundaries": "Connection deliver/outgoing -> HTTP modern request/policy -> parser/publication/startup -> serialized initialized/terminal completion -> Shared caller result -> existing manager cleanup. JSON/SSE and buffered/streamed use common owner. Public McpServers and actual loopback fixture are included in full MCP suite; scripted gateway browser verifies the assembled app, not wire header matrix.",
+    "excluded": "OAuth implementation, provider settlement/restoration redesign, physical WKWebView, signed-in/live provider accounts and proof of physical remote deletion. Windows CI compiles pure helpers but Unix-gated J fixtures do not execute there."
+  },
+  "gates_15_16_17": {
+    "15": "Canonical ADR392 J1-J20 ordering table precedes implementation; J19 preterminal failure row preserved, ordinary-terminal accepted neighbor and reader-error witness cover new failure ordering. No extra Recovery state.",
+    "16": "Use existing immutable binding, serialized writer, authorized modern POST policy and shutdown owner. Peer answer failure ends its connection rather than inventing reply-triggered recovery; expired ordinary call remains unreplayed. No new controller/API/readiness flag.",
+    "17": "Actual supported signed-out scripted umbrella exit0 on finala2f owned Nessa binary, dev mode columns: MCP Apps16/16, gateway-window13/13, scenarios8/8; allthree Chromium and WebKit. Earlier Chromium abort preserved, identical-source rerun passed. No performance, physical WKWebView or live-provider claim."
+  },
+  "evidence": {
+    "existing_15_owner_probes": "/workspace/637-probe-evidence/remaining-agent-inspected-15-pairs.json",
+    "restacked_original_owner_source_equivalence": "/workspace/637-probe-evidence/restacked-probe-source-equivalence.json",
+    "original_preterminal_runtime_red": "/tmp/637-red-preterminal-j19-with-control.log",
+    "all_j19_green": "/tmp/637-green-all-j19-corrected.log",
+    "excluded_attempts": [
+      "/workspace/637-probe-evidence/terminal-owner/manifest.json writer mutant survived0: wrong path witness, not RED",
+      "/tmp/637-green-all-j19-final.log E0382 assertion insertion corrected: compile failure, not runtime RED",
+      "initial Node architecture/doc runs missing Cargo PATH: setup failures, corrected final environment required",
+      "Initial browser attempt used stale ignored UI pin and lacked system GLES library; exit1 preserved; not pass.",
+      "Initial isolated server Cargo setup cold-build cancellation exit143; no runtime test claim.",
+      "First repaired browser run: MCP Apps16/16 and scenarios8/8 passed, gateway-window13/14 failed on one Chromium cross-origin /mcp-resources aborted request. Same-source supported umbrella rerun required; no source edits or guard relaxation."
+    ],
+    "final_two_terminal_runtime_pairs": "/workspace/637-probe-evidence/terminal-owner-final/manifest.json",
+    "meaningful_runtime_red_green_pairs": 17,
+    "final_gates_manifest": "/workspace/637-final-evidence/manifest.json",
+    "canonical_mermaid_render": "/tmp/637-canonical-doc-render-a2fdb80f/results.json",
+    "grouped_suite_disposition": "Initial PID1-reaping failure preserved. Same six-package CI command passes with verification-only child subreaper, physically reaped21 orphan descendants. No source changes, test skips or weakened assertions.",
+    "browser_environment": "/workspace/637-final-evidence/browser-environment.json",
+    "browser_results": {
+      "mcp-apps-gateway": {
+        "passed": 16,
+        "total": 16,
+        "engines": [
+          "chromium",
+          "webkit"
+        ],
+        "result_sha256": "20b29e31ef8e90d99a5484fd276b2f896313b73c9fb0cd51ae7d2e7c7b80ae01"
+      },
+      "gateway-window": {
+        "passed": 13,
+        "total": 13,
+        "engines": [
+          "chromium",
+          "webkit"
+        ],
+        "result_sha256": "5fc7c36877342342a1578458467edfdc65e4a35b90300e82ec710dd4df9cff90"
+      },
+      "scripted-scenarios": {
+        "passed": 8,
+        "total": 8,
+        "engines": [
+          "chromium",
+          "webkit"
+        ],
+        "result_sha256": "016f646f8361e7195b4fb5d69986a098811444c822b2d57ebf25b003f57d7bb4"
+      }
+    },
+    "browser_summary": "/workspace/637-final-evidence/scripted-browser-rerun/pr-summary.md",
+    "browser_log": "/workspace/637-final-evidence/scripted-browser-rerun.log",
+    "browser_log_sha256": "61255ee0a849e4d419819f16666f8b9ef54f8eaacf4577f87c9bff02c0fe6fa8"
+  },
+  "head": "a2fdb80f14d186614ec63d245936cf4ad4c5df94",
+  "assembled_merge": "44c4f87a50874bf2c83820dbf4d1221491d844ef",
+  "assembled_tree": "cee48352db9b32dbeb0ac8090e3ed8763dcc4dec",
+  "verification_attribution": "Rust checks on3add are source-identical to finala2f (ADR-only syntax fix); architecture/docs aftera2f pass. Browser builds own final source and binary.",
+  "review_findings": "No outstanding implementation findings in author review of whole combined baseaa774e to heada2fdb80 diff. Typed first cause, single shutdown owner, bounded capture, genuine ordinary-call positive controls verified. Fresh independent reviews still required, not represented as already approved.",
+  "review_enforcers": {
+    "immutable_reply_identity": "http.rs SessionBinding/ReplyContext/check_reply_binding; J17-J20 HTTP progress tests",
+    "actual_emitted_attempt_policy": "http.rs modern_request/authorized_post/ResponseContext; original15 runtime probe pairs",
+    "terminal_HTTP_fence": "connection.rs writer SendOutcome::End and read_messages terminal, existing HttpSession.shutdown; final2 runtime probe pairs and J19 positive control",
+    "readiness_and_cleanup": "publish_initialize/validate_handoff/complete_recovery; Phase/SessionClaims/readers registry; J1-J20 +post_body/post_streams",
+    "architecture_and_public_surface": "owning MCP modules, retained main composition, architecture74/checker0, SDK Rustdoc checker0"
+  }
+}

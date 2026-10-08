@@ -1,0 +1,74 @@
+$ node scripts/ensure-nessa-ui.mjs --update
+Cloning into '/workspace/nessa-agent-http-progress/.vendor/nessa_ui'...
+From https://github.com/nessalabs/nessa_ui
+ * branch            1f22c0467f935b9f3fcac8a0340c96e8d0c31439 -> FETCH_HEAD
+HEAD is now at 1f22c04 feat(react): compact controls, pill variants, row densities, SearchField/Kbd, GroupHeader, settings blocks (#122)
+Scope: 2 of 4 workspace projects
+✓ Lockfile passes supply-chain policies (verified 22h ago)
+Lockfile is up to date, resolution step is skipped
+Progress: resolved 1, reused 0, downloaded 0, added 0
+.                                        | +822 ++++++++++++++++++++++++++++++++
+Packages are hard linked from the content-addressable store to the virtual store.
+  Content-addressable store is at: /home/agent/.local/share/pnpm/store/v11
+  Virtual store is at:             node_modules/.pnpm
+Progress: resolved 822, reused 822, downloaded 0, added 822, done
+Done in 2.2s using pnpm v11.19.0
+$ pnpm clean && tsup && tailwindcss -i ./src/theme.css -o ./dist/theme.css --minify && tailwindcss -i ./src/styles.css -o ./dist/styles.css --minify && tailwindcss -i ./src/app.css -o ./dist/app.css --minify
+$ rimraf dist
+CLI Building entry: src/index.ts
+CLI Using tsconfig: tsconfig.json
+CLI tsup v8.5.1
+CLI Using tsup config: /workspace/nessa-agent-http-progress/.vendor/nessa_ui/packages/react/tsup.config.ts
+CLI Target: es2022
+ESM Build start
+dist/math-block-F3JJ4LZN.js (1:0): Module level directives cause errors when bundled, "use client" in "dist/math-block-F3JJ4LZN.js" was ignored.
+dist/mermaid-diagram-XPR33DVX.js (1:0): Module level directives cause errors when bundled, "use client" in "dist/mermaid-diagram-XPR33DVX.js" was ignored.
+DTS Build start
+dist/tool-call-diff-surface-HJ5E66UF.js (1:0): Module level directives cause errors when bundled, "use client" in "dist/tool-call-diff-surface-HJ5E66UF.js" was ignored.
+dist/index.js (1:0): Module level directives cause errors when bundled, "use client" in "dist/index.js" was ignored.
+ESM dist/math-block-F3JJ4LZN.js                 174.00 B
+ESM dist/chunk-2LIL3LWJ.js                      33.05 KB
+ESM dist/chunk-3R55FVQF.js                      10.46 KB
+ESM dist/chunk-6YB5C7XV.js                      2.09 KB
+ESM dist/mermaid-diagram-XPR33DVX.js            189.00 B
+ESM dist/tool-call-diff-surface-HJ5E66UF.js     765.00 B
+ESM dist/math-block-F3JJ4LZN.js.map             83.00 B
+ESM dist/chunk-3R55FVQF.js.map                  38.08 KB
+ESM dist/mermaid-diagram-XPR33DVX.js.map        88.00 B
+ESM dist/tool-call-diff-surface-HJ5E66UF.js.map 2.22 KB
+ESM dist/chunk-6YB5C7XV.js.map                  4.70 KB
+ESM dist/chunk-2LIL3LWJ.js.map                  88.17 KB
+ESM dist/index.js                               1.40 MB
+ESM dist/index.js.map                           3.67 MB
+ESM ⚡️ Build success in 1902ms
+DTS ⚡️ Build success in 8949ms
+DTS dist/index.d.ts 626.74 KB
+≈ tailwindcss v4.3.3
+
+Done in 48ms
+≈ tailwindcss v4.3.3
+
+Done in 202ms
+≈ tailwindcss v4.3.3
+
+Done in 201ms
+$ pnpm clean && tsup
+$ rimraf dist
+CLI Building entry: {"index":"src/contract.ts","transcript":"src/transcript/index.ts"}
+CLI Using tsconfig: tsconfig.json
+CLI tsup v8.5.1
+CLI Using tsup config: /workspace/nessa-agent-http-progress/.vendor/nessa_ui/packages/agent-stream/tsup.config.ts
+CLI Target: es2022
+ESM Build start
+DTS Build start
+ESM dist/transcript.js         14.88 KB
+ESM dist/chunk-ZBMCOM6W.js     1.86 KB
+ESM dist/index.js              243.91 KB
+ESM dist/transcript.js.map     43.26 KB
+ESM dist/chunk-ZBMCOM6W.js.map 24.83 KB
+ESM dist/index.js.map          617.34 KB
+ESM ⚡️ Build success in 441ms
+DTS ⚡️ Build success in 2611ms
+DTS dist/index.d.ts           155.33 KB
+DTS dist/transcript.d.ts      11.81 KB
+DTS dist/events-lkt3ADfL.d.ts 28.21 KB

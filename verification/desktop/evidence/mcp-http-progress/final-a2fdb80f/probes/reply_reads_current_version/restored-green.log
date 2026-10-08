@@ -1,0 +1,6 @@
+
+running 1 test
+test infrastructure::mcp::tests::http_progress::j19_queued_reply_keeps_unnegotiated_version_and_is_refused_after_close ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1042 filtered out; finished in 0.00s
+

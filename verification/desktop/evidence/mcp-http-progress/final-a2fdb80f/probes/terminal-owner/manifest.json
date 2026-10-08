@@ -1,0 +1,10 @@
+[
+  {
+    "name": "writer-end-does-not-shutdown",
+    "red_exit": 0,
+    "green_exit": 0,
+    "runtime_red": false,
+    "red_log_sha256": "ba20cbb3b25ad93e189bc9bb29bc97c18d1363ba89056069ad81f8343f277f30",
+    "green_log_sha256": "79ec001c340f9961f6534eab65d3c212f0536b85d0ce9de71a4d1535c3ab84d3"
+  }
+]

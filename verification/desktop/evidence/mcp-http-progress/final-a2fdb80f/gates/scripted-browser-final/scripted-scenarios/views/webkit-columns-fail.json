@@ -1,0 +1,135 @@
+{
+  "conversationId": "8f4f6935-1b7f-496b-9f44-a0a400d7134c",
+  "revision": "085ac3e9-de02-4296-b049-19eac993cc40:14",
+  "messages": [
+    {
+      "executionId": "7eafd77c-3edf-4026-b791-40e9ed369d15",
+      "userText": "S4c863b41 permission",
+      "attachments": [],
+      "files": [],
+      "status": "completed",
+      "parts": [
+        {
+          "offset": 0,
+          "kind": "text",
+          "text": "Asking",
+          "toolId": "",
+          "noticeId": "",
+          "messageId": "msg-d72a8c2e-2b32-4219-8bf4-7647187033f9"
+        },
+        {
+          "offset": 1,
+          "kind": "text",
+          "text": " for review.",
+          "toolId": "",
+          "noticeId": "",
+          "messageId": "msg-d72a8c2e-2b32-4219-8bf4-7647187033f9"
+        },
+        {
+          "offset": 2,
+          "kind": "tool",
+          "text": "",
+          "toolId": "toolu_scripted_9eed9490-8fbd-4164-8b9e-e1ee3443981e",
+          "noticeId": ""
+        },
+        {
+          "offset": 5,
+          "kind": "text",
+          "text": "Allowed.",
+          "toolId": "",
+          "noticeId": "",
+          "messageId": "msg-554ced09-2f44-4c67-93f0-9c9d164f1621"
+        }
+      ]
+    },
+    {
+      "executionId": "24585890-e491-4b34-9fe0-a56d7253cf19",
+      "userText": "fail the turn",
+      "attachments": [],
+      "files": [],
+      "status": "failed",
+      "error": "The agent provider reported an error: the scenario stopped the turn. The turn could not complete all required work.",
+      "parts": [
+        {
+          "offset": 0,
+          "kind": "text",
+          "text": "Before the failure.",
+          "toolId": "",
+          "noticeId": "",
+          "messageId": "msg-ceafddd3-1f66-4889-b5e3-853313cf2a4c"
+        }
+      ]
+    }
+  ],
+  "pending": [],
+  "permissions": [],
+  "tools": [
+    {
+      "executionId": "7eafd77c-3edf-4026-b791-40e9ed369d15",
+      "toolId": "toolu_scripted_9eed9490-8fbd-4164-8b9e-e1ee3443981e",
+      "title": "Report the rows",
+      "kind": "other",
+      "status": "completed",
+      "details": "Two rows: alpha (10), beta (20).",
+      "input": "{}",
+      "mcp": {
+        "server": "mcptest",
+        "tool": "report_rows"
+      }
+    }
+  ],
+  "capabilities": {
+    "queue": true,
+    "steer": true,
+    "resume": false,
+    "permissions": true,
+    "imageInput": false,
+    "agentFeatures": {
+      "permissionDenial": "unknown",
+      "nativeHookSuppression": "unknown",
+      "compactionReporting": "unsupported_not_implemented",
+      "modelSwitchReporting": "unsupported_not_implemented",
+      "permissionDeferral": "unsupported_not_implemented",
+      "elicitationForwarding": "unknown",
+      "preToolPolicy": "unsupported_not_implemented",
+      "policyEndTurn": "unsupported_not_implemented",
+      "policyCloseSession": "unsupported_not_implemented",
+      "incomingElicitation": "unknown"
+    }
+  },
+  "lifecycle": {
+    "phase": "absent"
+  },
+  "truncated": false,
+  "queueComplete": true,
+  "transcriptState": "complete",
+  "runtime": {
+    "model": "claude-sonnet-5",
+    "provider": "claude-acp",
+    "workspace": "/tmp/nessa-mcp-live-claude-enuJD6/workspace",
+    "agent": "claude",
+    "modelName": "Claude Sonnet 5",
+    "contextWindowTokens": 1000000,
+    "reasoning": true
+  },
+  "title": "S4c863b41 permission",
+  "questions": [],
+  "approvalMode": "ask",
+  "approvalModes": [
+    {
+      "id": "ask",
+      "name": "Provider asks",
+      "description": "Claude may read without asking and requests approval where its native policy requires it."
+    },
+    {
+      "id": "auto",
+      "name": "Claude automatic review",
+      "description": "Claude's reviewer may allow or deny an action without asking. Some actions still request approval."
+    },
+    {
+      "id": "full",
+      "name": "Claude full access",
+      "description": "Claude may run allowed actions without asking; Nessa's fixed denied tools remain unavailable."
+    }
+  ]
+}

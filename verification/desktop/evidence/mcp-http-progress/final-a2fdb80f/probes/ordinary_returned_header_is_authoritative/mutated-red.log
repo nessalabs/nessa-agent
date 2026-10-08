@@ -1,0 +1,19 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-sdk)
+    Finished `test` profile [unoptimized] target(s) in 57.76s
+     Running unittests src/lib.rs (/workspace/637-cargo-target/debug/deps/nessa_sdk-3bf8b30c97a3925a)
+
+running 1 test
+
+thread 'infrastructure::mcp::tests::http_progress::j17_ordinary_terminal_ignores_non_authoritative_oversized_header' (667778) panicked at crates/nessa-sdk/src/infrastructure/mcp/../../../tests/infrastructure/mcp/http_progress.rs:2631:14:
+called `Result::unwrap()` on an `Err` value: TooLarge("Mcp-Session-Id")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test infrastructure::mcp::tests::http_progress::j17_ordinary_terminal_ignores_non_authoritative_oversized_header ... FAILED
+
+failures:
+
+failures:
+    infrastructure::mcp::tests::http_progress::j17_ordinary_terminal_ignores_non_authoritative_oversized_header
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1042 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-sdk --lib`

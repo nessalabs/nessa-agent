@@ -1,0 +1,31 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-sdk)
+warning: unused variable: `attempt_index`
+    --> crates/nessa-sdk/src/infrastructure/mcp/http.rs:1560:9
+     |
+1560 |     for attempt_index in 0..2 {
+     |         ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_attempt_index`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `nessa-sdk` (lib test) generated 1 warning (run `cargo fix --lib -p nessa-sdk --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized] target(s) in 58.91s
+     Running unittests src/lib.rs (/workspace/637-cargo-target/debug/deps/nessa_sdk-3bf8b30c97a3925a)
+
+running 1 test
+
+thread 'infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy' (670019) panicked at crates/nessa-sdk/src/infrastructure/mcp/http.rs:1611:5:
+internal error: entered unreachable code: the second authorization attempt returns its classified response
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy' (670019) panicked at crates/nessa-sdk/src/infrastructure/mcp/../../../tests/infrastructure/mcp/post_body.rs:130:10:
+controlled lifecycle completes: Elapsed(())
+test infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy ... FAILED
+
+failures:
+
+failures:
+    infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1042 filtered out; finished in 3.00s
+
+error: test failed, to rerun pass `-p nessa-sdk --lib`

@@ -1,0 +1,103 @@
+{
+  "conversationId": "9e9fdc77-854f-41b6-af9d-758c64b877c3",
+  "revision": "924357ce-fe80-4e8b-81de-56eba1a10737:6:ui:41653207be9b7701b2b451c7d072e2d5652fbd47bb639ddc4e7cdb8288935d3a",
+  "messages": [
+    {
+      "executionId": "324f890e-ccb8-431d-b4b9-c64e0f08f0bd",
+      "userText": "Use the tools of the \"mcptest\" MCP server. If they are not among the tools you were given, find them with your tool search. Call review_rows (no arguments) exactly once, and wait for its result. Call no other tool of that server. When it has returned, reply with DONE.",
+      "attachments": [],
+      "files": [],
+      "status": "completed",
+      "parts": [
+        {
+          "offset": 0,
+          "kind": "tool",
+          "text": "",
+          "toolId": "toolu_scripted_5a9910f1-b7a6-445d-8598-e088fb39848b",
+          "noticeId": ""
+        },
+        {
+          "offset": 4,
+          "kind": "text",
+          "text": "DONE",
+          "toolId": "",
+          "noticeId": ""
+        }
+      ]
+    }
+  ],
+  "pending": [],
+  "permissions": [],
+  "tools": [
+    {
+      "executionId": "324f890e-ccb8-431d-b4b9-c64e0f08f0bd",
+      "toolId": "toolu_scripted_5a9910f1-b7a6-445d-8598-e088fb39848b",
+      "title": "mcp__mcptest__review_rows",
+      "kind": "other",
+      "status": "completed",
+      "details": "{\"rows\":[1,2]}",
+      "input": "",
+      "mcp": {
+        "server": "mcptest",
+        "tool": "review_rows",
+        "resourceUri": "ui://nessa-test/review.html",
+        "argumentsJson": "{}"
+      },
+      "structuredContent": "{\"rows\":[1,2]}"
+    }
+  ],
+  "capabilities": {
+    "queue": true,
+    "steer": true,
+    "resume": false,
+    "permissions": true,
+    "imageInput": false,
+    "agentFeatures": {
+      "permissionDenial": "supported_for_offered_permission_reviews",
+      "nativeHookSuppression": "unknown",
+      "compactionReporting": "unsupported_not_implemented",
+      "modelSwitchReporting": "unsupported_not_implemented",
+      "permissionDeferral": "unsupported_not_implemented",
+      "elicitationForwarding": "unknown",
+      "preToolPolicy": "unsupported_not_implemented",
+      "policyEndTurn": "unsupported_not_implemented",
+      "policyCloseSession": "unsupported_not_implemented",
+      "incomingElicitation": "supported_with_correlated_round_trip"
+    }
+  },
+  "lifecycle": {
+    "phase": "attached"
+  },
+  "truncated": false,
+  "queueComplete": true,
+  "transcriptState": "complete",
+  "runtime": {
+    "model": "claude-sonnet-5",
+    "provider": "claude-acp",
+    "workspace": "/tmp/nessa-mcp-live-claude-SWr53o/workspace",
+    "agent": "claude",
+    "modelName": "Claude Sonnet 5",
+    "contextWindowTokens": 1000000,
+    "reasoning": true
+  },
+  "title": "Use the tools of the \"mcptest\" MCP server. If th",
+  "questions": [],
+  "approvalMode": "ask",
+  "approvalModes": [
+    {
+      "id": "ask",
+      "name": "Provider asks",
+      "description": "Claude may read without asking and requests approval where its native policy requires it."
+    },
+    {
+      "id": "auto",
+      "name": "Claude automatic review",
+      "description": "Claude's reviewer may allow or deny an action without asking. Some actions still request approval."
+    },
+    {
+      "id": "full",
+      "name": "Claude full access",
+      "description": "Claude may run allowed actions without asking; Nessa's fixed denied tools remain unavailable."
+    }
+  ]
+}

@@ -1,0 +1,111 @@
+{
+  "source_head": "c68b4e4086fac3537e235427be32ea7f7a5e6462",
+  "restore_method": "immutable exact-c68b compiled binary, source bytes verified identical and fresh mtime; final Cargo rebuild follows",
+  "actual_pairs": [
+    {
+      "name": "connection_drops_reply_context",
+      "red_exit": 101,
+      "restored_exit": 0,
+      "red_sha256": "d78a363e593b90ca4f24b19a03dc1218f303fb7d5da4b680cffe14d4c3e86bf4",
+      "green_sha256": "6f4a0876eb743886ea21ad56ec4bf655763a48fb606cc4488bc6d95591237d4e"
+    },
+    {
+      "name": "reply_reads_current_version",
+      "red_exit": 101,
+      "restored_exit": 0,
+      "red_sha256": "8a36b7a73899860782eb94ff5288ffad879f6cc49a5e7ddbaa0823d7dd217e42",
+      "green_sha256": "a5c73625fa7093fff1cd32a3f1b1f5fbc97d7bc4d4f8bedf0cadbb6bd505a04b"
+    },
+    {
+      "name": "reply_accepts_reused_id_attribute",
+      "red_exit": 101,
+      "restored_exit": 0,
+      "red_sha256": "2ce4e2a1695eb75d6193241fbb9713334465d1bdbd39f572ff119c3e6e451821",
+      "green_sha256": "b1fbb8f255d69db8befec27156c4d39afce9ee6dd45a5f810536fdda3b116c4a"
+    },
+    {
+      "name": "provisional_claim_skips_collision",
+      "red_exit": 101,
+      "restored_exit": 0,
+      "red_sha256": "5d7ed4fae78cfcba89a89bd95115e3c8b1ccb20903b824f404b18445977580e2",
+      "green_sha256": "8755d863e0b529a3c4bc83f52bfe46fcb0f9abdef0195d2ab36f317ea5bc43f6"
+    },
+    {
+      "name": "initialize_identity_bound_removed",
+      "red_exit": 101,
+      "restored_exit": 0,
+      "red_sha256": "4d2faa39fa70f7ff0c5d957f9e3be68657d1086ff1fac89e43722b4c3ebe5508",
+      "green_sha256": "8755d863e0b529a3c4bc83f52bfe46fcb0f9abdef0195d2ab36f317ea5bc43f6"
+    },
+    {
+      "name": "ordinary_returned_header_is_authoritative",
+      "red_exit": 101,
+      "restored_exit": 0,
+      "red_sha256": "465e54c7d96e616169c65c37a2314409f843e5a9cac911adaffd0f0877031d6e",
+      "green_sha256": "7fb9adc3a3bfc389acf83e36cccaa253f222e4c0c2bfaee10202f8fd4cfeda97"
+    },
+    {
+      "name": "provisional_claim_starts_get",
+      "red_exit": 101,
+      "restored_exit": 0,
+      "red_sha256": "27fa397485d5df638c06497314e2768ec433d6d6e88da9faab907428e823404a",
+      "green_sha256": "2fdf3ee29d78783d145f9cca7aeff92e96cc14bfbaf1e8c7ad205858841ceb17"
+    },
+    {
+      "name": "provisional_cleanup_requires_validation",
+      "red_exit": 101,
+      "restored_exit": 0,
+      "red_sha256": "cd70227de66297c3638448da5005b0e789fe9055b048b558a60e91eb2dc08cd6",
+      "green_sha256": "fcefbbe5f8ada61208373c65dd2f3ccceb843780fb8f6035e0e2a1adbe067b35"
+    },
+    {
+      "name": "provisional_claim_released_before_delete",
+      "red_exit": 101,
+      "restored_exit": 0,
+      "red_sha256": "41af6a1ca4e32c5901d4d37ac89f3d3ecaee852749ed570127936124c4e0c2dd",
+      "green_sha256": "fcefbbe5f8ada61208373c65dd2f3ccceb843780fb8f6035e0e2a1adbe067b35"
+    },
+    {
+      "name": "common_post_skips_rejected_callback",
+      "red_exit": 101,
+      "restored_exit": 0,
+      "red_sha256": "ca56b5d7b77152005219a634a816e248d8929d9df781ea1920cb0c299e274e19",
+      "green_sha256": "488c0ea0b555411c6c0e868a43b365f3e7e90543074f48ec9733f1ac072c3f7f"
+    },
+    {
+      "name": "common_post_skips_scope_callback",
+      "red_exit": 101,
+      "restored_exit": 0,
+      "red_sha256": "a5f56a762d8675b6f52fb8259c3eb2740cbd81a4597d26ed8765c7055988cf82",
+      "green_sha256": "3bbc9c3ad8c6c43e62b8bd1ca32b241c34a09e69a31668e2d17fde6f9249f7fa"
+    },
+    {
+      "name": "private_initialize_5xx_is_expired",
+      "red_exit": 101,
+      "restored_exit": 0,
+      "red_sha256": "627538038b44f442f7e6230798b73df2b479d99caaa4e020525e96b2128b25b6",
+      "green_sha256": "488c0ea0b555411c6c0e868a43b365f3e7e90543074f48ec9733f1ac072c3f7f"
+    },
+    {
+      "name": "private_initialize_has_legacy_eligibility",
+      "red_exit": 101,
+      "restored_exit": 0,
+      "red_sha256": "6fc80bf25df1a700e71a06ea2a40e1aa616c3f13ce09e2454a051b7d1e7d16ac",
+      "green_sha256": "3bbc9c3ad8c6c43e62b8bd1ca32b241c34a09e69a31668e2d17fde6f9249f7fa"
+    },
+    {
+      "name": "common_post_retries_second_401",
+      "red_exit": 101,
+      "restored_exit": 0,
+      "red_sha256": "d2f811c430543a590817fb6944e880af2fb6ebaa4391865d295d771bb79563ad",
+      "green_sha256": "488c0ea0b555411c6c0e868a43b365f3e7e90543074f48ec9733f1ac072c3f7f"
+    },
+    {
+      "name": "reply_attempt_ignores_close_after_authorization",
+      "red_exit": 101,
+      "restored_exit": 0,
+      "red_sha256": "131cb8843f422ad6f9e8abf0cf997da9d755077a999298976d22c35865cb53ce",
+      "green_sha256": "f9da21e99291e4f6b92bddeeb0d9c24989c22447f1bbb9afdc84a8c667f98eea"
+    }
+  ]
+}

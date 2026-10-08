@@ -1,0 +1,18 @@
+{
+  "checkpoint": "9c365990570c1cdd2aab398f7dcd29ff89a441cc",
+  "main": "aa774e05a0c9d127ba9cab78a7068cc7b56e8388",
+  "files": [
+    {
+      "name": "crates/nessa-sdk/src/infrastructure/mcp/http.rs",
+      "original_probe_baseline_sha256": "c9428d0bac8aac4e428b24391443a57e5fe3227a1e138782c1b23df1bc9421e3",
+      "restacked_checkpoint_sha256": "c9428d0bac8aac4e428b24391443a57e5fe3227a1e138782c1b23df1bc9421e3",
+      "byte_identical": true
+    },
+    {
+      "name": "crates/nessa-sdk/src/infrastructure/mcp/connection.rs",
+      "original_probe_baseline_sha256": "d6df7d64f86aa09960a1808441dc479c87b107d6c5a7df388c4606a96c54df37",
+      "restacked_checkpoint_sha256": "d6df7d64f86aa09960a1808441dc479c87b107d6c5a7df388c4606a96c54df37",
+      "byte_identical": true
+    }
+  ]
+}

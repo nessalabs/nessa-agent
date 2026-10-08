@@ -1,0 +1,151 @@
+{
+  "head": "3add1c500da6de3c65d35dc74a1cd46c1be240a2",
+  "base": "aa774e05a0c9d127ba9cab78a7068cc7b56e8388",
+  "source_status": "",
+  "environment": {
+    "CARGO_HOME": "/tmp/nessa-cargo",
+    "RUSTUP_HOME": "/tmp/nessa-rustup",
+    "CARGO_TARGET_DIR": "/workspace/637-cargo-target",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "RUSTDOCFLAGS": "-D warnings",
+    "MCP_LIVE_NESSA": "/workspace/637-cargo-target/debug/nessa"
+  },
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-sdk",
+        "--",
+        "--check"
+      ],
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-sdk",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "log_sha256": "498284797e3adec08853d7ce8a909358ac13031bd53e9b870312582812b81c03"
+    },
+    {
+      "name": "architecture-tests",
+      "command": [
+        "node",
+        "--test",
+        "/workspace/nessa-agent-http-progress/scripts/architecture/setup-gate-placement.test.mjs",
+        "/workspace/nessa-agent-http-progress/scripts/architecture/imported-paths.test.mjs",
+        "/workspace/nessa-agent-http-progress/scripts/architecture/platform-boundaries.test.mjs",
+        "/workspace/nessa-agent-http-progress/scripts/architecture/rust-dependency-graphs.test.mjs",
+        "/workspace/nessa-agent-http-progress/scripts/architecture/composer-budget.test.mjs",
+        "/workspace/nessa-agent-http-progress/scripts/architecture/overlay-placement.test.mjs",
+        "/workspace/nessa-agent-http-progress/scripts/architecture/rust-boundaries.test.mjs",
+        "/workspace/nessa-agent-http-progress/scripts/architecture/without-comments.test.mjs",
+        "/workspace/nessa-agent-http-progress/scripts/architecture/split-panes-boundary.test.mjs",
+        "/workspace/nessa-agent-http-progress/scripts/architecture/adr-numbers.test.mjs",
+        "/workspace/nessa-agent-http-progress/scripts/architecture/stand-down-placement.test.mjs",
+        "/workspace/nessa-agent-http-progress/scripts/architecture/desktop-verticals.test.mjs",
+        "/workspace/nessa-agent-http-progress/scripts/architecture/whole-workspace.test.mjs"
+      ],
+      "exit": 0,
+      "log_sha256": "d3a65905317e6c64ef3f9ade937c7d2efc3f4f3a31fb31da36f4ca329039c9e0"
+    },
+    {
+      "name": "architecture",
+      "command": [
+        "node",
+        "scripts/check-architecture.mjs"
+      ],
+      "exit": 0,
+      "log_sha256": "2a2462c6729eeb5ecb05a41a9fb9ed10f97b1bdb34772bac68dd984b7907a5d8"
+    },
+    {
+      "name": "http-progress",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::mcp::tests::http_progress",
+        "--",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "log_sha256": "39a9911e837d4a64b4c6e465693fb6b24d81f743bc191c3ba7862a94b81692ba"
+    },
+    {
+      "name": "mcp",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::mcp::",
+        "--",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "log_sha256": "67dc6fc4bcd97090900000fcfc8e596746b4d8649387190444542c3468bb0937"
+    },
+    {
+      "name": "six-package-full-suite",
+      "command": [
+        "node",
+        "scripts/cargo-test-parallel.mjs",
+        "--concurrency",
+        "2",
+        "--",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-sdk"
+      ],
+      "exit": 1,
+      "log_sha256": "43f95447e5be08b462324b02b4aabe79be296408fc987bb5b22dad001c18e08d"
+    }
+  ]
+}

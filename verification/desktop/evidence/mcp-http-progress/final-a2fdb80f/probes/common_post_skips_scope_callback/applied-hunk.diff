@@ -1,0 +1,13 @@
+diff --git a/crates/nessa-sdk/src/infrastructure/mcp/http.rs b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+index a576a33c..d4553e82 100644
+--- a/crates/nessa-sdk/src/infrastructure/mcp/http.rs
++++ b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+@@ -1584,7 +1584,7 @@ async fn authorized_modern_post(
+                 .unwrap_or("Bearer")
+                 .to_owned();
+             drop(response);
+-            authorization.insufficient_scope(server, &challenge).await;
++            let _ = challenge;
+             return Err(McpError::InsufficientScope);
+         }
+         if matches!(response.status, 400 | 404 | 405)

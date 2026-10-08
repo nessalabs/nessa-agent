@@ -1,0 +1,13 @@
+diff --git a/crates/nessa-sdk/src/infrastructure/mcp/http.rs b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+index a576a33c..3435f716 100644
+--- a/crates/nessa-sdk/src/infrastructure/mcp/http.rs
++++ b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+@@ -1566,7 +1566,7 @@ async fn authorized_modern_post(
+             .exchange(request)
+             .await
+             .map_err(|_| lost_exchange(body))?;
+-        if response.status == 401 && attempt_index == 0 {
++        if response.status == 401 {
+             let challenge = response
+                 .header("www-authenticate")
+                 .unwrap_or("Bearer")

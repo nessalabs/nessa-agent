@@ -1,0 +1,14 @@
+diff --git a/crates/nessa-sdk/src/infrastructure/mcp/http.rs b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+index a576a33c..5f6a087b 100644
+--- a/crates/nessa-sdk/src/infrastructure/mcp/http.rs
++++ b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+@@ -326,8 +326,8 @@ impl HttpSession {
+                 headers,
+                 body: Vec::new(),
+             };
+-            let _ = exchange.exchange(request).await;
+             claims.release(&url, &session_id, local);
++            let _ = exchange.exchange(request).await;
+             finished.send_replace(true);
+         });
+     }

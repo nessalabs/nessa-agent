@@ -1,0 +1,1 @@
+["cargo", "test", "-p", "nessa-sdk", "--lib", "infrastructure::mcp::tests::http_progress::j19_reader_failure_fences_http_owner_before_ended", "--", "--exact", "--nocapture"]

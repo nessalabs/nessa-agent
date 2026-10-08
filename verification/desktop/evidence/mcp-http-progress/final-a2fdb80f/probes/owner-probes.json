@@ -1,0 +1,388 @@
+{
+  "head": "c68b4e4086fac3537e235427be32ea7f7a5e6462",
+  "base": "9d63a1f16eddbebaf95af5f8d598130b5baf28d8",
+  "binary_sha256": "f8e27f593c3c17e099d422246b2f3179a518c9cf158c24f7d67c997b4d1427ab",
+  "baseline_source_sha256": {
+    "crates/nessa-sdk/src/infrastructure/mcp/http.rs": "c9428d0bac8aac4e428b24391443a57e5fe3227a1e138782c1b23df1bc9421e3",
+    "crates/nessa-sdk/src/infrastructure/mcp/connection.rs": "d6df7d64f86aa09960a1808441dc479c87b107d6c5a7df388c4606a96c54df37"
+  },
+  "restore_green_method": "immutable exact-c68b compiled binary, source bytes verified identical and fresh mtime; final Cargo rebuild follows",
+  "probes": [
+    {
+      "name": "connection_drops_reply_context",
+      "test": "infrastructure::mcp::tests::http_progress::j3_public_open_held_initialize_dispatches_initialized_list_and_ping",
+      "mutant_exit": 101,
+      "actual_runtime_red": true,
+      "restored_exit": 0,
+      "restored_source_sha256": "d6df7d64f86aa09960a1808441dc479c87b107d6c5a7df388c4606a96c54df37",
+      "mutant_command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::mcp::tests::http_progress::j3_public_open_held_initialize_dispatches_initialized_list_and_ping",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "restored_command": [
+        "/workspace/637-probe-evidence/c68b-baseline-tests",
+        "infrastructure::mcp::tests::http_progress::j3_public_open_held_initialize_dispatches_initialized_list_and_ping",
+        "--exact",
+        "--nocapture"
+      ]
+    },
+    {
+      "name": "reply_reads_current_version",
+      "test": "infrastructure::mcp::tests::http_progress::j19_queued_reply_keeps_unnegotiated_version_and_is_refused_after_close",
+      "mutant_exit": 101,
+      "actual_runtime_red": true,
+      "restored_exit": 0,
+      "restored_source_sha256": "c9428d0bac8aac4e428b24391443a57e5fe3227a1e138782c1b23df1bc9421e3",
+      "mutant_command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::mcp::tests::http_progress::j19_queued_reply_keeps_unnegotiated_version_and_is_refused_after_close",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "restored_command": [
+        "/workspace/637-probe-evidence/c68b-baseline-tests",
+        "infrastructure::mcp::tests::http_progress::j19_queued_reply_keeps_unnegotiated_version_and_is_refused_after_close",
+        "--exact",
+        "--nocapture"
+      ]
+    },
+    {
+      "name": "reply_accepts_reused_id_attribute",
+      "test": "infrastructure::mcp::tests::http_progress::j19_old_reply_cannot_adopt_reused_or_stateless_replacement_binding",
+      "mutant_exit": 101,
+      "actual_runtime_red": true,
+      "restored_exit": 0,
+      "restored_source_sha256": "c9428d0bac8aac4e428b24391443a57e5fe3227a1e138782c1b23df1bc9421e3",
+      "mutant_command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::mcp::tests::http_progress::j19_old_reply_cannot_adopt_reused_or_stateless_replacement_binding",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "restored_command": [
+        "/workspace/637-probe-evidence/c68b-baseline-tests",
+        "infrastructure::mcp::tests::http_progress::j19_old_reply_cannot_adopt_reused_or_stateless_replacement_binding",
+        "--exact",
+        "--nocapture"
+      ]
+    },
+    {
+      "name": "provisional_claim_skips_collision",
+      "test": "infrastructure::mcp::tests::http_progress::j18_early_peer_claim_refuses_collision_and_oversize_before_answer",
+      "mutant_exit": 101,
+      "actual_runtime_red": true,
+      "restored_exit": 0,
+      "restored_source_sha256": "c9428d0bac8aac4e428b24391443a57e5fe3227a1e138782c1b23df1bc9421e3",
+      "mutant_command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::mcp::tests::http_progress::j18_early_peer_claim_refuses_collision_and_oversize_before_answer",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "restored_command": [
+        "/workspace/637-probe-evidence/c68b-baseline-tests",
+        "infrastructure::mcp::tests::http_progress::j18_early_peer_claim_refuses_collision_and_oversize_before_answer",
+        "--exact",
+        "--nocapture"
+      ]
+    },
+    {
+      "name": "initialize_identity_bound_removed",
+      "test": "infrastructure::mcp::tests::http_progress::j18_early_peer_claim_refuses_collision_and_oversize_before_answer",
+      "mutant_exit": 101,
+      "actual_runtime_red": true,
+      "restored_exit": 0,
+      "restored_source_sha256": "c9428d0bac8aac4e428b24391443a57e5fe3227a1e138782c1b23df1bc9421e3",
+      "mutant_command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::mcp::tests::http_progress::j18_early_peer_claim_refuses_collision_and_oversize_before_answer",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "restored_command": [
+        "/workspace/637-probe-evidence/c68b-baseline-tests",
+        "infrastructure::mcp::tests::http_progress::j18_early_peer_claim_refuses_collision_and_oversize_before_answer",
+        "--exact",
+        "--nocapture"
+      ]
+    },
+    {
+      "name": "ordinary_returned_header_is_authoritative",
+      "test": "infrastructure::mcp::tests::http_progress::j17_ordinary_terminal_ignores_non_authoritative_oversized_header",
+      "mutant_exit": 101,
+      "actual_runtime_red": true,
+      "restored_exit": 0,
+      "restored_source_sha256": "c9428d0bac8aac4e428b24391443a57e5fe3227a1e138782c1b23df1bc9421e3",
+      "mutant_command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::mcp::tests::http_progress::j17_ordinary_terminal_ignores_non_authoritative_oversized_header",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "restored_command": [
+        "/workspace/637-probe-evidence/c68b-baseline-tests",
+        "infrastructure::mcp::tests::http_progress::j17_ordinary_terminal_ignores_non_authoritative_oversized_header",
+        "--exact",
+        "--nocapture"
+      ]
+    },
+    {
+      "name": "provisional_claim_starts_get",
+      "test": "infrastructure::mcp::tests::http_progress::j17_public_open_waits_for_bound_peer_answer_before_validation",
+      "mutant_exit": 101,
+      "actual_runtime_red": true,
+      "restored_exit": 0,
+      "restored_source_sha256": "c9428d0bac8aac4e428b24391443a57e5fe3227a1e138782c1b23df1bc9421e3",
+      "mutant_command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::mcp::tests::http_progress::j17_public_open_waits_for_bound_peer_answer_before_validation",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "restored_command": [
+        "/workspace/637-probe-evidence/c68b-baseline-tests",
+        "infrastructure::mcp::tests::http_progress::j17_public_open_waits_for_bound_peer_answer_before_validation",
+        "--exact",
+        "--nocapture"
+      ]
+    },
+    {
+      "name": "provisional_cleanup_requires_validation",
+      "test": "infrastructure::mcp::tests::http_progress::j18_provisional_claim_is_retained_through_close_delete",
+      "mutant_exit": 101,
+      "actual_runtime_red": true,
+      "restored_exit": 0,
+      "restored_source_sha256": "c9428d0bac8aac4e428b24391443a57e5fe3227a1e138782c1b23df1bc9421e3",
+      "mutant_command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::mcp::tests::http_progress::j18_provisional_claim_is_retained_through_close_delete",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "restored_command": [
+        "/workspace/637-probe-evidence/c68b-baseline-tests",
+        "infrastructure::mcp::tests::http_progress::j18_provisional_claim_is_retained_through_close_delete",
+        "--exact",
+        "--nocapture"
+      ]
+    },
+    {
+      "name": "provisional_claim_released_before_delete",
+      "test": "infrastructure::mcp::tests::http_progress::j18_provisional_claim_is_retained_through_close_delete",
+      "mutant_exit": 101,
+      "actual_runtime_red": true,
+      "restored_exit": 0,
+      "restored_source_sha256": "c9428d0bac8aac4e428b24391443a57e5fe3227a1e138782c1b23df1bc9421e3",
+      "mutant_command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::mcp::tests::http_progress::j18_provisional_claim_is_retained_through_close_delete",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "restored_command": [
+        "/workspace/637-probe-evidence/c68b-baseline-tests",
+        "infrastructure::mcp::tests::http_progress::j18_provisional_claim_is_retained_through_close_delete",
+        "--exact",
+        "--nocapture"
+      ]
+    },
+    {
+      "name": "common_post_skips_rejected_callback",
+      "test": "infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy",
+      "mutant_exit": 101,
+      "actual_runtime_red": true,
+      "restored_exit": 0,
+      "restored_source_sha256": "c9428d0bac8aac4e428b24391443a57e5fe3227a1e138782c1b23df1bc9421e3",
+      "mutant_command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "restored_command": [
+        "/workspace/637-probe-evidence/c68b-baseline-tests",
+        "infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy",
+        "--exact",
+        "--nocapture"
+      ]
+    },
+    {
+      "name": "common_post_skips_scope_callback",
+      "test": "infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy",
+      "mutant_exit": 101,
+      "actual_runtime_red": true,
+      "restored_exit": 0,
+      "restored_source_sha256": "c9428d0bac8aac4e428b24391443a57e5fe3227a1e138782c1b23df1bc9421e3",
+      "mutant_command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "restored_command": [
+        "/workspace/637-probe-evidence/c68b-baseline-tests",
+        "infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy",
+        "--exact",
+        "--nocapture"
+      ]
+    },
+    {
+      "name": "private_initialize_5xx_is_expired",
+      "test": "infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy",
+      "mutant_exit": 101,
+      "actual_runtime_red": true,
+      "restored_exit": 0,
+      "restored_source_sha256": "c9428d0bac8aac4e428b24391443a57e5fe3227a1e138782c1b23df1bc9421e3",
+      "mutant_command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "restored_command": [
+        "/workspace/637-probe-evidence/c68b-baseline-tests",
+        "infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy",
+        "--exact",
+        "--nocapture"
+      ]
+    },
+    {
+      "name": "private_initialize_has_legacy_eligibility",
+      "test": "infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy",
+      "mutant_exit": 101,
+      "actual_runtime_red": true,
+      "restored_exit": 0,
+      "restored_source_sha256": "c9428d0bac8aac4e428b24391443a57e5fe3227a1e138782c1b23df1bc9421e3",
+      "mutant_command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "restored_command": [
+        "/workspace/637-probe-evidence/c68b-baseline-tests",
+        "infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy",
+        "--exact",
+        "--nocapture"
+      ]
+    },
+    {
+      "name": "common_post_retries_second_401",
+      "test": "infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy",
+      "mutant_exit": 101,
+      "actual_runtime_red": true,
+      "restored_exit": 0,
+      "restored_source_sha256": "c9428d0bac8aac4e428b24391443a57e5fe3227a1e138782c1b23df1bc9421e3",
+      "mutant_command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "restored_command": [
+        "/workspace/637-probe-evidence/c68b-baseline-tests",
+        "infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy",
+        "--exact",
+        "--nocapture"
+      ]
+    },
+    {
+      "name": "reply_attempt_ignores_close_after_authorization",
+      "test": "infrastructure::mcp::tests::http_progress::j19_close_during_reply_authorization_refuses_post_effect",
+      "mutant_exit": 101,
+      "actual_runtime_red": true,
+      "restored_exit": 0,
+      "restored_source_sha256": "c9428d0bac8aac4e428b24391443a57e5fe3227a1e138782c1b23df1bc9421e3",
+      "mutant_command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "infrastructure::mcp::tests::http_progress::j19_close_during_reply_authorization_refuses_post_effect",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "restored_command": [
+        "/workspace/637-probe-evidence/c68b-baseline-tests",
+        "infrastructure::mcp::tests::http_progress::j19_close_during_reply_authorization_refuses_post_effect",
+        "--exact",
+        "--nocapture"
+      ]
+    }
+  ],
+  "restored_tree_diff": ""
+}

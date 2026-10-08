@@ -1,0 +1,11 @@
+{
+  "review_head": "a2fdb80f14d186614ec63d245936cf4ad4c5df94",
+  "intended_base": "aa774e05a0c9d127ba9cab78a7068cc7b56e8388",
+  "github_test_merge": "44c4f87a50874bf2c83820dbf4d1221491d844ef",
+  "actual_merge_parents": [
+    "aa774e05a0c9d127ba9cab78a7068cc7b56e8388",
+    "a2fdb80f14d186614ec63d245936cf4ad4c5df94"
+  ],
+  "head_and_merge_tree": "cee48352db9b32dbeb0ac8090e3ed8763dcc4dec",
+  "evidence": "Actual GitHub git commit API tree equals local git rev-parse head tree; merge-base is actual base. Frozen branch therefore represents exact assembled source."
+}

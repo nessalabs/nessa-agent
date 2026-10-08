@@ -1,0 +1,34 @@
+{
+  "root": "/tmp/637-description-render",
+  "renderer": "mermaid11.12.1 in Playwright Chromium",
+  "results": [
+    {
+      "document": "comment.md",
+      "index": 0,
+      "source_sha256": "33a59d9112bc348274c1911f83075112b7ccd23e1297b0d9025703e4733bd86d",
+      "ok": true,
+      "svg": "diagram-0.svg"
+    },
+    {
+      "document": "description.md",
+      "index": 0,
+      "source_sha256": "c7d1f8c3e871a47720baa0c85cfe5bbff8303cf1e0cb7abf85458a6864c72f2d",
+      "ok": true,
+      "svg": "diagram-1.svg"
+    },
+    {
+      "document": "description.md",
+      "index": 1,
+      "source_sha256": "ef7ddb5a1faa9fa7b3c8ccb947572d7e00297974271e8163d1c0712f05232b81",
+      "ok": true,
+      "svg": "diagram-2.svg"
+    },
+    {
+      "document": "description.md",
+      "index": 2,
+      "source_sha256": "c781a945edae293f9d7107bb39d8861c89153be4e4c72fd6fd408f8dd4027fef",
+      "ok": true,
+      "svg": "diagram-3.svg"
+    }
+  ]
+}

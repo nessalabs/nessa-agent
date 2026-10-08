@@ -1,0 +1,57 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-sdk)
+    Finished `test` profile [unoptimized] target(s) in 1m 01s
+     Running unittests src/lib.rs (/workspace/637-cargo-target/debug/deps/nessa_sdk-3d68afc9996ff363)
+
+running 49 tests
+test infrastructure::mcp::tests::http_progress::j11_completion_loss_preserves_writer_failure ... ok
+test infrastructure::mcp::tests::http_progress::j11_accepted_initialized_at_expiry_reports_timeout ... ok
+test infrastructure::mcp::tests::http_progress::j12_lost_completion_cannot_admit_queued_call ... ok
+test infrastructure::mcp::tests::http_progress::j13_completed_commit_defeats_late_timeout ... ok
+test infrastructure::mcp::tests::http_progress::j10_recovery_neighbor_reply_precedes_invalid_initialize ... ok
+test infrastructure::mcp::tests::http_progress::j14_initialized_http_failures_keep_typed_causes ... ok
+test infrastructure::mcp::tests::http_progress::j15_control_response_uses_its_actual_request_context ... ok
+test infrastructure::mcp::tests::http_progress::j16_refreshed_control_retry_uses_its_own_bound_context ... ok
+test infrastructure::mcp::tests::http_progress::j17_ordinary_terminal_ignores_non_authoritative_oversized_header ... ok
+test infrastructure::mcp::tests::http_progress::j17_ordinary_body_reply_keeps_request_binding_and_ignores_returned_identity ... ok
+test infrastructure::mcp::tests::http_progress::j17_initial_peer_reply_keeps_response_binding_before_validation ... ok
+test infrastructure::mcp::tests::http_progress::j18_early_peer_claim_refuses_collision_and_oversize_before_answer ... ok
+test infrastructure::mcp::tests::http_progress::j18_provisional_claim_is_retained_through_close_delete ... ok
+test infrastructure::mcp::tests::http_progress::j17_public_open_waits_for_bound_peer_answer_before_validation ... ok
+test infrastructure::mcp::tests::http_progress::j19_close_during_reply_authorization_refuses_post_effect ... ok
+test infrastructure::mcp::tests::http_progress::j18_public_open_error_closes_provisional_binding ... ok
+test infrastructure::mcp::tests::http_progress::j19_peer_answer_404_ends_without_recovery_or_replay ... ok
+test infrastructure::mcp::tests::http_progress::j19_preterminal_stale_request_cannot_revive_ended_connection ... ok
+test infrastructure::mcp::tests::http_progress::j19_preterminal_ordinary_terminal_preserves_recovery_control ... ok
+test infrastructure::mcp::tests::http_progress::j19_old_reply_cannot_adopt_reused_or_stateless_replacement_binding ... ok
+test infrastructure::mcp::tests::http_progress::j19_reader_failure_fences_http_owner_before_ended ... ok
+test infrastructure::mcp::tests::http_progress::j19_queued_reply_keeps_unnegotiated_version_and_is_refused_after_close ... ok
+test infrastructure::mcp::tests::http_progress::j19_reply_retry_cannot_adopt_identity_published_during_authorization ... ok
+test infrastructure::mcp::tests::http_progress::j1_stalled_json_timeout_allows_cancel_and_next_call ... ok
+test infrastructure::mcp::tests::http_progress::j20_private_initialize_exchange_failure_is_unreachable ... ok
+test infrastructure::mcp::tests::http_progress::j2_complete_streamed_json_settles_and_releases_body ... ok
+test infrastructure::mcp::tests::http_progress::j20_private_initialize_healthy_and_retry_success_controls ... ok
+test infrastructure::mcp::tests::http_progress::j2_complete_body_without_own_terminal_settles_deadline_less_call ... ok
+test infrastructure::mcp::tests::http_progress::j2_matching_json_result_and_error_remain_accepted ... ok
+test infrastructure::mcp::tests::http_progress::j20_private_initialize_preserves_shared_authorization_and_status_policy ... ok
+test infrastructure::mcp::tests::http_progress::j2_neighbor_reply_is_preserved_before_unconfirmed_completion ... ok
+test infrastructure::mcp::tests::http_progress::j3_public_open_held_initialize_dispatches_initialized_list_and_ping ... ok
+test infrastructure::mcp::tests::http_progress::j4_initialize_terminal_precedes_bad_trailing_bytes ... ok
+test infrastructure::mcp::tests::http_progress::j4_invalid_initialize_version_does_not_claim_or_start_get ... ok
+test infrastructure::mcp::tests::http_progress::j5_close_held_initialize_body_has_no_late_publication ... ok
+test infrastructure::mcp::tests::http_progress::j5_drop_initial_reader_does_not_retain_session ... ok
+test infrastructure::mcp::tests::http_progress::j6_j7_close_owns_delete_and_retains_claim_through_completion ... ok
+test infrastructure::mcp::tests::http_progress::j6_recovery_publication_then_close_owns_one_retained_delete ... ok
+test infrastructure::mcp::tests::http_progress::j7_public_open_collision_while_delete_is_held_is_not_deleted ... ok
+test infrastructure::mcp::tests::http_progress::j8_recovery_owned_before_headers_and_controls_remain_available ... ok
+test infrastructure::mcp::tests::http_progress::j8_stalled_recovery_json_is_owned_and_bounded ... ok
+test infrastructure::mcp::tests::http_progress::j8_recovery_server_ping_reply_dispatches_before_initialize_result ... ok
+test infrastructure::mcp::tests::http_progress::j9_expired_queued_handoff_cannot_dispatch_initialized ... ok
+test infrastructure::mcp::tests::http_progress::j9_recovery_gate_covers_queued_calls_and_initialized_headers ... ok
+test infrastructure::mcp::tests::http_progress::j9_rejected_initialized_does_not_release_admission ... ok
+test infrastructure::mcp::tests::http_progress::j9_saturated_queue_budget_expiry_retains_close_ownership ... ok
+test infrastructure::mcp::tests::http_progress::j9_timeout_while_initialized_headers_held_cannot_reopen ... ok
+test infrastructure::mcp::tests::http_progress::j2_json_read_failure_and_bound_are_typed ... ok
+test infrastructure::mcp::tests::http_progress::j2_json_capacity_is_retained_through_physical_destruction ... ok
+
+test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 1024 filtered out; finished in 0.02s
+

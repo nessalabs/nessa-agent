@@ -1,0 +1,29 @@
+diff --git a/crates/nessa-sdk/src/infrastructure/mcp/http.rs b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+index a576a33c..820404c7 100644
+--- a/crates/nessa-sdk/src/infrastructure/mcp/http.rs
++++ b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+@@ -840,7 +840,7 @@ impl HttpSession {
+         header: Option<&str>,
+         origin: &ReplyContext,
+     ) -> Result<ReplyContext, McpError> {
+-        let _readers = self.readers.lock().expect("http readers");
++        let mut _readers = self.readers.lock().expect("http readers");
+         if self.closing.load(Ordering::SeqCst) {
+             return Err(McpError::Closed);
+         }
+@@ -852,10 +852,11 @@ impl HttpSession {
+             purpose,
+             BodyPurpose::Initialize(_) | BodyPurpose::RecoveryInitialize
+         ) {
+-            Ok(ReplyContext {
+-                binding: self.claim_binding(&mut phase, header)?,
+-                version: phase.version.clone(),
+-            })
++            let binding = self.claim_binding(&mut phase, header)?;
++            let version = phase.version.clone();
++            drop(phase);
++            self.start_get(binding.clone(), &mut _readers);
++            Ok(ReplyContext { binding, version })
+         } else {
+             check_reply_binding(&phase, origin)?;
+             Ok(origin.clone())

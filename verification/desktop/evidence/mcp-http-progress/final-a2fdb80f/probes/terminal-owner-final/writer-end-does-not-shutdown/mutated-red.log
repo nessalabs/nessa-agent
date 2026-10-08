@@ -1,0 +1,20 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-http-progress/crates/nessa-sdk)
+    Finished `test` profile [unoptimized] target(s) in 1m 03s
+     Running unittests src/lib.rs (/workspace/637-cargo-target/debug/deps/nessa_sdk-3d68afc9996ff363)
+
+running 1 test
+
+thread 'infrastructure::mcp::tests::http_progress::j19_peer_answer_404_ends_without_recovery_or_replay' (690256) panicked at crates/nessa-sdk/src/infrastructure/mcp/../../../tests/infrastructure/mcp/http_progress.rs:2014:9:
+assertion failed: matches!(session.dispatch(br#"{"method":"notifications/cancelled"}"#).await,
+    SendOutcome::End(McpError::Closed))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test infrastructure::mcp::tests::http_progress::j19_peer_answer_404_ends_without_recovery_or_replay ... FAILED
+
+failures:
+
+failures:
+    infrastructure::mcp::tests::http_progress::j19_peer_answer_404_ends_without_recovery_or_replay
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1072 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-sdk --lib`

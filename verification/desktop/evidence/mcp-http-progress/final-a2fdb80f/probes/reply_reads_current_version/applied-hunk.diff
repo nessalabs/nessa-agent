@@ -1,0 +1,13 @@
+diff --git a/crates/nessa-sdk/src/infrastructure/mcp/http.rs b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+index a576a33c..e274e862 100644
+--- a/crates/nessa-sdk/src/infrastructure/mcp/http.rs
++++ b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+@@ -588,7 +588,7 @@ impl HttpSession {
+             None
+         } else {
+             match purpose {
+-                PostPurpose::PeerReply(reply) => reply.version.clone(),
++                PostPurpose::PeerReply(_reply) => phase.version.clone(),
+                 _ => phase.version.clone(),
+             }
+         };

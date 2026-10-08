@@ -1,0 +1,9 @@
+{
+  "rust_source_gate_head": "3add1c500da6de3c65d35dc74a1cd46c1be240a2",
+  "updated_documentation_head": "a2fdb80f14d186614ec63d245936cf4ad4c5df94",
+  "only_changed_path": "docs/adr/todo/392-remote-mcp-servers.md",
+  "all_other_blobs_byte_identical": true,
+  "change": "diff --git a/docs/adr/todo/392-remote-mcp-servers.md b/docs/adr/todo/392-remote-mcp-servers.md\nindex 45e40ebc..d0ad6bde 100644\n--- a/docs/adr/todo/392-remote-mcp-servers.md\n+++ b/docs/adr/todo/392-remote-mcp-servers.md\n@@ -539,7 +539,7 @@ sequenceDiagram\n     Writer->>Peer: notifications/initialized\n     Note over Registry: close fences admission, joins tasks, owns DELETE\n     Registry->>Peer: DELETE claimed ID once\n-    Note over Registry: release claim after DELETE observation; finished after joins\n+    Note over Registry: release claim after DELETE observation and finish after joins\n ```\n \n ## Audit verification by recorded meaning (#631)\n",
+  "gate_active_at_documentation_change": "six-package all-target Clippy",
+  "later_checks": "architecture, SDK docs and scripted browser run after documentation fix; Rust source is unchanged"
+}

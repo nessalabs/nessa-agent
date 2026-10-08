@@ -1,0 +1,13 @@
+diff --git a/crates/nessa-sdk/src/infrastructure/mcp/http.rs b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+index a576a33c..838b8e1e 100644
+--- a/crates/nessa-sdk/src/infrastructure/mcp/http.rs
++++ b/crates/nessa-sdk/src/infrastructure/mcp/http.rs
+@@ -1536,7 +1536,7 @@ fn check_reply_binding(phase: &Phase, reply: &ReplyContext) -> Result<(), McpErr
+     }
+     match (&phase.binding, &reply.binding) {
+         (None, None) => Ok(()),
+-        (Some(current), Some(captured)) if Arc::ptr_eq(current, captured) => Ok(()),
++        (Some(current), Some(captured)) if current.id == captured.id => Ok(()),
+         _ => Err(McpError::SessionExpired),
+     }
+ }

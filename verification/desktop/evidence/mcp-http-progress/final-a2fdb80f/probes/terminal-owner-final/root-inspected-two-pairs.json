@@ -1,0 +1,23 @@
+{
+  "source_checkpoint": "9c365990570c1cdd2aab398f7dcd29ff89a441cc",
+  "source_patch_sha256": "c7fc2229c2ddb109373537db10b1800ca2924d7750bc3c1ecff88dc5c267c193",
+  "pairs": [
+    {
+      "name": "writer-end-does-not-shutdown",
+      "red_exit": 101,
+      "green_exit": 0,
+      "runtime_red": true,
+      "red_log_sha256": "fc5624fc56593744bec20ab53348408aac9789b26566be492f5654ea885c091f",
+      "green_log_sha256": "afe532d55fd97d31d5aeec48ac89bb838f1b8ec2428a6e8c037f5426d48f9df5"
+    },
+    {
+      "name": "reader-end-does-not-shutdown",
+      "red_exit": 101,
+      "green_exit": 0,
+      "runtime_red": true,
+      "red_log_sha256": "87c60f00a3e10f23fd4b5577e47e8026efa4360d888f97bfdda389dbbd0a8b5d",
+      "green_log_sha256": "1bcefe3f629ad7887f56ca5015f66c5cd94b29f2f59ee0a09dc157c98d2c68f1"
+    }
+  ],
+  "excluded_survivor": "terminal-owner/writer-end-does-not-shutdown mutant0 excluded"
+}
