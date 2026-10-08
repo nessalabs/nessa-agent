@@ -17,7 +17,7 @@ instead of creating a competing copy.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The map of the code as it stands: what each file owns, the boundaries, the invariants, and where a given change goes. Read this first. |
 | [codebase-structure.md](codebase-structure.md) | The general structural rules applied to Nessa specifically — the target shape, the Nessa absences, the host/shell seam, and what the core must never learn. |
 | [Agent SDK](../crates/nessa-sdk/docs/agent_execution/README.md) | Current Agent API, session storage, hooks, queueing, steering, and retry contracts. |
-| [Runtime architecture](design/runtime-architecture.md) | Proposed roles (authority, surface, executor), execution leases, replication by records, code placement and build order for phone sync and remote execution; companion to ADR 252. |
+| [Runtime architecture](design/runtime-architecture.md) | Proposed conversation and environment authorities, execution and workspace leases, peer gateways, replication by records, code placement and build order for phone sync, sandboxes and remote execution; companion to ADR 252. |
 | [Agent execution design](design/agent_execution/README.md) | Ownership review and separately labeled future gateway/conversation proposals. |
 | [Authentication](design/auth/README.md) | Design references; [local usage](guides/local-auth.md) and [gateway review](reviews/local-auth-gateway.md). |
 | [Gateway alpha review](reviews/gateway-alpha-review.md) | Local architecture review, fixed findings, external comparisons, validation, and remaining release limits. |
