@@ -326,23 +326,21 @@ html:not(.dark) .agents-overview-surface {
   pointer-events: none;
 }
 
+/* A row (`ui/list-row.tsx`, which owns its states) on the grouped list's own fill. */
 .agents-row {
-  display: grid;
+  --list-row-rest: color-mix(in oklab, var(--foreground) 3%, transparent);
   width: 100%;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
+  grid-template-areas:
+    "leading title trailing"
+    "leading description trailing";
+  --list-row-gap: 12px;
   padding: 10px 14px;
-  border: 0;
-  background: color-mix(in oklab, var(--foreground) 3%, transparent);
-  color: var(--desktop-ink-2) !important;
-  text-align: left;
+  color: var(--desktop-ink-2);
   outline: none;
-  transition: background-color var(--desktop-fast) ease;
 }
 
 html:not(.dark) .agents-row {
-  background: color-mix(in oklab, var(--background) 30%, white);
+  --list-row-rest: color-mix(in oklab, var(--background) 30%, white);
 }
 
 .agents-row-item:first-child .agents-row {
@@ -353,14 +351,6 @@ html:not(.dark) .agents-row {
 .agents-row-item:last-child .agents-row {
   border-bottom-left-radius: var(--desktop-radius-md);
   border-bottom-right-radius: var(--desktop-radius-md);
-}
-
-.agents-row:hover {
-  background: var(--desktop-hover);
-}
-
-.agents-row:active {
-  background: var(--desktop-press);
 }
 
 /*
@@ -375,14 +365,13 @@ html:not(.dark) .agents-row {
   outline: none;
 }
 
-.agents-row[data-selected],
 .agents-request[data-selected],
-.agents-row:focus,
+.agents-overview .agents-row:focus,
 .agents-request:focus-within {
   background: var(--desktop-selected);
 }
 
-.agents-row:focus-visible,
+.agents-overview .agents-row:focus-visible,
 .agents-request:focus-visible {
   background: var(--desktop-press);
 }
@@ -393,18 +382,15 @@ html:not(.dark) .agents-row {
   gap: 2px;
 }
 
-.agents-row-title {
+.agents-row-title,
+.agents-row .desktop-list-row-title {
   color: var(--foreground);
   font-size: var(--desktop-text-body);
   font-weight: 500;
 }
 
-/* Finished and not yet looked at, as unread reads everywhere in the window. */
-.agents-row[data-kind="finished"] .agents-row-title {
-  font-weight: 600;
-}
-
-.agents-row-preview {
+.agents-row .desktop-list-row-description {
+  margin-top: 2px;
   color: var(--desktop-muted);
   font-size: var(--desktop-text-footnote);
 }
@@ -415,7 +401,7 @@ html:not(.dark) .agents-row {
   font-variant-numeric: tabular-nums;
 }
 
-.agents-row > .workspace-status {
+.agents-row .workspace-status {
   margin-right: 3px;
 }
 

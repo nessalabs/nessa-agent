@@ -27,6 +27,7 @@ import { paneItemKey, sessionItem } from "../../model/pane-item"
 import { AgentTile } from "../chrome/agent-tile"
 import { ColumnHeader } from "../../../ui/column-header"
 import { IconButton } from "../../../ui/icon-button"
+import { ListRow } from "../../../ui/list-row"
 import { SessionMenuItems, useOpenFromRow } from "../session-actions"
 import { useWorkspaceFrame } from "../workspace-frame"
 import "./session-list.css"
@@ -186,15 +187,15 @@ const SessionRow = memo(function SessionRow({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div
+        <ListRow
           role="option"
           tabIndex={tabStop ? 0 : -1}
           aria-selected={selected}
           data-session-row={session.id}
           className="workspace-session"
-          data-selected={selected || undefined}
+          selected={selected}
+          unread={session.unread}
           data-open={open || undefined}
-          data-unread={session.unread || undefined}
           // Carried by the pointer to a pane (`split-panes/adapters/dom/drag.ts`).
           data-drag-item={paneItemKey(sessionItem(session.id))}
           onClick={(event) => actions.activate(event, session.id)}
@@ -203,24 +204,17 @@ const SessionRow = memo(function SessionRow({
             event.preventDefault()
             actions.activate(event, session.id)
           }}
-        >
-          <AgentTile model={session.model} size={22} />
-          <div className="workspace-session-main">
-            <div className="workspace-session-top">
-              {session.unread ? (
-                <span className="workspace-unread" aria-label="Unread" />
-              ) : null}
-              <span className="workspace-session-title workspace-truncate">
-                {session.title}
-              </span>
-              <SessionTime at={session.updatedAt} />
-            </div>
-            {/* A short first message is the title too; it is said once. */}
-            {sameWords(session.title, session.preview) ? null : (
-              <p className="workspace-session-preview">{session.preview}</p>
-            )}
-          </div>
-        </div>
+          leading={<AgentTile model={session.model} size={22} />}
+          marker={
+            session.unread ? (
+              <span className="workspace-unread" aria-label="Unread" />
+            ) : null
+          }
+          title={session.title}
+          trailing={<SessionTime at={session.updatedAt} />}
+          // A short first message is the title too; it is said once.
+          description={sameWords(session.title, session.preview) ? null : session.preview}
+        />
       </ContextMenuTrigger>
       <ContextMenuContent>
         <SessionMenuItems sessionId={session.id} />

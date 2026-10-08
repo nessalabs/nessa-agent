@@ -943,6 +943,18 @@ it is redesigned on its own branch.
   engine and layout, on load and with the switcher open). Rule: `chrome.css` ›
   Keys. At the base commit the session list's and the switcher's keys were
   bare text, unlike the sidebar's cap.
+- [ ] **Every list row is one of two components, answering the same way
+  (#657).** The sidebar's channels, its Agents entry and "Show all" are the
+  kit's `SidebarMenuItem` (`xs`); the sidebar's sessions, the session list,
+  the overview's sessions and the switcher's results are the window's
+  `ListRow` (`ui/list-row.tsx`), where a row is a listbox's option or its
+  trailing detail is as wide as it says. Under the pointer every kind fills
+  with `--desktop-hover`, a chosen row with `--desktop-selected`, and an
+  unread title weighs `--desktop-unread-weight`. _Check:_ `shared-controls.mjs`
+  (`rows`, per engine and layout: on load, in the overview, with the switcher
+  open). Rules: `ui/list-row.css`, `source-list.css` › Rows. At the base
+  commit no row was either component, and unread weighed 560, 600 or 650 by
+  list.
 
 ## Menus and tooltips
 

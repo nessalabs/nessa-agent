@@ -19,7 +19,7 @@ This skill is how to use them; it restates neither.
 | --- | --- |
 | anything in `src/desktop/` (always, first) | `smoke.mjs` |
 | `ui/icon-button.*`, or any icon-only control | `icon-buttons.mjs` (`--layout classic` for the classic shell) |
-| a key cap (`<kbd>`) outside Settings | `shared-controls.mjs` |
+| a key cap (`<kbd>`), a list row (`ui/list-row.*`, the kit's sidebar rows) or another repeated pattern outside Settings | `shared-controls.mjs` |
 | titlebar, column heads, side columns, Settings chrome, the picture band, anything that slides | `safe-area.mjs` |
 | the side rail, its toggle or a full view (`workspace/ui/chrome/side-rail.*`), the window frame (`.workspace-window`), anything that places a column from the workspace's edge | `columns.mjs` |
 | drag and drop, `drop.ts`, `drag.ts`, pane headers | `drag.mjs` |

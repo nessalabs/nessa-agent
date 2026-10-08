@@ -157,6 +157,8 @@ body {
   --desktop-text-read: 14.5px;
   --desktop-text-title: 17px;
   --desktop-text-display: 20px;
+  /* A row holding something not yet seen, in every list; the current row's weight too, so moving between them never reflows a label. */
+  --desktop-unread-weight: 600;
 
   /* Ink and fills, from loud to quiet. */
   --desktop-ink-2: color-mix(in oklab, var(--foreground) 82%, transparent);

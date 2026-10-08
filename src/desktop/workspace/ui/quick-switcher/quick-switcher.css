@@ -112,60 +112,44 @@ html:not(.dark) .workspace-switcher {
   user-select: none;
 }
 
+/* A row (`ui/list-row.tsx`, which owns its states): its glyph, its title, its place, its time. */
 .workspace-result {
   position: relative;
-  display: grid;
   min-height: 30px;
-  grid-template-columns: 16px minmax(0, max-content) minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
+  grid-template-areas: "leading title meta trailing";
+  grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr) auto;
+  --list-row-gap: 10px;
   padding: 3px 10px;
   border-radius: 6px;
   font: 400 13px / 16px var(--nessa-font-sans);
   cursor: default;
 }
 
-.workspace-result > .workspace-status {
-  justify-self: center;
-}
-
-.workspace-result[aria-selected="true"] {
-  background: var(--desktop-selected);
-}
-
-.workspace-result-icon {
-  display: grid;
-  place-items: center;
+.workspace-result > .desktop-list-row-leading {
+  width: 16px;
   color: var(--desktop-muted);
 }
 
-.workspace-result-icon svg {
+.workspace-result > .desktop-list-row-leading svg {
   width: 14px;
   height: 14px;
   stroke-width: 1.8;
 }
 
-.workspace-result-title {
-  overflow: hidden;
+.workspace-result .desktop-list-row-title {
   color: var(--foreground);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.workspace-result-meta {
-  overflow: hidden;
+.workspace-result > :is(.desktop-list-row-meta, .desktop-list-row-trailing) {
   color: color-mix(in oklab, var(--foreground) 50%, transparent);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.workspace-result-trail {
-  color: color-mix(in oklab, var(--foreground) 50%, transparent);
+.workspace-result > .desktop-list-row-trailing {
   font-variant-numeric: tabular-nums;
 }
 
 /* What ↩ does, on the chosen row only, in place of its trailing detail. */
-.workspace-result[aria-selected="true"] .workspace-result-trail {
+.workspace-result[data-selected] > .desktop-list-row-trailing {
   visibility: hidden;
 }
 

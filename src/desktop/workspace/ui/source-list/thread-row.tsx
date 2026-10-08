@@ -12,6 +12,7 @@ import { useNow } from "../../adapters/dom/clock"
 import { isMac } from "../../../adapters/platform"
 import { commandLabel } from "../../../model/keyboard"
 import { sessionTime } from "../../model/time-labels"
+import { ListRow } from "../../../ui/list-row"
 import { AgentTile } from "../chrome/agent-tile"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { SessionMenuItems, useOpenFromRow } from "../session-actions"
@@ -21,7 +22,9 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "../../../ui
 /**
  * A session hanging beneath its channel in the sidebar. `pinned`: one of the
  * chosen channel's pinned sessions, marked by its agent. `branch`: one of the
- * sessions a channel discloses inline, with its status and time.
+ * sessions a channel discloses inline, with its status and time. A `ListRow`,
+ * not the kit's sidebar row: its time is as wide as it says, and the kit lays
+ * what ends a row over a fixed room the title gives up.
  */
 export const ThreadRow = memo(function ThreadRow({
   sessionId,
@@ -48,15 +51,15 @@ export const ThreadRow = memo(function ThreadRow({
     <li>
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <button
-            type="button"
-            className="workspace-row workspace-thread-row"
+          <ListRow
+            as="button"
+            className="workspace-thread-row"
             data-row="session"
             data-session-row={session.id}
             data-parent={channelId}
             data-open={open || undefined}
-            data-focused={(kind === "branch" && focused) || undefined}
-            data-unread={(kind === "branch" && session.unread) || undefined}
+            selected={kind === "branch" && focused}
+            unread={kind === "branch" && session.unread}
             aria-current={focused ? "page" : undefined}
             // Carried by the pointer to a pane (`split-panes/adapters/dom/drag.ts`).
             data-drag-item={paneItemKey(sessionItem(session.id))}
@@ -66,21 +69,24 @@ export const ThreadRow = memo(function ThreadRow({
                 ? `${session.title} — ${commandLabel(isMac)}-click to open beside`
                 : session.title,
             )}
-          >
-            {kind === "pinned" ? (
-              <>
+            leading={
+              kind === "pinned" ? (
                 <AgentTile model={session.model} size={14} />
-                <span className="workspace-truncate">{session.title}</span>
-                <StatusGlyph status={session.status} />
-              </>
-            ) : (
-              <>
+              ) : (
                 <StatusGlyph status={session.status} idle />
-                <span className="workspace-truncate">{session.title}</span>
+              )
+            }
+            title={session.title}
+            trailing={
+              kind === "pinned" ? (
+                session.status === "idle" ? null : (
+                  <StatusGlyph status={session.status} />
+                )
+              ) : (
                 <BranchTime at={session.updatedAt} />
-              </>
-            )}
-          </button>
+              )
+            }
+          />
         </ContextMenuTrigger>
         <ContextMenuContent>
           <SessionMenuItems sessionId={session.id} />

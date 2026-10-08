@@ -2,7 +2,7 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store
 import { showContent } from "../../adapters/store/commands"
 import { selectOverviewOpen, selectStatusCounts } from "../../adapters/store/selectors"
 import { useWorkspaceFrame } from "../workspace-frame"
-import { SidebarRow } from "./channel-row"
+import { SidebarRow } from "./sidebar-row"
 
 /**
  * The sidebar's way into the Agents overview: "Agents", with how many wait

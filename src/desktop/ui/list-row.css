@@ -1,0 +1,91 @@
+/*
+ * A list's row (`list-row.tsx`): its parts and how it answers. Where the
+ * parts sit — the grid's areas, its padding and the type — are the list's
+ * own; a list that has no description or meta names no area for it. The
+ * space between the parts is `--list-row-gap`, after the leading part
+ * `--list-row-lead-gap` where it differs: a part a row leaves out takes its
+ * space with it, which a grid's gap between tracks would not.
+ * A list with a resting fill of its own sets `--list-row-rest`, so the
+ * pointer's and the chosen row's fills always win over it. The row's
+ * defaults are weightless (`:where`), so a list's one class outranks them
+ * whatever order the stylesheets load in.
+ */
+
+:where(.desktop-list-row) {
+  display: grid;
+  min-width: 0;
+  grid-template-areas: "leading title trailing";
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  border: 0;
+  background: var(--list-row-rest, transparent);
+  color: inherit;
+  text-align: left;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: background-color var(--desktop-fast) ease;
+}
+
+.desktop-list-row:hover {
+  background: var(--desktop-hover);
+}
+
+.desktop-list-row:active {
+  background: var(--desktop-press);
+}
+
+.desktop-list-row[data-selected] {
+  background: var(--desktop-selected);
+}
+
+:where(.desktop-list-row-leading) {
+  display: inline-flex;
+  margin-inline-end: var(--list-row-lead-gap, var(--list-row-gap, 0px));
+  grid-area: leading;
+  align-items: center;
+  justify-content: center;
+}
+
+:where(.desktop-list-row-title) {
+  display: flex;
+  min-width: 0;
+  grid-area: title;
+  align-items: center;
+  gap: 6px;
+}
+
+:where(.desktop-list-row-label, .desktop-list-row-meta, .desktop-list-row-description) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:where(.desktop-list-row-label) {
+  flex: 1;
+}
+
+.desktop-list-row[data-unread] .desktop-list-row-label {
+  font-weight: var(--desktop-unread-weight);
+}
+
+:where(.desktop-list-row-meta) {
+  grid-area: meta;
+  margin-inline-start: var(--list-row-gap, 0px);
+}
+
+:where(.desktop-list-row-description) {
+  grid-area: description;
+}
+
+:where(.desktop-list-row-trailing) {
+  display: inline-flex;
+  grid-area: trailing;
+  margin-inline-start: var(--list-row-gap, 0px);
+  align-items: center;
+  white-space: nowrap;
+}
+
+:where(.desktop-list-row-trailing > *) {
+  flex: none;
+}
