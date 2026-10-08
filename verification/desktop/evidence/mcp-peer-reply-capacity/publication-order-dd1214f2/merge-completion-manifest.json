@@ -1,0 +1,26 @@
+{
+  "PR": 671,
+  "issue": 665,
+  "source": "dd1214f2c9cd00a4417a05de236edcc5223ae5a9",
+  "squash_merge": "e1f4837c3aefaf023696d276cb6dbdba1e0531a6",
+  "main_synced_clean": true,
+  "main_tree_matches_verified_source": true,
+  "CI_run": 37763984884,
+  "current_statuses": "all11success",
+  "R5": "two freshclean; independentMCP226pass",
+  "CodeRabbit": "currentSUCCESS +nitconcretelydispositioned",
+  "Codex": "currentdd completed no majorissues, comment6058246785",
+  "review_threads": "all3resolved",
+  "issue_state": "CLOSED",
+  "followups": [
+    670,
+    672
+  ],
+  "publication_checkpoint": "Initial immutable publication b2c9bce4 correctly records pending CI/Codex at its publication time; this separate completion manifest records their final results",
+  "files": {
+    "root/dd-final-pr-checks.json": "9d3d2a7958dec92ec5ddb04d7a60e1fbee08cd10f91a118291d80a9c0f4fb286",
+    "root/hosteddd-final-jobs.json": "ea9f363a1c34fee46763ce9a81121b58c32254a1b31a6dfc2853671124314a4f",
+    "root/merged665-closure.json": "1a65dfbad699dfaea32a7ed932fc181841549decba3d7bbeda0c4a9243caa3bf",
+    "root/dd-final-pr-diagrams.json": "6ebcac214615b648298f8c961a237a2bed542d2de9b040d67f3ae84437fee7ae"
+  }
+}

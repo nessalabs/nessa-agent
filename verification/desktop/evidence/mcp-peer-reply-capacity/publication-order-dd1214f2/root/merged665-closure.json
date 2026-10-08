@@ -1,0 +1,19 @@
+{
+  "PR": 671,
+  "issue": 665,
+  "source": "dd1214f2c9cd00a4417a05de236edcc5223ae5a9",
+  "squash_merge": "e1f4837c3aefaf023696d276cb6dbdba1e0531a6",
+  "main_synced_clean": true,
+  "main_tree_matches_verified_source": true,
+  "CI_run": 37763984884,
+  "current_statuses": "all11success",
+  "R5": "two freshclean; independentMCP226pass",
+  "CodeRabbit": "currentSUCCESS +nitconcretelydispositioned",
+  "Codex": "currentdd completed no majorissues, comment6058246785",
+  "review_threads": "all3resolved",
+  "issue_state": "CLOSED",
+  "followups": [
+    670,
+    672
+  ]
+}
