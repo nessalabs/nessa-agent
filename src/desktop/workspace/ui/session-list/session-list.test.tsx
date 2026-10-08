@@ -84,7 +84,10 @@ it("a query that matches nothing shows the kit's empty state, and clearing it br
   const input = host.querySelector<HTMLInputElement>("[data-slot=search-field] input")
   expect(input).not.toBeNull()
   const type = (value: string) => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set
     setter?.call(input, value)
     input?.dispatchEvent(new Event("input", { bubbles: true }))
   }
