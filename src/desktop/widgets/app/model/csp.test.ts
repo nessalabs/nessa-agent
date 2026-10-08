@@ -200,11 +200,6 @@ describe("the reporter", () => {
       "apply(sourceOf, event, [])",
       "apply(dataOf, event, [])",
       "apply(stopImmediately, event, [])",
-      // in strict mode, and only the message's own data fields
-      '"use strict";',
-      'own(data, "method")',
-      'own(params, "check")',
-      'apply(hasOwn, found, ["value"])',
       sandboxMethods.appCheck,
       "stopImmediatePropagation",
       'addEventListener("click"',
@@ -218,6 +213,38 @@ describe("the reporter", () => {
       expect(document.indexOf(said), said).toBeGreaterThan(reporterAt)
       expect(document.indexOf(said), said).toBeLessThan(appAt)
     }
+  })
+
+  it("runs in strict mode, as the first statement of its function", () => {
+    const open = document.indexOf("(function () {")
+    expect(open).toBeGreaterThan(reporterAt)
+    expect(open).toBeLessThan(appAt)
+    expect(document.slice(open, appAt)).toMatch(
+      /^\(function \(\) \{\n {2}"use strict";\n/,
+    )
+  })
+
+  it("reads a message's fields only as that message's own data", () => {
+    const listenerAt = document.indexOf('addEventListener("message"')
+    const listenerEnd = document.indexOf("}, true);", listenerAt)
+    const listener = document.slice(listenerAt, listenerEnd)
+    expect(listenerAt).toBeGreaterThan(reporterAt)
+    expect(listenerEnd).toBeLessThan(appAt)
+    // The helper, taken before the app ran, and the calls in the listener.
+    // A helper defined elsewhere, or a call outside the listener, does not count.
+    expect(document.slice(reporterAt, listenerAt)).toContain(
+      'apply(hasOwn, found, ["value"])',
+    )
+    for (const said of [
+      'own(data, "method")',
+      'own(data, "params")',
+      'own(params, "check")',
+    ])
+      expect(listener, said).toContain(said)
+    // A direct read would take a field the app's prototype lent the message.
+    expect(listener).not.toContain("data.method")
+    expect(listener).not.toContain("data.params")
+    expect(listener).not.toMatch(/\.check\b/)
   })
 
   it("holds the first spelling of the token's slot, once", () => {

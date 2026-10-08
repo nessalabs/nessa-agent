@@ -1,5 +1,6 @@
 import { memo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { shallowEqual } from "react-redux"
+import { Kbd } from "@nessa-ui/react/kbd"
 import { useRunningFirstPreference } from "../../../adapters/window-preferences"
 import { DesktopIcon } from "../../../ui/icons"
 import { newSession, openSession } from "../../adapters/store/commands"
@@ -25,7 +26,7 @@ import { sameWords } from "../../model/transcript"
 import { paneItemKey, sessionItem } from "../../model/pane-item"
 import { AgentTile } from "../chrome/agent-tile"
 import { ColumnHeader } from "../../../ui/column-header"
-import { IconButton } from "../chrome/icon-button"
+import { IconButton } from "../../../ui/icon-button"
 import { SessionMenuItems, useOpenFromRow } from "../session-actions"
 import { useWorkspaceFrame } from "../workspace-frame"
 import "./session-list.css"
@@ -119,7 +120,7 @@ export const SessionList = memo(function SessionList() {
                 setQuery("")
               }}
             />
-            {query || !shortcut ? null : <kbd>{shortcut}</kbd>}
+            {query || !shortcut ? null : <Kbd>{shortcut}</Kbd>}
           </label>
         </ColumnHeader>
         <div

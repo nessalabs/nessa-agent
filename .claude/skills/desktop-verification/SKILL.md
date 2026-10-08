@@ -18,6 +18,8 @@ This skill is how to use them; it restates neither.
 | The change touches | Run |
 | --- | --- |
 | anything in `src/desktop/` (always, first) | `smoke.mjs` |
+| `ui/icon-button.*`, or any icon-only control | `icon-buttons.mjs` (`--layout classic` for the classic shell) |
+| a key cap (`<kbd>`) outside Settings | `shared-controls.mjs` |
 | titlebar, column heads, side columns, Settings chrome, the picture band, anything that slides | `safe-area.mjs` |
 | drag and drop, `drop.ts`, `drag.ts`, pane headers | `drag.mjs` |
 | keys, `focus.ts`, panes being added/closed/focused, dialogs, the overview | `focus.mjs` |

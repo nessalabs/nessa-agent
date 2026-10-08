@@ -110,10 +110,14 @@ export const css = {
   appView: "[data-app-view]", // an app's view; its value is the view's lifecycle
   appNotice: ".widget-app-notice", // class: a notice above a running app
   // The test MCP server's review app (scripts/mcp-test-server/server.mjs), as a real server serves it
-  chartApp: "#chart", // the test server's chart app: what it draws, "chart for <server>"
+  chartApp: "#chart", // the test server's chart app: the series it drew from its tool result
 
   // Quick switcher (⌘K, ⌘\\)
   switcherField: '[role="dialog"] input', // the switcher's search field
+  switcherResults: "#workspace-switcher-results", // the switcher's listbox
+
+  // Shared controls (#632): the kit's components, by the slot each draws
+  keyCap: "kbd", // every key cap; each must be the kit's (data-slot="kbd")
 
   // Side columns
   sidebar: ".workspace-sidebar", // class
@@ -267,6 +271,7 @@ export const selectorFor = {
   fixtureOutput: (name) => `#${name}`, // what the fixture app heard back: call, fetch, mode, message, context
   reviewControl: (name) => `[data-review="${name}"]`, // a control inside the review app: delete, fullscreen
   reviewState: (state) => `body[data-review-state="${state}"]`, // the review app saying where it is
+  chartState: (state) => `body[data-chart-state="${state}"]`, // the chart app saying where it is
   reviewOutput: (name) => `#${name}`, // what the review app heard back: result, first, hidden-no-ui, hidden-with-ui, again
   linkedAction: (action) => `[data-linked-action="${action}"]`,
   mcpServersIn: (phase) => `[data-mcp-servers="${phase}"]`,

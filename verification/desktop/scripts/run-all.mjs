@@ -33,6 +33,8 @@ const here = dirname(fileURLToPath(import.meta.url))
 // workspace-load.mjs stays off this list. CHECKLIST.md › Seeded workspace load.
 const functional = [
   "smoke",
+  "icon-buttons",
+  "shared-controls",
   "focus",
   "drag",
   "responsive",

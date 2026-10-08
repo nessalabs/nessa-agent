@@ -1,0 +1,75 @@
+/*
+ * The window's icon buttons (`icon-button.tsx`): size, shape and tone, and
+ * nothing else. Its colour, hover and press are the window's scale
+ * (`styles.css`), so a change to how a control rests or answers is made there.
+ */
+
+.desktop-icon-button {
+  --icon-button-size: var(--desktop-control-size);
+  --icon-button-glyph: 16px;
+  display: inline-flex;
+  width: var(--icon-button-size);
+  height: var(--icon-button-size);
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--desktop-control-radius);
+  background: transparent;
+  color: var(--icon-button-rest, var(--desktop-muted));
+  transition:
+    color var(--desktop-fast) ease,
+    background-color var(--desktop-fast) ease,
+    opacity var(--desktop-base) ease;
+}
+
+.desktop-icon-button[data-size="sm"] {
+  --icon-button-size: 26px;
+  --icon-button-glyph: 14px;
+  border-radius: var(--desktop-radius-sm);
+}
+
+.desktop-icon-button[data-size="lg"] {
+  --icon-button-size: 32px;
+  --icon-button-glyph: 18px;
+  border-radius: var(--desktop-radius-md);
+}
+
+.desktop-icon-button[data-shape="pill"] {
+  border-radius: var(--desktop-radius-pill);
+}
+
+.desktop-icon-button[data-tone="faint"] {
+  --icon-button-rest: var(--desktop-faint);
+}
+
+.desktop-icon-button[data-tone="ink"] {
+  --icon-button-rest: var(--desktop-ink-2);
+}
+
+.desktop-icon-button:hover:not(:disabled),
+.desktop-icon-button[data-state="open"] {
+  color: var(--foreground);
+  background: var(--desktop-hover-strong);
+}
+
+/* The workspace's resets say no outline at a weight only a component's own focus style beats. */
+.desktop-icon-button:focus-visible {
+  outline: var(--desktop-focus-outline);
+  outline-offset: -1.5px;
+}
+
+.desktop-icon-button:active {
+  background: var(--desktop-press);
+}
+
+.desktop-icon-button svg {
+  width: var(--icon-button-glyph);
+  height: var(--icon-button-glyph);
+  stroke-width: 1.75;
+}
+
+/* Holds its place when there is nothing for it to do, so its neighbours never move. */
+.desktop-icon-button[data-reserved] {
+  visibility: hidden;
+}

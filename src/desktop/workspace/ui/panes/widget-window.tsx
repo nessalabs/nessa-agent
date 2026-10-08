@@ -16,7 +16,7 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store
 import { selectWindowWidget } from "../../adapters/store/selectors"
 import { useWindowWidgetHost } from "../../adapters/store/widget-hosts"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
-import { IconButton } from "../chrome/icon-button"
+import { IconButton } from "../../../ui/icon-button"
 import { useWorkspaceFrame } from "../workspace-frame"
 import { headerBar } from "./header-bar"
 import { WidgetTrail } from "./widget-trail"

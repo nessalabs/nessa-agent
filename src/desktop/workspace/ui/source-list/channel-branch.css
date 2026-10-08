@@ -94,15 +94,7 @@
   position: absolute;
   top: 0;
   right: 0;
-  width: 28px !important;
-  height: 28px !important;
-  border-radius: var(--desktop-radius-sm) !important;
   opacity: 0;
-}
-
-.workspace-branch-add svg {
-  width: 14px;
-  height: 14px;
 }
 
 .workspace-branch-head:hover .workspace-branch-add {
