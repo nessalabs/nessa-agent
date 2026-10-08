@@ -5,6 +5,7 @@ import {
 import type { RequestDeadline, RpcRequester } from "../application/session-port.js"
 import {
   mcpServerInspect,
+  productMethodGrants,
   ProductMethod,
   type McpServersAuthorizeParams,
   type McpServersAuthorizeResult,
@@ -15,6 +16,7 @@ import {
   type McpServersRevokeResult,
   type McpServersSaveParams,
   type McpServersWriteResult,
+  type ProductSessionReady,
 } from "../generated/product.js"
 import {
   mcpServersAuthorizeResult,
@@ -23,6 +25,39 @@ import {
   mcpServersRevokeResult,
   mcpServersWriteResult,
 } from "../protocol/mcp-servers-validate.js"
+
+// The methods this API calls, named by the published table rather than listed again.
+const mcpServersGrants = Object.entries(productMethodGrants).flatMap(([method, grant]) =>
+  method.startsWith("mcpServers.") ? [grant] : [],
+)
+const mcpServersGrant = mcpServersGrants[0]
+if (
+  mcpServersGrants.length === 0 ||
+  typeof mcpServersGrant !== "string" ||
+  mcpServersGrants.some((grant) => grant !== mcpServersGrant)
+)
+  throw new Error("mcpServers methods do not share one published grant")
+
+/**
+ * Whether `session` carries the grant every mcpServers method asks for,
+ * for this connected gateway.
+ *
+ * The action is `productMethodGrants`, generated from
+ * `protocol/product/manifest.json`. The resource is the session's
+ * organization and gateway id, the same pair Cedar compares before it
+ * allows the action. Carrying it is not permission: the gateway can still
+ * answer `forbidden`, and that answer is the one a surface goes by.
+ */
+export function carriesMcpServersGrant(
+  session: Pick<ProductSessionReady, "grants" | "gatewayId" | "organizationId">,
+): boolean {
+  return session.grants.some(
+    (grant) =>
+      grant.action === mcpServersGrant &&
+      grant.resource.organizationId === session.organizationId &&
+      grant.resource.id === session.gatewayId,
+  )
+}
 
 /**
  * The gateway's stored MCP servers: list them, save one, remove one, and

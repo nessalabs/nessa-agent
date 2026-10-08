@@ -12,7 +12,7 @@ not as code in the desktop app. The widget host of
 [326](326-widgets.md) is where they appear.
 
 - **Date:** 2026-09-30
-- **Status:** proposed
+- **Status:** accepted
 
 ## Context
 
@@ -175,12 +175,12 @@ honouring it would mean holding frames outside the places that draw them.
 is an MCP server with an MCP App in nessa-extensions, held to nessa-agent's
 coding standards, published separately, and usable in any MCP Apps host. It
 gets its data only through the bridge: its tool's result, and `tools/call` to
-its own server. [333](333-experiments.md)'s decisions about the experiment
+its own server. [333](../todo/333-experiments.md)'s decisions about the experiment
 itself — the definition, validation, the one formatter, `bestSoFar` — stand,
 and are built there (nessa-extensions #4–#7).
 
 **What stays in the core** is what is about the conversation itself: its
-subagents ([329](329-subagents.md)) and the widget host that draws native and
+subagents ([329](../todo/329-subagents.md)) and the widget host that draws native and
 app widgets alike.
 
 ## Alternatives considered

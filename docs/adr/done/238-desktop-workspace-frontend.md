@@ -501,7 +501,7 @@ overview — the caret lands in its composer; when what held the
 caret went away (an answered approval), it lands there too. Focus in a dialog
 or a menu, or in a list walked with the arrow keys, is left alone. Closing ⌘K
 without a pick, or Settings, gives focus back to what opened it. [ADR
-326](../todo/326-widgets.md) amends both halves of this rule: a pane showing a
+326](326-widgets.md) amends both halves of this rule: a pane showing a
 widget takes the caret in its body rather than a composer, and while the
 window shows a widget, focus that falls away lands in that widget's body.
 

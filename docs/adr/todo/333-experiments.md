@@ -8,13 +8,13 @@ a metric, keeping what improves it
 This record settles how the desktop window shows one — the climb, the areas
 explored, every run, one run in detail — so that the same views serve a percent
 score that should rise, a latency that should fall, or a comparison with no
-areas and no swarm. It builds on widgets ([326](326-widgets.md)) for where an
+areas and no swarm. It builds on widgets ([326](../done/326-widgets.md)) for where an
 experiment appears and on subagents ([329](329-subagents.md)) for its agents.
 
 - **Date:** 2026-09-30
 - **Status:** proposed
 
-> **Amended by [344](344-mcp-ui.md):** the experiment view is built as an MCP App
+> **Amended by [344](../done/344-mcp-ui.md):** the experiment view is built as an MCP App
 > in [nessalabs/nessa-extensions](https://github.com/nessalabs/nessa-extensions)
 > (#4–#7 there), not as `src/desktop/experiments/`.
 >

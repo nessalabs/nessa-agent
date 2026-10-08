@@ -447,7 +447,7 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
 
 ## Widgets
 
-_ADR 326_ ([`docs/adr/todo/326-widgets.md`](../../docs/adr/todo/326-widgets.md)):
+_ADR 326_ ([`docs/adr/done/326-widgets.md`](../../docs/adr/done/326-widgets.md)):
 a plugin's view is drawn inline in a message, in a pane of its own, or in the
 window over the panes; Escape and focus as its _Focus_ and _Escape_ say. The
 scripts drive the sample plugin the sample workspace registers
@@ -530,7 +530,7 @@ on.
 
 ## MCP Apps
 
-_ADR 344_ ([`docs/adr/todo/344-mcp-ui.md`](../../docs/adr/todo/344-mcp-ui.md)),
+_ADR 344_ ([`docs/adr/done/344-mcp-ui.md`](../../docs/adr/done/344-mcp-ui.md)),
 #349: an MCP server's app is drawn behind a sandbox proxy on another origin,
 inline, in a pane (its fullscreen) and in the window, and spoken to over the
 `ui/*` bridge. The script drives the fixture app the sample workspace
