@@ -12,6 +12,7 @@ import { CannotRun } from "./cli.mjs"
 import {
   budgetMs,
   interactionBudget,
+  median,
   measurementFrom,
   missingFrameSample,
   sampleLoaf,
@@ -26,6 +27,17 @@ const script = {
   source: "pane.js:10",
   forcedLayout: 30,
 }
+
+it("keeps median precision and averages the middle pair of an even series", () => {
+  const samples = [50.1, 33.2, 49.8, 50.3]
+  assert.equal(median(samples), 49.95)
+  assert.deepEqual(samples, [50.1, 33.2, 49.8, 50.3])
+  assert.equal(median([]), null)
+  const budget = interactionBudget(samples.map((maxFrame) => ({ maxFrame, over: 0 })))
+  assert.equal(budget.median, 49.95)
+  assert.equal(budget.maxFrame, 50.3)
+  assert.equal(budget.exceeded, true)
+})
 
 const raw = (gaps, loaf, longtasks = []) => ({
   gaps,

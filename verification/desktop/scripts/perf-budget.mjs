@@ -410,7 +410,7 @@ await main(meta, async ({ options, rep, url, mode }) => {
             layout,
             name,
             max: budget.presentedMax,
-            median: budget.median,
+            median: Math.round(budget.median),
             over50: budget.over50,
             runs: budget.presentedRuns,
           }
@@ -428,7 +428,7 @@ await main(meta, async ({ options, rep, url, mode }) => {
             )
           return {
             max: budget.maxFrame,
-            median: row.median,
+            median: budget.median,
             over50: budget.over50,
             runs: detail,
             failures,

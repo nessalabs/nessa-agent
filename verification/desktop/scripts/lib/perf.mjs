@@ -222,7 +222,7 @@ export function interactionBudget(runs) {
   return {
     maxFrame,
     presentedMax: Math.round(maxFrame),
-    median: median(presentedRuns),
+    median: median(runs.map((run) => run.maxFrame)),
     over50: runs.reduce((sum, run) => sum + run.over, 0),
     presentedRuns: presentedRuns.join(" "),
     exceeded: exceedsFrameBudget(maxFrame),
@@ -263,5 +263,7 @@ function attribute(m) {
 
 export const median = (values) => {
   const sorted = values.slice().sort((a, b) => a - b)
-  return sorted.length ? sorted[Math.floor(sorted.length / 2)] : null
+  if (sorted.length === 0) return null
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2
 }
