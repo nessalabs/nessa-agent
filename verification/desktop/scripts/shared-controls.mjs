@@ -127,7 +127,7 @@ function rowsOnPage(sel) {
           ? name.includes(beside.textContent.trim())
             ? null
             : `its name does not say "${shown}"`
-          : name.length > words.length
+          : name.startsWith(words) && name !== words
             ? null
             : `its name does not say its ${shown} glyph`
     return {
@@ -139,6 +139,7 @@ function rowsOnPage(sel) {
       current:
         row.getAttribute("data-active") === "true" || row.hasAttribute("data-selected"),
       beside: besideFailure,
+      besides: beside ? (beside.matches(sel.countBadge) ? "count" : "glyph") : null,
     }
   })
 }
@@ -591,6 +592,30 @@ const checks = {
     failures.push(...rowFailures(onLoad, scale, "on load"))
     // The sample's unread session shows in the session list and in the tree.
     if (!onLoad.some((row) => row.unread)) failures.push("no unread row on load to weigh")
+    // A count and a glyph beside a kit row, each said once (the sample has both).
+    for (const kind of ["count", "glyph"])
+      if (!onLoad.some((row) => row.besides === kind))
+        failures.push(`no kit row with a ${kind} beside it on load`)
+    // Pointed at, a running glyph at a row's end leaves the row its fill.
+    const glyph = page
+      .locator(
+        `${css.sidebar} [data-trailing="glyph"] + [data-slot="sidebar-menu-item-trailing"] .workspace-status`,
+      )
+      .first()
+    if (await glyph.count()) {
+      await glyph.hover({ force: true })
+      await page.waitForTimeout(250)
+      const fill = await glyph.evaluate(
+        (element, sel) =>
+          getComputedStyle(element.closest(sel.kitRowFrame).querySelector(sel.kitRow))
+            .backgroundColor,
+        css,
+      )
+      measured.hover["kit row under its glyph"] = fill
+      if (fill !== scale.hover && fill !== scale.selected)
+        failures.push(`a kit row pointed at by its glyph is ${fill}, not ${scale.hover}`)
+      await page.mouse.move(1, 1)
+    }
     for (const [kind, selector] of Object.entries(rowKinds[layout] ?? {})) {
       const fill = await hovered(page, selector)
       measured.hover[kind] = fill

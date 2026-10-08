@@ -53,7 +53,7 @@ export function SidebarRow({
       unread={unread}
       aria-current={active ? "page" : undefined}
       // The kit lays the count and the glyph beside the control, not in it:
-      // its name says them, as the row's words did when they were inside.
+      // its name says them once, and they stay silent beside it.
       aria-label={[
         label,
         badge ? (badgeLabel ?? String(badge)) : running ? statusLabels.running : null,
@@ -70,7 +70,6 @@ export function SidebarRow({
             variant="secondary"
             className="workspace-badge"
             data-tone={badgeTone}
-            // Said with the row's name; beside the control it would be said twice.
             aria-hidden
           >
             {badge}

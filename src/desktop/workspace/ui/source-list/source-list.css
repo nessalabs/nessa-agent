@@ -171,6 +171,15 @@ html:not(.dark) .workspace-sidebar {
   right: 8px;
 }
 
+/*
+ * A running glyph at a row's end is the row's, as its count is (the kit makes
+ * the count's slot transparent to the pointer): pointed at, the row keeps its
+ * fill, its click and its tooltip.
+ */
+.workspace-sidebar [data-trailing="glyph"] + [data-slot="sidebar-menu-item-trailing"] {
+  pointer-events: none;
+}
+
 .workspace-sidebar [data-slot="sidebar-menu-item-badge"] {
   min-width: 0;
   color: inherit;
