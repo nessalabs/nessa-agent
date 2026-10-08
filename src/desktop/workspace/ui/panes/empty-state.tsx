@@ -1,3 +1,4 @@
+import { EmptyState } from "@nessa-ui/react/empty-state"
 import { loadWorkspace } from "../../adapters/store/commands"
 import { useWorkspaceDispatch } from "../../adapters/store/hooks"
 import type { StageMismatch, WorkspaceFailureReason } from "../../model/failure"
@@ -24,15 +25,20 @@ export function EmptyWorkspace({
   const dispatch = useWorkspaceDispatch()
   if (!failure || startupFailureCode(failure)) return null
   return (
-    <div className="workspace-empty" role="status">
-      <p>{readFailureCopy(failure, "index", stages)}</p>
-      <button
-        type="button"
-        className="workspace-button"
-        onClick={() => void dispatch(loadWorkspace())}
-      >
-        Try Again
-      </button>
-    </div>
+    <EmptyState
+      variant="compact"
+      className="workspace-empty"
+      role="status"
+      title={readFailureCopy(failure, "index", stages)}
+      action={
+        <button
+          type="button"
+          className="workspace-button"
+          onClick={() => void dispatch(loadWorkspace())}
+        >
+          Try Again
+        </button>
+      }
+    />
   )
 }

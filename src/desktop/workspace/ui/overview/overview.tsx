@@ -8,6 +8,12 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react"
+import {
+  SegmentedControl,
+  SegmentedControlOption,
+} from "@nessa-ui/react/segmented-control"
+import { StatusGlyph } from "../chrome/status-glyph"
+import { EmptyState } from "@nessa-ui/react/empty-state"
 import { flushSync } from "react-dom"
 import { reducedMotion } from "../../../adapters/motion-preference"
 import { useNow } from "../../adapters/dom/clock"
@@ -895,21 +901,27 @@ function Counts({
   if (!ready) return <p className="agents-overview-counts">{"\u00a0"}</p>
   if (counts.length === 0) return <p className="agents-overview-counts">{quietLine}</p>
   return (
-    <p className="agents-overview-counts" role="group" aria-label="Show only">
+    // The kit's segmented control, bare: a count shown alone is pressed, none
+    // is while every group shows, and choosing the pressed one lets it go.
+    <SegmentedControl
+      variant="bare"
+      className="agents-overview-counts"
+      aria-label="Show only"
+      value={glance.group ?? ""}
+      onValueChange={(value) => {
+        const chosen = counts.find((count) => count.group === value)
+        if (chosen) onToggle(chosen.group)
+      }}
+    >
       {counts.map(({ group, label }, index) => (
         <span key={group} className="agents-overview-count">
           {index > 0 ? <span aria-hidden="true">{" · "}</span> : null}
-          <button
-            type="button"
-            aria-pressed={glance.group === group}
-            data-group={group}
-            onClick={() => onToggle(group)}
-          >
+          <SegmentedControlOption value={group} data-group={group}>
             {label}
-          </button>
+          </SegmentedControlOption>
         </span>
       ))}
-    </p>
+    </SegmentedControl>
   )
 }
 
@@ -968,14 +980,19 @@ function Groups({
       {quiet === "all" ? (
         <AllClear />
       ) : quiet !== null ? (
-        <p className="agents-overview-resting" data-reflow="empty">
-          {emptyGroup[quiet]}
-        </p>
+        <EmptyState
+          variant="compact"
+          className="agents-overview-resting"
+          data-reflow="empty"
+          title={emptyGroup[quiet]}
+        />
       ) : null}
       {/* Shown only while something waits: an empty section is nothing to review. */}
       {glance.needsYou.length > 0 ? (
         <section className="agents-overview-group" aria-labelledby="agents-needs-you">
           <h2 id="agents-needs-you" data-reflow="title:needs-you">
+            {/* The page's one warm point: what waits on the person. */}
+            <StatusGlyph status="needs-you" flush decorative />
             Needs you
           </h2>
           <ul role="list" className="agents-overview-list">
@@ -1027,7 +1044,7 @@ function Groups({
         </section>
       ) : null}
       {glance.hidden > 0 ? (
-        <p className="agents-overview-resting" data-reflow="hidden">
+        <p className="agents-overview-footnote" data-reflow="hidden">
           {glance.hidden} more {glance.hidden === 1 ? "session" : "sessions"} outside this
           view
           {" · "}

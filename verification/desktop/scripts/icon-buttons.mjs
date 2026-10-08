@@ -97,6 +97,12 @@ Only what is mounted on load is covered: the titlebar, pane actions, session\n  
             const seen = []
             for (let index = 0; index < count; index++) {
               const button = buttons.nth(index)
+              // A row's action the kit reveals with its row (`showTrailingOnHover`) takes
+              // the pointer only once the row has it, as a person's pointer crosses it.
+              const row = button.locator(
+                'xpath=ancestor::*[@data-slot="sidebar-menu-item-row"][.//*[@data-show-on-hover]][1]',
+              )
+              if (await row.count()) await row.hover()
               await button.hover()
               // Settled, not equal to what is wanted: a wrong hover colour must reach the
               // comparison below instead of timing out here.

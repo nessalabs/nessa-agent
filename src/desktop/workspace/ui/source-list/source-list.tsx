@@ -147,7 +147,7 @@ function TreeTop() {
     <>
       <button
         type="button"
-        className="workspace-row workspace-search-button"
+        className="workspace-search-button"
         onClick={() => frame.openSwitcher("open")}
       >
         <DesktopIcon name="search" />

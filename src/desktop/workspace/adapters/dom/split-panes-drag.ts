@@ -17,7 +17,7 @@ export const dragCard: SplitPanesDragOptions["copyOf"] = (
     origin.querySelector(".workspace-agent-tile") ??
     origin.querySelector(".workspace-pane-name > svg")
   if (icon) card.append(picture(icon))
-  const name = origin.querySelector(".workspace-pane-title, .workspace-session-title")
+  const name = origin.querySelector(".workspace-pane-title, .desktop-list-row-label")
   const title = document.createElement("span")
   title.className = "workspace-drag-title"
   title.dir = "auto"

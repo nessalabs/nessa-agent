@@ -1334,6 +1334,9 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
 checks["overview-counts"] = async ({ page, engine, options }) => {
   await page.keyboard.press(keys.overview)
   await need(page, css.overview, "the Agents overview")
+  // The header draws its counts a few frames after the overview opens
+  // (`overview.tsx`); WebKit's frames can outrun two.
+  await need(page, css.overviewCount, "the header's counts")
   await frames(page, 2)
   await settled(page)
   const read = () =>

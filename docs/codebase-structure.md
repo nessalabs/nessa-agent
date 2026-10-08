@@ -233,7 +233,8 @@ writing the full defaults on first launch is buying.
   host callbacks each place gives a widget's view in
   `store/widget-hosts.ts`) and `ui/` (each component once, and `layouts/`
   that only arrange them; `ui/panes/` a session's pane, a widget's
-  (`widget-pane.tsx`) and the window over them (`widget-window.tsx`);
+  (`widget-pane.tsx`) and the window over them (`widget-window.tsx`), which
+  share one header bar (`pane-header-frame.tsx`);
   `ui/overview/` the Agents overview, with its rules in `model/overview/`),
   with `testing.ts` the fake source, the store, and the animation frames its
   tests share. The window has its own store (`src/desktop/store.ts`) and composition

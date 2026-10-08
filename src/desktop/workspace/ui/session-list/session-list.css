@@ -164,29 +164,21 @@
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * A row (`ui/list-row.tsx`, which owns its states), laid out as Mail's: the
+ * agent beside the title and its time, the last thing said under both.
+ */
 .workspace-session {
   position: relative;
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
-  gap: 12px;
+  grid-template-areas:
+    "leading title trailing"
+    "leading description description";
+  --list-row-lead-gap: 12px;
+  --list-row-gap: 6px;
+  align-items: start;
   margin: 0 4px 2px;
   padding: 12px 12px 12px 8px;
   border-radius: var(--desktop-radius-md);
-  -webkit-user-select: none;
-  user-select: none;
-  transition: background-color var(--desktop-fast) ease;
-}
-
-.workspace-session:hover {
-  background: var(--desktop-hover);
-}
-
-.workspace-session:active {
-  background: var(--desktop-press);
-}
-
-.workspace-session[data-selected] {
-  background: var(--desktop-selected);
 }
 
 /* The row stays in place, quieter, while its pill is carried. */
@@ -216,73 +208,40 @@
   opacity: 0;
 }
 
-.workspace-session > .workspace-agent-tile {
+.workspace-session > .desktop-list-row-leading {
   margin-top: 1px;
 }
 
-.workspace-session-main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  min-width: 0;
-  gap: 4px;
-}
-
-.workspace-session-top {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-}
-
-.workspace-session-title {
-  flex: 1;
+.workspace-session .desktop-list-row-title {
   font-size: var(--desktop-text-body);
   font-weight: 500;
   letter-spacing: -0.01em;
 }
 
-.workspace-session[data-unread] .workspace-session-title {
-  font-weight: 650;
-}
-
-.workspace-unread {
-  width: 6px;
-  height: 6px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--desktop-run);
-  box-shadow: 0 0 8px color-mix(in oklab, var(--desktop-run) 60%, transparent);
+.workspace-session > .desktop-list-row-trailing {
+  align-self: center;
 }
 
 .workspace-session time {
-  flex: none;
   color: var(--desktop-faint);
   font-size: var(--desktop-text-caption);
   font-variant-numeric: tabular-nums;
 }
 
-.workspace-session-preview {
+.workspace-session .desktop-list-row-description {
   display: -webkit-box;
-  margin: 0;
-  overflow: hidden;
+  margin-top: 4px;
   overflow-wrap: anywhere;
   color: var(--desktop-muted);
   font-size: var(--desktop-text-footnote);
   line-height: 1.45;
+  white-space: normal;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
 
+/* Where the list's empty state sits (the kit's `EmptyState`, `styles.css`). */
 .workspace-list-empty {
-  display: grid;
-  justify-items: center;
-  gap: 12px;
   margin: 32px 12px;
-  color: var(--desktop-faint);
-  font-size: var(--desktop-text-footnote);
-  text-align: center;
-}
-
-.workspace-list-empty p {
-  margin: 0;
+  padding: 0;
 }

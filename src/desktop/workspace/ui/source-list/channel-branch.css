@@ -5,28 +5,21 @@
  */
 /* ——— The tree's channel row: its glyph turns into its disclosure under the pointer ——— */
 
-.workspace-branch-head {
-  position: relative;
-}
-
-.workspace-branch-head > .workspace-row {
+/* The kit's row (`channel-branch.tsx`); its base and states are the sidebar's (`source-list.css`). */
+.workspace-sidebar .workspace-branch [data-row="channel"] {
   gap: 6px;
   padding: 0 32px 0 2px;
-  color: var(--desktop-muted) !important;
-  font-weight: 400;
+  color: var(--desktop-muted);
 }
 
-.workspace-branch-head > .workspace-row:hover {
-  color: var(--desktop-ink-2) !important;
+.workspace-sidebar .workspace-branch [data-row="channel"]:hover {
+  color: var(--desktop-ink-2);
 }
 
-.workspace-branch-head > .workspace-row[data-current] {
-  color: var(--foreground) !important;
-}
-
-.workspace-branch-head > .workspace-row[data-unread] {
-  color: var(--foreground) !important;
-  font-weight: 560;
+.workspace-sidebar
+  .workspace-branch
+  [data-row="channel"]:is([data-current], [data-unread]) {
+  color: var(--foreground);
 }
 
 .workspace-disclosure {
@@ -57,15 +50,15 @@
   opacity: 0;
 }
 
-.workspace-row:is(:hover, :focus-visible) .workspace-disclosure > svg:first-child {
+[data-row="channel"]:is(:hover, :focus-visible) .workspace-disclosure > svg:first-child {
   opacity: 0;
 }
 
-.workspace-row:is(:hover, :focus-visible) .workspace-disclosure > svg:last-child {
+[data-row="channel"]:is(:hover, :focus-visible) .workspace-disclosure > svg:last-child {
   opacity: 0.8;
 }
 
-.workspace-row[aria-expanded="true"] .workspace-disclosure > svg:last-child {
+[data-row="channel"][aria-expanded="true"] .workspace-disclosure > svg:last-child {
   transform: rotate(90deg);
 }
 
@@ -73,32 +66,22 @@
   background: var(--desktop-selected);
 }
 
-/* A folded channel's summary, in the slot its + takes under the pointer. */
-.workspace-branch-summary {
-  position: absolute;
-  top: 0;
+/*
+ * A folded channel's summary and its +, which the kit swaps under the
+ * pointer, in one slot at the row's very end.
+ */
+.workspace-sidebar
+  .workspace-branch
+  > [data-slot="sidebar-menu-item-row"]
+  > [data-slot="sidebar-menu-item-trailing"] {
   right: 0;
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  pointer-events: none;
-  transition: opacity var(--desktop-fast) ease;
 }
 
-.workspace-branch-head:hover .workspace-branch-summary {
-  opacity: 0;
-}
-
-.workspace-branch-add {
-  position: absolute;
-  top: 0;
-  right: 0;
-  opacity: 0;
-}
-
-.workspace-branch-head:hover .workspace-branch-add {
-  opacity: 1;
+.workspace-sidebar
+  .workspace-branch
+  > [data-slot="sidebar-menu-item-row"]
+  [data-slot="sidebar-menu-item-badge"] {
+  min-width: 28px;
 }
 
 .workspace-branch + .workspace-branch {
@@ -106,9 +89,9 @@
 }
 
 /* Session rows in the tree, nested under their channel on a faint guide. */
-.workspace-branch-sessions {
+.workspace-sidebar .workspace-branch-sessions {
   position: relative;
-  padding: 2px 0 4px !important;
+  padding: 2px 0 4px;
 }
 
 .workspace-branch-sessions::before {
@@ -121,27 +104,21 @@
   background: color-mix(in oklab, var(--foreground) 8%, transparent);
 }
 
-.workspace-branch-sessions .workspace-row {
+/* Every row beneath a channel: its sessions, and "Show all" or "Start a session". */
+.workspace-branch-sessions :is(.workspace-thread-row, .workspace-more) {
   padding-left: 28px;
   font-size: var(--desktop-text-body);
-  color: var(--desktop-muted) !important;
-  font-weight: 400;
+  color: var(--desktop-muted);
   letter-spacing: -0.004em;
 }
 
-.workspace-branch-sessions .workspace-row:hover,
-.workspace-branch-sessions .workspace-row[data-open] {
-  color: var(--desktop-ink-2) !important;
+.workspace-branch-sessions
+  :is(.workspace-thread-row, .workspace-more):is(:hover, [data-open]) {
+  color: var(--desktop-ink-2);
 }
 
-.workspace-branch-sessions .workspace-row[data-focused] {
-  background: var(--desktop-selected);
-  color: var(--foreground) !important;
-}
-
-.workspace-branch-sessions .workspace-row[data-unread] {
-  color: var(--foreground) !important;
-  font-weight: 560;
+.workspace-branch-sessions .workspace-thread-row:is([data-selected], [data-unread]) {
+  color: var(--foreground);
 }
 
 .workspace-branch-sessions .workspace-more {
@@ -150,17 +127,39 @@
 
 /* ——— The tree's search and "Needs you" ——— */
 
+/*
+ * The tree's Search, which opens the switcher. Search fields wait on the kit
+ * (nessalabs/nessa_ui#124); until then this is the look it has had: a row's
+ * box and inks on a hairline rim. (Its own fill and faint ink, written here
+ * before, never applied: the sidebar's row rule outranked them.)
+ */
 .workspace-search-button {
+  display: flex;
+  width: 100%;
+  height: 28px;
+  align-items: center;
   gap: 8px;
-  padding: 0 6px 0 9px;
-  background: var(--desktop-hover);
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--desktop-radius-sm);
+  background: transparent;
   box-shadow: inset 0 0 0 0.5px var(--desktop-rim);
-  color: var(--desktop-faint) !important;
+  color: var(--desktop-ink-2);
+  font-size: var(--desktop-text-body);
+  text-align: left;
+  transition:
+    background-color var(--desktop-fast) ease,
+    color var(--desktop-fast) ease,
+    opacity var(--desktop-base) ease;
 }
 
 .workspace-search-button:hover {
-  background: var(--desktop-hover-strong);
-  color: var(--desktop-muted) !important;
+  background: var(--desktop-hover);
+  color: var(--desktop-muted);
+}
+
+.workspace-search-button:active {
+  background: var(--desktop-press);
 }
 
 .workspace-search-button > svg {

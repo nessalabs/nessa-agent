@@ -289,12 +289,13 @@ describe("the Agents entry is not marked on the open's own paint", () => {
       expect(frames.pending()).toBe(0)
       const entry = () => host.querySelector<HTMLButtonElement>(".agents-overview-entry")
       await act(async () => entry()?.click())
-      expect(entry()?.hasAttribute("data-active")).toBe(false)
+      expect(entry()?.getAttribute("data-active")).not.toBe("true")
       expect(entry()?.getAttribute("aria-current") ?? null).toBeNull()
       await act(async () => frames.runFrame())
-      expect(entry()?.hasAttribute("data-active")).toBe(false)
+      expect(entry()?.getAttribute("data-active")).not.toBe("true")
       await act(async () => frames.runFrame())
-      expect(entry()?.hasAttribute("data-active")).toBe(true)
+      // The kit's row writes data-active either way; "true" is the mark.
+      expect(entry()?.getAttribute("data-active")).toBe("true")
       expect(entry()?.getAttribute("aria-current")).toBe("page")
       await act(async () => root.unmount())
     } finally {

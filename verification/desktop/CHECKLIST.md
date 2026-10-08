@@ -972,6 +972,78 @@ it is redesigned on its own branch.
   engine and layout, on load and with the switcher open). Rule: `chrome.css` ›
   Keys. At the base commit the session list's and the switcher's keys were
   bare text, unlike the sidebar's cap.
+- [ ] **Every list row is one of two components, answering the same way
+  (#657).** The sidebar's channels, its Agents entry and "Show all" are the
+  kit's `SidebarMenuItem` (`xs`); the sidebar's sessions, the session list,
+  the overview's sessions and the switcher's results are the window's
+  `ListRow` (`ui/list-row.tsx`), where a row is a listbox's option or its
+  trailing detail is as wide as it says. Under the pointer every kind fills
+  with `--desktop-hover`, a chosen row with `--desktop-selected`, and an
+  unread title weighs `--desktop-unread-weight`; a kit row's name says the
+  count or glyph the kit lays beside it, which stays silent, and pointed at
+  that glyph the row keeps its fill; a switcher result, whose choice
+  follows the pointer, draws no hover of its own. _Check:_ `shared-controls.mjs`
+  (`rows`, per engine and layout: on load, in the overview, with the switcher
+  open). Rules: `ui/list-row.css`, `source-list.css` › Rows. At the base
+  commit no row was either component, and unread weighed 560, 600 or 650 by
+  list.
+- [ ] **The window's name is one control in every place (#657).** "nessa
+  Studio" at the workspace's and the classic shell's foot and "‹ nessa Agent"
+  at Settings' are `ui/identity.tsx`: a pill the corner controls' size and
+  radius, "nessa" and its word in `--desktop-muted`, named, filled with
+  `--desktop-hover` under the pointer; Settings' row stands where the
+  window's does. _Check:_ `shared-controls.mjs` (`identity`, per engine and
+  layout; "‹ nessa Agent" measured inside Settings, over the inert window
+  that keeps its own; and in the classic shell). Rule:
+  `ui/identity.css`. At the base commit the classic shell's read
+  "nessaStudio" with no name, no pill and no fill, in the kit's grey.
+- [ ] **Every empty state is the kit's `EmptyState`, in the window's type
+  (#657).** The session list's, the workspace's failure, an overview group
+  shown alone, "Nothing needs you", the classic shell's notes, the subagents
+  panel's and a widget's line: a quiet one (`compact`) a faint footnote line
+  with its action 12px under it, a titled one at reading size, 600, its
+  sentence muted. Where each sits is its surface's. _Check:_
+  `shared-controls.mjs` (`empty`: the quiet ones — the session list with no
+  match, the classic shell's notes); `gateway-states.mjs` reads the
+  workspace's sentence from the kit's title. The titled ones ("Nothing needs
+  you", the subagents panel's) show only with nothing listed, which the
+  sample never is: their type is held by #657's before/after shots
+  (`evidence/657/empty-*`, `rims-all-clear-*`), not by a script. Rule: `styles.css` › Empty states. Settings' own are left to
+  its redesign.
+- [ ] **Counts are the kit's `Badge`; lit points are `StatusGlyph`'s (#657).**
+  A sidebar row's count is the kit's `Badge` as the row's caption (16px tall,
+  at least 18 wide, no border, the needs light for what waits); the session
+  list's unread point and the overview's "Needs you" point are
+  `StatusGlyph`'s 6px points (`unread`, `needs-you`; `flush` where words start
+  at the point, `decorative` beside words that say it). _Check:_
+  `shared-controls.mjs` (`badges`, on load and in the overview; an unread
+  point and the heading's point must be found);
+  `status-glyph.test.tsx` for what each says. Rules: `source-list.css` ›
+  `.workspace-badge`, `chrome.css` › `.workspace-status`. At the base commit
+  the unread point and the heading's point were drawn by their own rules.
+- [ ] **A card set into a surface has one edge (#657).** A code block, an
+  agent's command, a widget's card and "Nothing needs you" take
+  `--desktop-card-rim`, a 0.5px hairline at 10% of the ink; a pane's glass
+  keeps `--desktop-rim`. _Check:_ `shared-controls.mjs` (`rims`: on load, in
+  the widget sample, in the overview's peek; a code block, a command and a
+  widget's card must be found; "Nothing needs you" shows only with nothing
+  listed, which the sample never is: `evidence/657/rims-all-clear-*`). Rule: `styles.css` ›
+  `--desktop-card-rim`. At the base commit the four had four edges (1px at
+  4%, 1px `--desktop-rim`, 0.5px at 9% and at 10%). Settings' cards are left
+  to its redesign; warm edges (a review, the peek's request) are their own.
+- [ ] **A session's pane, a widget's pane and the window share one header
+  bar (#657).** `panes/pane-header-frame.tsx`: name, spacer, what is added,
+  actions, with `headerBar`'s drag attributes; a pane's × keeps its room
+  (`ClosePaneButton`). _Check:_ `pane-header-frame.test.tsx`; the markup of
+  every header is unchanged from the base (scratch comparison in #657's pull
+  request); `drag.mjs`, `widgets.mjs` and `safe-area.mjs` hold the behaviour.
+- [ ] **The overview's counts are the kit's `SegmentedControl` (#657).**
+  Bare, in the line's own type: none pressed while every group shows,
+  `--desktop-hover` under the pointer, `--desktop-selected` pressed, nothing
+  moving as one is chosen, and the pressed one chosen again letting go. The
+  side rail's lens and Settings' own controls stay with their owners.
+  _Check:_ `shared-controls.mjs` (`segmented`); `overview.test.tsx` for
+  what each count shows. Rule: `overview.css` › counts.
 
 ## Menus and tooltips
 

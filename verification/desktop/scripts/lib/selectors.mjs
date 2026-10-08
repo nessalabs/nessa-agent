@@ -85,7 +85,7 @@ export const css = {
   widgetWindow: "[data-widget-window]", // the window: a widget over the panes
   chatArea: ".workspace-chat", // class: the content region the panes, and the window, are drawn in
   workspaceEmpty: '.workspace-empty[role="status"]', // class: why the workspace has nothing to show
-  workspaceEmptyText: '.workspace-empty[role="status"] p', // class: its sentence
+  workspaceEmptyText: '.workspace-empty[role="status"] [data-slot="empty-state-title"]', // class: its sentence
   workspaceEmptyRetry: '.workspace-empty[role="status"] button', // class: its Try Again
   transcriptNote: '.workspace-transcript-note[role="status"]', // class: why a shown conversation could not be read
   transcriptNoteText: ".workspace-transcript-note p", // class: that note's sentence
@@ -122,6 +122,21 @@ export const css = {
 
   // Shared controls (#632): the kit's components, by the slot each draws
   keyCap: "kbd", // every key cap; each must be the kit's (data-slot="kbd")
+  kitRow: '[data-slot="sidebar-menu-item-row"] > [data-size]', // the kit's SidebarMenuItem control (data-size is always written; a context menu's trigger replaces data-slot)
+  kitRowFrame: '[data-slot="sidebar-menu-item-row"]', // the kit's row around its control and what it lays beside it
+  rowLabel: '[data-slot="sidebar-menu-item-label"], .desktop-list-row-label', // class: a row's words, in either row component
+  listRow: ".desktop-list-row", // class: the window's ListRow (src/desktop/ui/list-row.tsx)
+  segmentedControl: '[data-slot="segmented-control"]', // the kit's SegmentedControl
+  emptyTitle: '[data-slot="empty-state-title"]', // the kit's EmptyState's words
+  identityRow: ".desktop-identity", // class: the row holding the identity
+  identityProduct: ".desktop-identity-words > span", // class: the identity's word after "nessa"
+  identityButton: ".desktop-identity-button", // class: "nessa Studio" / "‹ nessa Agent" (src/desktop/ui/identity.tsx)
+  emptyState: '[data-slot="empty-state"]', // the kit's EmptyState
+  countBadge: ".workspace-badge", // class: a sidebar row's count, the kit's Badge
+  litPoint: '.workspace-status:is([data-status="needs-you"], [data-status="unread"])', // class: StatusGlyph's lit points
+  needsYouHeading: "#agents-needs-you", // the overview's Needs you heading
+  codeBlock: ".workspace-code", // class: a code block in a transcript
+  allClear: ".agents-clear", // class: the overview's "Nothing needs you" card
 
   // Side columns
   sidebar: ".workspace-sidebar", // class
@@ -131,7 +146,7 @@ export const css = {
   workspaceWindow: ".workspace-window", // class: the frame holding the rail and the workspace; data-rail, data-sidebar
   titlebarSidebarToggle: '.workspace-titlebar [aria-controls="workspace-sidebar"]', // the titlebar's Show/Hide Sidebar
   sideRailToggle: ".side-rail-toggle", // class: shows or hides the rail; aria-expanded
-  studio: ".workspace-identity-name", // class: "nessa Studio", which opens Settings
+  studio: ".workspace-identity .desktop-identity-button", // class: "nessa Studio", which opens Settings
   peekEdge: ".desktop-peek-edge", // class: the strip at the folded sidebar's edge a hover reveals it from
   listSearch: ".workspace-list .workspace-search", // class: the session list's search field
   listScroll: ".workspace-list-scroll", // class: the session list's scroller
@@ -183,7 +198,8 @@ export const css = {
   peekEarlier: ".agents-peek-earlier", // class: says the turn holds more above what the peek draws
   transcriptStep: ".workspace-steps li", // class: one step the agent took, in a message
   overviewColumn: ".agents-overview-column", // class: the list the arrow keys walk
-  overviewResting: ".agents-overview-resting", // class: a quiet line in the list ("Nothing needs you")
+  overviewResting: ".agents-overview-resting", // class: a group shown alone that lists nothing ("Nothing needs you"), the kit's EmptyState
+  overviewFootnote: ".agents-overview-footnote", // class: how many sessions the view leaves out, and Show All
   inlinePeek: ".agents-inline-peek", // class: the peek opened beneath its row
   overviewTitle: ".agents-overview-title", // class: the overview's heading and filter
   peekAsk: ".agents-peek-ask", // class: the request in full, after the story

@@ -125,9 +125,10 @@
   line-height: 1;
 }
 
+/* The mark's own size is the kit's utility, which any rule of the window's outranks. */
 .workspace-agent-tile svg {
-  width: 64% !important;
-  height: 64% !important;
+  width: 64%;
+  height: 64%;
 }
 
 /*
@@ -136,9 +137,9 @@
  * shouting over them.
  */
 .workspace-agent-tile > span {
-  color: color-mix(in oklab, var(--foreground) 62%, transparent) !important;
-  font-size: 0.86em !important;
-  font-weight: 600 !important;
+  color: color-mix(in oklab, var(--foreground) 62%, transparent);
+  font-size: 0.86em;
+  font-weight: 600;
   letter-spacing: -0.02em;
   line-height: 1;
   transform: translateY(0.02em);
@@ -162,13 +163,30 @@
   background: color-mix(in oklab, var(--foreground) 24%, transparent);
 }
 
-.workspace-status[data-status="needs-you"]::before {
+/* A lit point: what waits on the person in amber, what is unread in the running light. */
+.workspace-status:is([data-status="needs-you"], [data-status="unread"])::before {
   content: "";
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--desktop-needs);
-  box-shadow: 0 0 8px color-mix(in oklab, var(--desktop-needs) 55%, transparent);
+  background: var(--status-light);
+  box-shadow: 0 0 8px
+    color-mix(in oklab, var(--status-light) var(--status-glow), transparent);
+}
+
+.workspace-status[data-status="needs-you"] {
+  --status-light: var(--desktop-needs);
+  --status-glow: 55%;
+}
+
+.workspace-status[data-status="unread"] {
+  --status-light: var(--desktop-run);
+  --status-glow: 60%;
+}
+
+/* At its point's own width, where a line of words starts at the point. */
+.workspace-status[data-flush] {
+  margin-inline: -2px;
 }
 
 /*
@@ -221,50 +239,6 @@
   top: 0;
   bottom: 0;
   left: calc(var(--workspace-sidebar-width) + var(--desktop-gutter));
-}
-
-/* ——— The sidebar's foot ——— */
-
-/*
- * A corner control's row: "nessa Studio" sits the control inset in from the
- * card's side and foot, as the titlebar's controls sit from its top, and its
- * hover shape is concentric with the card's corner (`styles.css`).
- */
-.workspace-identity {
-  display: flex;
-  min-width: 200px;
-  height: calc(var(--desktop-control-size) + 2 * var(--desktop-control-inset));
-  flex: none;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px 0 var(--desktop-control-inset);
-  font-size: var(--desktop-text-body);
-  letter-spacing: -0.01em;
-}
-
-/* "nessa Studio" opens Settings, which puts "‹ nessa Agent" in this same place. */
-.workspace-identity-name {
-  flex: 0 1 auto;
-  height: var(--desktop-control-size);
-  padding: 0 8px;
-  overflow: hidden;
-  border-radius: var(--desktop-control-radius);
-  line-height: var(--desktop-control-size);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-identity-name:hover {
-  background: var(--desktop-hover);
-}
-
-.workspace-identity b {
-  font-weight: 600;
-}
-
-.workspace-identity b + span {
-  color: var(--desktop-muted);
-  transition: color var(--desktop-fast) ease;
 }
 
 /* ——— Pill buttons ——— */

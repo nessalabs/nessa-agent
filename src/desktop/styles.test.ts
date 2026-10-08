@@ -297,14 +297,19 @@ it("drops the composer's blur while a drag is carried and keeps the sidebar trea
     new URL("./workspace/ui/source-list/source-list.css", import.meta.url),
     "utf8",
   )
+  // Every sidebar row: the kit's (`[data-size]` on its control) and the sessions' ListRow.
   const row = rows
-    .slice(rows.indexOf(".workspace[data-overview-glass] .workspace-row {"))
+    .slice(
+      rows.indexOf(
+        '.workspace[data-overview-glass]\n  .workspace-sidebar\n  :is([data-slot="sidebar-menu-item-row"] > [data-size], .workspace-thread-row) {',
+      ),
+    )
     .split("}")[0]
   expect(row).toMatch(/transition:\s*none/)
   const quiet = rows
     .slice(
       rows.indexOf(
-        ".workspace[data-overview-glass] .workspace-row[data-active]:not(.agents-overview-entry)",
+        '> [data-size][data-active="true"]:not(.agents-overview-entry),\n.workspace[data-overview-glass] .workspace-sidebar .workspace-thread-row[data-selected] {',
       ),
     )
     .split("}")[0]
@@ -561,4 +566,34 @@ it("draws every key cap with the kit's Kbd: no raw <kbd> outside Settings and on
     })
   for (const path of sources(root))
     expect(readFileSync(path, "utf8"), relative(root, path)).not.toMatch(/<kbd[\s>]/)
+})
+
+it("says !important in the workspace's stylesheets only where a rule waits on its owner", () => {
+  // #657 took the count from 52 to these. The rest wait on their owners: the
+  // pills and the sidebar's group headers on the kit (nessalabs/nessa_ui#124),
+  // and the side rail's reduced motion, which must beat every animation.
+  // A new `!important` is a rule fighting another of the window's own: give
+  // it the weight it needs instead (a reset is `:where(...)`).
+  const root = fileURLToPath(new URL("./workspace", import.meta.url))
+  const sheets = (dir: string): string[] =>
+    readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name)
+      if (statSync(path).isDirectory()) return sheets(path)
+      return name.endsWith(".css") ? [path] : []
+    })
+  const counts = Object.fromEntries(
+    sheets(root)
+      .map((path) => [
+        relative(root, path),
+        (readFileSync(path, "utf8").match(/!important/g) ?? []).length,
+      ])
+      .filter(([, count]) => count !== 0),
+  )
+  expect(counts).toEqual({
+    "ui/chrome/chrome.css": 5,
+    "ui/chrome/side-rail.css": 2,
+    "ui/overview/overview.css": 7,
+    "ui/source-list/source-list.css": 6,
+    "ui/transcript/approval-card.css": 1,
+  })
 })

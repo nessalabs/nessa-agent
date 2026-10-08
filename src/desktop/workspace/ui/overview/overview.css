@@ -167,7 +167,7 @@ html:not(.dark) .agents-overview-surface {
   line-height: 1.2;
 }
 
-.agents-overview-header p {
+.agents-overview-header .agents-overview-counts {
   margin: 4px 0 0;
   color: var(--desktop-muted);
   font-size: var(--desktop-text-body);
@@ -181,6 +181,7 @@ html:not(.dark) .agents-overview-surface {
  */
 .agents-overview-header .agents-overview-counts {
   display: flex;
+  gap: 0;
   min-height: 22px;
   flex-wrap: wrap;
   align-items: center;
@@ -203,16 +204,20 @@ html:not(.dark) .agents-overview-surface {
   color: var(--desktop-fainter);
 }
 
-.agents-overview-count button {
+/* A count: the kit's segmented option, bare, in the line's own type and the window's fills. */
+.agents-overview-count [data-slot="segmented-control-option"] {
   height: 22px;
   padding: 0 7px;
   border: 0;
   border-radius: var(--desktop-radius-pill);
   background: transparent;
-  color: var(--desktop-muted) !important;
+  box-shadow: none;
+  color: var(--desktop-muted);
   font: inherit;
-  font-size: var(--desktop-text-body) !important;
+  font-size: var(--desktop-text-body);
   font-variant-numeric: tabular-nums;
+  letter-spacing: inherit;
+  translate: none;
   cursor: default;
   outline: none;
   transition:
@@ -220,17 +225,18 @@ html:not(.dark) .agents-overview-surface {
     color var(--desktop-fast) ease;
 }
 
-.agents-overview-count button:is(:hover, :focus-visible) {
+.agents-overview-count [data-slot="segmented-control-option"]:is(:hover, :focus-visible) {
   background: var(--desktop-hover);
-  color: var(--foreground) !important;
+  color: var(--foreground);
 }
 
-.agents-overview-count button[aria-pressed="true"] {
+.agents-overview-count [data-slot="segmented-control-option"][aria-pressed="true"] {
   background: var(--desktop-selected);
-  color: var(--foreground) !important;
+  color: var(--foreground);
 }
 
-.agents-overview-count button[aria-pressed="true"]:focus-visible {
+.agents-overview-count
+  [data-slot="segmented-control-option"][aria-pressed="true"]:focus-visible {
   background: var(--desktop-press);
 }
 
@@ -289,16 +295,6 @@ html:not(.dark) .agents-overview-surface {
   user-select: none;
 }
 
-/* The page's one warm point: what waits on the person. */
-#agents-needs-you::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--desktop-needs);
-  box-shadow: 0 0 8px color-mix(in oklab, var(--desktop-needs) 55%, transparent);
-}
-
 /* ——— Working and finished: one quiet grouped list ——— */
 
 .agents-overview-list {
@@ -324,23 +320,21 @@ html:not(.dark) .agents-overview-surface {
   pointer-events: none;
 }
 
+/* A row (`ui/list-row.tsx`, which owns its states) on the grouped list's own fill. */
 .agents-row {
-  display: grid;
+  --list-row-rest: color-mix(in oklab, var(--foreground) 3%, transparent);
   width: 100%;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
+  grid-template-areas:
+    "leading title trailing"
+    "leading description trailing";
+  --list-row-gap: 12px;
   padding: 10px 14px;
-  border: 0;
-  background: color-mix(in oklab, var(--foreground) 3%, transparent);
-  color: var(--desktop-ink-2) !important;
-  text-align: left;
+  color: var(--desktop-ink-2);
   outline: none;
-  transition: background-color var(--desktop-fast) ease;
 }
 
 html:not(.dark) .agents-row {
-  background: color-mix(in oklab, var(--background) 30%, white);
+  --list-row-rest: color-mix(in oklab, var(--background) 30%, white);
 }
 
 .agents-row-item:first-child .agents-row {
@@ -351,14 +345,6 @@ html:not(.dark) .agents-row {
 .agents-row-item:last-child .agents-row {
   border-bottom-left-radius: var(--desktop-radius-md);
   border-bottom-right-radius: var(--desktop-radius-md);
-}
-
-.agents-row:hover {
-  background: var(--desktop-hover);
-}
-
-.agents-row:active {
-  background: var(--desktop-press);
 }
 
 /*
@@ -373,14 +359,13 @@ html:not(.dark) .agents-row {
   outline: none;
 }
 
-.agents-row[data-selected],
 .agents-request[data-selected],
-.agents-row:focus,
+.agents-overview .agents-row:focus,
 .agents-request:focus-within {
   background: var(--desktop-selected);
 }
 
-.agents-row:focus-visible,
+.agents-overview .agents-row:focus-visible,
 .agents-request:focus-visible {
   background: var(--desktop-press);
 }
@@ -391,18 +376,15 @@ html:not(.dark) .agents-row {
   gap: 2px;
 }
 
-.agents-row-title {
+.agents-row-title,
+.agents-row .desktop-list-row-title {
   color: var(--foreground);
   font-size: var(--desktop-text-body);
   font-weight: 500;
 }
 
-/* Finished and not yet looked at, as unread reads everywhere in the window. */
-.agents-row[data-kind="finished"] .agents-row-title {
-  font-weight: 600;
-}
-
-.agents-row-preview {
+.agents-row .desktop-list-row-description {
+  margin-top: 2px;
   color: var(--desktop-muted);
   font-size: var(--desktop-text-footnote);
 }
@@ -413,7 +395,7 @@ html:not(.dark) .agents-row {
   font-variant-numeric: tabular-nums;
 }
 
-.agents-row > .workspace-status {
+.agents-row .workspace-status {
   margin-right: 3px;
 }
 
@@ -990,22 +972,19 @@ html:not(.dark) .agents-request {
 
 /* ——— Nothing needs you ——— */
 
+/* "Nothing needs you" (the kit's `EmptyState`, `styles.css`), on a card of its own with a lit check. */
 .agents-clear {
-  display: grid;
-  justify-items: center;
-  gap: 4px;
   padding: 28px 24px 30px;
   border-radius: var(--desktop-radius-lg);
   background: color-mix(in oklab, var(--foreground) 2.5%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 4%, transparent);
-  text-align: center;
+  box-shadow: var(--desktop-card-rim);
 }
 
 .agents-clear-mark {
   display: grid;
   width: 40px;
   height: 40px;
-  margin-bottom: 10px;
+  margin: 0 auto 14px;
   place-items: center;
   border-radius: 50%;
   background: radial-gradient(
@@ -1033,31 +1012,23 @@ html:not(.dark) .agents-request {
   }
 }
 
-.agents-clear-title {
-  margin: 0;
-  color: var(--foreground);
-  font-size: var(--desktop-text-read);
-  font-weight: 600;
-}
-
-.agents-clear-detail {
-  max-width: 320px;
-  margin: 0;
-  color: var(--desktop-muted);
-  font-size: var(--desktop-text-footnote);
-  line-height: 1.5;
-}
-
 /* ——— What is only counted, and what is only said ——— */
 
+/* Where a group shown alone says it lists nothing (the kit's `EmptyState`, `styles.css`). */
 .agents-overview-resting {
+  margin: 28px 0 0;
+  padding: 0;
+}
+
+/* How many sessions the view leaves out, and Show All. */
+.agents-overview-footnote {
   margin: 28px 0 0;
   color: var(--desktop-faint);
   font-size: var(--desktop-text-footnote);
   text-align: center;
 }
 
-.agents-overview-resting button {
+.agents-overview-footnote button {
   padding: 0;
   border: 0;
   background: none;
@@ -1068,7 +1039,7 @@ html:not(.dark) .agents-request {
   text-underline-offset: 3px;
 }
 
-.agents-overview-resting button:hover {
+.agents-overview-footnote button:hover {
   color: var(--foreground);
 }
 

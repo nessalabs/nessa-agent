@@ -13,6 +13,7 @@
  */
 import { act, useMemo, useRef } from "react"
 import { createRoot } from "react-dom/client"
+import { renderToStaticMarkup } from "react-dom/server"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { useWorkspaceStore } from "../store/hooks"
@@ -35,6 +36,7 @@ import { workspaceSplitPanes } from "../store/split-panes-source"
 import { useSplitPanesDrag } from "../../../split-panes"
 import { classes, gridOf, marks } from "../../../split-panes"
 import { dragCard, dragCardSize, workspaceDragOptions } from "./split-panes-drag"
+import { ListRow } from "../../../ui/list-row"
 
 let host: HTMLDivElement
 /** Every animation asked for, and of what. */
@@ -391,9 +393,18 @@ it("pictures the pane's header and leaves its conversation out of the copy", asy
 })
 
 it("carries only a row's title and icon, never its preview or a composer", () => {
+  // The session list's own row (`ListRow`), with a time and a preview of its own.
   const pressed = document.createElement("div")
-  pressed.innerHTML =
-    '<span class="workspace-agent-tile">A</span><span class="workspace-session-title">Session d</span><p>Long conversation preview</p><textarea>draft</textarea>'
+  pressed.innerHTML = renderToStaticMarkup(
+    <ListRow
+      leading={<span className="workspace-agent-tile">A</span>}
+      title="Session d"
+      trailing={<time>2m</time>}
+      description="Long conversation preview"
+    >
+      <textarea defaultValue="draft" />
+    </ListRow>,
+  )
   const copy = dragCard(
     { kind: "item", item: "session:d" },
     {

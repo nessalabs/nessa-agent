@@ -18,7 +18,7 @@ import { useWindowWidgetHost } from "../../adapters/store/widget-hosts"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
 import { IconButton } from "../../../ui/icon-button"
 import { useWorkspaceFrame } from "../workspace-frame"
-import { headerBar } from "./header-bar"
+import { PaneHeaderFrame } from "./pane-header-frame"
 import { WidgetTrail } from "./widget-trail"
 
 /**
@@ -72,8 +72,6 @@ function WindowParts({
   const shortcuts = useWorkspaceFrame()
   const origin = widgetOrigin(answer)
   const host = useWindowWidgetHost(widget, origin, steps)
-  // Alone in the titlebar's row, as one pane is: the bar moves the window.
-  const bar = headerBar({ pane: null, multi: false })
   // Back to the panes, focusing the pane showing the conversation, or
   // opening it in the focused pane.
   const toOrigin = useCallback(
@@ -82,20 +80,22 @@ function WindowParts({
   )
   return (
     <>
-      <header className="workspace-pane-header" {...bar.bar}>
-        <div className="workspace-pane-name" data-shown>
+      {/* Alone in the titlebar's row, as one pane is: the bar moves the window. */}
+      <PaneHeaderFrame
+        pane={null}
+        multi={false}
+        name={
           <WidgetTrail origin={origin} title={widgetTitle(answer)} onOrigin={toOrigin} />
-        </div>
-        <span className="workspace-spacer" {...bar.spacer} />
-        <div className="workspace-pane-actions">
+        }
+        actions={
           <IconButton
             icon="close"
             label="Close"
             shortcut={shortcuts.shortcut("closePane")}
             onClick={host.close}
           />
-        </div>
-      </header>
+        }
+      />
       <div className="workspace-pane-body">
         <WidgetBody
           id={widget.id}

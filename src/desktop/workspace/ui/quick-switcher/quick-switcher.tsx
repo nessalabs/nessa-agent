@@ -18,6 +18,7 @@ import { agentName, agentOf } from "../../model/workspace-index"
 import { switcherRows, type SwitcherRow } from "../../model/session-search"
 import { sessionTime } from "../../model/time-labels"
 import { StatusGlyph } from "../chrome/status-glyph"
+import { ListRow } from "../../../ui/list-row"
 import { useWorkspaceFrame } from "../workspace-frame"
 import "./quick-switcher.css"
 
@@ -96,6 +97,34 @@ export function QuickSwitcher({
   const newShortcut = useWorkspaceFrame().shortcut("newSession")
   const channelName = (id: string) =>
     channels.find((channel) => channel.id === id)?.name ?? ""
+  // What a row shows, by what it is: a session, a channel, or a new session.
+  const rowParts = (row: SwitcherRow) =>
+    row.kind === "session"
+      ? {
+          leading: <StatusGlyph status={row.session.status} idle />,
+          title: <Highlight text={row.session.title} hits={row.hits} />,
+          meta: `#${channelName(row.session.channelId)} · ${agentName(agentOf(row.session.model))}`,
+          trailing: sessionTime(row.session.updatedAt, now),
+        }
+      : row.kind === "channel"
+        ? {
+            leading: (
+              <DesktopIcon name={row.channel.private ? "privateChannel" : "channel"} />
+            ),
+            title: <Highlight text={row.channel.name} hits={row.hits} />,
+            meta: row.channel.topic,
+          }
+        : row.text
+          ? {
+              leading: <DesktopIcon name="enter" />,
+              title: `“${row.text}”`,
+              meta: `new session in #${channelName(row.channelId)}`,
+            }
+          : {
+              leading: <DesktopIcon name="newSession" />,
+              title: `New session in #${channelName(row.channelId)}`,
+              trailing: newShortcut ? <Kbd>{newShortcut}</Kbd> : null,
+            }
 
   // Modal: focus stays in the field, even when a menu that just closed hands
   // focus back to its trigger a frame after the switcher opened. Closed
@@ -210,70 +239,21 @@ export function QuickSwitcher({
                     {heading}
                   </div>
                 ) : null}
-                <div
+                <ListRow
                   id={`workspace-result-${index}`}
                   role="option"
                   aria-selected={index === clamped}
+                  selected={index === clamped}
                   data-index={index}
                   className="workspace-result"
                   onPointerMove={() => index !== clamped && setActive(index)}
                   onClick={(event) =>
                     choose(row, mode === "split" || commandKey(event, isMac))
                   }
+                  {...rowParts(row)}
                 >
                   {index === clamped ? <RowKeys mode={mode} /> : null}
-                  {row.kind === "session" ? (
-                    <>
-                      <StatusGlyph status={row.session.status} idle />
-                      <span className="workspace-result-title">
-                        <Highlight text={row.session.title} hits={row.hits} />
-                      </span>
-                      <span className="workspace-result-meta">
-                        #{channelName(row.session.channelId)} ·{" "}
-                        {agentName(agentOf(row.session.model))}
-                      </span>
-                      <span className="workspace-result-trail">
-                        {sessionTime(row.session.updatedAt, now)}
-                      </span>
-                    </>
-                  ) : row.kind === "channel" ? (
-                    <>
-                      <span className="workspace-result-icon">
-                        <DesktopIcon
-                          name={row.channel.private ? "privateChannel" : "channel"}
-                        />
-                      </span>
-                      <span className="workspace-result-title">
-                        <Highlight text={row.channel.name} hits={row.hits} />
-                      </span>
-                      <span className="workspace-result-meta">{row.channel.topic}</span>
-                    </>
-                  ) : row.text ? (
-                    <>
-                      <span className="workspace-result-icon">
-                        <DesktopIcon name="enter" />
-                      </span>
-                      <span className="workspace-result-title">“{row.text}”</span>
-                      <span className="workspace-result-meta">
-                        new session in #{channelName(row.channelId)}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="workspace-result-icon">
-                        <DesktopIcon name="newSession" />
-                      </span>
-                      <span className="workspace-result-title">
-                        New session in #{channelName(row.channelId)}
-                      </span>
-                      {newShortcut ? (
-                        <span className="workspace-result-trail">
-                          <Kbd>{newShortcut}</Kbd>
-                        </span>
-                      ) : null}
-                    </>
-                  )}
-                </div>
+                </ListRow>
               </Fragment>
             )
           })}

@@ -106,22 +106,27 @@ html:not(.dark) .workspace-sidebar {
   list-style: none;
 }
 
-/* ——— Rows ——— */
+/* ——— Rows: the kit's `SidebarMenuItem`, dense, in the window's inks ——— */
 
-/* Every row shares one height, one radius and one set of states. */
-.workspace-row {
-  display: flex;
-  width: 100%;
+/*
+ * The sidebar's channels, its Agents entry and "Show all" are the kit's
+ * rows (`sidebar-row.tsx`, `channel-branch.tsx`): one height, one radius and
+ * one set of states, given here once; its sessions are `ListRow`s
+ * (`thread-row.tsx`). `shared-controls.mjs` (`rows`) measures both. The
+ * kit's control is found by the `data-size` it writes on it (a context
+ * menu's trigger would put its own `data-slot` there). The control's selector is weightless, so a
+ * row's own class (a thread, "Show all") outranks the base and its states.
+ */
+.workspace-sidebar :where([data-slot="sidebar-menu-item-row"] > [data-size]) {
   height: 28px;
-  align-items: center;
   gap: 8px;
   padding: 0 8px;
-  border: 0;
   border-radius: var(--desktop-radius-sm);
   background: transparent;
-  color: var(--desktop-ink-2) !important;
+  color: var(--desktop-ink-2);
+  font: inherit;
   font-size: var(--desktop-text-body);
-  text-align: left;
+  letter-spacing: inherit;
   transition:
     background-color var(--desktop-fast) ease,
     color var(--desktop-fast) ease,
@@ -132,49 +137,102 @@ html:not(.dark) .workspace-sidebar {
    repainting them inside the sidebar for `--desktop-fast` (`styles.test.ts`).
    The chosen channel and the focused session keep their attributes; the
    overview's glass mark paints them quiet so the open commit does not
-   re-render the list. */
-.workspace[data-overview-glass] .workspace-row {
+   re-render the list. Its selectors outrank the rows' own states by weight. */
+.workspace[data-overview-glass]
+  .workspace-sidebar
+  :is([data-slot="sidebar-menu-item-row"] > [data-size], .workspace-thread-row) {
   transition: none;
 }
 
-.workspace[data-overview-glass] .workspace-row[data-active]:not(.agents-overview-entry),
-.workspace[data-overview-glass] .workspace-thread-row[data-focused] {
+.workspace[data-overview-glass]
+  .workspace-sidebar
+  [data-slot="sidebar-menu-item-row"]
+  > [data-size][data-active="true"]:not(.agents-overview-entry),
+.workspace[data-overview-glass] .workspace-sidebar .workspace-thread-row[data-selected] {
   background: transparent;
-  color: var(--desktop-ink-2) !important;
+  color: var(--desktop-ink-2);
   /* Weight stays. Changing it reflows the label on the glass frame
      (`styles.test.ts`). */
 }
 
 .workspace[data-overview-glass]
-  .workspace-row[data-active]:not(.agents-overview-entry)
+  .workspace-sidebar
+  [data-slot="sidebar-menu-item-row"]
+  > [data-size][data-active="true"]:not(.agents-overview-entry)
   .workspace-row-icon {
   color: var(--desktop-faint);
 }
 
-.workspace-row:hover {
+.workspace-sidebar :where([data-slot="sidebar-menu-item-row"] > [data-size]):hover {
   background: var(--desktop-hover);
 }
 
-.workspace-row:active {
+.workspace-sidebar :where([data-slot="sidebar-menu-item-row"] > [data-size]):active {
   background: var(--desktop-press);
 }
 
-.workspace-row[data-active] {
+.workspace-sidebar
+  :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-active="true"] {
   background: var(--desktop-selected);
 }
 
 /*
- * Unread and active are both 600: a weight change between them would reflow
- * the label, and the ellipsis with it, as a channel is chosen.
+ * Unread and current take one weight: a weight change between them would
+ * reflow the label, and the ellipsis with it, as a channel is chosen.
  */
-.workspace-row[data-active],
-.workspace-row[data-unread] {
-  color: var(--foreground) !important;
-  font-weight: 600;
+.workspace-sidebar
+  :where([data-slot="sidebar-menu-item-row"] > [data-size]):is(
+    [data-active="true"],
+    [data-unread]
+  ) {
+  color: var(--foreground);
+  font-weight: var(--desktop-unread-weight);
 }
 
-.workspace-row > .workspace-truncate {
-  flex: 1;
+/*
+ * What sits at a row's end, which the kit lays over the row, stands where the
+ * row's padding ends; the label leaves it room by what it is (`trailingRoom`).
+ */
+.workspace-sidebar [data-slot="sidebar-menu-item-trailing"] {
+  right: 8px;
+}
+
+/*
+ * A count or a running glyph at a row's end is the row's, as it was inside the
+ * row's button: the kit lays it in a slot beside the control, so the slot lets
+ * the pointer through, and pointed at, the row keeps its fill, its click and
+ * its tooltip. (`data-trailing` is written by `sidebar-row.tsx` only; the tree's
+ * + is a control of its own.)
+ */
+.workspace-sidebar [data-trailing] + [data-slot="sidebar-menu-item-trailing"] {
+  pointer-events: none;
+}
+
+.workspace-sidebar [data-slot="sidebar-menu-item-badge"] {
+  min-width: 0;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+}
+
+.workspace-sidebar
+  :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-trailing="glyph"] {
+  padding-right: calc(16px + 10px);
+}
+
+.workspace-sidebar
+  :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-trailing="count"] {
+  padding-right: calc(16px + 18px);
+}
+
+.workspace-sidebar
+  :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-digits="2"] {
+  padding-right: calc(16px + 24px);
+}
+
+.workspace-sidebar
+  :where([data-slot="sidebar-menu-item-row"] > [data-size])[data-digits="3"] {
+  padding-right: calc(16px + 31px);
 }
 
 .workspace-row-icon {
@@ -185,7 +243,7 @@ html:not(.dark) .workspace-sidebar {
   color: var(--desktop-faint);
 }
 
-.workspace-row[data-active] .workspace-row-icon {
+.workspace-sidebar [data-active="true"] .workspace-row-icon {
   color: var(--desktop-muted);
 }
 
@@ -195,6 +253,7 @@ html:not(.dark) .workspace-sidebar {
   stroke-width: 1.75;
 }
 
+/* A row's count: the kit's `Badge`, as small as the row's caption, in the window's fills. */
 .workspace-badge {
   display: inline-flex;
   min-width: 18px;
@@ -203,7 +262,10 @@ html:not(.dark) .workspace-sidebar {
   align-items: center;
   justify-content: center;
   padding: 0 5px;
+  border: 0;
   border-radius: var(--desktop-radius-pill);
+  line-height: inherit;
+  letter-spacing: inherit;
   background: var(--desktop-selected);
   color: var(--desktop-muted);
   font-size: var(--desktop-text-caption);
@@ -329,14 +391,14 @@ html:not(.dark) .workspace-sidebar {
 
 /* ——— Channels, and the sessions hanging beneath one ——— */
 
-/* A channel's sessions hang beneath it on a faint thread. */
-.workspace-thread {
+/* A channel's sessions hang beneath it on a faint thread (outranking the sidebar's list reset). */
+.workspace-sidebar .workspace-thread {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 1px;
-  margin: 2px 0 4px !important;
-  padding-left: 16px !important;
+  margin: 2px 0 4px;
+  padding-left: 16px;
 }
 
 .workspace-thread::before {
@@ -349,24 +411,26 @@ html:not(.dark) .workspace-sidebar {
   background: color-mix(in oklab, var(--foreground) 10%, transparent);
 }
 
+/*
+ * The sidebar's sessions (`thread-row.tsx`): a `ListRow`, which owns its
+ * states, in a sidebar row's box.
+ */
 .workspace-thread-row {
-  color: var(--desktop-muted) !important;
+  --list-row-gap: 8px;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--desktop-radius-sm);
+  color: var(--desktop-muted);
   font-size: var(--desktop-text-footnote);
+  transition:
+    background-color var(--desktop-fast) ease,
+    color var(--desktop-fast) ease,
+    opacity var(--desktop-base) ease;
 }
 
-.workspace-thread-row:hover,
-.workspace-thread-row[data-open] {
-  color: var(--foreground) !important;
-}
-
-.workspace-thread-row[data-focused] {
-  background: var(--desktop-selected);
-  color: var(--foreground) !important;
-}
-
-.workspace-thread-row[data-unread] {
-  color: var(--foreground) !important;
-  font-weight: 560;
+.workspace-thread-row:is(:hover, [data-open]) {
+  color: var(--foreground);
 }
 
 /* The row stays in place, quieter, while its pill is carried. */
@@ -380,17 +444,6 @@ html:not(.dark) .workspace-sidebar {
   font-size: var(--desktop-text-caption);
   font-weight: 450;
   font-variant-numeric: tabular-nums;
-}
-
-.workspace-more {
-  padding-left: 30px;
-  color: var(--desktop-faint) !important;
-  font-size: var(--desktop-text-footnote);
-  font-weight: 500;
-}
-
-.workspace-more:hover {
-  color: var(--desktop-ink-2) !important;
 }
 
 /* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
