@@ -541,3 +541,135 @@ async fn rejected_safety_write_blocks_completion_and_final_rejection_retries_onl
         LifetimeState::Closed
     );
 }
+
+struct ParentCompletionAudit {
+    root: Mutex<Option<AgentLifetimeId>>,
+    records: Mutex<Vec<OwnershipEvidence>>,
+    rejections: AtomicUsize,
+}
+
+#[async_trait]
+impl OwnershipAudit for ParentCompletionAudit {
+    async fn record(&self, record: &OwnershipEvidence) -> Result<(), PortFailure> {
+        self.records.lock().unwrap().push(record.clone());
+        let selected = self.root.lock().unwrap().as_ref() == Some(&record.parent_lifetime)
+            && record.child_lifetime.as_ref() == Some(&record.parent_lifetime)
+            && record.close_detail == Some(CloseEvidenceDetail::Completion);
+        if selected && take_rejection(&self.rejections) {
+            Err(PortFailure::Rejected)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+async fn cascaded_owner_case(gate_only: bool) {
+    use nessa_sdk::application::agent_execution::agents::AgentError;
+    let mut world = World::new(2);
+    let audit = Arc::new(ParentCompletionAudit {
+        root: Mutex::new(None),
+        records: Mutex::new(Vec::new()),
+        rejections: AtomicUsize::new(2),
+    });
+    world.coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+        store: world.store.clone(),
+        audit: audit.clone(),
+        factory: world.factory.clone(),
+        room: Arc::new(LiveCapacity::new(2)),
+    });
+    let root = bounded(world.root()).await;
+    *audit.root.lock().unwrap() = Some(root.clone());
+    let root_resources = Arc::new(ScriptResources {
+        closes: AtomicUsize::new(0),
+        report: released(),
+        hold: None,
+    });
+    world
+        .coordinator
+        .bind_resources(root.clone(), root_resources.clone())
+        .unwrap();
+    let child = bounded(
+        world
+            .coordinator
+            .spawn(world.command(&root, "cascaded", "task")),
+    )
+    .await
+    .unwrap()
+    .child;
+    let child_resources = world.factory.children.lock().unwrap()[0].clone();
+    let gate = world.factory.last_gate.lock().unwrap().clone().unwrap();
+    let failure = OwnershipFailure::Audit(PortFailure::Rejected);
+    assert_eq!(bounded(world.close(&root)).await, Err(failure.clone()));
+    let saved = bounded(world.store.read()).await.unwrap();
+    let graph = OwnershipGraph::restore(saved.clone());
+    assert!(graph.refusal().is_none());
+    assert_eq!(graph.close_owner(&child), Some(root.clone()));
+    assert_eq!(graph.lifetime_state(&root), Some(LifetimeState::Closing));
+    assert_eq!(graph.lifetime_state(&child), Some(LifetimeState::Closing));
+    assert_eq!(root_resources.closes.load(Ordering::SeqCst), 1);
+    assert_eq!(child_resources.closes.load(Ordering::SeqCst), 1);
+    if gate_only {
+        assert_eq!(
+            bounded(gate.join_descendants()).await,
+            Err(AgentError::InvalidInput(failure.to_string())),
+            "cascaded gate reads its first owner's failed generation"
+        );
+        assert_eq!(bounded(world.store.read()).await.unwrap(), saved);
+        assert_eq!(audit.rejections.load(Ordering::SeqCst), 1);
+        return;
+    }
+    assert_eq!(
+        bounded(close_with(
+            &world.coordinator,
+            &child,
+            LifetimeCause::ParentDeletion,
+            Initiator::Runtime
+        ))
+        .await,
+        Err(failure.clone()),
+        "explicit cascaded child retry settles the parent's original operation"
+    );
+    assert_eq!(bounded(world.close(&child)).await, Ok(()));
+    let final_snapshot = bounded(world.store.read()).await.unwrap();
+    let restored = OwnershipGraph::restore(final_snapshot.clone());
+    assert!(restored.refusal().is_none());
+    for id in [&root, &child] {
+        assert_eq!(restored.lifetime_state(id), Some(LifetimeState::Closed));
+        let original = saved
+            .lifetimes
+            .iter()
+            .find(|row| &row.lifetime_id == id)
+            .unwrap();
+        let final_row = final_snapshot
+            .lifetimes
+            .iter()
+            .find(|row| &row.lifetime_id == id)
+            .unwrap();
+        assert_eq!(final_row.close_operation, original.close_operation);
+        assert_eq!(final_row.cause, original.cause);
+        assert_eq!(final_row.initiator, original.initiator);
+    }
+    assert_eq!(root_resources.closes.load(Ordering::SeqCst), 1);
+    assert_eq!(child_resources.closes.load(Ordering::SeqCst), 1);
+    let records = audit.records.lock().unwrap();
+    let completions: Vec<_> = records
+        .iter()
+        .filter(|record| record.close_detail == Some(CloseEvidenceDetail::Completion))
+        .collect();
+    assert_eq!(completions.len(), 3);
+    assert!(completions
+        .iter()
+        .all(|record| record.parent_lifetime == root
+            && record.child_lifetime.as_ref() == Some(&root)));
+    assert!(completions.iter().all(|record| *record == completions[0]));
+}
+
+#[tokio::test]
+async fn cascaded_child_gate_joins_first_owner_failed_generation() {
+    cascaded_owner_case(true).await;
+}
+
+#[tokio::test]
+async fn cascaded_child_close_retries_first_owner_completion_without_physical_replay() {
+    cascaded_owner_case(false).await;
+}
