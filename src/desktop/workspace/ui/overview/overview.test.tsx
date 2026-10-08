@@ -690,6 +690,48 @@ describe("the agents overview", () => {
     ).toHaveLength(2)
   })
 
+  it("keeps End and the arrows on mounted rows while later rows are still arriving", async () => {
+    const { store } = await mount()
+    await act(async () => entry()?.click())
+    await act(async () => settle(10))
+    const mounted = () =>
+      [...host.querySelectorAll<HTMLElement>("[data-overview-item]")].map(
+        (item) => item.dataset.overviewItem,
+      )
+    for (let frame = 0; frame < 24; frame++) {
+      const onRow = document.activeElement?.closest("[data-overview-item]")
+      if (
+        onRow &&
+        mounted().length >= 2 &&
+        host.querySelector("[data-overview-listed]") === null
+      )
+        break
+      await nextFrame()
+    }
+    const focused = document.activeElement?.closest<HTMLElement>("[data-overview-item]")
+    expect(focused).not.toBeNull()
+    expect(host.querySelector("[data-overview-listed]")).toBeNull()
+    const before = mounted()
+    // Two rows drawn, and the list not finished: End has a mounted row to
+    // reach and a later one it must not name.
+    expect(before.length).toBeGreaterThanOrEqual(2)
+    const lastMounted = before[before.length - 1]
+    await press(focused as HTMLElement, "End")
+    const afterEnd = document.activeElement?.closest<HTMLElement>("[data-overview-item]")
+    expect(afterEnd?.dataset.overviewItem).toBe(lastMounted)
+    expect(store.getState().workspace.overview.selected).toBe(lastMounted)
+    await press(afterEnd as HTMLElement, "ArrowDown")
+    const afterDown = document.activeElement?.closest<HTMLElement>("[data-overview-item]")
+    expect(afterDown?.dataset.overviewItem).toBe(lastMounted)
+    expect(store.getState().workspace.overview.selected).toBe(lastMounted)
+    await press(afterDown as HTMLElement, "Home")
+    expect(
+      document.activeElement?.closest<HTMLElement>("[data-overview-item]")?.dataset
+        .overviewItem,
+    ).toBe(before[0])
+    expect(store.getState().workspace.overview.selected).toBe(before[0])
+  })
+
   it("walks the list with the arrow keys", async () => {
     await mount()
     await open()

@@ -19,7 +19,8 @@
  * focus the person took to the page stays there (focus-regroup-*). Focus on the
  * scene's Customize control in a new session's home stays there as the window
  * shortens and the home takes a small pane's shape, its header kept as a
- * band (focus-home-scene).
+ * band (focus-home-scene). While overview rows are still arriving, End, Home
+ * and the arrows stay on a row that is mounted (focus-overview-arriving).
  */
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
@@ -710,6 +711,94 @@ async function givesBackLostFocus(page, cause) {
   return { trail, failures }
 }
 
+/**
+ * End, ↓ and Home while rows are still arriving one a frame. End lands on the
+ * last row mounted so far, ↓ stays there, and Home returns to the first.
+ * Aiming at a row not drawn yet leaves focus on the old one (`overview.tsx`).
+ * The keys run in one turn, before another frame can mount the row they name.
+ */
+async function keysWhileRowsArrive(page) {
+  await page.keyboard.press(keys.overview)
+  const open = await until(
+    page,
+    (sel) => {
+      const column = document.querySelector(sel.column)
+      if (!column || column.hasAttribute("data-overview-listed")) return false
+      const rows = [...column.querySelectorAll(sel.item)]
+      if (rows.length < 2) return false
+      const focused = document.activeElement?.closest(sel.item)
+      return focused != null && focused !== rows[rows.length - 1]
+    },
+    { column: css.overviewColumn, item: css.overviewItem },
+    2000,
+  )
+  if (!open)
+    throw new CannotRun(
+      "the overview finished its list before two rows were mounted with focus still above the last",
+    )
+  const read = await page.evaluate(
+    (sel) => {
+      const column = document.querySelector(sel.column)
+      const rows = [...(column?.querySelectorAll(sel.item) ?? [])]
+      const ids = rows.map((row) => row.getAttribute("data-overview-item"))
+      const focused = document.activeElement?.closest(sel.item)
+      if (
+        !column ||
+        column.hasAttribute("data-overview-listed") ||
+        ids.length < 2 ||
+        !focused ||
+        focused === rows[rows.length - 1]
+      )
+        return { missed: true }
+      const press = (code) => {
+        const target = document.activeElement
+        if (!(target instanceof HTMLElement)) return
+        target.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            code,
+            key: code,
+            bubbles: true,
+            cancelable: true,
+          }),
+        )
+      }
+      const now = () => {
+        const row = document.activeElement?.closest(sel.item)
+        const tabbable = rows.find((item) => item.tabIndex === 0)
+        return {
+          focused: row?.getAttribute("data-overview-item") ?? null,
+          tabbable: tabbable?.getAttribute("data-overview-item") ?? null,
+        }
+      }
+      const first = ids[0]
+      const last = ids[ids.length - 1]
+      press("End")
+      const afterEnd = now()
+      press("ArrowDown")
+      const afterDown = now()
+      press("Home")
+      const afterHome = now()
+      return { missed: false, first, last, afterEnd, afterDown, afterHome }
+    },
+    { column: css.overviewColumn, item: css.overviewItem },
+  )
+  if (read.missed)
+    throw new CannotRun("the overview finished its list before End could be pressed")
+  const failures = []
+  const aligned = (label, step, want) => {
+    if (step.focused !== want)
+      failures.push(`${label} left focus on ${step.focused}, not the mounted row ${want}`)
+    else if (step.tabbable !== step.focused)
+      failures.push(
+        `${label} marked ${step.tabbable} current while focus stayed on ${step.focused}`,
+      )
+  }
+  aligned("End", read.afterEnd, read.last)
+  aligned("↓", read.afterDown, read.last)
+  aligned("Home", read.afterHome, read.first)
+  return { ...read, failures }
+}
+
 const meta = {
   name: "focus",
   summary:
@@ -751,7 +840,9 @@ Steps (each asserts where the caret is afterwards):
   to 700; Show All pressed once nothing is left out → the keyboard is on a
   row, and ↓ walks the list
   focus-home-scene: Customize focused in a new session's home, the window
-  shortened so the home takes a small pane's shape → focus stays on Customize`,
+  shortened so the home takes a small pane's shape → focus stays on Customize
+  focus-overview-arriving: ⌘0, and before every row is drawn, End, ↓ and Home
+  → focus stays on a mounted row, the same row the list marks current`,
 }
 
 /**
@@ -825,6 +916,14 @@ await main(meta, async ({ options, rep, url }) => {
             }
             return { trail, failures }
           })
+
+        await attempt(
+          rep,
+          { name: "focus-overview-arriving", engine, layout },
+          async () => {
+            return keysWhileRowsArrive(page)
+          },
+        )
 
         const mash = Number(options.mash)
         if (mash > 0)

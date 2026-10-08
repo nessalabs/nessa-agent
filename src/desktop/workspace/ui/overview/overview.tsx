@@ -399,7 +399,10 @@ export function AgentsOverview({
         ? (event.target.closest<HTMLElement>("[data-overview-item]")?.dataset
             .overviewItem ?? null)
         : null
-    const to = stepFrom(order, from, step)
+    // Only rows on the page. End and the arrows would name one the list has
+    // not drawn yet while it is still arriving, and focus would stay where
+    // it was (`overview.test.tsx`).
+    const to = stepFrom(order.slice(0, drawn), from, step)
     if (to !== null) focusItem(to)
   }
 
