@@ -773,7 +773,8 @@ for no conversation (`open_once`, a host's look at a server), `process` for a
 server's process group, `wire` for MCP's JSON, and `http` for remote identity,
 bounded JSON/SSE body and recovery ownership over injected `http_exchange`.
 HTTP replacement handoff and immutable peer-reply binding use `connection`'s
-existing bounded writer queue; `http` owns provisional/validated binding claims
+bounded FIFO with ordinary admission permits and reserved HTTP control capacity;
+`http` owns provisional/validated binding claims
 and the modern POST authorization/status policy shared by startup and recovery;
 [ADR 392](adr/todo/392-remote-mcp-servers.md) maps its orderings to
 `http_progress`, the owning `http_shutdown` close-fence tests, `post_streams`

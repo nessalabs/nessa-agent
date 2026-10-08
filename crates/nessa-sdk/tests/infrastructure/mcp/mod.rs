@@ -6,7 +6,7 @@
 //! stand_in -> McpSession::serve -> Connection -> fixture
 //! forwarded -> McpSession::serve -> ForwardedResults (the grant's)
 //! sessions -> McpServers::open / tool_ui / stop -> FixtureLauncher
-//! http_progress -> Connection / McpServers -> gated JSON/initialization/recovery, captured replies and POST policy (ADR 392 J1–J20)
+//! http_progress -> Connection / McpServers -> gated JSON/initialization/recovery, captured replies and POST policy (ADR 392 J1–J26)
 //! post_body -> controlled chunks/destruction shared by HTTP regressions
 //! post_streams -> HttpSession / Connection -> gated HttpChunks (ADR 392 P1–P14)
 //! process  -> McpServers -> ProcessLauncher -> fixtures/server.py

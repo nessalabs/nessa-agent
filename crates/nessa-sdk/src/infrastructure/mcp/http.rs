@@ -34,7 +34,7 @@
 #![deny(missing_docs)]
 
 use super::authorization::{Bearer, RemoteAuthorization};
-use super::connection::Outgoing;
+use super::connection::{Outgoing, OutgoingQueue};
 use super::framing::MAX_FRAME_BYTES;
 use super::http_exchange::{HttpExchange, HttpMethod, HttpRequest, HttpResponse};
 use super::remote::RemoteMcpUrl;
@@ -177,7 +177,7 @@ pub struct HttpSession {
 
 #[derive(Clone)]
 struct HttpWriter {
-    outgoing: mpsc::Sender<Outgoing>,
+    outgoing: OutgoingQueue,
     clock: Arc<dyn Clock>,
 }
 
@@ -913,7 +913,7 @@ impl HttpSession {
         readers.get.push(task);
     }
 
-    pub(crate) fn set_writer(&self, writer: mpsc::Sender<Outgoing>, clock: Arc<dyn Clock>) {
+    pub(crate) fn set_writer(&self, writer: OutgoingQueue, clock: Arc<dyn Clock>) {
         *self.writer.lock().expect("http writer") = Some(HttpWriter {
             outgoing: writer,
             clock,
