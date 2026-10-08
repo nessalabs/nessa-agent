@@ -342,3 +342,18 @@ it("defines every token the menus and the pickers read on :root, because they si
   expect(read.size).toBeGreaterThan(0)
   for (const token of read) expect(onRoot, token).toContain(token)
 })
+
+it("draws every key cap with the kit's Kbd: no raw <kbd> outside Settings and onboarding", () => {
+  // Settings keeps its own until its redesign (#632); onboarding's keycaps are a
+  // larger, separate drawing. Everything else is `Kbd`, skinned once in chrome.css.
+  const root = fileURLToPath(new URL(".", import.meta.url))
+  const sources = (dir: string): string[] =>
+    readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name)
+      if (statSync(path).isDirectory())
+        return path === join(root, "settings") ? [] : sources(path)
+      return /\.tsx$/.test(name) && !/\.test\./.test(name) ? [path] : []
+    })
+  for (const path of sources(root))
+    expect(readFileSync(path, "utf8"), relative(root, path)).not.toMatch(/<kbd[\s>]/)
+})

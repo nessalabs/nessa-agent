@@ -106,7 +106,7 @@ Settings is left out (#632 › Settings is redesigned on its own branch).`,
                   .filter(
                     (animation) => animation.effect?.getTiming().iterations !== Infinity,
                   )
-                  .map((animation) => animation.finished),
+                  .map((animation) => animation.finished.catch(() => {})),
               )
             }, css.switcherResults)
             const inSwitcher = await page.evaluate(

@@ -288,12 +288,13 @@
   opacity: 0.5;
 }
 
-/* ——— Keys, as a tooltip or a footer writes them ——— */
+/* ——— Key caps: the kit's Kbd in the window's inks ——— */
 
 /*
  * The kit's `Kbd` draws the cap (18px, 11px medium type); the window gives it
- * its own inks and corner. Every key cap in the workspace is that component
- * (`shared-controls.mjs`, `keys`); Settings keeps its own until its redesign.
+ * its own inks and corner. A raw `<kbd>` outside Settings is refused by `styles.test.ts`, and
+ * `shared-controls.mjs` (`keys`) measures the caps that show; Settings keeps its
+ * own until its redesign.
  */
 [data-surface] [data-slot="kbd"] {
   border-radius: var(--desktop-radius-xs);
