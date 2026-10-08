@@ -249,16 +249,8 @@
   -webkit-line-clamp: 2;
 }
 
+/* Where the list's empty state sits (the kit's `EmptyState`, `styles.css`). */
 .workspace-list-empty {
-  display: grid;
-  justify-items: center;
-  gap: 12px;
   margin: 32px 12px;
-  color: var(--desktop-faint);
-  font-size: var(--desktop-text-footnote);
-  text-align: center;
-}
-
-.workspace-list-empty p {
-  margin: 0;
+  padding: 0;
 }

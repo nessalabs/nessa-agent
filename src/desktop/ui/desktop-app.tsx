@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react"
+import { EmptyState } from "@nessa-ui/react/empty-state"
 import { IdentityButton } from "./identity"
 import { AppShell, AppShellBody, AppShellMain } from "@nessa-ui/react/app-shell"
 import {
@@ -300,7 +301,11 @@ export function DesktopApp({
                   className="desktop-sidebar desktop-glass"
                 >
                   <SidebarContent className="items-center justify-center">
-                    <p className="desktop-empty-note text-center">Nothing open</p>
+                    <EmptyState
+                      variant="compact"
+                      className="desktop-empty-note"
+                      title="Nothing open"
+                    />
                   </SidebarContent>
                 </Sidebar>
               </SidebarProvider>
@@ -333,7 +338,12 @@ function NavigationBody({
         <SidebarGroup className="mt-4">
           <SidebarGroupLabel>Recents</SidebarGroupLabel>
           <SidebarGroupContent>
-            <p className="desktop-empty-note">Your conversations will appear here.</p>
+            <EmptyState
+              variant="compact"
+              className="desktop-empty-note"
+              data-align="start"
+              title="Your conversations will appear here."
+            />
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>

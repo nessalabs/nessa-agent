@@ -84,7 +84,7 @@ export const css = {
   widgetWindow: "[data-widget-window]", // the window: a widget over the panes
   chatArea: ".workspace-chat", // class: the content region the panes, and the window, are drawn in
   workspaceEmpty: '.workspace-empty[role="status"]', // class: why the workspace has nothing to show
-  workspaceEmptyText: '.workspace-empty[role="status"] p', // class: its sentence
+  workspaceEmptyText: '.workspace-empty[role="status"] [data-slot="empty-state-title"]', // class: its sentence
   workspaceEmptyRetry: '.workspace-empty[role="status"] button', // class: its Try Again
   transcriptNote: '.workspace-transcript-note[role="status"]', // class: why a shown conversation could not be read
   transcriptNoteText: ".workspace-transcript-note p", // class: that note's sentence

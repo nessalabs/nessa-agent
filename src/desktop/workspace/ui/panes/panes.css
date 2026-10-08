@@ -258,20 +258,10 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
 
 /* ——— Empty states ——— */
 
+/* Where the workspace's empty state sits (the kit's `EmptyState`, `styles.css`): the room the panes would take. */
 .workspace-empty {
-  display: grid;
   flex: 1;
-  place-content: center;
-  justify-items: center;
-  gap: 12px;
   padding: 32px;
-  color: var(--desktop-faint);
-  font-size: var(--desktop-text-footnote);
-  text-align: center;
-}
-
-.workspace-empty p {
-  margin: 0;
 }
 
 .split-panes-grid > .workspace-empty {

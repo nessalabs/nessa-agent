@@ -469,11 +469,62 @@ html:not(.dark) [data-surface] {
   transform: translateX(12px) scale(0.985);
 }
 
+/* ——— Empty states: the kit's EmptyState in the window's inks ——— */
+
+/*
+ * What a surface shows when it has nothing to show is the kit's `EmptyState`
+ * everywhere in the window; this gives it the window's type once.
+ * `compact` is the quiet line — a faint sentence, and the way forward 12px
+ * under it (the kit's gap and its action's margin). `default` is the
+ * titled one: a title at reading size, a muted sentence under it. Where one
+ * sits — its margins and padding — is its surface's. `shared-controls.mjs`
+ * (`empty`) measures them.
+ */
+[data-surface] [data-slot="empty-state"] {
+  font-family: inherit;
+  letter-spacing: inherit;
+}
+
+[data-surface]
+  [data-slot="empty-state"]
+  > :is([data-slot="empty-state-title"], [data-slot="empty-state-description"]) {
+  letter-spacing: inherit;
+}
+
+[data-surface] [data-variant="compact"] > [data-slot="empty-state-title"] {
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-footnote);
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+[data-surface] [data-slot="empty-state"][data-variant="default"] {
+  gap: 4px;
+}
+
+[data-surface] [data-variant="default"] > [data-slot="empty-state-title"] {
+  color: var(--foreground);
+  font-size: var(--desktop-text-read);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+[data-surface] [data-variant="default"] > [data-slot="empty-state-description"] {
+  max-width: 320px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  line-height: 1.5;
+  text-wrap: wrap;
+}
+
+/* The classic shell's notes: "Nothing open", and Recents' line, which keeps to its group's start. */
 .desktop-empty-note {
   padding: 4px 8px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: color-mix(in oklab, var(--foreground) 38%, transparent);
+}
+
+.desktop-empty-note[data-align="start"] {
+  align-items: flex-start;
+  text-align: left;
 }
 
 /* The classic shell's foot: its mark, "nessa Studio" (`identity.tsx`), and the theme menu at the end. */

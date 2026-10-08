@@ -8,6 +8,7 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react"
+import { EmptyState } from "@nessa-ui/react/empty-state"
 import { flushSync } from "react-dom"
 import { reducedMotion } from "../../../adapters/motion-preference"
 import { useNow } from "../../adapters/dom/clock"
@@ -853,9 +854,12 @@ function Groups({
       {quiet === "all" ? (
         <AllClear />
       ) : quiet !== null ? (
-        <p className="agents-overview-resting" data-reflow="empty">
-          {emptyGroup[quiet]}
-        </p>
+        <EmptyState
+          variant="compact"
+          className="agents-overview-resting"
+          data-reflow="empty"
+          title={emptyGroup[quiet]}
+        />
       ) : null}
       {/* Shown only while something waits: an empty section is nothing to review. */}
       {glance.needsYou.length > 0 ? (
@@ -912,7 +916,7 @@ function Groups({
         </section>
       ) : null}
       {glance.hidden > 0 ? (
-        <p className="agents-overview-resting" data-reflow="hidden">
+        <p className="agents-overview-footnote" data-reflow="hidden">
           {glance.hidden} more {glance.hidden === 1 ? "session" : "sessions"} outside this
           view
           {" · "}

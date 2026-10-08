@@ -308,9 +308,9 @@ describe("the agents overview", () => {
     await mount({ index: { ...sampleIndex(), sessions: [] } })
     await open()
     expect(host.querySelector("#agents-needs-you")).toBeNull()
-    expect(host.querySelector(".agents-clear-title")?.textContent).toBe(
-      "Nothing needs you",
-    )
+    expect(
+      host.querySelector('.agents-clear [data-slot="empty-state-title"]')?.textContent,
+    ).toBe("Nothing needs you")
   })
 
   it("shows what each waiting agent asks, and what is working, over panes left in place", async () => {
@@ -842,7 +842,7 @@ describe("the agents overview", () => {
     await mount()
     await open()
     expect(row("rest")).toBeNull()
-    expect(host.querySelector(".agents-overview-resting")?.textContent).toContain(
+    expect(host.querySelector(".agents-overview-footnote")?.textContent).toContain(
       "1 more session outside this view",
     )
   })
@@ -966,9 +966,9 @@ describe("the counts show one group alone", () => {
     await act(async () => store.dispatch(showOverviewGroup({ group: "earlier" })))
     expect(pressed()).toEqual(["0 earlier"])
     const resting = () =>
-      [...host.querySelectorAll(".agents-overview-resting")].map((line) =>
-        line.textContent?.trim(),
-      )
+      [
+        ...host.querySelectorAll(".agents-overview-resting, .agents-overview-footnote"),
+      ].map((line) => line.textContent?.trim())
     expect(resting()).toEqual([
       "Nothing from earlier",
       "1 more session outside this view · Show All",
@@ -1063,9 +1063,9 @@ describe("the counts show one group alone", () => {
     await mount()
     await open()
     // Ongoing keeps out the idle session, which is not working.
-    expect(host.querySelector(".agents-overview-resting")).not.toBeNull()
+    expect(host.querySelector(".agents-overview-footnote")).not.toBeNull()
     await act(async () => count("1 working")?.click())
-    expect(host.querySelector(".agents-overview-resting")).toBeNull()
+    expect(host.querySelector(".agents-overview-footnote")).toBeNull()
   })
 })
 

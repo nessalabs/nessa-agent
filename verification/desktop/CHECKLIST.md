@@ -964,6 +964,16 @@ it is redesigned on its own branch.
   layout, with Settings open and in the classic shell). Rule:
   `ui/identity.css`. At the base commit the classic shell's read
   "nessaStudio" with no name, no pill and no fill, in the kit's grey.
+- [ ] **Every empty state is the kit's `EmptyState`, in the window's type
+  (#657).** The session list's, the workspace's failure, an overview group
+  shown alone, "Nothing needs you", the classic shell's notes, the subagents
+  panel's and a widget's line: a quiet one (`compact`) a faint footnote line
+  with its action 12px under it, a titled one at reading size, 600, its
+  sentence muted. Where each sits is its surface's. _Check:_
+  `shared-controls.mjs` (`empty`: the session list with no match, the classic
+  shell's notes); `gateway-states.mjs` reads the workspace's sentence from the
+  kit's title. Rule: `styles.css` › Empty states. Settings' own are left to
+  its redesign.
 
 ## Menus and tooltips
 

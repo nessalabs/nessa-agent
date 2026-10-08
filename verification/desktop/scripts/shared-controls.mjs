@@ -216,6 +216,54 @@ async function identityHover(page, scale) {
     : [`under the pointer it is ${fill}, not ${scale.hover}`]
 }
 
+/**
+ * Every empty state on the page against the window's skin of the kit's
+ * `EmptyState` (`styles.css` › Empty states): a quiet one's line faint
+ * footnote type, a titled one's title at reading size. In the page.
+ */
+function measureEmptyStates() {
+  const probe = document.createElement("div")
+  document.querySelector("[data-surface]").append(probe)
+  const read = (property, value) => {
+    probe.style.setProperty(property, value)
+    return getComputedStyle(probe).getPropertyValue(property)
+  }
+  const want = {
+    faint: read("color", "var(--desktop-faint)"),
+    footnote: read("font-size", "var(--desktop-text-footnote)"),
+    foreground: read("color", "var(--foreground)"),
+    read: read("font-size", "var(--desktop-text-read)"),
+  }
+  probe.remove()
+  const failures = []
+  const seen = []
+  const shown = (element) => element.getClientRects().length > 0
+  for (const empty of document.querySelectorAll('[data-slot="empty-state"]')) {
+    if (!shown(empty)) continue
+    const title = empty.querySelector('[data-slot="empty-state-title"]')
+    const style = getComputedStyle(title)
+    const words = title.textContent.trim()
+    const quiet = empty.dataset.variant === "compact"
+    seen.push({ words, variant: empty.dataset.variant, color: style.color })
+    const [color, size, weight] = quiet
+      ? [want.faint, want.footnote, "400"]
+      : [want.foreground, want.read, "600"]
+    if (style.color !== color)
+      failures.push(`"${words}": ink ${style.color}, not ${color}`)
+    if (style.fontSize !== size)
+      failures.push(`"${words}": ${style.fontSize}, not ${size}`)
+    if (style.fontWeight !== weight)
+      failures.push(`"${words}": weight ${style.fontWeight}, not ${weight}`)
+  }
+  // The classes the window drew its own empty states with, before the kit's.
+  for (const old of document.querySelectorAll(
+    ".workspace-list-empty, .workspace-empty, .desktop-empty-note, .agents-overview-resting, .agents-clear",
+  ))
+    if (shown(old) && old.dataset.slot !== "empty-state")
+      failures.push(`"${old.textContent.trim()}" is not the kit's EmptyState`)
+  return { failures, seen }
+}
+
 const rowKinds = {
   columns: {
     "sidebar row": ".workspace-sidebar [data-slot='sidebar-menu-item-row'] > [data-size]",
@@ -274,6 +322,35 @@ const checks = {
         .catch(() => {})
     }
     return { failures, measured: { inWindow, inSettings, inClassic } }
+  },
+  empty: async (page, { layout, open }) => {
+    const failures = []
+    let inList = { seen: [] }
+    // The session list is a column of its own only in the three-column layout.
+    if (layout === "columns") {
+      await page
+        .locator(css.listSearch)
+        .locator("input")
+        .fill("no session is called this")
+      await need(page, `${css.listScroll} > *`, "the list's empty state")
+      inList = await page.evaluate(measureEmptyStates)
+      failures.push(...inList.failures)
+      if (inList.seen.length === 0) failures.push("no kit EmptyState in the session list")
+    }
+    const classic = await open("classic")
+    let inClassic
+    try {
+      inClassic = await classic.evaluate(measureEmptyStates)
+      failures.push(...inClassic.failures.map((f) => `classic ${f}`))
+      if (inClassic.seen.length < 2)
+        failures.push("the classic shell's two notes are not shown")
+    } finally {
+      await classic
+        .context()
+        .close()
+        .catch(() => {})
+    }
+    return { failures, measured: { inList: inList.seen, inClassic: inClassic?.seen } }
   },
   keys: async (page) => {
     await need(page, `${css.keyCap}:visible`, "a key cap")
@@ -348,7 +425,10 @@ await main(
       only: { type: "string" },
     },
     help: `
-Checks, per engine and layout (--only identity,keys,rows):
+Checks, per engine and layout (--only empty,identity,keys,rows):
+  empty      every empty state — the session list's with no match, the classic
+             shell's notes — is the kit's EmptyState in the window's type: a
+             quiet one faint footnote, a titled one at reading size, 600.
   identity   "nessa Studio" at the sidebar's foot, "‹ nessa Agent" at Settings'
              and the classic shell's are one control (ui/identity.tsx): a pill
              the corner controls' size and radius, "nessa" and a word in

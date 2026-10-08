@@ -1,5 +1,6 @@
 import { memo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { shallowEqual } from "react-redux"
+import { EmptyState } from "@nessa-ui/react/empty-state"
 import { Kbd } from "@nessa-ui/react/kbd"
 import { useRunningFirstPreference } from "../../../adapters/window-preferences"
 import { DesktopIcon } from "../../../ui/icons"
@@ -132,18 +133,22 @@ export const SessionList = memo(function SessionList() {
           onKeyDown={onKeyDown}
         >
           {ordered.length === 0 ? (
-            <div className="workspace-list-empty">
-              <p>{query ? "No sessions match." : "No sessions here yet."}</p>
-              {query ? null : (
-                <button
-                  type="button"
-                  className="workspace-button"
-                  onClick={() => dispatch(newSession())}
-                >
-                  New Session
-                </button>
-              )}
-            </div>
+            <EmptyState
+              variant="compact"
+              className="workspace-list-empty"
+              title={query ? "No sessions match." : "No sessions here yet."}
+              action={
+                query ? null : (
+                  <button
+                    type="button"
+                    className="workspace-button"
+                    onClick={() => dispatch(newSession())}
+                  >
+                    New Session
+                  </button>
+                )
+              }
+            />
           ) : null}
           {groups.map((group, index) => (
             <div key={group.id} role="group" aria-label={group.label}>

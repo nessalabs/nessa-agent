@@ -975,22 +975,19 @@ html:not(.dark) .agents-request {
 
 /* ——— Nothing needs you ——— */
 
+/* "Nothing needs you" (the kit's `EmptyState`, `styles.css`), on a card of its own with a lit check. */
 .agents-clear {
-  display: grid;
-  justify-items: center;
-  gap: 4px;
   padding: 28px 24px 30px;
   border-radius: var(--desktop-radius-lg);
   background: color-mix(in oklab, var(--foreground) 2.5%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 4%, transparent);
-  text-align: center;
 }
 
 .agents-clear-mark {
   display: grid;
   width: 40px;
   height: 40px;
-  margin-bottom: 10px;
+  margin: 0 auto 14px;
   place-items: center;
   border-radius: 50%;
   background: radial-gradient(
@@ -1018,31 +1015,23 @@ html:not(.dark) .agents-request {
   }
 }
 
-.agents-clear-title {
-  margin: 0;
-  color: var(--foreground);
-  font-size: var(--desktop-text-read);
-  font-weight: 600;
-}
-
-.agents-clear-detail {
-  max-width: 320px;
-  margin: 0;
-  color: var(--desktop-muted);
-  font-size: var(--desktop-text-footnote);
-  line-height: 1.5;
-}
-
 /* ——— What is only counted, and what is only said ——— */
 
+/* Where a group shown alone says it lists nothing (the kit's `EmptyState`, `styles.css`). */
 .agents-overview-resting {
+  margin: 28px 0 0;
+  padding: 0;
+}
+
+/* How many sessions the view leaves out, and Show All. */
+.agents-overview-footnote {
   margin: 28px 0 0;
   color: var(--desktop-faint);
   font-size: var(--desktop-text-footnote);
   text-align: center;
 }
 
-.agents-overview-resting button {
+.agents-overview-footnote button {
   padding: 0;
   border: 0;
   background: none;
@@ -1053,7 +1042,7 @@ html:not(.dark) .agents-request {
   text-underline-offset: 3px;
 }
 
-.agents-overview-resting button:hover {
+.agents-overview-footnote button:hover {
   color: var(--foreground);
 }
 
