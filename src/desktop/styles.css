@@ -1613,6 +1613,17 @@ html:not(.dark) .desktop-tooltip {
   --desktop-tooltip-from: 2px;
 }
 
+/* Beside a control, it arrives from the control's side. */
+.desktop-tooltip[data-side="right"] {
+  --desktop-tooltip-from: 0;
+  --desktop-tooltip-from-x: -2px;
+}
+
+.desktop-tooltip[data-side="left"] {
+  --desktop-tooltip-from: 0;
+  --desktop-tooltip-from-x: 2px;
+}
+
 /* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
 :root[data-motion="reduced"] .desktop-tooltip[data-shown] {
   animation: none;
@@ -1621,7 +1632,7 @@ html:not(.dark) .desktop-tooltip {
 @keyframes desktop-tooltip-in {
   from {
     opacity: 0;
-    translate: 0 var(--desktop-tooltip-from, -2px);
+    translate: var(--desktop-tooltip-from-x, 0) var(--desktop-tooltip-from, -2px);
   }
 }
 

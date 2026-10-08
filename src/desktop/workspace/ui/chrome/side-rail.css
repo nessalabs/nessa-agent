@@ -1,0 +1,372 @@
+/*
+ * Prototype: the side rail, its toggle, and an item's full view.
+ *
+ * Geometry is the corner-control geometry `styles.css` owns
+ * (`--desktop-control-*`, `--desktop-gutter`); nothing here restates it.
+ * Every control sits `--desktop-control-edge` from the window's left edge, so
+ * the rail's items, its toggle and the titlebar's sidebar toggle stand in one
+ * column, and the toggle's corner is concentric with the sidebar card's.
+ */
+
+/*
+ * The rail stands beside the workspace, in this frame, not inside it: every
+ * column the workspace places from its own left edge stays right with the
+ * rail open or closed (`verification/desktop/scripts/columns.mjs`).
+ * --rail-width is set from RAIL_WIDTH.
+ */
+.workspace-window {
+  --rail-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --rail-gap: 6px;
+  position: relative;
+  display: flex;
+  height: 100svh;
+  overflow: hidden;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--nessa-font-sans);
+  font-size: var(--desktop-text-body);
+}
+
+.workspace-window > .workspace {
+  min-width: 0;
+  flex: 1;
+}
+
+/* ——— The rail ——— */
+
+.side-rail {
+  display: flex;
+  width: 0;
+  flex: none;
+  flex-direction: column;
+  /* Closed, it is no width at all: its inset is its items', not its own. */
+  padding-top: var(--desktop-titlebar-height);
+  overflow: hidden;
+  /* No width transition: the width lands at once and what moves beside it
+     plays back by transform (FlipScope). */
+  opacity: 0;
+}
+
+.side-rail[data-open] {
+  width: var(--rail-width);
+  opacity: 1;
+}
+
+.side-rail-items {
+  position: relative;
+  margin-left: var(--desktop-control-edge);
+  display: flex;
+  flex-direction: column;
+  gap: var(--rail-gap);
+}
+
+/*
+ * The rail's buttons are the window's icon buttons (`ui/icon-button.tsx`):
+ * size, corner, colour, hover, press and focus are theirs. What is the
+ * rail's own is below — where they stand, how they arrive, and their gestures.
+ */
+.side-rail-item {
+  position: relative;
+  z-index: 1;
+}
+
+/* Items arrive one after another as the rail opens. */
+.side-rail .side-rail-item {
+  opacity: 0;
+  transform: translateX(-6px) scale(0.9);
+}
+
+.side-rail[data-open] .side-rail-item {
+  opacity: 1;
+  transform: none;
+  transition:
+    color var(--desktop-fast) ease,
+    background-color var(--desktop-fast) ease,
+    opacity 240ms ease calc(var(--i, 5) * 28ms + 60ms),
+    transform 420ms var(--rail-spring) calc(var(--i, 5) * 28ms + 60ms);
+}
+
+.side-rail[data-open] .side-rail-item:active {
+  transform: scale(0.9);
+  transition-delay: 0s;
+}
+
+.side-rail-item[aria-current] {
+  color: var(--foreground);
+}
+
+/* The lens behind the chosen item glides to the next one, with a little give. */
+.side-rail-lens {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--desktop-control-size);
+  height: var(--desktop-control-size);
+  border-radius: var(--desktop-control-radius);
+  background: var(--desktop-selected);
+  transform: translateY(
+    calc(var(--rail-index) * (var(--desktop-control-size) + var(--rail-gap)))
+  );
+  transition: transform 460ms var(--rail-spring);
+}
+
+/* ——— Each icon's gesture: small, once, and only on hover ——— */
+
+.side-rail-item svg *,
+.side-rail-toggle rect {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.side-rail-item:hover .g-spark {
+  animation: rail-spark 620ms var(--rail-spring);
+}
+.side-rail-item:hover .g-core {
+  animation: rail-pulse 620ms var(--rail-spring);
+}
+.side-rail-item:hover .g-line {
+  animation: rail-write 520ms var(--desktop-ease);
+}
+.side-rail-item:hover .g-ring {
+  animation: rail-ring 520ms var(--rail-spring);
+}
+.side-rail-item:hover .g-page {
+  animation: rail-page 520ms var(--rail-spring);
+}
+.side-rail-item:hover .g-globe {
+  animation: rail-spin 700ms var(--desktop-ease);
+}
+.side-rail-item:hover .g-lid {
+  animation: rail-lid 520ms var(--rail-spring);
+}
+
+@keyframes rail-spark {
+  0% {
+    transform: rotate(0) scale(1);
+  }
+  45% {
+    transform: rotate(45deg) scale(0.82);
+  }
+  100% {
+    transform: rotate(90deg) scale(1);
+  }
+}
+@keyframes rail-pulse {
+  40% {
+    transform: scale(1.35);
+  }
+}
+@keyframes rail-write {
+  0% {
+    stroke-dasharray: 8;
+    stroke-dashoffset: 8;
+  }
+  100% {
+    stroke-dasharray: 8;
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes rail-ring {
+  35% {
+    transform: translateY(-1.5px);
+  }
+  60% {
+    transform: translateY(0.5px);
+  }
+}
+@keyframes rail-page {
+  40% {
+    transform: scaleX(0.7);
+  }
+}
+@keyframes rail-spin {
+  100% {
+    transform: rotate(360deg);
+  }
+}
+@keyframes rail-lid {
+  40% {
+    transform: translateY(-2px) rotate(-4deg);
+  }
+}
+
+/* ——— The toggle: one place in the window's bottom-left corner ——— */
+
+/*
+ * The toggle sits in the bottom-left corner at the control edge — the
+ * titlebar's sidebar toggle mirrored — and stays there open or closed, so it
+ * is in whatever is there: the rail, the sidebar card's foot, or a full view's
+ * corner (`columns.mjs`, rail-corner). With the rail closed and the Agents
+ * sidebar closed by the person there is nothing to sit in, so it hides; ⌘B
+ * brings the sidebar, and the toggle, back. A sidebar the window folded for
+ * room keeps it, in the corner, so the rail can always come back.
+ */
+.side-rail-toggle {
+  position: absolute;
+  z-index: 42;
+  bottom: var(--desktop-control-edge);
+  left: var(--desktop-control-edge);
+}
+
+.side-rail-toggle:active {
+  transform: scale(0.9);
+}
+
+.side-rail-toggle[aria-expanded="true"] {
+  color: var(--foreground);
+}
+
+/* It leaves and arrives with the sidebar's slide, and sits in a peeked sidebar too. */
+.side-rail-toggle {
+  transition:
+    color var(--desktop-fast) ease,
+    background-color var(--desktop-fast) ease,
+    transform 220ms var(--rail-spring),
+    opacity var(--desktop-slow) var(--desktop-out),
+    visibility 0s linear 0s;
+}
+
+.workspace-window[data-rail="closed"][data-sidebar-chosen="closed"]:not(
+    [data-rail-view]
+  ):not(:has(.workspace[data-peek]))
+  .side-rail-toggle {
+  visibility: hidden;
+  opacity: 0;
+  transition:
+    opacity var(--desktop-slow) var(--desktop-out),
+    visibility 0s linear var(--desktop-slow);
+}
+
+/* The toggle doubles as nessa's mark: its top-right tile is lit. */
+.side-rail-toggle .g-b {
+  fill: var(--foreground);
+  stroke: var(--foreground);
+  filter: drop-shadow(0 0 3px color-mix(in oklab, var(--foreground) 55%, transparent));
+}
+
+/* Its four tiles breathe apart on hover. */
+.side-rail-toggle rect {
+  transition: transform 360ms var(--rail-spring);
+}
+.side-rail-toggle:hover .g-a {
+  transform: translate(-0.8px, -0.8px);
+}
+.side-rail-toggle:hover .g-b {
+  transform: translate(0.8px, -0.8px);
+}
+.side-rail-toggle:hover .g-c {
+  transform: translate(-0.8px, 0.8px);
+}
+.side-rail-toggle:hover .g-d {
+  transform: translate(0.8px, 0.8px);
+}
+
+/*
+ * With the rail closed the toggle stands inside the sidebar card's foot, so
+ * "nessa Studio" steps right by one control and one inset, a hairline apart.
+ */
+.workspace-window .workspace-identity {
+  transition: padding-left var(--desktop-slow) var(--desktop-out);
+}
+
+.workspace-window[data-rail="closed"] .workspace-identity {
+  padding-left: calc(2 * var(--desktop-control-inset) + var(--desktop-control-size));
+}
+
+/*
+ * The titlebar is the workspace's, so it already starts after the rail. The
+ * window's own controls (the traffic lights) are placed from the window's
+ * edge, so with the rail open the rail's width comes off their inset.
+ */
+.workspace-window[data-rail="open"] .workspace-titlebar {
+  padding-left: max(
+    calc(var(--desktop-window-controls-inset) - var(--rail-width)),
+    var(--desktop-control-edge)
+  );
+}
+
+/* ——— An item's full view ——— */
+
+/*
+ * An item's view owns everything beside the rail, edge to edge, over the
+ * workspace, which stays mounted underneath and inert (`workspace-shell.tsx`).
+ */
+.rail-view {
+  position: absolute;
+  z-index: 41;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--background);
+  /* How far the window's own controls reach past the rail: the view's top
+     row keeps clear of this much on its left. */
+  --rail-view-safe-left: max(
+    0px,
+    calc(var(--desktop-window-controls-inset) - var(--rail-width))
+  );
+  animation: rail-arrive 320ms var(--desktop-ease) both;
+}
+
+.workspace-window[data-rail="open"] .rail-view {
+  left: var(--rail-width);
+}
+
+/* "nessa Studio" in a full view: where the sidebar card's foot puts it. */
+.rail-view-foot {
+  position: absolute;
+  bottom: var(--desktop-gutter);
+  left: var(--desktop-gutter);
+}
+
+/* The window still moves by its top edge: a drag strip, drawn by nothing. */
+.rail-view-drag {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: var(--rail-view-safe-left);
+  height: var(--desktop-titlebar-height);
+}
+
+.rail-view h1 {
+  margin: 8px 0 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.rail-view-mark {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border-radius: var(--desktop-radius);
+  background: var(--desktop-selected);
+  animation: rail-mark 620ms var(--rail-spring) 80ms both;
+}
+
+.rail-view-mark svg {
+  width: 24px;
+  height: 24px;
+}
+
+@keyframes rail-arrive {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes rail-mark {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.8);
+  }
+}
+
+:root[data-motion="reduced"] :is(.side-rail, .side-rail-toggle, .rail-view),
+:root[data-motion="reduced"] :is(.side-rail, .side-rail-toggle, .rail-view) * {
+  animation: none !important;
+  transition-duration: 0s !important;
+}

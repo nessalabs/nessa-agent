@@ -63,7 +63,7 @@ it("makes the window under Settings inert while it is open, and only then", asyn
   expect(host.querySelector(".settings")).not.toBeNull()
   expect(under()?.hasAttribute("inert")).toBe(true)
   await act(async () =>
-    host.querySelector<HTMLButtonElement>(".settings-identity")?.click(),
+    host.querySelector<HTMLButtonElement>(".settings-identity-name")?.click(),
   )
   expect(host.querySelector(".settings")).toBeNull()
   expect(under()?.hasAttribute("inert")).toBe(false)

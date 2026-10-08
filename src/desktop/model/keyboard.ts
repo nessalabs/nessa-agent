@@ -99,6 +99,51 @@ export function chordLabel(chord: Chord, mac: boolean): string {
   return parts.filter(Boolean).join("+")
 }
 
+/**
+ * The `KeyboardEvent.key` value of a code whose name is not one: punctuation
+ * by its character, except "+" and " ", which ARIA spells "Plus" and "Space".
+ */
+const shortcutKeys: Readonly<Record<string, string>> = {
+  Backquote: "`",
+  Backslash: "\\",
+  BracketLeft: "[",
+  BracketRight: "]",
+  Comma: ",",
+  Equal: "=",
+  Minus: "-",
+  NumpadAdd: "Plus",
+  NumpadEnter: "Enter",
+  Period: ".",
+  Quote: "'",
+  Semicolon: ";",
+  Slash: "/",
+  Space: "Space",
+}
+
+/**
+ * A chord as `aria-keyshortcuts` names it — modifiers, then the key's
+ * `KeyboardEvent.key` value, joined by "+": "Meta+Enter" on a Mac,
+ * "Control+Enter" elsewhere (`keyboard.test.ts`).
+ */
+export function chordShortcut(chord: Chord, mac: boolean): string {
+  const key = Object.hasOwn(shortcutKeys, chord.code)
+    ? shortcutKeys[chord.code]
+    : chord.code.startsWith("Key")
+      ? chord.code.slice(3)
+      : chord.code.startsWith("Digit")
+        ? chord.code.slice(5)
+        : chord.code
+  return [
+    chord.control || (chord.command && !mac) ? "Control" : "",
+    chord.alt ? "Alt" : "",
+    chord.shift ? "Shift" : "",
+    chord.command && mac ? "Meta" : "",
+    key,
+  ]
+    .filter(Boolean)
+    .join("+")
+}
+
 /** The command key alone, as the platform writes it before a click: "⌘Click", "Ctrl+Click". */
 export function commandLabel(mac: boolean): string {
   return mac ? "⌘" : "Ctrl+"

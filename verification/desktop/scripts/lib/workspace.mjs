@@ -482,3 +482,20 @@ export function paneDropFailure(before, after) {
   if (after.order === before.order) return "the drop did not change pane order"
   return null
 }
+
+/**
+ * Hover where the folded sidebar is revealed from: the middle of its edge
+ * strip, wherever that stands — the window's edge, or beside the side rail.
+ * `within` names the surface whose sidebar it is (the workspace, or
+ * Settings over it), since both can draw a strip at once. With no strip
+ * drawn there, the window's edge.
+ */
+export async function hoverPeekEdge(page, y, within = css.workspace) {
+  const strip = await page
+    .locator(`${within} ${css.peekEdge}`)
+    .first()
+    .boundingBox()
+    .catch(() => null)
+  const x = strip && strip.width > 0 ? strip.x + strip.width / 2 : 3
+  await page.mouse.move(x, y)
+}

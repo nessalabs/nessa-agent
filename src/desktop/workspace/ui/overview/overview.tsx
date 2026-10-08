@@ -5,14 +5,14 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react"
 import { flushSync } from "react-dom"
 import { reducedMotion } from "../../../adapters/motion-preference"
 import { useNow } from "../../adapters/dom/clock"
-import { durationToken } from "../../../adapters/motion"
 import { focusAfterPaint } from "../../adapters/dom/focus"
-import { useReflow } from "../../adapters/dom/overview-reflow"
+import { leaveInPlace, useReflow } from "../../adapters/dom/overview-reflow"
 import { isMac } from "../../../adapters/platform"
 import { matchesChord } from "../../../model/keyboard"
 import {
@@ -24,13 +24,19 @@ import {
   showOverviewGroup,
   type AnswerOutcome,
 } from "../../adapters/store/commands"
-import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
+import {
+  useWorkspaceDispatch,
+  useWorkspaceSelector,
+  useWorkspaceStore,
+} from "../../adapters/store/hooks"
 import {
   selectGlance,
   selectOverviewFilter,
   selectOverviewGroup,
   selectOverviewSelected,
   selectReady,
+  selectSession,
+  selectTranscript,
 } from "../../adapters/store/selectors"
 import {
   glanceCounts,
@@ -56,11 +62,15 @@ import { RequestRow } from "./request-row"
 import { SessionPeek } from "./session-peek"
 import { ReplyCaret } from "./reply-pill"
 import { SessionRow } from "./session-row"
+import { ResizeEdge } from "../../../ui/resize-edge"
 import { answeredLabels, type OnAnswer, type Settling } from "./settling"
 import "./overview.css"
 
-/** How long an answered request says what became of it before it goes. */
-const settledFor = 700
+/**
+ * The longest a closed row waits for the workspace to stop asking what it
+ * answered, before it is let go to show what the workspace holds.
+ */
+const heldAtMost = 2000
 
 /**
  * How many overview rows mount on each frame after the card has filled.
@@ -92,13 +102,19 @@ const steps: Partial<Record<string, Step>> = {
  */
 export function AgentsOverview({
   split,
+  listWidth,
+  onListWidth,
   onLeave,
 }: {
   /** Wide enough for the peek beside the list, as its layer measured before it opened. */
   split: boolean
+  /** The list's width beside the peek, as dragged; null for the even split. */
+  listWidth: number | null
+  onListWidth: (width: number | null) => void
   onLeave: () => void
 }) {
   const dispatch = useWorkspaceDispatch()
+  const store = useWorkspaceStore()
   const ready = useWorkspaceSelector(selectReady)
   const filter = useWorkspaceSelector(selectOverviewFilter)
   const group = useWorkspaceSelector(selectOverviewGroup)
@@ -178,6 +194,27 @@ export function AgentsOverview({
   useReflow(list, `${order.join(",")}|${split ? "" : (expanded ?? "")}`)
 
   const section = useRef<HTMLElement>(null)
+  // The list beside the peek, resized by its edge: the widths as drawn, for
+  // the edge to say where it stands, taken as they change (no layout is read
+  // for it) — and as they were when a drag or key press began.
+  const surface = useRef<HTMLDivElement>(null)
+  const side = useRef<HTMLDivElement>(null)
+  const [widths, setWidths] = useState({ list: 0, surface: 0 })
+  const dragFrom = useRef({ list: 0, surface: 0 })
+  useEffect(() => {
+    const room = surface.current
+    const list = side.current
+    if (!room || !list || typeof ResizeObserver === "undefined") return
+    const observer = new ResizeObserver(() =>
+      setWidths((was) => {
+        const now = { list: list.offsetWidth, surface: room.offsetWidth }
+        return was.list === now.list && was.surface === now.surface ? was : now
+      }),
+    )
+    observer.observe(room)
+    observer.observe(list)
+    return () => observer.disconnect()
+  }, [])
   const focusItem = useCallback(
     (id: string | null, scroll = true) => {
       const column = list.current
@@ -277,9 +314,18 @@ export function AgentsOverview({
   }, [filled, drawn, rowCount, peekDrawn])
 
   const timers = useRef(new Set<number>())
+  const watches = useRef(new Set<() => void>())
+  // An answer that settles after the overview closed must not start a watch or timer.
+  const mounted = useRef(true)
   useEffect(() => {
     const pending = timers.current
-    return () => pending.forEach((timer) => window.clearTimeout(timer))
+    const watching = watches.current
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      pending.forEach((timer) => window.clearTimeout(timer))
+      watching.forEach((stop) => stop())
+    }
   }, [])
   const later = useCallback((ms: number, run: () => void) => {
     const timer = window.setTimeout(() => {
@@ -363,6 +409,7 @@ export function AgentsOverview({
               optionId: option.id,
             })
       void dispatch(asked).then((outcome: AnswerOutcome) => {
+        if (!mounted.current) return
         // Refused, not confirmed, already on its way from a pane, or no longer
         // asked: the row comes back as the workspace holds it — asking again,
         // saying why (`selectAnswer`), or moved on.
@@ -370,15 +417,53 @@ export function AgentsOverview({
           release()
           return
         }
-        phase("settled")
+        // Taken: what became of it is said to a screen reader, and the row
+        // waits, quiet, until the source moves its session on — "sent" can
+        // come before the session's own move — so it never springs back into
+        // Needs you. Then it leaves its place as it arrives in the new one,
+        // in the same beat (`leaveInPlace`). An update that never comes lets
+        // it go after `heldAtMost`, shown as the workspace holds it.
+        phase("leaving")
         setSaid(`${answeredLabels[choice]}: ${summary.title}`)
-        later(settledFor, () => {
-          phase("leaving")
-          later(list.current ? durationToken(list.current, "--desktop-base") : 0, release)
+        // Still where it was: the session waits on the person (what lists it
+        // in Needs you) and asks nothing new — the approval it let go can
+        // arrive before the session's own move on.
+        const asks = () => {
+          const state = store.getState()
+          const asked = selectTranscript(state, summary.id)?.approval
+          return (
+            selectSession(state, summary.id)?.status === "needs-you" &&
+            (asked == null || asked.id === approval.id)
+          )
+        }
+        const moveOn = () => {
+          // Its copy is taken as it stands leaving — its answers put away —
+          // not as it stood a moment ago, still answering.
+          flushSync(() => phase("leaving"))
+          const column = list.current
+          const item = column
+            ?.querySelector(`[data-overview-item="${CSS.escape(summary.id)}"]`)
+            ?.closest<HTMLElement>(".agents-row-item")
+          if (column && item) leaveInPlace(column, item)
+          // Taken away in this same task, so the re-flow — the copy going,
+          // the gap closing, the session arriving — starts in the next frame.
+          flushSync(release)
+        }
+        if (!asks()) return moveOn()
+        const done = (moved: boolean) => {
+          if (!watches.current.delete(stop)) return
+          stop()
+          if (moved) moveOn()
+          else release()
+        }
+        const stop = store.subscribe(() => {
+          if (!asks()) done(true)
         })
+        watches.current.add(stop)
+        later(heldAtMost, () => done(false))
       })
     },
-    [dispatch, focusItem, later],
+    [dispatch, focusItem, later, store],
   )
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
@@ -627,9 +712,21 @@ export function AgentsOverview({
         data-alt={alt || undefined}
         data-split={split || undefined}
       >
-        <div className="agents-overview-surface" data-bare={filled ? undefined : ""}>
+        <div
+          ref={surface}
+          className="agents-overview-surface"
+          data-bare={filled ? undefined : ""}
+          data-list-width={listWidth === null ? undefined : true}
+          style={
+            {
+              "--agents-list-min": `${listMin}px`,
+              "--agents-peek-min": `${peekMin}px`,
+              ...(listWidth === null ? {} : { "--agents-list-width": `${listWidth}px` }),
+            } as CSSProperties
+          }
+        >
           {/* The header stays where it is; only the list under it scrolls. */}
-          <div className="agents-overview-side">
+          <div ref={side} className="agents-overview-side">
             <header className="agents-overview-header">
               <div className="agents-overview-title">
                 <h1>Agents</h1>
@@ -680,6 +777,26 @@ export function AgentsOverview({
                 </p>
               </div>
             </div>
+            {split && peeked !== null ? (
+              <ResizeEdge
+                label="Resize Agents List"
+                className="agents-overview-edge"
+                value={{ now: widths.list, min: listMin, max: listMax(widths.surface) }}
+                onStart={() => {
+                  dragFrom.current = {
+                    list: side.current?.getBoundingClientRect().width ?? widths.list,
+                    surface: surface.current?.getBoundingClientRect().width ?? 0,
+                  }
+                }}
+                onMove={(delta) => {
+                  const { list: from, surface: room } = dragFrom.current
+                  onListWidth(
+                    Math.round(Math.min(Math.max(from + delta, listMin), listMax(room))),
+                  )
+                }}
+                onReset={() => onListWidth(null)}
+              />
+            ) : null}
           </div>
           {split && peekDrawn && peeked !== null ? (
             <aside className="agents-overview-peek" aria-label="Peek">
@@ -702,6 +819,15 @@ export function AgentsOverview({
 
 /** How wide the overview's layer must be to hold its peek beside the list. */
 export const splitWidth = 820
+
+/**
+ * The narrowest the list and the peek beside it are drawn: given to the
+ * stylesheet (`--agents-list-min`, `--agents-peek-min`), which holds a
+ * dragged width between them as the window resizes, and to the edge.
+ */
+const listMin = 340
+const peekMin = 320
+const listMax = (surface: number) => Math.max(listMin, surface - peekMin)
 
 /**
  * The first `count` sessions of `glance`, in reading order. Counts stay the

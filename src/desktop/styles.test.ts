@@ -91,7 +91,7 @@ it("starts an inline column title after the window's controls wherever they stan
     ],
     [
       read("./settings/ui/settings.css"),
-      '.settings[data-sidebar="closed"] .settings-content > .desktop-column-bar {',
+      '.settings[data-sidebar="closed"] .settings-bar {',
     ],
     // The sidebar's own action, in the row the controls stand over.
     [

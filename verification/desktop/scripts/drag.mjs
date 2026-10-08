@@ -76,6 +76,7 @@ import {
   settled,
   state,
   zoneSays,
+  hoverPeekEdge,
 } from "./lib/workspace.mjs"
 
 const tolerance = 2
@@ -926,7 +927,7 @@ Object.assign(checks, {
       await page.keyboard.press(keys.toggleSidebar)
       await settled(page)
       const size = page.viewportSize()
-      await page.mouse.move(3, size.height / 2)
+      await hoverPeekEdge(page, size.height / 2)
       const peeked = () =>
         page.evaluate(
           (sel) => "peek" in (document.querySelector(sel)?.dataset ?? {}),
@@ -1035,7 +1036,7 @@ Object.assign(checks, {
     await settled(page)
     const size = page.viewportSize()
     const peekShown = (sel) => "peek" in (document.querySelector(sel)?.dataset ?? {})
-    await page.mouse.move(3, size.height / 2)
+    await hoverPeekEdge(page, size.height / 2)
     await page.waitForFunction(peekShown, css.workspace, { timeout: 2000 })
     await settled(page)
     const peek = await page.locator(css.sidebar).first().boundingBox()

@@ -8,9 +8,14 @@
  *        │                         and what search finds
  *        ▼
  *   ui/settings-view.tsx ──▶ ui/settings-tabs.tsx ──▶ ui/settings-controls.tsx
- *   (the surface: sidebar,    (each tab's rows, wired   (grouped rows and the
- *    tabs, search, focus)      to the preferences and    quiet controls a row
- *                              the workspace it sets)    holds)
+ *   (the surface: sidebar,    (each tab's rows, wired   (Group, Row, ItemRow,
+ *    the page's bar, tabs,     to the preferences and    SettingGroup and the
+ *    search, focus)            the workspace it sets)    controls, over the UI
+ *        │                                               kit's settings group,
+ *        ▼                                               row, switch and
+ *   ui/settings-masthead.tsx                             segmented control)
+ *   (a page's title, its one
+ *    line, its tabs)
  *                                    │
  *                                    ▼
  *   ui/integrations-tab.tsx ──▶ model/mcp-servers.ts ◀── adapters/mcp-servers-gateway.ts

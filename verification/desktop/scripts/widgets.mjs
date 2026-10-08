@@ -34,6 +34,7 @@ import {
   settled,
   state,
   until,
+  hoverPeekEdge,
 } from "./lib/workspace.mjs"
 
 const meta = {
@@ -420,7 +421,7 @@ const checks = {
     const failures = []
     await windowFromCard(page, failures)
     await hideColumns(page, layout)
-    await page.mouse.move(3, size.height / 2)
+    await hoverPeekEdge(page, size.height / 2)
     const peeked = await until(
       page,
       (sel) => document.querySelector(sel)?.hasAttribute("data-peek") === true,
@@ -447,7 +448,7 @@ const checks = {
     await settled(page)
     await page.locator(css.settingsSidebarToggle).first().click()
     await settled(page)
-    await page.mouse.move(3, size.height / 2)
+    await hoverPeekEdge(page, size.height / 2, css.settings)
     const peeked = await until(
       page,
       (sel) => document.querySelector(sel)?.hasAttribute("data-peek") === true,

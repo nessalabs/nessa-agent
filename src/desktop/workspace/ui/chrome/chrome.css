@@ -20,7 +20,7 @@
 }
 
 /* A reset, so it carries no weight: any component's own class outranks it. */
-:where(.workspace) button {
+:where(.workspace-window, .workspace) button {
   font: inherit;
   color: inherit;
   cursor: default;
@@ -31,11 +31,14 @@
  * Defaults, so they carry no weight: a component's own focus style, one class
  * and `:focus-visible`, outranks them.
  */
-:where(.workspace) :focus-visible {
+:where(.workspace-window, .workspace) :focus-visible {
   outline: none;
 }
 
-:where(.workspace :focus-visible:not(textarea, input, .desktop-resize-edge)),
+:where(
+  :is(.workspace-window, .workspace)
+    :focus-visible:not(textarea, input, .desktop-resize-edge)
+),
 :where(.workspace .desktop-chip:focus-visible) {
   outline: var(--desktop-focus-outline);
   outline-offset: -1.5px;
@@ -94,6 +97,13 @@
   /* Chrome is read, not selected: a double-click on a label selects nothing. */
   -webkit-user-select: none;
   user-select: none;
+}
+
+.workspace-titlebar-controls {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  gap: inherit;
 }
 
 /* ——— Agent tiles and status glyphs ——— */
@@ -215,27 +225,37 @@
 
 /* ——— The sidebar's foot ——— */
 
+/*
+ * A corner control's row: "nessa Studio" sits the control inset in from the
+ * card's side and foot, as the titlebar's controls sit from its top, and its
+ * hover shape is concentric with the card's corner (`styles.css`).
+ */
 .workspace-identity {
   display: flex;
   min-width: 200px;
-  height: 48px;
+  height: calc(var(--desktop-control-size) + 2 * var(--desktop-control-inset));
   flex: none;
   align-items: center;
   gap: 8px;
-  padding: 0 10px 0 16px;
+  padding: 0 10px 0 var(--desktop-control-inset);
   font-size: var(--desktop-text-body);
   letter-spacing: -0.01em;
 }
 
 /* "nessa Studio" opens Settings, which puts "‹ nessa Agent" in this same place. */
 .workspace-identity-name {
-  flex: 1;
-  height: 28px;
+  flex: 0 1 auto;
+  height: var(--desktop-control-size);
+  padding: 0 8px;
   overflow: hidden;
-  border-radius: var(--desktop-radius-sm);
-  line-height: 28px;
+  border-radius: var(--desktop-control-radius);
+  line-height: var(--desktop-control-size);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workspace-identity-name:hover {
+  background: var(--desktop-hover);
 }
 
 .workspace-identity b {

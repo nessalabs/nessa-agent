@@ -75,3 +75,12 @@ it("lends its look to another button-shaped component", async () => {
   expect(button.getAttribute("aria-label")).toBe("Hide Sidebar")
   await done()
 })
+
+it("draws a glyph of its own where a surface brings one", async () => {
+  const { button, done } = await render(
+    <IconButton icon={<svg data-own-glyph="" aria-hidden="true" />} label="Calendar" />,
+  )
+  expect(button.querySelector("[data-own-glyph]")).not.toBeNull()
+  expect(button.getAttribute("aria-label")).toBe("Calendar")
+  await done()
+})

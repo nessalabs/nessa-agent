@@ -9,3 +9,11 @@ export type Flag = "on" | "off"
 export function parseFlag(value: unknown): Flag {
   return value === "off" ? "off" : "on"
 }
+
+/**
+ * Reads a stored opt-in: a preview under Settings › Advanced › Experimental,
+ * off until it is turned on, and anything else stored reads as off.
+ */
+export function parseOptIn(value: unknown): Flag {
+  return value === "on" ? "on" : "off"
+}

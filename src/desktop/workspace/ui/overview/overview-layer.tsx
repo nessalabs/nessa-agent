@@ -46,6 +46,11 @@ export function OverviewLayer({ root }: { root: RefObject<HTMLElement | null> })
   const group = useWorkspaceSelector(selectOverviewGroup)
   const layer = useRef<HTMLDivElement>(null)
   const split = useAtLeastWide(layer, splitWidth)
+  // The list's width beside the peek, as the person dragged it; null is the
+  // even split the stylesheet draws. Held here, where the layer outlives each
+  // opening, so the overview opens as it was left for as long as the window
+  // is; it is a view's arrangement, not the workspace's state.
+  const [listWidth, setListWidth] = useState<number | null>(null)
   // Cover, then the overview, each on its own frame after the open commit.
   // Both follow `open`, so a leave renders neither (`overview.test.tsx`).
   const [coverReady, setCoverReady] = useState(false)
@@ -158,8 +163,17 @@ export function OverviewLayer({ root }: { root: RefObject<HTMLElement | null> })
       ref={layer}
       data-open={open || undefined}
       data-covered={covered || undefined}
+      data-flip="slide"
+      data-flip-id="overview"
     >
-      {mount ? <AgentsOverview split={split} onLeave={leave} /> : null}
+      {mount ? (
+        <AgentsOverview
+          split={split}
+          listWidth={listWidth}
+          onListWidth={setListWidth}
+          onLeave={leave}
+        />
+      ) : null}
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { useLayoutEffect } from "react"
-import { parseFlag } from "../model/window-preferences"
+import { parseFlag, parseOptIn } from "../model/window-preferences"
 import { storedPreference } from "./stored-preference"
 
 /**
@@ -17,7 +17,10 @@ import { storedPreference } from "./stored-preference"
  *   night scene, at the top of each conversation pane (`HeaderSliver`);
  * - **subagents** — the panel of agents a conversation put to work, offered
  *   under Settings › Advanced › Experimental. Off, the widget says so; the
- *   source is unchanged.
+ *   source is unchanged;
+ * - **side rail** — a preview, off until turned on in Advanced ›
+ *   Experimental: the strip of places at the window's left edge
+ *   (`workspace/ui/chrome/side-rail.tsx`).
  */
 const flag = (key: string, event: string) =>
   storedPreference({
@@ -52,3 +55,9 @@ export function useDriftInEffect(): void {
     document.documentElement.dataset.drift = drift === "on" ? "drifting" : "still"
   }, [drift])
 }
+
+export const useSideRailPreference = storedPreference({
+  key: "nessa.desktop.side-rail",
+  event: "nessa:desktop-side-rail",
+  parse: parseOptIn,
+}).usePreference

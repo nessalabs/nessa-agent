@@ -34,8 +34,8 @@ Checks, per engine and layout:
   draft-unlisted   ⌘N adds no row to the lists until something is sent
   send             a message typed in a new session appears in its transcript
   split            ⇧⌘N (new session beside) adds a pane
-  settings         ⌘, opens Settings; Advanced shows its one tab, Experimental, empty
-                   and with no control; its Back button closes it and the panes return
+  settings         ⌘, opens Settings; Advanced says what it is for, with no tab strip, and
+                   offers one preview switch, off; its Back button closes it and the panes return
   overview         on a fresh profile the sidebar offers "Agents"; ⌘0 shows the
                    overview and the keyboard lands on its row; Escape returns to the
                    panes (focus.mjs covers Escape before it lands)
@@ -152,7 +152,10 @@ await main(meta, async ({ options, rep, url }) => {
           .then(() => true)
           .catch(() => false)
         if (!shown) failures.push(`Settings (${css.settings}) not visible after ⌘,`)
-        // Advanced › Experimental: the home of previews. The subagents preview is on offer.
+        // Advanced › Experimental: the home of previews, each a switch — the
+        // subagents preview (on unless turned off) and the side rail (off until
+        // turned on). One tab is nothing to choose between, so no strip; its dek
+        // says what the page is for.
         await page.locator(css.settingsCategory, { hasText: "Advanced" }).click()
         await page
           .locator(css.settingsHeading, { hasText: "Advanced" })
@@ -161,36 +164,37 @@ await main(meta, async ({ options, rep, url }) => {
             failures.push("Advanced's page did not open from its sidebar entry"),
           )
         const advanced = await page.evaluate(
-          ({ tab, panel, control }) => {
+          ({ tab, panel, control, dek }) => {
             const page = document.querySelector(panel)
             return {
-              tabs: [...document.querySelectorAll(tab)].map((each) => ({
-                name: each.textContent?.trim(),
-                selected: each.getAttribute("aria-selected") === "true",
-              })),
+              tabs: [...document.querySelectorAll(tab)].map((each) => each.innerText),
+              dek: document.querySelector(dek)?.textContent ?? "",
               text: page?.textContent ?? "",
               controls: page?.querySelectorAll(control).length ?? -1,
+              offered: [...(page?.querySelectorAll('[role="switch"]') ?? [])].map(
+                (each) => each.getAttribute("aria-checked"),
+              ),
             }
           },
-          { tab: css.settingsTab, panel: css.settingsPanel, control: css.control },
+          {
+            tab: css.settingsTab,
+            panel: css.settingsPanel,
+            control: css.control,
+            dek: css.settingsDek,
+          },
         )
-        if (
-          advanced.tabs.length !== 1 ||
-          advanced.tabs[0].name !== "Experimental" ||
-          !advanced.tabs[0].selected
-        )
+        if (advanced.tabs.length !== 0)
           failures.push(
-            `Advanced's tabs are ${JSON.stringify(advanced.tabs)}, expected Experimental alone, selected`,
+            `Advanced shows tabs ${JSON.stringify(advanced.tabs)}, expected no strip for its one tab`,
           )
-        if (!advanced.text.includes("Subagents"))
+        if (!advanced.dek)
+          failures.push("Advanced has no line under its title saying what it is for")
+        for (const preview of ["Subagents", "Side rail"])
+          if (!advanced.text.includes(preview))
+            failures.push(`Experimental's page says "${advanced.text}", not ${preview}`)
+        if (advanced.offered.join() !== "true,false")
           failures.push(
-            `Experimental's page says "${advanced.text}", not the subagents preview`,
-          )
-        if (advanced.text.includes("Nothing to try right now."))
-          failures.push("Experimental's page still says it has nothing to try")
-        if (advanced.controls !== 1)
-          failures.push(
-            `Experimental's page shows ${advanced.controls} controls, expected the subagents switch`,
+            `Experimental's switches are ${JSON.stringify(advanced.offered)}, expected subagents on, the side rail off`,
           )
         await leaveSettings(page)
         const gone = await page

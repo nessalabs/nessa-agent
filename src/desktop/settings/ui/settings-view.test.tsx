@@ -181,22 +181,32 @@ describe("Advanced", () => {
     expect(navItem("Advanced")?.querySelector("svg.settings-nav-icon")).not.toBeNull()
   })
 
-  it("shows its Experimental tab, with the subagents preview on offer", async () => {
+  it("shows its Experimental tab, with the previews on offer", async () => {
     await mount()
     await act(async () => setOpen(true))
     await act(async () => navItem("Advanced")?.click())
     expect(document.querySelector("#settings-heading")?.textContent).toBe("Advanced")
-    expect(tabNames()).toEqual(["Experimental"])
+    expect(document.querySelector(".settings-dek")?.textContent).toBe(
+      "Early features you can try before they are finished.",
+    )
+    // One tab is nothing to choose between: no strip.
+    expect(tabNames()).toEqual([])
+    // Each preview is a switch, off until turned on.
     const panel = document.querySelector("#settings-panel")
     expect(panel?.textContent).toContain("Subagents")
     expect(panel?.textContent).toContain(
       "A panel of the agents a conversation put to work.",
     )
-    const toggle = panel?.querySelector<HTMLButtonElement>('[role="switch"]')
-    expect(toggle?.getAttribute("aria-checked")).toBe("true")
-    expect(panel?.querySelectorAll("button, input, [role='switch']").length).toBe(1)
-    await act(async () => toggle?.click())
-    expect(toggle?.getAttribute("aria-checked")).toBe("false")
+    expect(panel?.textContent).toContain("Side rail")
+    const [subagents, rail] = [
+      ...(panel?.querySelectorAll<HTMLButtonElement>('[role="switch"]') ?? []),
+    ]
+    expect(subagents?.getAttribute("aria-checked")).toBe("true")
+    // The side rail is off until turned on.
+    expect(rail?.getAttribute("aria-checked")).toBe("false")
+    expect(panel?.querySelectorAll("button, input, [role='switch']").length).toBe(2)
+    await act(async () => subagents?.click())
+    expect(subagents?.getAttribute("aria-checked")).toBe("false")
   })
 
   it("has taken Experimental out of General", async () => {
@@ -208,7 +218,7 @@ describe("Advanced", () => {
 })
 
 describe("what Settings offers", () => {
-  it("disables every control a setting not available yet shows, and says so", async () => {
+  it("disables every control a setting not available yet shows, and says so once for its group", async () => {
     const tabs = settingsCategories.flatMap((category) =>
       category.tabs.map((tab) => tab.id),
     )
@@ -227,15 +237,98 @@ describe("what Settings offers", () => {
     for (const entry of pending) {
       const row = host.querySelector(`[data-setting="${entry.id}"]`)
       expect(row, entry.id).not.toBeNull()
-      expect(row?.textContent).toContain("Not available yet")
       expect(row?.querySelectorAll("button:not(:disabled)").length, entry.id).toBe(0)
+      // Said on the row, or once for its group — never on a row whose group says it.
+      const group = row?.closest(".settings-group")
+      const said = [...(group?.querySelectorAll(".settings-unavailable") ?? [])]
+      // A setting that is a whole card of its own is its group: its note is the group's.
+      const onRow =
+        row !== group && (row?.textContent?.includes("Not available yet") ?? false)
+      expect(said.length + (onRow ? 1 : 0), entry.id).toBe(1)
+      // And whoever reads its controls hears why they rest.
+      if (said.length === 1)
+        for (const control of row?.querySelectorAll<HTMLElement>(
+          "[role=switch], [data-slot=segmented-control], .settings-button",
+        ) ?? [])
+          expect(control.getAttribute("aria-describedby") ?? "", entry.id).toContain(
+            said[0].id,
+          )
     }
-    // And every other control can be used.
-    const available = [...host.querySelectorAll("[data-setting]:not([data-pending])")]
+    // A group none of whose settings is available yet says so once, not on every row.
+    const general = host
+      .querySelector('[data-setting="open-at-login"]')
+      ?.closest(".settings-group")
+    expect(general?.textContent?.match(/Not available yet/g)).toHaveLength(1)
+    // And every other control can be used. A row not available yet is the
+    // kit's disabled row (`data-disabled`); a whole card, the app's `data-pending`.
+    const available = [
+      ...host.querySelectorAll("[data-setting]:not([data-pending], [data-disabled])"),
+    ]
     expect(
       available.every((row) => row.querySelectorAll("button:disabled").length === 0),
     ).toBe(true)
   })
+
+  it("never titles a group as its page or its tab is named, so no word shows twice at once", async () => {
+    const pages = settingsCategories.flatMap((category) =>
+      category.tabs.map((tab) => ({
+        category: category.label,
+        tab: tab.label,
+        id: tab.id,
+      })),
+    )
+    for (const { category, tab, id } of pages) {
+      const Page = settingsTabPages[id]
+      await act(async () =>
+        root.render(
+          <Provider store={testStore()}>
+            <Page />
+          </Provider>,
+        ),
+      )
+      // A title kept for assistive technology only is not on screen.
+      const titles = [
+        ...host.querySelectorAll('.settings-group:not([data-title="hidden"]) > h2'),
+      ].map((title) => title.textContent?.trim())
+      expect(titles, id).not.toContain(category)
+      expect(titles, id).not.toContain(tab)
+    }
+  })
+
+  // Classic has no workspace shell for the side rail to stand beside.
+  for (const [layout, applies] of [
+    ["sidebar", true],
+    ["classic", false],
+  ] as const)
+    it(`${applies ? "enables" : "disables, saying why,"} the side rail's switch in ${layout}`, async () => {
+      const kept = new Map<string, string>([["nessa.desktop.workspace-layout", layout]])
+      const storage = Object.getOwnPropertyDescriptor(window, "localStorage")
+      Object.defineProperty(window, "localStorage", {
+        configurable: true,
+        value: {
+          getItem: (key: string) => kept.get(key) ?? null,
+          setItem: (key: string, value: string) => void kept.set(key, value),
+          removeItem: (key: string) => void kept.delete(key),
+        },
+      })
+      try {
+        const Page = settingsTabPages.experimental
+        await act(async () =>
+          root.render(
+            <Provider store={testStore()}>
+              <Page />
+            </Provider>,
+          ),
+        )
+        const row = host.querySelector('[data-setting="side-rail"]')
+        const toggle = row?.querySelector<HTMLButtonElement>('[role="switch"]')
+        expect(toggle?.disabled).toBe(!applies)
+        expect(row?.textContent?.includes("Not in Classic")).toBe(!applies)
+      } finally {
+        if (storage) Object.defineProperty(window, "localStorage", storage)
+        else Reflect.deleteProperty(window, "localStorage")
+      }
+    })
 
   // The session list is drawn only in three columns: its settings do
   // nothing elsewhere, so there they are disabled and say where they apply.

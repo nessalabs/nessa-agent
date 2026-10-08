@@ -4,11 +4,18 @@
  * between the two feels like the sidebar changing its contents. It carries
  * the window's `data-surface` and `data-host`, so the titlebar geometry in
  * `styles.css` places its sidebar toggle exactly where the app's is.
+ *
+ * The page is set like a well-made magazine page: one centred column, the
+ * category's name large at its head, its tabs a quiet underlined strip, and
+ * the settings below in cards with hairlines between rows. Spacing keeps to
+ * a 4px scale (4 8 12 16 24 32 48); type to four sizes (title, body 13.5,
+ * small 12, label 11 set in capitals).
  */
 .settings {
-  --settings-hairline: color-mix(in oklab, var(--foreground) 6%, transparent);
-  --settings-fill: color-mix(in oklab, var(--foreground) 3.5%, transparent);
-  --settings-hover: color-mix(in oklab, var(--foreground) 5.5%, transparent);
+  /* The desktop's own tones, under Settings' names for what they do here. */
+  --settings-hairline: var(--desktop-rim);
+  --settings-fill: var(--desktop-pane-fill);
+  --settings-hover: var(--desktop-hover);
   /*
    * The theme's edge colour, leaned toward the text colour so it holds on a
    * light window too, where Graphite's near-white edge would vanish.
@@ -19,8 +26,12 @@
     var(--foreground) 35%
   );
   /* --settings-sidebar-w is set by the view, from `model/settings-sidebar.ts`. */
-  --settings-column: 640px;
-  --settings-fade: 160ms;
+  --settings-column: 620px;
+  /* The least room either side of the column. */
+  --settings-margin: 32px;
+  --settings-column-w: min(var(--settings-column), 100% - 2 * var(--settings-margin));
+  /* How a page arrives: quick, and only confirming what is already there. */
+  --settings-arrive: 220ms;
 
   position: fixed;
   inset: 0;
@@ -29,7 +40,7 @@
   display: flex;
   background: var(--background);
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--desktop-text-body);
   line-height: 1.4;
   letter-spacing: -0.005em;
   outline: none;
@@ -43,24 +54,24 @@
 }
 
 /*
- * Keyboard focus is a faint halo in the theme's edge colour, never a hard
- * ring. Defaults, so they carry no weight: a control's own focus style
- * outranks them.
+ * Keyboard focus is the window's focus ring: crisp, in the theme's light,
+ * just outside what it marks. Defaults, so they carry no weight: a
+ * control's own focus style outranks them.
  */
+.settings {
+  --settings-focus-outline: 2px solid var(--desktop-focus-ring);
+  --settings-focus-offset: 2px;
+}
+
 :where(.settings) :focus-visible {
-  outline: none;
+  outline: var(--settings-focus-outline);
+  outline-offset: var(--settings-focus-offset);
 }
 
-:where(.settings button:focus-visible) {
-  box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--settings-accent) 45%, transparent);
-}
-
-/* Controls that already rest on a fill take focus as that fill, with no ring at all. */
-.settings .settings-titlebar-button:focus-visible,
+/* Rows of a list take the ring inside their own edge, so neighbours never clip it. */
 .settings .settings-nav-item:focus-visible,
-.settings .settings-tab:focus-visible {
-  box-shadow: none;
-  background: var(--settings-hover);
+.settings .settings-titlebar-button:focus-visible {
+  outline-offset: -2px;
 }
 
 /* ——— Titlebar ——— */
@@ -354,22 +365,40 @@ html:not(.dark) .settings-glass {
   color: var(--desktop-faint);
 }
 
-/* Sits exactly where "nessa Studio" sits in the app's sidebar. */
+/*
+ * Sits exactly where "nessa Studio" sits in the app's sidebar
+ * (`.workspace-identity`): a row one corner control tall, and in it a pill
+ * of the corner controls' size and radius.
+ */
 .settings-identity {
   display: flex;
-  height: 48px;
+  height: calc(var(--desktop-control-size) + 2 * var(--desktop-control-inset));
   flex: none;
   align-items: center;
-  gap: 6px;
-  margin: 0;
-  padding: 0 16px 0 10px;
+  padding: 0 10px 0 var(--desktop-control-inset);
+  font-size: var(--desktop-text-body);
+  letter-spacing: -0.01em;
+}
+
+.settings-identity-name {
+  display: flex;
+  height: var(--desktop-control-size);
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px 0 4px;
   border: 0;
+  border-radius: var(--desktop-control-radius);
   background: transparent;
   color: var(--foreground);
   font: inherit;
-  text-align: left;
+  white-space: nowrap;
   cursor: default;
   user-select: none;
+  transition: background-color var(--desktop-fast) ease;
+}
+
+.settings-identity-name:hover {
+  background: var(--desktop-hover);
 }
 
 .settings-identity-back {
@@ -379,10 +408,10 @@ html:not(.dark) .settings-glass {
   color: var(--desktop-muted);
   transition:
     transform 160ms var(--desktop-out),
-    color 120ms ease;
+    color var(--desktop-fast) ease;
 }
 
-.settings-identity:hover .settings-identity-back {
+.settings-identity-name:hover .settings-identity-back {
   transform: translateX(-2px);
   color: var(--foreground);
 }
@@ -391,23 +420,15 @@ html:not(.dark) .settings-glass {
   font-weight: 600;
 }
 
-.settings-identity-name span {
+.settings-identity-name > span {
   margin-left: 3px;
   color: var(--desktop-muted);
-}
-
-.settings-identity:focus-visible {
-  box-shadow: none;
-}
-
-.settings-identity:focus-visible .settings-identity-name {
-  text-decoration: underline;
-  text-underline-offset: 3px;
 }
 
 /* ——— Content ——— */
 
 .settings-content {
+  position: relative;
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -415,52 +436,118 @@ html:not(.dark) .settings-glass {
   flex-direction: column;
 }
 
-/* Page title and tabs over a column shared with the page, so both line up. */
-.settings-column {
-  width: min(var(--settings-column), 100% - 64px);
-  margin: 0 auto;
-}
-
 /*
- * The page's head (`ui/column-header.tsx`): its title inline in the titlebar
- * row where it fits — starting with the page's column, or after the window's
- * controls with the sidebar away — else on its own row above the tabs.
+ * The page's titlebar row: its drag strip, and the page's name small once
+ * the masthead's has scrolled under it. It starts with the column — or after
+ * the window's controls, with the sidebar away — so nothing in it is ever
+ * under them (ADR 238).
  */
-.settings-content > .desktop-column-bar {
-  padding-right: calc((100% - min(var(--settings-column), 100% - 64px)) / 2);
-  padding-left: calc((100% - min(var(--settings-column), 100% - 64px)) / 2);
+.settings-bar {
+  position: relative;
+  display: flex;
+  height: var(--desktop-titlebar-height);
+  flex: none;
+  align-items: center;
+  padding-inline: calc((100% - var(--settings-column-w)) / 2);
 }
 
-.settings[data-sidebar="closed"] .settings-content > .desktop-column-bar {
+.settings[data-sidebar="closed"] .settings-bar {
   padding-left: max(
-    calc((100% - min(var(--settings-column), 100% - 64px)) / 2),
+    calc((100% - var(--settings-column-w)) / 2),
     var(--desktop-titlebar-safe-start)
   );
 }
 
-.settings-content > .desktop-column-title[data-placement="below"] {
-  width: min(var(--settings-column), 100% - 64px);
-  margin: 0 auto;
-  padding: 12px 0 0;
+.settings-bar::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  background: var(--settings-hairline);
+  opacity: 0;
+  transition: opacity var(--desktop-base) var(--desktop-ease);
 }
 
-.settings-content > .desktop-column-title[data-placement="below"] h1 {
-  font-size: 20px;
+.settings-bar-title {
+  overflow: hidden;
   font-weight: 600;
-  line-height: 28px;
-  letter-spacing: -0.02em;
-  animation: settings-fade var(--settings-fade) ease-out;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity var(--desktop-base) var(--desktop-ease),
+    transform var(--desktop-base) var(--desktop-ease);
 }
 
-.settings-head-tabs {
-  flex: none;
+.settings-content[data-condensed] .settings-bar::after,
+.settings-content[data-condensed] .settings-bar-title {
+  opacity: 1;
+  transform: none;
 }
 
+/*
+ * The page scrolls below the bar, never under the window's controls; it
+ * fades into the bar's edge rather than being cut there. Its scrollbar
+ * gutter is reserved on both sides, so a long page does not shift the
+ * column off the bar's centre.
+ */
+.settings-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--foreground) 16%, transparent) transparent;
+  mask-image: linear-gradient(to bottom, transparent, #000 12px);
+}
+
+.settings-column {
+  width: var(--settings-column-w);
+  margin: 0 auto;
+}
+
+.settings-page {
+  padding-bottom: 64px;
+}
+
+/* ——— Masthead ——— */
+
+.settings-masthead {
+  padding-top: clamp(16px, 5vh - 8px, 40px);
+  animation: settings-arrive var(--settings-arrive) var(--desktop-out);
+}
+
+.settings-title {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+
+.settings-dek {
+  margin: 10px 0 0;
+  max-width: 46ch;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-read);
+  line-height: 1.45;
+  letter-spacing: -0.01em;
+}
+
+/*
+ * The page's tabs, under the title: words in the muted ink, and a soft pill
+ * under the chosen one that glides between them once placed.
+ */
 .settings-tabs {
   position: relative;
   display: flex;
   gap: 2px;
-  margin: 14px 0 0 -10px;
+  margin: 20px 0 0 -10px;
 }
 
 /* The pill under the selected tab, placed by measurement; it glides once placed. */
@@ -503,230 +590,245 @@ html:not(.dark) .settings-glass {
   color: var(--foreground);
 }
 
+.settings .settings-tab:focus-visible {
+  outline-offset: -2px;
+}
+
 /*
- * The page scrolls under the fixed title and tabs. Its scrollbar gutter is
- * reserved on both sides, so a tab tall enough to scroll neither shifts the
- * column nor pulls it off centre from the title above.
+ * A page arrives at once and settles the last few pixels, so the motion
+ * only confirms the change; nothing waits on it.
  */
-.settings-scroll {
-  min-height: 0;
-  flex: 1;
-  padding: 24px 0 56px;
-  overflow-y: auto;
-  scrollbar-gutter: stable both-edges;
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in oklab, var(--foreground) 16%, transparent) transparent;
-}
-
 .settings-panel {
-  animation: settings-fade var(--settings-fade) ease-out;
+  padding-top: 24px;
+  animation: settings-arrive var(--settings-arrive) var(--desktop-out);
 }
 
-@keyframes settings-fade {
+@keyframes settings-arrive {
   from {
     opacity: 0;
+    transform: translateY(6px);
   }
 }
 
-.settings-group + .settings-group {
-  margin-top: 28px;
+/* ——— Groups and rows: the UI kit's, set for this page ——— */
+
+.settings .settings-group {
+  gap: 10px;
 }
 
-.settings-group h2 {
-  margin: 0 0 8px 14px;
+.settings-group + .settings-group,
+.settings-servers > .settings-group + .settings-group {
+  margin-top: 32px;
+}
+
+/* A group's title, where a tab has several: small and quiet, over its card. */
+.settings .settings-group > h2 {
+  margin: 0;
+  padding: 0 16px;
   color: var(--desktop-muted);
-  font-size: 12px;
+  font-size: var(--desktop-text-footnote);
   font-weight: 500;
+  line-height: 1.4;
 }
 
-.settings-card {
-  border-radius: 12px;
+/* A group named like its tab: the tab already says it; the name stays for assistive technology. */
+.settings .settings-group[data-title="hidden"] > h2 {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.settings [data-slot="settings-group-card"],
+.settings .settings-card {
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--desktop-radius);
   background: var(--settings-fill);
   box-shadow: inset 0 0 0 1px var(--settings-hairline);
 }
 
-.settings-footnote {
-  margin: 8px 14px 0;
+html:not(.dark) .settings [data-slot="settings-group-card"],
+html:not(.dark) .settings .settings-card {
+  background: color-mix(in oklab, var(--background) 70%, white);
+  box-shadow:
+    inset 0 0 0 1px var(--settings-hairline),
+    0 1px 2px rgb(0 0 0 / 4%);
+}
+
+.settings [data-slot="settings-group-footnote"] {
+  padding: 0 16px;
   color: var(--desktop-faint);
-  font-size: 12px;
+  font-size: var(--desktop-text-footnote);
+  line-height: 1.45;
 }
 
-.settings-row {
-  display: flex;
-  min-height: 48px;
-  align-items: center;
-  gap: 14px;
-  padding: 9px 12px 9px 14px;
-  border-radius: 12px;
-  transition: background-color 600ms ease;
+/* A note a tab writes under its groups itself, such as what the gateway answered. */
+.settings-footnote {
+  margin: 0;
+  padding: 0 16px;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-footnote);
 }
 
-.settings-row + .settings-row {
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-  box-shadow: 0 -1px 0 var(--settings-hairline);
+/* That a group is not available yet: said once, a shade firmer than the note beside it. */
+.settings-unavailable {
+  color: var(--desktop-muted);
+  font-weight: 500;
 }
 
-.settings-row:has(+ .settings-row) {
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
+.settings .settings-row {
+  position: relative;
+  gap: 8px;
+  padding: 12px 16px;
+}
+
+.settings .settings-row > :first-child {
+  min-height: 28px;
+  gap: 16px;
+}
+
+/* Hairlines between rows, starting where the words do, as a list's rules do. */
+.settings [data-slot="settings-group-card"] > .settings-row + .settings-row {
+  border-top: 0;
+}
+
+.settings
+  [data-slot="settings-group-card"]
+  > :not(.settings-notices:empty)
+  + .settings-row::before,
+.settings
+  [data-slot="settings-group-card"]
+  > .settings-row
+  + .settings-servers-add::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 16px;
+  height: 1px;
+  background: var(--settings-hairline);
+}
+
+.settings [data-slot="settings-row-label"] {
+  color: var(--foreground);
+  font-size: var(--desktop-text-body);
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+
+.settings [data-slot="settings-row-detail"] {
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  line-height: 1.4;
 }
 
 /* Where a search landed: a soft wash in the theme's light that fades away. */
 .settings-row[data-found],
-.settings-group[data-found] .settings-card {
-  animation: settings-found 1600ms ease-out;
+.settings-group[data-found] [data-slot="settings-group-card"] {
+  animation: settings-found 1600ms var(--desktop-out);
 }
 
 @keyframes settings-found {
   0%,
-  35% {
-    background-color: color-mix(in oklab, var(--settings-accent) 14%, transparent);
+  30% {
+    background-color: color-mix(in oklab, var(--settings-accent) 16%, transparent);
   }
 }
 
 .settings-row-leading {
   display: flex;
-  flex: none;
-}
-
-.settings-row-text {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.settings-row-text small {
-  color: var(--desktop-faint);
-  font-size: 12px;
 }
 
 /*
- * A setting not available yet: its name stays readable, its note says so
- * quietly, and its control rests, dimmed, taking no pointer.
+ * Not available yet, or not in this layout: the name stays readable, and
+ * the control rests, dimmed, taking no pointer — the kit's disabled row,
+ * which dims its own control. A choice drawn in the group dims here.
  */
-.settings-row[data-pending] .settings-row-control,
-.settings-group[data-pending] .settings-card {
+.settings-group[data-pending] .settings-choice {
   opacity: 0.45;
-}
-
-.settings-switch:disabled,
-.settings-segmented button:disabled,
-.settings-choice:disabled {
-  cursor: default;
-  pointer-events: none;
-}
-
-.settings-row-control {
-  display: flex;
-  flex: none;
-  align-items: center;
 }
 
 .settings-value {
   color: var(--desktop-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ——— Controls ——— */
 
-.settings-switch {
-  position: relative;
-  width: 34px;
-  height: 20px;
-  flex: none;
-  padding: 0;
-  border: 0;
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--foreground) 14%, transparent);
+/* The kit's switch, in this page's ink: a satisfying, springy thumb. */
+.settings .settings-switch {
   cursor: default;
-  transition: background-color 180ms ease;
 }
 
-.settings-switch span {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--foreground);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 25%);
-  transition:
-    transform 200ms var(--desktop-spring),
-    background-color 180ms ease;
+.settings .settings-switch [data-slot="switch-thumb"] {
+  transition: transform 220ms var(--desktop-spring);
 }
 
-.settings-switch[aria-checked="true"] {
-  background: color-mix(in oklab, var(--settings-accent) 80%, transparent);
+.settings .settings-switch:active:not(:disabled) [data-slot="switch-thumb"] {
+  width: 19px;
 }
 
-.settings-switch[aria-checked="true"] span {
-  transform: translateX(14px);
-  background: var(--background);
+.settings
+  .settings-switch[data-state="on"]:active:not(:disabled)
+  [data-slot="switch-thumb"] {
+  transform: translateX(11px);
 }
 
-.settings-segmented {
-  display: flex;
-  gap: 2px;
-  padding: 2px;
-  border-radius: 8px;
-  background: color-mix(in oklab, var(--foreground) 5.5%, transparent);
+/* The same ring, with the weight to outrank the kit's own. */
+.settings .settings-switch:focus-visible,
+.settings .settings-segmented button:focus-visible {
+  outline: var(--settings-focus-outline);
+  outline-offset: var(--settings-focus-offset);
 }
 
-.settings-segmented button {
-  height: 24px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--desktop-muted);
-  font: inherit;
-  font-size: 12px;
-  white-space: nowrap;
+.settings .settings-segmented button {
+  height: 26px;
+  font-size: var(--desktop-text-footnote);
+  font-weight: 500;
   cursor: default;
-  transition:
-    background-color 120ms ease,
-    color 120ms ease;
-}
-
-.settings-segmented button:hover {
-  color: var(--foreground);
-}
-
-.settings-segmented button[aria-checked="true"] {
-  background: color-mix(in oklab, var(--foreground) 11%, transparent);
-  color: var(--foreground);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 14%);
 }
 
 .settings-button {
-  height: 26px;
+  height: 28px;
   padding: 0 12px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--desktop-radius-sm);
   background: color-mix(in oklab, var(--foreground) 7%, transparent);
   color: var(--foreground);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--desktop-text-footnote);
+  font-weight: 500;
   white-space: nowrap;
   cursor: default;
-  transition: background-color 120ms ease;
+  transition:
+    background-color var(--desktop-fast) ease,
+    transform var(--desktop-fast) ease;
 }
 
 .settings-button:hover:not(:disabled) {
   background: color-mix(in oklab, var(--foreground) 11%, transparent);
 }
 
+.settings-button:active:not(:disabled) {
+  transform: translateY(0.5px);
+}
+
 .settings-button:disabled {
   color: var(--desktop-faint);
+}
+
+/* A list of keys reads as a list: its rows sit closer than a setting's. */
+.settings .settings-row:has(.settings-kbd) {
+  padding-block: 8px;
 }
 
 .settings-kbd {
   color: var(--desktop-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--desktop-text-footnote);
   letter-spacing: 0.04em;
 }
 
@@ -736,10 +838,10 @@ html:not(.dark) .settings-glass {
   width: 28px;
   height: 28px;
   place-items: center;
-  border-radius: 7px;
+  border-radius: var(--desktop-radius-sm);
   background: color-mix(in oklab, var(--foreground) 7%, transparent);
   color: var(--desktop-muted);
-  font-size: 12px;
+  font-size: var(--desktop-text-footnote);
   font-weight: 600;
 }
 
@@ -752,31 +854,40 @@ html:not(.dark) .settings-glass {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 28px 16px 24px;
+  gap: 8px;
+  padding: 40px 16px 32px;
   color: var(--desktop-faint);
+  text-align: center;
 }
 
 .settings-empty > svg {
   width: 20px;
   height: 20px;
+  margin-bottom: 4px;
 }
 
 .settings-empty p {
-  margin: 0 0 4px;
+  margin: 0;
+}
+
+.settings-empty p:first-of-type {
+  color: var(--desktop-muted);
+}
+
+/* A page with nothing on it yet says so plainly, where its settings would start. */
+.settings-nothing {
+  margin: 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-read);
 }
 
 /* ——— Integrations: the gateway's MCP servers ——— */
 
 .settings-notice {
   margin: 0;
-  padding: 10px 14px;
+  padding: 12px 16px;
   color: var(--desktop-muted);
-  font-size: 12px;
-}
-
-.settings-notices:not(:empty) + .settings-row {
-  box-shadow: 0 -1px 0 var(--settings-hairline);
+  font-size: var(--desktop-text-footnote);
 }
 
 /* The panel's heading takes focus when an inspection starts; it is not a control. */
@@ -788,12 +899,23 @@ html:not(.dark) .settings-glass {
  * A server's row wraps rather than squeezes: in a narrow page its actions go
  * under its name instead of pushing past the card, whatever the width.
  */
-.settings-server {
+.settings .settings-server > :first-child {
   flex-wrap: wrap;
 }
 
-.settings-server .settings-row-text {
+.settings .settings-server > :first-child > :not([data-slot]) {
   flex: 1 1 12rem;
+}
+
+.settings .settings-server [data-slot="settings-row-control"] {
+  max-width: 100%;
+  flex-shrink: 1;
+}
+
+.settings-server [data-slot="settings-row-detail"] > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .settings-server-command {
@@ -804,17 +926,23 @@ html:not(.dark) .settings-glass {
 }
 
 .settings-server-confirm {
-  margin: 6px 0 0;
-  font-size: 12px;
+  margin: 0;
+  font-size: var(--desktop-text-footnote);
 }
 
 .settings-server-actions {
+  display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
 }
 
+/* The list's foot: Add server, at the end of its line. */
 .settings-servers-add {
+  position: relative;
+  display: flex;
   justify-content: flex-end;
+  padding: 10px 16px;
 }
 
 /* A name stored more than once: its servers, read-only, one under another. */
@@ -852,6 +980,13 @@ html:not(.dark) .settings-glass {
 }
 
 /* Rows holding the place of a list on its way. */
+.settings-skeleton {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  padding: 0 16px;
+}
+
 .settings-skeleton span {
   width: 40%;
   height: 10px;
@@ -1225,47 +1360,48 @@ html:not(.dark) .settings-glass {
   flex: 1;
 }
 
+/* About's colophon: the name, set as the wordmark is. */
 .settings-about {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 4px 0 28px 14px;
-}
-
-.settings-about-mark {
-  width: 14px;
-  height: 14px;
-  border-radius: 3.5px;
+  margin: 0 0 24px 16px;
+  font-size: var(--desktop-text-title);
+  letter-spacing: -0.02em;
 }
 
 .settings-about strong {
-  font-size: 15px;
   font-weight: 600;
 }
 
 .settings-about span {
   color: var(--desktop-muted);
-  font-size: 15px;
 }
 
 /* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
 :root[data-motion="reduced"] .settings,
-:root[data-motion="reduced"] .settings-content > .desktop-column-title h1,
+:root[data-motion="reduced"] .settings-masthead,
 :root[data-motion="reduced"] .settings-panel,
 :root[data-motion="reduced"] .settings-row[data-found],
-:root[data-motion="reduced"] .settings-group[data-found] .settings-card {
+:root[data-motion="reduced"]
+  .settings-group[data-found]
+  [data-slot="settings-group-card"] {
   animation: none;
 }
 :root[data-motion="reduced"] .settings-sidebar,
 :root[data-motion="reduced"] .settings-glass,
 :root[data-motion="reduced"] .settings-titlebar-button,
 :root[data-motion="reduced"] .settings-tabs[data-placed]::before,
+:root[data-motion="reduced"] .settings-bar::after,
+:root[data-motion="reduced"] .settings-bar-title,
+:root[data-motion="reduced"] .settings-switch [data-slot="switch-thumb"],
 :root[data-motion="reduced"] .settings-choice-check {
   transition: none;
 }
 
-/* "nessa Studio" in each layout's sidebar footer opens Settings. */
-.desktop-identity-button {
+/*
+ * "nessa Studio" in each layout's sidebar footer opens Settings. A bare
+ * button by default, weightless, so the footer's own geometry (its padding
+ * and radius) wins.
+ */
+:where(.desktop-identity-button) {
   display: block;
   min-width: 0;
   padding: 0;
@@ -1277,7 +1413,7 @@ html:not(.dark) .settings-glass {
   cursor: default;
 }
 
-.desktop-identity-button:hover > :last-child {
+:where(.desktop-identity-button):hover > :last-child {
   color: var(--foreground);
 }
 
@@ -1285,11 +1421,7 @@ html:not(.dark) .settings-glass {
 .linked-devices {
   display: flex;
   flex-direction: column;
-  gap: 22px;
-}
-
-.settings-group[data-found] [data-slot="settings-group-card"] {
-  animation: settings-found 1600ms ease-out;
+  gap: 32px;
 }
 
 .linked-orbs {

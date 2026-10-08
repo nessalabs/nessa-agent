@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 import {
+  dekOf,
   firstTabOf,
+  namesItsTab,
   searchSettings,
   setting,
   settingsCategories,
@@ -61,19 +63,41 @@ describe("the settings catalogue", () => {
       label: "Experimental",
     })
     expect(tabsOf("general").map((tab) => tab.id)).not.toContain("experimental")
-    // The subagents preview is the one Advanced offers.
+    // The previews on offer: subagents and the side rail.
     expect(
       settingsEntries
         .filter((entry) => settingsTab(entry.tab).category === "advanced")
         .map((entry) => entry.id),
-    ).toEqual(["subagents-preview"])
+    ).toEqual(["subagents-preview", "side-rail"])
     expect(setting("subagents-preview").label).toBe("Subagents")
   })
 
-  it("shows a category's tabs when it has several, or one named other than itself", () => {
+  it("shows a category's tabs only when it has several to choose from", () => {
     expect(showsTabs("general")).toBe(true)
-    expect(showsTabs("advanced")).toBe(true)
+    expect(showsTabs("advanced")).toBe(false)
     expect(showsTabs("about")).toBe(false)
+  })
+
+  it("never names a tab in the strip as its category is named, so no word shows twice at once", () => {
+    for (const category of settingsCategories)
+      if (showsTabs(category.id))
+        for (const tab of tabsOf(category.id))
+          expect(tab.label, category.id).not.toBe(category.label)
+  })
+
+  it("gives a category a line under its title only where its name does not say enough", () => {
+    expect(dekOf("advanced")).toBe("Early features you can try before they are finished.")
+    expect(dekOf("appearance")).toBeUndefined()
+    // One short line: never more than a glance.
+    for (const category of settingsCategories)
+      expect((dekOf(category.id) ?? "").length, category.id).toBeLessThanOrEqual(64)
+  })
+
+  it("knows a setting named like its tab, whose group needs no title on screen", () => {
+    expect(namesItsTab("agents")).toBe(true)
+    expect(namesItsTab("workspace-layout")).toBe(true)
+    expect(namesItsTab("mcp-servers")).toBe(false)
+    expect(namesItsTab("icon-family")).toBe(false)
   })
 
   it("names every category by its label", () => {
@@ -162,6 +186,8 @@ describe("searchSettings", () => {
         label: "Experimental",
         trail: "Advanced",
       })
+    // With no tab strip on its page, a setting there is placed by its category alone.
+    expect(showsTabs("advanced")).toBe(false)
   })
 
   it("treats search syntax as plain text", () => {
