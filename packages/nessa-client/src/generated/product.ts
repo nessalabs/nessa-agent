@@ -568,7 +568,7 @@ export interface ConversationTool {
   /** The call's structured result (MCP structuredContent) as JSON text, when the harness passed it on and it fits; absent otherwise. The result's text stays in details either way. */
   structuredContent?: string
 }
-/** An MCP tool's identity: the server by the name it was configured under, and the tool on it; and the UI the tool declared, when known. */
+/** An MCP tool's identity: the server by the name it was configured under, and the tool on it; the UI the tool declared, when known; and the arguments the gateway's connection saw for the call, when it could match them. */
 export interface ConversationMcpTool {
   /** The MCP server's configured name. Which names are valid is the SDK domain's rule (McpTool); only its byte bound is repeated here, generated for both sides. */
   server: string
@@ -576,6 +576,8 @@ export interface ConversationMcpTool {
   tool: string
   /** The ui:// resource of the tool's MCP App, as the gateway's own connection to the server last listed the tool (no harness passes it through ACP); absent when the tool declared none or it is not known. Which URIs are valid is the SDK domain's rule (UiResourceUri); only its byte bound is repeated here. */
   resourceUri?: string
+  /** The call's arguments, one JSON object encoded, as the gateway's MCP connection saw them. The same bound as a review and an app's own call (maxMcpArgumentsBytes). Absent when the call did not go through that connection, the harness named no call id it could match, or the arguments did not fit — never cut. */
+  argumentsJson?: string
 }
 /** Bounded full replacement of the current live conversation view. Polling never implies cancellation or durable streaming storage. */
 export interface ConversationView {

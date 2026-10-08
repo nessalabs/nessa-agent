@@ -65,6 +65,15 @@ Sources for these two fields, beyond each entry's own page:
   which names Opus 5 alone among these.
 - OpenAI's levels come from each model's page and the
   [reasoning guide](https://developers.openai.com/api/docs/guides/reasoning).
+  Rechecked 2026-10-08 (#312), effort levels only: the guide's effort values
+  are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`, and it
+  says GPT-6 Astra rejects `none`. The model pages publish Astra as `low`
+  through `max`, and GPT-5.6 Sol, Terra, and Luna as `none` through `max`.
+  None of those pages lists `ultra`. A captured codex-acp 1.12 session for
+  Sol advertises `ultra` and omits `none`; that is the agent's narrowing, not
+  a change to these levels. That pass did not move `verifiedOn`: it did not
+  recheck the Anthropic entries, the other OpenAI fields, or the rest of the
+  catalog.
 - The OpenAI [fast mode guide](https://developers.openai.com/api/docs/guides/fast-mode)
   defers to the [pricing page](https://developers.openai.com/api/docs/pricing)
   for supported models. Its Fast table lists all four OpenAI entries.

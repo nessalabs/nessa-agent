@@ -968,6 +968,47 @@ it("carries the host's copy of an item, and a picture of a pane without the host
   await act(async () => root.unmount())
 })
 
+it("clears a sliver's inline clip when a committed drop releases the preview", async () => {
+  const finished = Promise.resolve()
+  Element.prototype.animate = function (this: Element, keyframes, timing) {
+    const asked = {
+      element: this,
+      keyframes: keyframes as Keyframe[],
+      duration: typeof timing === "object" ? timing.duration : timing,
+      cancelled: false,
+    }
+    animated.push(asked)
+    return {
+      cancel() {
+        asked.cancelled = true
+      },
+      finished,
+      id: "",
+      effect: { target: asked.element, getComputedTiming: () => ({ progress: 1 }) },
+    } as unknown as Animation
+  }
+  const fake = fakeSource(two())
+  const root = await mounted(fake)
+  const pane = element('[data-pane-key="2"]')
+  const sliver = document.createElement("div")
+  sliver.setAttribute("data-sliver", "")
+  pane.prepend(sliver)
+  await press(60, 16, element('[data-drag-pane="1"]'))
+  // Up pane b's middle: above it. Pane b goes below, shorter, and the sliver is cut.
+  for (const y of [400, 300, 200, 100, 30]) {
+    pointer("pointermove", 827, y)
+    await new Promise((resolve) => setTimeout(resolve, 4))
+  }
+  await frames()
+  expect(said()).toBe("Move above Pane b")
+  expect(sliver.style.clipPath).not.toBe("")
+  pointer("pointerup", 827, 30)
+  await frames()
+  expect(fake.state.drops).toHaveLength(1)
+  expect(sliver.style.clipPath).toBe("")
+  await act(async () => root.unmount())
+})
+
 it("holds each part of a pane to what it keeps to as a preview reshapes it", async () => {
   const fake = fakeSource(two())
   const root = await mounted(fake)

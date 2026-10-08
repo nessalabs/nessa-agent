@@ -1220,15 +1220,20 @@ export function useSplitPanesDrag(
       else unmark()
     }
 
+    /** Release retained pane styles before dropping their ownership map. */
+    const releasePreview = () => {
+      ;[...previewed.keys()].forEach(letGo)
+      letGoOfDragPreview(scope)
+      previewed.clear()
+    }
+
     /** Releases the copy and preview resources retained by this drag. */
     const releaseMade = (made: Made) => {
       made.drawing.fade?.cancel()
       made.drawing.glide?.cancel()
       made.drawing.shape.motion?.cancel()
       made.drawing.shape.counter?.cancel()
-      ;[...previewed.keys()].forEach(letGo)
-      letGoOfDragPreview(scope)
-      previewed.clear()
+      releasePreview()
       scope.removeAttribute(marks.takesSpare)
       tidy(made)
       made.layer.remove()
@@ -1319,8 +1324,7 @@ export function useSplitPanesDrag(
         }
         // The preview was the arrangement this frame is not committing.
         scope.removeAttribute(marks.takesSpare)
-        letGoOfDragPreview(scope)
-        previewed.clear()
+        releasePreview()
       })
       const release = () => {
         cancelAnimationFrame(frame)
@@ -1336,8 +1340,7 @@ export function useSplitPanesDrag(
           requestAnimationFrame(() => {
             if (ownsDragResources(phase, made)) {
               scope.removeAttribute(marks.takesSpare)
-              letGoOfDragPreview(scope)
-              previewed.clear()
+              releasePreview()
             }
             resolve()
           }),

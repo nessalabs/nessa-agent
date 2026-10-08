@@ -11,6 +11,7 @@ pub mod value_objects;
 pub use entities::ToolCall;
 pub(crate) use value_objects::ToolObservationUndo;
 pub use value_objects::{
-    FileLocation, FilePath, McpTool, ToolCallId, ToolCallUpdate, ToolContent, ToolContentView,
-    ToolKind, ToolObservation, ToolStatus, MAX_MCP_NAME_BYTES, MAX_STRUCTURED_RESULT_BYTES,
+    FileLocation, FilePath, McpCallArguments, McpTool, ToolCallId, ToolCallUpdate, ToolContent,
+    ToolContentView, ToolKind, ToolObservation, ToolStatus, MAX_MCP_ARGUMENTS_BYTES,
+    MAX_MCP_NAME_BYTES, MAX_STRUCTURED_RESULT_BYTES,
 };

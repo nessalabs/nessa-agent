@@ -6,7 +6,7 @@ use super::super::{
     sessions::{
         binding::{Command, Completion, DispatchedPrompt},
         cleanup::ProcessCleanup,
-        forwarded::attach_forwarded,
+        forwarded::{attach_arguments, attach_forwarded},
         thought_level, AcpConfig,
     },
 };
@@ -571,6 +571,11 @@ impl<P: AcpProfile> Worker<P> {
         execution_reply: &mut Option<ExecutionReply>,
         recovery: &ProcessCleanup,
     ) -> WorkerResult {
+        // A16: the grant stays with the provider session when this worker
+        // leaves. Drop arguments no update took before the next generation
+        // of that open can attach them. A turn that ends with the worker
+        // still running already dropped them in `message`.
+        self.discard_unclaimed_arguments();
         // No command may enter a generation that has left its drive loop. The final
         // execution acknowledgement can wake a different runtime thread immediately.
         self.commands.close();
@@ -2065,6 +2070,9 @@ impl<P: AcpProfile> Worker<P> {
             }
             self.emit(event)?;
             self.shutdown_deadline = previous_deadline;
+            // After this turn's updates have taken what they will. The next
+            // turn of this grant must not be told arguments that were left.
+            self.discard_unclaimed_arguments();
             let active = self.active.take().expect("validated active prompt");
             let _ = active
                 .reply
@@ -2076,6 +2084,13 @@ impl<P: AcpProfile> Worker<P> {
             self.provider_result = None;
         }
         Ok(())
+    }
+    /// Arguments still waiting were not claimed by an update of the execution
+    /// that just ended. Drop them before the session accepts another turn.
+    fn discard_unclaimed_arguments(&self) {
+        if let Some(forwarded) = self.config.stand_ins.forwarded() {
+            forwarded.discard_arguments();
+        }
     }
     fn emit(&mut self, event: ExecutionEvent) -> Result<(), AgentError> {
         let result = self.events.try_send(event);
@@ -2201,9 +2216,10 @@ impl<P: AcpProfile> Worker<P> {
             if !self.config.tools_enabled {
                 return Err(json_rpc::protocol("tool event in a text-only binding"));
             }
-            let tool = attach_forwarded(
-                self.profile.tool_call(update)?,
-                self.config.stand_ins.forwarded(),
+            let forwarded = self.config.stand_ins.forwarded();
+            let tool = attach_arguments(
+                attach_forwarded(self.profile.tool_call(update)?, forwarded),
+                forwarded,
             );
             self.emit(execution.tool_event(&target, tool)?)
         }

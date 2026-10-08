@@ -24,8 +24,13 @@ kept until the catalogue carried them.
   through `max` with `xhigh` between `high` and `max`; Haiku 4.5 takes a token
   budget, not a level. A shared list would invent equivalences the SDK shape
   forbids.
-- No verified provider page lists a level past `max`. The slider's Ultra has no
-  real model today.
+- No verified provider page for a model in this catalogue lists a level past
+  `max`. The slider's Ultra has no real model today. Rechecked 2026-10-08
+  (#312), those four OpenAI models' effort levels only: the OpenAI reasoning
+  guide and the GPT-6 Astra, GPT-5.6 Sol, Terra, and Luna pages still publish
+  the levels recorded below, and none of them lists `ultra`. The catalog-wide
+  `verifiedOn` stays 2026-09-29, because that pass did not recheck the rest
+  of the catalog.
 - Fast mode is speed, not effort (ADR 238), and a binding may be unable to turn
   it on even where the model has it.
 - When this record was accepted, every binding declared reasoning unsupported:
@@ -177,9 +182,19 @@ has the same gap, and one answer for both is
   control's Ultra look is held by unit tests with a stand-in model, not by
   real data.
 - Watch for: a provider renaming levels or publishing a level past `max`.
-  Codex 1.12 already offers `ultra` on gpt-6-astra and gpt-5.6-sol and no
-  `none` on the gpt-5.6 models, against what the catalogue records from the
-  provider pages; narrowing hides both differences until the catalogue is
-  checked again ([#312](https://github.com/nessalabs/nessa-agent/issues/312)).
+  Rechecked 2026-10-08
+  ([#312](https://github.com/nessalabs/nessa-agent/issues/312)), effort levels
+  of GPT-6 Astra and GPT-5.6 Sol, Terra, and Luna only, against the
+  [reasoning guide](https://developers.openai.com/api/docs/guides/reasoning)
+  and those models' pages. Those pages still publish
+  GPT-6 Astra as `low`, `medium`, `high`, `xhigh`, `max` (the guide says
+  `none` returns HTTP 400) and GPT-5.6 Sol, Terra, and Luna as `none`, `low`,
+  `medium`, `high`, `xhigh`, `max`. They do not publish `ultra`. `verifiedOn`
+  stays 2026-09-29. The Codex
+  models page describes Ultra for later models (GPT-6.1 Sol ranges to Ultra;
+  GPT-6 Luna stops at Max) and does not give a list for these four. The
+  captured codex-acp 1.12 session for gpt-5.6-sol still advertises `ultra`
+  and no `none`. That advertisement narrows the catalogue and does not widen
+  it, so the recorded levels stay the provider pages' levels.
 - Remaining: the server protocol and the desktop do not carry a chosen level
   to an agent yet, and fast mode is sent by no binding.

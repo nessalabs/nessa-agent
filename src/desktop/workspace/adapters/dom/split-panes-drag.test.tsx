@@ -3,8 +3,8 @@
  * The pointer's drag in the workspace, where jsdom can follow it: the split
  * panes' drag (`useSplitPanesDrag`) wired to the workspace's store
  * (`workspaceSplitPanes`) and page (`workspaceDragOptions`), as the window
- * wires it — the page's side of `split-panes/model/drag.ts`. The copy is the
- * pane itself, held under the pointer and gliding to its centre; the zone
+ * wires it — the page's side of `split-panes/model/drag.ts`. A compact title
+ * card follows the pointer while live chats stay in place; the zone
  * under the pointer is said, a drop commits what was shown, and Escape, a
  * lost pointer or any change lets it all go. What the drag reads of the page
  * it reads as the press begins; after that it only writes, and selects

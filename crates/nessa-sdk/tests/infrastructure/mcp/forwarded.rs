@@ -1,11 +1,14 @@
 //! What a grant keeps of the results its stand-ins forward: rows S1–S8 and
 //! S11 of the "Forwarded results" table in `docs/design/mcp-connections.md`,
-//! each test named after its row. The store's own bound and replacement (S9,
-//! S10) are tested with it, in `tests/infrastructure/acp/sessions/forwarded.rs`.
+//! and rows A1–A6 and A9 of "Forwarded arguments", each test named after its
+//! row. The store's own bound and replacement (S9, S10, A7, A8) are tested
+//! with it, in `tests/infrastructure/acp/sessions/forwarded.rs`.
 use super::super::{framing::MAX_FRAME_BYTES, McpOwner, McpSession};
 use super::fixture::{Behaviour, FixtureLauncher};
 use super::{conversation, servers, Harness};
-use crate::domain::agent_execution::tools::{ToolCallId, ToolContent, MAX_STRUCTURED_RESULT_BYTES};
+use crate::domain::agent_execution::tools::{
+    McpCallArguments, ToolCallId, ToolContent, MAX_MCP_ARGUMENTS_BYTES, MAX_STRUCTURED_RESULT_BYTES,
+};
 use crate::infrastructure::acp::fields::MAX_IDENTIFIER_BYTES;
 use crate::infrastructure::mcp::STRUCTURED_RESULT_OMITTED;
 use serde_json::{json, Value};
@@ -486,5 +489,207 @@ async fn s11_a_grant_keeps_only_its_own_stand_ins_results() {
     assert_eq!(
         owner.forwarded().take(&tool_call("toolu_mine"), "fixture"),
         Some(structured(r#"{"rows":1}"#))
+    );
+}
+
+fn kept_arguments(owner: &McpOwner, call: &str) -> Option<String> {
+    owner
+        .forwarded()
+        .take_arguments(&tool_call(call), "fixture")
+        .map(|arguments| arguments.as_str().to_owned())
+}
+
+#[tokio::test]
+async fn a1_arguments_are_kept_under_the_call_id_when_the_call_is_accepted() {
+    let (session, owner, launcher) = granted(silent("tools/call")).await;
+    let server = launcher.server(0);
+    let mut harness = Harness::attach(session);
+    harness
+        .send(call(
+            json!(1),
+            "echo",
+            json!({ "city": "Oslo" }),
+            json!("toolu_args"),
+        ))
+        .await;
+    server.arrived("tools/call", 1).await;
+    // The server has not answered. The arguments are already kept, and the
+    // results deque is untouched.
+    assert_eq!(owner.forwarded().len(), 0);
+    assert_eq!(owner.forwarded().arguments_len(), 1);
+    // Cancelling before the answer drops a result (S6) and leaves the
+    // arguments: they were the request.
+    let upstream = server.with_method("tools/call")[0]["id"].clone();
+    harness
+        .send(json!({ "jsonrpc": "2.0", "method": "notifications/cancelled", "params": { "requestId": 1 } }))
+        .await;
+    server.arrived("notifications/cancelled", 1).await;
+    server.send(json!({ "jsonrpc": "2.0", "id": upstream, "result": {
+        "content": [], "structuredContent": { "late": true } } }));
+    harness
+        .send(json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }))
+        .await;
+    assert_eq!(harness.next().await.unwrap()["id"], 1);
+    assert_eq!(owner.forwarded().len(), 0);
+    assert_eq!(
+        kept_arguments(&owner, "toolu_args").as_deref(),
+        Some(r#"{"city":"Oslo"}"#)
+    );
+}
+
+#[tokio::test]
+async fn a2_absent_or_null_arguments_are_kept_as_an_empty_object() {
+    let (session, owner, _) = granted(Behaviour::default()).await;
+    let mut harness = Harness::attach(session);
+    harness
+        .send(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": { "name": "echo", "_meta": { "claudecode/toolUseId": "toolu_absent" } } }))
+        .await;
+    harness
+        .send(call(json!(2), "echo", Value::Null, json!("toolu_null")))
+        .await;
+    harness.next().await.unwrap();
+    harness.next().await.unwrap();
+    assert_eq!(
+        kept_arguments(&owner, "toolu_absent").as_deref(),
+        Some("{}")
+    );
+    assert_eq!(kept_arguments(&owner, "toolu_null").as_deref(), Some("{}"));
+}
+
+#[tokio::test]
+async fn an_error_answer_keeps_the_call_arguments() {
+    // S4 keeps no result. The arguments were the request, so they stay.
+    let (session, owner, _) = granted(Behaviour::default()).await;
+    let mut harness = Harness::attach(session);
+    harness
+        .send(call(
+            json!(1),
+            "nope",
+            json!({ "city": "Oslo" }),
+            json!("toolu_error"),
+        ))
+        .await;
+    let answer = harness.next().await.unwrap();
+    assert_eq!(answer["error"]["code"], -32602);
+    assert_eq!(owner.forwarded().len(), 0);
+    assert_eq!(
+        kept_arguments(&owner, "toolu_error").as_deref(),
+        Some(r#"{"city":"Oslo"}"#)
+    );
+}
+
+#[tokio::test]
+async fn a3_arguments_that_are_not_an_object_are_not_kept() {
+    let (session, owner, _) = granted(Behaviour::default()).await;
+    let mut harness = Harness::attach(session);
+    for (id, arguments) in [json!([1]), json!(3), json!("text"), json!(true)]
+        .into_iter()
+        .enumerate()
+    {
+        harness
+            .send(call(
+                json!(id + 1),
+                "echo",
+                arguments,
+                json!(format!("toolu_{id}")),
+            ))
+            .await;
+        harness.next().await.unwrap();
+    }
+    assert_eq!(owner.forwarded().arguments_len(), 0);
+}
+
+#[tokio::test]
+async fn a4_arguments_past_the_bound_are_not_kept_and_arguments_at_it_are() {
+    let (session, owner, _) = granted(Behaviour::default()).await;
+    let mut harness = Harness::attach(session);
+    let past = "x".repeat(MAX_MCP_ARGUMENTS_BYTES - 7);
+    harness
+        .send(call(
+            json!(1),
+            "echo",
+            json!({ "a": past }),
+            json!("toolu_past"),
+        ))
+        .await;
+    harness.next().await.unwrap();
+    assert_eq!(owner.forwarded().arguments_len(), 0);
+    let fits = "x".repeat(MAX_MCP_ARGUMENTS_BYTES - 8);
+    let encoded = json!({ "a": fits }).to_string();
+    assert_eq!(encoded.len(), MAX_MCP_ARGUMENTS_BYTES);
+    harness
+        .send(call(
+            json!(2),
+            "echo",
+            json!({ "a": fits }),
+            json!("toolu_fits"),
+        ))
+        .await;
+    harness.next().await.unwrap();
+    assert_eq!(
+        kept_arguments(&owner, "toolu_fits").as_deref(),
+        Some(encoded.as_str())
+    );
+    let _ = McpCallArguments::new(encoded).unwrap();
+}
+
+#[tokio::test]
+async fn a5_a_call_naming_no_usable_call_id_keeps_no_arguments() {
+    let (session, owner, _) = granted(Behaviour::default()).await;
+    let mut harness = Harness::attach(session);
+    harness
+        .send(json!({ "jsonrpc": "2.0", "id": 0, "method": "tools/call",
+                      "params": { "name": "echo", "arguments": { "city": "Oslo" } } }))
+        .await;
+    harness.next().await.unwrap();
+    assert_eq!(owner.forwarded().arguments_len(), 0);
+}
+
+#[tokio::test]
+async fn a6_a_refused_call_to_a_hidden_tool_keeps_no_arguments() {
+    let behaviour = Behaviour {
+        pages: vec![vec![
+            json!({ "name": "echo", "_meta": { "ui": { "resourceUri": "ui://f/c", "visibility": ["app"] } } }),
+        ]],
+        ..Behaviour::default()
+    };
+    let (session, owner, launcher) = granted(behaviour).await;
+    let mut harness = Harness::attach(session);
+    harness
+        .send(call(
+            json!(1),
+            "echo",
+            json!({ "city": "Oslo" }),
+            json!("toolu_hidden"),
+        ))
+        .await;
+    assert_eq!(harness.next().await.unwrap()["error"]["code"], -32602);
+    assert_eq!(launcher.server(0).with_method("tools/call").len(), 0);
+    assert_eq!(owner.forwarded().arguments_len(), 0);
+    assert_eq!(owner.forwarded().len(), 0);
+}
+
+#[tokio::test]
+async fn a9_a_grant_keeps_only_its_own_stand_ins_arguments() {
+    let (session, owner, _) = granted(Behaviour::default()).await;
+    let other = McpOwner::new(conversation());
+    let (servers, _, _) = servers(Behaviour::default());
+    let others = servers.open("fixture", other.clone()).await.unwrap();
+    others.list_tools().await.unwrap();
+    let mut harness = Harness::attach(session);
+    harness
+        .send(call(
+            json!(1),
+            "echo",
+            json!({ "city": "Oslo" }),
+            json!("toolu_mine"),
+        ))
+        .await;
+    harness.next().await.unwrap();
+    assert_eq!(other.forwarded().arguments_len(), 0);
+    assert_eq!(
+        kept_arguments(&owner, "toolu_mine").as_deref(),
+        Some(r#"{"city":"Oslo"}"#)
     );
 }

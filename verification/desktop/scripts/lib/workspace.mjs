@@ -321,6 +321,12 @@ export function dragResidue(page) {
         .filter((p) => !p.closest(sel.dragGhost))
         .filter((p) => p.style.width || p.style.height)
         .map((p) => p.dataset.paneKey),
+      // An inline clip a shorter preview put on a sliver, still there after
+      // the drop (`drag.test.tsx`).
+      clipped: [...document.querySelectorAll(sel.pictureBand)]
+        .filter((el) => !el.closest(sel.dragGhost))
+        .filter((el) => el.style.clipPath)
+        .map((el) => el.closest(sel.pane)?.dataset.paneKey ?? "page"),
     }),
     css,
   )
@@ -335,6 +341,8 @@ export function residueFailures(residue) {
     out.push(`panes left drawn off their place: ${residue.transformed.join(",")}`)
   if (residue.sized.length)
     out.push(`panes left at a size of the drag's: ${residue.sized.join(",")}`)
+  if (residue.clipped?.length)
+    out.push(`slivers left clipped: ${residue.clipped.join(",")}`)
   return out
 }
 

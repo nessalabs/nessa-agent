@@ -843,7 +843,8 @@ once (`McpServerList` in `acp/sessions/config.rs`, beside the one owner of
 the server rules, `StdioMcpServer::problem_in`), holds the open's grant
 (`acp/sessions/stand_ins.rs`), and puts its environment in every MCP server
 entry; its worker attaches the grant's forwarded results to the completed
-calls they answer (`acp/sessions/forwarded.rs`). The desktop's
+calls they answer, and the arguments kept when each call was accepted to
+the update that names that call (`acp/sessions/forwarded.rs`). The desktop's
 `workspace/adapters/gateway/tool-widget.ts` reads a gateway tool into the
 transcript's `widget` part. The MCP server list is not part of the
 restoration fingerprint (`acp/sessions/identity.rs`, ADR 344).

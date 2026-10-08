@@ -9,9 +9,11 @@
  * What the view says of a call is mapped, not inferred:
  * - its status: `completed` is a result, `failed` an error result, anything
  *   else still running;
- * - its arguments: `input`, when it is a JSON object. The view holds them only
- *   when a permission request showed them; otherwise the app is told none
- *   (`{}`), the limit #394 removes;
+ * - its arguments: `mcp.argumentsJson` when the gateway's connection carried
+ *   them, and otherwise `input` when that is a JSON object. A running call
+ *   whose arguments are not yet known carries none, so `tool-input` waits;
+ *   a finished call whose view never carried any is told `{}`, and the
+ *   result follows;
  * - its result: the text in `details`, and `structuredContent` when it is a
  *   JSON object.
  *
@@ -72,17 +74,28 @@ function jsonObject(text: string | undefined): JsonObject | undefined {
   }
 }
 
+/**
+ * The arguments the app is told, when they are known. The connection's
+ * encoding wins over a permission review's `input`. Either missing, or not
+ * one JSON object, is not yet known.
+ */
+function argumentsOf(tool: ConversationTool): JsonObject | undefined {
+  const carried = tool.mcp?.argumentsJson
+  if (carried !== undefined) return jsonObject(carried)
+  return jsonObject(tool.input)
+}
+
 function phaseOf(tool: ConversationTool): CallPhase {
-  const args = jsonObject(tool.input) ?? {}
+  const args = argumentsOf(tool)
   if (tool.status !== "completed" && tool.status !== "failed")
-    return { kind: "running", arguments: args }
+    return args === undefined ? { kind: "running" } : { kind: "running", arguments: args }
   const structuredContent = jsonObject(tool.structuredContent)
   const result: JsonObject = {
     content: tool.details ? [{ type: "text", text: tool.details }] : [],
     ...(structuredContent ? { structuredContent } : {}),
     ...(tool.status === "failed" ? { isError: true } : {}),
   }
-  return { kind: "done", arguments: args, result }
+  return { kind: "done", arguments: args ?? {}, result }
 }
 
 /** The app call `tool` is, in conversation `conversationId`, or `null` for a call with no UI (C1, C2). */

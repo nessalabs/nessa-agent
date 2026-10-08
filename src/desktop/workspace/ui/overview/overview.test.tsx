@@ -704,6 +704,55 @@ describe("the agents overview", () => {
     ).toHaveLength(2)
   })
 
+  it("keeps End and the arrows on mounted rows while later rows are still arriving", async () => {
+    const index = sampleIndex()
+    const later = Array.from({ length: 8 }, (_, at) =>
+      summary(`later-${at}`, "desktop", 1, "running"),
+    )
+    const { store } = await mount({
+      index: { ...index, sessions: [...index.sessions, ...later] },
+    })
+    await act(async () => store.dispatch(selectInOverview({ sessionId: "first" })))
+    await act(async () => entry()?.click())
+    await act(async () => settle(10))
+    const mounted = () =>
+      [...host.querySelectorAll<HTMLElement>("[data-overview-item]")].map(
+        (item) => item.dataset.overviewItem,
+      )
+    for (let frame = 0; frame < 24; frame++) {
+      const onRow = document.activeElement?.closest("[data-overview-item]")
+      if (
+        onRow &&
+        mounted().length >= 2 &&
+        host.querySelector("[data-overview-listed]") === null
+      )
+        break
+      await nextFrame()
+    }
+    const focused = document.activeElement?.closest<HTMLElement>("[data-overview-item]")
+    expect(focused).not.toBeNull()
+    expect(host.querySelector("[data-overview-listed]")).toBeNull()
+    const before = mounted()
+    // Two rows drawn, and the list not finished: End has a mounted row to
+    // reach and a later one it must not name.
+    expect(before.length).toBeGreaterThanOrEqual(2)
+    const lastMounted = before[before.length - 1]
+    await press(focused as HTMLElement, "End")
+    const afterEnd = document.activeElement?.closest<HTMLElement>("[data-overview-item]")
+    expect(afterEnd?.dataset.overviewItem).toBe(lastMounted)
+    expect(store.getState().workspace.overview.selected).toBe(lastMounted)
+    await press(afterEnd as HTMLElement, "ArrowDown")
+    const afterDown = document.activeElement?.closest<HTMLElement>("[data-overview-item]")
+    expect(afterDown?.dataset.overviewItem).toBe(lastMounted)
+    expect(store.getState().workspace.overview.selected).toBe(lastMounted)
+    await press(afterDown as HTMLElement, "Home")
+    expect(
+      document.activeElement?.closest<HTMLElement>("[data-overview-item]")?.dataset
+        .overviewItem,
+    ).toBe(before[0])
+    expect(store.getState().workspace.overview.selected).toBe(before[0])
+  })
+
   it("walks the list with the arrow keys", async () => {
     await mount()
     await open()
@@ -787,6 +836,41 @@ describe("the agents overview", () => {
     await nextFrame()
     expect(document.activeElement).toBe(card("first"))
     expect(store.getState().workspace.overview.selected).toBe("first")
+  })
+
+  it("lands later when the current row moves past the drawn rows before the opening frame", async () => {
+    const index = sampleIndex()
+    // Newer than "first", so it leads and "first" is not the first row drawn.
+    const earlier = [summary("a", "desktop", 400, "needs-you", { title: "a" })]
+    const { store } = await mount({
+      index: { ...index, sessions: [...earlier, ...index.sessions] },
+    })
+    const shown = (id: string) =>
+      host.querySelector<HTMLElement>(`[data-overview-item="${id}"]`)
+    await act(async () => store.dispatch(selectInOverview({ sessionId: "first" })))
+    await act(async () => entry()?.click())
+    await act(async () => settle(10))
+    for (let frame = 0; frame < 16; frame++) {
+      if (
+        shown("first") !== null &&
+        document.activeElement !== shown("first") &&
+        animation.pending() > 0
+      )
+        break
+      await nextFrame()
+    }
+    // The row is committed and the opening frame is still waiting.
+    expect(shown("first")).not.toBeNull()
+    expect(document.activeElement).not.toBe(shown("first"))
+    expect(animation.pending()).toBeGreaterThan(0)
+    // "rest" is last. The frame already waiting cannot draw it.
+    expect(shown("rest")).toBeNull()
+    await act(async () => store.dispatch(selectInOverview({ sessionId: "rest" })))
+    for (let frame = 0; frame < 16 && document.activeElement !== shown("rest"); frame++)
+      await nextFrame()
+    expect(shown("rest")).not.toBeNull()
+    expect(document.activeElement).toBe(shown("rest"))
+    expect(store.getState().workspace.overview.selected).toBe("rest")
   })
 
   it("puts the keyboard on the current row under StrictMode too, whose second mount cancels the first try", async () => {

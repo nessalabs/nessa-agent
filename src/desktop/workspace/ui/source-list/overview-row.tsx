@@ -12,7 +12,23 @@ export function OverviewRow() {
   const open = useWorkspaceSelector(selectOverviewOpen)
   const [marked, setMarked] = useState(false)
   useEffect(() => {
-    setMarked(open)
+    if (!open) {
+      setMarked(false)
+      return
+    }
+    let active = true
+    let inner: number | null = null
+    const outer = requestAnimationFrame(() => {
+      if (!active) return
+      inner = requestAnimationFrame(() => {
+        if (active) setMarked(true)
+      })
+    })
+    return () => {
+      active = false
+      cancelAnimationFrame(outer)
+      if (inner !== null) cancelAnimationFrame(inner)
+    }
   }, [open])
   const waiting = useWorkspaceSelector((state) => selectStatusCounts(state).needsYou)
   return (

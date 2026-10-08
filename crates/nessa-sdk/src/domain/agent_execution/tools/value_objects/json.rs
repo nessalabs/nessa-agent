@@ -17,6 +17,12 @@ enum Open {
     ObjectNext,
 }
 
+/// Whether `text` is exactly one JSON object, surrounded by optional whitespace.
+pub(in crate::domain::agent_execution) fn is_json_object(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.get(space(bytes, 0)) == Some(&b'{') && is_json(text)
+}
+
 /// Whether `text` is exactly one JSON value, surrounded by optional whitespace.
 pub(in crate::domain::agent_execution) fn is_json(text: &str) -> bool {
     let bytes = text.as_bytes();

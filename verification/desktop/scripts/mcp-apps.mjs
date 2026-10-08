@@ -32,6 +32,7 @@ import { attempt, CannotRun, devServerOnlySteps, recordIfLeftOut } from "./lib/c
 import { appFrame } from "./lib/apps.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
+import { target } from "./lib/server.mjs"
 import { content, css, names, selectorFor } from "./lib/selectors.mjs"
 import { contentIs, paneCount, paneCountIs, settled, until } from "./lib/workspace.mjs"
 
@@ -106,7 +107,11 @@ Checks, per engine and layout (--only <names> to pick):
                go is sent ui/resource-teardown before its pane closes
 
 departures, departures-back and chart read the dev server's modules. Under
---mode prod those steps are not run.`,
+--mode prod those steps are not run. The other fixtures need the sandbox
+proxy, which Vite starts only in configureServer, so a production preview
+has no origin to mount the app. run-all --mode prod leaves this check out.
+Run on its own as --mode prod, it says it could not run, before building a
+preview.`,
 }
 
 /** The chart page `resources/read` serves, and the series this server's rows draw. */
@@ -1392,26 +1397,39 @@ const checks = {
   },
 }
 
-await main(meta, async ({ options, rep, url, mode }) => {
-  const only = options.only ? options.list(options.only) : Object.keys(checks)
-  for (const name of only)
-    if (!Object.hasOwn(checks, name)) throw new CannotRun(`no check named ${name}`)
-  await withEngines(options, rep, async (engine, browser) => {
-    for (const layout of options.layouts)
-      for (const name of only) {
-        if (
-          recordIfLeftOut(rep, mode, name, devServerOnlySteps["mcp-apps"], {
-            engine,
-            layout,
-          })
-        )
-          continue
-        let opened
-        await attempt(rep, { engine, layout, name }, async () => {
-          opened = await onSample(browser, { url, layout })
-          const result = await checks[name](opened.page, layout, options.shots)
-          return result
-        }).finally(() => opened?.close())
-      }
-  })
-})
+await main(
+  meta,
+  async ({ options, rep, url, mode }) => {
+    const only = options.only ? options.list(options.only) : Object.keys(checks)
+    for (const name of only)
+      if (!Object.hasOwn(checks, name)) throw new CannotRun(`no check named ${name}`)
+    await withEngines(options, rep, async (engine, browser) => {
+      for (const layout of options.layouts)
+        for (const name of only) {
+          if (
+            recordIfLeftOut(rep, mode, name, devServerOnlySteps["mcp-apps"], {
+              engine,
+              layout,
+            })
+          )
+            continue
+          let opened
+          await attempt(rep, { engine, layout, name }, async () => {
+            opened = await onSample(browser, { url, layout })
+            const result = await checks[name](opened.page, layout, options.shots)
+            return result
+          }).finally(() => opened?.close())
+        }
+    })
+  },
+  // A preview this check would start has no sandbox meta: the plugin publishes
+  // the proxy only from configureServer. Refuse before that build. An explicit
+  // --url may be a dev server, which does have the proxy.
+  async (options) => {
+    if (options.mode === "prod" && !options.url)
+      throw new CannotRun(
+        "MCP Apps fixtures need the dev server's sandbox proxy, which starts in configureServer and is absent from vite preview. Under --mode prod this check is not run.",
+      )
+    return target(options)
+  },
+)

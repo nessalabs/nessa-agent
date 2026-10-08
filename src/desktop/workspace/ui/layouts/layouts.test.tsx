@@ -21,7 +21,7 @@ import {
   showContent,
 } from "../../adapters/store/commands"
 import { layoutShape, panesOf } from "../../../split-panes/model/pane-layout"
-import { settle, shownBy, testStore } from "../../testing"
+import { controlledAnimationFrames, settle, shownBy, testStore } from "../../testing"
 import { paneItemOf } from "../../model/pane-item"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../../../ui/menu"
 import { PaneMenuItems } from "../panes/pane-menu"
@@ -275,6 +275,32 @@ describe("every key of the shared map does the same in both layouts", () => {
       // And it did something: every key in the map is one the window answers.
       expect(columns.after, binding.command).not.toEqual(columns.before)
     })
+})
+
+describe("the Agents entry is not marked on the open's own paint", () => {
+  it("waits two frames, then takes the current page", async () => {
+    const frames = controlledAnimationFrames()
+    try {
+      const { root } = await render(SessionsInSidebar)
+      // Mount may have queued frames of its own. The open's frames are the ones after those.
+      await act(async () => {
+        for (let step = 0; step < 12 && frames.pending() > 0; step++) frames.runFrame()
+      })
+      expect(frames.pending()).toBe(0)
+      const entry = () => host.querySelector<HTMLButtonElement>(".agents-overview-entry")
+      await act(async () => entry()?.click())
+      expect(entry()?.hasAttribute("data-active")).toBe(false)
+      expect(entry()?.getAttribute("aria-current") ?? null).toBeNull()
+      await act(async () => frames.runFrame())
+      expect(entry()?.hasAttribute("data-active")).toBe(false)
+      await act(async () => frames.runFrame())
+      expect(entry()?.hasAttribute("data-active")).toBe(true)
+      expect(entry()?.getAttribute("aria-current")).toBe("page")
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
 })
 
 describe("⌘0 and the sidebar's Agents entry always open the overview, with nothing to turn on", () => {
