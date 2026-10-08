@@ -295,6 +295,41 @@ describe("what Settings offers", () => {
     }
   })
 
+  // Classic has no workspace shell for the side rail to stand beside.
+  for (const [layout, applies] of [
+    ["sidebar", true],
+    ["classic", false],
+  ] as const)
+    it(`${applies ? "enables" : "disables, saying why,"} the side rail's switch in ${layout}`, async () => {
+      const kept = new Map<string, string>([["nessa.desktop.workspace-layout", layout]])
+      const storage = Object.getOwnPropertyDescriptor(window, "localStorage")
+      Object.defineProperty(window, "localStorage", {
+        configurable: true,
+        value: {
+          getItem: (key: string) => kept.get(key) ?? null,
+          setItem: (key: string, value: string) => void kept.set(key, value),
+          removeItem: (key: string) => void kept.delete(key),
+        },
+      })
+      try {
+        const Page = settingsTabPages.experimental
+        await act(async () =>
+          root.render(
+            <Provider store={testStore()}>
+              <Page />
+            </Provider>,
+          ),
+        )
+        const row = host.querySelector('[data-setting="side-rail"]')
+        const toggle = row?.querySelector<HTMLButtonElement>('[role="switch"]')
+        expect(toggle?.disabled).toBe(!applies)
+        expect(row?.textContent?.includes("Not in Classic")).toBe(!applies)
+      } finally {
+        if (storage) Object.defineProperty(window, "localStorage", storage)
+        else Reflect.deleteProperty(window, "localStorage")
+      }
+    })
+
   // The session list is drawn only in three columns: its settings do
   // nothing elsewhere, so there they are disabled and say where they apply.
   const sessionList = ["show-session-list", "running-first"] as const

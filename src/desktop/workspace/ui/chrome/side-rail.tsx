@@ -3,7 +3,13 @@
  * listing the workspace and the other places beside it; choosing one gives it the whole
  * window. Each icon has its own small hover gesture (`side-rail.css`).
  */
-import type { CSSProperties, ReactElement, ReactNode } from "react"
+import {
+  type CSSProperties,
+  type ReactElement,
+  type ReactNode,
+  useLayoutEffect,
+  useRef,
+} from "react"
 import { IconButton } from "../../../ui/icon-button"
 import { IdentityFooter } from "./identity-footer"
 import "./side-rail.css"
@@ -116,8 +122,19 @@ export function SideRail({
     0,
     railItems.findIndex((item) => item.id === active),
   )
+  const nav = useRef<HTMLElement>(null)
+  // Folding away — for room, or by the toggle — never strands the keyboard on
+  // a hidden button: focus goes to the toggle in the corner, or else lets go.
+  useLayoutEffect(() => {
+    const rail = nav.current
+    if (open || !rail?.contains(document.activeElement)) return
+    rail.parentElement?.querySelector<HTMLElement>(".side-rail-toggle")?.focus()
+    if (rail.contains(document.activeElement))
+      (document.activeElement as HTMLElement).blur()
+  }, [open])
   return (
     <nav
+      ref={nav}
       className="side-rail"
       data-open={open || undefined}
       id="side-rail"

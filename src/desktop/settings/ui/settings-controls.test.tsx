@@ -185,6 +185,22 @@ describe("a group's title", () => {
     ).toEqual(["Window"])
   })
 
+  it("keeps a resting card's note on a listed row's controls, beside the row's own line", async () => {
+    await render(
+      <SettingGroup id="workspace-layout" pending>
+        <ItemRow
+          label="Codex"
+          detail="Installed"
+          control={<Toggle checked onChange={noop} />}
+        />
+      </SettingGroup>,
+    )
+    const note = host.querySelector(".settings-unavailable")
+    expect(note).not.toBeNull()
+    const described = textOf(host.querySelector('[role="switch"]'), "aria-describedby")
+    expect(described).toBe(`${note?.textContent} | Installed`)
+  })
+
   it("names a card of choices, and stays only for assistive technology when it repeats its tab", async () => {
     await render(
       <>

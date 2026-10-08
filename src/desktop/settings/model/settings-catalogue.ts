@@ -133,11 +133,11 @@ interface SettingShape {
    */
   pending?: true
   /**
-   * The one workspace layout it applies in — what it changes is drawn only
+   * The workspace layouts it applies in — what it changes is drawn only
    * there. In any other its control is disabled and its row says where it
    * applies, so it never looks as if it works where it does nothing.
    */
-  layout?: WorkspaceLayoutId
+  layouts?: readonly WorkspaceLayoutId[]
 }
 
 export const settingsEntries = [
@@ -256,7 +256,7 @@ export const settingsEntries = [
   {
     id: "show-session-list",
     tab: "layout",
-    layout: "columns",
+    layouts: ["columns"],
     label: "Show session list",
     detail: "The column of sessions beside the sidebar.",
   },
@@ -278,7 +278,7 @@ export const settingsEntries = [
   {
     id: "running-first",
     tab: "sessions",
-    layout: "columns",
+    layouts: ["columns"],
     label: "Keep running sessions at the top",
     keywords: "sort order",
   },
@@ -405,6 +405,8 @@ export const settingsEntries = [
   {
     id: "side-rail",
     tab: "experimental",
+    // Classic has no workspace shell to stand beside.
+    layouts: ["columns", "sidebar"],
     label: "Side rail",
     detail: "A strip at the window's edge for places beside Agents.",
     keywords: "rail plugins places apps strip",

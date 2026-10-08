@@ -281,6 +281,8 @@ export function WorkspaceShell({
   // A preview, off until turned on in Settings › Advanced › Experimental.
   const [railFlag] = useSideRailPreference()
   const railOffered = railFlag === "on"
+  // Turned off, it forgets the place it had open: turned on again, it opens on Agents.
+  if (!railOffered && railItem !== "agents") setRailItem("agents")
   // An item other than Agents has the window: the workspace under it is inert.
   const shownRailItem = railOffered
     ? railItems.find((each) => each.id === railItem && each.id !== "agents")
@@ -607,27 +609,32 @@ const Columns = memo(function Columns({
           onMove={dragSidebar}
         />
       ) : null}
-      {region.sessionList ? <SessionList /> : null}
-      {region.sessionList && (listOpen || sidebarOpen) ? (
-        <ResizeEdge
-          label="Resize Session List"
-          className={
-            listOpen ? "workspace-list-edge" : "workspace-list-edge workspace-edge-folded"
-          }
-          value={{
-            now: listOpen ? listWidth : 0,
-            min: sessionListLimits.min,
-            max: sessionListLimits.max,
-          }}
-          onStart={() =>
-            (listFrom.current = listOpen
-              ? drawnWidth(root.current, ".workspace-list")
-              : null)
-          }
-          onMove={dragList}
-        />
-      ) : null}
-      <PaneGrid source={splitPanes} />
+      {/* What the Agents overview covers, and makes inert (`overview-layer.tsx`). */}
+      <div className="workspace-content">
+        {region.sessionList ? <SessionList /> : null}
+        {region.sessionList && (listOpen || sidebarOpen) ? (
+          <ResizeEdge
+            label="Resize Session List"
+            className={
+              listOpen
+                ? "workspace-list-edge"
+                : "workspace-list-edge workspace-edge-folded"
+            }
+            value={{
+              now: listOpen ? listWidth : 0,
+              min: sessionListLimits.min,
+              max: sessionListLimits.max,
+            }}
+            onStart={() =>
+              (listFrom.current = listOpen
+                ? drawnWidth(root.current, ".workspace-list")
+                : null)
+            }
+            onMove={dragList}
+          />
+        ) : null}
+        <PaneGrid source={splitPanes} />
+      </div>
     </>
   )
 })

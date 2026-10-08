@@ -20,7 +20,7 @@ import { SettingsGroup, SettingsRow } from "@nessa-ui/react/settings-group"
 import { Switch } from "@nessa-ui/react/switch"
 import { namesItsTab, setting, type SettingId } from "../model/settings-catalogue"
 import { useWorkspaceLayoutPreference } from "../../adapters/workspace-layout-preference"
-import { workspaceLayouts } from "../../model/workspace-layout"
+import { type WorkspaceLayoutId, workspaceLayouts } from "../../model/workspace-layout"
 import { tooltip } from "../../ui/tooltip"
 
 /**
@@ -67,7 +67,7 @@ const notYet = "Not available yet"
 
 /** The description ids a control takes, joined; none when there are none. */
 function describedBy(...ids: (string | undefined)[]): string | undefined {
-  const present = ids.filter(Boolean)
+  const present = [...new Set(ids.filter(Boolean))]
   return present.length > 0 ? present.join(" ") : undefined
 }
 
@@ -138,14 +138,24 @@ export function Group({
  * catalogue, and so does whether it is available yet, and in which layout
  * it applies — elsewhere its control is disabled and the row says where.
  */
+/** Where a setting applies, said on its row in any other layout: "Three columns only", "Not in Classic". */
+function appliesIn(layouts: readonly WorkspaceLayoutId[]): string {
+  const label = (id: WorkspaceLayoutId) =>
+    workspaceLayouts.find((each) => each.id === id)?.label ?? id
+  const outside = workspaceLayouts.filter((each) => !layouts.includes(each.id))
+  return outside.length === 1 && layouts.length > 1
+    ? `Not in ${outside[0].label}`
+    : `${layouts.map(label).join(" or ")} only`
+}
+
 export function Row({ id, children }: { id: SettingId; children?: ReactNode }) {
   const entry = setting(id)
   const found = useContext(FoundSetting) === id
   const groupNote = useContext(GroupNote)
   const [layout] = useWorkspaceLayoutPreference()
   const elsewhere =
-    entry.layout !== undefined && entry.layout !== layout
-      ? workspaceLayouts.find((each) => each.id === entry.layout)?.label
+    entry.layouts !== undefined && !entry.layouts.includes(layout)
+      ? appliesIn(entry.layouts)
       : undefined
   const pending = entry.pending === true
   // Why its control rests, said on the row unless its group says it once.
@@ -153,7 +163,7 @@ export function Row({ id, children }: { id: SettingId; children?: ReactNode }) {
     pending && groupNote === undefined
       ? notYet
       : elsewhere !== undefined
-        ? `${elsewhere} only`
+        ? elsewhere
         : undefined
   return (
     <ItemRow
@@ -206,11 +216,15 @@ export function ItemRow({
   onKeyDown?: KeyboardEventHandler<HTMLDivElement>
 } & { [data: `data-${string}`]: string | boolean | undefined }) {
   const detailId = useId()
+  // A pending group's note, said once under its card, still describes this row.
+  const inherited = useContext(RowDescription)
   const inGroup = useContext(RowAvailable)
   const available = inGroup && unavailable !== true
   return (
     <RowAvailable.Provider value={available}>
-      <RowDescription.Provider value={describedBy(detail ? detailId : undefined, also)}>
+      <RowDescription.Provider
+        value={describedBy(inherited, detail ? detailId : undefined, also)}
+      >
         <SettingsRow
           {...data}
           onKeyDown={onKeyDown}
