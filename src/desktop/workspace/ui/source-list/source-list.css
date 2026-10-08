@@ -113,11 +113,12 @@ html:not(.dark) .workspace-sidebar {
 /* ——— Rows: the kit's `SidebarMenuItem`, dense, in the window's inks ——— */
 
 /*
- * Every row of the sidebar is the kit's (`sidebar-row.tsx`, `thread-row.tsx`,
- * `channel-branch.tsx`): one height, one radius and one set of states, given
- * here once. `shared-controls.mjs` (`rows`) measures them. The row's control
- * is found by its size, which the kit always writes: a context menu's trigger
- * puts its own `data-slot` on it. The control's selector is weightless, so a
+ * The sidebar's channels, its Agents entry and "Show all" are the kit's
+ * rows (`sidebar-row.tsx`, `channel-branch.tsx`): one height, one radius and
+ * one set of states, given here once; its sessions are `ListRow`s
+ * (`thread-row.tsx`). `shared-controls.mjs` (`rows`) measures both. The
+ * kit's control is found by the `data-size` it writes on it (a context
+ * menu's trigger would put its own `data-slot` there). The control's selector is weightless, so a
  * row's own class (a thread, "Show all") outranks the base and its states.
  */
 .workspace-sidebar :where([data-slot="sidebar-menu-item-row"] > [data-size]) {

@@ -118,6 +118,14 @@ export const css = {
 
   // Shared controls (#632): the kit's components, by the slot each draws
   keyCap: "kbd", // every key cap; each must be the kit's (data-slot="kbd")
+  kitRow: '[data-slot="sidebar-menu-item-row"] > [data-size]', // the kit's SidebarMenuItem control (data-size is always written; a context menu's trigger replaces data-slot)
+  listRow: ".desktop-list-row", // class: the window's ListRow (src/desktop/ui/list-row.tsx)
+  identityButton: ".desktop-identity-button", // class: "nessa Studio" / "‹ nessa Agent" (src/desktop/ui/identity.tsx)
+  emptyState: '[data-slot="empty-state"]', // the kit's EmptyState
+  countBadge: ".workspace-badge", // class: a sidebar row's count, the kit's Badge
+  litPoint: '.workspace-status:is([data-status="needs-you"], [data-status="unread"])', // class: StatusGlyph's lit points
+  needsYouHeading: "#agents-needs-you", // the overview's Needs you heading
+  codeBlock: ".workspace-code", // class: a code block in a transcript
 
   // Side columns
   sidebar: ".workspace-sidebar", // class
@@ -177,7 +185,8 @@ export const css = {
   peekEarlier: ".agents-peek-earlier", // class: says the turn holds more above what the peek draws
   transcriptStep: ".workspace-steps li", // class: one step the agent took, in a message
   overviewColumn: ".agents-overview-column", // class: the list the arrow keys walk
-  overviewResting: ".agents-overview-resting", // class: a quiet line in the list ("Nothing needs you")
+  overviewResting: ".agents-overview-resting", // class: a group shown alone that lists nothing ("Nothing needs you"), the kit's EmptyState
+  overviewFootnote: ".agents-overview-footnote", // class: how many sessions the view leaves out, and Show All
   inlinePeek: ".agents-inline-peek", // class: the peek opened beneath its row
   overviewTitle: ".agents-overview-title", // class: the overview's heading and filter
   peekAsk: ".agents-peek-ask", // class: the request in full, after the story

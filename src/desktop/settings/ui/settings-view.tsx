@@ -488,7 +488,7 @@ function SettingsView({
           )}
 
           {/* Where "nessa Studio" opened Settings, the way back to the app. */}
-          <IdentityFooter>
+          <IdentityFooter as="div">
             <IdentityButton
               product="Agent"
               back

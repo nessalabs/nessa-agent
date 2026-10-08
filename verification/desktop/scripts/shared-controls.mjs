@@ -93,10 +93,9 @@ function windowScale() {
  * them: the kit's `SidebarMenuItem` (its control carries `data-size`) or the
  * window's `ListRow` (`.desktop-list-row`). In the page.
  */
-function rowsOnPage() {
-  const kit = (element) =>
-    element.matches('[data-slot="sidebar-menu-item-row"] > [data-size]')
-  const listRow = (element) => element.classList.contains("desktop-list-row")
+function rowsOnPage(sel) {
+  const kit = (element) => element.matches(sel.kitRow)
+  const listRow = (element) => element.matches(sel.listRow)
   const label = (element) =>
     element.querySelector(
       '[data-slot="sidebar-menu-item-label"], .desktop-list-row-label',
@@ -104,24 +103,34 @@ function rowsOnPage() {
   const rows = [
     ...document.querySelectorAll(
       [
-        ".workspace-sidebar [data-row]",
-        ".workspace-sidebar button[aria-current]",
-        ".workspace-sidebar .agents-overview-entry",
-        ".workspace-list [data-session-row]",
-        "[data-overview-item]:not(.agents-request)",
-        "#workspace-switcher-results [role='option']",
+        `${sel.sidebar} [data-row]`,
+        `${sel.sidebar} ${sel.kitRow}`,
+        sel.sessionListRow,
+        `${sel.overviewItem}:not(${sel.overviewRequest})`,
+        `${sel.switcherResults} [role='option']`,
       ].join(", "),
     ),
   ].filter((row) => row.getBoundingClientRect().height > 0 && !row.dataset.section)
-  return rows.map((row) => ({
-    text: (label(row)?.textContent ?? row.textContent).trim().slice(0, 40),
-    component: kit(row) ? "kit" : listRow(row) ? "list-row" : "other",
-    background: getComputedStyle(row).backgroundColor,
-    weight: label(row) ? getComputedStyle(label(row)).fontWeight : null,
-    unread: row.hasAttribute("data-unread"),
-    current:
-      row.getAttribute("data-active") === "true" || row.hasAttribute("data-selected"),
-  }))
+  return rows.map((row) => {
+    // What a kit row lays beside its control (a count, a glyph) must still be in its name.
+    const beside = row
+      .closest('[data-slot="sidebar-menu-item-row"]')
+      ?.querySelector(`${sel.countBadge}, [role="img"]`)
+    const said = beside?.getAttribute("aria-label") ?? beside?.textContent.trim() ?? null
+    return {
+      text: (label(row)?.textContent ?? row.textContent).trim().slice(0, 40),
+      component: kit(row) ? "kit" : listRow(row) ? "list-row" : "other",
+      background: getComputedStyle(row).backgroundColor,
+      weight: label(row) ? getComputedStyle(label(row)).fontWeight : null,
+      unread: row.hasAttribute("data-unread"),
+      current:
+        row.getAttribute("data-active") === "true" || row.hasAttribute("data-selected"),
+      unsaid:
+        kit(row) && said && !(row.getAttribute("aria-label") ?? "").includes(said)
+          ? said
+          : null,
+    }
+  })
 }
 
 /** Rows that are neither of the two components, and current or unread rows off the scale. */
@@ -134,6 +143,8 @@ function rowFailures(rows, scale, where) {
       failures.push(
         `${where}: unread "${row.text}" weighs ${row.weight}, not ${scale.unread}`,
       )
+    if (row.unsaid)
+      failures.push(`${where}: "${row.text}" does not say "${row.unsaid}" in its name`)
     if (row.current && row.background !== scale.selected)
       failures.push(
         `${where}: chosen "${row.text}" is filled ${row.background}, not ${scale.selected}`,
@@ -162,8 +173,8 @@ async function hovered(page, selector) {
  * The window's name at a sidebar's foot (`ui/identity.tsx`): its pill, its
  * words and its row, against the corner controls' scale. In the page.
  */
-function measureIdentity() {
-  const button = [...document.querySelectorAll(".desktop-identity-button")].find(
+function measureIdentity(selector) {
+  const button = [...document.querySelectorAll(selector)].find(
     (candidate) => candidate.getClientRects().length > 0 && candidate.checkVisibility(),
   )
   if (!button) return null
@@ -203,8 +214,8 @@ function measureIdentity() {
 }
 
 /** The identity's fill under the pointer, against `--desktop-hover`. */
-async function identityHover(page, scale) {
-  const button = page.locator(".desktop-identity-button:visible").first()
+async function identityHover(page, scale, selector) {
+  const button = page.locator(`${selector}:visible`).first()
   await button.hover()
   await page.waitForTimeout(250)
   const fill = await button.evaluate(
@@ -221,7 +232,7 @@ async function identityHover(page, scale) {
  * `EmptyState` (`styles.css` › Empty states): a quiet one's line faint
  * footnote type, a titled one's title at reading size. In the page.
  */
-function measureEmptyStates() {
+function measureEmptyStates(sel) {
   const probe = document.createElement("div")
   document.querySelector("[data-surface]").append(probe)
   const read = (property, value) => {
@@ -238,7 +249,7 @@ function measureEmptyStates() {
   const failures = []
   const seen = []
   const shown = (element) => element.getClientRects().length > 0
-  for (const empty of document.querySelectorAll('[data-slot="empty-state"]')) {
+  for (const empty of document.querySelectorAll(sel.emptyState)) {
     if (!shown(empty)) continue
     const title = empty.querySelector('[data-slot="empty-state-title"]')
     const style = getComputedStyle(title)
@@ -269,7 +280,7 @@ function measureEmptyStates() {
  * a row's caption (`source-list.css`), a point is `StatusGlyph`'s — 6px, in
  * the needs or the running light, wherever it stands. In the page.
  */
-function measureBadges() {
+function measureBadges(sel) {
   const probe = document.createElement("div")
   document.querySelector("[data-surface]").append(probe)
   const read = (value) => {
@@ -283,7 +294,7 @@ function measureBadges() {
   probe.remove()
   const failures = []
   const shown = (element) => element.getClientRects().length > 0
-  const counts = [...document.querySelectorAll(".workspace-badge")].filter(shown)
+  const counts = [...document.querySelectorAll(sel.countBadge)].filter(shown)
   for (const count of counts) {
     const box = count.getBoundingClientRect()
     const style = getComputedStyle(count)
@@ -296,11 +307,7 @@ function measureBadges() {
     if (count.dataset.tone === "needs" && style.color !== light["needs-you"])
       failures.push(`count ${words}: ink ${style.color}, not the needs light`)
   }
-  const points = [
-    ...document.querySelectorAll(
-      '.workspace-status:is([data-status="needs-you"], [data-status="unread"])',
-    ),
-  ].filter(shown)
+  const points = [...document.querySelectorAll(sel.litPoint)].filter(shown)
   for (const point of points) {
     const dot = getComputedStyle(point, "::before")
     const where = point.closest("h2, [data-session-row], [data-row], [role='option']")
@@ -313,23 +320,19 @@ function measureBadges() {
   // The classes the window drew its own point and count with, before.
   for (const old of document.querySelectorAll(".workspace-unread"))
     failures.push(`"${old.outerHTML.slice(0, 60)}" is not StatusGlyph`)
-  const header = document.querySelector("#agents-needs-you")
+  const header = document.querySelector(sel.needsYouHeading)
   if (header && getComputedStyle(header, "::before").content !== "none")
     failures.push("the overview's Needs you heading draws its own point")
   return {
     failures,
+    headerPoint: Boolean(header?.querySelector(sel.litPoint)),
     counts: counts.length,
     points: points.map((point) => point.dataset.status),
   }
 }
 
 /** The cards set into a surface, which share one edge (`--desktop-card-rim`). */
-const cards = [
-  ".workspace-code",
-  ".workspace-approval-command",
-  "[data-widget-inline]",
-  ".agents-clear",
-]
+const cards = [css.codeBlock, css.approvalCommand, css.widgetCard, ".agents-clear"]
 
 /** Every card on the page against `--desktop-card-rim`, by kind. In the page. */
 function measureCardRims(selectors) {
@@ -366,19 +369,32 @@ const checks = {
   identity: async (page, { open }) => {
     const scale = await page.evaluate(windowScale)
     const failures = []
-    const inWindow = await page.evaluate(measureIdentity)
+    const inWindow = await page.evaluate(measureIdentity, css.studio)
     if (!inWindow) return { failures: ["no identity at the sidebar's foot"] }
     failures.push(...inWindow.failures.map((f) => `"${inWindow.text}": ${f}`))
     failures.push(
-      ...(await identityHover(page, scale)).map((f) => `"${inWindow.text}": ${f}`),
+      ...(await identityHover(page, scale, css.studio)).map(
+        (f) => `"${inWindow.text}": ${f}`,
+      ),
     )
     await page.keyboard.press(keys.settings)
     await need(page, css.settings, "Settings")
     await page.waitForTimeout(500)
-    const inSettings = await page.evaluate(measureIdentity)
+    // Measured inside Settings: the window under it keeps its own, inert but drawn.
+    const inSettings = await page.evaluate(
+      measureIdentity,
+      `${css.settings} ${css.identityButton}`,
+    )
     if (!inSettings) failures.push("no identity at Settings' foot")
     else {
       failures.push(...inSettings.failures.map((f) => `"${inSettings.text}": ${f}`))
+      if (inSettings.text !== "nessa Agent")
+        failures.push(`Settings' foot reads "${inSettings.text}", not "nessa Agent"`)
+      failures.push(
+        ...(
+          await identityHover(page, scale, `${css.settings} ${css.identityButton}`)
+        ).map((f) => `"${inSettings.text}": ${f}`),
+      )
       // Where "nessa Studio" opened Settings, the way back stands in the same row.
       if (!inSettings.row || !inWindow.row) failures.push("an identity outside its row")
       else
@@ -391,14 +407,16 @@ const checks = {
     const classic = await open("classic")
     let inClassic
     try {
-      inClassic = await classic.evaluate(measureIdentity)
+      inClassic = await classic.evaluate(measureIdentity, css.identityButton)
       if (!inClassic) failures.push("no identity in the classic shell")
       else {
         failures.push(
           ...inClassic.failures.map((f) => `classic "${inClassic.text}": ${f}`),
         )
         failures.push(
-          ...(await identityHover(classic, scale)).map((f) => `classic: ${f}`),
+          ...(await identityHover(classic, scale, css.identityButton)).map(
+            (f) => `classic: ${f}`,
+          ),
         )
       }
     } finally {
@@ -409,15 +427,20 @@ const checks = {
     }
     return { failures, measured: { inWindow, inSettings, inClassic } }
   },
-  badges: async (page) => {
+  badges: async (page, { layout }) => {
     const failures = []
-    const onLoad = await page.evaluate(measureBadges)
+    const onLoad = await page.evaluate(measureBadges, css)
     failures.push(...onLoad.failures)
     if (onLoad.counts === 0) failures.push("no count in the sidebar")
+    // The session list, a column only in this layout, holds the sample's unread session.
+    if (layout === "columns" && !onLoad.points.includes("unread"))
+      failures.push("no unread point in the session list")
     await page.keyboard.press(keys.overview)
-    await need(page, "#agents-needs-you", "the overview's Needs you heading")
-    const inOverview = await page.evaluate(measureBadges)
+    await need(page, css.needsYouHeading, "the overview's Needs you heading")
+    const inOverview = await page.evaluate(measureBadges, css)
     failures.push(...inOverview.failures.map((f) => `in the overview: ${f}`))
+    if (!inOverview.headerPoint)
+      failures.push("the overview's Needs you heading has no point")
     return { failures, measured: { onLoad, inOverview } }
   },
   segmented: async (page) => {
@@ -505,7 +528,8 @@ const checks = {
     await page.locator(css.overviewRequest).first().click()
     await need(page, css.peekCommand, "the command in the peek")
     await measure("in the overview")
-    for (const kind of ["[data-widget-inline]", ".workspace-approval-command"])
+    // "Nothing needs you" shows only with nothing listed, which the sample never is.
+    for (const kind of [css.codeBlock, css.approvalCommand, css.widgetCard])
       if (!seen[kind]) failures.push(`no ${kind} was shown to measure`)
     return { failures, measured: seen }
   },
@@ -519,14 +543,14 @@ const checks = {
         .locator("input")
         .fill("no session is called this")
       await need(page, `${css.listScroll} > *`, "the list's empty state")
-      inList = await page.evaluate(measureEmptyStates)
+      inList = await page.evaluate(measureEmptyStates, css)
       failures.push(...inList.failures)
       if (inList.seen.length === 0) failures.push("no kit EmptyState in the session list")
     }
     const classic = await open("classic")
     let inClassic
     try {
-      inClassic = await classic.evaluate(measureEmptyStates)
+      inClassic = await classic.evaluate(measureEmptyStates, css)
       failures.push(...inClassic.failures.map((f) => `classic ${f}`))
       if (inClassic.seen.length < 2)
         failures.push("the classic shell's two notes are not shown")
@@ -556,7 +580,7 @@ const checks = {
     const scale = await page.evaluate(windowScale)
     const failures = []
     const measured = { scale, hover: {} }
-    const onLoad = await page.evaluate(rowsOnPage)
+    const onLoad = await page.evaluate(rowsOnPage, css)
     failures.push(...rowFailures(onLoad, scale, "on load"))
     for (const [kind, selector] of Object.entries(rowKinds[layout] ?? {})) {
       const fill = await hovered(page, selector)
@@ -568,7 +592,7 @@ const checks = {
     await page.keyboard.press(keys.overview)
     await need(page, css.overviewRow, "an overview row")
     await page.waitForTimeout(400)
-    const inOverview = await page.evaluate(rowsOnPage)
+    const inOverview = await page.evaluate(rowsOnPage, css)
     failures.push(...rowFailures(inOverview, scale, "in the overview"))
     const finished = inOverview.filter((row) => row.unread)
     if (finished.length === 0) failures.push("no finished row in the overview to weigh")
@@ -581,10 +605,28 @@ const checks = {
     await page.keyboard.press(keys.switcher)
     await need(page, css.switcherResults, "the switcher")
     await switcherSettled(page)
-    const inSwitcher = await page.evaluate(rowsOnPage)
+    const inSwitcher = await page.evaluate(rowsOnPage, css)
     failures.push(...rowFailures(inSwitcher, scale, "in the switcher"))
     if (!inSwitcher.some((row) => row.current))
       failures.push("no chosen row in the switcher")
+    // The switcher's choice follows the pointer, so a result draws no hover of its
+    // own: pointed at, then left behind by the keys, a row is back at rest.
+    const results = page.locator(`${css.switcherResults} [role='option']`)
+    await results.nth(2).hover()
+    await page.keyboard.press(keys.down)
+    await page.keyboard.press(keys.down)
+    await page.waitForTimeout(250)
+    const left = await results
+      .nth(2)
+      .evaluate((row) => [
+        row.getAttribute("aria-selected"),
+        getComputedStyle(row).backgroundColor,
+      ])
+    measured.hover["switcher row left by the keys"] = left[1]
+    if (left[0] !== "true" && left[1] !== "rgba(0, 0, 0, 0)")
+      failures.push(
+        `a switcher row the keys left is ${left[1]} under the pointer, not at rest`,
+      )
     measured.rows = onLoad.length + inOverview.length + inSwitcher.length
     return { failures, measured }
   },

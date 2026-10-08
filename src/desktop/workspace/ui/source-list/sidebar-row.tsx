@@ -51,6 +51,14 @@ export function SidebarRow({
       isActive={active}
       unread={unread}
       aria-current={active ? "page" : undefined}
+      // The kit lays the count and the glyph beside the control, not in it:
+      // its name says them, as the row's words did when they were inside.
+      aria-label={[
+        label,
+        badge ? (badgeLabel ?? String(badge)) : running ? "Running" : null,
+      ]
+        .filter(Boolean)
+        .join(" ")}
       {...trailingRoom(badge ? { count: badge } : running ? "glyph" : null)}
       {...tooltip(title ?? "", { shortcut })}
       onClick={onClick}

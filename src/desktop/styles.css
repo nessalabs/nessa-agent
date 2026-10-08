@@ -157,7 +157,7 @@ body {
   --desktop-text-read: 14.5px;
   --desktop-text-title: 17px;
   --desktop-text-display: 20px;
-  /* A row holding something not yet seen, in every list; the current row's weight too, so moving between them never reflows a label. */
+  /* A row holding something not yet seen, in every list (`shared-controls.mjs`, `rows`); the sidebar's current row's weight too, so moving between them does not reflow a label. */
   --desktop-unread-weight: 600;
 
   /* Ink and fills, from loud to quiet. */
@@ -171,7 +171,8 @@ body {
   --desktop-press: color-mix(in oklab, var(--foreground) 11%, transparent);
   --desktop-rim: color-mix(in oklab, var(--foreground) 7%, transparent);
   /* The one edge of a card set into a surface: a code block, a command, a widget's card, "Nothing needs you". A pane's glass takes `--desktop-rim`. */
-  --desktop-card-rim: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent);
+  --desktop-card-rim: inset 0 0 0 0.5px
+    color-mix(in oklab, var(--foreground) 10%, transparent);
   --desktop-focus-ring: color-mix(in oklab, var(--desktop-light-edge) 42%, transparent);
   /* The one outline recipe; a surface says only its `outline-offset`. (Two inset box-shadow rings remain: the picture band's adjust state and the Agents peek story.) */
   --desktop-focus-outline: 1.5px solid var(--desktop-focus-ring);
@@ -474,8 +475,8 @@ html:not(.dark) [data-surface] {
 /* ——— Empty states: the kit's EmptyState in the window's inks ——— */
 
 /*
- * What a surface shows when it has nothing to show is the kit's `EmptyState`
- * everywhere in the window; this gives it the window's type once.
+ * What a surface outside Settings shows when it has nothing to show is the
+ * kit's `EmptyState`; this gives it the window's type once.
  * `compact` is the quiet line — a faint sentence, and the way forward 12px
  * under it (the kit's gap and its action's margin). `default` is the
  * titled one: a title at reading size, a muted sentence under it. Where one

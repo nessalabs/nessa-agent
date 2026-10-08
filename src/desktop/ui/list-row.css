@@ -5,8 +5,8 @@
  * space between the parts is `--list-row-gap`, after the leading part
  * `--list-row-lead-gap` where it differs: a part a row leaves out takes its
  * space with it, which a grid's gap between tracks would not.
- * A list with a resting fill of its own sets `--list-row-rest`, so the
- * pointer's and the chosen row's fills always win over it. The row's
+ * A list with a resting fill of its own sets `--list-row-rest`, which the
+ * pointer's and the chosen row's fills replace (`shared-controls.mjs`, `rows`). The row's
  * defaults are weightless (`:where`), so a list's one class outranks them
  * whatever order the stylesheets load in.
  */

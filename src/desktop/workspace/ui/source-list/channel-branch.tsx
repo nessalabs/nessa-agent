@@ -19,7 +19,7 @@ import {
   selectShowAll,
 } from "../../adapters/store/selectors"
 import { useBesideKey } from "../session-actions"
-import { branchCap } from "../../model/session-groups"
+import { branchCap, statusLabels } from "../../model/session-groups"
 import { IconButton } from "../../../ui/icon-button"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { ThreadRow } from "./thread-row"
@@ -53,6 +53,11 @@ export const ChannelBranch = memo(function ChannelBranch({
   )
   if (!channel) return null
   const label = `New session in #${channel.name}`
+  // Folded, what waits or runs is said with the row's name: the kit lays it beside the control.
+  const summary =
+    !expanded && (activity.waiting > 0 || activity.running)
+      ? statusLabels[activity.waiting > 0 ? "needs-you" : "running"]
+      : null
   return (
     <SidebarMenuItem
       size="xs"
@@ -62,6 +67,7 @@ export const ChannelBranch = memo(function ChannelBranch({
       data-current={current || undefined}
       unread={activity.unread}
       aria-expanded={expanded}
+      aria-label={summary ? `${channel.name} ${summary}` : undefined}
       {...tooltip(channel.topic)}
       onClick={(event) => {
         const beside = besideKey.asks(event)
@@ -87,7 +93,7 @@ export const ChannelBranch = memo(function ChannelBranch({
       // Folded, it still says whether something waits or runs, in the slot
       // its + takes under the pointer.
       badge={
-        !expanded && (activity.waiting > 0 || activity.running) ? (
+        summary ? (
           <StatusGlyph status={activity.waiting > 0 ? "needs-you" : "running"} />
         ) : undefined
       }

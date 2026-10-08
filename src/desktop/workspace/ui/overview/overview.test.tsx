@@ -300,7 +300,7 @@ describe("the agents overview", () => {
     })
     await open()
     expect(host.querySelector("#agents-needs-you")).toBeNull()
-    expect(host.querySelector(".agents-clear-title")).toBeNull()
+    expect(host.querySelector(".agents-clear")).toBeNull()
     expect(host.querySelector("#agents-working")).not.toBeNull()
   })
 

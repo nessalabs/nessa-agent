@@ -53,15 +53,18 @@ export function IdentityButton({
  * from its top. `className` is a hook for the surface that places it.
  */
 export function IdentityFooter({
+  as: Element = "footer",
   className,
   children,
 }: {
+  /** `div` where the row sits inside another landmark, as Settings' does in its nav. */
+  as?: "footer" | "div"
   className?: string
   children: ReactNode
 }) {
   return (
-    <footer className={className ? `desktop-identity ${className}` : "desktop-identity"}>
+    <Element className={className ? `desktop-identity ${className}` : "desktop-identity"}>
       {children}
-    </footer>
+    </Element>
   )
 }

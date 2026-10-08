@@ -125,6 +125,18 @@ html:not(.dark) .workspace-switcher {
   cursor: default;
 }
 
+/*
+ * The chosen row follows the pointer (`onPointerMove`), so a result draws no
+ * hover or press of its own, and the highlight moves at once.
+ */
+.workspace-result {
+  transition: none;
+}
+
+.workspace-result:is(:hover, :active):not([data-selected]) {
+  background: transparent;
+}
+
 .workspace-result > .desktop-list-row-leading {
   width: 16px;
   color: var(--desktop-muted);
