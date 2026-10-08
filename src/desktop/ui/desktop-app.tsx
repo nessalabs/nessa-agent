@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react"
 import { AppShell, AppShellBody, AppShellMain } from "@nessa-ui/react/app-shell"
-import { Button } from "@nessa-ui/react/button"
 import {
   Sidebar,
   SidebarContent,
@@ -35,6 +34,7 @@ import { DesktopIcon } from "./icons"
 import { openSettings } from "../settings"
 import { ThemeMenu } from "./theme-menu"
 import { HistoryButtons } from "./history-buttons"
+import { IconButton } from "./icon-button"
 import { WindowTitlebar } from "./window-titlebar"
 import { tooltip } from "./tooltip"
 
@@ -114,41 +114,28 @@ export function DesktopApp({
   }, [])
 
   const leftAction = `${leftDocked ? "Hide" : "Show"} Sidebar`
-  const leftLabel = `${leftAction} (${chordLabel(sidebarChord, isMac)})`
   const rightAction = `${rightShown ? "Hide" : "Show"} Panel`
-  const rightLabel = `${rightAction} (${chordLabel(panelChord, isMac)})`
-  const maximizeLabel = rightMaximized ? "Restore Panel (Esc)" : "Expand Panel"
 
   const maximizeButton = (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="desktop-titlebar-button"
-      aria-label={maximizeLabel}
-      {...(rightMaximized
-        ? tooltip("Restore Panel", { shortcut: "Esc" })
-        : tooltip("Expand Panel"))}
+    <IconButton
+      icon={rightMaximized ? "restore" : "maximize"}
+      label={rightMaximized ? "Restore Panel" : "Expand Panel"}
+      shortcut={rightMaximized ? "Esc" : undefined}
       aria-pressed={rightMaximized}
       aria-controls="right"
       onClick={() => setRightMaximized((value) => !value)}
-    >
-      <DesktopIcon name={rightMaximized ? "restore" : "maximize"} />
-    </Button>
+    />
   )
 
   const rightToggle = (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="desktop-titlebar-button"
-      aria-label={rightLabel}
+    <IconButton
+      icon="panelRight"
+      label={rightAction}
+      shortcut={chordLabel(panelChord, isMac)}
       aria-expanded={rightShown}
       aria-controls="right"
-      {...tooltip(rightAction, { shortcut: chordLabel(panelChord, isMac) })}
       onClick={toggleRight}
-    >
-      <DesktopIcon name="panelRight" />
-    </Button>
+    />
   )
 
   return (
@@ -182,16 +169,15 @@ export function DesktopApp({
           height="var(--desktop-titlebar-height)"
           leading={
             <>
-              <SidebarTrigger
-                className="desktop-titlebar-button"
-                aria-label={leftLabel}
-                {...tooltip(leftAction, { shortcut: chordLabel(sidebarChord, isMac) })}
+              <IconButton
+                as={SidebarTrigger}
+                icon="sidebar"
+                label={leftAction}
+                shortcut={chordLabel(sidebarChord, isMac)}
                 aria-expanded={leftDocked}
                 aria-controls="left"
-              >
-                <DesktopIcon name="sidebar" />
-              </SidebarTrigger>
-              <HistoryButtons className="desktop-titlebar-button" />
+              />
+              <HistoryButtons />
             </>
           }
           trailing={

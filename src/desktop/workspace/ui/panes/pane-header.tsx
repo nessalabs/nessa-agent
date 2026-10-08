@@ -12,7 +12,7 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store
 import { selectPaneClosable, selectSession } from "../../adapters/store/selectors"
 import type { PaneKey } from "../../../split-panes/model/pane-layout"
 import { AgentTile } from "../chrome/agent-tile"
-import { IconButton } from "../chrome/icon-button"
+import { IconButton } from "../../../ui/icon-button"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { useWorkspaceFrame } from "../workspace-frame"
 import { headerBar } from "./header-bar"
