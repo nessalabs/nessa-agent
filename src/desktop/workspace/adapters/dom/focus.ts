@@ -157,8 +157,11 @@ export function useFocusFollowsPane(
       // Another pane took focus, or the panes came back from under the
       // overview or the window — by a command that changed nothing else, too.
       const moved = back || next.pane !== was.pane
-      // After the change reaches the page.
-      requestAnimationFrame(() => settle(moved))
+      // After the change reaches the page. Coming back from the overview,
+      // one frame later still: the leave's own frame only lifts the cover
+      // (`overview-layer.tsx`).
+      if (back) requestAnimationFrame(() => requestAnimationFrame(() => settle(moved)))
+      else requestAnimationFrame(() => settle(moved))
     })
 
     // Focus falls to the page when what held it is taken away, or hidden by

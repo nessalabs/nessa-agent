@@ -146,7 +146,8 @@ export const Transcript = memo(function Transcript({
       ref={scrollRef}
       tabIndex={-1}
       data-pane-focus
-      // One screen of it is what a drag's copy of the pane shows.
+      // The library can picture one screen of this. The workspace's copy
+      // leaves the body out (`split-panes-drag.ts`).
       data-split-scroll
     >
       <div className="workspace-transcript-inner" data-arriving={arriving || undefined}>

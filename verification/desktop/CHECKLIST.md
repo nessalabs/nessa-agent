@@ -92,9 +92,10 @@ production build at 4× CPU throttling.
   the diagnostic is absent rather than a negative duration.
   _Check:_ `lib/perf.test.mjs` (`long animation frame clock`).
 - [ ] **The ambient grain is a baked image, not a runtime noise filter** (#370).
-  Its 160×160 PNG tile repeats with 0.06 opacity and overlay blending; keeping
-  the texture in `ui/ambient-grain.png` avoids SVG turbulence in the GPU raster
-  path (`src/desktop/styles.css`, `.desktop-grain`).
+  Its 160×160 PNG tile repeats with 0.06 opacity and normal blending — overlay
+  blending would repaint the window under the veil. Keeping the texture in
+  `ui/ambient-grain.png` avoids SVG turbulence in the GPU raster path
+  (`src/desktop/styles.css`, `.desktop-grain`).
   _Check:_ `smoke.mjs` (`ambient-grain`), both engines/layouts; `perf-budget.mjs`
   checks the unchanged frame budget.
 - [ ] **The measurement works.** The calibration busy loop slows by roughly

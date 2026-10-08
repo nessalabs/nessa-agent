@@ -195,27 +195,217 @@ it("names what a flight restyles, so beginning one restyles a few elements, not 
   for (const rule of flightRules) expect(rule, rule).not.toMatch(/(?:>|\s)\*\s*(?:,|\{)/)
 })
 
-it("keeps the list and the panes under the Agents overview laid out, only unseen", () => {
+it("moves a drop's placeholder by transform, not by laying out its size", () => {
+  // A width or height transition lays the page out on every frame of a drag.
+  const sheet = readFileSync(
+    new URL("./split-panes/ui/split-panes.css", import.meta.url),
+    "utf8",
+  )
+  const body = sheet.slice(sheet.indexOf(".split-panes-placeholder {")).split("}")[0]
+  const transition = body.match(/transition:[^;]*/)?.[0] ?? ""
+  expect(transition).toMatch(/^transition:\s*transform\b/)
+  expect(transition).not.toMatch(/\b(?:width|height)\b/)
+  // Opaque, and still. A tint over transparent, or a fade, composites the blur
+  // on every frame of the move.
+  const background = body.match(/background:[^;]*/)?.[0] ?? ""
+  expect(background).toMatch(/var\(--background\)/)
+  expect(background).not.toMatch(/transparent/)
+  expect(body).not.toMatch(/animation:/)
+  expect(body).toMatch(/will-change:\s*transform/)
+})
+
+it("lifts a drag's copy without painting a shadow", () => {
+  // A shadow is painted again each time the copy changes shape.
+  const sheet = readFileSync(
+    new URL("./split-panes/ui/split-panes.css", import.meta.url),
+    "utf8",
+  )
+  const body = sheet.slice(sheet.indexOf(".split-panes-ghost {")).split("}")[0]
+  const shadow = body.match(/box-shadow:[^;]*/)?.[0] ?? ""
+  expect(shadow).toMatch(/box-shadow:\s*none/)
+  expect(body).toMatch(/opacity:\s*1\b/)
+  expect(body).toMatch(/background:\s*var\(--background\)/)
+  expect(body).not.toMatch(/will-change/)
+  const waiting = sheet
+    .slice(sheet.indexOf(".split-panes-ghost[data-drag-waiting] {"))
+    .split("}")[0]
+  expect(waiting).toMatch(/content-visibility:\s*hidden/)
+  expect(waiting).not.toMatch(/will-change/)
+  const shown = sheet
+    .slice(sheet.indexOf(".split-panes-ghost:not([data-drag-waiting]) {"))
+    .split("}")[0]
+  expect(shown).toMatch(/will-change:\s*transform/)
+  // The copy's box is the size `drag.ts` sets. The stylesheet only keeps
+  // that box from laying anything out outside itself.
+  const band = sheet.slice(sheet.indexOf(`${classes.ghost} {`)).split("}")[0]
+  expect(band).toMatch(/contain:\s*strict/)
+  expect(band).not.toMatch(/height:/)
+  const picture = sheet.slice(sheet.indexOf(".split-panes-ghost * {")).split("}")[0]
+  expect(picture).toMatch(/container-type:\s*normal\s*!important/)
+  expect(picture).toMatch(/container-name:\s*none\s*!important/)
+  expect(picture).toMatch(/box-shadow:\s*none\s*!important/)
+  expect(picture).toMatch(/(?:^|[;\n])\s*filter:\s*none\s*!important/)
+  const panes = readFileSync(
+    new URL("./workspace/ui/panes/panes.css", import.meta.url),
+    "utf8",
+  )
+  const bodyHidden = panes
+    .slice(panes.indexOf(".split-panes-ghost .workspace-pane-body {"))
+    .split("}")[0]
+  expect(bodyHidden).toMatch(/content-visibility:\s*hidden/)
+})
+
+it("keeps the ambient blur on its own layer", () => {
+  const body = styles.slice(styles.indexOf(".desktop-ambient {")).split("}")[0]
+  expect(body).toMatch(/will-change:\s*transform/)
+  // The filtered circles are not promoted on their own. The parent layer is.
+  const blurAt = styles.indexOf("filter: blur(80px)")
+  const blur = styles.slice(
+    styles.lastIndexOf(".desktop-ambient::before", blurAt),
+    styles.indexOf("}", blurAt),
+  )
+  expect(blur).not.toMatch(/will-change/)
+})
+
+it("holds the ambient blur still while panes travel", () => {
+  const selector =
+    ":root:is([data-drag-pressing], [data-drag-reflow], [data-split-flipping])\n  .desktop-ambient::before,\n:root:is([data-drag-pressing], [data-drag-reflow], [data-split-flipping])\n  .desktop-ambient::after {"
+  expect(styles).toContain(selector)
+  const body = styles.slice(styles.indexOf(selector)).split("}")[0]
+  expect(body).toMatch(/animation-play-state:\s*paused/)
+})
+
+it("drops the composer's blur while a drag is carried, and leaves the sidebar's blur up", () => {
+  const selector = ":root[data-drag-pressing] .desktop-composer {"
+  expect(styles).toContain(selector)
+  const body = styles.slice(styles.indexOf(selector)).split("}")[0]
+  expect(body).toMatch(/backdrop-filter:\s*none/)
+  expect(body).toMatch(/background:\s*var\(--background\)/)
+  // Turning the sidebar's blur off and back on was a long frame. It stays.
+  expect(styles).not.toContain(":root[data-drag-pressing]\n  :is(.workspace-sidebar")
+  expect(styles).not.toContain(
+    ".workspace[data-overview-glass]\n  :is(.workspace-sidebar",
+  )
+  const grain = styles
+    .slice(styles.indexOf(":root[data-drag-pressing] .desktop-grain {"))
+    .split("}")[0]
+  expect(grain).toMatch(/visibility:\s*hidden/)
+  // The resting shadow stays. A hairline in its place rastered a new blur
+  // on the release.
+  expect(styles).not.toContain(":root[data-drag-pressing] .workspace-sidebar {")
+  const rows = readFileSync(
+    new URL("./workspace/ui/source-list/source-list.css", import.meta.url),
+    "utf8",
+  )
+  const row = rows
+    .slice(rows.indexOf(".workspace[data-overview-glass] .workspace-row {"))
+    .split("}")[0]
+  expect(row).toMatch(/transition:\s*none/)
+  const quiet = rows
+    .slice(
+      rows.indexOf(
+        ".workspace[data-overview-glass] .workspace-row[data-active]:not(.agents-overview-entry)",
+      ),
+    )
+    .split("}")[0]
+  expect(quiet).toMatch(/background:\s*transparent/)
+  expect(quiet).not.toMatch(/font-weight/)
+})
+
+it("lays the grain on as a flat veil, not an overlay blend", () => {
+  const body = styles.slice(styles.indexOf(".desktop-grain {")).split("}")[0]
+  expect(body).toMatch(/mix-blend-mode:\s*normal/)
+  expect(body).not.toMatch(/overlay/)
+})
+
+it("does not paint a carried pane's conversation on the frame it lifts", () => {
+  const sheet = readFileSync(
+    new URL("./workspace/ui/panes/panes.css", import.meta.url),
+    "utf8",
+  )
+  const lifted = sheet
+    .slice(
+      sheet.indexOf(
+        ".workspace-pane[data-drag-lifted] > .workspace-pane-header,\n.workspace-pane[data-drag-lifted] > .workspace-pane-body {",
+      ),
+    )
+    .split("}")[0]
+  expect(lifted).toMatch(/content-visibility:\s*hidden/)
+  expect(lifted).not.toMatch(/opacity/)
+  const slot = sheet
+    .slice(sheet.indexOf(".workspace-pane[data-drag-lifted] {"))
+    .split("}")[0]
+  expect(slot).toMatch(/transition:\s*none/)
+})
+
+it("skips pane bodies on the frame a drop commits them", () => {
+  const sheet = readFileSync(
+    new URL("./workspace/ui/panes/panes.css", import.meta.url),
+    "utf8",
+  )
+  const body = sheet
+    .slice(sheet.indexOf(".workspace-pane[data-drag-settling] > .workspace-pane-body {"))
+    .split("}")[0]
+  expect(body).toMatch(/content-visibility:\s*hidden/)
+  // While the preview moves, the conversation is not painted. The scroller
+  // keeps its box (`drag.mjs`).
+  const quiet = sheet
+    .slice(sheet.indexOf(".workspace[data-drag-reflow] .workspace-transcript-inner {"))
+    .split("}")[0]
+  expect(quiet).toMatch(/content-visibility:\s*hidden/)
+  const mask = sheet
+    .slice(sheet.indexOf(".workspace[data-drag-reflow] .workspace-transcript {"))
+    .split("}")[0]
+  expect(mask).toMatch(/mask-image:\s*none/)
+  const travelling = sheet
+    .slice(
+      sheet.indexOf(
+        ".workspace:is([data-split-flipping], [data-drag-reflow]) .workspace-pane {",
+      ),
+    )
+    .split("}")[0]
+  expect(travelling).toMatch(/background:\s*var\(--background\)/)
+})
+
+it("keeps the list and the panes under the Agents overview laid out", () => {
   // A pane command asked while the overview is open measures the panes' room:
   // it must be the room they have, so nothing under the overview may leave the
-  // layout (display, content-visibility) or change its size.
+  // layout (display, content-visibility) or change its size. visibility would
+  // restyle every descendant as the cover comes and goes; the layer marks
+  // them inert instead (`overview-layer.tsx`).
   const sheet = readFileSync(
     new URL("./workspace/ui/layouts/layouts.css", import.meta.url),
     "utf8",
   )
-  const selector =
-    '.workspace[data-content="agents"] .workspace-list,\n.workspace[data-content="agents"] .workspace-list-edge,\n.workspace[data-content="agents"] .workspace-chat {'
-  const body = sheet.slice(sheet.indexOf(selector)).split("}")[0]
-  expect(sheet).toContain(selector)
-  expect(body).toMatch(/visibility:\s*hidden/)
-  const everyAgentsRule = sheet.match(/\[data-content="agents"\][^{]*\{[^}]*\}/g) ?? []
-  for (const rule of everyAgentsRule)
-    expect(rule, rule).not.toMatch(/display:|content-visibility|width:|padding/)
-  // The overview's own sheet sets nothing on what is under it.
+  expect(sheet).not.toMatch(/\[data-overview-covered\][^{]*\{[^}]*visibility/)
+  expect(sheet).not.toMatch(/\[data-content="agents"\]/)
   const overview = readFileSync(
     new URL("./workspace/ui/overview/overview.css", import.meta.url),
     "utf8",
   )
+  const surface = overview
+    .slice(overview.indexOf(".agents-overview-surface {"))
+    .split("}")[0]
+  expect(surface).not.toMatch(/animation:|0 12px 40px/)
+  const bare = overview
+    .slice(overview.indexOf(".agents-overview-surface[data-bare] {"))
+    .split("}")[0]
+  expect(bare).toMatch(/background:\s*none/)
+  expect(bare).toMatch(/box-shadow:\s*none/)
+  const openLayer = sheet
+    .slice(sheet.indexOf(".workspace-overview-layer[data-open] {"))
+    .split("}")[0]
+  expect(openLayer).not.toMatch(/background/)
+  const coveredLayer = sheet
+    .slice(sheet.indexOf(".workspace-overview-layer[data-covered] {"))
+    .split("}")[0]
+  expect(coveredLayer).toMatch(/background:\s*var\(--background\)/)
+  expect(coveredLayer).not.toMatch(/desktop-pane-fill/)
+  // No rule on what is covered: visibility, display, and content-visibility
+  // would restyle or resize it as the cover comes and goes.
+  const everyCoveredRule = sheet.match(/\[data-overview-covered\][^{]*\{[^}]*\}/g) ?? []
+  expect(everyCoveredRule).toEqual([])
+  // The overview's own sheet sets nothing on what is under it.
   expect(overview).not.toMatch(/\.workspace-(?:list|chat)\b/)
 })
 

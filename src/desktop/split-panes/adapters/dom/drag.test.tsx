@@ -457,7 +457,53 @@ it("previews the outcome of the layout the source holds, and commits it through 
   // Measured once, as the press began.
   expect(fake.state.measured).toBe(1)
   expect(items(fake)).toEqual(["b", "a"])
+  // Bodies were held out of the commit's layout, then brought back.
+  expect(host.querySelector("[data-drag-settling]")).toBeNull()
   expect(carrying()).toBe(false)
+  await act(async () => root.unmount())
+})
+
+it("holds pane bodies out of the frame a cancel lets the preview go, and brings one back each frame after", async () => {
+  const fake = fakeSource(two())
+  const root = await mounted(fake)
+  await liftOntoTwo()
+  expect(document.documentElement.hasAttribute(marks.reflow)).toBe(true)
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
+  pointer("pointerup", 827, 400)
+  // The preview's mark drops as the copy flies home, and the bodies are
+  // waiting on that turn — one comes back on the frame after.
+  await act(async () => {})
+  expect(document.documentElement.hasAttribute(marks.reflow)).toBe(false)
+  expect(host.querySelectorAll("[data-drag-settling]").length).toBeGreaterThan(1)
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(host.querySelectorAll("[data-drag-settling]").length).toBe(1)
+  await frames()
+  expect(host.querySelector("[data-drag-settling]")).toBeNull()
+  expect(fake.state.drops).toEqual([])
+  await act(async () => root.unmount())
+})
+
+it("holds pane bodies out of the commit frame and brings one back each frame after", async () => {
+  const fake = fakeSource(two())
+  const root = await mounted(fake)
+  await liftOntoTwo()
+  pointer("pointerup", 827, 400)
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(host.querySelectorAll("[data-drag-settling]").length).toBeGreaterThan(0)
+  await frames()
+  expect(host.querySelector("[data-drag-settling]")).toBeNull()
+  expect(fake.state.drops).toHaveLength(1)
+  // The copy is gone on that landing. Fading it would blend it with the blur.
+  const handoff = animated.filter(
+    (asked) =>
+      asked.element.classList.contains(classes.ghost) &&
+      asked.keyframes.some((frame) => frame.opacity === 0),
+  )
+  expect(handoff.at(-1)?.duration).toBe(0)
   await act(async () => root.unmount())
 })
 
@@ -582,6 +628,13 @@ it("with less motion, previews a swap at once — the other pane drawn where the
       /^translate\(554px, 0px\) scale\(1, 1\)$/,
     )
     expect(drawnAt(2)?.duration).toBe(0)
+    // The transcript's clip is a style, set once. Keyframes that animate it
+    // lay the transcript out on every frame of the glide.
+    expect(
+      animated.every(({ keyframes }) =>
+        keyframes.every((frame) => frame?.clipPath == null),
+      ),
+    ).toBe(true)
     // Dropped: the panes are laid out where the preview drew them, and the
     // preview is let go as they are — left on, it would draw them moved again.
     const preview = animated.filter(({ element: of }) => of.closest("[data-pane-key]"))
@@ -807,6 +860,47 @@ it("carries the host's copy of an item, and a picture of a pane without the host
   expect(element('[data-pane-key="1"] header').hasAttribute("data-host-mark")).toBe(true)
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
   pointer("pointerup", 827, 400)
+  await act(async () => root.unmount())
+})
+
+it("clears a sliver's inline clip when a committed drop releases the preview", async () => {
+  const finished = Promise.resolve()
+  Element.prototype.animate = function (this: Element, keyframes, timing) {
+    const asked = {
+      element: this,
+      keyframes: keyframes as Keyframe[],
+      duration: typeof timing === "object" ? timing.duration : timing,
+      cancelled: false,
+    }
+    animated.push(asked)
+    return {
+      cancel() {
+        asked.cancelled = true
+      },
+      finished,
+      id: "",
+      effect: { target: asked.element, getComputedTiming: () => ({ progress: 1 }) },
+    } as unknown as Animation
+  }
+  const fake = fakeSource(two())
+  const root = await mounted(fake)
+  const pane = element('[data-pane-key="2"]')
+  const sliver = document.createElement("div")
+  sliver.setAttribute("data-sliver", "")
+  pane.prepend(sliver)
+  await press(60, 16, element('[data-drag-pane="1"]'))
+  // Up pane b's middle: above it. Pane b goes below, shorter, and the sliver is cut.
+  for (const y of [400, 300, 200, 100, 30]) {
+    pointer("pointermove", 827, y)
+    await new Promise((resolve) => setTimeout(resolve, 4))
+  }
+  await frames()
+  expect(said()).toBe("Move above Pane b")
+  expect(sliver.style.clipPath).not.toBe("")
+  pointer("pointerup", 827, 30)
+  await frames()
+  expect(fake.state.drops).toHaveLength(1)
+  expect(sliver.style.clipPath).toBe("")
   await act(async () => root.unmount())
 })
 
