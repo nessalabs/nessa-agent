@@ -342,3 +342,128 @@ fn restored_completion_with_empty_resource_proof_is_refused_without_repair() {
     assert_eq!(restored.refusal(), Some(&OwnershipError::Contradictory));
     assert_eq!(restored.snapshot(), history);
 }
+
+#[test]
+fn refused_restore_blocks_late_handoffs_absence_and_completion_without_changing_history() {
+    let mut donor = ready_root("close");
+    let token = donor
+        .prepare_completion(&life("root"), &close_id("close"))
+        .unwrap();
+    donor
+        .acknowledge_completion(&token, EvidenceFact::Acknowledged)
+        .unwrap();
+    let mut history = donor.snapshot();
+    history.lifetimes[0].close_operation = None;
+    let mut refused = OwnershipGraph::restore(history.clone());
+    assert_eq!(refused.refusal(), Some(&OwnershipError::Contradictory));
+    assert_eq!(
+        refused.note_prepared_owner(&spawn_id("request")),
+        Err(OwnershipError::DispatchRefused)
+    );
+    assert_eq!(
+        refused.note_task_receipt(&spawn_id("request"), receipt("actual")),
+        Err(OwnershipError::DispatchRefused)
+    );
+    assert_eq!(
+        refused.note_absence(
+            &life("root"),
+            &close_id("close"),
+            &life("root"),
+            AbsenceProof::NeverTransferredRoot
+        ),
+        Err(OwnershipError::DispatchRefused)
+    );
+    assert_eq!(
+        refused
+            .prepare_completion(&life("root"), &close_id("close"))
+            .unwrap_err(),
+        OwnershipError::DispatchRefused
+    );
+    assert_eq!(
+        refused.acknowledge_completion(&token, EvidenceFact::Acknowledged),
+        Err(OwnershipError::DispatchRefused)
+    );
+    assert_eq!(refused.snapshot(), history);
+}
+
+#[test]
+fn unknown_request_cannot_install_prepared_owner_or_task_receipt() {
+    let mut graph = reserved_child();
+    let before = graph.snapshot();
+    assert_eq!(
+        graph.note_prepared_owner(&spawn_id("unknown")),
+        Err(OwnershipError::UnknownSpawn)
+    );
+    assert_eq!(
+        graph.note_task_receipt(&spawn_id("unknown"), receipt("actual")),
+        Err(OwnershipError::UnknownSpawn)
+    );
+    assert_eq!(graph.snapshot(), before);
+}
+
+#[test]
+fn missing_or_foreign_observation_correlation_cannot_acknowledge_local_debt() {
+    let mut donor = ready_root("close");
+    let actual = donor
+        .apply_report(
+            &life("root"),
+            &close_id("close"),
+            &life("root"),
+            PhysicalFact::Released,
+            EvidenceFact::Acknowledged,
+        )
+        .unwrap();
+    for record in [
+        OwnershipEvidence {
+            child_lifetime: None,
+            ..actual.clone()
+        },
+        OwnershipEvidence {
+            close_operation: None,
+            ..actual.clone()
+        },
+        OwnershipEvidence {
+            close_operation: Some(close_id("foreign")),
+            ..actual.clone()
+        },
+    ] {
+        let before = donor.snapshot();
+        assert_eq!(
+            donor.acknowledge_observation(&record, EvidenceFact::Acknowledged),
+            Err(OwnershipError::StaleOutcome)
+        );
+        assert_eq!(donor.snapshot(), before);
+    }
+    let mut recipient = closing_root("close");
+    let before = recipient.snapshot();
+    assert_eq!(
+        recipient.acknowledge_observation(&actual, EvidenceFact::Acknowledged),
+        Err(OwnershipError::StaleOutcome)
+    );
+    assert_eq!(recipient.snapshot(), before);
+}
+
+#[test]
+fn completion_receipt_requires_the_ready_recipient_own_prepared_decision() {
+    let mut donor = ready_root("close");
+    let token = donor
+        .prepare_completion(&life("root"), &close_id("close"))
+        .unwrap();
+    let mut recipient = ready_root("close");
+    let before = recipient.snapshot();
+    assert_eq!(
+        recipient.acknowledge_completion(&token, EvidenceFact::Acknowledged),
+        Err(OwnershipError::StaleOutcome)
+    );
+    assert_eq!(recipient.snapshot(), before);
+    let own = recipient
+        .prepare_completion(&life("root"), &close_id("close"))
+        .unwrap();
+    recipient
+        .acknowledge_completion(&own, EvidenceFact::Acknowledged)
+        .unwrap();
+    assert_eq!(
+        recipient.lifetime_state(&life("root")),
+        Some(LifetimeState::Closed)
+    );
+}
