@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react"
-import { DesktopIcon } from "../../../ui/icons"
-import { tooltip } from "../../../ui/tooltip"
 import { showContent } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectOverviewOpen, selectStatusCounts } from "../../adapters/store/selectors"
 import { useWorkspaceFrame } from "../workspace-frame"
+import { SidebarRow } from "./channel-row"
 
 /**
  * The sidebar's way into the Agents overview: "Agents", with how many wait
@@ -23,29 +22,18 @@ export function OverviewRow() {
   }, [open])
   const waiting = useWorkspaceSelector((state) => selectStatusCounts(state).needsYou)
   return (
-    <button
-      type="button"
-      className="workspace-row agents-overview-entry"
-      data-active={marked || undefined}
-      aria-current={marked ? "page" : undefined}
-      {...tooltip("Every agent at a glance", {
-        shortcut: frame.shortcut("showOverview"),
-      })}
+    <SidebarRow
+      className="agents-overview-entry"
+      icon="workspace"
+      label="Agents"
+      title="Every agent at a glance"
+      shortcut={frame.shortcut("showOverview")}
+      active={marked}
+      current={marked}
+      badge={waiting}
+      badgeTone="needs"
+      badgeLabel={`${waiting} ${waiting === 1 ? "needs" : "need"} you`}
       onClick={() => dispatch(showContent({ content: "agents" }))}
-    >
-      <span className="workspace-row-icon" aria-hidden="true">
-        <DesktopIcon name="workspace" />
-      </span>
-      <span className="workspace-truncate">Agents</span>
-      {waiting > 0 ? (
-        <span
-          className="workspace-badge"
-          data-tone="needs"
-          aria-label={`${waiting} ${waiting === 1 ? "needs" : "need"} you`}
-        >
-          {waiting}
-        </span>
-      ) : null}
-    </button>
+    />
   )
 }

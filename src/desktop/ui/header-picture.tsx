@@ -7,7 +7,7 @@ import {
   placeHeaderImage,
   type HeaderFraming,
 } from "../model/header-image"
-import { DesktopIcon } from "./icons"
+import { IconButton } from "./icon-button"
 
 /** Pixels an arrow key moves the picture, and how much a key or button zooms. */
 const keyStep = 12
@@ -181,14 +181,13 @@ export function HeaderPicture({
           role="toolbar"
           aria-label="Picture position"
         >
-          <button
-            type="button"
-            className="desktop-header-tool"
-            aria-label="Zoom out"
+          <IconButton
+            icon="zoomOut"
+            label="Zoom out"
+            shape="pill"
+            tone="ink"
             onClick={() => zoomBy(-zoomStep)}
-          >
-            <DesktopIcon name="zoomOut" />
-          </button>
+          />
           <input
             type="range"
             className="desktop-header-zoom"
@@ -201,14 +200,13 @@ export function HeaderPicture({
               change({ ...framingRef.current, zoom: Number(event.target.value) })
             }
           />
-          <button
-            type="button"
-            className="desktop-header-tool"
-            aria-label="Zoom in"
+          <IconButton
+            icon="zoomIn"
+            label="Zoom in"
+            shape="pill"
+            tone="ink"
             onClick={() => zoomBy(zoomStep)}
-          >
-            <DesktopIcon name="zoomIn" />
-          </button>
+          />
           <span className="desktop-header-toolbar-divider" aria-hidden="true" />
           <button
             type="button"

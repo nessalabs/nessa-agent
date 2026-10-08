@@ -1,4 +1,4 @@
-import { DesktopIcon } from "./icons"
+import { IconButton } from "./icon-button"
 import { desktopThemes, parseDesktopTheme, type DesktopThemeId } from "../model/theme"
 import {
   DropdownMenu,
@@ -8,7 +8,6 @@ import {
   MenuRadioGroup,
   MenuRadioItem,
 } from "./menu"
-import { tooltip } from "./tooltip"
 
 /** Lists the themes, each with a swatch painted from its own colours. */
 export function ThemeMenu({
@@ -21,14 +20,13 @@ export function ThemeMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="desktop-footer-button"
-          aria-label="Appearance"
-          {...tooltip("Appearance", { side: "above" })}
-        >
-          <DesktopIcon name="appearance" />
-        </button>
+        <IconButton
+          icon="appearance"
+          label="Appearance"
+          size="sm"
+          tone="faint"
+          tooltipSide="above"
+        />
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="end">
         <MenuLabel>Light</MenuLabel>

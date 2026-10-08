@@ -248,34 +248,6 @@ html:not(.dark) [data-surface] {
   margin-right: 0;
 }
 
-.desktop-footer-button {
-  display: inline-flex;
-  width: 26px;
-  height: 26px;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: color-mix(in oklab, var(--foreground) 45%, transparent);
-  transition:
-    color var(--desktop-fast) ease,
-    background-color var(--desktop-fast) ease;
-}
-
-.desktop-footer-button:hover,
-.desktop-footer-button[data-state="open"] {
-  color: var(--foreground);
-  background: var(--desktop-hover-strong);
-}
-
-.desktop-footer-button svg {
-  width: 15px;
-  height: 15px;
-  stroke-width: 1.6;
-}
-
 /*
  * Native macOS window buttons remain host-owned and sit inside the sidebar,
  * centred on the same row as the controls: 24px from the window's top, where
@@ -388,29 +360,12 @@ html:not(.dark) [data-surface] {
   }
 }
 
-.desktop-titlebar-button,
 .desktop-titlebar [data-slot="app-shell-titlebar-navigation"] {
   color: color-mix(in oklab, var(--foreground) 55%, transparent);
   border-radius: var(--desktop-control-radius);
   transition:
     color var(--desktop-fast) ease,
     background-color var(--desktop-fast) ease;
-}
-
-.desktop-titlebar-button:hover {
-  color: var(--foreground);
-  background: var(--desktop-hover-strong);
-}
-
-.desktop-titlebar-button {
-  width: var(--desktop-control-size);
-  height: var(--desktop-control-size);
-}
-
-.desktop-titlebar-button svg {
-  width: 16px;
-  height: 16px;
-  stroke-width: 1.6;
 }
 
 /* SplitView owns sizing, capture, keyboard resizing, and collapse snapping. */
@@ -744,7 +699,6 @@ html:not(.dark) [data-surface] {
   cursor: default;
 }
 
-.desktop-header-tool,
 .desktop-header-text-button {
   display: inline-flex;
   height: 28px;
@@ -762,21 +716,10 @@ html:not(.dark) [data-surface] {
     background-color var(--desktop-fast) ease;
 }
 
-.desktop-header-tool {
-  width: 28px;
-}
-
-.desktop-header-tool svg {
-  width: 14px;
-  height: 14px;
-  stroke-width: 1.75;
-}
-
 .desktop-header-text-button {
   padding: 0 12px;
 }
 
-.desktop-header-tool:hover,
 .desktop-header-text-button:hover {
   color: var(--foreground);
   background: var(--desktop-hover-strong);

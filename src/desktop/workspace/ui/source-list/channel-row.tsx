@@ -74,17 +74,24 @@ export function SidebarRow({
   icon,
   label,
   title,
+  shortcut,
+  className,
   active,
   current,
   unread,
   badge,
   badgeTone,
+  badgeLabel,
   running,
   onClick,
 }: {
   icon: Parameters<typeof DesktopIcon>[0]["name"]
   label: string
   title?: string
+  /** The chord that does the same, drawn quieter in the tooltip. */
+  shortcut?: string
+  /** A hook for a surface that styles or finds its one row. */
+  className?: string
   active: boolean
   /** The sidebar's current page. Lags `active` while the overview opens. */
   current: boolean
@@ -92,17 +99,19 @@ export function SidebarRow({
   /** A count, shown instead of the running glyph. */
   badge?: number
   badgeTone?: "needs"
+  /** What the count means, for a reader who cannot see its colour. */
+  badgeLabel?: string
   running?: boolean
   onClick: () => void
 }) {
   return (
     <button
       type="button"
-      className="workspace-row"
+      className={className ? `workspace-row ${className}` : "workspace-row"}
       data-active={active || undefined}
       data-unread={unread || undefined}
       aria-current={current ? "page" : undefined}
-      {...tooltip(title ?? "")}
+      {...tooltip(title ?? "", { shortcut })}
       onClick={onClick}
     >
       <span className="workspace-row-icon" aria-hidden="true">
@@ -110,7 +119,7 @@ export function SidebarRow({
       </span>
       <span className="workspace-truncate">{label}</span>
       {badge ? (
-        <span className="workspace-badge" data-tone={badgeTone}>
+        <span className="workspace-badge" data-tone={badgeTone} aria-label={badgeLabel}>
           {badge}
         </span>
       ) : running ? (

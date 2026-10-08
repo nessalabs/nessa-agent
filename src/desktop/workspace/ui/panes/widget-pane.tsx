@@ -19,7 +19,7 @@ import { selectFocusedPaneKey, selectPaneClosable } from "../../adapters/store/s
 import { usePaneWidgetHost } from "../../adapters/store/widget-hosts"
 import type { PaneFrame } from "../../../split-panes"
 import type { PaneKey } from "../../../split-panes/model/pane-layout"
-import { IconButton } from "../chrome/icon-button"
+import { IconButton } from "../../../ui/icon-button"
 import { useWorkspaceFrame } from "../workspace-frame"
 import { headerBar } from "./header-bar"
 import { usePaneFocus } from "./use-pane-focus"
