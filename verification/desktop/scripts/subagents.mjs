@@ -20,7 +20,15 @@ import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
-import { calibrate, measure, observers, throttle } from "./lib/perf.mjs"
+import {
+  budgetMs,
+  calibrate,
+  calibrationFrame,
+  exceedsFrameBudget,
+  measure,
+  observers,
+  throttle,
+} from "./lib/perf.mjs"
 import { main } from "./lib/run.mjs"
 import { content, css, keys, names } from "./lib/selectors.mjs"
 import {
@@ -58,7 +66,9 @@ Checks, per engine and layout (--only <names> to pick):
   narrow   the list fits a narrow pane in a short window; the conversation's
            header shows its subagents, the busiest first, and a click there
            opens the panel; the title, the stack and the menu stay inside
-           the header. A production run records the click's frames.
+           the header, and the title keeps a positive width. A production
+           Chromium run fails when the click's longest frame exceeds the
+           frame budget (`budgetMs`).
 
 The panel check waits on the sample's follow-up lines, so it takes about
 half a minute.`,
@@ -183,6 +193,8 @@ function headerFit(page) {
       stackInside: inside(sr),
       menuInside: mr ? inside(mr) : false,
       stackBeforeMenu: mr ? sr.right <= mr.left + 1 : false,
+      titleWidth: tr ? tr.width : 0,
+      titleInside: tr ? inside(tr) : false,
       titleBeforeStack: tr ? tr.right <= sr.left + 1 : false,
       faces: [...stack.querySelectorAll(sel.face)].map((node) =>
         node.getAttribute("aria-label"),
@@ -208,6 +220,8 @@ function assertHeader(fit, failures, when) {
   if (!fit.stackInside) failures.push(`the stack is outside the header ${when}`)
   if (!fit.menuInside) failures.push(`the pane menu is outside the header ${when}`)
   if (!fit.stackBeforeMenu) failures.push(`the stack overlaps the pane menu ${when}`)
+  if (!(fit.titleWidth > 0)) failures.push(`the header title has no width ${when}`)
+  if (!fit.titleInside) failures.push(`the header title is outside the header ${when}`)
   if (!fit.titleBeforeStack) failures.push(`the stack overlaps the title ${when}`)
 }
 
@@ -308,11 +322,19 @@ const checks = {
 
     const panesBefore = await paneCount(page)
     let calibration
+    let frame
     let cdp
     if (label.mode === "prod" && label.engine === "chromium") {
       calibration = await calibrate(page.context(), page, 4)
       if (!calibration.ok)
         failures.push(`calibration did not hold: ${JSON.stringify(calibration)}`)
+      // Unthrottled, after the ratio check: one frame of known cost must be
+      // measured and attributed, or the click's numbers are not evidence.
+      frame = await calibrationFrame(page)
+      if (!frame.ok)
+        failures.push(
+          `a ${frame.cost} ms frame measured ${frame.measuredMs} ms (attributed: ${frame.attributed})`,
+        )
       cdp = await throttle(page.context(), page, 4)
     }
     const opening = await measure(
@@ -320,6 +342,14 @@ const checks = {
       () => page.locator(css.subagentStack).click(),
       800,
     )
+    if (
+      label.mode === "prod" &&
+      label.engine === "chromium" &&
+      exceedsFrameBudget(opening.maxFrame)
+    )
+      failures.push(
+        `longest frame ${opening.maxFrame} ms > ${budgetMs} ms (over: ${opening.over})`,
+      )
     if (cdp) await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 })
     if (!(await paneCountIs(page, panesBefore + 1)))
       failures.push(
@@ -363,6 +393,7 @@ const checks = {
         slow: opening.slow,
       },
       calibration,
+      calibrationFrame: frame,
       failures,
     }
   },

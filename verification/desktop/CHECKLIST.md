@@ -448,7 +448,9 @@ on.
   (`subagent-stack.test.tsx`). A click opens the panel beside the
   conversation. At a narrow width the stack, the header's title and the
   pane's menu sit in the header without it overflowing and without
-  overlapping. _Check:_ `subagents.mjs --only narrow` (1000 × 560).
+  overlapping, and the title keeps a positive width inside the header.
+  A production Chromium run fails when the open's longest frame exceeds
+  50 ms. _Check:_ `subagents.mjs --only narrow` (1000 × 560).
 
 ## MCP Apps
 
