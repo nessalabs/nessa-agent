@@ -1,0 +1,179 @@
+diff --git a/crates/nessa-sdk/src/infrastructure/mcp/connection.rs b/crates/nessa-sdk/src/infrastructure/mcp/connection.rs
+index 645c5f0c..422d32fa 100644
+--- a/crates/nessa-sdk/src/infrastructure/mcp/connection.rs
++++ b/crates/nessa-sdk/src/infrastructure/mcp/connection.rs
+@@ -81,10 +81,10 @@ impl Shared {
+             state.ended = Some(cause.clone());
+             std::mem::take(&mut state.pending)
+         };
++        self.ended.send_replace(Some(cause.clone()));
+         for (_, waiter) in pending {
+             let _ = waiter.send(Err(cause.clone()));
+         }
+-        self.ended.send_replace(Some(cause));
+     }
+ 
+     /// Fail one admitted call and leave the connection open. The first end
+@@ -423,9 +423,10 @@ impl Connection {
+ 
+     /// Admission waits observe the existing end publication without draining the writer.
+     async fn send_frame(&self, frame: Vec<u8>) -> Result<(), McpError> {
++        let ended = self.ended();
+         tokio::select! {
+             biased;
+-            cause = self.ended() => Err(cause),
++            cause = ended => Err(cause),
+             sent = self.outgoing.send(Outgoing::Frame(frame)) => {
+                 sent.map_err(|_| self.end_cause().unwrap_or(McpError::ServerGone))
+             }
+@@ -461,10 +462,10 @@ impl Connection {
+     /// End the connection with `cause` and close the server's stdin. Calls
+     /// waiting on it get `cause`.
+     pub(crate) fn close(&self, cause: McpError) {
+-        self.shared.end(cause);
+         if let Some(http) = &self.http {
+             http.shutdown();
+         }
++        self.shared.end(cause);
+         self.writer.abort();
+     }
+ }
+@@ -651,3 +652,7 @@ async fn read_messages(
+     }
+     shared.end(cause);
+ }
++
++#[cfg(all(test, unix))]
++#[path = "../../../tests/infrastructure/mcp/connection_end.rs"]
++mod end_tests;
+diff --git a/crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs b/crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs
+index e4a48ccf..f370be59 100644
+--- a/crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs
++++ b/crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs
+@@ -19,9 +19,9 @@ use std::future::{poll_fn, Future};
+ use std::pin::Pin;
+ use std::sync::{
+     atomic::{AtomicBool, AtomicUsize, Ordering},
+-    Arc, Mutex,
++    Arc, Condvar, Mutex,
+ };
+-use std::task::Poll;
++use std::task::{Context, Poll, Wake, Waker};
+ use std::time::Duration;
+ use tokio::sync::{
+     mpsc::{self, error::TrySendError},
+@@ -29,6 +29,37 @@ use tokio::sync::{
+ };
+ use uuid::Uuid;
+ 
++#[derive(Default)]
++struct ClosingWake {
++    entered: Notify,
++    released: Mutex<bool>,
++    ready: Condvar,
++}
++impl ClosingWake {
++    fn release(&self) {
++        *self.released.lock().unwrap() = true;
++        self.ready.notify_all();
++    }
++}
++impl Wake for ClosingWake {
++    fn wake(self: Arc<Self>) {
++        self.wake_by_ref();
++    }
++    fn wake_by_ref(self: &Arc<Self>) {
++        self.entered.notify_one();
++        let mut released = self.released.lock().unwrap();
++        while !*released {
++            released = self.ready.wait(released).unwrap();
++        }
++    }
++}
++struct ReleaseClosingWake(Arc<ClosingWake>);
++impl Drop for ReleaseClosingWake {
++    fn drop(&mut self) {
++        self.0.release();
++    }
++}
++
+ struct Gate {
+     entered: AtomicUsize,
+     changed: Notify,
+@@ -3261,3 +3292,47 @@ async fn j26_close_or_writer_failure_refuses_queued_saturated_reply() {
+         );
+     }
+ }
++
++#[tokio::test]
++async fn j26_close_fences_http_and_publishes_before_response_wakes() {
++    let (connection, session, peer, probe, gate, _) = held_recovery(202).await;
++    let connection = Arc::new(connection);
++    let wake = Arc::new(ClosingWake::default());
++    let release = ReleaseClosingWake(wake.clone());
++    let waker = Waker::from(wake.clone());
++    let mut call = Box::pin(connection.call("tools/list", None));
++    {
++        let mut future = std::pin::pin!(tokio::task::unconstrained(call.as_mut()));
++        assert!(future
++            .as_mut()
++            .poll(&mut Context::from_waker(&waker))
++            .is_pending());
++    }
++    let closing_connection = connection.clone();
++    let closing = tokio::task::spawn_blocking(move || closing_connection.close(McpError::Closed));
++    bounded(wake.entered.notified()).await;
++    assert_eq!(connection.end_cause(), Some(McpError::Closed));
++    // Capture all three boundaries while close is paused inside a response wake.
++    let notified = bounded(connection.notify("notifications/test", None)).await;
++    let mut ended = Box::pin(connection.ended());
++    let published = poll_fn(|context| Poll::Ready(ended.as_mut().poll(context))).await;
++    let dispatched = bounded(session.dispatch(br#"{"method":"notifications/direct"}"#)).await;
++    let direct_posts = peer.count(|request| method_of(request, "notifications/direct"));
++    eprintln!(
++        "close snapshot: notify={notified:?}, watch={published:?}, direct_posts={direct_posts}"
++    );
++    drop(release);
++    closing.await.unwrap();
++    gate.release();
++    stop(&session).await;
++    probe.released().await;
++    assert_eq!(notified, Err(McpError::Closed));
++    assert_eq!(published, Poll::Ready(McpError::Closed));
++    assert!(matches!(dispatched, SendOutcome::End(McpError::Closed)));
++    assert_eq!(direct_posts, 0);
++    assert_eq!(bounded(call).await.unwrap_err(), McpError::Closed);
++    assert_eq!(
++        peer.count(|request| method_of(request, "notifications/test")),
++        0
++    );
++}
+diff --git a/crates/nessa-sdk/tests/infrastructure/mcp/mod.rs b/crates/nessa-sdk/tests/infrastructure/mcp/mod.rs
+index 06ffcc37..9e189fc6 100644
+--- a/crates/nessa-sdk/tests/infrastructure/mcp/mod.rs
++++ b/crates/nessa-sdk/tests/infrastructure/mcp/mod.rs
+@@ -6,6 +6,7 @@
+ //! stand_in -> McpSession::serve -> Connection -> fixture
+ //! forwarded -> McpSession::serve -> ForwardedResults (the grant's)
+ //! sessions -> McpServers::open / tool_ui / stop -> FixtureLauncher
++//! connection_end -> Connection-private State/watch -> retained snapshot during paused publication (ADR392 J23)
+ //! http_progress -> Connection / McpServers -> gated JSON/initialization/recovery, captured replies and POST policy (ADR 392 J1–J26)
+ //! post_body -> controlled chunks/destruction shared by HTTP regressions
+ //! post_streams -> HttpSession / Connection -> gated HttpChunks (ADR 392 P1–P14)
+diff --git a/docs/adr/todo/392-remote-mcp-servers.md b/docs/adr/todo/392-remote-mcp-servers.md
+index b15b5d2b..6dd7baeb 100644
+--- a/docs/adr/todo/392-remote-mcp-servers.md
++++ b/docs/adr/todo/392-remote-mcp-servers.md
+@@ -545,10 +545,10 @@ for captured binding, recovery admission, deadlines and close.
+ | --- | --- | --- | --- |
+ | J21 | 64 ordinary frames wait behind a held writer; early recovery ping or unsupported request arrives before matching initialize | Reserve admits the answer without blocking the reader. Drain pressure; ordinary calls remain Busy and answer uses originating SID and unnegotiated version. Matching initialization supplied after actual answer advances | `j21_saturated_ordinary_queue_preserves_early_recovery_answers` |
+ | J22 | Matching initialize arrives while saturated ordinary frames and early answer remain queued | Captured answer retains unnegotiated version; FIFO answer precedes RecoveryReady/initialized. Ordinary admission remains fenced until valid initialized completion | `j22_matching_initialize_preserves_queued_reply_order` |
+-| J23 | Physical queue fills with ordinary frames and one answer or entirely with controls; a live call/notification waits for ordinary or physical admission, then another peer request overflows, or writer is closed | Explicit typed overflow/closed termination through existing reader fence; first cause survives later close/failure, no queued answer effect after fence, one retained DELETE and joined startup. Connection admission observes existing Shared end publication so blocked calls/notifications resolve retained cause before the held writer drains; already-ended admission returns that cause. HTTP shutdown remains the downstream effect fence | `j23_control_overflow_retains_first_cause_and_one_cleanup`, `j23_terminal_admission_wakes_physical_waiters_and_refuses_ended_notifications`, `j23_closed_control_queue_is_explicit` |
++| J23 | Physical queue fills with ordinary frames and one answer or entirely with controls; a live call/notification waits for ordinary or physical admission, then another peer request overflows, or writer is closed | Explicit typed overflow/closed termination through existing reader fence; first cause survives later close/failure, no queued answer effect after fence, one retained DELETE and joined startup. Connection admission observes existing Shared end publication so blocked calls/notifications resolve retained cause before the held writer drains; admission subscribes before its retained-State snapshot, and a recorded end returns that cause even while watch publication is paused. Watch publishes after releasing State and before pending response wakes. HTTP shutdown remains the downstream effect fence | `j23_control_overflow_retains_first_cause_and_one_cleanup`, `j23_terminal_admission_wakes_physical_waiters_and_refuses_ended_notifications`, `connection::end_tests::recorded_end_refuses_admission_while_watch_publication_is_held`, `j23_closed_control_queue_is_explicit` |
+ | J24 | Ordinary sender waits for capacity and is dropped; dequeue retains returned frame; receiver is dropped | No permit leak; dequeue releases ordinary capacity before dispatch completion; later frames progress; closed receiver rejects remaining sends. Canceling terminal Connection admission drops pending send permits/envelopes without inventing a second terminal owner | `j24_ordinary_capacity_releases_on_dequeue_and_cancellation`, `j23_terminal_admission_wakes_physical_waiters_and_refuses_ended_notifications` |
+ | J25 | Recovery budget expires while early answer or handoff waits behind writer pressure | Timeout remains authoritative; queued reply/initialized cannot dispatch or reopen admission after expiry; provisional claim remains close-owned | `j25_deadline_refuses_queued_saturated_reply`, existing J9/J11 handoff expiry tests |
+-| J26 | Explicit close or control POST failure wins before queued saturated answer dispatch | No downstream answer/initialized effect; retain first typed cause and one cleanup owner | `j26_close_or_writer_failure_refuses_queued_saturated_reply`, existing J19 close-fence tests |
++| J26 | Explicit close or control POST failure wins before queued saturated answer dispatch | No downstream answer/initialized effect; explicit HTTP close raises its existing shutdown fence before committing the first Shared end cause, then publishes watch outside State before waking responses. Later competing causes cannot replace the first commit. Admission checked open before that commit may race queue insertion, but HTTP effects remain fenced | `j26_close_or_writer_failure_refuses_queued_saturated_reply`, `j26_close_fences_http_and_publishes_before_response_wakes`, existing J19 close-fence tests |
+ 
+ J4/J5/J10's no-claim requirements describe bodies without an early claim for a peer answer.
+ An already answered request may own provisional cleanup but cannot validate

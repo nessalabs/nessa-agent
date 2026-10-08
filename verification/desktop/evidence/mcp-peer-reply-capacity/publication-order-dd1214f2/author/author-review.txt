@@ -1,0 +1,107 @@
+Issue #665 final publication-order correction author review
+Exact frozen/pushed head: dd1214f2c9cd00a4417a05de236edcc5223ae5a9
+Exact base: d59d9272ed7afdb512c13263c8b9620ebd591db0
+Checkout: /workspace/nessa-agent-peer-reply-capacity; clean. Root owns GitHub, hosted CI and R5 handoff.
+PR: https://github.com/nessalabs/nessa-agent/pull/671
+Finding: Codex inline4217525241; prior8f committed State.ended before watch
+publication and HTTP close fence. Notification admission could return Ok and a
+direct HTTP dispatch could POST while response-channel wake delayed close.
+
+Authority and identity: Shared State remains the sole first terminal-cause owner.
+No new terminal flag, controller or semaphore state. send_frame creates an existing
+watch subscription, checks retained State cause, then biased-selects publication
+against the unchanged queue. HTTP shutdown still owns the downstream effect fence.
+
+Domain invariants: no domain/persistence/schema/API decision changed. ReplyContext
+continues to capture SID/version; only matching initialize proves readiness.
+RecoveryReady still uses existing deadline-owned startup task and control capacity.
+
+Admission and concurrency: an admission whose retained-State check observes an end
+returns its typed cause even when watch publication is paused. This is a checked-
+open-state linearization, not an atomic State/queue insertion. A send admitted at
+an open check may race end; existing HTTP shutdown fences downstream effects.
+Subscription precedes the snapshot by design. The snapshot is load-bearing;
+reversing subscription alone is not claimed to lose an event because watch retains
+its terminal value and wait_for reads the initial value.
+
+Failure and cleanup: HTTP close raises shutdown before Shared.end; competing
+failures still use the first committed Shared cause, so early fencing does not
+make Close win. Shared.end commits cause/takes pending under State mutex, unlocks,
+publishes watch, then drains pending oneshots. Publishing outside State mutex lets
+synchronous wakers reenter without a mutex deadlock. Held-writer overflow/permit/
+physical wait and typed retained-cause regressions remain passing.
+
+Observations and restoration: the deterministic old-source regression exited101:
+notify Ok, watch Pending, direct_posts1 while a safe response waker held close.
+After correction it captures notify Closed, watch Ready Closed, direct_posts0.
+Three isolated reverts each exited101: retained snapshot omission (bounded notify
+timeout while watch borrow held); watch-after-response (watch Pending only);
+HTTP-fence-after-end (direct_posts1 only). Exact restoration is recorded, with
+current full MCP226 passed, zero failed, one existing ignored. No production test
+switch, public testing API or subprocess fixture was introduced. Managed blocking
+fixtures release/join before assertions; Sender.subscribe does not borrow watched
+value, verified against Tokio implementation, so held-value publication is safe.
+
+Audit: no durable audited product transition changed. Cause, admission result and
+actual POST/DELETE effects are asserted separately; no fabricated cancellation
+acknowledgement or cleanup authority. First retained cause remains immutable.
+
+Representation boundaries: JSON/SSE, remote errors and header/context identity
+remain unchanged. Overflow retains typed TooLarge; close retains typed cause.
+No string matching decides lifecycle outcomes. New imports follow canonical rules.
+
+Resource bounds: ordinary64 permits and physicalFIFO65 (one control reserve) remain
+unchanged, with dequeue/drop release and explicit bounded control overflow. There
+is no priority guarantee or unlimited-control promise. Watch observes the existing
+owner; admission cancellation still drops acquired permit/envelope via RAII.
+Synchronous-waker boundary: watch wakers can themselves block or panic before the
+subsequent pending drain. Public MCP operation caller wakers pass through existing
+contain_caller_wake, while keep_listed is a Tokio task; existing caller-wake tests
+also pass. An arbitrary blocking custom waker can delay subsequent response drains.
+A raw crate-private uncontained panicking watch waker can unwind Shared.end after
+State/watch commit, dropping remaining oneshots; admitted call receiver-close
+fallback remains ServerGone. No generic panic containment or arbitrary-callback
+progress claim is made. This boundary is disclosed for R5, not represented as a
+new supported public-path failure or repaired #670 writer-panic supervision.
+
+Public surface and organization: correction is private Connection ordering,
+existing HTTP progress fixture, owner-local connection_end test module, necessary
+module-map link, and ADR392 J23/J26 ordering rows updated before implementation.
+No new dependency, public API, process fixture, UI edit or unrelated fix.
+
+Agreement: Shared owns terminal cause/pending response IDs; queue envelope owns
+ordinary permit; ReplyContext owns captured peer identity; HttpSession owns phase,
+HTTP fence and cleanup claim. New tests cross committed cause, delayed publication,
+response wakes, observed admission and actual downstream effects. Relationships
+use existing owners rather than duplicate state.
+Gate15: J23/J26 ordering rows preceded patch (adr-before-code.diff); old RED and
+three isolated reverts falsify separate changed rules. Gate16: accepted bounded
+single-FIFO/owner direction retained. Gate17: current clean exact-head supported
+browser rebuilt binary and passed Apps16, Gateway13, Scenarios8, both engines.
+
+All eight numeric author exits0: format; MCP226pass/1ignore; six-package all-target
+Clippy; broad suite 4422passed/30existing ignored/25successful verdicts;
+strict SDK docs; architecture checker; architecture74 units; current browser.
+Broad totals match numeric verdict tails, including two child probes; one child
+summary is interleaved at raw lines2176-2177, so contiguous-prefix parsing omits it.
+Initial format/MCP/Clippy executed with HEAD8f and dirty final source bytes; those
+exact bytes were committed dd without source changes. Actual broad/docs/arch/browser
+ran on clean dd. Source-freeze identities and command/log hashes record this without
+inventing command-start metadata. All raw result rows were inspected, no exemptions.
+
+Historical evidence remains immutable and separately scoped: initial ee798 six
+behavior mutations101 each/restored56pass; later capacity-owner65positive and
+broken-reserve101; 8f terminal-admission oldRED101/restored222pass. They were not
+rerun or relabeled as current dd. R1-R4 reports/reviews remain historical; current
+publication fix adds its own rule probes/current full runtime/browser verification.
+Queue design is preserved; no claim all earlier production source is byte-identical
+because Shared.end/send_frame/HTTP close ordering changed in this correction.
+Root independently confirmed queue/deliver blocks byte-identical to8f; raw record
+/workspace/665-root-evidence/dd1214-source-inspection.json.
+
+Environment: Linux x86_64, exclusive warm target, jobs1/debug0/incremental0,
+existing subreaper, pinned UI1f22c0467f935b9f3fcac8a0340c96e8d0c31439, bundled headless Chromium/WebKit.
+Only ldconfig-cache host preflight bypassed; assertions ran. Native WKWebView and
+performance unverified; root owns platform CI. #670 remains excluded; unrelated
+prior8f frontend flake is tracked #672. Author all nine dimensions, agreement and
+gates15-17 are complete on this frozen source. No additional source edits pending.

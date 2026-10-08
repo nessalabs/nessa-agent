@@ -1,0 +1,14 @@
+--- fixed
++++ mutated
+@@ -465,10 +465,10 @@
+     /// End the connection with `cause` and close the server's stdin. Calls
+     /// waiting on it get `cause`.
+     pub(crate) fn close(&self, cause: McpError) {
++        self.shared.end(cause);
+         if let Some(http) = &self.http {
+             http.shutdown();
+         }
+-        self.shared.end(cause);
+         self.writer.abort();
+     }
+ }

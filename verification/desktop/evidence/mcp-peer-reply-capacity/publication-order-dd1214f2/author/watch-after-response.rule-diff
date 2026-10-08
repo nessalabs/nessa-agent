@@ -1,0 +1,14 @@
+--- fixed
++++ mutated
+@@ -81,10 +81,10 @@
+             state.ended = Some(cause.clone());
+             std::mem::take(&mut state.pending)
+         };
+-        self.ended.send_replace(Some(cause.clone()));
+         for (_, waiter) in pending {
+             let _ = waiter.send(Err(cause.clone()));
+         }
++        self.ended.send_replace(Some(cause.clone()));
+     }
+ 
+     /// Fail one admitted call and leave the connection open. The first end

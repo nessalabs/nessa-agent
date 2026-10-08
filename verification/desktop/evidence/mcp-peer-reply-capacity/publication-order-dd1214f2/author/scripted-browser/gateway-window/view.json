@@ -1,0 +1,80 @@
+{
+  "conversationId": "b8573480-b312-4f57-8a3e-4fa65b1a028c",
+  "revision": "67788299-f3e7-4db8-ac1d-44701a58651e:6",
+  "messages": [
+    {
+      "executionId": "ebd92ce5-1b20-411c-b333-334b68d58c93",
+      "userText": "W9e2d978b: reply with exactly that word and nothing else, using no tools.",
+      "attachments": [],
+      "files": [],
+      "status": "completed",
+      "parts": [
+        {
+          "offset": 0,
+          "kind": "text",
+          "text": "Ready.",
+          "toolId": "",
+          "noticeId": "",
+          "messageId": "msg-e99dd71a-7782-4e46-a967-fba212d3575c"
+        }
+      ]
+    }
+  ],
+  "pending": [],
+  "permissions": [],
+  "tools": [],
+  "capabilities": {
+    "queue": true,
+    "steer": true,
+    "resume": false,
+    "permissions": true,
+    "imageInput": false,
+    "agentFeatures": {
+      "permissionDenial": "supported_for_offered_permission_reviews",
+      "nativeHookSuppression": "unknown",
+      "compactionReporting": "unsupported_not_implemented",
+      "modelSwitchReporting": "unsupported_not_implemented",
+      "permissionDeferral": "unsupported_not_implemented",
+      "elicitationForwarding": "unknown",
+      "preToolPolicy": "unsupported_not_implemented",
+      "policyEndTurn": "unsupported_not_implemented",
+      "policyCloseSession": "unsupported_not_implemented",
+      "incomingElicitation": "supported_with_correlated_round_trip"
+    }
+  },
+  "lifecycle": {
+    "phase": "attached"
+  },
+  "truncated": false,
+  "queueComplete": true,
+  "transcriptState": "complete",
+  "runtime": {
+    "model": "claude-sonnet-5",
+    "provider": "claude-acp",
+    "workspace": "/tmp/nessa-mcp-live-claude-OcZmnW/workspace",
+    "agent": "claude",
+    "modelName": "Claude Sonnet 5",
+    "contextWindowTokens": 1000000,
+    "reasoning": true
+  },
+  "title": "W9e2d978b: reply with exactly that word and noth",
+  "questions": [],
+  "approvalMode": "ask",
+  "approvalModes": [
+    {
+      "id": "ask",
+      "name": "Provider asks",
+      "description": "Claude may read without asking and requests approval where its native policy requires it."
+    },
+    {
+      "id": "auto",
+      "name": "Claude automatic review",
+      "description": "Claude's reviewer may allow or deny an action without asking. Some actions still request approval."
+    },
+    {
+      "id": "full",
+      "name": "Claude full access",
+      "description": "Claude may run allowed actions without asking; Nessa's fixed denied tools remain unavailable."
+    }
+  ]
+}

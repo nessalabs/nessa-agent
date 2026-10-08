@@ -1,0 +1,78 @@
+{
+  "head": "dd1214f2c9cd00a4417a05de236edcc5223ae5a9",
+  "all8_gate_exits_and_log_hashes_verified": {
+    "format": {
+      "exit": 0,
+      "log_sha256_matches": true,
+      "provenance": "Executed before commit on HEAD8f with final dirty source bytes; source-freeze hashes reproduce exact dd source."
+    },
+    "full-mcp": {
+      "exit": 0,
+      "log_sha256_matches": true,
+      "provenance": "Executed before commit on HEAD8f with final dirty source bytes; source-freeze hashes reproduce exact dd source."
+    },
+    "clippy": {
+      "exit": 0,
+      "log_sha256_matches": true,
+      "provenance": "Executed before commit on HEAD8f with final dirty source bytes; source-freeze hashes reproduce exact dd source."
+    },
+    "six-package-full-suite": {
+      "exit": 0,
+      "log_sha256_matches": true,
+      "provenance": "Executed on clean actual dd1214f2c9cd00a4417a05de236edcc5223ae5a9"
+    },
+    "sdk-docs": {
+      "exit": 0,
+      "log_sha256_matches": true,
+      "provenance": "Executed on clean actual dd1214f2c9cd00a4417a05de236edcc5223ae5a9"
+    },
+    "architecture-unit-tests": {
+      "exit": 0,
+      "log_sha256_matches": true,
+      "provenance": "Executed on clean actual dd1214f2c9cd00a4417a05de236edcc5223ae5a9"
+    },
+    "architecture": {
+      "exit": 0,
+      "log_sha256_matches": true,
+      "provenance": "Executed on clean actual dd1214f2c9cd00a4417a05de236edcc5223ae5a9"
+    },
+    "scripted-browser": {
+      "exit": 0,
+      "log_sha256_matches": true,
+      "provenance": "Executed on clean actual dd1214f2c9cd00a4417a05de236edcc5223ae5a9"
+    }
+  },
+  "browser": {
+    "mcp-apps-gateway": {
+      "passed": 16,
+      "engines": {
+        "shared": 2,
+        "chromium": 7,
+        "webkit": 7
+      },
+      "raw_hash_matches": true
+    },
+    "gateway-window": {
+      "passed": 13,
+      "engines": {
+        "shared": 1,
+        "chromium": 6,
+        "webkit": 6
+      },
+      "raw_hash_matches": true
+    },
+    "scripted-scenarios": {
+      "passed": 8,
+      "engines": {
+        "chromium": 4,
+        "webkit": 4
+      },
+      "raw_hash_matches": true
+    }
+  },
+  "actual3isolated_failures_verified": true,
+  "exact_restored_connection_bytes_verified": true,
+  "source_inspection": "dd1214-source-inspection.json",
+  "broad_counts": "dd1214-broad-count-inspection.json",
+  "runtime_executed_by_root": false
+}

@@ -1,0 +1,25 @@
+{
+  "command": [
+    "python3",
+    "/tmp/637-verify-subreaper.py",
+    "cargo",
+    "test",
+    "-p",
+    "nessa-sdk",
+    "--lib",
+    "infrastructure::mcp::"
+  ],
+  "cwd": "/workspace/nessa-agent-peer-reply-capacity",
+  "head": "dd1214f2c9cd00a4417a05de236edcc5223ae5a9",
+  "status": "",
+  "environment": {
+    "CARGO_HOME": "/tmp/nessa-cargo",
+    "RUSTUP_HOME": "/tmp/nessa-rustup",
+    "CARGO_TARGET_DIR": "/workspace/665-cargo-target",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "PATH": "/tmp/nessa-tools/bin:/tmp/nessa-cargo/bin:/home/agent/.local/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin/override:/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/node/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin:/opt/codex/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/agent/.local/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin/fallback"
+  }
+}

@@ -1,0 +1,12 @@
+--- fixed
++++ mutated
+@@ -424,9 +424,6 @@
+     /// Admission waits observe the existing end publication without draining the writer.
+     async fn send_frame(&self, frame: Vec<u8>) -> Result<(), McpError> {
+         let ended = self.ended();
+-        if let Some(cause) = self.end_cause() {
+-            return Err(cause);
+-        }
+         tokio::select! {
+             biased;
+             cause = ended => Err(cause),

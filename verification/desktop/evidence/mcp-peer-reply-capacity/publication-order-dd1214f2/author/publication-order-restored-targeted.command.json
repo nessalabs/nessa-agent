@@ -1,0 +1,1 @@
+["python3", "/tmp/637-verify-subreaper.py", "cargo", "test", "-p", "nessa-sdk", "--lib", "infrastructure::mcp::"]

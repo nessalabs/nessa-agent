@@ -1,0 +1,110 @@
+[
+  {
+    "name": "reserve-zero",
+    "diff_path": "/workspace/665-author-evidence/reserve-zero.diff",
+    "diff_sha256": "99fb1814f44548e44fe41edc2fee0710152c20d6c2f2e4c160ca16208312d4af",
+    "log_sha256": "ca8d3b697b7dcfce3b8efd39340a789f599cde5bbb6f42cfb374a880cdb4d5e3",
+    "results": [
+      "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "name": "ordinary-bypass",
+    "diff_path": "/workspace/665-author-evidence/ordinary-bypass.diff",
+    "diff_sha256": "8e5cf36122f1c766d29da5c72ac0bc5f1cb8745ad8b0aee0de0ac6af88490551",
+    "log_sha256": "0946a84d39fe9fd91c0815441522f7804a19e81c35e105944b84eb406f68dd2a",
+    "results": [
+      "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "name": "ignored-overflow",
+    "diff_path": "/workspace/665-author-evidence/ignored-overflow.diff",
+    "diff_sha256": "4c6bb5538465a95ffbb025d9bb34ea1e3688c02e4d7c9136edae58657917bf35",
+    "log_sha256": "cc3d6c9d95fd1c0ad66fe090a0d9af405a874d4d1ef4cf8fa6681e0505bdff1e",
+    "results": [
+      "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 3.01s"
+    ]
+  },
+  {
+    "name": "dequeue-permit-leak",
+    "diff_path": "/workspace/665-author-evidence/dequeue-permit-leak.diff",
+    "diff_sha256": "bcf200d3543786266b9f7a1e5d06e5f1cc074d77232bd82f93823f1e2f5aa486",
+    "log_sha256": "490c7c349fda84f6e3f03b1b6d18e0e05de718baa40190183a55b13c9678dea9",
+    "results": [
+      "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 3.02s"
+    ]
+  },
+  {
+    "name": "recovery-takes-ordinary-permit",
+    "diff_path": "/workspace/665-author-evidence/recovery-takes-ordinary-permit.diff",
+    "diff_sha256": "c0742169f85b56ecc2b2996a192ad05ba3eb50f525ac82bf9e0fd8b1f3f68ad8",
+    "log_sha256": "c46edcc2e2ced97098adfe0f3317fc3c29ce60c1e14e67241aa4500269995f82",
+    "results": [
+      "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "name": "closed-cause-wrong",
+    "diff_path": "/workspace/665-author-evidence/closed-cause-wrong.diff",
+    "diff_sha256": "a306bd77df9c0ed8d24766bca07233afc55af8138de3d316629b35f4f916c187",
+    "log_sha256": "d3384ce7601e3d7d4bba581baad4f7e5c3dc58a695d13c1d454b30fe40dc18f2",
+    "results": [
+      "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "name": "owner-bound-65-real-wait-derived-workload",
+    "diff_path": "/workspace/665-capacity-review-evidence/owner-bound-65-real-wait-derived-workload.diff",
+    "diff_sha256": "6ecfe05c6f45c53b9a0cc42c76a43ab94fa1c635a6c4848b5052b7f6d3f5c17f",
+    "log_sha256": "6e70dd73d551eadab3deb5f5c8811bd758409d3d8154cb076b2a844b95709b79",
+    "results": [
+      "test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 1026 filtered out; finished in 0.02s"
+    ]
+  },
+  {
+    "name": "owner-bound-65-no-reserve-derived-held-calls",
+    "diff_path": "/workspace/665-capacity-review-evidence/owner-bound-65-no-reserve-derived-held-calls.diff",
+    "diff_sha256": "4d687d5f06be596d6b713d31b2c0e7f95f0c52a8650b7205b405c97ade9e9c19",
+    "log_sha256": "75360fc06e2ca2de88fd7a875eba0b0a015f49a08c10982512c03943cda05b6a",
+    "results": [
+      "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "name": "blocked-call-before-fix",
+    "diff_path": "/workspace/665-terminal-admission-evidence/blocked-call-before-fix.diff",
+    "diff_sha256": "a2cff93b59ee3ae05cce9c08061b8bc48896e87b4ce86a4856f896973b9436a8",
+    "log_sha256": "057570456c47c2a28682f0f8349b57c3f78cfb4839fe8ba037741f742d39160c",
+    "results": [
+      "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 3.00s"
+    ]
+  },
+  {
+    "name": "snapshot-omitted",
+    "diff_path": "/workspace/665-publication-evidence/snapshot-omitted.rule-diff",
+    "diff_sha256": "dd510ae85e48ca53c0dec7090b75e644a01186af695095aac6e69d413a582085",
+    "log_sha256": "6ef91d4432cc3dac6bcc3e3cc049766bb1fefe1063bbcabec5e1d6a5e8280331",
+    "results": [
+      "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1084 filtered out; finished in 3.00s"
+    ]
+  },
+  {
+    "name": "watch-after-response",
+    "diff_path": "/workspace/665-publication-evidence/watch-after-response.rule-diff",
+    "diff_sha256": "0167ceb780af1c41016429c5e95df65d0ca9f4e884a0b60ec6417356a9f3e801",
+    "log_sha256": "ce0a546a23c6a84cf0aa22ec846c24114dbdd2d164129b473da12eb385401b8e",
+    "results": [
+      "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1084 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "name": "http-fence-after-end",
+    "diff_path": "/workspace/665-publication-evidence/http-fence-after-end.rule-diff",
+    "diff_sha256": "5a2757709c7de28274d725b6beebd939b55eaf524cc2a2c381655c892c702016",
+    "log_sha256": "ca881447f9a65ca272a33d3724d747b6670c5e8cd1add942a3809fffaf11d4ae",
+    "results": [
+      "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1084 filtered out; finished in 0.00s"
+    ]
+  }
+]

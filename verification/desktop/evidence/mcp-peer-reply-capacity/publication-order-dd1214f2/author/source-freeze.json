@@ -1,0 +1,15 @@
+{
+  "head": "dd1214f2c9cd00a4417a05de236edcc5223ae5a9",
+  "base": "d59d9272ed7afdb512c13263c8b9620ebd591db0",
+  "previous_head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+  "clean": true,
+  "hashes": {
+    "crates/nessa-sdk/src/infrastructure/mcp/connection.rs": "2c6271c30e183cf240547604b030935f7eeab9fb72991eba357633ab91f3aa15",
+    "crates/nessa-sdk/tests/infrastructure/mcp/connection_end.rs": "d7781839c30fbaca037a81828fe1f6ff74df922db468281436d93c41cf016abf",
+    "crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs": "9807e164132fa95324c893225a337112eebc85e96272c550efbd7d428c094ba2",
+    "crates/nessa-sdk/tests/infrastructure/mcp/mod.rs": "805991e1b20801ce586e3d7516268d1efdf5620aa9dd7803537442ab2599c248",
+    "docs/adr/todo/392-remote-mcp-servers.md": "45c4530779703b3ff7943971012e5cf2f5f443ddb2c1108bff1a8954a2ba530b",
+    "docs/codebase-structure.md": "7b257dd7895e4eb01ea61f7946851fb8a66968ec01faf2e892108d2d13fff4a0"
+  },
+  "initial_checks": "format/full MCP(all mcp namespace)/Clippy ran on exact final dirty source before this commit, HEAD8f083e81; no source edits between passes and freeze"
+}

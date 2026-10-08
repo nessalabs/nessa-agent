@@ -1,0 +1,17 @@
+[
+  {
+    "name": "snapshot-omitted",
+    "exit": 101,
+    "test": "infrastructure::mcp::connection::end_tests::recorded_end_refuses_admission_while_watch_publication_is_held"
+  },
+  {
+    "name": "watch-after-response",
+    "exit": 101,
+    "test": "infrastructure::mcp::tests::http_progress::j26_close_fences_http_and_publishes_before_response_wakes"
+  },
+  {
+    "name": "http-fence-after-end",
+    "exit": 101,
+    "test": "infrastructure::mcp::tests::http_progress::j26_close_fences_http_and_publishes_before_response_wakes"
+  }
+]

@@ -1,0 +1,89 @@
+{
+  "source": "dd1214f2c9cd00a4417a05de236edcc5223ae5a9",
+  "all8author_gates_passed": true,
+  "actualbrowserrows": 37,
+  "omitted_png_retained_locally": [
+    {
+      "path": "scripted-browser/mcp-apps-gateway/shots/mcp-apps-gateway-chromium-columns.png",
+      "sha256": "fab5b6983dc29e981e510e3b6168e22f02a189bc9178e708fa8ad10073ab8a1b"
+    },
+    {
+      "path": "scripted-browser/mcp-apps-gateway/shots/mcp-apps-gateway-webkit-columns-message.png",
+      "sha256": "b44861c05d7dbf7062997d73b02c17b38b52df41232c8fd87aa180cbac2625ac"
+    },
+    {
+      "path": "scripted-browser/mcp-apps-gateway/shots/mcp-apps-gateway-webkit-columns.png",
+      "sha256": "1222d614a66fa96f08f8a7f7044f8557cd4317dcc2893cb19e2da9beac26e08e"
+    },
+    {
+      "path": "scripted-browser/mcp-apps-gateway/shots/mcp-apps-gateway-chromium-columns-message.png",
+      "sha256": "0bdd72263dc89751d3775ac1f76f9471c0b1977acd66af40ef22dacb968df218"
+    },
+    {
+      "path": "scripted-browser/scripted-scenarios/shots/scripted-scenarios-webkit-columns-permission.png",
+      "sha256": "9545ab541a58c44bbdf8629780ee7fe0a4954ee65c62aa787eb59ee7a76b1f3b"
+    },
+    {
+      "path": "scripted-browser/scripted-scenarios/shots/scripted-scenarios-chromium-columns-fail.png",
+      "sha256": "1786606629ebb23656ccbff3235d3f1076ee4b6b56def7412227ad55418f235d"
+    },
+    {
+      "path": "scripted-browser/scripted-scenarios/shots/scripted-scenarios-webkit-columns-allow.png",
+      "sha256": "1a12e556acffc0eb4b4bce933dffab6b7de90c0565f50dd1d2d44a3860fe6a2f"
+    },
+    {
+      "path": "scripted-browser/scripted-scenarios/shots/scripted-scenarios-webkit-columns-fail.png",
+      "sha256": "d034115e7dcf276ea2fc1a35bff55c00b66f7055871db7dfcb0cf28287a0830c"
+    },
+    {
+      "path": "scripted-browser/scripted-scenarios/shots/scripted-scenarios-chromium-columns-permission.png",
+      "sha256": "9b86e2e1207aaa4a50c98b2643802712cfbd7bdd50b52ffd8dd5eb39f4459151"
+    },
+    {
+      "path": "scripted-browser/scripted-scenarios/shots/scripted-scenarios-chromium-columns-cancel.png",
+      "sha256": "d29b6b955ca1100677fe085f7ba0dfc8555d896b858acd0e69dd97f9992cc789"
+    },
+    {
+      "path": "scripted-browser/scripted-scenarios/shots/scripted-scenarios-chromium-columns-allow.png",
+      "sha256": "1069971779b4ace48f1d02adae4b943879e2dd1e7fa9e148bb400d35810ce5c6"
+    },
+    {
+      "path": "scripted-browser/scripted-scenarios/shots/scripted-scenarios-webkit-columns-cancel.png",
+      "sha256": "cfbddea3f541dfe2cac2ceff7636ce7d706171adc6ac7170ec56fa6b4d22edd9"
+    },
+    {
+      "path": "scripted-browser/gateway-window/shots/gateway-window-chromium-columns-handshake.png",
+      "sha256": "42fe87fbd58694e92a06e9129b0e3794405ab0b8969bcffd9d08944bc120b537"
+    },
+    {
+      "path": "scripted-browser/gateway-window/shots/gateway-window-webkit-columns-opens.png",
+      "sha256": "05b08d59f26d45889734f8960458e94e23827cb448ced4f2ccfbbc1609b9b189"
+    },
+    {
+      "path": "scripted-browser/gateway-window/shots/gateway-window-webkit-columns-handshake.png",
+      "sha256": "4aaa0ce0a812816714faeb1406992a606b0238416d703a321c948dadae436a0b"
+    },
+    {
+      "path": "scripted-browser/gateway-window/shots/gateway-window-webkit-columns-lists.png",
+      "sha256": "34b2c8ad0a24ca9401dde453cbf1efb08b0fc0d3a8b283e90f5d1e5559d27025"
+    },
+    {
+      "path": "scripted-browser/gateway-window/shots/gateway-window-webkit-columns-live.png",
+      "sha256": "47c5223b174287c79e556660714671418f0b8c5778281bdcded62303c354f412"
+    },
+    {
+      "path": "scripted-browser/gateway-window/shots/gateway-window-chromium-columns-opens.png",
+      "sha256": "3aeabce515547658792dc19d72271f4f6f6ea7a040fcf13e37df6a69b4dd2fc4"
+    },
+    {
+      "path": "scripted-browser/gateway-window/shots/gateway-window-chromium-columns-lists.png",
+      "sha256": "969e72ff6f43abdb2dcbeaabc199dee2d5096a8a3539fbc4ecf0faad381a299b"
+    },
+    {
+      "path": "scripted-browser/gateway-window/shots/gateway-window-chromium-columns-live.png",
+      "sha256": "8d81d737c3c2fa5d29d161c279edd1e1ff18f2011084a722ef38359f9f91d2b7"
+    }
+  ],
+  "selected_png_meaning": "Existing MCP app scope-refusal fixture, not queue saturation visualization",
+  "R5_and_hostedCI": "pending at preparation, no final approval claimed"
+}

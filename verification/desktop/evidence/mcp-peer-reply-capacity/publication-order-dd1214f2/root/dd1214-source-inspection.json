@@ -1,0 +1,28 @@
+{
+  "head": "dd1214f2c9cd00a4417a05de236edcc5223ae5a9",
+  "base": "d59d9272ed7afdb512c13263c8b9620ebd591db0",
+  "clean": true,
+  "combined_source_hashes": {
+    "crates/nessa-sdk/src/infrastructure/mcp/connection.rs": "2c6271c30e183cf240547604b030935f7eeab9fb72991eba357633ab91f3aa15",
+    "crates/nessa-sdk/src/infrastructure/mcp/http.rs": "0e7aadb9be3cd217cbba6c896ea3c4b6d8f24e47bbca20c45595aa4ef944b718",
+    "crates/nessa-sdk/src/infrastructure/mcp/mod.rs": "0574953b9729feefbb25a08f069f41bd3b4d1d4886961c27748b636b1f262ff6",
+    "crates/nessa-sdk/tests/infrastructure/mcp/connection_end.rs": "d7781839c30fbaca037a81828fe1f6ff74df922db468281436d93c41cf016abf",
+    "crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs": "9807e164132fa95324c893225a337112eebc85e96272c550efbd7d428c094ba2",
+    "crates/nessa-sdk/tests/infrastructure/mcp/mod.rs": "805991e1b20801ce586e3d7516268d1efdf5620aa9dd7803537442ab2599c248",
+    "crates/nessa-sdk/tests/infrastructure/mcp/post_streams.rs": "bd15d846e9719e7fbcfbfc30ac492b501551dc33ad43545a20367ad83c626911",
+    "docs/adr/todo/392-remote-mcp-servers.md": "45c4530779703b3ff7943971012e5cf2f5f443ddb2c1108bff1a8954a2ba530b",
+    "docs/codebase-structure.md": "7b257dd7895e4eb01ea61f7946851fb8a66968ec01faf2e892108d2d13fff4a0"
+  },
+  "author_freeze_hashes_match": true,
+  "unchanged_rules": {
+    "queue": {
+      "identical_to_8f": true,
+      "sha256": "7fd476584e654920932f4b3cc214aec0159b9b25b1afa71c1dc7b23821f2ab8d"
+    },
+    "deliver": {
+      "identical_to_8f": true,
+      "sha256": "4a093e4830d5af78573eb6f8fae8b57c0a76c444b31ebdbb99f49202ea26dbfb"
+    }
+  },
+  "historical_mutation_scope": "Original queue/deliver mutation evidence retained at actual ee798 source; latest ordering rules have three actual independent101 probes."
+}

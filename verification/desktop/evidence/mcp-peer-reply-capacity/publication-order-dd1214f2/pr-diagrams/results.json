@@ -1,0 +1,20 @@
+{
+  "root": "/tmp/665-publication-description-render",
+  "renderer": "mermaid11.12.1 in Playwright Chromium",
+  "results": [
+    {
+      "document": "description.md",
+      "index": 0,
+      "source_sha256": "26e7dfb84e6c59cd93637c598accece1543f8f4d7ef7c2dfa3dfe0ecd2204dcf",
+      "ok": true,
+      "svg": "diagram-0.svg"
+    },
+    {
+      "document": "description.md",
+      "index": 1,
+      "source_sha256": "88d411b4d987e2875d1ffa16226540d0fdf137de40fb40d6d7bff1d54a710b20",
+      "ok": true,
+      "svg": "diagram-1.svg"
+    }
+  ]
+}

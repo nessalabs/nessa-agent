@@ -1,0 +1,9 @@
+{
+  "log": "/workspace/665-publication-evidence/six-package-full-suite.log",
+  "passed": 4422,
+  "failed": 0,
+  "ignored": 30,
+  "numeric_verdicts": 25,
+  "interleaved_verdict": "lines2176-2177 retain one1-pass child verdict whose test result: ok prefix was interleaved with a sibling test line; match numeric verdicts without requiring contiguous prefix",
+  "head": "dd1214f2c9cd00a4417a05de236edcc5223ae5a9"
+}

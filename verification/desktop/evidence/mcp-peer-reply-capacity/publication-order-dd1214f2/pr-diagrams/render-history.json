@@ -1,0 +1,15 @@
+{
+  "first_attempt": {
+    "exit": 1,
+    "diagram0": "PASS",
+    "diagram1": "FAIL",
+    "cause": "Mermaid sequence note semicolon parsed as statement separator"
+  },
+  "correction": "Replaced note semicolon with comma; no diagram behavior changed",
+  "restored_attempt": {
+    "exit": 0,
+    "diagram0": "PASS",
+    "diagram1": "PASS"
+  },
+  "status": "Draft description, not yet final-source evidence"
+}

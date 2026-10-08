@@ -1,0 +1,13 @@
+{
+  "head": "dd1214f2c9cd00a4417a05de236edcc5223ae5a9",
+  "binary_origin": "Supported scripted-browser umbrella rebuilt binary from clean exact dd1214f2c9cd00a4417a05de236edcc5223ae5a9",
+  "binary": "/workspace/665-cargo-target/debug/nessa",
+  "binary_sha256": "2a27e9a9c0cde63c735ccb34091c269fb0d8765c4979971412d3eff238fbde91",
+  "binary_mtime_ns": 1791455995754389474,
+  "ui_head": "1f22c0467f935b9f3fcac8a0340c96e8d0c31439",
+  "libGLES_path": "/tmp/637-browser-libs/extracted/usr/lib/x86_64-linux-gnu/libGLESv2.so.2.1.0",
+  "libGLES_sha256": "3d07baa9b15672660df7e19f068499310f5922b238991daaf2cefa704d2bb7ef",
+  "platform": "Linux x86_64; bundled headless Chromium and WebKit dev columns; native WKWebView and performance not assessed",
+  "toolchain": "Exclusive warm target /workspace/665-cargo-target; jobs1, debug0, incremental0; existing verification subreaper",
+  "host_preflight": "PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1 bypasses only ldconfig-cache preflight; all browser assertions ran"
+}

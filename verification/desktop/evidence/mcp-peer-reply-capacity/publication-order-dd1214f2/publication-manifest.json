@@ -1,0 +1,203 @@
+{
+  "source": "dd1214f2c9cd00a4417a05de236edcc5223ae5a9",
+  "all8author_gates_passed": true,
+  "actualbrowserrows": 37,
+  "omitted_png_retained_locally": [
+    {
+      "path": "scripted-browser/mcp-apps-gateway/shots/mcp-apps-gateway-chromium-columns.png",
+      "sha256": "fab5b6983dc29e981e510e3b6168e22f02a189bc9178e708fa8ad10073ab8a1b"
+    },
+    {
+      "path": "scripted-browser/mcp-apps-gateway/shots/mcp-apps-gateway-webkit-columns-message.png",
+      "sha256": "b44861c05d7dbf7062997d73b02c17b38b52df41232c8fd87aa180cbac2625ac"
+    },
+    {
+      "path": "scripted-browser/mcp-apps-gateway/shots/mcp-apps-gateway-webkit-columns.png",
+      "sha256": "1222d614a66fa96f08f8a7f7044f8557cd4317dcc2893cb19e2da9beac26e08e"
+    },
+    {
+      "path": "scripted-browser/mcp-apps-gateway/shots/mcp-apps-gateway-chromium-columns-message.png",
+      "sha256": "0bdd72263dc89751d3775ac1f76f9471c0b1977acd66af40ef22dacb968df218"
+    },
+    {
+      "path": "scripted-browser/scripted-scenarios/shots/scripted-scenarios-webkit-columns-permission.png",
+      "sha256": "9545ab541a58c44bbdf8629780ee7fe0a4954ee65c62aa787eb59ee7a76b1f3b"
+    },
+    {
+      "path": "scripted-browser/scripted-scenarios/shots/scripted-scenarios-chromium-columns-fail.png",
+      "sha256": "1786606629ebb23656ccbff3235d3f1076ee4b6b56def7412227ad55418f235d"
+    },
+    {
+      "path": "scripted-browser/scripted-scenarios/shots/scripted-scenarios-webkit-columns-allow.png",
+      "sha256": "1a12e556acffc0eb4b4bce933dffab6b7de90c0565f50dd1d2d44a3860fe6a2f"
+    },
+    {
+      "path": "scripted-browser/scripted-scenarios/shots/scripted-scenarios-webkit-columns-fail.png",
+      "sha256": "d034115e7dcf276ea2fc1a35bff55c00b66f7055871db7dfcb0cf28287a0830c"
+    },
+    {
+      "path": "scripted-browser/scripted-scenarios/shots/scripted-scenarios-chromium-columns-permission.png",
+      "sha256": "9b86e2e1207aaa4a50c98b2643802712cfbd7bdd50b52ffd8dd5eb39f4459151"
+    },
+    {
+      "path": "scripted-browser/scripted-scenarios/shots/scripted-scenarios-chromium-columns-cancel.png",
+      "sha256": "d29b6b955ca1100677fe085f7ba0dfc8555d896b858acd0e69dd97f9992cc789"
+    },
+    {
+      "path": "scripted-browser/scripted-scenarios/shots/scripted-scenarios-chromium-columns-allow.png",
+      "sha256": "1069971779b4ace48f1d02adae4b943879e2dd1e7fa9e148bb400d35810ce5c6"
+    },
+    {
+      "path": "scripted-browser/scripted-scenarios/shots/scripted-scenarios-webkit-columns-cancel.png",
+      "sha256": "cfbddea3f541dfe2cac2ceff7636ce7d706171adc6ac7170ec56fa6b4d22edd9"
+    },
+    {
+      "path": "scripted-browser/gateway-window/shots/gateway-window-chromium-columns-handshake.png",
+      "sha256": "42fe87fbd58694e92a06e9129b0e3794405ab0b8969bcffd9d08944bc120b537"
+    },
+    {
+      "path": "scripted-browser/gateway-window/shots/gateway-window-webkit-columns-opens.png",
+      "sha256": "05b08d59f26d45889734f8960458e94e23827cb448ced4f2ccfbbc1609b9b189"
+    },
+    {
+      "path": "scripted-browser/gateway-window/shots/gateway-window-webkit-columns-handshake.png",
+      "sha256": "4aaa0ce0a812816714faeb1406992a606b0238416d703a321c948dadae436a0b"
+    },
+    {
+      "path": "scripted-browser/gateway-window/shots/gateway-window-webkit-columns-lists.png",
+      "sha256": "34b2c8ad0a24ca9401dde453cbf1efb08b0fc0d3a8b283e90f5d1e5559d27025"
+    },
+    {
+      "path": "scripted-browser/gateway-window/shots/gateway-window-webkit-columns-live.png",
+      "sha256": "47c5223b174287c79e556660714671418f0b8c5778281bdcded62303c354f412"
+    },
+    {
+      "path": "scripted-browser/gateway-window/shots/gateway-window-chromium-columns-opens.png",
+      "sha256": "3aeabce515547658792dc19d72271f4f6f6ea7a040fcf13e37df6a69b4dd2fc4"
+    },
+    {
+      "path": "scripted-browser/gateway-window/shots/gateway-window-chromium-columns-lists.png",
+      "sha256": "969e72ff6f43abdb2dcbeaabc199dee2d5096a8a3539fbc4ecf0faad381a299b"
+    },
+    {
+      "path": "scripted-browser/gateway-window/shots/gateway-window-chromium-columns-live.png",
+      "sha256": "8d81d737c3c2fa5d29d161c279edd1e1ff18f2011084a722ef38359f9f91d2b7"
+    }
+  ],
+  "selected_png_meaning": "Existing MCP app scope-refusal fixture, not queue saturation visualization",
+  "review_round": "R5 (R1-R4 retained)",
+  "R5": "Two fresh independent clean reports; lifecycle independently executed MCP226pass",
+  "CodeRabbit": "Actual dd review5455299678 statusSUCCESS; diagnostic nit disposition6058151600 independently agreed by both R5 reviewers",
+  "Codex": "Current dd manual review6058106473 running at publication",
+  "hosted_CI": {
+    "run": 37763984884,
+    "status_at_publication": "in_progress; Windows/macOS pending; other jobs passed",
+    "snapshot": "root/hosteddd-checkpoint-jobs.json"
+  },
+  "author_execution_identity": "Initial format/MCP/Clippy exact ddsource bytes on dirty8f beforecommit; other5author checks clean actualdd",
+  "historical_frontend_failure": "root/hosted8f-jobs.json refers only to prior8f; diagnosed separately672; currentdd frontend alreadypassed withoutretry",
+  "browser_scope": "Headless Chromium/WebKit dev columns, UIpin1f22, localLDlibraries, onlyldconfigcachepreflightbypass, nativeWKWebView/perf excluded",
+  "reviewer_runtime": "root/r5-lifecycle-full-mcp.* executed on clean dd",
+  "raw_paths": "author manifest paths preserve original workspace execution locations; corresponding files retained below author/",
+  "queue_mutations": "Original ee798 proofs historical; current queue/deliver blocks unchanged from8f independentlyverified; three latestordering probes actually executed andfailed101",
+  "files": {
+    "author/source-freeze.json": "d27f76b694ae2584b17ef71971fce32ba93e285b6f329d95606e40475e2c0b24",
+    "author/full-mcp.command.json": "504d65c05ca2ba2744c48f4bafba3c0202cd7741fbafd54e8c674c658a0e1437",
+    "author/http-fence-after-end.command.json": "52064a9df624e26dc5f6ae1ab688d4a3bbb42ec3a23092958fdb3069f79f08b2",
+    "author/publication-gap-before-fix.command.json": "52064a9df624e26dc5f6ae1ab688d4a3bbb42ec3a23092958fdb3069f79f08b2",
+    "author/clippy.command.json": "fb144e29d416bddeb4d8ad2e4efc700be283cae528b360232d684d1279f21167",
+    "author/format.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "author/adr-before-code.diff": "af81eb013973569e882f75facc70bdfa7aaebc8f6e8e1a632965ecdeb14f0825",
+    "author/ordering-probes.json": "8558e56bc980246c2c47ad09888c8cb8a321df18e84026a74a7b814d53b344f5",
+    "author/scripted-browser.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "author/six-package-full-suite.command.json": "435aa8c3ca636c42ac5d1415469d6c7df0bcc88846e88deafed812ffbab3f7fb",
+    "author/six-package-full-suite.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "author/http-fence-after-end.rule-diff": "5a2757709c7de28274d725b6beebd939b55eaf524cc2a2c381655c892c702016",
+    "author/http-fence-after-end.log": "ca881447f9a65ca272a33d3724d747b6670c5e8cd1add942a3809fffaf11d4ae",
+    "author/architecture-unit-tests.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "author/snapshot-omitted.log": "6ef91d4432cc3dac6bcc3e3cc049766bb1fefe1063bbcabec5e1d6a5e8280331",
+    "author/watch-after-response.diff": "8f077f41a31c40934b9991ad144a831b15435c1dc8261b772072f303bd5a70e9",
+    "author/architecture.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "author/snapshot-omitted.command.json": "623c81f0b1a0a24fa778b304b7aae3b8bf305f8678540057e33b549b8e73ff54",
+    "author/publication-gap-before-fix.log": "1afec8664f895c9e5ce3d845ca0eaa35cf7393f3b39d574bea6768764c18a1a8",
+    "author/scripted-browser.command.json": "c634467151bb4a2f7fbea3d1bdbbfe295e8c74dffb41e5ee6f8d65dbb42e0d42",
+    "author/watch-after-response.log": "ce0a546a23c6a84cf0aa22ec846c24114dbdd2d164129b473da12eb385401b8e",
+    "author/clippy.log": "affb23f8ede9dfbb7325be0a993db21017cf1feff5e4bb16fbcdc1f24a0466eb",
+    "author/sdk-docs.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "author/scripted-browser.log": "f7bbe75b94138c4db22f8c62e918428e247d275ac59b8732ea6d7c4a87ab83d1",
+    "author/author-review.txt": "de7bf64590c75af9126304d229c48c6f7bd61c58f2495ef271f227f0047f4b9f",
+    "author/publication-order-restored-targeted.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "author/architecture-unit-tests.log": "83f54dcd3bb495abe537393a8e945c99c5384c31febdea6e5880dc6e5c80499c",
+    "author/snapshot-omitted.rule-diff": "dd510ae85e48ca53c0dec7090b75e644a01186af695095aac6e69d413a582085",
+    "author/browser-environment.json": "e07356ea424d0faae2f6b4ab45dbe0eb18f0cf11e274b4456d5751377ef0f769",
+    "author/publication-order-restored-targeted.command.json": "504d65c05ca2ba2744c48f4bafba3c0202cd7741fbafd54e8c674c658a0e1437",
+    "author/watch-after-response.command.json": "52064a9df624e26dc5f6ae1ab688d4a3bbb42ec3a23092958fdb3069f79f08b2",
+    "author/format.command.json": "0fdef87d62aa423b0709c951c248cde0dbe9575a0c3553f68194def17ff0522e",
+    "author/http-fence-after-end.exit": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c",
+    "author/full-mcp.log": "e73540a446f147bfcba50328d4e4a75b2d7ecb9ec8d45a61697c0e4806d098a7",
+    "author/source-identities.json": "d27f76b694ae2584b17ef71971fce32ba93e285b6f329d95606e40475e2c0b24",
+    "author/watch-after-response.exit": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c",
+    "author/publication-gap-before-fix.exit": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c",
+    "author/publication-gap-before-fix.diff": "0c9f36b6b02ae1d808ac0b86db7ef30241ef6eb6a480f75400c848de625cde4d",
+    "author/architecture.command.json": "98a2af81defc0306c3f81fa0851956f2a5385e71d5a920af4a16faf575d45fe7",
+    "author/architecture-unit-tests.command.json": "a75194b34ddcd7124c2285000a5932dae6f7828428438f588175d91fda52b5f1",
+    "author/ordering-restoration.json": "b40841da0c42ef69b727070d3919584fc9bf3996b0021cf4ce190c77ec1777fb",
+    "author/format.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "author/sdk-docs.command.json": "5aee479dd687c2b8575a36fb8f7963cb2ac4e440b9d00a030225fdd586c19c81",
+    "author/http-fence-after-end.diff": "dff8604c39d2d2020121807850a0251b17d09391bcce71f9ed7b81ef631530cf",
+    "author/watch-after-response.rule-diff": "0167ceb780af1c41016429c5e95df65d0ca9f4e884a0b60ec6417356a9f3e801",
+    "author/publication-order-restored-targeted.log": "35239f53d857824598ddf1603058d2364c0cd0b4c8e624ef4038fd15ee2b74e3",
+    "author/full-mcp.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "author/six-package-full-suite.log": "2caa947b3d85632745daba9c6bbb42bdc307f5515145368894c59d7dfe03136d",
+    "author/clippy.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "author/snapshot-omitted.diff": "006cdd1677e14a43bb98429713f2596cd9bfe45827cf1172076f369817979912",
+    "author/fixed-connection.rs": "2c6271c30e183cf240547604b030935f7eeab9fb72991eba357633ab91f3aa15",
+    "author/manifest.json": "6fc888830409681e8d4c03fa6e47079164c31a9a6592b62fc246d94097de6619",
+    "author/architecture.log": "2a2462c6729eeb5ecb05a41a9fb9ed10f97b1bdb34772bac68dd984b7907a5d8",
+    "author/sdk-docs.log": "d6b2d1eb05366384337ca1a1ab2ca44f2b71080b616be586ef4e24e696dce49c",
+    "author/snapshot-omitted.exit": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c",
+    "root/dd1214-broad-count-inspection.json": "ad7eba05fc2500bf3ddfea21fa46f8d231b1487f8bb28be197317431d2a936c3",
+    "root/r5-lifecycle-full-mcp.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "root/frontend-ci-diagnosis.md": "fd76fa39af4f5f0a7f41c49e062d509390e31aab7a08e8b755d3739e25187d31",
+    "root/review-r5-protocol-final.md": "55ec4a87a24bd77e64514f1c71de280478264ce01015ff454631d7bf6fcd7eac",
+    "root/hosteddd-checkpoint-jobs.json": "8043fb1ad1685c7146098d3d03e84f8a5352d7d02111414546b20841eaec7188",
+    "root/r5-lifecycle-full-mcp.log": "95b84332c3640a788391346747103e36798c13fb613da6562eda3d26822cf3c8",
+    "root/finaldd-independent-inspection.json": "85c662f1eb8249b4f0bafedcc297d39c1ba4e36f57c533046dc196cc60af20ef",
+    "root/r5-lifecycle-full-mcp.command.json": "c3862ff3c7ca6b07ff145ba7e3b7130fde043c7d5ccd4d11e08bb5bbefb4e6ff",
+    "root/review-r5-lifecycle-final.md": "379796a41a686b9020b6be5d6ecfb55edd4667665a3b2c6fa5ed6b4c95010590",
+    "root/dd1214-source-inspection.json": "3a9306422c311c778126dff31018e970ad348c86b3b610ded88cbf49bf420998",
+    "root/frontend-input-identity.json": "6f61bf6af22ed4e23ed73e7149c1c881e95e7c965039907085a35ff268a2d6e0",
+    "root/r5-lifecycle-probe-inspection.json": "a9b4a28233159297caad58307950dbf15dafbcb0bef2d23071805d430dd094c0",
+    "root/hosted8f-jobs.json": "daed355df7c6782224d7aa5d402a2517219f1b9f23c069fc456f051d14f560ed",
+    "root/assembleddd-tree-identity.json": "8befa9d4c036fa0db34ee4f5c2bd051f299d25fdab97ff9dd5c7b5868a971672",
+    "pr-diagrams/results.json": "0a3fcb9983bff785695cd1aab72c0a352593140179d80271102d948257025b01",
+    "pr-diagrams/render-history.json": "4661b53285d22523cdbf57df1806c5fbcbb070bb9dbd6811977acb478fb5d25d",
+    "pr-diagrams/diagram-0.svg": "c6a08a580dfa4d3c38a66e318f4a07d95d51bf60e415b6a1974f15c1daa385e6",
+    "pr-diagrams/diagram-1.svg": "894968b13c5873420bf75ccaae04859be38fc0b199e21fdaa56c319569222e67",
+    "author/scripted-browser/pr-summary.md": "e3c174ccfbbe20e0c54595775ab10990c9339acaacfbcd1ea889e9094f2abb65",
+    "author/scripted-browser/mcp-apps-gateway/mcp.jsonl": "84484f7db054c389e7f4ca1f8f67f68d419524883481921adda27f9ae1e39e69",
+    "author/scripted-browser/mcp-apps-gateway/acp.jsonl": "f5106075470c44ffa30c177455a0c27ca0b7131398c5ac62445d8e3086f845ea",
+    "author/scripted-browser/mcp-apps-gateway/view.json": "ef127c9adaa50c1f56b2258b49c09a0c5c2bfab4709ec7008b39fe0d4ddf7072",
+    "author/scripted-browser/mcp-apps-gateway/gateway.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "author/scripted-browser/mcp-apps-gateway/result.json": "f6c7923fe5c85b76f9e023cd353f0c08e8bdd1247a02dec44ec47cf47fb1ddd3",
+    "author/scripted-browser/scripted-scenarios/mcp.jsonl": "ea46fc6b09d275f93c498d2457590520856f84e7853c8b163bc349ef774742da",
+    "author/scripted-browser/scripted-scenarios/acp.jsonl": "95d5f2d0049d14287668d5b5e32cc521b68612a3e4d3c8fb025ab984f7011332",
+    "author/scripted-browser/scripted-scenarios/gateway.log": "6aaa48e865195a077144427c75a197f9af5e9497078f46a2e10a999319fbe584",
+    "author/scripted-browser/scripted-scenarios/result.json": "0f89a44bbd5ecc1e0beb6744daa28440ff6cc47db9fe2ffa911fb71993cceb8a",
+    "author/scripted-browser/gateway-window/mcp.jsonl": "92cc61d91ec63d20ea8c701c9fb9c221a434f44ca3dc4b863f49b19e9664cdfc",
+    "author/scripted-browser/gateway-window/acp.jsonl": "07e640e656c78fb546b934f495d0e041a45bc904534818a08d26f1ae19f23393",
+    "author/scripted-browser/gateway-window/view.json": "93ff463fb90f565642334ea4d4f6228b8692c6238f372252ae62c27c2d6b42c3",
+    "author/scripted-browser/gateway-window/gateway.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "author/scripted-browser/gateway-window/result.json": "4991b8e5bb8f8c497548fd70c2e60c5ff56912ef2b97dd3a274e5a94e9557acc",
+    "author/scripted-browser/scripted-scenarios/views/webkit-columns-cancel.json": "8f808d3ef7ed47c5421de1a93f4a6bd7929d07238f143dbbcbfaf3f6ca7c2d02",
+    "author/scripted-browser/scripted-scenarios/views/chromium-columns-fail.json": "0d3fad7274054a82c8d8035a7b78ae51ff95ce09b340e15997424f56d6888ace",
+    "author/scripted-browser/scripted-scenarios/views/chromium-columns-permission.json": "111ccdf69b7e6df5778f49a1bc0eb67d51b683b7df3be05c6c592ff9efb62efc",
+    "author/scripted-browser/scripted-scenarios/views/webkit-columns-fail.json": "230e81705966cbcc93656099727ac90e17e6475b478dd7c17dc0f051a22be367",
+    "author/scripted-browser/scripted-scenarios/views/webkit-columns-allow.json": "581b8b37a42ddfcde983b903c345cb652f57399766855a5d896b5840ed9a3202",
+    "author/scripted-browser/scripted-scenarios/views/webkit-columns-permission.json": "1eeede15d37c196d8272a0df6a665fd22a3bb998966ed75ea7288dc41179538e",
+    "author/scripted-browser/scripted-scenarios/views/chromium-columns-cancel.json": "77bbbc8c5eb143fcf0b13e2bdbf2b29da6742829fd0c54a83265b6858af43f28",
+    "author/scripted-browser/scripted-scenarios/views/chromium-columns-allow.json": "b81d9f45c25f64e7911971febd68b5ac8cb2fb07c795cb88ac32031a378e7b87",
+    "author/scripted-browser/gateway-window/shots/gateway-window-chromium-columns-apps.png": "bae6c69dba44f4a9c7303567f924edfb43c3caf006fba2898b2b2a27f11787fa",
+    "author/scripted-browser/gateway-window/shots/gateway-window-webkit-columns-apps.png": "2cdd6b938c9a805109ceb93014d133126c2aaa611621bf4123fea335905a8630"
+  }
+}

@@ -1,0 +1,167 @@
+{
+  "head": "dd1214f2c9cd00a4417a05de236edcc5223ae5a9",
+  "base": "d59d9272ed7afdb512c13263c8b9620ebd591db0",
+  "clean": true,
+  "root_source_inspection": "/workspace/665-root-evidence/dd1214-source-inspection.json",
+  "checks": {
+    "format": {
+      "exit": 0,
+      "command": "/workspace/665-publication-evidence/format.command.json",
+      "log": "/workspace/665-publication-evidence/format.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "provenance": "Executed before commit on HEAD8f with final dirty source bytes; source-freeze hashes reproduce exact dd source."
+    },
+    "full-mcp": {
+      "exit": 0,
+      "command": "/workspace/665-publication-evidence/full-mcp.command.json",
+      "log": "/workspace/665-publication-evidence/full-mcp.log",
+      "log_sha256": "e73540a446f147bfcba50328d4e4a75b2d7ecb9ec8d45a61697c0e4806d098a7",
+      "provenance": "Executed before commit on HEAD8f with final dirty source bytes; source-freeze hashes reproduce exact dd source.",
+      "counts": {
+        "passed": 226,
+        "failed": 0,
+        "ignored": 1
+      }
+    },
+    "clippy": {
+      "exit": 0,
+      "command": "/workspace/665-publication-evidence/clippy.command.json",
+      "log": "/workspace/665-publication-evidence/clippy.log",
+      "log_sha256": "affb23f8ede9dfbb7325be0a993db21017cf1feff5e4bb16fbcdc1f24a0466eb",
+      "provenance": "Executed before commit on HEAD8f with final dirty source bytes; source-freeze hashes reproduce exact dd source."
+    },
+    "six-package-full-suite": {
+      "exit": 0,
+      "command": "/workspace/665-publication-evidence/six-package-full-suite.command.json",
+      "log": "/workspace/665-publication-evidence/six-package-full-suite.log",
+      "log_sha256": "2caa947b3d85632745daba9c6bbb42bdc307f5515145368894c59d7dfe03136d",
+      "provenance": "Executed on clean actual dd1214f2c9cd00a4417a05de236edcc5223ae5a9",
+      "counts": {
+        "passed": 4422,
+        "failed": 0,
+        "ignored": 30,
+        "verdicts": 25
+      }
+    },
+    "sdk-docs": {
+      "exit": 0,
+      "command": "/workspace/665-publication-evidence/sdk-docs.command.json",
+      "log": "/workspace/665-publication-evidence/sdk-docs.log",
+      "log_sha256": "d6b2d1eb05366384337ca1a1ab2ca44f2b71080b616be586ef4e24e696dce49c",
+      "provenance": "Executed on clean actual dd1214f2c9cd00a4417a05de236edcc5223ae5a9"
+    },
+    "architecture-unit-tests": {
+      "exit": 0,
+      "command": "/workspace/665-publication-evidence/architecture-unit-tests.command.json",
+      "log": "/workspace/665-publication-evidence/architecture-unit-tests.log",
+      "log_sha256": "83f54dcd3bb495abe537393a8e945c99c5384c31febdea6e5880dc6e5c80499c",
+      "provenance": "Executed on clean actual dd1214f2c9cd00a4417a05de236edcc5223ae5a9",
+      "passed": 74
+    },
+    "architecture": {
+      "exit": 0,
+      "command": "/workspace/665-publication-evidence/architecture.command.json",
+      "log": "/workspace/665-publication-evidence/architecture.log",
+      "log_sha256": "2a2462c6729eeb5ecb05a41a9fb9ed10f97b1bdb34772bac68dd984b7907a5d8",
+      "provenance": "Executed on clean actual dd1214f2c9cd00a4417a05de236edcc5223ae5a9"
+    },
+    "scripted-browser": {
+      "exit": 0,
+      "command": "/workspace/665-publication-evidence/scripted-browser.command.json",
+      "log": "/workspace/665-publication-evidence/scripted-browser.log",
+      "log_sha256": "f7bbe75b94138c4db22f8c62e918428e247d275ac59b8732ea6d7c4a87ab83d1",
+      "provenance": "Executed on clean actual dd1214f2c9cd00a4417a05de236edcc5223ae5a9",
+      "results": {
+        "mcp-apps-gateway": {
+          "path": "/workspace/665-publication-evidence/scripted-browser/mcp-apps-gateway/result.json",
+          "sha256": "f6c7923fe5c85b76f9e023cd353f0c08e8bdd1247a02dec44ec47cf47fb1ddd3",
+          "passed": 16,
+          "engines": {
+            "shared": 2,
+            "chromium": 7,
+            "webkit": 7
+          }
+        },
+        "gateway-window": {
+          "path": "/workspace/665-publication-evidence/scripted-browser/gateway-window/result.json",
+          "sha256": "4991b8e5bb8f8c497548fd70c2e60c5ff56912ef2b97dd3a274e5a94e9557acc",
+          "passed": 13,
+          "engines": {
+            "shared": 1,
+            "chromium": 6,
+            "webkit": 6
+          }
+        },
+        "scripted-scenarios": {
+          "path": "/workspace/665-publication-evidence/scripted-browser/scripted-scenarios/result.json",
+          "sha256": "0f89a44bbd5ecc1e0beb6744daa28440ff6cc47db9fe2ffa911fb71993cceb8a",
+          "passed": 8,
+          "engines": {
+            "chromium": 4,
+            "webkit": 4
+          }
+        }
+      }
+    }
+  },
+  "environment": {
+    "head": "dd1214f2c9cd00a4417a05de236edcc5223ae5a9",
+    "binary_origin": "Supported scripted-browser umbrella rebuilt binary from clean exact dd1214f2c9cd00a4417a05de236edcc5223ae5a9",
+    "binary": "/workspace/665-cargo-target/debug/nessa",
+    "binary_sha256": "2a27e9a9c0cde63c735ccb34091c269fb0d8765c4979971412d3eff238fbde91",
+    "binary_mtime_ns": 1791455995754389474,
+    "ui_head": "1f22c0467f935b9f3fcac8a0340c96e8d0c31439",
+    "libGLES_path": "/tmp/637-browser-libs/extracted/usr/lib/x86_64-linux-gnu/libGLESv2.so.2.1.0",
+    "libGLES_sha256": "3d07baa9b15672660df7e19f068499310f5922b238991daaf2cefa704d2bb7ef",
+    "platform": "Linux x86_64; bundled headless Chromium and WebKit dev columns; native WKWebView and performance not assessed",
+    "toolchain": "Exclusive warm target /workspace/665-cargo-target; jobs1, debug0, incremental0; existing verification subreaper",
+    "host_preflight": "PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1 bypasses only ldconfig-cache preflight; all browser assertions ran"
+  },
+  "old_source_red": {
+    "head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+    "exit": 101,
+    "log": "/workspace/665-publication-evidence/publication-gap-before-fix.log",
+    "observation": "notify Ok, watch Pending, direct_posts1"
+  },
+  "ordering_probes": [
+    {
+      "name": "snapshot-omitted",
+      "exit": 101,
+      "test": "infrastructure::mcp::connection::end_tests::recorded_end_refuses_admission_while_watch_publication_is_held",
+      "log": "/workspace/665-publication-evidence/snapshot-omitted.log",
+      "log_sha256": "6ef91d4432cc3dac6bcc3e3cc049766bb1fefe1063bbcabec5e1d6a5e8280331",
+      "isolated_rule_diff": "/workspace/665-publication-evidence/snapshot-omitted.rule-diff",
+      "command": "/workspace/665-publication-evidence/snapshot-omitted.command.json"
+    },
+    {
+      "name": "watch-after-response",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j26_close_fences_http_and_publishes_before_response_wakes",
+      "log": "/workspace/665-publication-evidence/watch-after-response.log",
+      "log_sha256": "ce0a546a23c6a84cf0aa22ec846c24114dbdd2d164129b473da12eb385401b8e",
+      "isolated_rule_diff": "/workspace/665-publication-evidence/watch-after-response.rule-diff",
+      "command": "/workspace/665-publication-evidence/watch-after-response.command.json"
+    },
+    {
+      "name": "http-fence-after-end",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j26_close_fences_http_and_publishes_before_response_wakes",
+      "log": "/workspace/665-publication-evidence/http-fence-after-end.log",
+      "log_sha256": "ca881447f9a65ca272a33d3724d747b6670c5e8cd1add942a3809fffaf11d4ae",
+      "isolated_rule_diff": "/workspace/665-publication-evidence/http-fence-after-end.rule-diff",
+      "command": "/workspace/665-publication-evidence/http-fence-after-end.command.json"
+    }
+  ],
+  "restoration": {
+    "exact_fixed_source_restored": true,
+    "mtime": 1791455086.2424228
+  },
+  "historical_evidence": [
+    "/workspace/665-author-evidence",
+    "/workspace/665-final-author-evidence",
+    "/workspace/665-import-correction-evidence",
+    "/workspace/665-test-import-correction-evidence",
+    "/workspace/665-capacity-review-evidence",
+    "/workspace/665-terminal-admission-evidence"
+  ]
+}

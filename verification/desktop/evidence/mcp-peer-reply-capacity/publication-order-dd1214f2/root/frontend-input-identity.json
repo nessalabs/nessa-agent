@@ -1,0 +1,36 @@
+{
+  "refs": [
+    "d59d9272ed7afdb512c13263c8b9620ebd591db0",
+    "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+    "8f083e81e2c323c818cb51612c45edcef42c61b6"
+  ],
+  "inputs": {
+    "src": {
+      "git_object": "074db69dc34151f1769640b5481e14ce58cc8c2e",
+      "identical_all_three": true
+    },
+    "packages": {
+      "git_object": "a89cc051270898af5568ce292643e7b35c8dac58",
+      "identical_all_three": true
+    },
+    "scripts": {
+      "git_object": "1c5255d8327f46b227182fb1d0df3e363c668170",
+      "identical_all_three": true
+    },
+    "package.json": {
+      "git_object": "22fa86e523aa63d612803c31989ccd0c787328c8",
+      "identical_all_three": true
+    },
+    "pnpm-lock.yaml": {
+      "git_object": "55184614ed12f4f61cefe0fb0a6fefd5583d7d3b",
+      "identical_all_three": true
+    },
+    "vitest.config.ts": {
+      "git_object": "edcceb334e4d46e356446622a49fae732a5f4c1e",
+      "identical_all_three": true
+    }
+  },
+  "actual_failed_job": 113250602229,
+  "log_sha256": "a103cd00ce2d2656dd68891e79e634be85ab7fd15ef94d874ffe7548e0e4a079",
+  "failure": "layouts.test.tsx289 expectedframes.pending0 actual1; 3875passed1failed"
+}
