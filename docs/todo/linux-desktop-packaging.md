@@ -15,8 +15,9 @@ What remains:
 - **Installed acceptance** ([#188](https://github.com/nessalabs/nessa-agent/issues/188)):
   on a fresh Ubuntu desktop, install the `.deb`, open the app, chat, quit,
   reopen, log out and back in, and chat again.
-- **Running while logged out** ([#217](https://github.com/nessalabs/nessa-agent/issues/217)):
-  setup offers linger explicitly and reports what logind confirms.
+- **Running while logged out** ([#217](https://github.com/nessalabs/nessa-agent/issues/217),
+  [ADR 217](../adr/done/217-linux-linger-at-setup.md)): Linux setup offers linger
+  explicitly and reports what logind confirms. Packaging does not enable it.
 - **AppImage**: not released. linuxdeploy rewrites every ELF file under
   `usr/lib`, the runtime's executables included, so the runtime fails its
   fingerprint (the proof run on #219 showed `nessa`, `nessa-mcp`, `node`, the

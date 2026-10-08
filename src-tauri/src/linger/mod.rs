@@ -2,7 +2,7 @@
 //!
 //! Linger is an account policy on logind, not a step of registering the
 //! systemd user unit. The unit runs while the person is signed in either way
-//! ([ADR 217](../../../docs/adr/todo/217-linux-linger-at-setup.md)).
+//! ([ADR 217](../../../docs/adr/done/217-linux-linger-at-setup.md)).
 //!
 //! ```text
 //! setup command ──▶ LingerOffer (this process's attempt)
@@ -19,3 +19,4 @@
 
 pub(crate) mod application;
 pub(crate) mod domain;
+pub(crate) mod infrastructure;

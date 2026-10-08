@@ -3,12 +3,15 @@ id: "host-startup-complete-setup-choose-an-agent-and-learn-the-shortcut"
 title: "complete setup, choose an agent, and learn the shortcut"
 kind: "statechart"
 status: "implemented"
-summary: "Setup walks through welcome, agent choice and the summon shortcut before finishing."
+summary: "Setup walks through welcome, agent choice and the summon shortcut, then linger on Linux, before finishing."
 parent: "host-startup"
 sources:
   - "src/onboarding/model/onboarding.ts"
   - "src/onboarding/model/onboarding.test.ts"
   - "src/onboarding/ui/use-onboarding.ts"
+  - "src/onboarding/model/linger.ts"
+  - "src/onboarding/ui/linger-step.tsx"
+  - "src-tauri/src/linger/domain/show.rs"
   - "src/onboarding/ui/use-onboarding-startup.test.ts"
   - "src/onboarding/application/readiness-check.ts"
   - "src/onboarding/application/readiness-check.test.ts"
@@ -28,7 +31,7 @@ diagramLinks: {}
 
 # complete setup, choose an agent, and learn the shortcut
 
-Setup walks through welcome, agent choice and the summon shortcut before finishing. Claude, Codex and OpenCode are listed, but only an agent reported as ready can be selected.
+Setup walks through welcome, agent choice and the summon shortcut before finishing. On Linux, when the host's linger read is not `not-applicable`, the shortcut is followed by the linger step. The claim on that step is logind's read. Claude, Codex and OpenCode are listed, but only an agent reported as ready can be selected.
 
 Ready means the probe found the required installation, configuration and authentication for that agent. Missing installation, missing configuration, missing sign-in and an unknown result remain different states. A fresh report can invalidate a choice while the picker is open. Finishing saves the chosen agent; a save or window-close failure offers recovery instead of claiming setup completed.
 
@@ -39,7 +42,13 @@ stateDiagram-v2
         [*] --> Welcome
         Welcome --> AgentPicker: Continue
         AgentPicker --> SummonLesson: Continue [selected agent ready]
-        SummonLesson --> Done: Finish
+        SummonLesson --> Linger: Finish [host did not say not-applicable]
+        SummonLesson --> Done: Finish [not-applicable]
+        Linger --> Done: Continue
+        note right of Linger
+            The claim is logind's Linger read.
+            A method reply is not the screen.
+        end note
     }
     Done --> ShowingPanel: Request handoff
     Setup --> ShowingPanel: Dismiss [completion false]

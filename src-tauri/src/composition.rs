@@ -56,6 +56,14 @@ use crate::gateway::{
     application::{Gateway, GatewayRuntimeDependencies, SystemMonotonicClock},
 };
 use crate::gateway_endpoint::{self, application::GatewayEndpointAccess};
+use crate::linger::application::LingerOffer;
+#[cfg(not(target_os = "linux"))]
+use crate::linger::application::NotApplicableLinger;
+#[cfg(target_os = "linux")]
+use crate::linger::{
+    application::LingerSession,
+    infrastructure::{FileLingerAudit, SystemLogind, UnavailableLingerAudit},
+};
 use crate::local_data;
 use crate::settings::{SettingsFile, SettingsStore};
 use crate::shortcuts::{ShortcutStore, ShortcutsFile};
@@ -138,6 +146,9 @@ pub struct HostDependencies {
     /// replaced by its store, not by itself.
     #[cfg(desktop)]
     pub releases: Arc<dyn ReleaseSource>,
+    /// Whether setup may offer linger. Linux asks logind. Every other host
+    /// answers `not-applicable` and has no call that enables it.
+    pub linger: Arc<dyn LingerOffer>,
 }
 
 impl HostDependencies {
@@ -199,6 +210,7 @@ impl HostDependencies {
                 })
             })
             .unwrap_or_else(|| Arc::new(UnavailableCredentialSaveAudit));
+        let linger = linger_offer(app, config_root.as_deref());
 
         // A development build has no staged runtime to register, exactly as
         // before: the branch is on the profile, not on whether a path exists.
@@ -265,8 +277,41 @@ impl HostDependencies {
             gateway,
             #[cfg(desktop)]
             releases: updater::release_source(app),
+            linger,
         })
     }
+}
+
+/// Linux records the choice under the same trusted root as credential audit,
+/// then asks logind. A root that cannot be placed there cannot record an
+/// intent, so accept does not call. Other hosts have no logind API.
+#[cfg(target_os = "linux")]
+fn linger_offer(app: &AppHandle, config_root: Option<&std::path::Path>) -> Arc<dyn LingerOffer> {
+    let audit = app
+        .path()
+        .app_config_dir()
+        .ok()
+        .and_then(|trusted_root| {
+            config_root.and_then(|config_root| {
+                config_root
+                    .strip_prefix(&trusted_root)
+                    .ok()
+                    .map(|relative| {
+                        Arc::new(FileLingerAudit::beneath(
+                            trusted_root,
+                            relative.join("linger-audit"),
+                        ))
+                            as Arc<dyn crate::linger::application::LingerAudit>
+                    })
+            })
+        })
+        .unwrap_or_else(|| Arc::new(UnavailableLingerAudit));
+    Arc::new(LingerSession::new(Arc::new(SystemLogind), audit))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn linger_offer(_app: &AppHandle, _config_root: Option<&std::path::Path>) -> Arc<dyn LingerOffer> {
+    Arc::new(NotApplicableLinger)
 }
 
 /// The bundle, for a handler the framework calls with only an app handle.

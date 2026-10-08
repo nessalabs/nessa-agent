@@ -1097,6 +1097,18 @@ Both cases require zero page errors. The rule is owned by
 [adapter tests](../../src/onboarding/adapters/agents.test.ts) and
 [setup recovery tests](../../src/onboarding/ui/onboarding-readiness-timeout.test.tsx).
 
+### Linux linger at setup
+
+`node verification/desktop/scripts/linux-linger.mjs` drives the real setup UI
+and controller in Chromium and WebKit. The fixture supplies the host's linger
+answer; it does not call logind. After the shortcut, an offer shows the choice
+and does not say the gateway keeps running after logout. Accepting shows that
+sentence only when the answer is `enabled`. Declining, a refusal, an unsupported
+host, and a prompt still open claim nothing, and a prompt still open has no
+Continue and no second enable. An account that is already lingering is reported
+without a call. Both engines require zero page errors and painted controls.
+The screen is [ADR 217](../../docs/adr/done/217-linux-linger-at-setup.md).
+
 ### Attachment admission races
 
 `node verification/desktop/scripts/attachments-races.mjs` drives the actual App,

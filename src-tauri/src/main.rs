@@ -114,6 +114,9 @@ fn main() {
             startup::host_startup,
             startup::restart_nessa,
             startup::quit_nessa,
+            linger::infrastructure::linger_status,
+            linger::infrastructure::linger_accept,
+            linger::infrastructure::linger_decline,
         ])
         .setup(move |app| {
             page_load::watch(app.handle().clone(), loads);

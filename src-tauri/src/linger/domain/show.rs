@@ -1,6 +1,6 @@
 //! The screen for one logind read and this process's attempt.
 //!
-//! The table is [ADR 217](../../../../../docs/adr/todo/217-linux-linger-at-setup.md).
+//! The table is [ADR 217](../../../../../docs/adr/done/217-linux-linger-at-setup.md).
 //! `enabled` is the only claim that the gateway keeps running after logout,
 //! and it is returned only for a read whose `Linger` property is true.
 

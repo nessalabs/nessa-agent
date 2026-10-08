@@ -152,13 +152,15 @@ What remains to validate and ship:
   while that user is signed in: the manager starts it at every login and stops
   it at a full logout, and recovery treats a manager replaced that way as a
   fact. Registration does not require linger (#219 removed that prerequisite).
-  Lingering is an explicit installation policy, not something the app enables
+  Lingering is an explicit account policy, not something the app enables
   silently: `loginctl enable-linger` keeps that user's manager alive from boot
   and after logout and is protected by the
-  `org.freedesktop.login1.set-user-linger` privilege. Offering it at setup, with
-  an explicit report of what logind confirms, is
-  [#217](https://github.com/nessalabs/nessa-agent/issues/217); the app must not
-  enable it silently or claim logged-out operation without it.
+  `org.freedesktop.login1.set-user-linger` privilege. Linux setup offers that
+  choice and reports only the confirming logind read
+  ([#217](https://github.com/nessalabs/nessa-agent/issues/217),
+  [ADR 217](../adr/done/217-linux-linger-at-setup.md)). The app does not turn
+  linger off, and it does not claim logged-out operation unless that read says
+  linger is on.
 - Use `$XDG_DATA_HOME` for installed runtime files and `$XDG_STATE_HOME` for
   host lifecycle state. `$XDG_RUNTIME_DIR` is only for sockets, locks, and other
   disposable session objects; the XDG specification requires it to disappear
@@ -254,7 +256,8 @@ delete its unit file) before registering again.
 
 Done when: fresh Ubuntu machine, install the `.deb`, open the app, chat works,
 quit, reopen, log out and back in, and chat still works, with linger off.
-Running while logged out is accepted separately under #217.
+Running while logged out is the explicit setup choice in ADR 217: the screen
+follows logind's confirming read, and packaging does not enable linger.
 
 ## 5. Windows
 
