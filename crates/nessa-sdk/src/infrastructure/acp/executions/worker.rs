@@ -571,6 +571,11 @@ impl<P: AcpProfile> Worker<P> {
         execution_reply: &mut Option<ExecutionReply>,
         recovery: &ProcessCleanup,
     ) -> WorkerResult {
+        // A16: the grant stays with the provider session when this worker
+        // leaves. Drop arguments no update took before the next generation
+        // of that open can attach them. A turn that ends with the worker
+        // still running already dropped them in `message`.
+        self.discard_unclaimed_arguments();
         // No command may enter a generation that has left its drive loop. The final
         // execution acknowledgement can wake a different runtime thread immediately.
         self.commands.close();

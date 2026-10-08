@@ -399,7 +399,12 @@ repeat the identity joins them to the identity already on that call. Past the
 view's byte budget, history yields
 first; arguments are then left off the tool, which stays, and the view does
 not say it was truncated for that. A tool row removed instead would leave
-the desktop on the previous state.
+the desktop on the previous state. The grant is held for the provider
+session's life, through every restart of its process. When the worker
+leaves with arguments still kept — the prompt fails, or the provider
+reports the turn cancelled without a turn cancel — those arguments are
+dropped as it leaves, before the next generation of that open can attach
+them. Results stay (A16).
 
 | # | Event | Effect |
 | --- | --- | --- |
@@ -418,6 +423,7 @@ the desktop on the previous state.
 | A13 | an open without a grant | the update unchanged |
 | A14 | an ACP update before the request is seen | that update carries none; a later update after the request takes them. The harness sends `tools/call` before it can report the call completed, so the update that arrives first is the running announcement. A last update that still arrived first leaves the arguments in the store until they are dropped, and the app is told `{}` |
 | A15 | the execution ends with the session still open | arguments no update took are dropped; results are not. The next execution's running update cannot be told the previous execution's arguments, which `tool-input` would then keep |
+| A16 | the worker leaves with arguments still kept (the prompt fails, or the provider reports the turn cancelled without a turn cancel) and the grant stays with the provider session | those arguments are dropped before the next generation's execution; results are not |
 | V1 | the arguments fit the view's byte budget | on `ConversationMcpTool.argumentsJson` |
 | V2 | the view is over budget and the arguments are why a tool row would be removed | the arguments omitted, the tool kept; the view does not say it was truncated |
 | V3 | the view is over budget because of an older message | the message yields first; the arguments stay |
@@ -507,7 +513,12 @@ Each row above has at least one test, named after it:
   (`tests/infrastructure/acp/sessions/forwarded.rs`), and
   Claude's recorded frames (`report_rows` completed, `always_fails` failed)
   replayed through the worker with a grant holding a result for each
-  (`contracts/tools.rs`).
+  (`contracts/tools.rs`). A16: a failed prompt
+  (`a_failed_prompt_drops_arguments_before_the_next_generation`) and an
+  unsolicited cancellation
+  (`an_unsolicited_cancellation_drops_arguments_before_the_next_generation`)
+  each drop arguments the turn did not take before the restarted generation
+  runs, and leave the result.
 - Protocol: a call's arguments are on `ConversationMcpTool.argumentsJson` and
   stay when a later update of the same server and tool does not repeat them
   (V1); past the view's budget they yield after the history and before the

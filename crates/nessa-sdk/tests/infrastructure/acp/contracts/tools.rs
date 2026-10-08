@@ -185,3 +185,83 @@ async fn a_forwarded_structured_result_reaches_the_completed_update_of_its_call(
         .into_result()
         .unwrap();
 }
+
+/// A16. `mode`'s first turn ends by leaving the worker; the grant stays.
+/// Arguments no update took are gone before the next generation runs, and
+/// the result kept beside them is not.
+async fn arguments_left_by_a_worker_that_exits_do_not_reach_the_next_generation(
+    mode: &str,
+    first: Result<ExecutionOutcome, AgentError>,
+) {
+    let _process_slot = process_test_slot().await;
+    let (root, mut config, model) = test_acp_configuration(mode, 16);
+    let forwarded = ForwardedResults::new();
+    let left_id = ToolCallId::new("toolu_left").unwrap();
+    let kept = ToolContent::structured(r#"{"kept":true}"#).unwrap();
+    forwarded.record(left_id.clone(), "mcptest", kept.clone());
+    forwarded.record_arguments(
+        left_id.clone(),
+        "mcptest",
+        McpCallArguments::new(r#"{"city":"Left"}"#).unwrap(),
+    );
+    assert_eq!(forwarded.arguments_len(), 1);
+    config.stand_ins = StandInSessions::granted_by(Arc::new(ForwardingGrants(forwarded.clone())));
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(RecordingAudit::default()),
+    )
+    .unwrap();
+    let (_, _, control) = ProviderOpenRequest::without_startup_control(None).into_parts();
+    let request = ProviderOpenRequest::new(SessionId::new("conversation").unwrap(), None, control);
+    let opened = binding.open(request).await.unwrap();
+    assert_eq!(start(&opened, "first").await.await.unwrap(), first);
+    assert_eq!(forwarded.take_arguments(&left_id, "mcptest"), None);
+    assert_eq!(forwarded.arguments_len(), 0);
+    assert_eq!(forwarded.take(&left_id, "mcptest"), Some(kept));
+    // The failed turn's evidence stays on the stream. The next turn is
+    // admitted on the same grant, which is what would have inherited it.
+    let running = start(&opened, "second").await;
+    assert_eq!(
+        timeout(Duration::from_secs(5), running)
+            .await
+            .expect("second turn")
+            .unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+    let launches: Vec<i32> =
+        serde_json::from_str(&std::fs::read_to_string(root.path().join("launches")).unwrap())
+            .unwrap();
+    assert_eq!(launches.len(), 2);
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn a_failed_prompt_drops_arguments_before_the_next_generation() {
+    arguments_left_by_a_worker_that_exits_do_not_reach_the_next_generation(
+        "provider-error-once",
+        Err(AgentError::Provider {
+            code: -32001,
+            diagnostic: Some(ProviderDiagnostic::new(
+                "provider plan does not allow this request",
+            )),
+        }),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn an_unsolicited_cancellation_drops_arguments_before_the_next_generation() {
+    arguments_left_by_a_worker_that_exits_do_not_reach_the_next_generation(
+        "cancelled-once",
+        Ok(ExecutionOutcome::Cancelled),
+    )
+    .await;
+}

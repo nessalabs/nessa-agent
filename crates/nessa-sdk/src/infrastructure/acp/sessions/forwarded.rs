@@ -24,6 +24,8 @@
 //! arguments"): the stand-in's rows (S1–S8, S11, A1–A6, A9) are tested in
 //! `tests/infrastructure/mcp/forwarded.rs`, this store's (S9, S10, A7, A8, A15)
 //! and W1–W8, A10–A13 in `tests/infrastructure/acp/sessions/forwarded.rs`.
+//! A16, the worker leaving with arguments still kept, is
+//! `tests/infrastructure/acp/contracts/tools.rs`.
 #![deny(missing_docs)]
 
 use crate::domain::agent_execution::tools::{
