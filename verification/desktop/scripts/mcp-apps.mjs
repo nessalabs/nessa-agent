@@ -731,15 +731,19 @@ async function departuresOn(page, scenarios) {
         ).find(({ owns }) => owns)?.frame
         if (!owner) failures.push("held image owner disappeared before release")
         else
-          await owner.waitForFunction(
-            (url) =>
-              [...document.images].some(
-                (image) =>
-                  image.src === url && image.complete && image.naturalWidth === 1,
-              ),
-            source,
-            { timeout: 5000 },
-          )
+          await owner
+            .waitForFunction(
+              (url) =>
+                [...document.images].some(
+                  (image) =>
+                    image.src === url && image.complete && image.naturalWidth === 1,
+                ),
+              source,
+              { timeout: 5000 },
+            )
+            .catch((error) => {
+              failures.push(`held image release failed: ${error.message}`)
+            })
       } finally {
         await heldLoad.close()
       }

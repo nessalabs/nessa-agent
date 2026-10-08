@@ -32,3 +32,10 @@ screenshot-only chart run held **5/5** in Chromium, both layouts.
 `failure-path.log` injects a chart behavior failure: both chart checks fail,
 while both cleanup checks pass. Restored source was then checked again.
 Read-only lifecycle review reported no findings after the missing-owner fix.
+
+Review follow-up: held-image wait rejection now records a release failure instead
+of throwing out of the cleanup block and discarding previous observations.
+A controlled rejecting wait preserved the earlier failure; successful and missing
+owner cases retained their prior outcomes. The affected real-browser departure
+matrix then held **12/12**, both engines/layouts, including cleanup and console.
+See `release-timeout-browser.json` and its log.
