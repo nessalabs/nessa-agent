@@ -302,22 +302,27 @@ export function useOnboarding(
   }, [practising])
 
   // A reply the shell cannot read is not a claim. Ask again, and show that read.
+  // The accept stays pending until the confirming read settles, so a second
+  // click cannot start a newer call that this read would overwrite.
   const applyLinger = React.useCallback(
     (view: LingerView | undefined) => {
-      lingerBusy.current = false
-      setLingerPending(false)
+      const settle = (next: LingerView) => {
+        lingerBusy.current = false
+        setLingerPending(false)
+        setState((current) => recordLinger(current, next))
+      }
       if (view) {
-        setState((current) => recordLinger(current, view))
+        settle(view)
         return
       }
       void linger.status().then(
         (fresh) => {
           // The confirming read decides the screen. A payload this shell cannot
           // read is the same as no read: failed claims nothing.
-          setState((current) => recordLinger(current, fresh ?? { shown: "failed" }))
+          settle(fresh ?? { shown: "failed" })
         },
         () => {
-          setState((current) => recordLinger(current, { shown: "failed" }))
+          settle({ shown: "failed" })
         },
       )
     },

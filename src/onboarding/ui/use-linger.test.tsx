@@ -229,6 +229,82 @@ describe("linger at the end of setup", () => {
     expect(container.textContent).not.toContain("keeps running")
   })
 
+  it("holds the accept until the confirming read settles", async () => {
+    let accepts = 0
+    let statuses = 0
+    const reads: Array<(view: { shown: "refused" } | undefined) => void> = []
+    const linger: LingerSource = {
+      status: async () => {
+        statuses += 1
+        if (statuses === 1) return { shown: "offer" }
+        return new Promise((resolve) => {
+          reads.push(resolve)
+        })
+      },
+      accept: async () => {
+        accepts += 1
+        if (accepts === 1) throw new Error("lost")
+        return { shown: "enabled" }
+      },
+    }
+    const calls: { accept?: () => void } = {}
+    function Harness() {
+      const onboarding = useOnboarding(agents, atSummon, linger)
+      calls.accept = onboarding.acceptLinger
+      return (
+        <div data-step={onboarding.state.step}>
+          <Onboarding
+            state={onboarding.state}
+            gatewayStartup={onboarding.gatewayStartup}
+            platform={onboarding.platform}
+            accelerator={onboarding.accelerator}
+            lingerPending={onboarding.lingerPending}
+            onBegin={onboarding.begin}
+            onChoose={onboarding.choose}
+            onConfirm={onboarding.confirm}
+            onFinish={onboarding.finish}
+            onAcceptLinger={onboarding.acceptLinger}
+            onRecheck={onboarding.recheck}
+            onRetryGateway={onboarding.retryGatewayStartup}
+          />
+        </div>
+      )
+    }
+    await React.act(async () => {
+      root.render(<Harness />)
+    })
+    await React.act(async () => {
+      button("Skip this step").click()
+    })
+    await React.act(async () => {
+      button("Keep it running").click()
+    })
+    expect(accepts).toBe(1)
+    expect(reads).toHaveLength(1)
+    const keep = button("Keep it running")
+    expect(keep.disabled).toBe(true)
+    await React.act(async () => {
+      keep.click()
+      calls.accept?.()
+    })
+    expect(accepts).toBe(1)
+    expect(reads).toHaveLength(1)
+    await React.act(async () => {
+      reads[0]?.({ shown: "refused" })
+    })
+    expect(container.querySelector("[data-linger]")?.getAttribute("data-linger")).toBe(
+      "refused",
+    )
+    await React.act(async () => {
+      button("Try again").click()
+    })
+    expect(accepts).toBe(2)
+    expect(container.querySelector("[data-linger]")?.getAttribute("data-linger")).toBe(
+      "enabled",
+    )
+    expect(container.textContent).toContain("Nessa keeps running when you log out")
+  })
+
   it("sends one enable for two clicks in the same turn", async () => {
     let accepts = 0
     let release: (() => void) | undefined
