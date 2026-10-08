@@ -55,12 +55,14 @@ export interface AuditedState {
 
 /**
  * A consequential call, as the source recorded it: what was asked, of which
- * session, by whom and when — on record the moment it is asked — then the
- * session as it stood when the source carried it out (`before`), what became
- * of it and when, and, taken, the revision it produced (`after`: the new
- * summary's, or the removal's). This source refuses only by type; it has no
- * faults of its own to tell apart. Kept in memory only, for as long as the
- * source lives; entries are frozen and replaced, never changed.
+ * session, by whom and when — on record as the source begins to carry it out,
+ * before the effect, and in that carry-out order — then the session as it
+ * stood (`before`), what became of it and when, and, taken, the revision it
+ * produced (`after`: the new summary's, or the removal's). Calls asked in one
+ * tick are carried out in the order they were asked, so a message and the
+ * answer it overtakes stay in that order. This source refuses only by type;
+ * it has no faults of its own to tell apart. Kept in memory only, for as long
+ * as the source lives; entries are frozen and replaced, never changed.
  */
 export interface AuditEntry {
   readonly sessionId: string
@@ -107,15 +109,21 @@ export function inMemorySource(
   // Each session's running script, so a new message or `dispose` can stop it.
   const scripts = new Map<string, Set<() => void>>()
   let disposed = false
+  const guard = () => {
+    if (disposed) throw new WorkspaceSourceError("unavailable")
+  }
   // A disposed source answers nothing: every later call is refused, and none schedules.
   const live = <T>(work: () => T): Promise<T> =>
     run(() => {
-      if (disposed) throw new WorkspaceSourceError("unavailable")
+      guard()
       return work()
     })
-  // On record the moment it is asked — a refused call, a disposed source's,
-  // too — then given the session as the source found it, and what became of
-  // it. Entries are frozen and replaced, never changed.
+  // On record as the call is carried out — a refused call, a disposed source's,
+  // too — before its effect, then given the session as the source found it,
+  // and what became of it. Appending here, not when the caller asked, keeps a
+  // same-tick message ahead of the answer it overtakes: each call is one
+  // microtask, and those run in the order the calls were made. Entries are
+  // frozen and replaced, never changed.
   let entries: readonly AuditEntry[] = Object.freeze([])
   const stateOf = (sessionId: string): AuditedState | null => {
     const held = sessions.get(sessionId)
@@ -134,18 +142,22 @@ export function inMemorySource(
     asked: Pick<AuditEntry, "sessionId" | "action" | "approvalId" | "initiator">,
     work: () => number,
   ): Promise<void> => {
-    let entry: AuditEntry = Object.freeze({
-      ...asked,
-      at: schedule.now(),
-      outcome: "asked",
-    })
-    entries = Object.freeze([...entries, entry])
+    let entry: AuditEntry | undefined
     const replace = (change: Partial<AuditEntry>) => {
+      if (!entry) throw new Error("an audit entry is replaced only after it is opened")
       const next: AuditEntry = Object.freeze({ ...entry, ...change })
       entries = Object.freeze(entries.map((each) => (each === entry ? next : each)))
       entry = next
     }
-    return live(() => {
+    return run(() => {
+      const opened: AuditEntry = Object.freeze({
+        ...asked,
+        at: schedule.now(),
+        outcome: "asked",
+      })
+      entry = opened
+      entries = Object.freeze([...entries, opened])
+      guard()
       replace({ before: stateOf(asked.sessionId) })
       return work()
     }).then(

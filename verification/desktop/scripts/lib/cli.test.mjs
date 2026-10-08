@@ -221,6 +221,7 @@ describe("run-all's sum", () => {
       "committed-transcript",
       "app-review",
       "gateway-states",
+      "mcp-apps",
     ])
     assert.deepEqual(checksUnder("prod", ["smoke", ...devServerOnlyChecks]), {
       run: ["smoke"],
@@ -260,5 +261,11 @@ describe("run-all's sum", () => {
         readFileSync(join(scripts, file), "utf8"),
         new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
       )
+    // A production preview has no sandbox origin. The check says so before
+    // it builds one, and before any fixture waits for a frame.
+    assert.match(
+      readFileSync(join(scripts, "../mcp-apps.mjs"), "utf8"),
+      /absent from vite preview[\s\S]*return target\(options\)/,
+    )
   })
 })

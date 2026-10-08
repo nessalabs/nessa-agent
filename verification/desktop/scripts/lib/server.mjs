@@ -175,6 +175,20 @@ export async function stopPreview(outDir, preview) {
 }
 
 /**
+ * Build environment for `run-all --mode prod`'s functional preview.
+ *
+ * The build stays a minified production bundle (`vite build`). Both stage
+ * halves are `ci` — the same explicit stage the gateway-backed production
+ * verifier passes to `startPreview` — because the stage is inlined at build
+ * time and a prod stage refuses a scripted numeric-loopback browser socket.
+ * The perf budget does not use this: its own preview keeps the default prod
+ * stage.
+ */
+export function functionalPreviewEnv() {
+  return { NESSA_STAGE: "ci", VITE_NESSA_STAGE: "ci" }
+}
+
+/**
  * Builds a production bundle and previews it on a free port. `env` is added
  * to the build and the preview: a check that talks to a ci gateway sets
  * `VITE_NESSA_STAGE=ci`, because the stage is inlined at build time and a
@@ -254,7 +268,7 @@ export function pageMode(options) {
   return "given"
 }
 
-export async function target(options) {
+export async function target(options, env = {}) {
   if (options.url)
     return { url: options.url, mode: pageMode(options), close: async () => {} }
 
@@ -271,7 +285,7 @@ export async function target(options) {
     return { url: dev.url, mode: "dev", close: dev.close }
   }
 
-  if (options.mode === "prod") return startPreview(options)
+  if (options.mode === "prod") return startPreview(options, env)
 
   throw new CannotRun(`unknown --mode ${options.mode} (dev or prod)`)
 }
