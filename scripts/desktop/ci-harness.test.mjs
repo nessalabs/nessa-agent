@@ -556,6 +556,11 @@ test("linger acceptance uses a throwaway user and does not enable linger for the
   assert.match(script, /linger_live/)
   assert.match(script, /refusing to enable linger for the account running this script/)
   assert.doesNotMatch(script, /loginctl enable-linger/)
+  assert.match(script, /loginctl show-user lt -p State --value/)
+  assert.match(script, /systemctl is-active "user@\$\{lt_uid\}\.service"/)
+  assert.match(script, /pgrep -u lt -f 'sleep infinity'/)
+  assert.match(script, /loginctl terminate-user lt/)
+  assert.doesNotMatch(script, /systemctl --user -M/)
 })
 
 test("the frontend job owns top-level script and verification-script tests, and their just dependency", () => {

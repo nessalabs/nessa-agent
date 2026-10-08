@@ -1109,7 +1109,11 @@ name `loginctl enable-linger` and claim nothing. An unsupported host claims
 nothing. An account that is already lingering is reported without a call. Both
 engines require zero page errors and painted controls. The screen is
 [ADR 217](../../docs/adr/done/217-linux-linger-at-setup.md). The live bus is
-`scripts/desktop/check-linux-linger.sh`, for user `lt` only.
+`scripts/desktop/check-linux-linger.sh`, for user `lt` only. After
+`terminate-user`, the user is `lingering`, `user@<uid>` is active, and
+`sleep infinity` is still running. `systemctl --user -M` is not that proof:
+it starts the user manager itself. With linger then disabled, `user@` is
+inactive and the process is gone.
 
 ### Attachment admission races
 

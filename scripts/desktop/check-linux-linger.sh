@@ -81,13 +81,47 @@ sudo systemd-run --wait --pipe --collect \
   -p User=lt \
   -p PAMName=login \
   /bin/bash -lc 'systemctl --user daemon-reload && systemctl --user enable --now nessa-gateway-dev.service'
+
+# A per-user systemctl machine match starts user@ itself, so it is not evidence.
+# After terminate-user, linger keeps the manager and the enabled sleep process.
+lt_uid="$(id -u lt)"
+sudo loginctl terminate-user lt
+linger_state=""
+user_unit=""
+kept=0
 for _ in $(seq 1 20); do
-  if sudo systemctl --user -M lt@ is-active nessa-gateway-dev.service; then
-    echo "linger kept nessa-gateway-dev.service active after the login session ended"
-    exit 0
+  linger_state="$(loginctl show-user lt -p State --value 2>/dev/null || true)"
+  user_unit="$(systemctl is-active "user@${lt_uid}.service" 2>/dev/null || true)"
+  if [ "$linger_state" = "lingering" ] && [ "$user_unit" = "active" ] && pgrep -u lt -f 'sleep infinity' >/dev/null; then
+    kept=1
+    break
   fi
   sleep 0.5
 done
-echo "nessa-gateway-dev.service was not active after the login session ended" >&2
-sudo systemctl --user -M lt@ status nessa-gateway-dev.service >&2 || true
-exit 1
+echo "after terminate-user: state=${linger_state} user@${lt_uid}.service=${user_unit}"
+pgrep -u lt -a -f 'sleep infinity' || true
+if [ "$kept" != 1 ]; then
+  echo "linger did not keep user@${lt_uid}.service and sleep infinity after terminate-user" >&2
+  exit 1
+fi
+
+echo "negative control: disable linger and terminate"
+sudo loginctl disable-linger lt
+sudo loginctl terminate-user lt || true
+user_unit=""
+stopped=0
+for _ in $(seq 1 20); do
+  user_unit="$(systemctl is-active "user@${lt_uid}.service" 2>/dev/null || true)"
+  if [ "$user_unit" = "inactive" ] && ! pgrep -u lt -f 'sleep infinity' >/dev/null; then
+    stopped=1
+    break
+  fi
+  sleep 0.5
+done
+echo "after disable-linger and terminate-user: user@${lt_uid}.service=${user_unit}"
+if [ "$stopped" != 1 ]; then
+  pgrep -u lt -a -f 'sleep infinity' || true
+  echo "user@${lt_uid}.service or sleep infinity survived disable-linger" >&2
+  exit 1
+fi
+echo "with linger disabled, user@${lt_uid}.service is inactive and sleep infinity is gone"
