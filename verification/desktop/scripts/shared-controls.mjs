@@ -679,6 +679,92 @@ const checks = {
     measured.rows = onLoad.length + inOverview.length + inSwitcher.length
     return { failures, measured }
   },
+  // Columns only: the sidebar layout folds this list. Search and captions are
+  // the kit's; the rows stay ListRow (#668), which `rows` already weighs.
+  list: async (page, { layout }) => {
+    if (layout !== "columns")
+      return { failures: [], measured: { skipped: "the session list is folded" } }
+    await need(page, css.listSearch, "the list search")
+    const list = await page.evaluate(measureAdopted, css.sessionList)
+    await page.keyboard.press(keys.switcher)
+    await need(page, css.switcherResults, "the switcher's list")
+    await switcherSettled(page)
+    const switcher = await page.evaluate(() => {
+      const header = document.querySelector(".workspace-results-group")
+      const failures = []
+      if (!header || header.getAttribute("data-slot") !== "group-header") {
+        failures.push("switcher caption is not the kit's GroupHeader")
+        return { failures, height: 0 }
+      }
+      const box = header.getBoundingClientRect()
+      if (Math.abs(box.height - 27) > 1)
+        failures.push(`switcher caption ${box.height}px tall, not 27`)
+      const label = header.querySelector("[data-slot=group-header-label]")
+      const style = label ? getComputedStyle(label) : null
+      if (!style || style.fontSize !== "11px" || style.fontWeight !== "600")
+        failures.push(
+          `switcher caption type ${style?.fontSize} ${style?.fontWeight}, not 11px 600`,
+        )
+      return { failures, height: +box.height.toFixed(2) }
+    })
+    return {
+      failures: [...list.failures, ...switcher.failures],
+      measured: { search: list.search, rows: list.rows, switcher: switcher.height },
+    }
+  },
+}
+
+/**
+ * The session list's search and captions (#657), in the page. Widths follow
+ * the layout, so only the kit's slot and the sizes that do not.
+ */
+function measureAdopted(root) {
+  const failures = []
+  const scope = document.querySelector(root)
+  const read = (selector) => scope?.querySelector(selector) ?? null
+  const search = read("[data-slot=search-field]")
+  if (!search) failures.push("session list search is not the kit's SearchField")
+  else {
+    const box = search.getBoundingClientRect()
+    const radius = getComputedStyle(search).borderTopLeftRadius
+    const probe = document.createElement("div")
+    probe.style.borderRadius = "var(--desktop-radius-md)"
+    document.querySelector("[data-surface]").append(probe)
+    const want = getComputedStyle(probe).borderTopLeftRadius
+    probe.remove()
+    if (Math.abs(box.height - 32) > 0.5)
+      failures.push(`search ${box.height}px tall, not 32`)
+    if (radius !== want) failures.push(`search corner ${radius}, not ${want}`)
+  }
+  const input = read("[data-slot=search-field-input]")
+  if (input && getComputedStyle(input).fontSize !== "13px")
+    failures.push(`search type ${getComputedStyle(input).fontSize}, not 13px`)
+  const group = read("[data-slot=group-header]")
+  if (!group) failures.push("session list caption is not the kit's GroupHeader")
+  else {
+    const label = group.querySelector("[data-slot=group-header-label]")
+    const style = label ? getComputedStyle(label) : null
+    const box = group.getBoundingClientRect()
+    if (Math.abs(box.height - 16.5) > 1)
+      failures.push(`caption ${box.height}px tall, not 16.5`)
+    if (style && (style.fontSize !== "11px" || style.fontWeight !== "600"))
+      failures.push(`caption type ${style.fontSize} ${style.fontWeight}, not 11px 600`)
+  }
+  const rows = [...(scope?.querySelectorAll("[data-session-row]") ?? [])]
+  if (rows.length === 0) failures.push("no session row")
+  for (const row of rows) {
+    if (!row.classList.contains("desktop-list-row"))
+      failures.push("a session row is not ListRow")
+    if (row.getAttribute("role") !== "option")
+      failures.push("a session row is not an option")
+    if (!row.getAttribute("data-drag-item"))
+      failures.push("a session row cannot be carried")
+  }
+  return {
+    failures,
+    search: search ? +search.getBoundingClientRect().height.toFixed(2) : 0,
+    rows: rows.length,
+  }
 }
 
 /** Waits for the switcher to finish scaling in (a running glyph spins forever, so only its own). */
@@ -702,7 +788,7 @@ await main(
       only: { type: "string" },
     },
     help: `
-Checks, per engine and layout (--only badges,empty,identity,keys,rims,rows,segmented):
+Checks, per engine and layout (--only badges,empty,identity,keys,list,rims,rows,segmented):
   badges     every count is the kit's Badge as a row's caption (16px tall, at
              least 18 wide, no border, the needs light for what waits); every
              lit point — unread, needs you, the overview's heading included —
@@ -719,6 +805,11 @@ Checks, per engine and layout (--only badges,empty,identity,keys,rims,rows,segme
              search, the quick switcher's rows) is the kit's Kbd: 18px tall and at
              least as wide, 11px medium type, --desktop-radius-xs, a 7% fill and
              --desktop-muted ink. Measured on load and with the switcher open.
+  list       columns only (the sidebar layout folds the list, and the check
+             holds without measuring it). The list's search is the kit's
+             SearchField (32px, 13px type, the window's 12px corner), its
+             captions are GroupHeader (11px/600), and its rows are ListRow.
+             The switcher's group caption is a GroupHeader 27px tall.
   rims       every card set into a surface — a code block, an agent's command,
              a widget's card, "Nothing needs you" — has --desktop-card-rim for
              its edge. On load, in the widget sample, in the overview's peek.
