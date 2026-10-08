@@ -51,8 +51,10 @@ export const APP_CALLS = {
  * `ui/notifications/size-changed`. It draws nothing until
  * `ui/notifications/tool-result`: `#chart` then shows the result's
  * `structuredContent.series` as `name value` pairs joined by ", "
- * (`alpha 10, beta 20` for this server's rows). Its state is
- * `data-chart-state` on its body (`loading`, then `live`, or `refused`).
+ * (`alpha 10, beta 20` for this server's rows). Asked
+ * `ui/resource-teardown`, it answers `{ result: {} }` and nothing else. Its
+ * state is `data-chart-state` on its body (`loading`, then `live`, or
+ * `refused`).
  */
 const CHART_HTML = `<!doctype html>
 <html lang="en">
@@ -91,6 +93,10 @@ const CHART_HTML = `<!doctype html>
       var resolve = waiting[message.id];
       delete waiting[message.id];
       if (resolve) resolve(message);
+      return;
+    }
+    if (message.method === "ui/resource-teardown") {
+      post({ jsonrpc: "2.0", id: message.id, result: {} });
       return;
     }
     if (message.method === "ui/notifications/tool-result")

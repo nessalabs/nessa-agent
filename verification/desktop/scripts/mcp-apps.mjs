@@ -21,7 +21,9 @@
  *
  * Every check runs on a fresh page, in each engine and layout.
  */
+import { mkdirSync } from "node:fs"
 import { createServer } from "node:http"
+import { join } from "node:path"
 import {
   CHART_URI,
   answer as mcpAnswer,
@@ -911,7 +913,7 @@ async function openPane(page, failures) {
  * document builder. The page is the host: it answers `ui/initialize` and then
  * sends the tool result. The chart goes live and draws that result.
  */
-async function chartLive(page, layout) {
+async function chartLive(page, layout, shots) {
   const failures = []
   const dev = await page.evaluate(async () => {
     const answer = await fetch("/src/desktop/widgets/app/model/csp.ts")
@@ -1024,10 +1026,13 @@ async function chartLive(page, layout) {
     failures.push(`the chart shows ${JSON.stringify(said.chart)}, not the tool result`)
   if (said.heading !== "Chart (nessa-test)")
     failures.push(`the chart's document is not the server's: ${said.heading}`)
-  const engine = page.context().browser().browserType().name()
-  await probe
-    .screenshot({ path: `/opt/cursor/artifacts/chart-${engine}-${layout}.png` })
-    .catch(() => {})
+  if (shots && probe) {
+    mkdirSync(shots, { recursive: true })
+    const engine = page.context().browser().browserType().name()
+    await probe.screenshot({
+      path: join(shots, `chart-${engine}-${layout}.png`),
+    })
+  }
   return { said, failures }
 }
 
@@ -1324,7 +1329,7 @@ const checks = {
 
   "departures-back": (page) => departuresOn(page, backScenarios),
 
-  chart: (page, layout) => chartLive(page, layout),
+  chart: (page, layout, shots) => chartLive(page, layout, shots),
 
   forge: async (page) => {
     const failures = []
@@ -1404,7 +1409,7 @@ await main(meta, async ({ options, rep, url, mode }) => {
         let opened
         await attempt(rep, { engine, layout, name }, async () => {
           opened = await onSample(browser, { url, layout })
-          const result = await checks[name](opened.page, layout)
+          const result = await checks[name](opened.page, layout, options.shots)
           return result
         }).finally(() => opened?.close())
       }

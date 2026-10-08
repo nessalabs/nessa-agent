@@ -202,6 +202,7 @@ test("the chart app handshakes, then draws the tool result it was sent", async (
     '"ui/notifications/initialized"',
     '"ui/notifications/size-changed"',
     '"ui/notifications/tool-result"',
+    '"ui/resource-teardown"',
   ])
     assert.ok(text.includes(said), said)
   assert.ok(!text.includes("${"))
@@ -235,6 +236,39 @@ test("the chart app handshakes, then draws the tool result it was sent", async (
     },
   })
   assert.equal(chart.textContent, "alpha 10, beta 20")
+  const before = posted.length
+  deliver({
+    jsonrpc: "2.0",
+    id: "nessa-teardown",
+    method: "ui/resource-teardown",
+    params: {},
+  })
+  const teardown = posted[before]
+  assert.equal(posted.length, before + 1)
+  assert.deepEqual(Object.keys(teardown).sort(), ["id", "jsonrpc", "result"])
+  assert.deepEqual(Object.keys(teardown.result), [])
+  assert.deepEqual(JSON.parse(JSON.stringify(teardown)), {
+    jsonrpc: "2.0",
+    id: "nessa-teardown",
+    result: {},
+  })
+  deliver({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "ui/resource-teardown",
+    params: { reason: "closed" },
+  })
+  const withReason = posted[before + 1]
+  assert.equal(posted.length, before + 2)
+  assert.deepEqual(Object.keys(withReason).sort(), ["id", "jsonrpc", "result"])
+  assert.deepEqual(Object.keys(withReason.result), [])
+  assert.deepEqual(JSON.parse(JSON.stringify(withReason)), {
+    jsonrpc: "2.0",
+    id: 1,
+    result: {},
+  })
+  assert.equal(chart.textContent, "alpha 10, beta 20")
+  assert.equal(attributes["data-chart-state"], "live")
 })
 
 test("the review app speaks the ui/* bridge and calls each of its tools by name", () => {
