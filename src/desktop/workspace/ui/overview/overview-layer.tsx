@@ -37,8 +37,8 @@ import { overviewKeys } from "./overview-keys"
  * the overview in that commit (`overview.test.tsx`).
  *
  * Leaving it — Escape, Open, or going anywhere else — gives the keyboard
- * back to the focused pane's composer, a frame later, once the panes are
- * drawn again.
+ * back to the focused pane's composer after the cover lifts and the target
+ * has had its paint (`focus.ts`, `focus.test.tsx`).
  */
 export function OverviewLayer({ root }: { root: RefObject<HTMLElement | null> }) {
   const dispatch = useWorkspaceDispatch()
@@ -101,28 +101,18 @@ export function OverviewLayer({ root }: { root: RefObject<HTMLElement | null> })
   // `visibility`, which would restyle every descendant as the cover comes
   // and goes. Lifting it waits a frame: doing it in the leave's commit lays
   // the panes out on that key (`overview.test.tsx`).
-  const stilled = useRef<HTMLElement[]>([])
   useLayoutEffect(() => {
     const node = root.current
     if (!node) return
+    const content = node.querySelector<HTMLElement>(".workspace-content")
     if (covered) {
       node.setAttribute("data-overview-covered", "")
-      stilled.current = [
-        ".workspace-list",
-        ".workspace-list-edge",
-        ".workspace-chat",
-      ].flatMap((selector) => {
-        const element = node.querySelector<HTMLElement>(selector)
-        if (!element) return []
-        element.setAttribute("inert", "")
-        return [element]
-      })
+      content?.setAttribute("inert", "")
       return
     }
     node.removeAttribute("data-overview-covered")
     const frame = requestAnimationFrame(() => {
-      for (const element of stilled.current) element.removeAttribute("inert")
-      stilled.current = []
+      content?.removeAttribute("inert")
     })
     return () => cancelAnimationFrame(frame)
   }, [covered, root])

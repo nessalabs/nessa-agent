@@ -1,0 +1,31 @@
+starting a dev server of its own on port 58485…
+warmed 473 modules in 1009 ms
+ok    chart-cleanup [chromium columns]
+Error: fault: chart behavior failed
+    at chartLive (file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/mcp-apps.mjs:1138:9)
+    at async file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/mcp-apps.mjs:1518:22
+    at async attempt (file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/lib/cli.mjs:339:20)
+    at async file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/mcp-apps.mjs:1514:11
+    at async runAndClose (file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/lib/browser.mjs:470:12)
+    at async withEngines (file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/lib/browser.mjs:489:5)
+    at async file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/mcp-apps.mjs:1503:5
+    at async main (file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/lib/run.mjs:23:5)
+    at async file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/mcp-apps.mjs:1497:1
+ERROR chart [chromium columns]
+        ! fault: chart behavior failed
+ok    console
+ok    chart-cleanup [chromium sidebar]
+Error: fault: chart behavior failed
+    at chartLive (file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/mcp-apps.mjs:1138:9)
+    at async file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/mcp-apps.mjs:1518:22
+    at async attempt (file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/lib/cli.mjs:339:20)
+    at async file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/mcp-apps.mjs:1514:11
+    at async runAndClose (file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/lib/browser.mjs:470:12)
+    at async withEngines (file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/lib/browser.mjs:489:5)
+    at async file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/mcp-apps.mjs:1503:5
+    at async main (file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/lib/run.mjs:23:5)
+    at async file:///Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent/verification/desktop/scripts/mcp-apps.mjs:1497:1
+ERROR chart [chromium sidebar]
+        ! fault: chart behavior failed
+wrote /tmp/616-sandbox-host-fault.json
+mcp-apps: 3/5 held

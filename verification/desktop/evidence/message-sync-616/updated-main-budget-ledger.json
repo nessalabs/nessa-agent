@@ -1,0 +1,82 @@
+{
+  "source": "c4a6fe8344abe32c0c4e154e0a5fa1bd97caa475",
+  "base": "d55de88d9c6f5794b225da05b1055c511b9dba74",
+  "machine": {
+    "system": "macOS-26.6-arm64-arm-64bit",
+    "cpuCount": 10,
+    "model": "Mac17,3",
+    "memoryBytes": 25769803776
+  },
+  "command": "node verification/desktop/scripts/perf-budget.mjs --mode prod --headed --channel bundled --runs 3",
+  "started": "2026-10-07T18:48:43.591Z",
+  "finished": "2026-10-07T18:55:39.509Z",
+  "extraCpuWorkers": 0,
+  "concurrentVerificationJobs": 0,
+  "held": 29,
+  "total": 35,
+  "interactionHeld": 27,
+  "interactions": 33,
+  "calibration": {
+    "ok": true,
+    "failures": [],
+    "name": "calibration",
+    "engine": "chromium",
+    "calibration": {
+      "rate": 4,
+      "plainMs": 21,
+      "throttledMs": 65,
+      "ratio": 3.07,
+      "ok": true
+    },
+    "calibrationFrame": {
+      "cost": 120,
+      "measuredMs": 116.70000000000005,
+      "attributed": true,
+      "ok": true
+    }
+  },
+  "failedRows": [
+    {
+      "name": "overview-open",
+      "layout": "columns",
+      "maxMs": 84.19999999999982,
+      "medianMs": 67,
+      "failures": ["longest frame 84.19999999999982 ms > 50 ms (runs: 84 67 67)"]
+    },
+    {
+      "name": "overview-leave",
+      "layout": "columns",
+      "maxMs": 51.100000000000136,
+      "medianMs": 33,
+      "failures": ["longest frame 51.100000000000136 ms > 50 ms (runs: 33 51 33)"]
+    },
+    {
+      "name": "send-home",
+      "layout": "sidebar",
+      "maxMs": 100.59999999999991,
+      "medianMs": 52,
+      "failures": ["longest frame 100.59999999999991 ms > 50 ms (runs: 52 51 101)"]
+    },
+    {
+      "name": "drag-drop",
+      "layout": "sidebar",
+      "maxMs": 67.70000000000073,
+      "medianMs": 65,
+      "failures": ["longest frame 67.70000000000073 ms > 50 ms (runs: 68 48 65)"]
+    },
+    {
+      "name": "drag-cancel",
+      "layout": "sidebar",
+      "maxMs": 51.70000000000027,
+      "medianMs": 34,
+      "failures": ["longest frame 51.70000000000027 ms > 50 ms (runs: 52 34 32)"]
+    },
+    {
+      "name": "overview-open",
+      "layout": "sidebar",
+      "maxMs": 252,
+      "medianMs": 118,
+      "failures": ["longest frame 252 ms > 50 ms (runs: 252 118 99)"]
+    }
+  ]
+}

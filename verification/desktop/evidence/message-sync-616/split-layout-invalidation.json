@@ -1,0 +1,968 @@
+{
+  "marker": 100403839590,
+  "rows": [
+    {
+      "ms": 114.763,
+      "cpuMs": 112.829,
+      "dirty": 11,
+      "total": 592,
+      "stack": [
+        {
+          "columnNumber": 15929,
+          "functionName": "FC",
+          "lineNumber": 245,
+          "scriptId": "6",
+          "url": "http://127.0.0.1:55115/assets/desktop-japt4NJZ.js"
+        },
+        {
+          "columnNumber": 16290,
+          "functionName": "",
+          "lineNumber": 245,
+          "scriptId": "6",
+          "url": "http://127.0.0.1:55115/assets/desktop-japt4NJZ.js"
+        },
+        {
+          "columnNumber": 92781,
+          "functionName": "Xi",
+          "lineNumber": 9,
+          "scriptId": "7",
+          "url": "http://127.0.0.1:55115/assets/index-Dp73fupZ.js"
+        },
+        {
+          "columnNumber": 97298,
+          "functionName": "fg",
+          "lineNumber": 9,
+          "scriptId": "7",
+          "url": "http://127.0.0.1:55115/assets/index-Dp73fupZ.js"
+        },
+        {
+          "columnNumber": 106177,
+          "functionName": "Sr",
+          "lineNumber": 9,
+          "scriptId": "7",
+          "url": "http://127.0.0.1:55115/assets/index-Dp73fupZ.js"
+        }
+      ],
+      "invalidations": [
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 263,
+          "label": "DIV class='workspace-session'",
+          "path": [
+            "DIV class=workspace-session",
+            "DIV",
+            "DIV class=workspace-list-scroll",
+            "DIV class=workspace-list-inner",
+            "SECTION class=workspace-list",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 387,
+          "label": "HEADER class='workspace-pane-header'",
+          "path": [
+            "HEADER class=workspace-pane-header",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 543,
+          "label": "DIV class='desktop-composer-row'",
+          "path": [
+            "DIV class=desktop-composer-row",
+            "FORM class=desktop-composer",
+            "DIV class=workspace-dock",
+            "DIV class=workspace-conversation",
+            "DIV class=workspace-pane-body",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 20,
+          "label": "::before",
+          "path": [
+            "::before",
+            "DIV class=desktop-ambient",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY",
+            "HTML class=dark"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 22,
+          "label": "::after",
+          "path": [
+            "::after",
+            "DIV class=desktop-ambient",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY",
+            "HTML class=dark"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 92,
+          "label": "::before",
+          "path": [
+            "::before",
+            "SPAN class=workspace-status",
+            "BUTTON class=workspace-row workspace-thread-row",
+            "LI",
+            "UL class=workspace-thread workspace-rise",
+            "LI",
+            "UL"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 142,
+          "label": "::before",
+          "path": [
+            "::before",
+            "SPAN class=workspace-status",
+            "BUTTON class=workspace-row",
+            "LI",
+            "UL",
+            "DIV class=workspace-section-body",
+            "SECTION class=workspace-section"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 394,
+          "label": "::before",
+          "path": [
+            "::before",
+            "SPAN class=workspace-status",
+            "DIV class=workspace-pane-name",
+            "HEADER class=workspace-pane-header",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 503,
+          "label": "::before",
+          "path": [
+            "::before",
+            "SPAN class=workspace-status",
+            "DIV class=workspace-live",
+            "DIV class=workspace-transcript-inner",
+            "DIV class=workspace-transcript",
+            "DIV class=workspace-conversation",
+            "DIV class=workspace-pane-body"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 505,
+          "label": "SPAN class='workspace-shimmer'",
+          "path": [
+            "SPAN class=workspace-shimmer",
+            "DIV class=workspace-live",
+            "DIV class=workspace-transcript-inner",
+            "DIV class=workspace-transcript",
+            "DIV class=workspace-conversation",
+            "DIV class=workspace-pane-body",
+            "ARTICLE class=workspace-pane"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 851,
+          "label": "ARTICLE class='workspace-pane'",
+          "path": [
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 327,
+          "label": "ARTICLE class='workspace-pane'",
+          "path": [
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 419,
+          "label": "DIV class='desktop-header'",
+          "path": [
+            "DIV class=desktop-header",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 408,
+          "label": "DIV class='workspace-pane-body'",
+          "path": [
+            "DIV class=workspace-pane-body",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Node was inserted into tree",
+          "node": 887,
+          "label": "DIV class='workspace-pane-home'",
+          "path": [
+            "DIV class=workspace-pane-home",
+            "DIV class=workspace-pane-body",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under"
+          ]
+        },
+        {
+          "name": "LayoutInvalidationTracking",
+          "reason": "Added to layout",
+          "node": 887,
+          "label": "DIV class='workspace-pane-home'",
+          "path": [
+            "DIV class=workspace-pane-home",
+            "DIV class=workspace-pane-body",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under"
+          ]
+        },
+        {
+          "name": "LayoutInvalidationTracking",
+          "reason": "Added to layout",
+          "node": 888,
+          "label": "DIV class='desktop-home'",
+          "path": [
+            "DIV class=desktop-home",
+            "DIV class=workspace-pane-home",
+            "DIV class=workspace-pane-body",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace"
+          ]
+        }
+      ]
+    },
+    {
+      "ms": 79.673,
+      "cpuMs": 78.186,
+      "dirty": 12,
+      "total": 575,
+      "stack": [
+        {
+          "columnNumber": 64663,
+          "functionName": "",
+          "lineNumber": 1,
+          "scriptId": "6",
+          "url": "http://127.0.0.1:55115/assets/desktop-japt4NJZ.js"
+        },
+        {
+          "columnNumber": 64636,
+          "functionName": "Rb",
+          "lineNumber": 1,
+          "scriptId": "6",
+          "url": "http://127.0.0.1:55115/assets/desktop-japt4NJZ.js"
+        },
+        {
+          "columnNumber": 65902,
+          "functionName": "componentDidUpdate",
+          "lineNumber": 1,
+          "scriptId": "6",
+          "url": "http://127.0.0.1:55115/assets/desktop-japt4NJZ.js"
+        },
+        {
+          "columnNumber": 97474,
+          "functionName": "fg",
+          "lineNumber": 9,
+          "scriptId": "7",
+          "url": "http://127.0.0.1:55115/assets/index-Dp73fupZ.js"
+        },
+        {
+          "columnNumber": 106177,
+          "functionName": "Sr",
+          "lineNumber": 9,
+          "scriptId": "7",
+          "url": "http://127.0.0.1:55115/assets/index-Dp73fupZ.js"
+        }
+      ],
+      "invalidations": [
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Related style rule",
+          "node": 327,
+          "label": "ARTICLE class='workspace-pane'",
+          "path": [
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Node was inserted into tree",
+          "node": 852,
+          "label": "DIV class='desktop-resize-edge split-panes-pane-edge'",
+          "path": [
+            "DIV class=desktop-resize-edge split-panes-pane-edge",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Related style rule",
+          "node": 851,
+          "label": "ARTICLE class='workspace-pane'",
+          "path": [
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY"
+          ]
+        },
+        {
+          "name": "LayoutInvalidationTracking",
+          "reason": "Style changed",
+          "node": 327,
+          "label": "ARTICLE class='workspace-pane'",
+          "path": [
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY"
+          ]
+        },
+        {
+          "name": "LayoutInvalidationTracking",
+          "reason": "Added to layout",
+          "node": 852,
+          "label": "DIV class='desktop-resize-edge split-panes-pane-edge'",
+          "path": [
+            "DIV class=desktop-resize-edge split-panes-pane-edge",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY"
+          ]
+        },
+        {
+          "name": "LayoutInvalidationTracking",
+          "reason": "Added to layout",
+          "node": 852,
+          "label": "DIV class='desktop-resize-edge split-panes-pane-edge'",
+          "path": [
+            "DIV class=desktop-resize-edge split-panes-pane-edge",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY"
+          ]
+        },
+        {
+          "name": "LayoutInvalidationTracking",
+          "reason": "Added to layout",
+          "node": 852,
+          "label": "DIV class='desktop-resize-edge split-panes-pane-edge'",
+          "path": [
+            "DIV class=desktop-resize-edge split-panes-pane-edge",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY"
+          ]
+        },
+        {
+          "name": "LayoutInvalidationTracking",
+          "reason": "Added to layout",
+          "node": 851,
+          "label": "ARTICLE class='workspace-pane'",
+          "path": [
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY"
+          ]
+        }
+      ]
+    },
+    {
+      "ms": 1.547,
+      "cpuMs": 1.526,
+      "dirty": 15,
+      "total": 665,
+      "stack": [],
+      "invalidations": [
+        {
+          "name": "LayoutInvalidationTracking",
+          "reason": "Style changed",
+          "node": 408,
+          "label": "DIV class='workspace-pane-body'",
+          "path": [
+            "DIV class=workspace-pane-body",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root"
+          ]
+        },
+        {
+          "name": "LayoutInvalidationTracking",
+          "reason": "Style changed",
+          "node": 873,
+          "label": "DIV class='workspace-pane-body'",
+          "path": [
+            "DIV class=workspace-pane-body",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 327,
+          "label": "ARTICLE class='workspace-pane'",
+          "path": [
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 851,
+          "label": "ARTICLE class='workspace-pane'",
+          "path": [
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 20,
+          "label": "::before",
+          "path": [
+            "::before",
+            "DIV class=desktop-ambient",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY",
+            "HTML class=dark"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 22,
+          "label": "::after",
+          "path": [
+            "::after",
+            "DIV class=desktop-ambient",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY",
+            "HTML class=dark"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 92,
+          "label": "::before",
+          "path": [
+            "::before",
+            "SPAN class=workspace-status",
+            "BUTTON class=workspace-row workspace-thread-row",
+            "LI",
+            "UL class=workspace-thread workspace-rise",
+            "LI",
+            "UL"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 142,
+          "label": "::before",
+          "path": [
+            "::before",
+            "SPAN class=workspace-status",
+            "BUTTON class=workspace-row",
+            "LI",
+            "UL",
+            "DIV class=workspace-section-body",
+            "SECTION class=workspace-section"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 394,
+          "label": "::before",
+          "path": [
+            "::before",
+            "SPAN class=workspace-status",
+            "DIV class=workspace-pane-name",
+            "HEADER class=workspace-pane-header",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 503,
+          "label": "::before",
+          "path": [
+            "::before",
+            "SPAN class=workspace-status",
+            "DIV class=workspace-live",
+            "DIV class=workspace-transcript-inner",
+            "DIV class=workspace-transcript",
+            "DIV class=workspace-conversation",
+            "DIV class=workspace-pane-body"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 505,
+          "label": "SPAN class='workspace-shimmer'",
+          "path": [
+            "SPAN class=workspace-shimmer",
+            "DIV class=workspace-live",
+            "DIV class=workspace-transcript-inner",
+            "DIV class=workspace-transcript",
+            "DIV class=workspace-conversation",
+            "DIV class=workspace-pane-body",
+            "ARTICLE class=workspace-pane"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 894,
+          "label": "SPAN",
+          "path": [
+            "SPAN",
+            "SPAN class=desktop-night-scene-rain",
+            "SPAN class=desktop-night-scene-layers",
+            "PRE class=desktop-night-scene",
+            "DIV class=desktop-header",
+            "DIV class=desktop-home-stack",
+            "DIV class=desktop-home"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 896,
+          "label": "SPAN",
+          "path": [
+            "SPAN",
+            "SPAN class=desktop-night-scene-rain",
+            "SPAN class=desktop-night-scene-layers",
+            "PRE class=desktop-night-scene",
+            "DIV class=desktop-header",
+            "DIV class=desktop-home-stack",
+            "DIV class=desktop-home"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 898,
+          "label": "SPAN",
+          "path": [
+            "SPAN",
+            "SPAN class=desktop-night-scene-rain",
+            "SPAN class=desktop-night-scene-layers",
+            "PRE class=desktop-night-scene",
+            "DIV class=desktop-header",
+            "DIV class=desktop-home-stack",
+            "DIV class=desktop-home"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 902,
+          "label": "SPAN",
+          "path": [
+            "SPAN",
+            "SPAN class=desktop-night-scene-steam",
+            "SPAN class=desktop-night-scene-layers",
+            "PRE class=desktop-night-scene",
+            "DIV class=desktop-header",
+            "DIV class=desktop-home-stack",
+            "DIV class=desktop-home"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 910,
+          "label": "DIV class='desktop-home-inner'",
+          "path": [
+            "DIV class=desktop-home-inner",
+            "DIV class=desktop-home-stack",
+            "DIV class=desktop-home",
+            "DIV class=workspace-pane-home",
+            "DIV class=workspace-pane-body",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid"
+          ]
+        },
+        {
+          "name": "LayoutInvalidationTracking",
+          "reason": "Text changed",
+          "node": 537,
+          "label": "#text",
+          "path": [
+            "#text",
+            "SPAN class=workspace-live-time",
+            "DIV class=workspace-live",
+            "DIV class=workspace-transcript-inner",
+            "DIV class=workspace-transcript",
+            "DIV class=workspace-conversation",
+            "DIV class=workspace-pane-body"
+          ]
+        }
+      ]
+    },
+    {
+      "ms": 0.968,
+      "cpuMs": 0.968,
+      "dirty": 11,
+      "total": 590,
+      "stack": [],
+      "invalidations": [
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Animation",
+          "node": 387,
+          "label": "HEADER class='workspace-pane-header'",
+          "path": [
+            "HEADER class=workspace-pane-header",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Inline CSS style declaration was mutated",
+          "node": 419,
+          "label": "DIV class='desktop-header'",
+          "path": [
+            "DIV class=desktop-header",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Inline CSS style declaration was mutated",
+          "node": 387,
+          "label": "HEADER class='workspace-pane-header'",
+          "path": [
+            "HEADER class=workspace-pane-header",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Inline CSS style declaration was mutated",
+          "node": 408,
+          "label": "DIV class='workspace-pane-body'",
+          "path": [
+            "DIV class=workspace-pane-body",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Related style rule",
+          "node": 327,
+          "label": "ARTICLE class='workspace-pane'",
+          "path": [
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Related style rule",
+          "node": 419,
+          "label": "DIV class='desktop-header'",
+          "path": [
+            "DIV class=desktop-header",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Related style rule",
+          "node": 387,
+          "label": "HEADER class='workspace-pane-header'",
+          "path": [
+            "HEADER class=workspace-pane-header",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Related style rule",
+          "node": 408,
+          "label": "DIV class='workspace-pane-body'",
+          "path": [
+            "DIV class=workspace-pane-body",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Related style rule",
+          "node": 508,
+          "label": "FORM class='desktop-composer'",
+          "path": [
+            "FORM class=desktop-composer",
+            "DIV class=workspace-dock",
+            "DIV class=workspace-conversation",
+            "DIV class=workspace-pane-body",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Related style rule",
+          "node": 851,
+          "label": "ARTICLE class='workspace-pane'",
+          "path": [
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Related style rule",
+          "node": 858,
+          "label": "HEADER class='workspace-pane-header'",
+          "path": [
+            "HEADER class=workspace-pane-header",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Related style rule",
+          "node": 873,
+          "label": "DIV class='workspace-pane-body'",
+          "path": [
+            "DIV class=workspace-pane-body",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root"
+          ]
+        },
+        {
+          "name": "StyleRecalcInvalidationTracking",
+          "reason": "Related style rule",
+          "node": 852,
+          "label": "DIV class='desktop-resize-edge split-panes-pane-edge'",
+          "path": [
+            "DIV class=desktop-resize-edge split-panes-pane-edge",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root",
+            "BODY"
+          ]
+        },
+        {
+          "name": "LayoutInvalidationTracking",
+          "reason": "Style changed",
+          "node": 408,
+          "label": "DIV class='workspace-pane-body'",
+          "path": [
+            "DIV class=workspace-pane-body",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root"
+          ]
+        },
+        {
+          "name": "LayoutInvalidationTracking",
+          "reason": "Style changed",
+          "node": 873,
+          "label": "DIV class='workspace-pane-body'",
+          "path": [
+            "DIV class=workspace-pane-body",
+            "ARTICLE class=workspace-pane",
+            "DIV class=split-panes-grid",
+            "MAIN class=workspace-chat",
+            "DIV class=workspace",
+            "DIV class=desktop-window-under",
+            "DIV id=root"
+          ]
+        }
+      ]
+    }
+  ]
+}

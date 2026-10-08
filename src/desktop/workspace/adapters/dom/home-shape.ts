@@ -15,12 +15,15 @@
 export function settleOnReshape(home: HTMLElement): () => void {
   if (typeof ResizeObserver === "undefined") return () => {}
   const shape = () => getComputedStyle(home).getPropertyValue("--workspace-home-settle")
-  let seen = shape()
+  // The first observation owns the initial shape. Reading it while the home
+  // mounts forces layout before the browser's resize/paint delivery.
+  let seen: string | undefined
   const observer = new ResizeObserver(() => {
     const next = shape()
     if (next === seen) return
+    const hadShape = seen !== undefined
     seen = next
-    home.dataset.reshaped = ""
+    if (hadShape) home.dataset.reshaped = ""
   })
   observer.observe(home)
   return () => observer.disconnect()

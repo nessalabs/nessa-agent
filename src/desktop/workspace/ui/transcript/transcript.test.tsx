@@ -6,7 +6,7 @@
 import { act, StrictMode, createRef } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   loadWorkspace,
   followWorkspace,
@@ -94,7 +94,11 @@ const conversation: TranscriptValue = {
   },
 }
 
-async function shown(source = fakeSource(), shownConversation = conversation) {
+async function shown(
+  source = fakeSource(),
+  shownConversation = conversation,
+  onHeadingVisible: (visible: boolean) => void = () => {},
+) {
   source.transcripts.set("b", shownConversation)
   const store = testStore(source)
   await store.dispatch(loadWorkspace())
@@ -107,10 +111,8 @@ async function shown(source = fakeSource(), shownConversation = conversation) {
           <ClockProvider now={() => 1000}>
             <Transcript
               sessionId="b"
-              arriving={false}
               scrollRef={createRef()}
-              headingRef={createRef()}
-              onHeadingVisible={() => {}}
+              onHeadingVisible={onHeadingVisible}
             />
           </ClockProvider>
         </Provider>
@@ -141,13 +143,7 @@ async function failedRead(reason: "unavailable" | "signed-out") {
     root.render(
       <Provider store={store}>
         <ClockProvider now={() => 1000}>
-          <Transcript
-            sessionId="b"
-            arriving={false}
-            scrollRef={createRef()}
-            headingRef={createRef()}
-            onHeadingVisible={() => {}}
-          />
+          <Transcript sessionId="b" scrollRef={createRef()} onHeadingVisible={() => {}} />
         </ClockProvider>
       </Provider>,
     )
@@ -357,9 +353,7 @@ describe("a transcript", () => {
           <ClockProvider now={() => 1000}>
             <Transcript
               sessionId="b"
-              arriving
               scrollRef={createRef()}
-              headingRef={createRef()}
               onHeadingVisible={() => {}}
             />
           </ClockProvider>
@@ -382,11 +376,11 @@ describe("a transcript", () => {
     const rising = [...host.querySelectorAll(".workspace-message[data-new]")].map(
       (message) => message.textContent,
     )
-    // What the source held and was never on screen may rise; what was shown stays put.
+    // The first snapshot and what was already shown stay put.
     expect(rising).not.toContain("one")
     expect(rising).not.toContain("two")
-    // Arriving, what the source says beyond its first message was never on screen: it rises.
-    expect(rising.length).toBeGreaterThan(0)
+    // Later additions rise; the initial snapshot is held still.
+    expect(rising).toHaveLength(0)
     // A reply the source places before a message still pending rises all the same.
     const [one] = store.getState().workspace.outbox.b ?? []
     const reply = {
@@ -851,4 +845,107 @@ it("keeps an older failed outbox message from hiding a later observed refusal", 
     await sent
   })
   expect(host.querySelector(".provider-sign-in")).toBeNull()
+})
+
+it("observes heading visibility without forcing the mounting layout", async () => {
+  let visibility: IntersectionObserverCallback | null = null
+  const observed = vi.fn()
+  const disconnected = vi.fn()
+  class HeadingObserver {
+    constructor(callback: IntersectionObserverCallback) {
+      visibility = callback
+    }
+    observe = observed
+    disconnect = disconnected
+  }
+  const previous = globalThis.IntersectionObserver
+  Object.assign(globalThis, { IntersectionObserver: HeadingObserver })
+  const geometry = vi
+    .spyOn(Element.prototype, "getBoundingClientRect")
+    .mockImplementation(() => {
+      throw new Error("forced mounting layout")
+    })
+  const reported = vi.fn()
+  try {
+    await shown(fakeSource(), conversation, reported)
+    expect(reported).not.toHaveBeenCalled()
+    expect(observed).toHaveBeenCalledWith(host.querySelector(".workspace-heading h2"))
+    const notify = visibility as IntersectionObserverCallback | null
+    expect(notify).not.toBeNull()
+    await act(async () =>
+      notify?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      ),
+    )
+    await act(async () =>
+      notify?.(
+        [{ isIntersecting: false } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      ),
+    )
+    expect(reported.mock.calls).toEqual([[true], [false]])
+    await act(async () => root.unmount())
+    expect(disconnected).toHaveBeenCalledTimes(2)
+  } finally {
+    geometry.mockRestore()
+    Object.assign(globalThis, { IntersectionObserver: previous })
+  }
+})
+
+it("pins after observed layout, respects scrolling away, and rejects late deliveries", async () => {
+  let notify: ResizeObserverCallback | null = null
+  class LayoutObserver {
+    constructor(callback: ResizeObserverCallback) {
+      notify = callback
+    }
+    observe() {}
+    disconnect() {}
+  }
+  const previous = globalThis.ResizeObserver
+  Object.assign(globalThis, { ResizeObserver: LayoutObserver })
+  let laidOut = false
+  let height = 500
+  const geometry = vi
+    .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+    .mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("workspace-transcript")) {
+        expect(laidOut, "scroll read before observed layout").toBe(true)
+        return height
+      }
+      return 0
+    })
+  let removed = false
+  try {
+    await shown()
+    expect(geometry).not.toHaveBeenCalled()
+    const scroller = host.querySelector<HTMLElement>(".workspace-transcript")
+    expect(scroller).not.toBeNull()
+    if (!scroller) return
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 100 })
+    const deliver = notify as ResizeObserverCallback | null
+    expect(deliver).not.toBeNull()
+    laidOut = true
+    await act(async () => deliver?.([], {} as ResizeObserver))
+    expect(scroller.scrollTop).toBe(500)
+    scroller.scrollTop = 0
+    scroller.dispatchEvent(new Event("scroll"))
+    height = 700
+    await act(async () => deliver?.([], {} as ResizeObserver))
+    expect(scroller.scrollTop).toBe(0)
+    scroller.scrollTop = 600
+    scroller.dispatchEvent(new Event("scroll"))
+    height = 900
+    await act(async () => deliver?.([], {} as ResizeObserver))
+    expect(scroller.scrollTop).toBe(900)
+    await act(async () => root.unmount())
+    removed = true
+    scroller.scrollTop = 10
+    await act(async () => deliver?.([], {} as ResizeObserver))
+    expect(scroller.scrollTop).toBe(10)
+  } finally {
+    if (!removed) await act(async () => root.unmount())
+    geometry.mockRestore()
+    Object.assign(globalThis, { ResizeObserver: previous })
+  }
 })

@@ -75,15 +75,7 @@ async function conversation(source: FakeSource = fakeSource()) {
   store.dispatch(followWorkspace())
   await store.dispatch(loadWorkspace())
   await settle()
-  await mount(
-    store,
-    <Conversation
-      sessionId="a"
-      arrival={null}
-      takeFocus={() => false}
-      onHeadingVisible={() => {}}
-    />,
-  )
+  await mount(store, <Conversation sessionId="a" onHeadingVisible={() => {}} />)
   return { store, source }
 }
 

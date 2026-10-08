@@ -1,106 +1,118 @@
-/**
- * A new session's first message, sent from its home: the composer glides
- * from the home down to the foot of the pane, the message rises from where it
- * was typed into its bubble, and the heading settles in above it. Transform
- * and opacity only. The home is measured before the conversation replaces
- * it; the motion plays once the conversation has mounted.
- */
-import { useLayoutEffect, type RefObject } from "react"
+/** First-send motion: read the origin before send, observe the destination after layout. */
 import { durationToken, motionToken } from "../../../adapters/motion"
 
-/** Where the first message was when it was sent. */
+/** Owned by the arrival adapter while its destinations await their first layout. */
+export const arrivalWaitingAttribute = "data-message-arrival-waiting"
+
 export interface Arrival {
-  readonly composer: DOMRect
-  readonly text: DOMRect
+  readonly composer: DOMRectReadOnly
+  readonly text: DOMRectReadOnly
+  readonly duration: number
+  readonly glide: string
+  readonly headingDuration: number
+  readonly headingDelay: number
+  readonly ease: string
 }
 
-/** Measures a home's composer before it hands over; nothing when there is no motion to play. */
-export function measureArrival(home: HTMLElement | null): Arrival | null {
-  const composer = home?.querySelector(".desktop-composer")
-  const field = composer?.querySelector("textarea")
-  if (!composer || !field || durationToken(composer, "--desktop-arrival") === 0)
-    return null
+/** Read the still-mounted home, before the command changes its DOM. */
+export function captureArrival(home: HTMLElement | null): Arrival | null {
+  const composer = home?.querySelector<HTMLElement>(".desktop-composer")
+  const text = composer?.querySelector("textarea")
+  if (!composer || !text) return null
+  const duration = durationToken(composer, "--desktop-arrival")
+  if (duration === 0) return null
+  const composerBox = composer.getBoundingClientRect()
+  const textBox = text.getBoundingClientRect()
+  if (composerBox.width === 0 || textBox.height === 0) return null
   return {
-    composer: composer.getBoundingClientRect(),
-    text: field.getBoundingClientRect(),
+    composer: composerBox,
+    text: textBox,
+    duration,
+    glide: motionToken(composer, "--desktop-glide") ?? "linear",
+    headingDuration: durationToken(composer, "--desktop-slow"),
+    headingDelay: durationToken(composer, "--desktop-stagger"),
+    ease: motionToken(composer, "--desktop-ease") ?? "linear",
   }
 }
 
 /**
- * Plays the arrival once, on mount, from `arrival` into the conversation's
- * docked composer, first message and heading.
+ * One composer, first bubble and heading. The browser supplies all landing
+ * boxes in one observation; starting the flights reads no layout. Cleanup
+ * owns the observer, waiting mark and animations, including late deliveries.
  */
-export function useArrival(
-  arrival: Arrival | null,
-  {
-    dock,
-    scroller,
-    heading,
-  }: {
-    dock: RefObject<HTMLElement | null>
-    scroller: RefObject<HTMLElement | null>
-    heading: RefObject<HTMLElement | null>
-  },
-): void {
-  useLayoutEffect(() => {
-    const from = arrival
-    const composer = dock.current?.querySelector<HTMLElement>(".desktop-composer")
-    const bubble = scroller.current?.querySelector<HTMLElement>(
-      '[data-role="user"] .workspace-bubble',
-    )
-    const title = heading.current
-    if (!from || !composer || !bubble || !title) return
-    const glide = motionToken(composer, "--desktop-glide") ?? "linear"
-    const ease = motionToken(composer, "--desktop-ease") ?? "linear"
-    const to = composer.getBoundingClientRect()
-    const scale = from.composer.width / to.width
+export function playArrival(
+  conversation: HTMLElement,
+  from: Arrival,
+  done: () => void,
+): () => void {
+  const composer = conversation.querySelector<HTMLElement>(".desktop-composer")
+  const bubble = conversation.querySelector<HTMLElement>(
+    '[data-role="user"] .workspace-bubble',
+  )
+  const heading = conversation.querySelector<HTMLElement>(".workspace-heading")
+  if (!composer || !bubble || !heading) {
+    done()
+    return () => {}
+  }
+  let active = true
+  let launched = false
+  const boxes = new Map<Element, DOMRectReadOnly>()
+  const flights: Animation[] = []
+  const observer = new IntersectionObserver((entries) => {
+    if (!active || launched) return
+    for (const entry of entries) boxes.set(entry.target, entry.boundingClientRect)
+    const to = boxes.get(composer)
+    const landed = boxes.get(bubble)
+    if (!to || !landed || !boxes.has(heading)) return
+    launched = true
+    observer.disconnect()
+    conversation.removeAttribute(arrivalWaitingAttribute)
+    const scale = to.width > 0 ? from.composer.width / to.width : 1
     const dx = from.composer.left + from.composer.width / 2 - (to.left + to.width / 2)
     const dy = from.composer.top + from.composer.height / 2 - (to.top + to.height / 2)
-    const travel = durationToken(composer, "--desktop-arrival")
-    const moving = composer.animate(
-      [
-        { transform: `translate(${dx}px, ${dy}px) scale(${scale})` },
-        { transform: "none" },
-      ],
-      { duration: travel, easing: glide },
-    )
-    // The message leaves the field as the composer travels; its placeholder
-    // returns only once the field has nearly settled.
-    const clearing = composer
-      .querySelector("textarea")
-      ?.animate([{ opacity: 0 }, { opacity: 0, offset: 0.6 }, { opacity: 1 }], {
-        duration: travel,
-        easing: "ease-out",
-      })
-    const landed = bubble.getBoundingClientRect()
-    const rising = bubble.animate(
-      [
+    flights.push(
+      composer.animate(
+        [
+          { transform: `translate(${dx}px, ${dy}px) scale(${scale})` },
+          { transform: "none" },
+        ],
+        { duration: from.duration, easing: from.glide, id: "first-send-composer" },
+      ),
+      bubble.animate(
+        [
+          {
+            transform: `translate(${from.text.left - landed.left - 16}px, ${from.text.top - landed.top - 8}px)`,
+          },
+          { transform: "none" },
+        ],
+        { duration: from.duration, easing: from.glide, id: "first-send-message" },
+      ),
+      heading.animate(
+        [
+          { opacity: 0, transform: "translateY(8px)" },
+          { opacity: 1, transform: "none" },
+        ],
         {
-          transform: `translate(${from.text.left - landed.left - 14}px, ${from.text.top - landed.top - 10}px)`,
-          backgroundColor: "transparent",
+          duration: from.headingDuration,
+          delay: from.headingDelay,
+          easing: from.ease,
+          fill: "backwards",
         },
-        { offset: 0.4, backgroundColor: "transparent" },
-        { transform: "none" },
-      ],
-      { duration: travel - 20, easing: glide },
+      ),
     )
-    const settling = title.animate(
-      [
-        { opacity: 0, transform: "translateY(8px)" },
-        { opacity: 1, transform: "none" },
-      ],
-      {
-        duration: durationToken(title, "--desktop-slow"),
-        delay: durationToken(title, "--desktop-stagger"),
-        easing: ease,
-        fill: "backwards",
-      },
-    )
-    // Cancelled on cleanup, so a second mount measures the resting layout
-    // rather than a frame of this animation.
-    return () =>
-      [moving, rising, settling, clearing].forEach((animation) => animation?.cancel())
-    // Plays once, for the arrival this conversation mounted with.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    Promise.all(flights.map((flight) => flight.finished))
+      .then(() => {
+        if (active) done()
+      })
+      .catch(() => undefined)
+  })
+  conversation.setAttribute(arrivalWaitingAttribute, "")
+  for (const target of [composer, bubble, heading]) observer.observe(target)
+  return () => {
+    if (!active) return
+    active = false
+    observer.disconnect()
+    conversation.removeAttribute(arrivalWaitingAttribute)
+    flights.forEach((flight) => flight.cancel())
+  }
 }

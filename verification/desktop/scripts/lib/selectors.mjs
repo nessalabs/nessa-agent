@@ -69,12 +69,13 @@ export const css = {
   homePage: ".desktop-home[data-page]", // class: a home whose long draft opened the page
   homeCustomize: ".workspace-pane-home .desktop-header-customize", // class: the scene's Customize control
   dragLayer: ".split-panes-layer", // class: what is carried is drawn in it, below the titlebar row
+  dragTitle: ".workspace-drag-title", // class: the compact carried title
   dragGhost: ".split-panes-ghost", // class: the opaque copy the pointer carries
   dragCarrier: ".split-panes-carrier", // class: holds the copy at the pointer
   dragPlaceholder: ".split-panes-placeholder", // class: where a drop would land
   dragShield: ".split-panes-shield", // class: holds the pointer while carrying
   lifted: "[data-drag-lifted]",
-  dragging: "[data-workspace][data-drag-carrying]",
+  dragging: "[data-workspace][data-drag-carrying], [data-workspace][data-drag-card]",
   dropAnnouncer: '[data-workspace] [role="status"][aria-live="polite"]',
 
   // Widgets (ADR 326) and the sample plugin that shows them (src/desktop/widgets/fixture/)

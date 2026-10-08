@@ -1,0 +1,12 @@
+
+ RUN  v3.2.7 /Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent
+
+ ✓ src/desktop/split-panes/adapters/dom/drag.test.tsx (22 tests) 3674ms
+   ✓ ends a press, and a drag, the moment the source has no layout  306ms
+   ✓ marks the root while a drop would take the host's spare room, and clears it when let go  619ms
+
+ Test Files  1 passed (1)
+      Tests  22 passed (22)
+   Start at  03:28:13
+   Duration  4.51s (transform 77ms, setup 0ms, collect 110ms, tests 3.67s, environment 446ms, prepare 38ms)
+

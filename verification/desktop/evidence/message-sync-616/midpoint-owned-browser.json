@@ -1,0 +1,596 @@
+{
+  "check": "drag",
+  "ok": true,
+  "started": "2026-10-07T10:31:59.614Z",
+  "finished": "2026-10-07T10:35:24.980Z",
+  "target": {
+    "url": "http://127.0.0.1:54321/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "sideways-top",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1440x900",
+      "observations": [
+        {
+          "dy": 30,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 3961.8999999910593,
+              "lastMoveAt": 3918.7000000029802
+            }
+          ]
+        },
+        {
+          "dy": 50,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 6177.399999991059,
+              "lastMoveAt": 6136.79999999702
+            }
+          ]
+        },
+        {
+          "dy": 90,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 8477.59999999404,
+              "lastMoveAt": 8435.89999999106
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "boundary-jitter",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "swap-in-tall-pane",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1440x900",
+      "pane": "352×884"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "reduced-motion",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "sideways-top",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700",
+      "observations": [
+        {
+          "dy": 30,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 3491.5,
+              "lastMoveAt": 3457.7999999970198
+            }
+          ]
+        },
+        {
+          "dy": 50,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 5248.699999988079,
+              "lastMoveAt": 5222.0999999940395
+            }
+          ]
+        },
+        {
+          "dy": 90,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 7033.899999991059,
+              "lastMoveAt": 7004.29999999702
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "boundary-jitter",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "swap-in-tall-pane",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700",
+      "pane": "300×684"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "reduced-motion",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "sideways-top",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1440x900",
+      "observations": [
+        {
+          "dy": 30,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 4056.4000000059605,
+              "lastMoveAt": 4010.4000000059605
+            }
+          ]
+        },
+        {
+          "dy": 50,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 7013.300000011921,
+              "lastMoveAt": 6957.5
+            }
+          ]
+        },
+        {
+          "dy": 90,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 9910.10000000894,
+              "lastMoveAt": 9858.60000000894
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "boundary-jitter",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "swap-in-tall-pane",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1440x900",
+      "pane": "352×884"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "overview-session-drop",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "peek-session-no-zone",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "reduced-motion",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "sideways-top",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700",
+      "observations": [
+        {
+          "dy": 30,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 4173,
+              "lastMoveAt": 4124.4000000059605
+            }
+          ]
+        },
+        {
+          "dy": 50,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 6822.0999999940395,
+              "lastMoveAt": 6746.29999999702
+            }
+          ]
+        },
+        {
+          "dy": 90,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 9443.70000000298,
+              "lastMoveAt": 9400.29999999702
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "boundary-jitter",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "swap-in-tall-pane",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700",
+      "pane": "300×684"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "overview-session-drop",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "peek-session-no-zone",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "reduced-motion",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "sideways-top",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1440x900",
+      "observations": [
+        {
+          "dy": 30,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 3027,
+              "lastMoveAt": 3025
+            }
+          ]
+        },
+        {
+          "dy": 50,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 3377,
+              "lastMoveAt": 3375
+            }
+          ]
+        },
+        {
+          "dy": 90,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 3741,
+              "lastMoveAt": 3739
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "boundary-jitter",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "swap-in-tall-pane",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1440x900",
+      "pane": "352×884"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "reduced-motion",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "sideways-top",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1000x700",
+      "observations": [
+        {
+          "dy": 30,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 2982,
+              "lastMoveAt": 2980
+            }
+          ]
+        },
+        {
+          "dy": 50,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 3365,
+              "lastMoveAt": 3364
+            }
+          ]
+        },
+        {
+          "dy": 90,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 3700,
+              "lastMoveAt": 3698
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "boundary-jitter",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "swap-in-tall-pane",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1000x700",
+      "pane": "300×684"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "reduced-motion",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "sideways-top",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1440x900",
+      "observations": [
+        {
+          "dy": 30,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 2985,
+              "lastMoveAt": 2983
+            }
+          ]
+        },
+        {
+          "dy": 50,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 3335,
+              "lastMoveAt": 3333
+            }
+          ]
+        },
+        {
+          "dy": 90,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 3718,
+              "lastMoveAt": 3716
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "boundary-jitter",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "swap-in-tall-pane",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1440x900",
+      "pane": "352×884"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "overview-session-drop",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "peek-session-no-zone",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "reduced-motion",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1440x900"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "sideways-top",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700",
+      "observations": [
+        {
+          "dy": 30,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 2902,
+              "lastMoveAt": 2900
+            }
+          ]
+        },
+        {
+          "dy": 50,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 3284,
+              "lastMoveAt": 3283
+            }
+          ]
+        },
+        {
+          "dy": 90,
+          "recorded": [
+            {
+              "said": "Swap with Notarize the macOS build",
+              "at": 3651,
+              "lastMoveAt": 3650
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "boundary-jitter",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "swap-in-tall-pane",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700",
+      "pane": "300×684"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "overview-session-drop",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "peek-session-no-zone",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "reduced-motion",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700"
+    }
+  ]
+}

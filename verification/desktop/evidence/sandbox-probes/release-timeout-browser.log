@@ -1,0 +1,16 @@
+starting a dev server of its own on port 64650…
+warmed 473 modules in 5310 ms
+ok    departures-cleanup [chromium columns]
+ok    departures [chromium columns]
+ok    console
+ok    departures-cleanup [chromium sidebar]
+ok    departures [chromium sidebar]
+ok    console
+ok    departures-cleanup [webkit columns]
+ok    departures [webkit columns]
+ok    console
+ok    departures-cleanup [webkit sidebar]
+ok    departures [webkit sidebar]
+ok    console
+wrote /tmp/642-departure-release.json
+mcp-apps: 12/12 held

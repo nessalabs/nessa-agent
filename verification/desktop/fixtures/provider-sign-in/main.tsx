@@ -269,13 +269,7 @@ container.style.display = "flex"
 createRoot(container).render(
   <Provider store={store}>
     <ClockProvider now={() => 1000}>
-      <Transcript
-        sessionId="b"
-        arriving={false}
-        scrollRef={createRef()}
-        headingRef={createRef()}
-        onHeadingVisible={() => {}}
-      />
+      <Transcript sessionId="b" scrollRef={createRef()} onHeadingVisible={() => {}} />
     </ClockProvider>
   </Provider>,
 )

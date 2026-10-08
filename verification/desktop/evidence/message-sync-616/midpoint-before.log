@@ -1,0 +1,61 @@
+
+ RUN  v3.2.7 /Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent
+
+ ❯ src/desktop/split-panes/model/drop.test.ts (31 tests | 1 failed) 9ms
+   × where on a pane a drop lands > keeps the exact midpoint available after holding an edge in a narrow pane 3ms
+     → expected 'left' to be 'center' // Object.is equality
+   ✓ where on a pane a drop lands > lands on the side it is nearest in pixels, and in the middle well within every edge 0ms
+   ✓ where on a pane a drop lands > keeps a tall narrow pane's top and bottom short: a quarter of the way down is a side, not the top 0ms
+   ✓ where on a pane a drop lands > reaches a third of the way in from each side, held to 90–300px and never past the middle 0ms
+   ✓ where on a pane a drop lands > reads a drag down a tall pane as below by two-thirds of the way, and the same sideways and up 0ms
+   ✓ where on a pane a drop lands > keeps a wide short pane's sides short in the same way 0ms
+   ✓ where on a pane a drop lands > takes a sideways sweep near the top to the side it heads for 0ms
+   ✓ where on a pane a drop lands > moves a sideways drag near a tall narrow pane's top beside it, never above, at any depth 1ms
+   ✓ where on a pane a drop lands > moves an up-or-down drag near a wide short pane's side above or below it, never beside 0ms
+   ✓ where on a pane a drop lands > never takes a side out of reach for the one the pointer is at, however it heads 0ms
+   ✓ where on a pane a drop lands > splits a diagonal by the diagonal, and a diagonal heading by what it heads for 0ms
+   ✓ where on a pane a drop lands > holds the zone the pointer is in when it jitters sideways across the boundary 0ms
+   ✓ where on a pane a drop lands > does not let a resting pointer's jitter flip the zone at a boundary 0ms
+   ✓ where on a pane a drop lands > holds the side it is in while the hand settles, and lets go as it sweeps 0ms
+   ✓ where on a pane a drop lands > never aims at a zone it refuses: the one beside it is aimed at instead 0ms
+   ✓ where on a pane a drop lands > reads the pointer's heading from the last tenth of a second, and none once it has rested 0ms
+   ✓ where a drag aims > reads a gutter as the pane nearest it, held to its edge 0ms
+   ✓ where a drag aims > aims at the pointer: the pane and zone under it, nothing off the grid or with no pane in sight 0ms
+   ✓ where a drag aims > aims at nothing over a side column, docked or revealed over the panes 0ms
+   ✓ where a drag aims > holds the zone it had only on the same pane 0ms
+   ✓ what a drop leaves > swaps two panes in the middle, and moves one to a side 0ms
+   ✓ what a drop leaves > puts an item in a new pane on a side, minted the layout's next key, or in the pane's place 0ms
+   ✓ what a drop leaves > goes to an item already on screen, whatever the zone 0ms
+   ✓ what a drop leaves > offers nothing where the room refuses, or for a pane dropped on itself 0ms
+   ✓ the zones a drag refuses > refuses the side of a pane the carried one already sits on, and nothing else there 0ms
+   ✓ the zones a drag refuses > refuses every zone of the carried pane itself 0ms
+   ✓ the zones a drag refuses > aims beside a refused zone: at the right edge just under the carried pane, the right 0ms
+   ✓ the way the pane has come > moved up, the top reaches as a heading does 0ms
+   ✓ the way the pane has come > moved sideways, the left or right does, and the top does not 0ms
+   ✓ the way the pane has come > never puts a pane moved sideways above or below, at a refused side's corner 0ms
+   ✓ the way the pane has come > counts only once it has come far enough 0ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/desktop/split-panes/model/drop.test.ts > where on a pane a drop lands > keeps the exact midpoint available after holding an edge in a narrow pane
+AssertionError: expected 'left' to be 'center' // Object.is equality
+
+Expected: "center"
+Received: "left"
+
+ ❯ src/desktop/split-panes/model/drop.test.ts:51:13
+     49|           expect(
+     50|             zoneAt(at(size.width / 2, size.height / 2, velocity), size…
+     51|           ).toBe("center")
+       |             ^
+     52|         }
+     53|       }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 30 passed (31)
+   Start at  03:27:05
+   Duration  227ms (transform 31ms, setup 0ms, collect 35ms, tests 9ms, environment 0ms, prepare 49ms)
+

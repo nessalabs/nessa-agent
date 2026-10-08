@@ -247,6 +247,20 @@ describe("carrying", () => {
     expect(stepDrag(fast, { kind: "still", t: 30 + restAfter - 1, targets })).toBe(fast)
   })
 
+  it("keeps adjacent positions across sparse pointer delivery and preserves horizontal targeting", () => {
+    const carried = run([
+      press(),
+      ready,
+      move(1060, 30, 0),
+      move(1000, 30, 120),
+      move(940, 30, 240),
+    ])
+    if (carried.kind !== "carrying") throw new Error("not carrying")
+    expect(carried.path.map((point) => point.t)).toEqual([120, 240])
+    expect(carried.aim?.zone).not.toBe("top")
+    expect(carried.aim?.zone).not.toBe("bottom")
+  })
+
   it("keeps as much of the path as its heading reads, and no more", () => {
     // Samples 10ms apart: the heading reads the last 100ms of them.
     const moves = Array.from({ length: 30 }, (_, index) =>
