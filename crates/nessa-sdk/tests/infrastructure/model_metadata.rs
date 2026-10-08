@@ -362,16 +362,18 @@ fn malformed_effort_levels_fail_loading_as_invalid_metadata() {
 }
 
 /// What the providers publish, as recorded on the catalogue's verification
-/// date (ADR 302). OpenAI's levels were rechecked on 2026-10-08 against the
-/// reasoning guide and each model page (#312): Astra is `low` through `max`,
-/// and the GPT-5.6 models are `none` through `max`. Those pages do not
-/// publish `ultra`. Asserted so that a change to a model's levels or fast
-/// mode is made on purpose, with its source, rather than slipped in.
+/// date (ADR 302). OpenAI's effort levels were rechecked on 2026-10-08
+/// against the reasoning guide and each of those four model pages (#312):
+/// Astra is `low` through `max`, and the GPT-5.6 models are `none` through
+/// `max`. Those pages do not publish `ultra`. That pass did not recheck the
+/// rest of the catalog, so `verifiedOn` stays 2026-09-29. Asserted so that a
+/// change to a model's levels, its fast mode, or the catalog-wide date is
+/// made on purpose, with its source, rather than slipped in.
 #[test]
 fn shipped_catalog_records_each_models_published_levels_and_fast_mode() {
     let file = File::open(concat!(env!("CARGO_MANIFEST_DIR"), "/data/models.json")).unwrap();
     let catalog = load_catalog(file).unwrap();
-    assert_eq!(catalog.verified_on(), "2026-10-08");
+    assert_eq!(catalog.verified_on(), "2026-09-29");
     let openai_5_6 = &["none", "low", "medium", "high", "xhigh", "max"][..];
     let five = &["low", "medium", "high", "xhigh", "max"][..];
     let unrecorded = &[][..];

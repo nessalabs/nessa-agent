@@ -26,9 +26,11 @@ kept until the catalogue carried them.
   forbids.
 - No verified provider page for a model in this catalogue lists a level past
   `max`. The slider's Ultra has no real model today. Rechecked 2026-10-08
-  (#312): the OpenAI reasoning guide and the GPT-6 Astra, GPT-5.6 Sol, Terra,
-  and Luna pages still publish the levels recorded below, and none of them
-  lists `ultra`.
+  (#312), those four OpenAI models' effort levels only: the OpenAI reasoning
+  guide and the GPT-6 Astra, GPT-5.6 Sol, Terra, and Luna pages still publish
+  the levels recorded below, and none of them lists `ultra`. The catalog-wide
+  `verifiedOn` stays 2026-09-29, because that pass did not recheck the rest
+  of the catalog.
 - Fast mode is speed, not effort (ADR 238), and a binding may be unable to turn
   it on even where the model has it.
 - When this record was accepted, every binding declared reasoning unsupported:
@@ -181,12 +183,14 @@ has the same gap, and one answer for both is
   real data.
 - Watch for: a provider renaming levels or publishing a level past `max`.
   Rechecked 2026-10-08
-  ([#312](https://github.com/nessalabs/nessa-agent/issues/312)) against the
+  ([#312](https://github.com/nessalabs/nessa-agent/issues/312)), effort levels
+  of GPT-6 Astra and GPT-5.6 Sol, Terra, and Luna only, against the
   [reasoning guide](https://developers.openai.com/api/docs/guides/reasoning)
-  and the model pages linked from `models.json`. Those pages still publish
+  and those models' pages. Those pages still publish
   GPT-6 Astra as `low`, `medium`, `high`, `xhigh`, `max` (the guide says
   `none` returns HTTP 400) and GPT-5.6 Sol, Terra, and Luna as `none`, `low`,
-  `medium`, `high`, `xhigh`, `max`. They do not publish `ultra`. The Codex
+  `medium`, `high`, `xhigh`, `max`. They do not publish `ultra`. `verifiedOn`
+  stays 2026-09-29. The Codex
   models page describes Ultra for later models (GPT-6.1 Sol ranges to Ultra;
   GPT-6 Luna stops at Max) and does not give a list for these four. The
   captured codex-acp 1.12 session for gpt-5.6-sol still advertises `ultra`
