@@ -2,6 +2,10 @@
  *
  * `enabled` is the only tag that means the gateway keeps running after logout,
  * and it is present only when the confirming read said so.
+ *
+ * This list is the vocabulary the shell accepts. The host wire test
+ * `every_shown_tag_matches_the_published_vocabulary` fails when a serialized
+ * tag differs from it.
  */
 
 export const LINGER_SHOWN = [

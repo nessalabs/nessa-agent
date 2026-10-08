@@ -81,4 +81,50 @@ mod tests {
         let failed = serde_json::to_value(response(LingerShown::Failed)).unwrap();
         assert_eq!(failed["shown"], "failed");
     }
+
+    /// `LINGER_SHOWN` in `src/onboarding/model/linger.ts` is the list the shell
+    /// accepts. A tag added or renamed on only one side fails here.
+    #[test]
+    fn every_shown_tag_matches_the_published_vocabulary() {
+        let published = published_shown_tags();
+        let wired = [
+            LingerShown::NotApplicable,
+            LingerShown::Offer,
+            LingerShown::Enabled,
+            LingerShown::Refused,
+            LingerShown::Failed,
+            LingerShown::Unsupported,
+        ]
+        .map(wire_tag);
+        assert_eq!(wired.as_slice(), published.as_slice());
+    }
+
+    fn wire_tag(shown: LingerShown) -> String {
+        serde_json::to_value(response(shown))
+            .unwrap()
+            .get("shown")
+            .and_then(|tag| tag.as_str())
+            .expect("shown tag")
+            .to_string()
+    }
+
+    fn published_shown_tags() -> Vec<String> {
+        let source = include_str!("../../../../src/onboarding/model/linger.ts");
+        let marker = "export const LINGER_SHOWN = [";
+        let start = source.find(marker).expect("LINGER_SHOWN");
+        let body = &source[start + marker.len()..];
+        let end = body.find("] as const").expect("LINGER_SHOWN close");
+        body[..end]
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                let line = line.strip_suffix(',').unwrap_or(line);
+                line.strip_prefix('"')
+                    .and_then(|rest| rest.strip_suffix('"'))
+                    .expect("quoted tag")
+                    .to_string()
+            })
+            .collect()
+    }
 }
