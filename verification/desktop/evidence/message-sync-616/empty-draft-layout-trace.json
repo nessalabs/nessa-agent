@@ -1,0 +1,97 @@
+[
+  {
+    "ms": 103.519,
+    "cpuMs": 102.481,
+    "dirty": 11,
+    "total": 592,
+    "stack": [
+      {
+        "file": "src/desktop/workspace/adapters/dom/home-shape.ts",
+        "line": 17,
+        "name": null
+      },
+      {
+        "file": "src/desktop/workspace/adapters/dom/home-shape.ts",
+        "line": 18,
+        "name": "shape"
+      },
+      {
+        "file": "src/desktop/workspace/ui/panes/pane.tsx",
+        "line": 117,
+        "name": "settleOnReshape"
+      },
+      {
+        "file": "node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom-client.production.js",
+        "line": 8583,
+        "name": "create"
+      }
+    ]
+  },
+  {
+    "ms": 60.628,
+    "cpuMs": 60.017,
+    "dirty": 12,
+    "total": 575,
+    "stack": [
+      {
+        "file": "src/desktop/split-panes/adapters/dom/flip.tsx",
+        "line": 124,
+        "name": null
+      },
+      {
+        "file": "src/desktop/split-panes/adapters/dom/flip.tsx",
+        "line": 124,
+        "name": null
+      },
+      {
+        "file": "src/desktop/split-panes/adapters/dom/flip.tsx",
+        "line": 212,
+        "name": "play"
+      },
+      {
+        "file": "node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom-client.production.js",
+        "line": 9033,
+        "name": null
+      }
+    ]
+  },
+  {
+    "ms": 1.425,
+    "cpuMs": 1.414,
+    "dirty": 15,
+    "total": 665,
+    "stack": []
+  },
+  {
+    "ms": 0.737,
+    "cpuMs": 0.718,
+    "dirty": 11,
+    "total": 590,
+    "stack": []
+  },
+  {
+    "ms": 0.644,
+    "cpuMs": 0.644,
+    "dirty": 14,
+    "total": 665,
+    "stack": [
+      {
+        "file": "src/desktop/workspace/adapters/dom/home-shape.ts",
+        "line": 17,
+        "name": null
+      },
+      {
+        "file": "src/desktop/workspace/adapters/dom/home-shape.ts",
+        "line": 20,
+        "name": "shape"
+      }
+    ]
+  },
+  {
+    "ms": 0.532,
+    "cpuMs": 0.532,
+    "dirty": 11,
+    "total": 665,
+    "stack": []
+  }
+]

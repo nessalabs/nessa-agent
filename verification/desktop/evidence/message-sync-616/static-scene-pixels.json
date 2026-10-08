@@ -1,0 +1,70 @@
+{
+  "kind": "same-page-static-decoration-pixel-control",
+  "ambient": "paused in both captures",
+  "results": [
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "motion": "full",
+      "identical": true,
+      "before": "2fd216817dd5259e7914cf955433e30778ccc4b95d06d5a3ce429dd6e594524e",
+      "after": "2fd216817dd5259e7914cf955433e30778ccc4b95d06d5a3ce429dd6e594524e"
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "motion": "reduced",
+      "identical": true,
+      "before": "49189f1de607b310c6825c8f86d098850510ee92d8dd2c33f99730e0f3a0bd82",
+      "after": "49189f1de607b310c6825c8f86d098850510ee92d8dd2c33f99730e0f3a0bd82"
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "motion": "full",
+      "identical": true,
+      "before": "f9e7045eb1ad7d75169cf55b29aeab870c0af0bc929a33f686bb62a142f484a5",
+      "after": "f9e7045eb1ad7d75169cf55b29aeab870c0af0bc929a33f686bb62a142f484a5"
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "motion": "reduced",
+      "identical": true,
+      "before": "b45b54966af2afd1aa941f6dc6e1cd1786754ba9c31a95f9ddf0ee9c3be1e14b",
+      "after": "b45b54966af2afd1aa941f6dc6e1cd1786754ba9c31a95f9ddf0ee9c3be1e14b"
+    },
+    {
+      "engine": "webkit",
+      "layout": "columns",
+      "motion": "full",
+      "identical": true,
+      "before": "af6be215e2583108f7e2db5872db2d2b669d4ea3f3681d6af2c60a4c05ec1701",
+      "after": "af6be215e2583108f7e2db5872db2d2b669d4ea3f3681d6af2c60a4c05ec1701"
+    },
+    {
+      "engine": "webkit",
+      "layout": "columns",
+      "motion": "reduced",
+      "identical": true,
+      "before": "f766ab3470cfa068c92ddd6d9f51f9c6e0a4cf76fb9f9e37888f286b867243e3",
+      "after": "f766ab3470cfa068c92ddd6d9f51f9c6e0a4cf76fb9f9e37888f286b867243e3"
+    },
+    {
+      "engine": "webkit",
+      "layout": "sidebar",
+      "motion": "full",
+      "identical": true,
+      "before": "5f87943ca6321fffcb1fdb0c1bcb9da67370348196169670dda6d432969af810",
+      "after": "5f87943ca6321fffcb1fdb0c1bcb9da67370348196169670dda6d432969af810"
+    },
+    {
+      "engine": "webkit",
+      "layout": "sidebar",
+      "motion": "reduced",
+      "identical": true,
+      "before": "2dd82d2d956ca5c58f797e6566b111b824502e7445eaee0130f769a8e97a03ce",
+      "after": "2dd82d2d956ca5c58f797e6566b111b824502e7445eaee0130f769a8e97a03ce"
+    }
+  ]
+}

@@ -1,0 +1,244 @@
+{
+  "check": "responsive",
+  "ok": true,
+  "started": "2026-10-07T07:58:36.623Z",
+  "finished": "2026-10-07T07:59:29.639Z",
+  "target": {
+    "url": "http://127.0.0.1:55115/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:55115/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "home-shape",
+      "engine": "chromium",
+      "layout": "columns",
+      "shapes": [
+        {
+          "tag": "small",
+          "pane": "424×884",
+          "composerFoot": 16,
+          "greeting": "20px",
+          "caret": "elsewhere"
+        },
+        {
+          "tag": "large",
+          "pane": "856×884",
+          "composerFoot": 351,
+          "greeting": "30px",
+          "caret": 34
+        },
+        {
+          "tag": "short",
+          "pane": "856×624",
+          "composerFoot": 16,
+          "greeting": "20px",
+          "caret": 29
+        },
+        {
+          "tag": "shortest",
+          "pane": "856×464",
+          "composerFoot": 8,
+          "greeting": "17px",
+          "caret": 29
+        },
+        {
+          "tag": "back",
+          "pane": "856×884",
+          "composerFoot": 351,
+          "greeting": "30px",
+          "caret": 29
+        },
+        {
+          "tag": "opacity the frame after",
+          "moving": 0.804996,
+          "still": 1
+        },
+        {
+          "tag": "no-greeting",
+          "pane": "424×884",
+          "composerFoot": 16,
+          "greeting": "off",
+          "caret": 0
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "home-shape",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "shapes": [
+        {
+          "tag": "small",
+          "pane": "576×884",
+          "composerFoot": 16,
+          "greeting": "20px",
+          "caret": "elsewhere"
+        },
+        {
+          "tag": "large",
+          "pane": "1160×884",
+          "composerFoot": 351,
+          "greeting": "30px",
+          "caret": 34
+        },
+        {
+          "tag": "short",
+          "pane": "1160×624",
+          "composerFoot": 16,
+          "greeting": "20px",
+          "caret": 29
+        },
+        {
+          "tag": "shortest",
+          "pane": "1160×464",
+          "composerFoot": 8,
+          "greeting": "17px",
+          "caret": 29
+        },
+        {
+          "tag": "back",
+          "pane": "1160×884",
+          "composerFoot": 351,
+          "greeting": "30px",
+          "caret": 29
+        },
+        {
+          "tag": "opacity the frame after",
+          "moving": 0.682328,
+          "still": 1
+        },
+        {
+          "tag": "no-greeting",
+          "pane": "576×884",
+          "composerFoot": 16,
+          "greeting": "off",
+          "caret": 0
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "home-shape",
+      "engine": "webkit",
+      "layout": "columns",
+      "shapes": [
+        {
+          "tag": "small",
+          "pane": "424×884",
+          "composerFoot": 16,
+          "greeting": "20px",
+          "caret": "elsewhere"
+        },
+        {
+          "tag": "large",
+          "pane": "856×884",
+          "composerFoot": 351,
+          "greeting": "30px",
+          "caret": 34
+        },
+        {
+          "tag": "short",
+          "pane": "856×624",
+          "composerFoot": 16,
+          "greeting": "20px",
+          "caret": 29
+        },
+        {
+          "tag": "shortest",
+          "pane": "856×464",
+          "composerFoot": 8,
+          "greeting": "17px",
+          "caret": 29
+        },
+        {
+          "tag": "back",
+          "pane": "856×884",
+          "composerFoot": 351,
+          "greeting": "30px",
+          "caret": 29
+        },
+        {
+          "tag": "opacity the frame after",
+          "moving": 0,
+          "still": 1
+        },
+        {
+          "tag": "no-greeting",
+          "pane": "424×884",
+          "composerFoot": 16,
+          "greeting": "off",
+          "caret": 0
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "home-shape",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "shapes": [
+        {
+          "tag": "small",
+          "pane": "576×884",
+          "composerFoot": 16,
+          "greeting": "20px",
+          "caret": "elsewhere"
+        },
+        {
+          "tag": "large",
+          "pane": "1160×884",
+          "composerFoot": 351,
+          "greeting": "30px",
+          "caret": 34
+        },
+        {
+          "tag": "short",
+          "pane": "1160×624",
+          "composerFoot": 16,
+          "greeting": "20px",
+          "caret": 29
+        },
+        {
+          "tag": "shortest",
+          "pane": "1160×464",
+          "composerFoot": 8,
+          "greeting": "17px",
+          "caret": 29
+        },
+        {
+          "tag": "back",
+          "pane": "1160×884",
+          "composerFoot": 351,
+          "greeting": "30px",
+          "caret": 29
+        },
+        {
+          "tag": "opacity the frame after",
+          "moving": 0,
+          "still": 1
+        },
+        {
+          "tag": "no-greeting",
+          "pane": "576×884",
+          "composerFoot": 16,
+          "greeting": "off",
+          "caret": 0
+        }
+      ]
+    }
+  ]
+}

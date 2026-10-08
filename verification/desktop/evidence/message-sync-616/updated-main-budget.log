@@ -1,0 +1,84 @@
+building production into /var/folders/1w/wp9n0wwd22qgrf0zkhb2fk6r0000gn/T/nessa-desktop-verify-sskdoY…
+previewing production at http://127.0.0.1:60957/desktop.html
+ok    console
+calibration: busy loop 21 ms → 65 ms at 4× (ratio 3.07)
+calibration: a 120 ms frame measured 116.70000000000005 ms, attributed by LoAF: true
+ok    calibration [chromium]
+ok    split-right [chromium columns]
+ok    split-down [chromium columns]
+ok    move [chromium columns]
+ok    close [chromium columns]
+ok    sidebar [chromium columns]
+ok    session-list [chromium columns]
+ok    send-home [chromium columns]
+ok    typing [chromium columns]
+ok    stream-1-of-4 [chromium columns]
+ok    drag-drop [chromium columns]
+ok    drag-cancel [chromium columns]
+ok    thinking-walk [chromium columns]
+ok    thinking-drag [chromium columns]
+FAIL  overview-open [chromium columns]
+        - longest frame 84.19999999999982 ms > 50 ms (runs: 84 67 67)
+ok    overview-select [chromium columns]
+ok    overview-answer [chromium columns]
+FAIL  overview-leave [chromium columns]
+        - longest frame 51.100000000000136 ms > 50 ms (runs: 33 51 33)
+ok    split-right [chromium sidebar]
+ok    split-down [chromium sidebar]
+ok    move [chromium sidebar]
+ok    close [chromium sidebar]
+ok    sidebar [chromium sidebar]
+FAIL  send-home [chromium sidebar]
+        - longest frame 100.59999999999991 ms > 50 ms (runs: 52 51 101)
+ok    typing [chromium sidebar]
+ok    stream-1-of-4 [chromium sidebar]
+FAIL  drag-drop [chromium sidebar]
+        - longest frame 67.70000000000073 ms > 50 ms (runs: 68 48 65)
+FAIL  drag-cancel [chromium sidebar]
+        - longest frame 51.70000000000027 ms > 50 ms (runs: 52 34 32)
+ok    thinking-walk [chromium sidebar]
+ok    thinking-drag [chromium sidebar]
+FAIL  overview-open [chromium sidebar]
+        - longest frame 252 ms > 50 ms (runs: 252 118 99)
+ok    overview-select [chromium sidebar]
+ok    overview-answer [chromium sidebar]
+ok    overview-leave [chromium sidebar]
+
+layout   name             max  median  over50  runs      
+-------  ---------------  ---  ------  ------  ----------
+columns  split-right      33   33      0       33 33 33  
+columns  split-down       33   33      0       18 33 33  
+columns  move             18   18      0       18 18 18  
+columns  close            18   18      0       18 18 18  
+columns  sidebar          18   18      0       18 18 18  
+columns  session-list     18   18      0       18 17 18  
+columns  send-home        18   18      0       18 18 18  
+columns  typing           18   18      0       18 18 18  
+columns  stream-1-of-4    18   18      0       18 18 18  
+columns  drag-drop        34   34      0       34 34 34  
+columns  drag-cancel      34   34      0       34 18 34  
+columns  thinking-walk    18   18      0       18 18 18  
+columns  thinking-drag    18   18      0       18 18 18  
+columns  overview-open    84   67      3       84 67 67  
+columns  overview-select  18   18      0       18 18 18  
+columns  overview-answer  33   18      0       18 18 33  
+columns  overview-leave   51   33      1       33 51 33  
+sidebar  split-right      50   34      0       34 33 50  
+sidebar  split-down       35   34      0       35 34 33  
+sidebar  move             33   19      0       33 18 19  
+sidebar  close            48   19      0       19 48 19  
+sidebar  sidebar          49   35      0       35 49 32  
+sidebar  send-home        101  52      3       52 51 101 
+sidebar  typing           19   19      0       19 19 19  
+sidebar  stream-1-of-4    32   19      0       19 19 32  
+sidebar  drag-drop        68   65      3       68 48 65  
+sidebar  drag-cancel      52   34      1       52 34 32  
+sidebar  thinking-walk    19   19      0       19 19 19  
+sidebar  thinking-drag    19   19      0       19 18 19  
+sidebar  overview-open    252  118     6       252 118 99
+sidebar  overview-select  34   19      0       34 19 19  
+sidebar  overview-answer  50   35      0       35 19 50  
+sidebar  overview-leave   48   34      0       34 34 48  
+(ms; budget 50 ms at 4× throttle)
+
+perf-budget: 29/35 held

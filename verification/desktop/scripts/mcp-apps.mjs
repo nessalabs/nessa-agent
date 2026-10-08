@@ -154,9 +154,6 @@ function openHeldLoad() {
     }
     hits += 1
     pending.push(response)
-    request.on("close", () => {
-      if (!response.writableEnded) response.destroy()
-    })
   })
   return new Promise((resolve, reject) => {
     server.once("error", reject)
@@ -604,44 +601,48 @@ async function departuresOn(page, scenarios) {
             proxy.setAttribute("sandbox", origin.proxyFrameSandbox)
             // On screen, as the host's are: an engine may throttle the timers
             // of a frame it cannot see.
-            proxy.style.cssText = `position:fixed;z-index:9999;left:${(proxies.length % 10) * 42}px;top:${Math.floor(proxies.length / 10) * 32}px;width:40px;height:30px`
+            proxy.style.cssText = "width:40px;height:30px"
             proxy.src = sandbox.url
             seen[name] = []
-            addEventListener("message", (event) => {
-              if (event.source !== proxy.contentWindow) return
-              const method = event.data?.method
-              if (method === methods.proxyReady) {
-                proxy.contentWindow.postMessage(
-                  {
-                    jsonrpc: "2.0",
-                    method: methods.resourceReady,
-                    params: {
-                      html: bare ? named(html) : csp.appDocument(named(html), applied),
-                      policy,
-                      checkWithin: checkWithin ?? deadlines.initialize,
-                    },
-                  },
-                  sandbox.origin,
-                )
-                handed += 1
-                return
-              }
-              // A host reply with no method of its own, after the app has
-              // asked: one per check number the scenario names. The proxy
-              // relays it; the app's prototype cannot make it a check.
-              if (method === "send-host-reply") {
-                const count = scenarios[name].replies ?? 0
-                for (let i = 0; i < count; i += 1)
+            addEventListener(
+              "message",
+              (event) => {
+                if (event.source !== proxy.contentWindow) return
+                const method = event.data?.method
+                if (method === methods.proxyReady) {
                   proxy.contentWindow.postMessage(
-                    { jsonrpc: "2.0", id: 1, result: {} },
+                    {
+                      jsonrpc: "2.0",
+                      method: methods.resourceReady,
+                      params: {
+                        html: bare ? named(html) : csp.appDocument(named(html), applied),
+                        policy,
+                        checkWithin: checkWithin ?? deadlines.initialize,
+                      },
+                    },
                     sandbox.origin,
                   )
-                replies[name] = count
-              }
-              seen[name].push(method ?? "?")
-            })
+                  handed += 1
+                  return
+                }
+                // A host reply with no method of its own, after the app has
+                // asked: one per check number the scenario names. The proxy
+                // relays it; the app's prototype cannot make it a check.
+                if (method === "send-host-reply") {
+                  const count = scenarios[name].replies ?? 0
+                  for (let i = 0; i < count; i += 1)
+                    proxy.contentWindow.postMessage(
+                      { jsonrpc: "2.0", id: 1, result: {} },
+                      sandbox.origin,
+                    )
+                  replies[name] = count
+                }
+                seen[name].push(method ?? "?")
+              },
+              { signal: window.__sandboxProbeAbort.signal },
+            )
             proxies.push(proxy)
-            document.body.append(proxy)
+            document.querySelector("[data-sandbox-probes]").append(proxy)
           }
           // Every document handed over, and every app that stays has spoken:
           // its frame is made.
@@ -660,6 +661,7 @@ async function departuresOn(page, scenarios) {
           // page's own, on no origin, that forges departures and check
           // answers at every proxy and every app frame it can reach.
           const third = document.createElement("iframe")
+          third.setAttribute("data-probe-attacker", "")
           third.setAttribute("sandbox", "allow-scripts")
           third.style.cssText = "position:fixed;left:-9999px"
           third.srcdoc = `<script>
@@ -681,10 +683,14 @@ async function departuresOn(page, scenarios) {
           parent.postMessage({ proxies: proxies, apps: apps }, "*");
         </script>`
           let forgedAt = { proxies: 0, apps: 0 }
-          addEventListener("message", (event) => {
-            if (event.source === third.contentWindow) forgedAt = event.data
-          })
-          document.body.append(third)
+          addEventListener(
+            "message",
+            (event) => {
+              if (event.source === third.contentWindow) forgedAt = event.data
+            },
+            { signal: window.__sandboxProbeAbort.signal },
+          )
+          document.querySelector("[data-sandbox-probes]").append(third)
           // Then past the proxy's deadline for the latest load it waits on:
           // the rewrites come a moment after their apps first speak.
           const wait = deadlines.initialize + 6000
@@ -707,7 +713,40 @@ async function departuresOn(page, scenarios) {
   } finally {
     if (heldLoad) {
       heldLoad.answer()
-      await heldLoad.close()
+      try {
+        const source = `${heldLoad.origin}${holdPath}`
+        const frames = page.frames()
+        const owner = (
+          await Promise.all(
+            frames.map(async (frame) => ({
+              frame,
+              owns: await frame
+                .evaluate(
+                  (url) => [...document.images].some((image) => image.src === url),
+                  source,
+                )
+                .catch(() => false),
+            })),
+          )
+        ).find(({ owns }) => owns)?.frame
+        if (!owner) failures.push("held image owner disappeared before release")
+        else
+          await owner
+            .waitForFunction(
+              (url) =>
+                [...document.images].some(
+                  (image) =>
+                    image.src === url && image.complete && image.naturalWidth === 1,
+                ),
+              source,
+              { timeout: 5000 },
+            )
+            .catch((error) => {
+              failures.push(`held image release failed: ${error.message}`)
+            })
+      } finally {
+        await heldLoad.close()
+      }
     }
   }
   if (crashed || seen === null) {
@@ -780,6 +819,64 @@ async function departuresOn(page, scenarios) {
     failures,
     ...(held ? { held } : {}),
   }
+}
+
+const sandboxProbeChecks = new Set(["departures", "departures-back", "chart"])
+const sandboxProbePath = "/verification/desktop/fixtures/sandbox-probes/index.html"
+
+/** Visible probes get their own document, without the product sidebar or chats. */
+async function onProbeHost(browser, { url, layout }) {
+  const opened = await openPage(browser, {
+    url: new URL(sandboxProbePath, url).href,
+    layout,
+    readySelector: "[data-sandbox-probes]",
+  })
+  try {
+    await opened.page.evaluate(() => {
+      window.__sandboxProbeAbort = new AbortController()
+    })
+    return opened
+  } catch (error) {
+    await opened.close().catch(() => {})
+    throw error
+  }
+}
+
+/** Release test listeners and frames before reporting the check or closing its page. */
+async function releaseProbeHost(page) {
+  return page.evaluate((workspace) => {
+    const host = document.querySelector("[data-sandbox-probes]")
+    const outside = [...document.querySelectorAll("iframe")].filter(
+      (frame) => !host?.contains(frame),
+    ).length
+    const product = document.querySelector(workspace) !== null
+    const bounds = host?.getBoundingClientRect()
+    const overflowing = [
+      ...document.querySelectorAll("iframe:not([data-probe-attacker])"),
+    ].filter((frame) => {
+      const box = frame.getBoundingClientRect()
+      return (
+        !bounds ||
+        box.left < bounds.left - 1 ||
+        box.top < bounds.top - 1 ||
+        box.right > bounds.right + 1 ||
+        box.bottom > bounds.bottom + 1
+      )
+    }).length
+    const owner = window.__sandboxProbeAbort
+    owner?.abort()
+    host?.replaceChildren()
+    delete window.__sandboxProbeAbort
+    return {
+      outside,
+      product,
+      overflowing,
+      path: location.pathname,
+      owned: owner !== undefined,
+      aborted: owner?.signal.aborted === true,
+      remaining: document.querySelectorAll("iframe").length,
+    }
+  }, css.workspace)
 }
 
 /** A fresh page on the sample session whose conversation carries the fixture app. */
@@ -940,65 +1037,69 @@ async function chartLive(page, layout, shots) {
     proxy.setAttribute("sandbox", origin.proxyFrameSandbox)
     proxy.title = "Chart probe"
     proxy.style.cssText =
-      "position:fixed;z-index:9999;left:24px;top:24px;width:420px;height:140px;background:canvas;border:0"
+      "grid-column:1 / -1;width:420px;height:140px;background:canvas;border:0"
     proxy.src = sandbox.url
     const done = { initialized: false }
-    addEventListener("message", (event) => {
-      if (event.source !== proxy.contentWindow) return
-      const message = event.data
-      if (!message || message.jsonrpc !== "2.0") return
-      if (message.method === methods.proxyReady) {
-        proxy.contentWindow.postMessage(
-          {
-            jsonrpc: "2.0",
-            method: methods.resourceReady,
-            params: {
-              html: csp.appDocument(html, applied),
-              policy: csp.cspPolicy(applied),
-              checkWithin: deadlines.initialize,
-            },
-          },
-          sandbox.origin,
-        )
-        return
-      }
-      if (message.method === "ui/initialize") {
-        proxy.contentWindow.postMessage(
-          {
-            jsonrpc: "2.0",
-            id: message.id,
-            result: {
-              protocolVersion: "2026-01-26",
-              hostInfo: { name: "nessa-test", version: "0" },
-              hostCapabilities: {},
-              hostContext: { displayMode: "inline" },
-            },
-          },
-          sandbox.origin,
-        )
-        return
-      }
-      if (message.method === "ui/notifications/initialized") {
-        done.initialized = true
-        proxy.contentWindow.postMessage(
-          {
-            jsonrpc: "2.0",
-            method: "ui/notifications/tool-result",
-            params: {
-              content: [{ type: "text", text: "Chart of two rows." }],
-              structuredContent: {
-                series: [
-                  { name: "alpha", value: 10 },
-                  { name: "beta", value: 20 },
-                ],
+    addEventListener(
+      "message",
+      (event) => {
+        if (event.source !== proxy.contentWindow) return
+        const message = event.data
+        if (!message || message.jsonrpc !== "2.0") return
+        if (message.method === methods.proxyReady) {
+          proxy.contentWindow.postMessage(
+            {
+              jsonrpc: "2.0",
+              method: methods.resourceReady,
+              params: {
+                html: csp.appDocument(html, applied),
+                policy: csp.cspPolicy(applied),
+                checkWithin: deadlines.initialize,
               },
             },
-          },
-          sandbox.origin,
-        )
-      }
-    })
-    document.body.append(proxy)
+            sandbox.origin,
+          )
+          return
+        }
+        if (message.method === "ui/initialize") {
+          proxy.contentWindow.postMessage(
+            {
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                protocolVersion: "2026-01-26",
+                hostInfo: { name: "nessa-test", version: "0" },
+                hostCapabilities: {},
+                hostContext: { displayMode: "inline" },
+              },
+            },
+            sandbox.origin,
+          )
+          return
+        }
+        if (message.method === "ui/notifications/initialized") {
+          done.initialized = true
+          proxy.contentWindow.postMessage(
+            {
+              jsonrpc: "2.0",
+              method: "ui/notifications/tool-result",
+              params: {
+                content: [{ type: "text", text: "Chart of two rows." }],
+                structuredContent: {
+                  series: [
+                    { name: "alpha", value: 10 },
+                    { name: "beta", value: 20 },
+                  ],
+                },
+              },
+            },
+            sandbox.origin,
+          )
+        }
+      },
+      { signal: window.__sandboxProbeAbort.signal },
+    )
+    document.querySelector("[data-sandbox-probes]").append(proxy)
     const started = performance.now()
     while (!done.initialized && performance.now() - started < 10_000)
       await new Promise((resolve) => setTimeout(resolve, 50))
@@ -1036,6 +1137,10 @@ async function chartLive(page, layout, shots) {
     const engine = page.context().browser().browserType().name()
     await probe.screenshot({
       path: join(shots, `chart-${engine}-${layout}.png`),
+    })
+    await page.screenshot({
+      path: join(shots, `probe-host-${engine}-${layout}.png`),
+      clip: { x: 0, y: 0, width: 530, height: 300 },
     })
   }
   return { said, failures }
@@ -1415,9 +1520,38 @@ await main(
             continue
           let opened
           await attempt(rep, { engine, layout, name }, async () => {
-            opened = await onSample(browser, { url, layout })
-            const result = await checks[name](opened.page, layout, options.shots)
-            return result
+            const probe = sandboxProbeChecks.has(name)
+            opened = await (probe ? onProbeHost : onSample)(browser, { url, layout })
+            try {
+              return await checks[name](opened.page, layout, options.shots)
+            } finally {
+              if (probe)
+                await attempt(
+                  rep,
+                  { engine, layout, name: `${name}-cleanup` },
+                  async () => {
+                    const state = await releaseProbeHost(opened.page)
+                    const failures = []
+                    if (state.outside)
+                      failures.push(`${state.outside} probe frames escaped their host`)
+                    if (state.product)
+                      failures.push("probe-only page contains product UI")
+                    if (state.path !== sandboxProbePath)
+                      failures.push("probes ran outside their dedicated document")
+                    if (state.overflowing)
+                      failures.push(
+                        `${state.overflowing} visible probe frames paint outside their host`,
+                      )
+                    if (!state.owned || !state.aborted)
+                      failures.push("probe listener owner was not released")
+                    if (state.remaining)
+                      failures.push(
+                        `${state.remaining} probe frames remain after cleanup`,
+                      )
+                    return { ...state, failures }
+                  },
+                )
+            }
           }).finally(() => opened?.close())
         }
     })

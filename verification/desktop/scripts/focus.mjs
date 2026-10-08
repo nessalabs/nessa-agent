@@ -19,13 +19,12 @@
  * focus the person took to the page stays there (focus-regroup-*). Focus on the
  * scene's Customize control in a new session's home stays there as the window
  * shortens and the home takes a small pane's shape, its header kept as a
- * band (focus-home-scene). While overview rows are still arriving, End, Home
- * and the arrows stay on a row that is mounted (focus-overview-arriving).
+ * band (focus-home-scene).
  */
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { content, css, keys, names } from "./lib/selectors.mjs"
+import { content, css, keys, names, storage } from "./lib/selectors.mjs"
 import {
   contentIs,
   focusComposer,
@@ -195,6 +194,8 @@ async function openInPane(page, title) {
  * a frame, so that is later than the peek's animation (`overview.tsx`).
  */
 async function onOverviewRow(page) {
+  if (!(await overviewListed(page)))
+    throw new CannotRun("the overview list did not finish drawing")
   const landed = await until(
     page,
     (sel) => document.activeElement?.closest(sel) != null,
@@ -607,6 +608,8 @@ async function givesBackLostFocus(page, cause) {
   await page.keyboard.press(keys.overview)
   await contentIs(page, content.overview)
   await onOverviewRow(page)
+  if (!(await overviewListed(page)))
+    throw new CannotRun("the overview list did not finish drawing")
   let scrolledTo = null
   if (cause === "moved") {
     // Scrolled away from the focused row, as when reading further down.
@@ -709,6 +712,135 @@ async function givesBackLostFocus(page, cause) {
       failures.push(`the arrows do not walk the list after ${cause}: ${walked.on}`)
   }
   return { trail, failures }
+}
+
+async function firstMessageHandoff(page, reduced = false) {
+  const prompt = "one composer through the first message"
+  await page.keyboard.press(keys.newSession)
+  const ready = await until(
+    page,
+    ([pane, home, field]) => {
+      const current = document.querySelector(pane)
+      const input = current?.querySelector(`${home} ${field}`)
+      return input != null && document.activeElement === input
+    },
+    [css.focusedPane, css.paneHome, css.field],
+  )
+  if (!ready) return { failures: ["new-session home did not receive the caret"] }
+  await page.evaluate(
+    ([pane, composer]) => {
+      const current = document.querySelector(pane)
+      const counts = []
+      const flights = new Map()
+      const seen = new Set()
+      const sample = () => counts.push(current.querySelectorAll(composer).length)
+      const observer = new MutationObserver(sample)
+      observer.observe(current, { childList: true, subtree: true })
+      let frame = 0
+      const sampleMotion = () => {
+        for (const animation of current.getAnimations({ subtree: true })) {
+          if (animation.id.startsWith("first-send-")) {
+            seen.add(animation)
+            flights.set(animation.id, animation.effect?.getKeyframes())
+          }
+        }
+        frame = requestAnimationFrame(sampleMotion)
+      }
+      frame = requestAnimationFrame(sampleMotion)
+      sample()
+      window.__focusHomeHandoff = () => {
+        sample()
+        observer.disconnect()
+        cancelAnimationFrame(frame)
+        delete window.__focusHomeHandoff
+        return { counts, flights: Object.fromEntries(flights), motionCount: seen.size }
+      }
+    },
+    [css.focusedPane, css.composerCard],
+  )
+  let counts
+  let flights
+  let motionCount
+  const failures = []
+  try {
+    await page.keyboard.type(prompt)
+    await page.keyboard.press(keys.enter)
+    const arrived = await until(
+      page,
+      ([pane, home, dock, field, bubble, text]) => {
+        const current = document.querySelector(pane)
+        const input = current?.querySelector(`${dock} ${field}`)
+        return (
+          input != null &&
+          !current.querySelector(home) &&
+          [...current.querySelectorAll(bubble)].some(
+            (part) => part.textContent.trim() === text,
+          ) &&
+          document.activeElement === input
+        )
+      },
+      [
+        css.focusedPane,
+        css.paneHome,
+        css.conversationDock,
+        css.field,
+        css.bubble,
+        prompt,
+      ],
+    )
+    if (!arrived) failures.push("first message did not arrive with the reply caret")
+    else {
+      await page.keyboard.type("next reply")
+      const value = await page
+        .locator(`${css.focusedPane} ${css.conversationDock} ${css.field}`)
+        .inputValue()
+      if (value !== "next reply") failures.push(`reply draft is ${JSON.stringify(value)}`)
+      await frames(page, 2)
+      await page.evaluate((pane) => {
+        for (const animation of document
+          .querySelector(pane)
+          .getAnimations({ subtree: true }))
+          if (animation.id.startsWith("first-send-")) animation.pause()
+      }, css.focusedPane)
+      await page.keyboard.press(keys.newSession)
+      await page.locator(css.sessionRow).filter({ hasText: prompt }).first().click()
+      const returned = await until(
+        page,
+        ([pane, dock, field]) => {
+          const input = document.querySelector(pane)?.querySelector(`${dock} ${field}`)
+          return input?.value === "next reply"
+        },
+        [css.focusedPane, css.conversationDock, css.field],
+      )
+      if (!returned) failures.push("returning to the sent chat lost its reply draft")
+      await frames(page, 4)
+    }
+  } finally {
+    const observed = await page.evaluate(
+      () => window.__focusHomeHandoff?.() ?? { counts: [], flights: {}, motionCount: 0 },
+    )
+    counts = observed.counts
+    flights = observed.flights
+    motionCount = observed.motionCount
+  }
+  if (counts.length === 0) failures.push("handoff had no observed composer counts")
+  if (counts.some((count) => count > 1))
+    failures.push(`overlapping composers during handoff: ${counts.join(" ")}`)
+  if (reduced) {
+    if (Object.keys(flights).length)
+      failures.push("first send animated with reduced motion")
+  } else {
+    if (motionCount !== 2)
+      failures.push(
+        `first-send motion replayed or was missing: ${motionCount} flights, expected 2`,
+      )
+    for (const id of ["first-send-composer", "first-send-message"]) {
+      const frames = flights[id]
+      if (!frames || !frames[0]?.transform?.startsWith("translate("))
+        failures.push(`${id} did not glide from its origin`)
+    }
+  }
+  return { counts, flights, motionCount, after: await state(page), failures }
 }
 
 /**
@@ -839,10 +971,10 @@ Steps (each asserts where the caret is afterwards):
   the caret kept in the pill and the next keys in it; focus in the peek beside the list as the window narrows
   to 700; Show All pressed once nothing is left out → the keyboard is on a
   row, and ↓ walks the list
+  focus-home-handoff: the first message replaces the home with one composer;
+    the reply receives the caret and keeps the next draft.
   focus-home-scene: Customize focused in a new session's home, the window
-  shortened so the home takes a small pane's shape → focus stays on Customize
-  focus-overview-arriving: ⌘0, and before every row is drawn, End, ↓ and Home
-  → focus stays on a mounted row, the same row the list marks current`,
+  shortened so the home takes a small pane's shape → focus stays on Customize`,
 }
 
 /**
@@ -917,12 +1049,8 @@ await main(meta, async ({ options, rep, url }) => {
             return { trail, failures }
           })
 
-        await attempt(
-          rep,
-          { name: "focus-overview-arriving", engine, layout },
-          async () => {
-            return keysWhileRowsArrive(page)
-          },
+        await attempt(rep, { name: "focus-overview-arriving", engine, layout }, () =>
+          keysWhileRowsArrive(page),
         )
 
         const mash = Number(options.mash)
@@ -956,6 +1084,33 @@ await main(meta, async ({ options, rep, url }) => {
       } finally {
         await opened.close()
       }
+      await attempt(rep, { name: "focus-home-handoff", engine, layout }, async () => {
+        const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
+        try {
+          const result = await firstMessageHandoff(fresh.page)
+          return result
+        } finally {
+          await fresh.close()
+        }
+      })
+      await attempt(
+        rep,
+        { name: "focus-home-handoff-reduced", engine, layout },
+        async () => {
+          const fresh = await openPage(browser, {
+            url,
+            layout,
+            width: 1440,
+            height: 900,
+            prefs: { [storage.motion]: "reduced" },
+          })
+          try {
+            return await firstMessageHandoff(fresh.page, true)
+          } finally {
+            await fresh.close()
+          }
+        },
+      )
       for (const [name, answer] of [
         ["focus-answers-overview", answerOnceInOverview],
         ["focus-answers-card", answerOnceOnCard],

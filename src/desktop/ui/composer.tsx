@@ -125,7 +125,10 @@ export function Composer({
   useLayoutEffect(() => {
     const textarea = textareaRef.current
     if (!textarea) return
-    const next = nextPageMode(page, draftLines(textarea))
+    // An empty draft has one line regardless of a wrapping placeholder or
+    // the field's minimum height. Asking layout on mount flushes a whole pane
+    // for an answer the draft already owns.
+    const next = nextPageMode(page, draft === "" ? 1 : draftLines(textarea))
     if (next !== page) onPageChange(next)
   }, [draft, page, onPageChange])
   const send = () => {

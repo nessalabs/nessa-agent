@@ -322,6 +322,34 @@
   transform: none;
 }
 
+.split-panes-ghost .workspace-drag-card {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  padding: 8px 12px;
+  box-sizing: border-box;
+  border: 1px solid var(--desktop-rim);
+  border-radius: var(--desktop-radius);
+  background: color-mix(in oklab, var(--background) 95%, var(--foreground));
+  color: var(--foreground);
+}
+
+.workspace-drag-card .workspace-agent-tile {
+  flex: none;
+}
+
+.workspace-drag-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--desktop-text-body);
+  font-weight: 500;
+}
+
 /*
  * A drop that folds the sidebar for room — taking the spare room it gives
  * (`data-drag-takes-spare`) — shows it before it happens: the sidebar slides

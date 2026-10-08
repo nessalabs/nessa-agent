@@ -1,0 +1,32 @@
+starting a dev server of its own on port 57279…
+warmed 473 modules in 2971 ms
+ok    departures-cleanup [chromium columns]
+ok    departures [chromium columns]
+ok    console
+ok    departures-back-cleanup [chromium columns]
+ok    departures-back [chromium columns]
+ok    chart-cleanup [chromium columns]
+ok    chart [chromium columns]
+ok    departures-cleanup [chromium sidebar]
+ok    departures [chromium sidebar]
+ok    console
+ok    departures-back-cleanup [chromium sidebar]
+ok    departures-back [chromium sidebar]
+ok    chart-cleanup [chromium sidebar]
+ok    chart [chromium sidebar]
+ok    departures-cleanup [webkit columns]
+ok    departures [webkit columns]
+ok    console
+ok    departures-back-cleanup [webkit columns]
+ok    departures-back [webkit columns]
+ok    chart-cleanup [webkit columns]
+ok    chart [webkit columns]
+ok    departures-cleanup [webkit sidebar]
+ok    departures [webkit sidebar]
+ok    console
+ok    departures-back-cleanup [webkit sidebar]
+ok    departures-back [webkit sidebar]
+ok    chart-cleanup [webkit sidebar]
+ok    chart [webkit sidebar]
+wrote /tmp/616-sandbox-host-browser.json
+mcp-apps: 28/28 held

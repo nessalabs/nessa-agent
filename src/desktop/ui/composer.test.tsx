@@ -19,6 +19,57 @@ beforeEach(() => {
 
 afterEach(() => host.remove())
 
+it("does not measure an empty draft, closes its page, and still measures nonempty drafts", async () => {
+  const root = createRoot(host)
+  const changes: boolean[] = []
+  const sheet = document.createElement("style")
+  sheet.textContent = ".desktop-composer textarea { line-height: 24px; padding: 0; }"
+  document.head.append(sheet)
+  const before = Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    "scrollHeight",
+  )
+  let reads = 0
+  Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", {
+    configurable: true,
+    get() {
+      reads++
+      return 8 * 24
+    },
+  })
+  const render = (page: boolean, text: string) =>
+    act(async () =>
+      root.render(
+        <Composer
+          page={page}
+          onPageChange={(next) => changes.push(next)}
+          text={text}
+          onTextChange={() => {}}
+          placeholder={"A wrapping placeholder ".repeat(20)}
+          model={undefined}
+          onModelChange={() => {}}
+        />,
+      ),
+    )
+  try {
+    await render(false, "")
+    expect(reads).toBe(0)
+    expect(changes).toEqual([])
+    await render(true, "")
+    expect(reads).toBe(0)
+    expect(changes).toEqual([false])
+    await render(false, Array.from({ length: 8 }, () => "draft line").join("\n"))
+    expect(reads).toBeGreaterThan(0)
+    expect(changes).toEqual([false, true])
+  } finally {
+    await act(async () => root.unmount())
+    sheet.remove()
+    if (before)
+      Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", before)
+    else Reflect.deleteProperty(HTMLTextAreaElement.prototype, "scrollHeight")
+  }
+})
+
 it("sends on a press of Return, and nothing on its repeats", async () => {
   const sent: string[] = []
   const root = createRoot(host)

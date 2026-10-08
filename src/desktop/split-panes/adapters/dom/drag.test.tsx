@@ -9,7 +9,7 @@
  */
 import { act, useRef, useSyncExternalStore, type RefObject } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { afterEach, beforeEach, expect, it } from "vitest"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import type { Drop, SplitPanesSource } from "../../application/ports"
 import { dropOutcome } from "../../model/drop"
 import { panesOf, singlePane, splitPane, type PaneLayout } from "../../model/pane-layout"
@@ -184,9 +184,12 @@ function Page({
 const options = (
   overrides: Partial<SplitPanesDragOptions> = {},
 ): SplitPanesDragOptions => ({
-  copyOf: (item) => {
+  copySize: null,
+  previewPanes: true,
+  copyOf: (carried, { pane, picture }) => {
+    if (carried.kind === "pane" && pane) return picture(pane)
     const copy = document.createElement("article")
-    copy.textContent = `copy of ${item}`
+    copy.textContent = `copy of ${carried.kind === "item" ? carried.item : ""}`
     return copy
   },
   covered: () => [],
@@ -436,6 +439,27 @@ it("keeps a ready failure that is not cancellation", async () => {
   }
 })
 
+it("a target-only drop leaves body restoration to the layout owner", async () => {
+  const fake = fakeSource(two())
+  const commit = fake.source.commitDrop
+  vi.spyOn(fake.source, "commitDrop").mockImplementation((drop) => {
+    expect(host.querySelector(`[${marks.settling}]`)).toBeNull()
+    commit(drop)
+  })
+  const root = await mounted(
+    fake,
+    options({ previewPanes: false, copySize: { width: 280, height: 44 } }),
+  )
+  await liftOntoTwo()
+  expect(said()).toBe("Swap with Pane b")
+  pointer("pointerup", 827, 400)
+  await frames()
+  expect(fake.state.drops).toHaveLength(1)
+  expect(items(fake)).toEqual(["b", "a"])
+  expect(host.querySelector(`[${marks.settling}]`)).toBeNull()
+  await act(async () => root.unmount())
+})
+
 it("previews the outcome of the layout the source holds, and commits it through the source in the room the press read", async () => {
   const fake = fakeSource(two())
   const root = await mounted(fake)
@@ -606,6 +630,76 @@ it("does not commit a drop whose frame was cancelled by unmount", async () => {
   expect(fake.state.drops).toEqual([])
   expect(fake.state.subscribed).toBe(0)
 })
+
+it.each([
+  { kind: "bodies", rebind: true },
+  { kind: "glass", rebind: true },
+  { kind: "bodies", rebind: false },
+] as const)(
+  "rejects old $kind restoration callbacks (rebound owner: $rebind)",
+  async ({ kind, rebind }) => {
+    const first = fakeSource(two())
+    const root = await mounted(first)
+    await liftOntoTwo()
+    const request = window.requestAnimationFrame
+    const cancel = window.cancelAnimationFrame
+    const queued = new Map<number, FrameRequestCallback>()
+    let next = 10000
+    const control = () => {
+      window.requestAnimationFrame = (callback) => {
+        const id = next++
+        queued.set(id, callback)
+        return id
+      }
+      window.cancelAnimationFrame = (id) => {
+        queued.delete(id)
+      }
+    }
+    try {
+      control()
+      await act(async () =>
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        ),
+      )
+      const obsolete = [...queued.values()]
+      expect(obsolete.length).toBeGreaterThan(0)
+      if (rebind) {
+        const second = fakeSource(two())
+        await act(async () => root.render(<Host fake={second} options={options()} />))
+        obsolete.push(...queued.values())
+      }
+      queued.clear()
+      window.requestAnimationFrame = request
+      window.cancelAnimationFrame = cancel
+      layOut()
+      await liftOntoTwo()
+      expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
+      control()
+      if (kind === "bodies") {
+        pointer("pointerup", 827, 400)
+        await act(async () => {
+          for (const [id, callback] of [...queued]) {
+            queued.delete(id)
+            callback(performance.now())
+          }
+        })
+        expect(host.querySelectorAll(`[${marks.settling}]`)).toHaveLength(2)
+      }
+      await act(async () => obsolete.forEach((callback) => callback(performance.now())))
+      if (kind === "bodies")
+        expect(host.querySelectorAll(`[${marks.settling}]`)).toHaveLength(2)
+      else expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
+    } finally {
+      await act(async () => root.unmount())
+      window.requestAnimationFrame = request
+      window.cancelAnimationFrame = cancel
+      queued.clear()
+      document.documentElement.removeAttribute(marks.pressing)
+      document.documentElement.removeAttribute(marks.reflow)
+    }
+  },
+)
 
 it("with less motion, previews a swap at once — the other pane drawn where the drop puts it — and lets it go as the drop lands", async () => {
   // As the person's window is set: Settings › Appearance › Motion, Reduced (#286).
@@ -845,6 +939,9 @@ it("carries the host's copy of an item, and a picture of a pane without the host
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
   pointer("pointerup", 40, 40)
   await frames()
+  element('[data-pane-key="1"]').setAttribute(marks.restoring, "")
+  element('[data-pane-key="1"]').setAttribute(marks.flying, "")
+  element('[data-pane-key="1"]').setAttribute(marks.measuring, "")
   await liftOntoTwo()
   const copy = element(`.${classes.ghost} header`)
   // A picture of the pane as it looks — in the corner, its header starts
@@ -852,7 +949,15 @@ it("carries the host's copy of an item, and a picture of a pane without the host
   expect(element(`.${classes.ghost} article`).hasAttribute(marks.corner)).toBe(true)
   // Only `dragPane` is on the pane as it is pictured; the others are set
   // after the copy is made, and are listed so that stays true.
-  for (const name of [marks.dragPane, marks.dragItem, marks.carrying, marks.lifted])
+  for (const name of [
+    marks.dragPane,
+    marks.dragItem,
+    marks.carrying,
+    marks.lifted,
+    marks.restoring,
+    marks.flying,
+    marks.measuring,
+  ])
     expect(element(`.${classes.ghost}`).querySelector(`[${name}]`), name).toBeNull()
   expect(copy.hasAttribute("data-host-mark")).toBe(false)
   expect(copy.hasAttribute("data-drag-pane")).toBe(false)

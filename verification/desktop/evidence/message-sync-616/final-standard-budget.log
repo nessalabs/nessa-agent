@@ -1,0 +1,94 @@
+building production into /var/folders/1w/wp9n0wwd22qgrf0zkhb2fk6r0000gn/T/nessa-desktop-verify-17BTEL…
+previewing production at http://127.0.0.1:53341/desktop.html
+ok    console
+calibration: busy loop 28 ms → 107 ms at 4× (ratio 3.88)
+calibration: a 120 ms frame measured 114.90000000000009 ms, attributed by LoAF: true
+ok    calibration [chromium]
+FAIL  split-right [chromium columns]
+        - longest frame 51.899999999999864 ms > 50 ms (runs: 51 49 52)
+FAIL  split-down [chromium columns]
+        - longest frame 50.100000000000136 ms > 50 ms (runs: 50 35 50)
+ok    move [chromium columns]
+ok    close [chromium columns]
+ok    sidebar [chromium columns]
+FAIL  session-list [chromium columns]
+        - longest frame 51.899999999999864 ms > 50 ms (runs: 33 33 52)
+FAIL  send-home [chromium columns]
+        - longest frame 66.80000000000018 ms > 50 ms (runs: 67 67 67)
+ok    typing [chromium columns]
+ok    stream-1-of-4 [chromium columns]
+FAIL  drag-drop [chromium columns]
+        - longest frame 81.69999999999982 ms > 50 ms (runs: 67 82 66)
+FAIL  drag-cancel [chromium columns]
+        - longest frame 65 ms > 50 ms (runs: 65 50 50)
+ok    thinking-walk [chromium columns]
+ok    thinking-drag [chromium columns]
+FAIL  overview-open [chromium columns]
+        - longest frame 216.69999999999982 ms > 50 ms (runs: 217 184 182)
+ok    overview-select [chromium columns]
+ok    overview-answer [chromium columns]
+FAIL  overview-leave [chromium columns]
+        - longest frame 101.10000000000014 ms > 50 ms (runs: 51 65 101)
+FAIL  split-right [chromium sidebar]
+        - longest frame 100.09999999999991 ms > 50 ms (runs: 66 51 100)
+FAIL  split-down [chromium sidebar]
+        - longest frame 67.40000000000009 ms > 50 ms (runs: 67 66 67)
+ok    move [chromium sidebar]
+ok    close [chromium sidebar]
+ok    sidebar [chromium sidebar]
+FAIL  send-home [chromium sidebar]
+        - longest frame 101.20000000000027 ms > 50 ms (runs: 101 69 65)
+ok    typing [chromium sidebar]
+ok    stream-1-of-4 [chromium sidebar]
+FAIL  drag-drop [chromium sidebar]
+        - longest frame 81.80000000000018 ms > 50 ms (runs: 50 66 82)
+FAIL  drag-cancel [chromium sidebar]
+        - longest frame 68.5 ms > 50 ms (runs: 69 68 67)
+ok    thinking-walk [chromium sidebar]
+ok    thinking-drag [chromium sidebar]
+FAIL  overview-open [chromium sidebar]
+        - longest frame 148.60000000000014 ms > 50 ms (runs: 132 148 149)
+ok    overview-select [chromium sidebar]
+FAIL  overview-answer [chromium sidebar]
+        - longest frame 51.899999999999864 ms > 50 ms (runs: 50 52 52)
+FAIL  overview-leave [chromium sidebar]
+        - longest frame 50.700000000000045 ms > 50 ms (runs: 51 50 50)
+
+layout   name             max  median  over50  runs       
+-------  ---------------  ---  ------  ------  -----------
+columns  split-right      52   51      3       51 49 52   
+columns  split-down       50   50      1       50 35 50   
+columns  move             33   19      0       19 33 19   
+columns  close            33   19      0       33 19 19   
+columns  sidebar          35   34      0       34 35 34   
+columns  session-list     52   33      1       33 33 52   
+columns  send-home        67   67      3       67 67 67   
+columns  typing           33   19      0       19 19 33   
+columns  stream-1-of-4    34   33      0       34 33 19   
+columns  drag-drop        82   67      6       67 82 66   
+columns  drag-cancel      65   50      3       65 50 50   
+columns  thinking-walk    19   19      0       19 19 19   
+columns  thinking-drag    19   19      0       19 19 19   
+columns  overview-open    217  184     6       217 184 182
+columns  overview-select  33   19      0       19 33 19   
+columns  overview-answer  33   32      0       33 32 32   
+columns  overview-leave   101  65      3       51 65 101  
+sidebar  split-right      100  66      5       66 51 100  
+sidebar  split-down       67   67      4       67 66 67   
+sidebar  move             50   34      0       34 50 34   
+sidebar  close            49   48      0       48 32 49   
+sidebar  sidebar          48   48      0       35 48 48   
+sidebar  send-home        101  69      3       101 69 65  
+sidebar  typing           19   19      0       19 19 19   
+sidebar  stream-1-of-4    34   19      0       19 34 19   
+sidebar  drag-drop        82   66      4       50 66 82   
+sidebar  drag-cancel      69   68      7       69 68 67   
+sidebar  thinking-walk    19   19      0       19 19 19   
+sidebar  thinking-drag    35   19      0       19 19 35   
+sidebar  overview-open    149  148     5       132 148 149
+sidebar  overview-select  35   34      0       33 35 34   
+sidebar  overview-answer  52   52      2       50 52 52   
+sidebar  overview-leave   51   50      2       51 50 50   
+(ms; budget 50 ms at 4× throttle)
+
+perf-budget: 19/35 held

@@ -1,0 +1,575 @@
+{
+  "check": "mcp-apps",
+  "ok": true,
+  "started": "2026-10-08T07:05:48.270Z",
+  "finished": "2026-10-08T07:08:43.046Z",
+  "target": {
+    "url": "http://127.0.0.1:57279/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "departures-cleanup",
+      "outside": 0,
+      "product": false,
+      "overflowing": 0,
+      "path": "/verification/desktop/fixtures/sandbox-probes/index.html",
+      "owned": true,
+      "aborted": true,
+      "remaining": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "departures",
+      "seen": {
+        "left-alone": ["hello-from-app"],
+        "forged-departures": ["hello-from-app"],
+        "fragment-links": [
+          "hello-from-app",
+          "moved-plain",
+          "moved-empty",
+          "moved-self",
+          "moved-spaced",
+          "moved-svg",
+          "moved-area",
+          "moved-shadowed",
+          "hello-from-app"
+        ],
+        "fragment-by-script": ["hello-from-app", "moved"],
+        "rewrite-alone": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "rewrite-then-reload": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "rewrite-then-navigate": [
+          "hello-from-app",
+          "ui/notifications/sandbox-csp-violation",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "rewrite-then-blank": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "navigate-before-load": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "reload-before-load": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "holds-first-load": ["hello-from-app", "holding"],
+        "posts-as-it-goes": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "forged-checks": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "prototype-reply": [
+          "hello-from-app",
+          "send-host-reply",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "forged-checks-from-a-frame": [
+          "hello-from-app",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "patched-app": ["hello-from-app"],
+        "unusable-deadline": [],
+        "no-reporter": ["ui/notifications/sandbox-app-left"],
+        "impostor": ["ui/notifications/sandbox-app-left"],
+        "nested-answers": ["ui/notifications/sandbox-app-left"],
+        "javascript-url": ["hello-from-app", "still-here"]
+      },
+      "forgedAt": {
+        "proxies": 21,
+        "apps": 18
+      },
+      "leaked": [],
+      "held": {
+        "hits": 1,
+        "unanswered": 1
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:57279/favicon.ico)",
+        "console.error: Framing 'https://example.com/' violates the following Content Security Policy directive: \"frame-src 'none'\". The request has been blocked.\n"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "departures-back-cleanup",
+      "outside": 0,
+      "product": false,
+      "overflowing": 0,
+      "path": "/verification/desktop/fixtures/sandbox-probes/index.html",
+      "owned": true,
+      "aborted": true,
+      "remaining": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "departures-back",
+      "seen": {
+        "hash-then-back": ["hello-from-app", "went-back"],
+        "stale-answer": ["answered-late", "ui/notifications/sandbox-app-left"]
+      },
+      "forgedAt": {
+        "proxies": 2,
+        "apps": 2
+      },
+      "leaked": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "chart-cleanup",
+      "outside": 0,
+      "product": false,
+      "overflowing": 0,
+      "path": "/verification/desktop/fixtures/sandbox-probes/index.html",
+      "owned": true,
+      "aborted": true,
+      "remaining": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "chart",
+      "said": {
+        "state": "live",
+        "chart": "alpha 10, beta 20",
+        "heading": "Chart (nessa-test)"
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "departures-cleanup",
+      "outside": 0,
+      "product": false,
+      "overflowing": 0,
+      "path": "/verification/desktop/fixtures/sandbox-probes/index.html",
+      "owned": true,
+      "aborted": true,
+      "remaining": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "departures",
+      "seen": {
+        "left-alone": ["hello-from-app"],
+        "forged-departures": ["hello-from-app"],
+        "fragment-links": [
+          "hello-from-app",
+          "moved-plain",
+          "moved-empty",
+          "moved-self",
+          "moved-spaced",
+          "moved-svg",
+          "moved-area",
+          "moved-shadowed",
+          "hello-from-app"
+        ],
+        "fragment-by-script": ["hello-from-app", "moved"],
+        "rewrite-alone": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "rewrite-then-reload": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "rewrite-then-navigate": [
+          "hello-from-app",
+          "ui/notifications/sandbox-csp-violation",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "rewrite-then-blank": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "navigate-before-load": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "reload-before-load": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "holds-first-load": ["hello-from-app", "holding"],
+        "posts-as-it-goes": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "forged-checks": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "prototype-reply": [
+          "hello-from-app",
+          "send-host-reply",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "forged-checks-from-a-frame": [
+          "hello-from-app",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "patched-app": ["hello-from-app"],
+        "unusable-deadline": [],
+        "no-reporter": ["ui/notifications/sandbox-app-left"],
+        "impostor": ["ui/notifications/sandbox-app-left"],
+        "nested-answers": ["ui/notifications/sandbox-app-left"],
+        "javascript-url": ["hello-from-app", "still-here"]
+      },
+      "forgedAt": {
+        "proxies": 21,
+        "apps": 18
+      },
+      "leaked": [],
+      "held": {
+        "hits": 1,
+        "unanswered": 1
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "console",
+      "harmless": [
+        "console.error: Framing 'https://example.com/' violates the following Content Security Policy directive: \"frame-src 'none'\". The request has been blocked.\n"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "departures-back-cleanup",
+      "outside": 0,
+      "product": false,
+      "overflowing": 0,
+      "path": "/verification/desktop/fixtures/sandbox-probes/index.html",
+      "owned": true,
+      "aborted": true,
+      "remaining": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "departures-back",
+      "seen": {
+        "hash-then-back": ["hello-from-app", "went-back"],
+        "stale-answer": ["answered-late", "ui/notifications/sandbox-app-left"]
+      },
+      "forgedAt": {
+        "proxies": 2,
+        "apps": 2
+      },
+      "leaked": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "chart-cleanup",
+      "outside": 0,
+      "product": false,
+      "overflowing": 0,
+      "path": "/verification/desktop/fixtures/sandbox-probes/index.html",
+      "owned": true,
+      "aborted": true,
+      "remaining": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "chart",
+      "said": {
+        "state": "live",
+        "chart": "alpha 10, beta 20",
+        "heading": "Chart (nessa-test)"
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "departures-cleanup",
+      "outside": 0,
+      "product": false,
+      "overflowing": 0,
+      "path": "/verification/desktop/fixtures/sandbox-probes/index.html",
+      "owned": true,
+      "aborted": true,
+      "remaining": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "departures",
+      "seen": {
+        "left-alone": ["hello-from-app"],
+        "forged-departures": ["hello-from-app"],
+        "fragment-links": [
+          "hello-from-app",
+          "moved-plain",
+          "moved-empty",
+          "moved-self",
+          "moved-spaced",
+          "moved-svg",
+          "moved-area",
+          "moved-shadowed",
+          "hello-from-app"
+        ],
+        "fragment-by-script": ["hello-from-app", "moved"],
+        "rewrite-alone": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "rewrite-then-reload": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "rewrite-then-navigate": [
+          "hello-from-app",
+          "ui/notifications/sandbox-csp-violation",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "rewrite-then-blank": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "navigate-before-load": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "reload-before-load": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "holds-first-load": ["hello-from-app", "holding"],
+        "posts-as-it-goes": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "forged-checks": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "prototype-reply": [
+          "hello-from-app",
+          "send-host-reply",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "forged-checks-from-a-frame": [
+          "hello-from-app",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "patched-app": ["hello-from-app"],
+        "unusable-deadline": [],
+        "no-reporter": ["ui/notifications/sandbox-app-left"],
+        "impostor": ["ui/notifications/sandbox-app-left"],
+        "nested-answers": ["ui/notifications/sandbox-app-left"],
+        "javascript-url": [
+          "hello-from-app",
+          "replaced",
+          "still-here",
+          "ui/notifications/sandbox-app-left"
+        ]
+      },
+      "forgedAt": {
+        "proxies": 21,
+        "apps": 18
+      },
+      "leaked": [],
+      "held": {
+        "hits": 1,
+        "unanswered": 1
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "console",
+      "harmless": [
+        "console.error: Refused to load https://example.com/?leak=rewrite because it does not appear in the frame-src directive of the Content Security Policy."
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "departures-back-cleanup",
+      "outside": 0,
+      "product": false,
+      "overflowing": 0,
+      "path": "/verification/desktop/fixtures/sandbox-probes/index.html",
+      "owned": true,
+      "aborted": true,
+      "remaining": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "departures-back",
+      "seen": {
+        "hash-then-back": ["hello-from-app", "went-back"],
+        "stale-answer": ["answered-late", "ui/notifications/sandbox-app-left"]
+      },
+      "forgedAt": {
+        "proxies": 2,
+        "apps": 2
+      },
+      "leaked": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "chart-cleanup",
+      "outside": 0,
+      "product": false,
+      "overflowing": 0,
+      "path": "/verification/desktop/fixtures/sandbox-probes/index.html",
+      "owned": true,
+      "aborted": true,
+      "remaining": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "chart",
+      "said": {
+        "state": "live",
+        "chart": "alpha 10, beta 20",
+        "heading": "Chart (nessa-test)"
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "departures-cleanup",
+      "outside": 0,
+      "product": false,
+      "overflowing": 0,
+      "path": "/verification/desktop/fixtures/sandbox-probes/index.html",
+      "owned": true,
+      "aborted": true,
+      "remaining": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "departures",
+      "seen": {
+        "left-alone": ["hello-from-app"],
+        "forged-departures": ["hello-from-app"],
+        "fragment-links": [
+          "hello-from-app",
+          "moved-plain",
+          "moved-empty",
+          "moved-self",
+          "moved-spaced",
+          "moved-svg",
+          "moved-area",
+          "moved-shadowed",
+          "hello-from-app"
+        ],
+        "fragment-by-script": ["hello-from-app", "moved"],
+        "rewrite-alone": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "rewrite-then-reload": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "rewrite-then-navigate": [
+          "hello-from-app",
+          "ui/notifications/sandbox-csp-violation",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "rewrite-then-blank": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "navigate-before-load": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "reload-before-load": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "holds-first-load": ["hello-from-app", "holding"],
+        "posts-as-it-goes": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "forged-checks": ["hello-from-app", "ui/notifications/sandbox-app-left"],
+        "prototype-reply": [
+          "hello-from-app",
+          "send-host-reply",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "forged-checks-from-a-frame": [
+          "hello-from-app",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "patched-app": ["hello-from-app"],
+        "unusable-deadline": [],
+        "no-reporter": ["ui/notifications/sandbox-app-left"],
+        "impostor": ["ui/notifications/sandbox-app-left"],
+        "nested-answers": ["ui/notifications/sandbox-app-left"],
+        "javascript-url": [
+          "hello-from-app",
+          "replaced",
+          "still-here",
+          "ui/notifications/sandbox-app-left"
+        ]
+      },
+      "forgedAt": {
+        "proxies": 21,
+        "apps": 18
+      },
+      "leaked": [],
+      "held": {
+        "hits": 1,
+        "unanswered": 1
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "console",
+      "harmless": [
+        "console.error: Refused to load https://example.com/?leak=rewrite because it does not appear in the frame-src directive of the Content Security Policy."
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "departures-back-cleanup",
+      "outside": 0,
+      "product": false,
+      "overflowing": 0,
+      "path": "/verification/desktop/fixtures/sandbox-probes/index.html",
+      "owned": true,
+      "aborted": true,
+      "remaining": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "departures-back",
+      "seen": {
+        "hash-then-back": ["hello-from-app", "went-back"],
+        "stale-answer": ["answered-late", "ui/notifications/sandbox-app-left"]
+      },
+      "forgedAt": {
+        "proxies": 2,
+        "apps": 2
+      },
+      "leaked": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "chart-cleanup",
+      "outside": 0,
+      "product": false,
+      "overflowing": 0,
+      "path": "/verification/desktop/fixtures/sandbox-probes/index.html",
+      "owned": true,
+      "aborted": true,
+      "remaining": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "chart",
+      "said": {
+        "state": "live",
+        "chart": "alpha 10, beta 20",
+        "heading": "Chart (nessa-test)"
+      }
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+starting a dev server of its own on port 56909…
+warmed 473 modules in 2719 ms
+FAIL  chart-cleanup [chromium columns]
+        - 1 visible probe frames paint outside their host
+ok    chart [chromium columns]
+ok    console
+FAIL  chart-cleanup [chromium sidebar]
+        - 1 visible probe frames paint outside their host
+ok    chart [chromium sidebar]
+wrote /tmp/616-sandbox-host-fault.json
+mcp-apps: 3/5 held

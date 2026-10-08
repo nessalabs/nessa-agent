@@ -37,11 +37,30 @@ import {
   state,
 } from "./lib/workspace.mjs"
 
+const homePrompt = "hello from home"
+const typingText = "the quick brown fox jumps over"
+const streamPrompt = "go"
+
 const snapshot = async (page) => ({
   thinking: await page.evaluate(
     (sel) => document.querySelector(sel)?.getAttribute("aria-valuenow") ?? null,
     css.thinkingSlider,
   ),
+  sidebar: await page.locator(css.workspace).getAttribute("data-sidebar"),
+  list: await page.locator(css.workspace).getAttribute("data-list"),
+  homes: await page.locator(css.paneHome).count(),
+  draft: await page.evaluate((selector) => {
+    const field = document.querySelector(selector)
+    return field instanceof HTMLTextAreaElement ? field.value : null
+  }, `${css.focusedPane} ${css.field}`),
+  userTexts: await page
+    .locator(`${css.focusedPane} ${css.message}[data-role="user"] ${css.bubble}`)
+    .allTextContents(),
+  agentText: (
+    await page
+      .locator(`${css.focusedPane} ${css.message}[data-role="agent"]`)
+      .allTextContents()
+  ).join("\n"),
   panes: await paneCount(page),
   geometry: await panes(page),
   order: (await order(page)).join(","),
@@ -142,33 +161,50 @@ const scenarios = {
     expect: (b, a) =>
       a.panes === b.panes - 1 ? null : `panes ${b.panes} → ${a.panes}, expected −1`,
   },
-  sidebar: { act: (p) => p.keyboard.press(keys.toggleSidebar) },
+  sidebar: {
+    act: (p) => p.keyboard.press(keys.toggleSidebar),
+    expect: (b, a) => (b.sidebar !== a.sidebar ? null : "sidebar did not toggle"),
+  },
   "session-list": {
     layouts: ["columns"],
     act: (p) => p.keyboard.press(keys.toggleSessionList),
+    expect: (b, a) => (b.list !== a.list ? null : "session list did not toggle"),
   },
   "send-home": {
     setup: async (p) => {
       await p.keyboard.press(keys.newSession)
       await settled(p)
       await focusComposer(p)
-      await p.keyboard.type("hello from home", { delay: 20 })
+      await p.keyboard.type(homePrompt, { delay: 20 })
     },
     act: (p) => p.keyboard.press(keys.enter),
     settle: 1500,
+    expect: (b, a) =>
+      a.userTexts.some((text) => text.trim() === homePrompt) && a.homes < b.homes
+        ? null
+        : "first message did not replace the home",
   },
   typing: {
     setup: (p) => focusComposer(p),
-    act: (p) => p.keyboard.type("the quick brown fox jumps over", { delay: 60 }),
+    act: (p) => p.keyboard.type(typingText, { delay: 60 }),
+    expect: (b, a) =>
+      a.draft === `${b.draft ?? ""}${typingText}`
+        ? null
+        : "typed text did not reach the composer",
   },
   "stream-1-of-4": {
     setup: async (p) => {
       await openPanes(p, 4)
       await focusComposer(p)
-      await p.keyboard.type("go", { delay: 20 })
+      await p.keyboard.type(streamPrompt, { delay: 20 })
     },
     act: (p) => p.keyboard.press(keys.enter),
     settle: 6000,
+    expect: (b, a) =>
+      a.userTexts.some((text) => text.trim() === streamPrompt) &&
+      a.agentText !== b.agentText
+        ? null
+        : "no new agent text streamed in the focused pane",
   },
   "drag-drop": {
     setup: (p) => openPanes(p, 4),
@@ -338,6 +374,8 @@ await main(meta, async ({ options, rep, url, mode }) => {
         if (only && !only.includes(name)) continue
         if (s.layouts && !s.layouts.includes(layout)) continue
         await attempt(rep, { name, engine, layout }, async () => {
+          if (typeof s.expect !== "function")
+            throw new CannotRun(`${name} has no functional assertion`)
           const detail = []
           for (let r = 0; r < runs; r++) {
             const opened = await openPage(browser, {
@@ -361,7 +399,7 @@ await main(meta, async ({ options, rep, url, mode }) => {
                 ...m,
                 before,
                 after,
-                did: s.expect?.(before, after) ?? null,
+                did: s.expect(before, after),
               })
             } finally {
               await opened.close()
@@ -372,7 +410,7 @@ await main(meta, async ({ options, rep, url, mode }) => {
             layout,
             name,
             max: budget.presentedMax,
-            median: budget.median,
+            median: Math.round(budget.median),
             over50: budget.over50,
             runs: budget.presentedRuns,
           }
@@ -390,7 +428,7 @@ await main(meta, async ({ options, rep, url, mode }) => {
             )
           return {
             max: budget.maxFrame,
-            median: row.median,
+            median: budget.median,
             over50: budget.over50,
             runs: detail,
             failures,

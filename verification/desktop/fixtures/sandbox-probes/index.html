@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sandbox verification</title>
+    <style>
+      body {
+        margin: 24px;
+        font:
+          14px system-ui,
+          sans-serif;
+        background: Canvas;
+        color: CanvasText;
+      }
+      h1 {
+        font-size: 20px;
+      }
+      [data-sandbox-probes] {
+        display: grid;
+        grid-template-columns: repeat(10, 44px);
+        gap: 4px;
+        width: max-content;
+        min-height: 34px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Sandbox verification</h1>
+    <p>Temporary frames exercise navigation, isolation and message handling.</p>
+    <main data-sandbox-probes aria-label="Sandbox probe frames"></main>
+  </body>
+</html>

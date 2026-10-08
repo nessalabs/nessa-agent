@@ -216,7 +216,7 @@ describe("startup sample", () => {
     const samples = [{ readyMs: 100.4 }, { readyMs: 180.6 }, { readyMs: null }]
     const ready = series(samples, (sample) => sample.readyMs)
     assert.equal(ready.max, 181)
-    assert.equal(ready.median, 181)
+    assert.equal(ready.median, 141)
     assert.equal(ready.runs, "100 181")
     assert.deepEqual(
       series([], (sample) => sample.readyMs),

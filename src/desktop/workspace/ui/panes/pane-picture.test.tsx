@@ -6,7 +6,7 @@
  * header itself, so no sliver. Any pane's menu chooses the picture, and
  * offers the scene back once there is one.
  */
-import { act } from "react"
+import { act, Profiler } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it } from "vitest"
@@ -22,7 +22,7 @@ import { fakeSource, settle, testStore } from "../../testing"
 import { Pane } from "./pane"
 
 class Observer {
-  observe() {}
+  observe(_target?: Element) {}
   unobserve() {}
   disconnect() {}
 }
@@ -59,7 +59,7 @@ const placed = (store: ReturnType<typeof testStore>) => {
   return panes ? placementsOf(panes.columns).panes : []
 }
 
-async function panes(withHome = false) {
+async function panes(withHome = false, onCommit?: () => void) {
   const store = testStore(fakeSource())
   await store.dispatch(loadWorkspace())
   store.dispatch(openBeside({ sessionId: "c" }))
@@ -70,14 +70,16 @@ async function panes(withHome = false) {
     root.render(
       <Provider store={store}>
         <ClockProvider now={() => 1000}>
-          {placements.map((placement) => (
-            <Pane
-              key={placement.key}
-              placement={placement}
-              frame={paneFrame(placement)}
-              multi
-            />
-          ))}
+          <Profiler id="pane-picture" onRender={() => onCommit?.()}>
+            {placements.map((placement) => (
+              <Pane
+                key={placement.key}
+                placement={placement}
+                frame={paneFrame(placement)}
+                multi
+              />
+            ))}
+          </Profiler>
         </ClockProvider>
       </Provider>,
     ),
@@ -87,6 +89,28 @@ async function panes(withHome = false) {
 }
 
 const slivers = () => [...host.querySelectorAll<HTMLElement>("[data-sliver]")]
+
+it("registers home observation in the layout commit, before a paint can intervene", async () => {
+  const observed = new Set<Element>()
+  class WatchingObserver extends Observer {
+    override observe(target?: Element) {
+      if (target) observed.add(target)
+    }
+  }
+  const before = globalThis.ResizeObserver
+  globalThis.ResizeObserver = WatchingObserver
+  const registeredAtCommit: boolean[] = []
+  try {
+    await panes(true, () => {
+      const home = host.querySelector(".workspace-pane-home")
+      if (home) registeredAtCommit.push(observed.has(home))
+    })
+    expect(registeredAtCommit.length).toBeGreaterThan(0)
+    expect(registeredAtCommit.every(Boolean)).toBe(true)
+  } finally {
+    globalThis.ResizeObserver = before
+  }
+})
 
 it("draws the night scene, still, at the top of every conversation pane", async () => {
   await panes()

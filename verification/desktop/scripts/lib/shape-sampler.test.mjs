@@ -6,6 +6,7 @@ const sel = {
   dragGhost: ".ghost",
   dragPlaceholder: ".placeholder",
   titleText: ".title",
+  dragTitle: ".title",
   dropAnnouncer: ".status",
   pane: ".pane",
   transcript: ".transcript",

@@ -1,0 +1,16 @@
+2026-10-07T10:43:29.7064230Z [nessa-server nessa_server] failures:
+2026-10-07T10:43:29.7064580Z [nessa-server nessa_server] 
+2026-10-07T10:43:29.7065500Z [nessa-server nessa_server] ---- composition::current_agent::tests::proactive_current_warm_up_opens_and_closes_without_a_conversation_or_prompt stdout ----
+2026-10-07T10:43:29.7066170Z [nessa-server nessa_server] 
+2026-10-07T10:43:29.7067680Z [nessa-server nessa_server] thread 'composition::current_agent::tests::proactive_current_warm_up_opens_and_closes_without_a_conversation_or_prompt' (42463) panicked at crates/nessa-server/src/composition/../../tests/composition/current_agent.rs:984:10:
+2026-10-07T10:43:29.7069540Z [nessa-server nessa_server] managed ACP fixture launched
+2026-10-07T10:43:29.7069930Z [nessa-server nessa_server] 
+2026-10-07T10:43:29.7070260Z [nessa-server nessa_server] 
+2026-10-07T10:43:29.7070660Z [nessa-server nessa_server] failures:
+2026-10-07T10:43:29.7071440Z [nessa-server nessa_server]     composition::current_agent::tests::proactive_current_warm_up_opens_and_closes_without_a_conversation_or_prompt
+2026-10-07T10:43:29.7072110Z [nessa-server nessa_server] 
+2026-10-07T10:43:29.7072850Z [nessa-server nessa_server] test result: FAILED. 1939 passed; 1 failed; 9 ignored; 0 measured; 0 filtered out; finished in 130.62s
+2026-10-07T10:43:29.7073430Z [nessa-server nessa_server] 
+2026-10-07T10:43:29.7078450Z nessa-server nessa_server finished in 130.7s with exit 101
+2026-10-07T10:43:29.7118110Z nessa-server nessa_server exited with 101
+2026-10-07T10:43:29.7339940Z ##[error]Process completed with exit code 1.

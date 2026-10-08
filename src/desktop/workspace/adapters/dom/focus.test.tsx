@@ -5,6 +5,7 @@
  * list the person is walking, or a dialog.
  */
 import { act, useRef } from "react"
+import { arrivalWaitingAttribute } from "./arrival"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it } from "vitest"
@@ -29,7 +30,9 @@ import {
   testStore,
   type AnimationFrames,
 } from "../../testing"
-import { focusedPaneAttribute, useFocusFollowsPane } from "./focus"
+import { widgetBodyAttribute } from "../../../widgets"
+import { marks } from "../../../split-panes"
+import { focusedPaneAttribute, focusInFront, useFocusFollowsPane } from "./focus"
 
 /** Panes as the page draws them, each with a composer, and a list beside them. */
 function Page() {
@@ -201,4 +204,160 @@ it("puts the caret in the focused pane's composer when the panes come back from 
   await frames()
   expect(store.getState().workspace.content).toBe("panes")
   expect(caretIn()).toBe(`Message ${focused}`)
+})
+
+it("lets a newly found composer paint before focus and cancels the pending landing", async () => {
+  host.innerHTML =
+    '<div data-pane-focused><form class="desktop-composer"><textarea aria-label="New" /></form></div>'
+  const stop = focusInFront(host)
+  await act(async () => animation.runFrame())
+  expect(caretIn()).not.toBe("New")
+  stop()
+  await frames()
+  expect(caretIn()).not.toBe("New")
+  focusInFront(host)
+  await act(async () => animation.runFrame())
+  expect(caretIn()).not.toBe("New")
+  await act(async () => animation.runFrame())
+  expect(caretIn()).toBe("New")
+})
+
+it("rechecks a replaced composer before landing the caret", async () => {
+  host.innerHTML =
+    '<div data-pane-focused><form class="desktop-composer"><textarea aria-label="Old" /></form></div>'
+  const old = host.querySelector("textarea")
+  const stop = focusInFront(host)
+  await act(async () => animation.runFrame())
+  host.innerHTML =
+    '<div data-pane-focused><form class="desktop-composer"><textarea aria-label="Replacement" /></form></div>'
+  await act(async () => animation.runFrame())
+  expect(document.activeElement).not.toBe(old)
+  expect(caretIn()).not.toBe("Replacement")
+  await act(async () => animation.runFrame())
+  expect(caretIn()).toBe("Replacement")
+  stop()
+})
+
+it.each(["dialog", "list"])(
+  "keeps %s focus taken during a pending composer landing",
+  async (kind) => {
+    host.innerHTML =
+      '<div data-pane-focused><form class="desktop-composer"><textarea aria-label="Composer" /></form></div>'
+    const stop = focusInFront(host)
+    await act(async () => animation.runFrame())
+    const destination = document.createElement("button")
+    destination.textContent = "Keep focus"
+    if (kind === "dialog") {
+      const dialog = document.createElement("div")
+      dialog.setAttribute("role", "dialog")
+      dialog.append(destination)
+      host.append(dialog)
+    } else host.append(destination)
+    destination.focus()
+    await act(async () => animation.runFrame())
+    expect(document.activeElement).toBe(destination)
+    stop()
+  },
+)
+
+it("keeps deliberate focus taken before the first target search", async () => {
+  await act(async () =>
+    root.render(
+      <>
+        <div data-pane-focused>
+          <form className="desktop-composer">
+            <textarea aria-label="Composer" />
+          </form>
+        </div>
+        <button>List</button>
+      </>,
+    ),
+  )
+  const stop = focusInFront(host)
+  try {
+    host.querySelector("button")?.focus()
+    await frames()
+    expect(document.activeElement).toBe(host.querySelector("button"))
+  } finally {
+    stop()
+  }
+})
+
+it("skips inert composers when choosing the target", async () => {
+  await act(async () =>
+    root.render(
+      <div data-pane-focused>
+        <div inert>
+          <form className="desktop-composer">
+            <textarea aria-label="Leaving" />
+          </form>
+        </div>
+        <form className="desktop-composer">
+          <textarea aria-label="Current" />
+        </form>
+      </div>,
+    ),
+  )
+  const stop = focusInFront(host)
+  try {
+    await frames()
+    expect(caretIn()).toBe("Current")
+  } finally {
+    stop()
+  }
+})
+
+it.each([
+  marks.settling,
+  marks.flying,
+  marks.measuring,
+  marks.restoring,
+  arrivalWaitingAttribute,
+])("waits for %s to release before finding its field", async (attribute) => {
+  host.innerHTML =
+    '<div data-pane-focused><form class="desktop-composer"><textarea aria-label="Ready" /></form></div>'
+  const pane = host.firstElementChild as HTMLElement
+  pane.setAttribute(attribute, "")
+  const stop = focusInFront(host)
+  try {
+    await act(async () => animation.runFrame())
+    expect(caretIn()).not.toBe("Ready")
+    pane.removeAttribute(attribute)
+    await act(async () => animation.runFrame())
+    expect(caretIn()).not.toBe("Ready")
+    await act(async () => animation.runFrame())
+    expect(caretIn()).toBe("Ready")
+  } finally {
+    stop()
+  }
+})
+
+it("waits for a window widget's body rather than focusing the pane beneath it", async () => {
+  await act(async () =>
+    root.render(
+      <>
+        <div data-pane-focused>
+          <form className="desktop-composer">
+            <textarea aria-label="Covered" />
+          </form>
+        </div>
+        <section data-widget-window />
+      </>,
+    ),
+  )
+  const stop = focusInFront(host)
+  try {
+    await act(async () => animation.runFrame())
+    await act(async () => animation.runFrame())
+    expect(caretIn()).not.toBe("Covered")
+    const body = document.createElement("div")
+    body.setAttribute(widgetBodyAttribute, "")
+    body.tabIndex = -1
+    host.querySelector("section")?.append(body)
+    await act(async () => animation.runFrame())
+    await act(async () => animation.runFrame())
+    expect(document.activeElement).toBe(body)
+  } finally {
+    stop()
+  }
 })
