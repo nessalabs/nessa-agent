@@ -9,6 +9,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react"
+import { IdentityButton, IdentityFooter } from "../../ui/identity"
 import type { HostKind } from "../../../host/features"
 import { holdStill, slideFrom } from "../../adapters/hold-still"
 import { isMac } from "../../adapters/platform"
@@ -487,17 +488,14 @@ function SettingsView({
           )}
 
           {/* Where "nessa Studio" opened Settings, the way back to the app. */}
-          <div className="settings-identity">
-            <button
-              type="button"
-              className="settings-identity-name"
-              aria-label="Back to nessa Agent"
+          <IdentityFooter>
+            <IdentityButton
+              product="Agent"
+              back
+              label="Back to nessa Agent"
               onClick={onClose}
-            >
-              <DesktopIcon name="chevronLeft" className="settings-identity-back" />
-              <strong>nessa</strong> <span>Agent</span>
-            </button>
-          </div>
+            />
+          </IdentityFooter>
         </nav>
       </div>
 

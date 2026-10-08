@@ -1,7 +1,7 @@
 import { openSettings } from "../../../settings"
 import { isMac } from "../../../adapters/platform"
 import { commandLabel } from "../../../model/keyboard"
-import { tooltip } from "../../../ui/tooltip"
+import { IdentityButton, IdentityFooter as Footer } from "../../../ui/identity"
 
 /**
  * The sidebar's foot: "nessa Studio", which opens Settings. Its mark is the
@@ -9,16 +9,13 @@ import { tooltip } from "../../../ui/tooltip"
  */
 export function IdentityFooter() {
   return (
-    <footer className="workspace-identity">
-      <button
-        type="button"
-        className="desktop-identity-button workspace-identity-name"
-        aria-label="nessa Studio Settings"
-        {...tooltip("Settings", { shortcut: `${commandLabel(isMac)},` })}
+    <Footer className="workspace-identity">
+      <IdentityButton
+        product="Studio"
+        label="nessa Studio Settings"
+        shortcut={`${commandLabel(isMac)},`}
         onClick={openSettings}
-      >
-        <b>nessa</b> <span>Studio</span>
-      </button>
-    </footer>
+      />
+    </Footer>
   )
 }

@@ -127,7 +127,7 @@ export const css = {
   workspaceWindow: ".workspace-window", // class: the frame holding the rail and the workspace; data-rail, data-sidebar
   titlebarSidebarToggle: '.workspace-titlebar [aria-controls="workspace-sidebar"]', // the titlebar's Show/Hide Sidebar
   sideRailToggle: ".side-rail-toggle", // class: shows or hides the rail; aria-expanded
-  studio: ".workspace-identity-name", // class: "nessa Studio", which opens Settings
+  studio: ".workspace-identity .desktop-identity-button", // class: "nessa Studio", which opens Settings
   peekEdge: ".desktop-peek-edge", // class: the strip at the folded sidebar's edge a hover reveals it from
   listSearch: ".workspace-list .workspace-search", // class: the session list's search field
   listScroll: ".workspace-list-scroll", // class: the session list's scroller

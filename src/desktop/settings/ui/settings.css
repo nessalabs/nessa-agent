@@ -365,66 +365,6 @@ html:not(.dark) .settings-glass {
   color: var(--desktop-faint);
 }
 
-/*
- * Sits exactly where "nessa Studio" sits in the app's sidebar
- * (`.workspace-identity`): a row one corner control tall, and in it a pill
- * of the corner controls' size and radius.
- */
-.settings-identity {
-  display: flex;
-  height: calc(var(--desktop-control-size) + 2 * var(--desktop-control-inset));
-  flex: none;
-  align-items: center;
-  padding: 0 10px 0 var(--desktop-control-inset);
-  font-size: var(--desktop-text-body);
-  letter-spacing: -0.01em;
-}
-
-.settings-identity-name {
-  display: flex;
-  height: var(--desktop-control-size);
-  align-items: center;
-  gap: 2px;
-  padding: 0 8px 0 4px;
-  border: 0;
-  border-radius: var(--desktop-control-radius);
-  background: transparent;
-  color: var(--foreground);
-  font: inherit;
-  white-space: nowrap;
-  cursor: default;
-  user-select: none;
-  transition: background-color var(--desktop-fast) ease;
-}
-
-.settings-identity-name:hover {
-  background: var(--desktop-hover);
-}
-
-.settings-identity-back {
-  width: 16px;
-  height: 16px;
-  flex: none;
-  color: var(--desktop-muted);
-  transition:
-    transform 160ms var(--desktop-out),
-    color var(--desktop-fast) ease;
-}
-
-.settings-identity-name:hover .settings-identity-back {
-  transform: translateX(-2px);
-  color: var(--foreground);
-}
-
-.settings-identity-name strong {
-  font-weight: 600;
-}
-
-.settings-identity-name > span {
-  margin-left: 3px;
-  color: var(--desktop-muted);
-}
-
 /* ——— Content ——— */
 
 .settings-content {
@@ -1397,27 +1337,6 @@ html:not(.dark) .settings .settings-card {
 :root[data-motion="reduced"] .settings-switch [data-slot="switch-thumb"],
 :root[data-motion="reduced"] .settings-choice-check {
   transition: none;
-}
-
-/*
- * "nessa Studio" in each layout's sidebar footer opens Settings. A bare
- * button by default, weightless, so the footer's own geometry (its padding
- * and radius) wins.
- */
-:where(.desktop-identity-button) {
-  display: block;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: default;
-}
-
-:where(.desktop-identity-button):hover > :last-child {
-  color: var(--foreground);
 }
 
 /* Linked devices: the UI kit's groups, with the orbs stacked so a narrow page fits them. */

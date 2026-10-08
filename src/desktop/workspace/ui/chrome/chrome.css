@@ -223,50 +223,6 @@
   left: calc(var(--workspace-sidebar-width) + var(--desktop-gutter));
 }
 
-/* ——— The sidebar's foot ——— */
-
-/*
- * A corner control's row: "nessa Studio" sits the control inset in from the
- * card's side and foot, as the titlebar's controls sit from its top, and its
- * hover shape is concentric with the card's corner (`styles.css`).
- */
-.workspace-identity {
-  display: flex;
-  min-width: 200px;
-  height: calc(var(--desktop-control-size) + 2 * var(--desktop-control-inset));
-  flex: none;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px 0 var(--desktop-control-inset);
-  font-size: var(--desktop-text-body);
-  letter-spacing: -0.01em;
-}
-
-/* "nessa Studio" opens Settings, which puts "‹ nessa Agent" in this same place. */
-.workspace-identity-name {
-  flex: 0 1 auto;
-  height: var(--desktop-control-size);
-  padding: 0 8px;
-  overflow: hidden;
-  border-radius: var(--desktop-control-radius);
-  line-height: var(--desktop-control-size);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-identity-name:hover {
-  background: var(--desktop-hover);
-}
-
-.workspace-identity b {
-  font-weight: 600;
-}
-
-.workspace-identity b + span {
-  color: var(--desktop-muted);
-  transition: color var(--desktop-fast) ease;
-}
-
 /* ——— Pill buttons ——— */
 
 .workspace-button {

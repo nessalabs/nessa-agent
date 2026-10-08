@@ -476,14 +476,20 @@ html:not(.dark) [data-surface] {
   color: color-mix(in oklab, var(--foreground) 38%, transparent);
 }
 
-.desktop-identity[data-slot="sidebar-footer"] {
+/* The classic shell's foot: its mark, "nessa Studio" (`identity.tsx`), and the theme menu at the end. */
+.desktop-sidebar-footer[data-slot="sidebar-footer"] {
   flex-direction: row;
   align-items: center;
-  gap: 8px;
-  padding: 12px 16px 14px;
+  gap: 0;
+  /* The name's pill is 28px, the theme menu's 26: a pixel less above and below keeps the foot 52px. */
+  padding: 11px 16px 13px;
   border-top: 0;
   font-size: 13px;
   letter-spacing: -0.01em;
+}
+
+.desktop-sidebar-footer[data-slot="sidebar-footer"] > :last-child {
+  margin-left: auto;
 }
 
 .desktop-mark {

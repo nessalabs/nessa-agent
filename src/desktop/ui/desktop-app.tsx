@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react"
+import { IdentityButton } from "./identity"
 import { AppShell, AppShellBody, AppShellMain } from "@nessa-ui/react/app-shell"
 import {
   Sidebar,
@@ -36,7 +37,6 @@ import { ThemeMenu } from "./theme-menu"
 import { HistoryButtons } from "./history-buttons"
 import { IconButton } from "./icon-button"
 import { WindowTitlebar } from "./window-titlebar"
-import { tooltip } from "./tooltip"
 
 /** Track only the local glow position; SplitView continues to own dragging. */
 function positionEdgeGlow(event: PointerEvent<HTMLDivElement>) {
@@ -337,17 +337,14 @@ function NavigationBody({
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarFooter className="desktop-identity">
+      <SidebarFooter className="desktop-sidebar-footer">
         <span aria-hidden="true" className="desktop-mark" />
-        <button
-          type="button"
-          className="desktop-identity-button min-w-0 flex-1 truncate"
+        <IdentityButton
+          product="Studio"
+          label="nessa Studio Settings"
+          shortcut={chordLabel(settingsChord, isMac)}
           onClick={openSettings}
-          {...tooltip("Settings", { shortcut: chordLabel(settingsChord, isMac) })}
-        >
-          <span className="font-semibold">nessa</span>
-          <span className="font-normal text-muted-foreground">Studio</span>
-        </button>
+        />
         <ThemeMenu theme={theme} onThemeChange={onThemeChange} />
       </SidebarFooter>
     </>

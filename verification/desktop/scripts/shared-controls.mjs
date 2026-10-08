@@ -158,6 +158,64 @@ async function hovered(page, selector) {
   return fill
 }
 
+/**
+ * The window's name at a sidebar's foot (`ui/identity.tsx`): its pill, its
+ * words and its row, against the corner controls' scale. In the page.
+ */
+function measureIdentity() {
+  const button = [...document.querySelectorAll(".desktop-identity-button")].find(
+    (candidate) => candidate.getClientRects().length > 0 && candidate.checkVisibility(),
+  )
+  if (!button) return null
+  const probe = document.createElement("div")
+  document.querySelector("[data-surface]").append(probe)
+  probe.style.position = "absolute"
+  probe.style.width = "var(--desktop-control-size)"
+  probe.style.borderRadius = "var(--desktop-control-radius)"
+  probe.style.color = "var(--desktop-muted)"
+  const want = getComputedStyle(probe)
+  const scale = {
+    size: want.width,
+    radius: want.borderTopLeftRadius,
+    muted: want.color,
+  }
+  probe.remove()
+  const style = getComputedStyle(button)
+  const box = button.getBoundingClientRect()
+  const product = button.querySelector(".desktop-identity-words > span")
+  const failures = []
+  if (Math.abs(box.height - Number.parseFloat(scale.size)) > 0.5)
+    failures.push(`its pill is ${box.height}px tall, not ${scale.size}`)
+  if (style.borderTopLeftRadius !== scale.radius)
+    failures.push(`its corner is ${style.borderTopLeftRadius}, not ${scale.radius}`)
+  if (!/^nessa \S/.test(button.textContent.trim()))
+    failures.push(`it reads "${button.textContent.trim()}", not "nessa" and a word`)
+  if (!product || getComputedStyle(product).color !== scale.muted)
+    failures.push(`its product word is not --desktop-muted at rest`)
+  if (!button.getAttribute("aria-label")) failures.push("it has no accessible name")
+  const row = button.closest(".desktop-identity")?.getBoundingClientRect() ?? null
+  return {
+    failures,
+    text: button.textContent.trim(),
+    box: { x: box.x, y: box.y, height: box.height },
+    row: row && { x: row.x, y: row.y, height: row.height },
+  }
+}
+
+/** The identity's fill under the pointer, against `--desktop-hover`. */
+async function identityHover(page, scale) {
+  const button = page.locator(".desktop-identity-button:visible").first()
+  await button.hover()
+  await page.waitForTimeout(250)
+  const fill = await button.evaluate(
+    (element) => getComputedStyle(element).backgroundColor,
+  )
+  await page.mouse.move(400, 400)
+  return fill === scale.hover
+    ? []
+    : [`under the pointer it is ${fill}, not ${scale.hover}`]
+}
+
 const rowKinds = {
   columns: {
     "sidebar row": ".workspace-sidebar [data-slot='sidebar-menu-item-row'] > [data-size]",
@@ -171,6 +229,52 @@ const rowKinds = {
 }
 
 const checks = {
+  identity: async (page, { open }) => {
+    const scale = await page.evaluate(windowScale)
+    const failures = []
+    const inWindow = await page.evaluate(measureIdentity)
+    if (!inWindow) return { failures: ["no identity at the sidebar's foot"] }
+    failures.push(...inWindow.failures.map((f) => `"${inWindow.text}": ${f}`))
+    failures.push(
+      ...(await identityHover(page, scale)).map((f) => `"${inWindow.text}": ${f}`),
+    )
+    await page.keyboard.press(keys.settings)
+    await need(page, css.settings, "Settings")
+    await page.waitForTimeout(500)
+    const inSettings = await page.evaluate(measureIdentity)
+    if (!inSettings) failures.push("no identity at Settings' foot")
+    else {
+      failures.push(...inSettings.failures.map((f) => `"${inSettings.text}": ${f}`))
+      // Where "nessa Studio" opened Settings, the way back stands in the same row.
+      if (!inSettings.row || !inWindow.row) failures.push("an identity outside its row")
+      else
+        for (const side of ["y", "height"])
+          if (Math.abs(inSettings.row[side] - inWindow.row[side]) > 0.5)
+            failures.push(
+              `Settings' row is at ${side} ${inSettings.row[side]}, the window's at ${inWindow.row[side]}`,
+            )
+    }
+    const classic = await open("classic")
+    let inClassic
+    try {
+      inClassic = await classic.evaluate(measureIdentity)
+      if (!inClassic) failures.push("no identity in the classic shell")
+      else {
+        failures.push(
+          ...inClassic.failures.map((f) => `classic "${inClassic.text}": ${f}`),
+        )
+        failures.push(
+          ...(await identityHover(classic, scale)).map((f) => `classic: ${f}`),
+        )
+      }
+    } finally {
+      await classic
+        .context()
+        .close()
+        .catch(() => {})
+    }
+    return { failures, measured: { inWindow, inSettings, inClassic } }
+  },
   keys: async (page) => {
     await need(page, `${css.keyCap}:visible`, "a key cap")
     const onLoad = await page.evaluate(measureKeyCaps, css.keyCap)
@@ -244,7 +348,12 @@ await main(
       only: { type: "string" },
     },
     help: `
-Checks, per engine and layout (--only keys,rows):
+Checks, per engine and layout (--only identity,keys,rows):
+  identity   "nessa Studio" at the sidebar's foot, "‹ nessa Agent" at Settings'
+             and the classic shell's are one control (ui/identity.tsx): a pill
+             the corner controls' size and radius, "nessa" and a word in
+             --desktop-muted, named, filled with --desktop-hover under the
+             pointer; Settings' row stands where the window's does.
   keys       every <kbd> in the window (the sidebar's search, the session list's
              search, the quick switcher's rows) is the kit's Kbd: 18px tall and at
              least as wide, 11px medium type, --desktop-radius-xs, a 7% fill and
@@ -265,9 +374,11 @@ Settings is left out (#632 › Settings is redesigned on its own branch).`,
         for (const name of names)
           await attempt(rep, { name, engine, layout }, async () => {
             const { page, close } = await openPage(browser, { url, layout })
+            const open = async (other) =>
+              (await openPage(browser, { url, layout: other })).page
             try {
               await need(page, css.anyReady, "the window")
-              return await checks[name](page, { layout })
+              return await checks[name](page, { layout, open })
             } finally {
               await close().catch(() => {})
             }

@@ -955,6 +955,15 @@ it is redesigned on its own branch.
   open). Rules: `ui/list-row.css`, `source-list.css` › Rows. At the base
   commit no row was either component, and unread weighed 560, 600 or 650 by
   list.
+- [ ] **The window's name is one control in every place (#657).** "nessa
+  Studio" at the workspace's and the classic shell's foot and "‹ nessa Agent"
+  at Settings' are `ui/identity.tsx`: a pill the corner controls' size and
+  radius, "nessa" and its word in `--desktop-muted`, named, filled with
+  `--desktop-hover` under the pointer; Settings' row stands where the
+  window's does. _Check:_ `shared-controls.mjs` (`identity`, per engine and
+  layout, with Settings open and in the classic shell). Rule:
+  `ui/identity.css`. At the base commit the classic shell's read
+  "nessaStudio" with no name, no pill and no fill, in the kit's grey.
 
 ## Menus and tooltips
 
