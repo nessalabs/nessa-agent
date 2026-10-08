@@ -128,7 +128,7 @@
 }
 
 /* A folded column does not paint its rows, so the fold's layout does not walk
- * the kit row tree. The header above this scroller still fades with the column. */
+ * them. The header above this scroller still fades with the column. */
 .workspace[data-list="closed"] .workspace-list-scroll {
   content-visibility: hidden;
 }
