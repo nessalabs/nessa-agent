@@ -137,10 +137,12 @@ export const sameAim = (a: Aim | null, b: Aim | null) =>
 /** How much of the pointer's path is kept: all its heading reads (`pointerVelocity`). */
 const kept = headingWindow
 
-const along = (path: readonly PointerSample[], at: PointerSample) => [
-  ...path.filter((sample) => at.t - sample.t <= kept),
-  at,
-]
+const along = (path: readonly PointerSample[], at: PointerSample) => {
+  const recent = path.filter((sample) => at.t - sample.t <= kept)
+  const previous = path.at(-1)
+  // Sparse delivery still has a direction: retain its adjacent position.
+  return [...(recent.length > 0 ? recent : previous ? [previous] : []), at]
+}
 
 /** The phase `event` moves `phase` to; the same object where it changes nothing. */
 export function stepDrag<Made>(

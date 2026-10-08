@@ -251,6 +251,19 @@ describe("where on a pane a drop lands", () => {
     expect(zoneAt(at(600, 90), square, null, new Set(["right"]))).toBe("center")
   })
 
+  it("keeps a slow fresh horizontal move out of the upper edge", () => {
+    expect(zoneAt(at(150, 30, { x: -0.01, y: 0 }), tall)).toBe("center")
+  })
+
+  it("reads sparse adjacent motion without treating a fresh move as rest", () => {
+    const path = [
+      { x: 300, y: 30, t: 0 },
+      { x: 240, y: 30, t: 120 },
+    ]
+    expect(pointerVelocity(path, 120)).toEqual({ x: -0.5, y: 0 })
+    expect(pointerVelocity(path, 120 + restAfter)).toEqual({ x: 0, y: 0 })
+  })
+
   it("reads the pointer's heading from the last tenth of a second, and none once it has rested", () => {
     expect(pointerVelocity([], 0)).toEqual({ x: 0, y: 0 })
     expect(pointerVelocity([{ x: 5, y: 5, t: 10 }], 10)).toEqual({ x: 0, y: 0 })

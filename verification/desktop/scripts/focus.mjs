@@ -194,6 +194,8 @@ async function openInPane(page, title) {
  * a frame, so that is later than the peek's animation (`overview.tsx`).
  */
 async function onOverviewRow(page) {
+  if (!(await overviewListed(page)))
+    throw new CannotRun("the overview list did not finish drawing")
   const landed = await until(
     page,
     (sel) => document.activeElement?.closest(sel) != null,

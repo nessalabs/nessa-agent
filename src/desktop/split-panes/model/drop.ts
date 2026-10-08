@@ -97,9 +97,6 @@ export const travelled = 24
 /** How much of the pointer's motion must be toward a side for it to be heading there (a cosine). */
 export const toward = 0.7
 
-/** Below this speed, in px/ms, the pointer is resting: its heading says nothing. */
-export const restingSpeed = 0.05
-
 /**
  * Below this speed, in px/ms, the pointer is settling — a hand nudging into
  * place — and the side it is in keeps its reach; faster, it sweeps.
@@ -159,7 +156,7 @@ export function zonesAt(
   const sides = Object.keys(distance) as Side[]
   const { x: vx, y: vy } = pointer.velocity
   const speed = Math.hypot(vx, vy)
-  const moving = speed >= restingSpeed
+  const moving = speed > 0
   const headingTo = (side: Side) =>
     moving ? (vx * outward[side].x + vy * outward[side].y) / speed : 0
   // Plainly along one axis: the sides across it are reached only at their edge.
@@ -309,7 +306,10 @@ export function pointerVelocity(
 ): { x: number; y: number } {
   const last = samples.at(-1)
   if (!last || now - last.t >= restAfter) return { x: 0, y: 0 }
-  const first = samples.find((sample) => last.t - sample.t <= headingWindow) ?? last
+  const first =
+    samples.slice(0, -1).find((sample) => last.t - sample.t <= headingWindow) ??
+    samples.at(-2) ??
+    last
   const span = last.t - first.t
   return span > 0
     ? { x: (last.x - first.x) / span, y: (last.y - first.y) / span }

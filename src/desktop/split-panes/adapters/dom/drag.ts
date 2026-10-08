@@ -1,48 +1,20 @@
 /**
- * Drag and drop between split panes, carried by the pointer rather than the
- * browser's own drag, so what is carried looks like the window it will be.
- * What a press becomes, event by event, is `model/drag.ts` (ADR 238 › _Drag
- * and drop_ has its table); this is the page's side of it — every event is
- * sent there, and each phase it answers with is drawn here:
+ * Drag and drop between split panes. The pure model owns the phases; this
+ * adapter owns the pointer, copy, target highlight and cancellable resources.
  *
- * - **pressed**: nothing in the press's own frame; in a task once it has
- *   painted, the copy is made unseen — the pane itself, or for an item from
- *   outside the grid what the host makes of it (`copyOf`) — and what the drag
- *   needs of the page is read, once: the grid and its room, each pane's box
- *   and parts, what the host covers (`covered`). Until then a move does not
- *   lift it;
- * - **carrying**: the copy is shown under the pointer and glides so its
- *   centre comes under it, then stays there; the zone the pointer is in
- *   (`aimAt`) shows what dropping there would do — the panes take the rects
- *   the drop would give them and a placeholder marks the rect it takes, from
- *   the one outcome the drop commits (`dropOutcome` of the layout the source
- *   reads), and the copy takes the placeholder's shape about the pointer
- *   (`copyShape`);
- * - **dropping**: released while a zone is shown, the copy flies into the
- *   placeholder's rect. The source commits what is shown (`commitDrop`) on
- *   the next frame, in the room the press read, so that pointerup does not
- *   also lay the new arrangement out (`drag.test.tsx`). That frame commits
- *   only while the preview still holds — the panes and watched values the
- *   press read, a carried item still held, and no resize since the release —
- *   and not at all if the drag is gone before it (`drag.test.tsx`);
- * - **cancelling**: the copy flies home as the panes go back — or, when the
- *   room, the panes or the view changed under it, both go at once and the
- *   change plays as it would with no drag.
+ * The host supplies the copy and its size. A fixed copy stays compact over
+ * every zone; a natural copy may take its destination's shape. The host also
+ * chooses whether live panes preview the proposal or remain stationary while
+ * only the hovered target highlights. The workspace uses compact copies and
+ * stationary chats (ADR 238 owns that product behavior).
  *
- * Everything moves by transform, in animations the compositor runs; the
- * pointer is followed without rendering anything, and the outcome is asked
- * for only when the zone changes. What changes shape grows or shrinks into it by
- * a scale its content undoes step by step, so no text is ever drawn
- * stretched: a pane the preview resizes is cut to the shape it would take;
- * the copy is laid out once at it, as the zone changes. No frame of a drag
- * makes the page lay out early: after the press's frame nothing is read again — a change that would
- * make what was read wrong ends the drag instead. Where a preview has drawn a
- * pane is known from the preview's own motion, never read back. The
- * preview's motion is marked (`dragPreview`) so `FlipScope` measures through
- * it at the drop and lets it go before it measures where things landed. With
- * less motion, nothing glides: the copy follows the pointer, and the panes
- * and the copy take the drop's rects at once. The zone is said to assistive
- * technology as it changes.
+ * Preparation runs after the press's paint and reads the room once. Carrying
+ * updates compositor transforms and the accepted proposal. Release commits
+ * that proposal on the next frame only while its layout, watched values and
+ * carried item are still held. Cancellation and cleanup retain resource
+ * identity so a late frame or finished flight cannot affect a newer drag.
+ * The target is announced as it changes. Reduced motion follows the same
+ * phases with zero-duration flights.
  *
  * A host takes part by marking what can be carried: `data-drag-pane` (a
  * pane's key, on its header) or `data-drag-item` (an item's id, on a row
