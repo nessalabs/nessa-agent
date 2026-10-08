@@ -654,7 +654,7 @@ impl Owner {
         owner.ready = owner.ok(
             "session.authenticate",
             json!({"minVersion":1,"maxVersion":1,"nonce":challenge["payload"]["nonce"],
-                "credential":credential,"client":{"id":"bench-owner"}}),
+                "credential":credential,"client":{"id":"bench-owner"},"surface":{"kind":"cli","instance":"bench-owner"}}),
         );
         owner
     }
@@ -1021,7 +1021,7 @@ impl Probe {
         self.call(
             "session.authenticate",
             json!({"minVersion":1,"maxVersion":1,"nonce":nonce,"credential":credential,
-                "client":{"id":"bench-probe"}}),
+                "client":{"id":"bench-probe"},"surface":{"kind":"cli","instance":"bench-probe"}}),
         )
     }
 }

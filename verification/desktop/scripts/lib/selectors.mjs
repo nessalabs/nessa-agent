@@ -97,6 +97,13 @@ export const css = {
 
   sampleAccessory: "[data-sample-accessory]", // the sample plugin's accessory in its session's header
   sampleSize: "[data-sample-size]", // the place's size as the sample view was told it, "<width>x<height>"
+  subagentPanel: "[data-subagent-panel]", // the subagents widget's view
+  subagentList: "[data-subagent-list]", // its list of children
+  subagentRow: "[data-subagent-row]", // one child; data-subagent-name is the child's name
+  subagentDetail: "[data-subagent-detail]", // the open child's conversation
+  subagentScroll: "[data-subagent-scroll]", // the conversation's scroller
+  subagentMessages: "[data-subagent-messages]", // the messages that scroller follows
+  subagentSummary: "[data-subagent-summary]", // the list's counts
 
   // MCP Apps (ADR 344, #349) and the fixture app the sample workspace registers (src/desktop/widgets/app/fixture/)
   appFrame: "[data-app-frame]", // an app's sandbox proxy frame; its value is the place it is drawn in
@@ -362,6 +369,29 @@ export const layouts = ["columns", "sidebar"]
  * Keyboard chords, as Playwright names them
  * (`src/desktop/workspace/ui/layouts/shortcuts.ts` is their owner).
  */
+const chordModifiers = ["Alt", "Control", "Meta", "Shift"]
+
+/**
+ * The key and the modifiers a Playwright chord holds down. Every other
+ * modifier is up. The last segment is the `KeyboardEvent.code`. The page
+ * listener that proves a chord arrived matches this, so it does not spell
+ * the chord a second time.
+ */
+export function chordDown(chord) {
+  const parts = String(chord).split("+")
+  const code = parts.at(-1) ?? ""
+  const modifiers = parts.slice(0, -1)
+  if (!code || modifiers.some((name) => !chordModifiers.includes(name)))
+    throw new Error(`not a Playwright chord: ${chord}`)
+  return {
+    code,
+    altKey: modifiers.includes("Alt"),
+    ctrlKey: modifiers.includes("Control"),
+    metaKey: modifiers.includes("Meta"),
+    shiftKey: modifiers.includes("Shift"),
+  }
+}
+
 export const keys = {
   escape: "Escape",
   enter: "Enter",
@@ -501,6 +531,8 @@ export const names = {
   moreWaysToAllow: "More Ways to Allow",
   /** The sample session (in-memory source) whose conversation carries a widget of each state. */
   widgetSession: "Widget hosts, every state",
+  /** The sample session whose conversation carries the subagents card. */
+  subagentsSession: "Retry budget for ACP reconnects",
   /** The channel the sample session is in. */
   widgetChannel: "design-system",
   /** The sample session (in-memory source) whose conversation carries the fixture MCP App's call. */

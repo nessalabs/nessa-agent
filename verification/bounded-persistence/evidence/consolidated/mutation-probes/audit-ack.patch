@@ -1,0 +1,11 @@
+--- a/crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs
++++ b/crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs
+@@ -53,7 +53,7 @@
+         let operation = move || state.record(&record);
+         #[cfg(test)]
+         let operation = self.probe.wrap(operation);
+-        permit.submit(operation).await.map_err(|_| AuditFailure)?
++        permit.submit(operation).await.unwrap_or(Ok(()))
+     }
+ }
+ 

@@ -303,6 +303,22 @@ writing the full defaults on first launch is buying.
   import against that direction, in every form of import it reads, and the
   window's composition (`main.tsx`, `dependencies.ts`), which imports them
   all, is outside the rule.
+- Subagents are the desktop window's vertical for the agents a conversation
+  puts to work ([ADR 329](adr/todo/329-subagents.md)): `src/desktop/subagents/`
+  (its map is `index.ts`) owns the child as the panel shows it
+  (`model/subagent.ts`, taglines in `model/tagline.ts`), the read-only source
+  and the join of several (`application/ports.ts`), what the widget answers
+  (`application/widget-state.ts`), and which child a conversation's panel
+  shows (`application/selection.ts`, reached from outside through
+  `useOpenSubagent`). The sample source
+  (`adapters/in-memory/sample-source.ts`) fills the retry-budget sample on
+  the injected clock and is joined under `sample` from composition only
+  while the sample workspace is in use; a window on another source keeps an
+  unread source and does not register the plugin. The panel (`ui/`) is the
+  native `subagents` widget: a list and a read-only transcript, in a pane
+  and in the window. Counts live in `src/desktop/model/counts.ts`. The
+  preview is the window preference `useSubagentsPreview`, offered under
+  Settings › Advanced › Experimental.
 - The shared desktop light's fixed grain tile lives in
   `src/desktop/ui/ambient-grain.png`, drawn by `.desktop-grain` in the desktop
   stylesheet. It is pre-rendered to keep SVG turbulence out of runtime raster
@@ -381,15 +397,15 @@ own current lifecycle and API contracts.
 | `domain/model_metadata/`, `domain/effective_capabilities/` | Model catalog invariants and immutable admission capabilities. |
 | `domain/agent_execution/` | Sessions, execution ordering, tools, permissions, prompts, and the subagent lifetime graph; DDD roles beneath each feature. |
 | `application/agent_execution/agents/` | Public Agent, scheduling, submission retry recovery, and one lifecycle owner for work generations, active work, and shutdown. An installed owned lifetime seals descendant admission; `Agent::close` stays attachment-only. |
-| `application/agent_execution/subagents/` | Ownership coordinator: reserve a child, prepare it through an injected factory, admit one initial task, and drain descendants when the parent lifetime ends. A rejected publication or a startup that held no cleanup returns the live slot. A child that is already closing is not dispatched. Concurrent closes share one drain. An older snapshot copy does not replace a newer acknowledged one. |
+| `application/agent_execution/subagents/` | Ownership coordinator for admitted child attempts, retained cleanup owners and tree drains. `publication.rs` owns audit eligibility and durable projection through the write fence; `root.rs` owns admission through ID delivery and unclaimed-result reconciliation. Domain graph and actual Agent gates own lifecycle and runnable admission. Stage-specific failure/capacity semantics and named enforcers live in the [ADR329 ordering table](adr/todo/329-subagents.md#sdk-audit-eligibility-and-owned-root-delivery-628). |
 | `application/agent_execution/providers/`, `hooks/` | Injected execution ports, operation capabilities, and typed invocation callbacks. |
 | `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, backend-issued load/save bindings and immutable semantic units in `storage/save.rs`, retained attachment resources, snapshot evidence mapped through domain history rules, which apps a message may name (`app_sources.rs`: an MCP tool call of an earlier turn, asked at admission and of restored history), where a steered message stands in its target turn (`steering_position.rs`: target and offset taken at admission and read from saved history in one place), the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
 | `application/agent_execution/executions/`, `permissions/`, `tools/` | Domain coordination, weak permission authority carriers, attributed decisions, and observation/review projections. |
 | `infrastructure/acp/`, `claude_acp/`, `codex_acp/`, `opencode_acp/` | Shared transport lifecycle, and one module per provider for its own configuration and tool translation. Verification shared by more than one provider moves up into `acp/`, as ordered session configuration did once Codex and Opencode both needed it. |
-| `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, shared unpublished-unit/completion lineage codec in `save_group.rs`, explicit evidence serialization, physical source identity/construction, shared framing validation and bounded terminal-discovery progress for sync-engine, chunked semantic checkpoints, shared read/write admission and shutdown ownership, the Tokio streaming commit clock adapter, and the ownership snapshot file `ownership.sqlite3`. |
+| `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, shared unpublished-unit/completion lineage codec in `save_group.rs`, explicit evidence serialization, physical source identity/construction, shared framing validation and bounded terminal-discovery progress for sync-engine, chunked semantic checkpoints, shared read/write admission and shutdown ownership, the Tokio streaming commit clock adapter, and the ownership snapshot file `ownership.sqlite3`: `nessa-local-storage::physical_operation` owns physical admission and captured cleanup, with an independent Worker per adapter; sibling `ownership/tests.rs` holds queue, cancellation, poison and runtime watchdog regressions. |
 | `infrastructure/json_rpc/`, `process.rs`, `model_metadata_json.rs` | Framing, process supervision, and model catalog parsing. |
 | `infrastructure/clock.rs` | The clock every ACP protocol deadline is measured on: `RuntimeClock` from composition, and `tests/infrastructure/manual_clock.rs` in tests, which moves only when the test moves it. |
-| `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. Public memory binding/retry/reset observations live in `tests/infrastructure/session_storage/memory.rs`; `record.rs` owns public writer/watch/interruption/retry cases, `record_source.rs` owns publication/restored-extension cases, `discovery.rs` owns bounded query ordering/physical faults, and `save_group.rs` owns emitted checkpoint contradictions. Their boundary fixture module constructs exported immutable data and obtains actual producer receipts. All are rooted from the external public storage integration module; the inherited internal discovery fixture remains separate. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
+| `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. SDK ownership publication interleavings use independent audit gates in `tests/application/agent_execution/subagents/publication.rs`; pure targeted-discard and absence-token correlation cases remain in `tests/domain/agent_execution/ownership.rs`. Public memory binding/retry/reset observations live in `tests/infrastructure/session_storage/memory.rs`; `record.rs` owns public writer/watch/interruption/retry cases, `record_source.rs` owns publication/restored-extension cases, `discovery.rs` owns bounded query ordering/physical faults, and `save_group.rs` owns emitted checkpoint contradictions. Their boundary fixture module constructs exported immutable data and obtains actual producer receipts. All are rooted from the external public storage integration module; the inherited internal discovery fixture remains separate. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
 
 Composition chooses models, provider configuration, storage, and the required
 permission audit sink. Agent owns admitted work; UI adapters and gateway code call
@@ -476,6 +492,11 @@ the gateway keeps those effects behind its own application port. See the
 `crates/nessa-local-storage` owns native OS private-file mechanics shared by the
 local auth, SDK session storage, and desktop credential adapters. It has no auth/domain policy
 or Tauri dependency; callers inject the resulting adapters through composition.
+Its default-off `physical-operation` feature owns shared Tokio admission and
+captured-cleanup lifetime in `src/physical_operation.rs`. SDK/server adapters own
+independent Worker instances and their typed port conversions. Central mechanic
+tests live beside that source; source-included test-only capture/OS fixtures live
+in `tests/support/physical_operation.rs`.
 Each primitive comes in two forms: a path-based one for a directory whose whole
 path the caller trusts, and a `_beneath` one that walks a relative path down
 from an already-verified root, refusing anything that is not a private
@@ -774,7 +795,14 @@ generation, refresh and revoke (ADR 392): the domain statechart, the
 owner that fences a URL change before the live set is replaced, the
 transport adapter that names an admitted token for the HTTP session, HTTPS
 discovery and token calls, the loopback callback, and the non-secret
-record beside the sealed token files. `mcpServers.authorize` and
+record beside the sealed token files. The optional local-storage
+`physical_operation` capability serves `FileRecords` and `FileAuthorizationAudit`
+with one physical slot per instance;
+`records/tests.rs` and `audit/tests.rs` exercise actual file effects and input cleanup.
+Manual ignored real-file benchmarks live under each crate’s `tests/` owning
+`session_storage` or `mcp_authorization/infrastructure` feature and link production
+libraries without private test probes. The [bounded persistence ordering table](design/bounded-physical-persistence.md)
+names the adapter lifecycle boundary. `mcpServers.authorize` and
 `mcpServers.revoke` are the product methods. An app call that the remote
 refuses, cannot reach, or answers with insufficient scope is
 `mcp_unauthorized`, `mcp_unreachable`, or `mcp_insufficient_scope`, not
@@ -1746,3 +1774,12 @@ for states and the Claude internal-error limitation.
 The panel's causal recovery integration test is
 `src/conversation/adapters/store/authentication-recovery.test.tsx`: local send,
 retry and replacement use cases followed by the real transcript renderer.
+
+## Container process cleanup acceptance
+
+[`scripts/process-cleanup/`](../scripts/process-cleanup/README.md) owns the opt-in
+Linux PID-namespace acceptance harness: pinned runtime image, direct-child
+supervisor, four-case Docker orchestration and its substitute-runner tests.
+The [cleanup state](state/services/sdk/runtime/stop-cancels-owned-work-and-confirms-process-cleanup.md#linux-container-acceptance-630)
+owns its ordering table. Production SDK cleanup remains in
+`crates/nessa-sdk/src/infrastructure/process.rs`.

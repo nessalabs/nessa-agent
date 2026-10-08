@@ -20,6 +20,14 @@ that page still holds and reports it as `console`.
 | open throws after the page exists | close reports the lines, the open result is "could not run", and each step not started is "not run" |
 | a script already knows a line is noise | `noteHarmless(pattern)` moves matches, including ones still to come, onto `harmless` |
 | a step learns afterwards which held lines are noise | `reclassifyHeld` moves those lines, rewritten, and leaves every other error |
+| the apps step proves its mount is live, with a same-origin `/mcp-resources` `net::ERR_ABORTED` held (#647) | `browser.mjs` publishes the exact endpoint pattern; `noteHarmless` moves the held match |
+| that same abort arrives after the live proof, before the next result or close (#647) | the installed pattern classifies it as harmless; the existing result/close owner reports it once |
+| no live proof, or an abort with another origin, path or error (#647) | no exemption applies; the existing result/close owner reports the failure |
+
+For #647, the #473 live-mount exemption now matches the exact
+`/mcp-resources` endpoint rather than any path ending in that name. Query
+and fragment suffixes remain eligible. `browser.mjs` owns the shared pattern
+for held and future lines; `page-lines.mjs` owns classification and reporting.
 
 A line is removed from the page when it is reported, so a second add or a
 later close cannot report it again. The close path's own result does not

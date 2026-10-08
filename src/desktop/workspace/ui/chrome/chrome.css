@@ -1,6 +1,6 @@
 /*
- * The workspace's frame and the small pieces every part of it uses: icon
- * buttons, agent tiles, status glyphs, resize edges, pill buttons and menus.
+ * The workspace's frame and the small pieces every part of it uses: agent
+ * tiles, status glyphs, resize edges, pill buttons and menus.
  * Every value comes from the `--desktop-*` scales in `styles.css`.
  */
 
@@ -40,7 +40,7 @@
     :focus-visible:not(textarea, input, .desktop-resize-edge)
 ),
 :where(.workspace .desktop-chip:focus-visible) {
-  outline: 1.5px solid var(--desktop-focus-ring);
+  outline: var(--desktop-focus-outline);
   outline-offset: -1.5px;
 }
 
@@ -104,44 +104,6 @@
   height: 100%;
   align-items: center;
   gap: inherit;
-}
-
-.workspace-icon-button {
-  display: inline-flex;
-  width: var(--desktop-control-size);
-  height: var(--desktop-control-size);
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: var(--desktop-control-radius);
-  background: transparent;
-  color: var(--desktop-muted) !important;
-  transition:
-    color var(--desktop-fast) ease,
-    background-color var(--desktop-fast) ease,
-    opacity var(--desktop-base) ease;
-}
-
-.workspace-icon-button:hover,
-.workspace-icon-button[data-state="open"] {
-  color: var(--foreground) !important;
-  background: var(--desktop-hover);
-}
-
-.workspace-icon-button:active {
-  background: var(--desktop-press);
-}
-
-.workspace-icon-button svg {
-  width: 16px;
-  height: 16px;
-  stroke-width: 1.75;
-}
-
-/* Holds its place when there is nothing for it to do, so its neighbours never move. */
-.workspace-icon-button[data-reserved] {
-  visibility: hidden;
 }
 
 /* ——— Agent tiles and status glyphs ——— */
@@ -312,7 +274,7 @@
   flex: none;
   padding: 0 12px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: var(--desktop-selected);
   color: var(--desktop-ink-2) !important;
   font-size: var(--desktop-text-footnote) !important;

@@ -60,28 +60,11 @@
   gap: var(--rail-gap);
 }
 
-.side-rail-item,
-.side-rail-toggle {
-  display: grid;
-  width: var(--desktop-control-size);
-  height: var(--desktop-control-size);
-  place-items: center;
-  border: 0;
-  border-radius: var(--desktop-control-radius);
-  background: transparent;
-  color: var(--desktop-muted);
-  transition:
-    color var(--desktop-fast) ease,
-    background-color var(--desktop-fast) ease,
-    transform 220ms var(--rail-spring);
-}
-
-.side-rail-item:hover,
-.side-rail-toggle:hover {
-  color: var(--foreground);
-  background: var(--desktop-hover);
-}
-
+/*
+ * The rail's buttons are the window's icon buttons (`ui/icon-button.tsx`):
+ * size, corner, colour, hover, press and focus are theirs. What is the
+ * rail's own is below — where they stand, how they arrive, and their gestures.
+ */
 .side-rail-item {
   position: relative;
   z-index: 1;
@@ -213,9 +196,10 @@
  * The toggle sits in the bottom-left corner at the control edge — the
  * titlebar's sidebar toggle mirrored — and stays there open or closed, so it
  * is in whatever is there: the rail, the sidebar card's foot, or a full view's
- * corner (`columns.mjs`, rail-corner). With the rail and the Agents sidebar
- * both closed there is nothing to sit in, so it hides; ⌘B brings the sidebar,
- * and the toggle, back.
+ * corner (`columns.mjs`, rail-corner). With the rail closed and the Agents
+ * sidebar closed by the person there is nothing to sit in, so it hides; ⌘B
+ * brings the sidebar, and the toggle, back. A sidebar the window folded for
+ * room keeps it, in the corner, so the rail can always come back.
  */
 .side-rail-toggle {
   position: absolute;
@@ -242,9 +226,9 @@
     visibility 0s linear 0s;
 }
 
-.workspace-window[data-rail="closed"][data-sidebar="closed"]:not([data-rail-view]):not(
-    :has(.workspace[data-peek])
-  )
+.workspace-window[data-rail="closed"][data-sidebar-chosen="closed"]:not(
+    [data-rail-view]
+  ):not(:has(.workspace[data-peek]))
   .side-rail-toggle {
   visibility: hidden;
   opacity: 0;

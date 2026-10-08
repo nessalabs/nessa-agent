@@ -6,13 +6,13 @@
  * host's startup of the gateway is ready (`GatewayReader` in `src-tauri`).
  *
  * The credential is the panel's, which the session's client id
- * names (`connectDevSession`'s `nessa-panel`), not the window. The gateway
- * cannot tell this window from the panel: both authenticate as client
- * `nessa-panel` and are answered as principal `surface:nessa-panel`, which
- * `verification/desktop/scripts/gateway-window.mjs` asserts of every handshake
- * this window makes (W4′), and `session.authenticate` has no field for the
- * surface kind the client is given (`surfaceKind: "desktop"`;
- * `SessionAuthenticateParams`, #447). This module never holds the
+ * names (`connectDevSession`'s `nessa-panel`), not the window. Both
+ * authenticate as client `nessa-panel` and are answered as principal
+ * `surface:nessa-panel`. This window's handshake also sends
+ * `surface: { kind: "desktop", instance }` (`surfaceKind` below;
+ * `SessionAuthenticateParams.surface`), which the gateway records, and
+ * `verification/desktop/scripts/gateway-window.mjs` asserts that kind on
+ * every handshake this window makes (W4′). This module never holds the
  * token: it hands the client the credential source, which the client asks at
  * its handshake, and passes no URL or `auth` of its own
  * (`host-gateway.test.ts`).

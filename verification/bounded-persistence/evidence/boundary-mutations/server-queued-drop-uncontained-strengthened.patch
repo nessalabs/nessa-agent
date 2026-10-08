@@ -1,0 +1,11 @@
+--- a/crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs
++++ b/crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs
+@@ -224,7 +224,7 @@
+ 
+ impl<F> Drop for Job<F> {
+     fn drop(&mut self) {
+-        let _ = self.drop_operation();
++        drop(self.operation.take());
+         // Automatic field destruction releases admission after this body.
+     }
+ }

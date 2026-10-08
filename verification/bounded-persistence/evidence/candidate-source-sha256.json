@@ -1,0 +1,22 @@
+{
+  "crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs": "a44398c60cce2f6c7468e877868365b9f9454d60a7c77a81f808411d3e3d0e3a",
+  "crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs": "42b8be25db8f85cf61ec6e8177ded094aa7bc314d3b1a093c5b0e4506e043d1f",
+  "crates/nessa-sdk/src/infrastructure/session_storage/ownership/physical_tests.rs": "4bf8f290b8d3eb38a7f709ad72a9c3547c4a02f5a713e680f99c87dc1a974c5a",
+  "crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs": "72acd379ce45138d6fd92df742a45d193f1c36d549f209b6059d445435887089",
+  "crates/nessa-sdk/tests/infrastructure/session_storage.rs": "0ec5723626be3249abadf0a4d6727430990559048095eb36ae23244e31581d09",
+  "crates/nessa-sdk/tests/infrastructure/session_storage/bounded_persistence_benchmark.rs": "2c112c5d653159e4fe490445959193500545918ad93ac3276c64b6460863c78b",
+  "crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs": "f3f8bfe55205d2fbc2af7a18a4cfe85b87a62b74bee1ec9937d0b8318c3373be",
+  "crates/nessa-server/src/mcp_authorization/infrastructure/audit/tests.rs": "d43ba1439157240dd28fdb7c67ed43f9adee20d9f04958186c83bcbd21773425",
+  "crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs": "42b8be25db8f85cf61ec6e8177ded094aa7bc314d3b1a093c5b0e4506e043d1f",
+  "crates/nessa-server/src/mcp_authorization/infrastructure/mod.rs": "f9d8150f2bd6348d98e7482e6e521ef784d67b8e9dbc53c8b72fcb6bf139e34b",
+  "crates/nessa-server/src/mcp_authorization/infrastructure/physical_tests.rs": "4bf8f290b8d3eb38a7f709ad72a9c3547c4a02f5a713e680f99c87dc1a974c5a",
+  "crates/nessa-server/src/mcp_authorization/infrastructure/records.rs": "269c074356d591de1d8f9f3a5100080a9aaffb9d3db91f6b543e9ebfc65d5e07",
+  "crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs": "35a965a13e7415245ebf8b30c66105dd7db4995d2cce6cdccf2856b08fe2ec30",
+  "crates/nessa-server/tests/mcp_authorization/infrastructure/bounded_persistence_benchmark.rs": "030a36c3f15ba22ebdb2c9d380af882bfdcaf4383600ffe700558469ae295a27",
+  "crates/nessa-server/tests/mcp_authorization_benchmark.rs": "a1e3bae0a65283e18f2f2eba6ee7e8290aefec7fd21d51ec12eb1444c8c69a90",
+  "docs/codebase-structure.md": "748e871cdcabd61e801cef55a7b5102e3e76aa153f3ebdabd9190a55874648ad",
+  "docs/design/bounded-physical-persistence.md": "2d342e2a076638278a852b287b2f07787308799a8598c40df6b66ac3f16ad172",
+  "docs/state/services/mcp/README.md": "190e443b725e7767953f52287c78429a5d87e809e85df61b12b2b76cea85b6b9",
+  "docs/state/services/sdk/README.md": "c1d3d245f72005c13f988bdaba6badc2ac44a29f1b3f4da2a87c4f45bba1fa3f",
+  "docs/state/services/storage/README.md": "0a42ec885e7f667aa482faa3ef8131fe10d78ed13375f382ea0f7f396f5ab621"
+}

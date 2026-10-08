@@ -3,8 +3,8 @@
  * listing the workspace and the other places beside it; choosing one gives it the whole
  * window. Each icon has its own small hover gesture (`side-rail.css`).
  */
-import type { CSSProperties, ReactNode } from "react"
-import { tooltip } from "../../../ui/tooltip"
+import type { CSSProperties, ReactElement, ReactNode } from "react"
+import { IconButton } from "../../../ui/icon-button"
 import { IdentityFooter } from "./identity-footer"
 import "./side-rail.css"
 
@@ -19,7 +19,7 @@ export const RAIL_WIDTH = 48
 export interface RailItem {
   readonly id: string
   readonly name: string
-  readonly icon: ReactNode
+  readonly icon: ReactElement
   /**
    * Whether its full view keeps "nessa Studio" — the way to Settings — in
    * the bottom-left corner, where the sidebar keeps it. On unless the item
@@ -36,7 +36,7 @@ const stroke = {
   strokeLinejoin: "round",
 } as const
 
-const svg = (children: ReactNode) => (
+const svg = (children: ReactNode): ReactElement => (
   <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...stroke}>
     {children}
   </svg>
@@ -128,21 +128,19 @@ export function SideRail({
       <div className="side-rail-items">
         <span className="side-rail-lens" aria-hidden="true" />
         {railItems.map((item, i) => (
-          <button
+          <IconButton
             key={item.id}
-            type="button"
+            icon={item.icon}
+            label={item.name}
+            // Beside the icon, toward what it opens; never over its neighbours.
+            tooltipSide="right"
             className="side-rail-item"
             data-rail-item={item.id}
             aria-current={item.id === active ? "page" : undefined}
             tabIndex={open ? 0 : -1}
             style={{ "--i": i } as CSSProperties}
-            aria-label={item.name}
-            // Beside the icon, toward what it opens; never over its neighbours.
-            {...tooltip(item.name, { side: "right" })}
             onClick={() => onPick(item.id)}
-          >
-            {item.icon}
-          </button>
+          />
         ))}
       </div>
     </nav>
@@ -168,18 +166,8 @@ export function SideRailButton({
     ? `${open ? "Hide" : "Show"} Side Rail`
     : "No Room for the Side Rail"
   return (
-    <button
-      type="button"
-      className="side-rail-toggle"
-      aria-label={action}
-      aria-expanded={open}
-      aria-controls="side-rail"
-      // Said, not hidden: the window is too narrow for it beside what is open.
-      aria-disabled={!room || undefined}
-      {...tooltip(action, { side: "above" })}
-      onClick={room ? toggle : undefined}
-    >
-      {svg(
+    <IconButton
+      icon={svg(
         <>
           <rect className="g-a" x="4" y="4" width="6.5" height="6.5" rx="1.8" />
           <rect className="g-b" x="13.5" y="4" width="6.5" height="6.5" rx="1.8" />
@@ -187,7 +175,15 @@ export function SideRailButton({
           <rect className="g-d" x="13.5" y="13.5" width="6.5" height="6.5" rx="1.8" />
         </>,
       )}
-    </button>
+      label={action}
+      tooltipSide="above"
+      className="side-rail-toggle"
+      aria-expanded={open}
+      aria-controls="side-rail"
+      // Said, not hidden: the window is too narrow for it beside what is open.
+      aria-disabled={!room || undefined}
+      onClick={room ? toggle : undefined}
+    />
   )
 }
 

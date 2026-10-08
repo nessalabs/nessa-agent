@@ -1,0 +1,17 @@
+--- a/crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs
++++ b/crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs
+@@ -90,13 +90,13 @@
+ #[async_trait]
+ impl OwnershipStore for SqliteOwnershipStore {
+     async fn write(&self, snapshot: &OwnershipSnapshot) -> Result<(), PortFailure> {
++        let snapshot = self.worker.input(snapshot.clone());
+         let permit = self
+             .worker
+             .admit()
+             .await
+             .map_err(|_| PortFailure::Rejected)?;
+         let state = self.state.clone();
+-        let snapshot = self.worker.input(snapshot.clone());
+         self.worker
+             .run(permit, move || state.write(snapshot.get()))
+             .await

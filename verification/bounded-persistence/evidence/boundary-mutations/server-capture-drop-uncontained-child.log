@@ -1,0 +1,26 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-e2f6c708a6cf158b)
+
+running 1 test
+
+thread 'tokio-rt-worker' (480625) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs:52:13:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'tokio-rt-worker' (480625) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/blocking.rs:265:9:
+faulting panic payload destructor
+
+thread 'mcp_authorization::infrastructure::records::tests::detached_ready_input_drop_fault_is_contained' (480623) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/records/tests.rs:634:9:
+assertion `left == right` failed
+  left: 1
+ right: 0
+test mcp_authorization::infrastructure::records::tests::detached_ready_input_drop_fault_is_contained ... FAILED
+
+failures:
+
+failures:
+    mcp_authorization::infrastructure::records::tests::detached_ready_input_drop_fault_is_contained
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1999 filtered out; finished in 0.20s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

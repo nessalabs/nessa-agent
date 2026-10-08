@@ -1,0 +1,11 @@
+--- a/crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs
++++ b/crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs
+@@ -224,7 +224,7 @@
+ 
+ impl<F> Drop for Job<F> {
+     fn drop(&mut self) {
+-        let _ = self.drop_operation();
++        drop(self.operation.take());
+         // Automatic field destruction releases admission after this body.
+     }
+ }

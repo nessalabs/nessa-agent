@@ -1,0 +1,11 @@
+{
+  "benchmarks/oauth-current-repeat.csv": "437cb40b5bfe4a7d86c3a542bc9571e62a460c5f8d079bfe400442d41e3b80e8",
+  "benchmarks/sqlite-inline.csv": "12f4845205cfd0c042372d7ac1cf175bc3ffe4b89efc60b9ee882d1768df65ce",
+  "benchmarks/sqlite-current.csv": "7a7ae6f33f8d75317dc007d1ae0f0ded7bf3257b781148e2db159e76529d5200",
+  "benchmarks/sqlite-current.csv.batches.csv": "fe292f1efe1e3088db163d0395f9b346f4fcd2c4ae2b08d464d6959f4c59af72",
+  "benchmarks/sqlite-current-repeat.csv": "4a4b7946c9cd8e4fe53bc7ed2b98367c018caead80ac24965ba1e6f82171ef07",
+  "benchmarks/sqlite-current-repeat.csv.batches.csv": "b86690ddbc547782941be7421d567aaab9c4db2046b24cf90373767854347257",
+  "benchmarks/oauth-current.csv": "207077a6418ddf0053cb4770055fe1c19c3aa4abd8cf0b19bd0a9d2fc9f6bec6",
+  "benchmarks/oauth-inline.csv": "5e56d31453c7a7cb5b98b5298f86dca203eed13eaf7f98c8e89d21bb1089c1b3",
+  "benchmarks/sqlite-inline.csv.batches.csv": "cf8c45a215b7a373cf261b7b8316b54ce3a0a70d0d91c3dea5d9bcb2a07311e7"
+}

@@ -1,0 +1,25 @@
+
+running 2 tests
+test infrastructure::session_storage::ownership::tests::ownership_read_keeps_current_thread_heartbeat_running ... FAILED
+test infrastructure::session_storage::ownership::tests::ownership_write_keeps_current_thread_heartbeat_running ... FAILED
+
+failures:
+
+---- infrastructure::session_storage::ownership::tests::ownership_read_keeps_current_thread_heartbeat_running stdout ----
+
+thread 'infrastructure::session_storage::ownership::tests::ownership_read_keeps_current_thread_heartbeat_running' (443085) panicked at crates/nessa-sdk/src/infrastructure/session_storage/ownership/physical_tests.rs:45:5:
+current-thread heartbeat froze during physical I/O: 1 -> 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- infrastructure::session_storage::ownership::tests::ownership_write_keeps_current_thread_heartbeat_running stdout ----
+
+thread 'infrastructure::session_storage::ownership::tests::ownership_write_keeps_current_thread_heartbeat_running' (443086) panicked at crates/nessa-sdk/src/infrastructure/session_storage/ownership/physical_tests.rs:45:5:
+current-thread heartbeat froze during physical I/O: 1 -> 1
+
+
+failures:
+    infrastructure::session_storage::ownership::tests::ownership_read_keeps_current_thread_heartbeat_running
+    infrastructure::session_storage::ownership::tests::ownership_write_keeps_current_thread_heartbeat_running
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 967 filtered out; finished in 0.13s
+

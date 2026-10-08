@@ -81,8 +81,9 @@ export const settingsCategories = [
     ],
   },
   {
-    // The home of previews of features not settled yet; with none on offer
-    // its page says so, and shows no control that would do nothing.
+    // The home of previews of features not settled yet. The subagents preview
+    // is on offer; with none on offer the page says so, and shows no control
+    // that would do nothing.
     id: "advanced",
     label: "Advanced",
     dek: "Early features you can try before they are finished.",
@@ -390,6 +391,14 @@ export const settingsEntries = [
     label: "Session history",
     detail: "Kept on this Mac, in Nessa's data folder.",
     keywords: "storage finder clear",
+  },
+  // Advanced › Experimental
+  {
+    id: "subagents-preview",
+    tab: "experimental",
+    label: "Subagents",
+    detail: "A panel of the agents a conversation put to work.",
+    keywords: "delegation children agents panel",
   },
   // About
   // Advanced › Experimental

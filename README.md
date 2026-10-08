@@ -142,6 +142,11 @@ The server and auth library need **Rust 1.89+** (embedded Cedar). Ubuntu's packa
 `rustc` is often 1.83; install via rustup. [`rust-toolchain.toml`](rust-toolchain.toml)
 pins `stable`, so `just dev` and `cargo test` pick it without an extra env var.
 
+Linux containers running agent processes need a reaping init: use Docker
+`--init`, or run the owner under `tini -s --`. See the opt-in
+[process-cleanup acceptance harness](scripts/process-cleanup/README.md) for the
+non-reaping failure and supported environment comparison.
+
 Build packages on Debian/Ubuntu:
 
 ```bash
@@ -186,6 +191,7 @@ and `just release` there.
 | `pnpm frontend:check` | Run the complete frontend/client formatting, lint, protocol, docs, type, test, and build contract |
 | `pnpm sdk:check` | Run SDK formatting, Clippy, tests, and warnings-denied Rustdoc |
 | `pnpm check` | Run the same frontend, Rust crate, SDK, MCP, and desktop checks composed in CI |
+| `pnpm check:changed` | Run the local scripts that own the files changed since `origin/main`, or `pnpm check` when a path has no narrow owner. Required CI still runs every job |
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm ui:check` | Confirm the vendored UI matches `nessa-ui-revision` (offline, runs before `typecheck`, `dev`, `build`, `test`) |
 | `pnpm ui:types` | Reconcile the vendored UI with `nessa-ui-revision` |

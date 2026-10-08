@@ -1,0 +1,11 @@
+--- a/crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs
++++ b/crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs
+@@ -155,7 +155,7 @@
+ 
+ impl<F> Job<F> {
+     fn drop_operation(&mut self) -> bool {
+-        contained_drop(self.operation.take())
++        { drop(self.operation.take()); true }
+     }
+ 
+     fn run<R>(mut self) -> Result<R, Interrupted>

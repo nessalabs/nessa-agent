@@ -18,6 +18,7 @@ This skill is how to use them; it restates neither.
 | The change touches | Run |
 | --- | --- |
 | anything in `src/desktop/` (always, first) | `smoke.mjs` |
+| `ui/icon-button.*`, or any icon-only control | `icon-buttons.mjs` (`--layout classic` for the classic shell) |
 | titlebar, column heads, side columns, Settings chrome, the picture band, anything that slides | `safe-area.mjs` |
 | the side rail, its toggle or a full view (`workspace/ui/chrome/side-rail.*`), the window frame (`.workspace-window`), anything that places a column from the workspace's edge | `columns.mjs` |
 | drag and drop, `drop.ts`, `drag.ts`, pane headers | `drag.mjs` |
@@ -34,6 +35,7 @@ This skill is how to use them; it restates neither.
 | the same, once the window does read a gateway: its handshake, the conversation list, a transcript, a turn made elsewhere (needs the agent signed in on this machine, or `--scripted` for none; not in `run-all.mjs`) | `gateway-window.mjs` |
 | UI, gateway, ACP, or MCP behavior, signed out: a permission, a failed turn, a cancel, in Chromium and WebKit, with one verdict and an evidence directory | `pnpm test:e2e:scripted` (`scripted-e2e.mjs`; `--mode prod` for a production build) |
 | motion, FLIP, rendering, selectors, anything on the budget's list, or a perf claim | `perf-budget.mjs` (production build) |
+| startup time, heap, paint, a full pane cap, one long transcript | `alpha-perf.mjs` (production build; opt-in, not in `run-all`) |
 | a seeded large workspace (opt-in; not in `run-all.mjs`) | `workspace-load.mjs` |
 | a UI branch before hand-off | `run-all.mjs` (the functional checks above, not `gateway-window.mjs` or `pnpm test:e2e:scripted`; gateway-window needs a signed-in agent unless `--scripted`, and runs on its own) |
 

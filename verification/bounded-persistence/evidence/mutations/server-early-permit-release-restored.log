@@ -1,0 +1,9 @@
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 38.99s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-e2f6c708a6cf158b)
+
+running 1 test
+test mcp_authorization::infrastructure::records::tests::canceled_secret_store_excludes_delete_and_load ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1997 filtered out; finished in 0.20s
+

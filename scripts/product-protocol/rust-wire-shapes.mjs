@@ -37,6 +37,8 @@ export function rustWireShapes(definitions, roots, references = {}) {
         return unsigned(node, value)
       case "nullableInteger":
         return `${value}.is_null() || ${unsigned(node, value)}`
+      case "stringEnum":
+        return `${value}.as_str().is_some_and(|text| [${node.values.map(rustString).join(",")}].contains(&text))`
       case "string": {
         const conditions = []
         if (node.minimum !== undefined)

@@ -367,7 +367,7 @@ function SettingsView({
         >
           <DesktopIcon name="sidebar" />
         </button>
-        <HistoryButtons className="settings-titlebar-button" />
+        <HistoryButtons />
         <button
           type="button"
           className="settings-titlebar-button settings-titlebar-back"

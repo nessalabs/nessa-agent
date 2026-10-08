@@ -216,15 +216,16 @@ pub struct ListedAuthorization {
 /// The loopback redirect the browser is sent back to.
 #[async_trait]
 pub trait ConsentCallback: Send + Sync {
-    /// Bind `http://127.0.0.1:<port>/mcp-oauth/callback` and accept one
-    /// matching call until `deadline_ms`. The response body never contains
-    /// the code.
+    /// Bind `http://127.0.0.1:<port>/mcp-oauth/callback` and deliver bounded,
+    /// completely framed candidates until `wait_for` elapses or the receiver
+    /// is dropped. The domain decides which candidate consumes consent.
+    /// Responses are fixed and omit the code and state.
     async fn listen(&self, wait_for: std::time::Duration) -> Result<CallbackBind, ()>;
 }
 
 pub struct CallbackBind {
     pub redirect_uri: String,
-    pub accepted: tokio::sync::oneshot::Receiver<CallbackQuery>,
+    pub candidates: tokio::sync::mpsc::Receiver<CallbackQuery>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

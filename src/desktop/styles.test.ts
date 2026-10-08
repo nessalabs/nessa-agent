@@ -279,3 +279,66 @@ it("moves Settings' sidebar by transform, never by animating its width", () => {
   const body = sheet.slice(sheet.indexOf(".settings-sidebar {")).split("}")[0]
   expect(body).not.toMatch(/transition/)
 })
+
+it("draws a pill, a short fade and a focus ring from the window's tokens, not from literals", () => {
+  // Settings keeps its own sheet until its redesign lands (#632); everything else
+  // names the scale in `styles.css` — `--desktop-radius-pill`, `--desktop-fast`,
+  // `--desktop-medium`, `--desktop-focus-outline` — so a change to how the app
+  // looks is made in one place.
+  const root = fileURLToPath(new URL(".", import.meta.url))
+  const sheets = (dir: string): string[] =>
+    readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name)
+      if (statSync(path).isDirectory())
+        return path === join(root, "settings") ? [] : sheets(path)
+      return name.endsWith(".css") ? [path] : []
+    })
+  const literals = {
+    pill: /\b\d*999px\b/,
+    fade: /\b(?:120|140|160)ms\b|\b0?\.1[246]s\b/,
+    focus:
+      /(?<![-\w])outline(?:-width)?:[^;]*\b[\d.]+px\b[^;]*\bsolid\b|(?<![-\w])outline:\s*solid\s+[\d.]+px/,
+  }
+  const comments = /\/\*[\s\S]*?\*\//g
+  // `styles.css` defines the tokens; every other rule uses them.
+  const definition = /^\s*--desktop-(?:fast|medium|radius-pill):[^;]*;/gm
+  for (const path of sheets(root)) {
+    let source = readFileSync(path, "utf8").replace(comments, "")
+    if (path === join(root, "styles.css")) source = source.replace(definition, "")
+    for (const [name, literal] of Object.entries(literals))
+      expect(source, `${relative(root, path)}: ${name}`).not.toMatch(literal)
+  }
+})
+
+it("defines every token the menus and the pickers read on :root, because they sit outside every surface", () => {
+  // A `var()` with no value drops its whole declaration: a menu closed without its
+  // fade, the model picker lost its selected row (both caught in review), and the picker's
+  // rise never played at the base commit, for the same reason. Menus and the model picker portal to <body>.
+  const comments = /\/\*[\s\S]*?\*\//g
+  const defined = (source: string) =>
+    new Set([...source.matchAll(/(--desktop-[\w-]+)\s*:/g)].map((match) => match[1]))
+  const rules = (source: string) =>
+    [...source.replace(comments, "").matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+      selector: match[1],
+      body: match[2],
+    }))
+  const scope = styles.match(/:root,\s*\[data-surface\]\s*\{([^}]*)\}/)?.[1] ?? ""
+  const onRoot = defined(scope)
+  expect(onRoot.size).toBeGreaterThan(0)
+  const menu = readFileSync(new URL("./ui/menu/menu.css", import.meta.url), "utf8")
+  const portalled = [
+    ...rules(menu),
+    ...rules(styles).filter(({ selector }) =>
+      /\.desktop-popover|\.desktop-model-picker/.test(selector),
+    ),
+  ]
+  // What the portalled rules define themselves (the popover material) is theirs.
+  const own = new Set(portalled.flatMap(({ body }) => [...defined(body)]))
+  const read = new Set<string>()
+  for (const { body } of portalled)
+    for (const [, token] of body.matchAll(/var\((--desktop-[\w-]+)/g))
+      // `--desktop-light-*` is set on <html> by the theme (`adapters/theme-preference.ts`).
+      if (!own.has(token) && !token.startsWith("--desktop-light-")) read.add(token)
+  expect(read.size).toBeGreaterThan(0)
+  for (const token of read) expect(onRoot, token).toContain(token)
+})

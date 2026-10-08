@@ -1,0 +1,11 @@
+--- a/crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs
++++ b/crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs
+@@ -13,7 +13,7 @@
+ use tokio::runtime::Handle;
+ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+ 
+-const PHYSICAL_SLOTS: usize = 1;
++const PHYSICAL_SLOTS: usize = 2;
+ 
+ pub(super) struct Worker {
+     slot: Arc<Semaphore>,

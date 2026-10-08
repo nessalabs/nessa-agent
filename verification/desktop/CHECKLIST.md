@@ -29,6 +29,45 @@ Opt-in. Not part of `run-all`. The contract is
   `lib/perf.mjs` at 4× after calibration. A frame over 50 ms is a finding,
   not a failure of this check. WebKit runs the journeys without that throttle.
 
+## Alpha startup and stress
+
+Opt-in. Not part of `run-all`. It does not change the frame budget and it
+does not replace `workspace-load.mjs`.
+
+- [ ] **Cold and warm startup are measured on the sample workspace**, in
+  Chromium and WebKit, production build. Cold is a fresh context (Chromium
+  disables the HTTP cache). Warm is the second reload after a cache fill.
+  The row keeps ready time, Navigation Timing, first contentful paint, heap
+  when the browser exposes it, and the longest rAF gap. A missing navigation
+  entry or a startup screen still up fails the row. There is no startup
+  budget.
+  _Check:_ `alpha-perf.mjs` (`startup`).
+- [ ] **The layout's pane cap is filled, and one long seeded transcript
+  scrolls.** The cap is `paneLimits.maxPanes`. One further split does not
+  add a pane. The long transcript is 24 sessions, one transcript of 24
+  messages, 4,000 ASCII characters in the plain part. Chromium records the
+  refused split and the scroll at 4× CPU throttle. A frame over 50 ms is
+  stored and does not fail the row. A pane past the cap, a short fill, a
+  split chord that does not arrive, or a transcript that does not overflow,
+  fails the row. A missing frame sample does not replace that result.
+  _Check:_ `alpha-perf.mjs` (`panes`, `transcript`).
+- [ ] **A scripted gateway is stressed only with `--with-gateway`, in
+  Chromium and WebKit, columns.** The gateway stores `paneLimits.maxPanes`
+  conversations. One of them has four copies of a 4,000-character user
+  message; the scripted agent answers each with text. The scroll is
+  recorded only after those replies are on the page. A transcript of the
+  user lines alone fails the row. Cold and warm each
+  ask the host for the endpoint, and the ready mark is that long
+  conversation's session row, so the clock includes the list. The same
+  window fills the pane cap and scrolls that transcript. `conversation.list`
+  has to be complete (`seedHeld`); an incomplete list is not measured.
+  This is not a catalogue walk.
+  _Check:_ `alpha-perf.mjs --with-gateway` (`gateway-seed`, `gateway-startup`,
+  `gateway-panes`, `gateway-transcript`).
+- [ ] **Overview, drag, and split budgets stay in `perf-budget.mjs`.** A number
+  there that misses 50 ms and matches `#588` / `#606` is that known result.
+  The 10,000-session dry run stays in `workspace-load.mjs`.
+
 ## Performance budget
 
 _ADR 238 › Context_: "Calm means no dropped frames" — no frame over 50 ms, in a
@@ -457,6 +496,24 @@ scripts drive the sample plugin the sample workspace registers
   it, the body with room. _Check:_ `widgets.mjs --only narrow-short` (1000 ×
   560, three panes).
 
+## Subagents
+
+The read-only sample panel (ADR 329, #330, #331): a conversation's widget
+opens a list of the agents it put to work, and one child's conversation.
+The sample fills the retry-budget session only. No composer, no header
+accessory.
+
+- [ ] **The card opens a pane beside the conversation**, the list in activity
+  order with a closed child called closed, and a child opens on its
+  transcript. Focus stays in the panel. _Check:_ `subagents.mjs --only panel`.
+- [ ] **The transcript follows a new line while it is at the end, and stays
+  put when scrolled up.** _Check:_ `subagents.mjs --only panel`.
+- [ ] **Escape steps back to the list.** In a pane a second Escape changes
+  nothing more; in the window it returns to the panes. _Check:_
+  `subagents.mjs --only panel`.
+- [ ] **The list fits a narrow pane in a short window.** _Check:_
+  `subagents.mjs --only narrow` (1000 × 560).
+
 ## MCP Apps
 
 _ADR 344_ ([`docs/adr/todo/344-mcp-ui.md`](../../docs/adr/todo/344-mcp-ui.md)),
@@ -715,8 +772,8 @@ phone's scanner is not this screen.
 - [ ] **Advanced › Experimental is the home of previews**: Advanced sits just
   before About with its flask in both icon families; one line under its
   title says what it is for, and with one tab there is no tab strip; it
-  offers each preview as one switch, off until turned on (today: the side
-  rail); General has no Experimental tab; search finds it as "advanced",
+  offers each preview as one switch — the subagents preview (on unless
+  turned off) and the side rail (off until turned on); General has no Experimental tab; search finds it as "advanced",
   "experimental", "labs" or "preview". _Check:_ `smoke.mjs` (`settings`);
   unit tests `settings-view.test.tsx`, `settings-catalogue.test.ts`,
   `icon-provider.test.tsx`; the flask by eye in both families.
@@ -857,6 +914,21 @@ publish, and refuses nothing the gateway would judge.
   in a new conversation, its app frame renders the chart, once. _Check:_
   `mcp-servers-gateway.mjs --only done-when` (needs the agent signed in on the
   machine). "Once" depends on #418's fix (#421) being in the tree.
+
+## Icon buttons (#632)
+
+One component, `ui/icon-button.tsx`, draws every icon-only control outside
+Settings: a box of 26, 28 or 32px, rounded or a pill, named "Label (⌘K)" and
+saying the same in its tooltip, filled by `--desktop-hover-strong` under the
+pointer, and outlined by `--desktop-focus-outline` under the keyboard.
+
+- [ ] **Every icon button holds the contract, and none of the replaced classes
+  is left.** _Check:_ `icon-buttons.mjs` (`contract`, per engine and layout;
+  `--layout classic` for the classic shell). Rule: `ui/icon-button.css`.
+- [ ] **The pointer fills it with the stronger hover.** _Check:_
+  `icon-buttons.mjs` (`hover`).
+- [ ] **Keyboard focus on one draws an outline.** _Check:_ `icon-buttons.mjs`
+  (`focus`). At the base commit the workspace's resets left these with none.
 
 ## Menus and tooltips
 
@@ -1002,7 +1074,8 @@ says why where the conversations would be.
   drawn in the open transcript as its last two messages, the page not
   reloaded (the gateway source's poller). Every handshake the window makes,
   each reconnect's too, is the first's: the host's endpoint, client
-  `nessa-panel`, principal `surface:nessa-panel`. No console error, page error
+  `nessa-panel`, surface kind `desktop` with an instance, principal
+  `surface:nessa-panel`. No console error, page error
   or failed request at any point. In Chromium and WebKit. The reply compared
   is a text-only one (only text parts, plain text, not empty), which the
   window draws as its text alone; an agent that answers otherwise leaves the
@@ -1149,10 +1222,20 @@ or clocks.
   600 ms in Chromium and WebKit, in both layouts. A held summary list and another
   conversation's held read do not delay delivery. One background read per
   conversation, at most four active reads per second, one-second summaries and
-  no idle transcript reads. `message-sync.mjs` measures these contracts over the
+  no idle transcript reads. Running/queued text keeps fast polling after an idle
+  send even while its summary still says idle (#616). `run-all.mjs --mode prod`
+  gives this check its dedicated fixture build. `message-sync.mjs` measures these contracts over the
   production source, store and window with controlled gateway replies. See the
   [ordering table](../../docs/reviews/startup-latency.md#desktop-transcript-delivery-experiment-532).
   Three fresh-page runs report delivery median/max and frame attribution. Chromium
   uses calibrated 4x CPU throttling and checks the 50 ms frame budget through
   `lib/perf.mjs`; WebKit delivery is reported separately without CPU throttling.
   DOM plus frame opportunities do not measure transport, provider startup or compositor paint.
+
+### Retained widget and drag resources (#616)
+
+- [ ] The same inline widget keeps its proxy/app document and local state when
+  surrounding transcript parts are added or removed (`message-sync.mjs`, retained-app).
+- [ ] Resize removes a suspended returning drag copy in the resize event's turn,
+  including a blur followed by resize (`drag.mjs`, return-interrupted).
+  [ADR 238](../../docs/adr/done/238-desktop-workspace-frontend.md) owns the flight ordering.

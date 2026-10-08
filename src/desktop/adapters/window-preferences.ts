@@ -15,6 +15,9 @@ import { storedPreference } from "./stored-preference"
  *   above the rest; off, they are listed with the rest, newest first;
  * - **picture in conversations** — a sliver of the header picture, or the
  *   night scene, at the top of each conversation pane (`HeaderSliver`);
+ * - **subagents** — the panel of agents a conversation put to work, offered
+ *   under Settings › Advanced › Experimental. Off, the widget says so; the
+ *   source is unchanged;
  * - **side rail** — a preview, off until turned on in Advanced ›
  *   Experimental: the strip of places at the window's left edge
  *   (`workspace/ui/chrome/side-rail.tsx`).
@@ -42,6 +45,8 @@ export const usePictureInConversationsPreference = flag(
   "picture-in-conversations",
   "desktop-picture-in-conversations",
 ).usePreference
+
+export const useSubagentsPreview = flag("subagents", "desktop-subagents").usePreference
 
 /** Keeps the root's `data-drift` to the drifting-light preference. Mounted once, by the window. */
 export function useDriftInEffect(): void {

@@ -1,0 +1,11 @@
+{
+  "previous_head": "a8e2f1397220cb84750ef4450b16bcd4314045c3",
+  "base": "d55de88d9c6f5794b225da05b1055c511b9dba74",
+  "portable_original_red_exit": 101,
+  "central_green": "15 passed, 1 manual Linux test ignored",
+  "mutations": "two compiled runtime failures and exact restored green; only added catch and immediate payload disposition",
+  "linux": "existing reviewer pthread_create shim: baseline0/refusal0/repeat0; queued Job retains slot, later same-origin kick runs actual effect/capture cleanup exactly once",
+  "portable_limit": "thread_name_fn panic poisons Tokio pool; ManuallyDrop runtime avoids destruction; this child witness establishes no OS recovery or queue drainage",
+  "measurement_limit": "66k per-call and5250 batch rows and26 prior mutations are pre-R1 helper source; not rerun for exceptional submission catch",
+  "gate_record": "https://github.com/nessalabs/nessa-agent/blob/codex/622-verification-evidence/verification/bounded-persistence/evidence/review-and-final-gates/manifest.json"
+}

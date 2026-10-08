@@ -1,0 +1,21 @@
+
+running 1 test
+test infrastructure::session_storage::ownership::tests::queued_send_future_resumes_on_plain_thread ... FAILED
+
+failures:
+
+---- infrastructure::session_storage::ownership::tests::queued_send_future_resumes_on_plain_thread stdout ----
+
+thread '<unnamed>' (452060) panicked at crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs:85:22:
+there is no reactor running, must be called from the context of a Tokio 1.x runtime
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'infrastructure::session_storage::ownership::tests::queued_send_future_resumes_on_plain_thread' (452055) panicked at crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs:470:90:
+called `Result::unwrap()` on an `Err` value: Any { .. }
+
+
+failures:
+    infrastructure::session_storage::ownership::tests::queued_send_future_resumes_on_plain_thread
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 979 filtered out; finished in 0.20s
+

@@ -306,8 +306,9 @@ its top in both workspace layouts, and ⌘0 open it, with no preference to
 turn on (`layouts.test.tsx`). It began as a preview behind a setting; that
 setting is gone, and with it the sidebar's separate "Needs you" and "Running"
 views, which the overview holds — the session list shows one channel's
-sessions (`SessionView`). Previews to come are offered under Settings ›
-Advanced › Experimental, which says so while it has none. Its groups are
+sessions (`SessionView`). Previews are offered under Settings ›
+Advanced › Experimental. The subagents preview is on offer there; the page
+says it has nothing to try only while none is. The overview's groups are
 shown only while they hold something, "Needs you" too — nothing waiting
 leaves no empty section — and its one quiet line ("Nothing needs you") shows
 only when it lists nothing at all (`overview.test.tsx`). **Each count in its
@@ -476,8 +477,11 @@ button carries**; and **the zone settles at rest**.
 | carrying | Escape | cancelling (home) | as above; Escape goes no further |
 | carrying | another button, `lostpointercapture`, `pointercancel`, the window's blur | cancelling (home) | as above; with the press let go, a later move starts nothing |
 | carrying | a change: any key but Escape or a lone modifier (a command — ⌘W, ⌘0, ⌘B, ⌘,, ⌘K, an arrow — ends the drag before it runs); a resize; the panes, the content view or the side columns changing in the store (an agent's dispatch, a session removed); the carried session no longer listed; the window going inert under Settings, seen as it happens (a `MutationObserver` on `inert`). A layout switch unmounts the shell, and the drag with it, taking everything it drew | cancelling (at once) | the copy and the preview go at once, nothing read again, and the change plays as it would with no drag; a key that reaches the window while it is inert is never the drag's, so Settings keeps its Escape |
+| dropping | its flight finishes before the deferred commit/preview release | dropping | retain the resource owner until both finish, including reduced motion (#616) |
 | dropping | the drop's own change to the panes | dropping | (it is the drop) |
-| dropping, cancelling | the copy's flight ends (`landed`) | idle | — |
+| cancelling (home) | a change of room/view before its return flight ends | cancelling (at once) | remove the retained copy and preview immediately, including a lost pointer followed by resize; keep the resource owner through the flight (#616) |
+| dropping, cancelling | the owned copy's flight ends (`landed`, with its made resources) | idle | an obsolete flight's settlement leaves the current drag and its preview unchanged (#616) |
+| any phase with retained resources | adapter unmounts | idle | cancel owned flights, remove their copy/preview, and fence their later callbacks before cleanup effects (#616) |
 | dropping, cancelling | anything else, a press included | unchanged | a press while the copy still flies starts nothing |
 
 What the copy and the panes are drawn at (`copyShape`, `split-panes/model/drag.ts`; the
@@ -662,8 +666,9 @@ index derived from it, in `src/desktop/settings/model/`, rendered generically
 by `src/desktop/settings/ui/` (`src/desktop/settings/index.ts` is its map).
 A category's page shows its tabs when it has several, or one named other than
 the category (`showsTabs`): Advanced, just before About, holds one tab,
-Experimental, the home of previews, which shows a calm empty state and no
-control while none is on offer; search finds it as "advanced",
+Experimental, the home of previews. The subagents preview is offered there
+as a switch; the page shows a calm empty state and no control only while
+none is on offer. Search finds the tab as "advanced",
 "experimental", "labs" or "preview" (`settings-catalogue.test.ts`,
 `settings-view.test.tsx`).
 Preferences stay host-side adapters that notify other readers in the same

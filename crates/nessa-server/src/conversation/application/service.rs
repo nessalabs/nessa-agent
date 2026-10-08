@@ -2046,6 +2046,34 @@ impl ConversationService {
         mode: SubmissionMode,
         writer: Writer,
     ) -> Result<SubmissionReceipt, SubmitFailure> {
+        let (asked, submission) =
+            self.submission_future(id, caller, execution_id, message, mode, writer);
+        let outcome = tokio::spawn(submission).await;
+        let asked = asked.load(Ordering::SeqCst);
+        let failure = match outcome {
+            Ok(Ok(receipt)) => return Ok(receipt),
+            // Only before anything is asked: admission, and the resolve.
+            Ok(Err(Halt::Retired)) => SubmitFailure::Retired,
+            Ok(Err(Halt::Failed(error))) if asked => SubmitFailure::Asked(error),
+            Ok(Err(Halt::Failed(error))) => SubmitFailure::NotAsked(error),
+            Err(_) => SubmitFailure::TaskFailed { asked },
+        };
+        Err(failure)
+    }
+    /// The submission task, shared by normal supervision and controlled polling
+    /// in the desktop-stop ordering test. Refusal attribution stays on this task.
+    fn submission_future(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        execution_id: String,
+        message: SubmittedMessage,
+        mode: SubmissionMode,
+        writer: Writer,
+    ) -> (
+        Arc<AtomicBool>,
+        impl Future<Output = Result<SubmissionReceipt, Halt>> + Send + 'static,
+    ) {
         let service = self.clone();
         // Set just before the agent is asked to take it, on the submission's
         // own task: what the caller reads to know whether it was.
@@ -2330,7 +2358,7 @@ impl ConversationService {
                 }
             }
         };
-        let outcome = tokio::spawn(async move {
+        let outcome = async move {
             let submitted: Result<SubmissionReceipt, Halt> = submission.await;
             // An app's message refused before the agent was asked, while its
             // own apps say its opening had ended or its mount been released:
@@ -2348,18 +2376,8 @@ impl ConversationService {
                 }
                 submitted => submitted,
             }
-        })
-        .await;
-        let asked = asked.load(Ordering::SeqCst);
-        let failure = match outcome {
-            Ok(Ok(receipt)) => return Ok(receipt),
-            // Only before anything is asked: admission, and the resolve.
-            Ok(Err(Halt::Retired)) => SubmitFailure::Retired,
-            Ok(Err(Halt::Failed(error))) if asked => SubmitFailure::Asked(error),
-            Ok(Err(Halt::Failed(error))) => SubmitFailure::NotAsked(error),
-            Err(_) => SubmitFailure::TaskFailed { asked },
         };
-        Err(failure)
+        (asked, outcome)
     }
     /// `new_submission` is false for a retry of a submission the agent already
     /// had. One found already settled then says nothing new, so its reply is

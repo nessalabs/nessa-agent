@@ -14,7 +14,8 @@ when reviewing it, and after anything performance-sensitive.
 
 A large-workspace measurement is specified in
 [UI workspace load](../docs/design/ui-workspace-load.md). The seeded page is
-opt-in (`workspace-load.mjs`). It is not part of `pnpm verify:desktop`.
+opt-in (`workspace-load.mjs`). Startup, the pane cap, and one long transcript
+are opt-in too (`alpha-perf.mjs`). Neither is part of `pnpm verify:desktop`.
 
 ## Layout
 
@@ -42,7 +43,9 @@ verification/
       run-all.mjs           every check, summarised
       committed-transcript.mjs history notices, permission controls, re-enable
       smoke.mjs             loads, sends, splits, Settings, overview; console errors
+      icon-buttons.mjs      every icon button: size, shape, name, tooltip, hover, keyboard focus
       perf-budget.mjs       the frame budget, production build, 4× CPU throttling
+      alpha-perf.mjs        cold/warm startup, the pane cap, one long transcript; --with-gateway seeds a scripted gateway (opt-in; not in run-all)
       safe-area.mjs         nothing painted under the window controls, per frame
       columns.mjs           no two columns overlap in any state of the side rail, sidebar, list and overview; the rail's toggle and "nessa Studio" hold still; a full view's workspace takes no keys
       load-fallback.mjs     the load fallback inside, and centred in, the visible panel

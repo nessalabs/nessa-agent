@@ -1,0 +1,13 @@
+Dataset: 7 legal single-store SQLite fixtures: empty, and 32/256/2048 root lifetimes in open/closed histories; zero spawns. Actual row/report/settlement/body sizes are in raw CSV. No 2048-reservation claim; retained-request cap is128.
+Profiles: cargo test debug, production library integration targets without cfg(test) fault probes. Raw caller latency includes input clone, admission/wait, blocking submission, serialization/crypto, I/O and joining; phase timings were not instrumented.
+Runtime: Tokio multithread,2 worker threads,8 maximum blocking threads. SQLite:1 adapter instance, sequential write/read each1000 samples and250 batches of4 scheduled writers (1000 caller samples); 50 write/read warmup pairs per fixture. OAuth:4 independent AuthorizationOwner/FileRecords/audit lanes, each10 warmup flows and250 measured flows; scripted zero-delay HTTP/discovery/callback/token/clock/entropy/resources/session seams, no real network. New server UUID per flow, retained auth/audit files grow during each lane.
+Filesystem: tempdir() on local /tmp tmpfs. SQLite DELETE journal / FULL synchronous configured by existing opener; sealed token and audit use their existing durability operations. Results do not establish disk or production network performance.
+Order: initial worker, reconstructed inline delegation over the same synchronous state implementation/harness, restored final worker repeat. Initial worker precedes cfg(test)-only fault witness strengthening; final repeat is measured on restored final source. No byte-equality claim for separately compiled binaries.
+Quantiles: median mean of two middle samples when even; p95/p99 nearest-rank ceil(p*N)-1 on sorted elapsed_ns;1000 samples/scenario, tails have limited resolution. Four scheduled callers are not asserted simultaneously ready in one poll.
+Heartbeat: independent OS thread samples actual current-thread Tokio tick counter during a120ms physical gate, then releases operation. These are observed tick counts/responsiveness assertions, not a jitter/latency distribution or throughput guarantee.
+Linux 6.18.44 x86_64 GNU/Linux
+rustc 1.99.0 (b940084d7 2026-09-28)
+v24.19.0
+/tmp tmpfs
+Scheduled-call clock scope: four-writer elapsed starts inside each spawned task, excluding scheduler waiting before first poll. OAuth elapsed starts at each flow's initiation inside its lane, excluding time before that lane/flow begins. The inline baseline can therefore hide some scheduler delay; gated heartbeat counts, not these caller quantiles, establish runtime responsiveness.
+Host CPU: AMD EPYC9V74 80-Core Processor; nproc reports5 available CPUs. CARGO_BUILD_JOBS=2; no other agent Cargo builds scheduled during this measurement stage.

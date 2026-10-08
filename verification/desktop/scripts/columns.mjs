@@ -219,6 +219,8 @@ const body = {
         return {
           rail: window?.dataset.rail === "open",
           sidebar: window?.dataset.sidebar === "open",
+          // Closed by the person, not folded by the window for room.
+          sidebarChosen: window?.dataset.sidebarChosen === "open",
         }
       }, css.workspaceWindow)
     for (const rail of [true, false])
@@ -230,7 +232,7 @@ const body = {
         const at = await boxOf(page, css.sideRailToggle)
         const studio = await boxOf(page, css.studio)
         seen.push({ label, toggle: at, studio })
-        const hidden = !now.rail && !now.sidebar
+        const hidden = !now.rail && !now.sidebarChosen
         if (hidden && at)
           failures.push(`${label}: the toggle is drawn with nothing to sit in`)
         if (!hidden && !at) failures.push(`${label}: the toggle is not drawn`)

@@ -1,0 +1,26 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_sdk-3a9a37445fc631f7)
+
+running 1 test
+
+thread 'tokio-rt-worker' (479309) panicked at crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs:52:13:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'tokio-rt-worker' (479309) panicked at crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs:265:9:
+faulting panic payload destructor
+
+thread 'infrastructure::session_storage::ownership::tests::detached_ready_input_drop_fault_is_contained' (479307) panicked at crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs:691:9:
+assertion `left == right` failed
+  left: 1
+ right: 0
+test infrastructure::session_storage::ownership::tests::detached_ready_input_drop_fault_is_contained ... FAILED
+
+failures:
+
+failures:
+    infrastructure::session_storage::ownership::tests::detached_ready_input_drop_fault_is_contained
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 985 filtered out; finished in 0.20s
+
+error: test failed, to rerun pass `-p nessa-sdk --lib`

@@ -1,0 +1,7 @@
+{
+  "mutated_exit": 101,
+  "restored_exit": 0,
+  "restored_sha256": {
+    "crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs": "f3f8bfe55205d2fbc2af7a18a4cfe85b87a62b74bee1ec9937d0b8318c3373be"
+  }
+}

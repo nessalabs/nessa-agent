@@ -1,0 +1,271 @@
+{
+  "check": "mcp-apps-gateway",
+  "ok": false,
+  "started": "2026-10-07T05:34:00.215Z",
+  "finished": "2026-10-07T05:34:19.935Z",
+  "target": {
+    "url": "http://127.0.0.1:42113/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "setup",
+      "seen": {
+        "title": "Use the tools of the \"mcptest\" MCP server. If th"
+      },
+      "timings": {
+        "gatewayMs": 293,
+        "devServerMs": 2624,
+        "agentTurnMs": 1214
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "renders",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 25,
+      "seen": {
+        "state": "live",
+        "mode": "inline",
+        "heading": "Review rows (nessa-test)",
+        "origin": "null",
+        "url": "about:srcdoc",
+        "cards": 1,
+        "frames": 1,
+        "result": "{\"rows\":[1,2]}",
+        "proxyOrigin": "http://127.0.0.1:46329"
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "hidden",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 9,
+      "seen": {
+        "noUi": "error: This app may not use that tool",
+        "withUi": "error: This app may not use that tool"
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "allow",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 424,
+      "seen": {
+        "before": "pending",
+        "review": {
+          "arrivedMs": 7,
+          "toolName": "app_delete_row",
+          "origin": {
+            "kind": "app",
+            "server": "mcptest",
+            "tool": "app_delete_row"
+          },
+          "argumentsJson": "{\"id\":2}",
+          "options": ["allow", "deny"],
+          "card": "The mcptest app wants to run app_delete_row $ app_delete_row {\"id\":2} An app asks to run app_delete_row on mcptest Deny Allow"
+        },
+        "answer": "ok: Deleted row 2."
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "deny",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1239,
+      "seen": {
+        "before": "pending",
+        "review": {
+          "arrivedMs": 263,
+          "toolName": "app_delete_row",
+          "origin": {
+            "kind": "app",
+            "server": "mcptest",
+            "tool": "app_delete_row"
+          },
+          "argumentsJson": "{\"id\":2}",
+          "options": ["allow", "deny"],
+          "card": "The mcptest app wants to run app_delete_row $ app_delete_row {\"id\":2} An app asks to run app_delete_row on mcptest Deny Allow"
+        },
+        "answer": "error: The person declined this action"
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "release",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1611,
+      "seen": {
+        "paneMode": "fullscreen",
+        "pointerMoves": 1,
+        "review": {
+          "origin": {
+            "kind": "app",
+            "server": "mcptest",
+            "tool": "app_delete_row"
+          },
+          "toolName": "app_delete_row"
+        },
+        "paneSaid": "pending",
+        "withdrawn": true,
+        "withdrawnMs": 7,
+        "cardGone": true,
+        "cardGoneAfterWithdrawnMs": 82,
+        "inlineState": "live",
+        "paneLive": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "message",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2450,
+      "seen": {
+        "before": "pending",
+        "tool": "review_rows",
+        "labelled": "Sent by review_rows, from mcptest",
+        "answer": "ok",
+        "arrived": 1,
+        "executionId": "app-fcc3d963c13756b923b31f64142ab7e7",
+        "app": {
+          "executionId": "381ce3fe-f9c0-40a9-b372-59ec99f08346",
+          "toolId": "toolu_scripted_e588ffcf-9bee-4011-a39e-ada7056fbe7e",
+          "server": "mcptest",
+          "tool": "review_rows"
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "context",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 378,
+      "seen": {
+        "answer": "ok"
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "console",
+      "harmless": [
+        "requestfailed: http://127.0.0.1:42113/browser/check net::ERR_ABORTED (aborted after a 204 response, #485)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "renders",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 61,
+      "seen": {
+        "state": "live",
+        "mode": "inline",
+        "heading": "Review rows (nessa-test)",
+        "origin": "null",
+        "url": "about:srcdoc",
+        "cards": 1,
+        "frames": 1,
+        "result": "{\"rows\":[1,2]}",
+        "proxyOrigin": "http://127.0.0.1:46329"
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "hidden",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 17,
+      "seen": {
+        "noUi": "error: This app may not use that tool",
+        "withUi": "error: This app may not use that tool"
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "allow",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 368,
+      "seen": {
+        "before": "pending",
+        "review": {
+          "arrivedMs": 7,
+          "toolName": "app_delete_row",
+          "origin": {
+            "kind": "app",
+            "server": "mcptest",
+            "tool": "app_delete_row"
+          },
+          "argumentsJson": "{\"id\":2}",
+          "options": ["allow", "deny"],
+          "card": "The mcptest app wants to run app_delete_row $ app_delete_row {\"id\":2} An app asks to run app_delete_row on mcptest Deny Allow"
+        },
+        "answer": "ok: Deleted row 2."
+      }
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "deny",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 622,
+      "error": "frame.evaluate: Frame was detached"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "release",
+      "engine": "webkit",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: deny failed"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "message",
+      "engine": "webkit",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: deny failed"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "context",
+      "engine": "webkit",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: deny failed"
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: [vite] TypeError: Importing a module script failed. (http://127.0.0.1:42113/@vite/client)",
+        "console.error: [vite] Failed to reload /src/desktop/styles.css. This could be due to syntax errors or importing non-existent modules. (see errors above) (http://127.0.0.1:42113/@vite/client)"
+      ],
+      "name": "console"
+    }
+  ]
+}

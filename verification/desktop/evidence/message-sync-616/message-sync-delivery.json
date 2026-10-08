@@ -1,0 +1,1489 @@
+{
+  "check": "message-sync",
+  "ok": false,
+  "started": "2026-10-07T05:17:26.055Z",
+  "finished": "2026-10-07T05:26:45.329Z",
+  "target": {
+    "url": "http://127.0.0.1:42107/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:42107/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "calibration",
+      "engine": "chromium",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 46,
+        "throttledMs": 186,
+        "ratio": 4.07,
+        "ok": true
+      },
+      "calibrationFrame": {
+        "cost": 120,
+        "measuredMs": 116.59999999999991,
+        "attributed": true,
+        "ok": true
+      }
+    },
+    {
+      "ok": false,
+      "failures": ["message update frame 66.69999999999982 ms exceeds 50 ms"],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "columns",
+      "run": 1,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          461.89999999990687, 430.5, 335.89999999990687, 271.60000000009313,
+          463.70000000018626, 388.39999999990687, 294.39999999990687, 486.5,
+          419.79999999981374, 336.39999999990687
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 419.79999999981374,
+          "maxMs": 486.5
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 374.8000000002794,
+          "maxMs": 437.20000000018626
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "maxFrame": 50.099999999999454,
+          "over": 2,
+          "frames": 160,
+          "slow": [
+            {
+              "at": 2956,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3406,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "maxFrame": 66.69999999999982,
+          "over": 1,
+          "frames": 74,
+          "slow": [
+            {
+              "at": -44,
+              "frame": 66.69999999999982,
+              "longTask": null,
+              "loaf": {
+                "duration": 57,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": [
+                  {
+                    "duration": 6,
+                    "invoker": "TimerHandler:setTimeout",
+                    "type": "user-callback",
+                    "fn": "",
+                    "source": "styles-2DXDAmI4.js:390490",
+                    "forcedLayout": 0
+                  }
+                ]
+              }
+            }
+          ],
+          "noLoaf": false
+        },
+        "heldMs": [
+          104.1999999997206, 405.1999999997206, 374.8000000002794, 252.5,
+          437.20000000018626
+        ],
+        "before": {
+          "lists": 2,
+          "reads": 8,
+          "fastReads": 3,
+          "slowReads": 5,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 1454.7999999998137,
+          "lastFastRequest": {
+            "at": 1370.6000000000931,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 7,
+          "reads": 28,
+          "fastReads": 13,
+          "slowReads": 15,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 6537.200000000186,
+          "lastFastRequest": {
+            "at": 6377.399999999907,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "lists": 8,
+          "reads": 36,
+          "fastReads": 19,
+          "slowReads": 17,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 9364.399999999907,
+          "lastFastRequest": {
+            "at": 9229.799999999814,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "lists": 10,
+          "reads": 39,
+          "fastReads": 21,
+          "slowReads": 18,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 11957.600000000093,
+          "lastFastRequest": {
+            "at": 9944.5,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "lists": 12,
+          "reads": 39,
+          "fastReads": 21,
+          "slowReads": 18,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 13957.799999999814,
+          "lastFastRequest": {
+            "at": 9944.5,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "columns",
+      "run": 2,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          236.60000000009313, 394.8000000002794, 117.10000000009313, 284.10000000009313,
+          452.89999999990687, 356.10000000009313, 329.10000000009313, 491.39999999990687,
+          420.39999999990687, 331.60000000009313
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 356.10000000009313,
+          "maxMs": 491.39999999990687
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 296.10000000009313,
+          "maxMs": 411.10000000009313
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "maxFrame": 49.899999999999636,
+          "over": 0,
+          "frames": 163,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "maxFrame": 50,
+          "over": 0,
+          "frames": 66,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [
+          296.10000000009313, 411.10000000009313, 372.29999999981374, 250.79999999981374,
+          229.79999999981374
+        ],
+        "before": {
+          "lists": 2,
+          "reads": 8,
+          "fastReads": 3,
+          "slowReads": 5,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 1444.3999999999069,
+          "lastFastRequest": {
+            "at": 1386.1000000000931,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 6,
+          "reads": 28,
+          "fastReads": 13,
+          "slowReads": 15,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 6048.5,
+          "lastFastRequest": {
+            "at": 5894.5,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "lists": 7,
+          "reads": 34,
+          "fastReads": 18,
+          "slowReads": 16,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 8333.5,
+          "lastFastRequest": {
+            "at": 8148.799999999814,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "lists": 9,
+          "reads": 36,
+          "fastReads": 19,
+          "slowReads": 17,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 10369.200000000186,
+          "lastFastRequest": {
+            "at": 8401.299999999814,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "lists": 11,
+          "reads": 36,
+          "fastReads": 19,
+          "slowReads": 17,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 12373.700000000186,
+          "lastFastRequest": {
+            "at": 8401.299999999814,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": false,
+      "failures": ["message update frame 50.100000000000364 ms exceeds 50 ms"],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "columns",
+      "run": 3,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          464.90000000037253, 430.70000000018626, 348.6999999997206, 275.29999999981374,
+          435.79999999981374, 390.40000000037253, 295.29999999981374, 230.79999999981374,
+          445.5, 282.09999999962747
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 390.40000000037253,
+          "maxMs": 464.90000000037253
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 346.70000000018626,
+          "maxMs": 451.20000000018626
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "maxFrame": 50.09999999999991,
+          "over": 1,
+          "frames": 150,
+          "slow": [
+            {
+              "at": 1246,
+              "frame": 50.09999999999991,
+              "longTask": null,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "maxFrame": 50.100000000000364,
+          "over": 1,
+          "frames": 70,
+          "slow": [
+            {
+              "at": 627,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false
+        },
+        "heldMs": [
+          346.70000000018626, 430.89999999990687, 335, 283.6999999997206,
+          451.20000000018626
+        ],
+        "before": {
+          "lists": 2,
+          "reads": 8,
+          "fastReads": 3,
+          "slowReads": 5,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 1507.3999999999069,
+          "lastFastRequest": {
+            "at": 1423.7000000001863,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 7,
+          "reads": 28,
+          "fastReads": 13,
+          "slowReads": 15,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 6300.5,
+          "lastFastRequest": {
+            "at": 6138.100000000093,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "lists": 8,
+          "reads": 36,
+          "fastReads": 20,
+          "slowReads": 16,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 9614.100000000093,
+          "lastFastRequest": {
+            "at": 9435.899999999907,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "lists": 10,
+          "reads": 38,
+          "fastReads": 21,
+          "slowReads": 17,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 11675.5,
+          "lastFastRequest": {
+            "at": 9936.5,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "lists": 12,
+          "reads": 38,
+          "fastReads": 21,
+          "slowReads": 17,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 13652.100000000093,
+          "lastFastRequest": {
+            "at": 9936.5,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": false,
+      "failures": ["message update frame 66.69999999999982 ms exceeds 50 ms"],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "run": 1,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          449.29999999981374, 443.60000000009313, 338.10000000009313, 285.90000000037253,
+          455.8000000002794, 385.5, 49.89999999990687, 459.89999999990687, 183.5,
+          343.79999999981374
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 385.5,
+          "maxMs": 459.89999999990687
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 199.20000000018626,
+          "maxMs": 303.6999999997206
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "maxFrame": 66.69999999999982,
+          "over": 5,
+          "frames": 130,
+          "slow": [
+            {
+              "at": 890,
+              "frame": 50.09999999999991,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 1690,
+              "frame": 50.09999999999991,
+              "longTask": null,
+              "loaf": {
+                "duration": 64,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            },
+            {
+              "at": 2706,
+              "frame": 66.69999999999982,
+              "longTask": null,
+              "loaf": {
+                "duration": 66,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            },
+            {
+              "at": 2890,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 3290,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "maxFrame": 66.69999999999982,
+          "over": 2,
+          "frames": 43,
+          "slow": [
+            {
+              "at": 471,
+              "frame": 66.69999999999982,
+              "longTask": null,
+              "loaf": {
+                "duration": 68,
+                "blocking": 0,
+                "styleAndLayout": 0,
+                "scripts": []
+              }
+            },
+            {
+              "at": 938,
+              "frame": 66.60000000000036,
+              "longTask": null,
+              "loaf": {
+                "duration": 71,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            }
+          ],
+          "noLoaf": false
+        },
+        "heldMs": [
+          199.20000000018626, 165.79999999981374, 303.6999999997206, 46.40000000037253,
+          209.5
+        ],
+        "before": {
+          "lists": 2,
+          "reads": 8,
+          "fastReads": 3,
+          "slowReads": 5,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 1465.1000000000931,
+          "lastFastRequest": {
+            "at": 1383.5,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 6,
+          "reads": 29,
+          "fastReads": 13,
+          "slowReads": 16,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 6055.799999999814,
+          "lastFastRequest": {
+            "at": 5894.899999999907,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "lists": 8,
+          "reads": 38,
+          "fastReads": 20,
+          "slowReads": 18,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 8682.799999999814,
+          "lastFastRequest": {
+            "at": 8525,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "lists": 10,
+          "reads": 41,
+          "fastReads": 22,
+          "slowReads": 19,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 11299.399999999907,
+          "lastFastRequest": {
+            "at": 9269.5,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "lists": 12,
+          "reads": 41,
+          "fastReads": 22,
+          "slowReads": 19,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 13281.100000000093,
+          "lastFastRequest": {
+            "at": 9269.5,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": false,
+      "failures": ["message update frame 83.29999999999995 ms exceeds 50 ms"],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "run": 2,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          498.5, 435.70000000018626, 312.10000000009313, 291.5, 454.5, 359.8000000002794,
+          330.70000000018626, 492.59999999962747, 158.89999999990687, 313.8000000002794
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 359.8000000002794,
+          "maxMs": 498.5
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 272.89999999990687,
+          "maxMs": 472.89999999990687
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "maxFrame": 83.29999999999995,
+          "over": 3,
+          "frames": 140,
+          "slow": [
+            {
+              "at": 47,
+              "frame": 83.29999999999995,
+              "longTask": null,
+              "loaf": {
+                "duration": 68,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            },
+            {
+              "at": 280,
+              "frame": 50.100000000000136,
+              "longTask": null,
+              "loaf": {
+                "duration": 50,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            },
+            {
+              "at": 3447,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "maxFrame": 50.100000000000364,
+          "over": 2,
+          "frames": 55,
+          "slow": [
+            {
+              "at": 971,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": {
+                "duration": 59,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            },
+            {
+              "at": 1254,
+              "frame": 50.099999999998545,
+              "longTask": null,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false
+        },
+        "heldMs": [
+          72.8000000002794, 168.70000000018626, 331.8000000002794, 272.89999999990687,
+          472.89999999990687
+        ],
+        "before": {
+          "lists": 2,
+          "reads": 8,
+          "fastReads": 3,
+          "slowReads": 5,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 1454.6999999997206,
+          "lastFastRequest": {
+            "at": 1398.3999999999069,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 7,
+          "reads": 28,
+          "fastReads": 13,
+          "slowReads": 15,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 6303.0999999996275,
+          "lastFastRequest": {
+            "at": 6127.5999999996275,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "lists": 8,
+          "reads": 36,
+          "fastReads": 20,
+          "slowReads": 16,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 9096.799999999814,
+          "lastFastRequest": {
+            "at": 8916.69999999972,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "lists": 10,
+          "reads": 38,
+          "fastReads": 21,
+          "slowReads": 17,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 11118.399999999907,
+          "lastFastRequest": {
+            "at": 9417.399999999907,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "lists": 12,
+          "reads": 38,
+          "fastReads": 21,
+          "slowReads": 17,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 13131.19999999972,
+          "lastFastRequest": {
+            "at": 9417.399999999907,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": false,
+      "failures": ["message update frame 83.40000000000009 ms exceeds 50 ms"],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "run": 3,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          418.1999999997206, 192.09999999962747, 349.5, 244.10000000009313,
+          253.70000000018626, 349.20000000018626, 309.90000000037253, 508, 359,
+          385.89999999990687
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 349.5,
+          "maxMs": 508
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 279.39999999990687,
+          "maxMs": 412.29999999981374
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "maxFrame": 83.40000000000009,
+          "over": 3,
+          "frames": 128,
+          "slow": [
+            {
+              "at": 1643,
+              "frame": 83.40000000000009,
+              "longTask": null,
+              "loaf": {
+                "duration": 68,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            },
+            {
+              "at": 1943,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            },
+            {
+              "at": 4210,
+              "frame": 50.099999999999454,
+              "longTask": null,
+              "loaf": {
+                "duration": 59,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            }
+          ],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "maxFrame": 83.39999999999964,
+          "over": 2,
+          "frames": 60,
+          "slow": [
+            {
+              "at": 683,
+              "frame": 83.39999999999964,
+              "longTask": null,
+              "loaf": {
+                "duration": 68,
+                "blocking": 0,
+                "styleAndLayout": 1,
+                "scripts": []
+              }
+            },
+            {
+              "at": 866,
+              "frame": 50.100000000000364,
+              "longTask": null,
+              "loaf": null
+            }
+          ],
+          "noLoaf": false
+        },
+        "heldMs": [
+          279.39999999990687, 158.29999999981374, 363.89999999990687, 276.29999999981374,
+          412.29999999981374
+        ],
+        "before": {
+          "lists": 2,
+          "reads": 8,
+          "fastReads": 3,
+          "slowReads": 5,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 1494.9000000003725,
+          "lastFastRequest": {
+            "at": 1378.2000000001863,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 6,
+          "reads": 28,
+          "fastReads": 13,
+          "slowReads": 15,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 6055.100000000093,
+          "lastFastRequest": {
+            "at": 5884.100000000093,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "lists": 7,
+          "reads": 34,
+          "fastReads": 18,
+          "slowReads": 16,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 8284.80000000028,
+          "lastFastRequest": {
+            "at": 8139.300000000279,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "lists": 9,
+          "reads": 36,
+          "fastReads": 19,
+          "slowReads": 17,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 10318.80000000028,
+          "lastFastRequest": {
+            "at": 8640,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "lists": 11,
+          "reads": 36,
+          "fastReads": 19,
+          "slowReads": 17,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 12331.400000000373,
+          "lastFastRequest": {
+            "at": 8640,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": false,
+      "failures": [
+        "active: delivery exceeded 600 ms: [1031,992,1011,987,957,952,980,945,935,954]",
+        "held: delivery exceeded 600 ms: [939,941,922,984,941]"
+      ],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "columns",
+      "run": 1,
+      "measured": {
+        "activeMs": [1031, 992, 1011, 987, 957, 952, 980, 945, 935, 954],
+        "heldMs": [939, 941, 922, 984, 941],
+        "before": {
+          "lists": 17,
+          "reads": 25,
+          "fastReads": 2,
+          "slowReads": 23,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 24821,
+          "lastFastRequest": {
+            "at": 23853,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 29,
+          "reads": 71,
+          "fastReads": 25,
+          "slowReads": 46,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 47174,
+          "lastFastRequest": {
+            "at": 46181,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "lists": 42,
+          "reads": 119,
+          "fastReads": 56,
+          "slowReads": 63,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 78366,
+          "lastFastRequest": {
+            "at": 77476,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "timeoutDiagnostics": []
+      }
+    },
+    {
+      "ok": false,
+      "failures": [
+        "active: delivery exceeded 600 ms: [992,1000,965,994,1040,1008,1036,1003,930,1025]",
+        "held: delivery exceeded 600 ms: [1056,1094,949,1006,986]"
+      ],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "columns",
+      "run": 2,
+      "measured": {
+        "activeMs": [992, 1000, 965, 994, 1040, 1008, 1036, 1003, 930, 1025],
+        "heldMs": [1056, 1094, 949, 1006, 986],
+        "before": {
+          "lists": 17,
+          "reads": 25,
+          "fastReads": 2,
+          "slowReads": 23,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 24251,
+          "lastFastRequest": {
+            "at": 23216,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 34,
+          "reads": 71,
+          "fastReads": 25,
+          "slowReads": 46,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 47387,
+          "lastFastRequest": {
+            "at": 46312,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "lists": 36,
+          "reads": 89,
+          "fastReads": 41,
+          "slowReads": 48,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 63723,
+          "lastFastRequest": {
+            "at": 62749,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "timeoutDiagnostics": []
+      }
+    },
+    {
+      "ok": false,
+      "failures": [
+        "active: delivery exceeded 600 ms: [955,943,990,1014,1019,1017,971,971,961,987]",
+        "held: delivery exceeded 600 ms: [1071,1021,1009,1008,996]"
+      ],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "columns",
+      "run": 3,
+      "measured": {
+        "activeMs": [955, 943, 990, 1014, 1019, 1017, 971, 971, 961, 987],
+        "heldMs": [1071, 1021, 1009, 1008, 996],
+        "before": {
+          "lists": 19,
+          "reads": 26,
+          "fastReads": 2,
+          "slowReads": 24,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 26081,
+          "lastFastRequest": {
+            "at": 25126,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 34,
+          "reads": 72,
+          "fastReads": 25,
+          "slowReads": 47,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 48901,
+          "lastFastRequest": {
+            "at": 47897,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "lists": 36,
+          "reads": 90,
+          "fastReads": 41,
+          "slowReads": 49,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 65032,
+          "lastFastRequest": {
+            "at": 64051,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "timeoutDiagnostics": []
+      }
+    },
+    {
+      "ok": false,
+      "failures": [
+        "active: delivery exceeded 600 ms: [988,1071,1070,1054,1037,1055,1047,1002,1032,1018]",
+        "held: delivery exceeded 600 ms: [1041,1109,1048,1038,1034]"
+      ],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "run": 1,
+      "measured": {
+        "activeMs": [988, 1071, 1070, 1054, 1037, 1055, 1047, 1002, 1032, 1018],
+        "heldMs": [1041, 1109, 1048, 1038, 1034],
+        "before": {
+          "lists": 17,
+          "reads": 26,
+          "fastReads": 2,
+          "slowReads": 24,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 25563,
+          "lastFastRequest": {
+            "at": 24567,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 36,
+          "reads": 72,
+          "fastReads": 25,
+          "slowReads": 47,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 49511,
+          "lastFastRequest": {
+            "at": 48536,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "lists": 49,
+          "reads": 120,
+          "fastReads": 56,
+          "slowReads": 64,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 82062,
+          "lastFastRequest": {
+            "at": 81006,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "timeoutDiagnostics": []
+      }
+    },
+    {
+      "ok": false,
+      "failures": [
+        "active: delivery exceeded 600 ms: [957,969,989,987,989,984,988,980,975,950]",
+        "held: delivery exceeded 600 ms: [1018,1124,1198,1033,973]"
+      ],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "run": 2,
+      "measured": {
+        "activeMs": [957, 969, 989, 987, 989, 984, 988, 980, 975, 950],
+        "heldMs": [1018, 1124, 1198, 1033, 973],
+        "before": {
+          "lists": 15,
+          "reads": 25,
+          "fastReads": 2,
+          "slowReads": 23,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 24437,
+          "lastFastRequest": {
+            "at": 23401,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 27,
+          "reads": 71,
+          "fastReads": 25,
+          "slowReads": 46,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 46858,
+          "lastFastRequest": {
+            "at": 45876,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "lists": 29,
+          "reads": 89,
+          "fastReads": 41,
+          "slowReads": 48,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 63553,
+          "lastFastRequest": {
+            "at": 62471,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "timeoutDiagnostics": []
+      }
+    },
+    {
+      "ok": false,
+      "failures": [
+        "active: delivery exceeded 600 ms: [1003,983,1064,1032,1065,1017,1044,1073,1067,1148]",
+        "held: delivery exceeded 600 ms: [989,1003,995,1085,1025]"
+      ],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "run": 3,
+      "measured": {
+        "activeMs": [1003, 983, 1064, 1032, 1065, 1017, 1044, 1073, 1067, 1148],
+        "heldMs": [989, 1003, 995, 1085, 1025],
+        "before": {
+          "lists": 15,
+          "reads": 26,
+          "fastReads": 2,
+          "slowReads": 24,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 25307,
+          "lastFastRequest": {
+            "at": 24338,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "lists": 33,
+          "reads": 72,
+          "fastReads": 25,
+          "slowReads": 47,
+          "heldLists": 0,
+          "heldReads": 0,
+          "now": 49128,
+          "lastFastRequest": {
+            "at": 48103,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "lists": 35,
+          "reads": 90,
+          "fastReads": 41,
+          "slowReads": 49,
+          "heldLists": 1,
+          "heldReads": 1,
+          "now": 65342,
+          "lastFastRequest": {
+            "at": 64274,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "timeoutDiagnostics": []
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery-statistics",
+      "summaries": [
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "run": 1,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 419.79999999981374,
+            "maxMs": 486.5
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 374.8000000002794,
+            "maxMs": 437.20000000018626
+          },
+          "frameMaxMs": 66.69999999999982,
+          "activeMs": [
+            461.89999999990687, 430.5, 335.89999999990687, 271.60000000009313,
+            463.70000000018626, 388.39999999990687, 294.39999999990687, 486.5,
+            419.79999999981374, 336.39999999990687
+          ],
+          "heldMs": [
+            104.1999999997206, 405.1999999997206, 374.8000000002794, 252.5,
+            437.20000000018626
+          ],
+          "over50": 3
+        },
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "run": 2,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 356.10000000009313,
+            "maxMs": 491.39999999990687
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 296.10000000009313,
+            "maxMs": 411.10000000009313
+          },
+          "frameMaxMs": 50,
+          "activeMs": [
+            236.60000000009313, 394.8000000002794, 117.10000000009313, 284.10000000009313,
+            452.89999999990687, 356.10000000009313, 329.10000000009313,
+            491.39999999990687, 420.39999999990687, 331.60000000009313
+          ],
+          "heldMs": [
+            296.10000000009313, 411.10000000009313, 372.29999999981374,
+            250.79999999981374, 229.79999999981374
+          ],
+          "over50": 0
+        },
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "run": 3,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 390.40000000037253,
+            "maxMs": 464.90000000037253
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 346.70000000018626,
+            "maxMs": 451.20000000018626
+          },
+          "frameMaxMs": 50.100000000000364,
+          "activeMs": [
+            464.90000000037253, 430.70000000018626, 348.6999999997206, 275.29999999981374,
+            435.79999999981374, 390.40000000037253, 295.29999999981374,
+            230.79999999981374, 445.5, 282.09999999962747
+          ],
+          "heldMs": [
+            346.70000000018626, 430.89999999990687, 335, 283.6999999997206,
+            451.20000000018626
+          ],
+          "over50": 2
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "run": 1,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 385.5,
+            "maxMs": 459.89999999990687
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 199.20000000018626,
+            "maxMs": 303.6999999997206
+          },
+          "frameMaxMs": 66.69999999999982,
+          "activeMs": [
+            449.29999999981374, 443.60000000009313, 338.10000000009313,
+            285.90000000037253, 455.8000000002794, 385.5, 49.89999999990687,
+            459.89999999990687, 183.5, 343.79999999981374
+          ],
+          "heldMs": [
+            199.20000000018626, 165.79999999981374, 303.6999999997206, 46.40000000037253,
+            209.5
+          ],
+          "over50": 7
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "run": 2,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 359.8000000002794,
+            "maxMs": 498.5
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 272.89999999990687,
+            "maxMs": 472.89999999990687
+          },
+          "frameMaxMs": 83.29999999999995,
+          "activeMs": [
+            498.5, 435.70000000018626, 312.10000000009313, 291.5, 454.5,
+            359.8000000002794, 330.70000000018626, 492.59999999962747, 158.89999999990687,
+            313.8000000002794
+          ],
+          "heldMs": [
+            72.8000000002794, 168.70000000018626, 331.8000000002794, 272.89999999990687,
+            472.89999999990687
+          ],
+          "over50": 5
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "run": 3,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 349.5,
+            "maxMs": 508
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 279.39999999990687,
+            "maxMs": 412.29999999981374
+          },
+          "frameMaxMs": 83.40000000000009,
+          "activeMs": [
+            418.1999999997206, 192.09999999962747, 349.5, 244.10000000009313,
+            253.70000000018626, 349.20000000018626, 309.90000000037253, 508, 359,
+            385.89999999990687
+          ],
+          "heldMs": [
+            279.39999999990687, 158.29999999981374, 363.89999999990687,
+            276.29999999981374, 412.29999999981374
+          ],
+          "over50": 5
+        }
+      ],
+      "aggregates": [
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "runs": 3,
+          "active": {
+            "samples": 30,
+            "medianMs": 388.39999999990687,
+            "maxMs": 491.39999999990687
+          },
+          "held": {
+            "samples": 15,
+            "medianMs": 346.70000000018626,
+            "maxMs": 451.20000000018626
+          },
+          "frameMaxMs": 66.69999999999982,
+          "frameRunMedianMs": 50.100000000000364,
+          "over50": 5
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "runs": 3,
+          "active": {
+            "samples": 30,
+            "medianMs": 349.5,
+            "maxMs": 508
+          },
+          "held": {
+            "samples": 15,
+            "medianMs": 272.89999999990687,
+            "maxMs": 472.89999999990687
+          },
+          "frameMaxMs": 83.40000000000009,
+          "frameRunMedianMs": 83.29999999999995,
+          "over50": 17
+        }
+      ]
+    }
+  ]
+}

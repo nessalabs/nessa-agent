@@ -19,6 +19,7 @@ import {
   useSideRailPreference,
   usePictureInConversationsPreference,
   useRunningFirstPreference,
+  useSubagentsPreview,
 } from "../../adapters/window-preferences"
 import { motionChoices } from "../../model/motion"
 import {
@@ -52,7 +53,7 @@ import { LinkedDevicesTab } from "./linked-devices-tab"
 /**
  * What each tab shows. Every setting the window owns is real and
  * remembered: theme, icons, tint, the picture in conversations, greeting,
- * motion, drifting light, layout,
+ * motion, drifting light, layout, the subagents preview,
  * the session list, ⌘-click, running first. What lives outside the window —
  * the host, the gateway, an account — is marked not available yet in the
  * catalogue (`pending`), and its row says so with its control disabled.
@@ -530,11 +531,18 @@ function DataTab() {
 
 /* ——— Advanced ——— */
 
-/** Previews of features not settled yet, each off until turned on. */
+/** Previews of features not settled yet, each a switch. */
 function ExperimentalTab() {
+  const [preview, setPreview] = useSubagentsPreview()
   const [rail, setRail] = useSideRailPreference()
   return (
     <Group>
+      <Row id="subagents-preview">
+        <Toggle
+          checked={preview === "on"}
+          onChange={(on) => setPreview(on ? "on" : "off")}
+        />
+      </Row>
       <Row id="side-rail">
         <Toggle checked={rail === "on"} onChange={(on) => setRail(on ? "on" : "off")} />
       </Row>

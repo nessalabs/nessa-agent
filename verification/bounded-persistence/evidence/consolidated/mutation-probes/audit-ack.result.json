@@ -1,0 +1,40 @@
+{
+  "rule": "audit-ack",
+  "historical_clean_head": "393042a3b87339b2475e8335047dcbf3ba1cef6d",
+  "dirty_candidate_manifest": "candidate-source-manifest.json",
+  "mutated_sha256": {
+    "crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs": "b5b0bbd83067e707c99df3be20bbc1a6fb427e2c38eaa421fb1b36eef4b60cce"
+  },
+  "command": [
+    "/tmp/nessa-browser-libs/usr/bin/tini",
+    "-s",
+    "--",
+    "env",
+    "CARGO_HOME=/tmp/nessa-cargo",
+    "RUSTUP_HOME=/tmp/nessa-rustup",
+    "PATH=/tmp/nessa-cargo/bin:/home/agent/.local/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin/override:/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/node/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin:/opt/codex/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/agent/.local/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin/fallback",
+    "CARGO_TARGET_DIR=/workspace/nessa-agent/target",
+    "CARGO_NET_OFFLINE=true",
+    "CARGO_BUILD_JOBS=2",
+    "CARGO_INCREMENTAL=0",
+    "cargo",
+    "test",
+    "-p",
+    "nessa-server",
+    "--lib",
+    "interrupted_audit_and_poison_are_failures",
+    "--",
+    "--nocapture"
+  ],
+  "mutated_exit": 101,
+  "compiled_runtime_failure": true,
+  "resume_note": "Original compiled runtime red log preserved; interrupted runner had not restored source or written result. Exit101 reconstructed from Cargo test failure; restored command run at resumption.",
+  "restored_sha256": {
+    "crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs": "8b6d036d058d7a3b00fbe061340ba3385690959b44ff470642ad0807b552f3be"
+  },
+  "restored_mtime_ns": {
+    "crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs": 1791396054849825318
+  },
+  "restored_exit": 0,
+  "valid": true
+}

@@ -37,6 +37,23 @@ body {
 }
 
 /*
+ * The part of the scale that menus and the model picker, portalled to <body>,
+ * read as well as the surfaces (`styles.test.ts` keeps the list true): they sit outside every [data-surface], and a
+ * `var()` with no value there drops the whole declaration (a menu then closes
+ * without its fade). Defined once, for both.
+ */
+:root,
+[data-surface] {
+  --desktop-fast: 120ms;
+  /* Between fast and base: a fill or fade on something the pointer rests on. */
+  --desktop-medium: 160ms;
+  --desktop-radius-pill: 999px;
+  /* Settles with a slight overshoot, like a spring, for things that appear. */
+  --desktop-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
+  --desktop-hover: color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+
+/*
  * Geometry shared by the titlebar and the floating panels. The titlebar sits
  * over the panels, so each panel's content starts below it.
  */
@@ -69,16 +86,13 @@ body {
   );
   --desktop-pane-fill: color-mix(in oklab, var(--foreground) 3.5%, transparent);
   --desktop-ease: cubic-bezier(0.32, 0.72, 0, 1);
-  /* Settles with a slight overshoot, like a spring, for things that appear. */
-  --desktop-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
 
   /*
    * The window's shared scales, defined once. Every surface takes its motion,
    * radii, type and inks from here; a component that needs another value is a
    * change to this list, not a local token.
    */
-  /* Motion: three durations for everything, two for the workspace's travel. */
-  --desktop-fast: 120ms;
+  /* Motion: base and slow, beside fast and medium above; two more for the workspace's travel. */
   --desktop-base: 180ms;
   --desktop-slow: 240ms;
   /* A pane travelling to its new place when the layout changes. */
@@ -149,11 +163,14 @@ body {
   --desktop-muted: color-mix(in oklab, var(--foreground) 56%, transparent);
   --desktop-faint: color-mix(in oklab, var(--foreground) 40%, transparent);
   --desktop-fainter: color-mix(in oklab, var(--foreground) 30%, transparent);
-  --desktop-hover: color-mix(in oklab, var(--foreground) 5%, transparent);
+  /* A control's hover (icon button, chip); a row's is `--desktop-hover`. */
+  --desktop-hover-strong: color-mix(in oklab, var(--foreground) 8%, transparent);
   --desktop-selected: color-mix(in oklab, var(--foreground) 8.5%, transparent);
   --desktop-press: color-mix(in oklab, var(--foreground) 11%, transparent);
   --desktop-rim: color-mix(in oklab, var(--foreground) 7%, transparent);
   --desktop-focus-ring: color-mix(in oklab, var(--desktop-light-edge) 42%, transparent);
+  /* The one outline recipe; a surface says only its `outline-offset`. (Two inset box-shadow rings remain: the picture band's adjust state and the Agents peek story.) */
+  --desktop-focus-outline: 1.5px solid var(--desktop-focus-ring);
   /* What waits on the person, and what is running. */
   --desktop-needs: oklch(0.82 0.13 78);
   --desktop-run: var(--desktop-light-edge);
@@ -229,34 +246,6 @@ html:not(.dark) [data-surface] {
 /* In a menu row the row's own gap spaces it from its words. */
 .desktop-popover[role="menu"] .desktop-swatch {
   margin-right: 0;
-}
-
-.desktop-footer-button {
-  display: inline-flex;
-  width: 26px;
-  height: 26px;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: color-mix(in oklab, var(--foreground) 45%, transparent);
-  transition:
-    color 120ms ease,
-    background-color 120ms ease;
-}
-
-.desktop-footer-button:hover,
-.desktop-footer-button[data-state="open"] {
-  color: var(--foreground);
-  background: color-mix(in oklab, var(--foreground) 8%, transparent);
-}
-
-.desktop-footer-button svg {
-  width: 15px;
-  height: 15px;
-  stroke-width: 1.6;
 }
 
 /*
@@ -338,29 +327,12 @@ html:not(.dark) [data-surface] {
   }
 }
 
-.desktop-titlebar-button,
 .desktop-titlebar [data-slot="app-shell-titlebar-navigation"] {
   color: color-mix(in oklab, var(--foreground) 55%, transparent);
   border-radius: var(--desktop-control-radius);
   transition:
-    color 120ms ease,
-    background-color 120ms ease;
-}
-
-.desktop-titlebar-button:hover {
-  color: var(--foreground);
-  background: color-mix(in oklab, var(--foreground) 8%, transparent);
-}
-
-.desktop-titlebar-button {
-  width: var(--desktop-control-size);
-  height: var(--desktop-control-size);
-}
-
-.desktop-titlebar-button svg {
-  width: 16px;
-  height: 16px;
-  stroke-width: 1.6;
+    color var(--desktop-fast) ease,
+    background-color var(--desktop-fast) ease;
 }
 
 /* SplitView owns sizing, capture, keyboard resizing, and collapse snapping. */
@@ -673,7 +645,7 @@ html:not(.dark) [data-surface] {
   position: absolute;
   left: 50%;
   translate: -50% 0;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: color-mix(in oklab, var(--popover) 62%, transparent);
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
@@ -694,42 +666,30 @@ html:not(.dark) [data-surface] {
   cursor: default;
 }
 
-.desktop-header-tool,
 .desktop-header-text-button {
   display: inline-flex;
   height: 28px;
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: transparent;
   color: color-mix(in oklab, var(--foreground) 70%, transparent);
   font: inherit;
   font-size: 12.5px;
   font-weight: 500;
   transition:
-    color 140ms ease,
-    background-color 140ms ease;
-}
-
-.desktop-header-tool {
-  width: 28px;
-}
-
-.desktop-header-tool svg {
-  width: 14px;
-  height: 14px;
-  stroke-width: 1.75;
+    color var(--desktop-fast) ease,
+    background-color var(--desktop-fast) ease;
 }
 
 .desktop-header-text-button {
   padding: 0 12px;
 }
 
-.desktop-header-tool:hover,
 .desktop-header-text-button:hover {
   color: var(--foreground);
-  background: color-mix(in oklab, var(--foreground) 9%, transparent);
+  background: var(--desktop-hover-strong);
 }
 
 .desktop-header-text-button[data-primary] {
@@ -761,7 +721,7 @@ html:not(.dark) [data-surface] {
 
 .desktop-header-zoom::-webkit-slider-runnable-track {
   height: 3px;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: color-mix(in oklab, var(--foreground) 22%, transparent);
 }
 
@@ -769,7 +729,7 @@ html:not(.dark) [data-surface] {
   width: 14px;
   height: 14px;
   margin-top: -5.5px;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   appearance: none;
   background: var(--foreground);
   box-shadow: 0 1px 4px rgb(0 0 0 / 50%);
@@ -777,7 +737,7 @@ html:not(.dark) [data-surface] {
 
 .desktop-header-zoom::-moz-range-track {
   height: 3px;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: color-mix(in oklab, var(--foreground) 22%, transparent);
 }
 
@@ -785,14 +745,14 @@ html:not(.dark) [data-surface] {
   width: 14px;
   height: 14px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: var(--foreground);
 }
 
 .desktop-header-zoom:focus-visible {
-  outline: 2px solid color-mix(in oklab, var(--desktop-light-edge) 60%, transparent);
+  outline: var(--desktop-focus-outline);
   outline-offset: 2px;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
 }
 
 /*
@@ -857,7 +817,7 @@ html:not(.dark) [data-surface] {
   align-items: center;
   gap: 8px;
   opacity: 0;
-  transition: opacity 160ms ease;
+  transition: opacity var(--desktop-medium) ease;
 }
 
 .desktop-header:hover .desktop-header-controls,
@@ -1320,7 +1280,7 @@ html:not(.dark) [data-surface] {
 .desktop-composer-body::-webkit-scrollbar-thumb,
 .desktop-composer textarea::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: color-mix(in oklab, var(--foreground) 20%, transparent) padding-box;
 }
 
@@ -1369,7 +1329,7 @@ html:not(.dark) [data-surface] {
   gap: 6px;
   padding: 0 10px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: transparent;
   color: color-mix(in oklab, var(--foreground) 58%, transparent);
   font: inherit;
@@ -1379,18 +1339,18 @@ html:not(.dark) [data-surface] {
   white-space: nowrap;
   cursor: default;
   transition:
-    color 160ms ease,
-    background-color 160ms ease;
+    color var(--desktop-medium) ease,
+    background-color var(--desktop-medium) ease;
 }
 
 .desktop-chip:hover,
 .desktop-chip[data-state="open"] {
   color: var(--foreground);
-  background: color-mix(in oklab, var(--foreground) 7%, transparent);
+  background: var(--desktop-hover-strong);
 }
 
 .desktop-chip:focus-visible {
-  outline: 2px solid color-mix(in oklab, var(--desktop-light-edge) 60%, transparent);
+  outline: var(--desktop-focus-outline);
   outline-offset: 1px;
 }
 
@@ -1672,7 +1632,7 @@ html:not(.dark) .desktop-tooltip {
 .desktop-model-picker [data-slot="searchable-listbox-option"] {
   padding: 7px 8px;
   border-radius: 10px;
-  transition: background-color 120ms ease;
+  transition: background-color var(--desktop-fast) ease;
 }
 
 /* Highlighted as a menu's rows are: the material's soft fill, no ring. */
@@ -1683,7 +1643,7 @@ html:not(.dark) .desktop-tooltip {
 }
 
 .desktop-model-picker [data-slot="searchable-listbox-option"][data-selected="true"] {
-  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+  background: var(--desktop-hover);
 }
 
 /* The row's icon well steps back so the provider tile carries the colour. */
@@ -1785,12 +1745,12 @@ html:not(.dark) .desktop-tooltip {
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: var(--foreground);
   color: var(--background);
   transition:
-    background-color 160ms ease,
-    color 160ms ease;
+    background-color var(--desktop-medium) ease,
+    color var(--desktop-medium) ease;
 }
 
 .desktop-send:disabled {
@@ -1841,7 +1801,7 @@ html:not(.dark) .desktop-tooltip {
     transparent 100%
   );
   opacity: 0;
-  transition: opacity 140ms ease;
+  transition: opacity var(--desktop-fast) ease;
 }
 
 .desktop-sidebar-edge[data-slot="split-view-separator"]:is(

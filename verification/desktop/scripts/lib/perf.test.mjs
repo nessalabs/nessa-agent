@@ -13,6 +13,7 @@ import {
   budgetMs,
   interactionBudget,
   measurementFrom,
+  missingFrameSample,
   sampleLoaf,
   styleAndLayoutMs,
 } from "./perf.mjs"
@@ -87,6 +88,12 @@ describe("frame budget", () => {
 
   it("could not run when the sample recorded no frame", () => {
     assert.throws(() => measurementFrom(raw([[10, 16]], []), 20), CannotRun)
+  })
+
+  it("keeps a missing frame sample as a gap and rethrows anything else", () => {
+    const gap = new CannotRun("no animation frames were recorded (is the page visible?)")
+    assert.equal(missingFrameSample(gap), gap.message)
+    assert.throws(() => missingFrameSample(new Error("boom")), /boom/)
   })
 })
 

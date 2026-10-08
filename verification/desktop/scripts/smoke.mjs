@@ -152,9 +152,10 @@ await main(meta, async ({ options, rep, url }) => {
           .then(() => true)
           .catch(() => false)
         if (!shown) failures.push(`Settings (${css.settings}) not visible after ⌘,`)
-        // Advanced › Experimental: the home of previews, each a switch that is
-        // off until turned on (the side rail). One tab is nothing to choose
-        // between, so no strip; its dek says what the page is for.
+        // Advanced › Experimental: the home of previews, each a switch — the
+        // subagents preview (on unless turned off) and the side rail (off until
+        // turned on). One tab is nothing to choose between, so no strip; its dek
+        // says what the page is for.
         await page.locator(css.settingsCategory, { hasText: "Advanced" }).click()
         await page
           .locator(css.settingsHeading, { hasText: "Advanced" })
@@ -188,11 +189,12 @@ await main(meta, async ({ options, rep, url }) => {
           )
         if (!advanced.dek)
           failures.push("Advanced has no line under its title saying what it is for")
-        if (!advanced.text.includes("Side rail"))
-          failures.push(`Experimental's page says "${advanced.text}", not the side rail`)
-        if (advanced.offered.join() !== "false")
+        for (const preview of ["Subagents", "Side rail"])
+          if (!advanced.text.includes(preview))
+            failures.push(`Experimental's page says "${advanced.text}", not ${preview}`)
+        if (advanced.offered.join() !== "true,false")
           failures.push(
-            `Experimental's switches are ${JSON.stringify(advanced.offered)}, expected one, off`,
+            `Experimental's switches are ${JSON.stringify(advanced.offered)}, expected subagents on, the side rail off`,
           )
         await leaveSettings(page)
         const gone = await page

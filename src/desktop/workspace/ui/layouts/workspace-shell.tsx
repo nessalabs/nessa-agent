@@ -85,7 +85,7 @@ import {
   sessionListLimits,
   type ColumnLimits,
 } from "../../model/window-fit"
-import { IconButton } from "../chrome/icon-button"
+import { IconButton } from "../../../ui/icon-button"
 import {
   SideRail,
   SideRailButton,
@@ -410,6 +410,9 @@ export function WorkspaceShell({
                 data-surface={browserSurface ? "browser" : "window"}
                 data-desktop-theme={theme}
                 data-sidebar={sidebarOpen ? "open" : "closed"}
+                // The person's own choice, apart from a fold for room: the
+                // rail's toggle hides only with a sidebar they closed.
+                data-sidebar-chosen={chrome.sidebar.open ? "open" : "closed"}
                 style={{ "--rail-width": `${RAIL_WIDTH}px` } as CSSProperties}
               >
                 {railOffered ? (
@@ -473,7 +476,7 @@ export function WorkspaceShell({
                       aria-controls="workspace-sidebar"
                       onClick={() => dispatch(toggleSidebar())}
                     />
-                    <HistoryButtons className="workspace-icon-button" />
+                    <HistoryButtons />
                     {region.sessionList ? (
                       <IconButton
                         icon="sessionList"

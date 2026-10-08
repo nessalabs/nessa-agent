@@ -20,6 +20,7 @@ import { makeDesktopStore } from "./store"
 import { DesktopIconFamilyProvider } from "./ui/icons"
 import { DesktopWindow } from "./ui/desktop-window"
 import { platformFor, sandboxFor, WidgetRegistryProvider } from "./widgets"
+import { SubagentsProvider } from "./subagents"
 import { ClockProvider, followWorkspace, loadWorkspace } from "./workspace"
 
 import "@fontsource-variable/geist"
@@ -95,18 +96,20 @@ createRoot(container).render(
     <Provider store={store}>
       <WidgetRegistryProvider registry={dependencies.widgets}>
         <ClockProvider now={dependencies.now}>
-          {/* Every icon in the window resolves through the family chosen in Settings. */}
-          <DesktopIconFamilyProvider>
-            <McpServersProvider gateway={dependencies.mcpServers}>
-              <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
-                <DesktopWindow
-                  hostKind={host.kind}
-                  browserSurface={host.kind === "browser"}
-                  inspectable={import.meta.env.DEV}
-                />
-              </LinkedDevicesProvider>
-            </McpServersProvider>
-          </DesktopIconFamilyProvider>
+          <SubagentsProvider source={dependencies.subagents}>
+            {/* Every icon in the window resolves through the family chosen in Settings. */}
+            <DesktopIconFamilyProvider>
+              <McpServersProvider gateway={dependencies.mcpServers}>
+                <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
+                  <DesktopWindow
+                    hostKind={host.kind}
+                    browserSurface={host.kind === "browser"}
+                    inspectable={import.meta.env.DEV}
+                  />
+                </LinkedDevicesProvider>
+              </McpServersProvider>
+            </DesktopIconFamilyProvider>
+          </SubagentsProvider>
         </ClockProvider>
       </WidgetRegistryProvider>
     </Provider>

@@ -1,0 +1,178 @@
+/*
+ * The subagents panel: a list of the agents a conversation put to work, and
+ * one child's conversation. Tokens are the window's and the chart series a
+ * tag's hue names.
+ */
+
+.subagents-panel {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--foreground);
+}
+
+.subagents-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.subagents-list,
+.subagents-detail {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.subagents-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px 8px;
+}
+
+.subagents-summary,
+.subagents-unreadable,
+.subagents-failed {
+  margin: 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.subagents-summary {
+  padding: 0 20px 8px;
+}
+
+.subagents-rows {
+  display: flex;
+  margin: 0;
+  padding: 0 8px 12px;
+  flex-direction: column;
+  gap: 2px;
+  list-style: none;
+}
+
+.subagent-row {
+  display: grid;
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 2px 12px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+}
+
+.subagent-row:hover,
+.subagent-row:focus-visible {
+  background: var(--desktop-hover);
+}
+
+.subagent-avatar {
+  grid-row: 1 / span 4;
+  align-self: start;
+}
+
+.subagent-name {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.subagent-tag[data-hue="1"] {
+  color: var(--nessa-chart-series-1);
+}
+
+.subagent-tag[data-hue="2"] {
+  color: var(--nessa-chart-series-2);
+}
+
+.subagent-tag[data-hue="3"] {
+  color: var(--nessa-chart-series-3);
+}
+
+.subagent-tag[data-hue="4"] {
+  color: var(--nessa-chart-series-4);
+}
+
+.subagent-tag[data-hue="5"] {
+  color: var(--nessa-chart-series-5);
+}
+
+.subagent-tag {
+  font-size: var(--desktop-text-footnote);
+  font-weight: 500;
+}
+
+.subagent-model,
+.subagent-time {
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  font-variant-numeric: tabular-nums;
+}
+
+.subagent-model {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.subagent-status {
+  display: flex;
+  grid-column: 2 / -1;
+  align-items: center;
+  gap: 8px;
+}
+
+.subagent-meter {
+  width: 72px;
+}
+
+.subagent-headline,
+.subagent-live,
+.subagent-tagline {
+  grid-column: 2 / -1;
+  margin: 0;
+  min-width: 0;
+}
+
+.subagent-headline {
+  color: var(--desktop-ink-2);
+}
+
+.subagent-live,
+.subagent-tagline {
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.subagent-live {
+  display: flex;
+  gap: 8px;
+}
+
+.subagents-unreadable,
+.subagents-failed {
+  padding: 8px 20px 16px;
+}
+
+.subagents-detail {
+  gap: 8px;
+  padding: 12px 16px 0;
+}
+
+.subagents-panel [data-read-only] {
+  flex: none;
+  overflow: visible;
+  mask-image: none;
+}

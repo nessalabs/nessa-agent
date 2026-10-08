@@ -63,12 +63,13 @@ describe("the settings catalogue", () => {
       label: "Experimental",
     })
     expect(tabsOf("general").map((tab) => tab.id)).not.toContain("experimental")
-    // The previews on offer: the side rail, and nothing else.
+    // The previews on offer: subagents and the side rail.
     expect(
       settingsEntries
         .filter((entry) => settingsTab(entry.tab).category === "advanced")
         .map((entry) => entry.id),
-    ).toEqual(["side-rail"])
+    ).toEqual(["subagents-preview", "side-rail"])
+    expect(setting("subagents-preview").label).toBe("Subagents")
   })
 
   it("shows a category's tabs only when it has several to choose from", () => {

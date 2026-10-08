@@ -1,0 +1,22 @@
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 17s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-cad12ce67ae1d3eb)
+
+running 2 tests
+
+thread 'mcp_authorization::infrastructure::audit::tests::worker_input_drop_keeps_slot' (538704) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/audit/tests.rs:79:5:
+assertion `left == right` failed
+  left: 2
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test mcp_authorization::infrastructure::records::tests::worker_input_drop_keeps_slot ... ok
+test mcp_authorization::infrastructure::audit::tests::worker_input_drop_keeps_slot ... FAILED
+
+failures:
+
+failures:
+    mcp_authorization::infrastructure::audit::tests::worker_input_drop_keeps_slot
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 1998 filtered out; finished in 0.20s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

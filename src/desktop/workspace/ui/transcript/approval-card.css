@@ -219,12 +219,12 @@
 
   .workspace-approval-actions .workspace-approval-once {
     flex: 1;
-    border-radius: 999px;
+    border-radius: var(--desktop-radius-pill);
   }
 
   /* Joined to the menu that holds Always, and only while that menu is there. */
   .workspace-approval-actions:has(.workspace-approval-more) .workspace-approval-once {
-    border-radius: 999px 4px 4px 999px;
+    border-radius: var(--desktop-radius-pill) 4px 4px var(--desktop-radius-pill);
   }
 
   .workspace-approval-actions .workspace-approval-more {
@@ -233,7 +233,7 @@
     align-items: center;
     justify-content: center;
     padding: 0;
-    border-radius: 4px 999px 999px 4px;
+    border-radius: 4px var(--desktop-radius-pill) var(--desktop-radius-pill) 4px;
   }
 
   .workspace-approval-actions .workspace-approval-deny {

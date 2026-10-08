@@ -1,0 +1,124 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-sdk)
+warning: field `worker` is never read
+  --> crates/nessa-sdk/src/infrastructure/session_storage/ownership.rs:65:5
+   |
+63 | pub struct SqliteOwnershipStore {
+   |            -------------------- field in this struct
+64 |     state: Arc<OwnershipState>,
+65 |     worker: Worker,
+   |     ^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling nessa-protocol v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-protocol)
+   Compiling nessa-client-core v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-client-core)
+warning: `nessa-sdk` (lib) generated 1 warning
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-server)
+warning: field `worker` is never read
+  --> crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs:16:5
+   |
+14 | pub struct FileAuthorizationAudit {
+   |            ---------------------- field in this struct
+15 |     state: Arc<AuditState>,
+16 |     worker: Worker,
+   |     ^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `after` is never read
+   --> crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:147:16
+    |
+140 | pub(super) struct Probe {
+    |                   ----- field in this struct
+...
+147 |     pub(super) after: Mutex<Option<Arc<Gate>>>,
+    |                ^^^^^
+
+warning: methods `clone_input` and `wrap` are never used
+   --> crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:158:19
+    |
+156 | impl Probe {
+    | ---------- methods in this implementation
+157 |     // Observe the actual owned clone constructor, not a later independent counter.
+158 |     pub(super) fn clone_input<T>(&self, clone: impl FnOnce() -> T) -> T {
+    |                   ^^^^^^^^^^^
+...
+163 |     pub(super) fn wrap<F, R>(self: &Arc<Self>, operation: F) -> impl FnMut() -> R + Send
+    |                   ^^^^
+
+warning: struct `ObservedCapture` is never constructed
+   --> crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:181:8
+    |
+181 | struct ObservedCapture<F> {
+    |        ^^^^^^^^^^^^^^^
+
+warning: method `call` is never used
+   --> crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:188:8
+    |
+187 | impl<F> ObservedCapture<F> {
+    | -------------------------- method in this implementation
+188 |     fn call<R>(&mut self) -> R
+    |        ^^^^
+
+warning: struct `Completion` is never constructed
+   --> crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:228:8
+    |
+228 | struct Completion(Arc<Probe>);
+    |        ^^^^^^^^^^
+
+warning: struct `Payload` is never constructed
+   --> crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:234:8
+    |
+234 | struct Payload(Arc<Probe>);
+    |        ^^^^^^^
+
+warning: `nessa-server` (lib test) generated 7 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 39s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-cad12ce67ae1d3eb)
+
+running 6 tests
+627 heartbeat: 1 -> 1 ticks during OS-held 120 ms physical operation
+
+thread 'mcp_authorization::infrastructure::audit::tests::authorization_audit_keeps_current_thread_heartbeat_running' (539793) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:68:5:
+current-thread heartbeat froze during physical I/O: 1 -> 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+627 heartbeat: 1 -> 1 ticks during OS-held 120 ms physical operation
+
+thread 'mcp_authorization::infrastructure::records::tests::secret_delete_keeps_current_thread_heartbeat_running' (539796) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:68:5:
+current-thread heartbeat froze during physical I/O: 1 -> 1
+627 heartbeat: 1 -> 1 ticks during OS-held 120 ms physical operation
+627 heartbeat: 1 -> 1 ticks during OS-held 120 ms physical operation
+
+thread 'mcp_authorization::infrastructure::records::tests::record_load_keeps_current_thread_heartbeat_running' (539794) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:68:5:
+current-thread heartbeat froze during physical I/O: 1 -> 1
+
+thread 'mcp_authorization::infrastructure::records::tests::record_store_keeps_current_thread_heartbeat_running' (539795) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:68:5:
+current-thread heartbeat froze during physical I/O: 1 -> 1
+test mcp_authorization::infrastructure::records::tests::secret_delete_keeps_current_thread_heartbeat_running ... FAILED
+test mcp_authorization::infrastructure::records::tests::record_load_keeps_current_thread_heartbeat_running ... FAILED
+test mcp_authorization::infrastructure::records::tests::record_store_keeps_current_thread_heartbeat_running ... FAILED
+test mcp_authorization::infrastructure::audit::tests::authorization_audit_keeps_current_thread_heartbeat_running ... FAILED
+627 heartbeat: 1 -> 1 ticks during OS-held 120 ms physical operation
+627 heartbeat: 1 -> 1 ticks during OS-held 120 ms physical operation
+
+thread 'mcp_authorization::infrastructure::records::tests::secret_store_keeps_current_thread_heartbeat_running' (539802) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:68:5:
+current-thread heartbeat froze during physical I/O: 1 -> 1
+
+thread 'mcp_authorization::infrastructure::records::tests::secret_load_keeps_current_thread_heartbeat_running' (539801) panicked at crates/nessa-server/src/mcp_authorization/infrastructure/../../../../nessa-local-storage/tests/support/physical_operation.rs:68:5:
+current-thread heartbeat froze during physical I/O: 1 -> 1
+test mcp_authorization::infrastructure::records::tests::secret_load_keeps_current_thread_heartbeat_running ... FAILED
+test mcp_authorization::infrastructure::records::tests::secret_store_keeps_current_thread_heartbeat_running ... FAILED
+
+failures:
+
+failures:
+    mcp_authorization::infrastructure::audit::tests::authorization_audit_keeps_current_thread_heartbeat_running
+    mcp_authorization::infrastructure::records::tests::record_load_keeps_current_thread_heartbeat_running
+    mcp_authorization::infrastructure::records::tests::record_store_keeps_current_thread_heartbeat_running
+    mcp_authorization::infrastructure::records::tests::secret_delete_keeps_current_thread_heartbeat_running
+    mcp_authorization::infrastructure::records::tests::secret_load_keeps_current_thread_heartbeat_running
+    mcp_authorization::infrastructure::records::tests::secret_store_keeps_current_thread_heartbeat_running
+
+test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 1994 filtered out; finished in 0.24s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

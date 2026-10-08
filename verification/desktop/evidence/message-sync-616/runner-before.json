@@ -1,0 +1,33 @@
+{
+  "check": "run-all",
+  "ok": false,
+  "summary": [
+    {
+      "check": "message-sync",
+      "status": "COULD NOT RUN",
+      "held": "0/1",
+      "seconds": 0
+    }
+  ],
+  "checks": {
+    "message-sync": {
+      "check": "message-sync",
+      "ok": false,
+      "started": "2026-10-07T02:29:42.429Z",
+      "finished": "2026-10-07T02:29:42.437Z",
+      "target": {
+        "url": "http://127.0.0.1:57968/desktop.html",
+        "mode": "prod"
+      },
+      "results": [
+        {
+          "ok": false,
+          "failures": [],
+          "name": "message-sync",
+          "cannotRun": true,
+          "error": "could not run: message-sync fixture is not served"
+        }
+      ]
+    }
+  }
+}

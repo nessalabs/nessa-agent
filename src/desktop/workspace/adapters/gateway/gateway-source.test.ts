@@ -14,6 +14,7 @@ import {
   type ConversationPermission,
 } from "@nessa/client"
 import { describe, expect, it, vi } from "vitest"
+import { conversationView } from "../../../../../packages/nessa-client/src/protocol/conversation-validate"
 import { HostRefusalError } from "../../../../host/startup-refusals"
 import { SessionHealthError } from "../../../../session/adapters/client/dev-session"
 import { WorkspaceSourceError, type WorkspaceUpdate } from "../../application/ports"
@@ -120,6 +121,9 @@ const running = (id = "turn") => ({
 })
 
 describe("reads", () => {
+  it("the default gateway fixture conforms to the client view contract", () => {
+    expect(conversationView(view("a"), "a")).toEqual(view("a"))
+  })
   it("C1, R1: connected, lists every conversation in one section and channel, each at its first revision", async () => {
     const { gateway, source } = started()
     gateway.rows.set("a", row("a", { running: true }))
@@ -3045,6 +3049,54 @@ describe("independent active transcript polling (#532)", () => {
     expect(gateway.count("read")).toBe(reads)
     source.dispose()
   })
+  for (const listed of [false, true])
+    for (const status of ["running", "queued"] as const)
+      it(`F13: ${status} text keeps polling after send with ${listed ? "an idle" : "no"} summary`, async () => {
+        const { gateway, source, advance, updates, follow } = fast()
+        gateway.views.set("a", view("a"))
+        if (listed) gateway.rows.set("a", row("a"))
+        await source.index()
+        await source.transcript("a")
+        follow()
+        await source.send({
+          sessionId: "a",
+          messageId: "m",
+          text: "hello",
+          model,
+          initiator: "person",
+        })
+        const streaming = (text: string) => ({
+          ...running(),
+          status,
+          parts: [{ offset: 0, kind: "text" as const, text, toolId: "", noticeId: "" }],
+        })
+        gateway.views.set(
+          "a",
+          view("a", { revision: "r2", messages: [streaming("first")] }),
+        )
+        await advance(250)
+        expect(updates.at(-1)).toMatchObject({
+          kind: "transcript",
+          transcript: { activity: null },
+        })
+        updates.length = 0
+        gateway.views.set(
+          "a",
+          view("a", { revision: "r3", messages: [streaming("second")] }),
+        )
+        await advance(250)
+        expect(updates).toContainEqual({
+          kind: "transcript",
+          transcript: expect.objectContaining({ revision: 3 }),
+        })
+        expect(gateway.count("list")).toBe(1)
+        gateway.views.set("a", view("a", { revision: "r4" }))
+        await advance(250)
+        const reads = gateway.count("read")
+        await advance(249)
+        expect(gateway.count("read")).toBe(reads)
+        source.dispose()
+      })
   it("F6: dispose fences a pending answer and both timers", async () => {
     const { gateway, source, advance, updates, follow, busy } = fast()
     await busy("a")

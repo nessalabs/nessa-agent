@@ -181,7 +181,7 @@ describe("Advanced", () => {
     expect(navItem("Advanced")?.querySelector("svg.settings-nav-icon")).not.toBeNull()
   })
 
-  it("says what it is for under its title, calmly empty, with no control that does nothing", async () => {
+  it("shows its Experimental tab, with the previews on offer", async () => {
     await mount()
     await act(async () => setOpen(true))
     await act(async () => navItem("Advanced")?.click())
@@ -193,9 +193,20 @@ describe("Advanced", () => {
     expect(tabNames()).toEqual([])
     // Each preview is a switch, off until turned on.
     const panel = document.querySelector("#settings-panel")
-    const rail = panel?.querySelector<HTMLElement>("[role='switch']")
+    expect(panel?.textContent).toContain("Subagents")
+    expect(panel?.textContent).toContain(
+      "A panel of the agents a conversation put to work.",
+    )
     expect(panel?.textContent).toContain("Side rail")
+    const [subagents, rail] = [
+      ...(panel?.querySelectorAll<HTMLButtonElement>('[role="switch"]') ?? []),
+    ]
+    expect(subagents?.getAttribute("aria-checked")).toBe("true")
+    // The side rail is off until turned on.
     expect(rail?.getAttribute("aria-checked")).toBe("false")
+    expect(panel?.querySelectorAll("button, input, [role='switch']").length).toBe(2)
+    await act(async () => subagents?.click())
+    expect(subagents?.getAttribute("aria-checked")).toBe("false")
   })
 
   it("has taken Experimental out of General", async () => {

@@ -834,7 +834,8 @@ fn refused_authentication(address: SocketAddr, credential: &str) -> (Value, u16)
         .send(tungstenite::Message::Text(
             json!({"type": "req", "id": "1", "method": "session.authenticate", "params": {
                 "minVersion": 1, "maxVersion": 1, "nonce": challenge["payload"]["nonce"],
-                "credential": credential, "client": {"id": "nessa-cli"}}})
+                "credential": credential, "client": {"id": "nessa-cli"},
+                "surface": {"kind": "cli", "instance": "nessa-cli"}}})
             .to_string()
             .into(),
         ))

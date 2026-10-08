@@ -55,6 +55,7 @@ describe("connectDevSession", () => {
       expect.objectContaining({
         profile: "product",
         client: expect.objectContaining({ id: "nessa-panel" }),
+        surface: expect.objectContaining({ kind: "panel" }),
       }),
     )
     expect(close).not.toHaveBeenCalled()

@@ -1,0 +1,8 @@
+{
+  "identity": "All consolidated proof is dirty over historical393 before restack; manifests specify exact source hashes. Historical393 evidence outside this directory stays historical.",
+  "audit-resumption": "Original audit-ack assertion was observed at runtime. Runner interruption left variant source in place. Restored green was actually executed at resumption; original exit101 is reconstructed and explicitly labeled in its result.",
+  "shutdown-fixture": "Initial already-queued shutdown assumption failed and is preserved; corrected actual adapters test stopped-executor submission, not queued-abort detachment. Central tests own genuine abort/detached witnesses.",
+  "enospc": "Corrected SDK matrix passed; following server ENOSPC compile is non-pass. Server recovery used unchanged source and CARGO_INCREMENTAL=0 after root deleted only shared incremental compiler cache.",
+  "benchmarks": "Per-call first-poll clocks exclude prior scheduling. Batch wall observer begins before spawning four scheduled callers, ends after all four complete before CSV output. Seven fixtures,250 batches/fixture/phase (1750/phase); not1000 independent batch samples. Local debug tmpfs, no production estimates or timing threshold.",
+  "renderer": "Actual markdown-it proves one26-row table; external atlas/browser Mermaid rendering unavailable and unclaimed."
+}

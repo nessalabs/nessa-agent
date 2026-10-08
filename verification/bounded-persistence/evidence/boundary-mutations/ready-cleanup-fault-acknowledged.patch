@@ -1,0 +1,11 @@
+--- a/crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs
++++ b/crates/nessa-sdk/src/infrastructure/session_storage/ownership/blocking.rs
+@@ -170,7 +170,7 @@
+             Interrupted
+         });
+         let cleaned = self.drop_operation();
+-        let result = if cleaned {
++        let result = if cleaned || output.is_ok() {
+             output
+         } else {
+             if let Ok(output) = output {

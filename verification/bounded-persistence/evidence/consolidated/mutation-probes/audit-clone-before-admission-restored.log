@@ -1,0 +1,10 @@
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 18s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-cad12ce67ae1d3eb)
+
+running 2 tests
+test mcp_authorization::infrastructure::records::tests::worker_input_drop_keeps_slot ... ok
+test mcp_authorization::infrastructure::audit::tests::worker_input_drop_keeps_slot ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1998 filtered out; finished in 0.20s
+

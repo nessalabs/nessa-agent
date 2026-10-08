@@ -1,0 +1,11 @@
+--- a/crates/nessa-local-storage/src/physical_operation.rs
++++ b/crates/nessa-local-storage/src/physical_operation.rs
+@@ -164,7 +164,7 @@
+             output
+         } else {
+             if let Ok(output) = output {
+-                let _ = contained_drop(output);
++                drop(output);
+             }
+             Err(Interrupted)
+         };

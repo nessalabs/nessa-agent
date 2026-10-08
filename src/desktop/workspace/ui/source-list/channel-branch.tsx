@@ -19,7 +19,7 @@ import {
 } from "../../adapters/store/selectors"
 import { useBesideKey } from "../session-actions"
 import { branchCap } from "../../model/session-groups"
-import { IconButton } from "../chrome/icon-button"
+import { IconButton } from "../../../ui/icon-button"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { ThreadRow } from "./thread-row"
 import "./channel-branch.css"

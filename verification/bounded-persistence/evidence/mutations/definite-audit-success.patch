@@ -1,0 +1,11 @@
+--- a/crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs
++++ b/crates/nessa-server/src/mcp_authorization/infrastructure/audit.rs
+@@ -46,7 +46,7 @@
+         self.worker
+             .run(permit, move || state.record(record.get()))
+             .await
+-            .map_err(|_| AuditFailure)?
++            .unwrap_or(Ok(()))
+     }
+ }
+ 

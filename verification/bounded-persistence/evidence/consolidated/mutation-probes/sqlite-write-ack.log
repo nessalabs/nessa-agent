@@ -1,0 +1,28 @@
+   Compiling nessa-local-storage v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-local-storage)
+   Compiling nessa-local-database v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-local-database)
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-bounded-persistence/crates/nessa-sdk)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 45.63s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_sdk-33934274e459b55f)
+
+running 1 test
+
+thread 'tokio-rt-worker' (535984) panicked at crates/nessa-sdk/src/infrastructure/session_storage/../../../../nessa-local-storage/tests/support/physical_operation.rs:201:9:
+physical pre-effect fault
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'tokio-rt-worker' (535984) panicked at crates/nessa-sdk/src/infrastructure/session_storage/../../../../nessa-local-storage/tests/support/physical_operation.rs:210:9:
+physical post-effect fault
+
+thread 'infrastructure::session_storage::ownership::tests::pre_effect_worker_panic_is_typed_and_landed_effect_is_uncertain' (535983) panicked at crates/nessa-sdk/src/infrastructure/session_storage/ownership/tests.rs:246:5:
+assertion failed: matches!(store.write(&OwnershipSnapshot::default()).await,
+    Err(PortFailure::Uncertain))
+test infrastructure::session_storage::ownership::tests::pre_effect_worker_panic_is_typed_and_landed_effect_is_uncertain ... FAILED
+
+failures:
+
+failures:
+    infrastructure::session_storage::ownership::tests::pre_effect_worker_panic_is_typed_and_landed_effect_is_uncertain
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 985 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-sdk --lib`

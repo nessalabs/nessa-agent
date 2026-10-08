@@ -7,6 +7,7 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | product.max_payload_bytes | fixed | 65536 | protocol/product/v1.json x-frameBytes.maxPayloadBytes | a request frame longer than this is refused before it is decoded |
 | product.max_record_response_bytes | fixed | 131072 | protocol/product/v1.json RecordPageResult bounds | a record page past this is refused rather than written to the socket |
 | product.max_client_id_characters | fixed | 256 | protocol/product/v1.json ProductClientMetadata.id maxLength | a client id longer than this is refused at the handshake |
+| product.max_surface_instance_characters | fixed | 256 | protocol/product/v1.json ProductSurface.instance maxLength | a surface instance longer than this is refused at the handshake |
 | server.requests | configured | 128 | config.json limits.requests | an ordinary request past the gateway's admission is refused |
 | server.controls | configured | 32 | config.json limits.controls | a control past the gateway's admission is refused |
 | server.record_reads | configured | 4 | config.json limits.recordReads | a record read past the gateway's admission is refused |
