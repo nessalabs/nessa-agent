@@ -506,10 +506,19 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   a fragment (on a page of its own, where an answer to an earlier check,
   coming after a later load, ends no wait), an app forging departures, and a
   third party forging them and the check's answers at every proxy and app
-  frame, are not; a deadline no timer can wait loads nothing. _#349 design,
-  L32._ _Check:_ `mcp-apps.mjs --only
+  frame, are not; a host reply with no method of its own, after the app has
+  defined `method` and `params` on `Object.prototype`, is not a check, and
+  that app's departure is still reported; a `javascript:` rewrite does not
+  run in Chromium, and in WebKit it runs and the unanswered load is the
+  departure; a deadline no timer can wait loads
+  nothing. _#349 design, L32; #388._ _Check:_ `mcp-apps.mjs --only
   departures,departures-back` (dev server: it imports the host's builder; it
   waits past the initialize deadline).
+- [ ] **The test server's chart app goes live** (#423): handed to the real
+  proxy as the host writes a document, it says `ui/initialize`, reaches
+  live, and `#chart` shows the series from the tool result it was sent
+  (`alpha 10, beta 20`), not a static page. _Check:_ `mcp-apps.mjs --only chart`
+  (dev server: it imports the host's builder).
 - [ ] **It is torn down on close**: a pane's close takes its proxy and app
   documents with it; an app asking to go is sent `ui/resource-teardown`, and
   its pane closes only once it answers. _Check:_ `mcp-apps.mjs --only teardown`.
@@ -804,7 +813,8 @@ publish, and refuses nothing the gateway would judge.
   own 480px minimum), reported as `windowScroll`; Settings itself does not.
 - [ ] **A server added here reaches a new conversation** (the issue's
   Done-when): added again from the window, its switch on, the agent asked for `show_chart`
-  in a new conversation, its app frame renders the chart, once. _Check:_
+  in a new conversation, its app is live and its frame shows the tool result's
+  series, once. _Check:_
   `mcp-servers-gateway.mjs --only done-when` (needs the agent signed in on the
   machine). "Once" depends on #418's fix (#421) being in the tree.
 
