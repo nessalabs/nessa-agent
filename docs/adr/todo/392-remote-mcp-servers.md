@@ -539,7 +539,7 @@ sequenceDiagram
     Writer->>Peer: notifications/initialized
     Note over Registry: close fences admission, joins tasks, owns DELETE
     Registry->>Peer: DELETE claimed ID once
-    Note over Registry: release claim after DELETE observation; finished after joins
+    Note over Registry: release claim after DELETE observation and finish after joins
 ```
 
 ## Audit verification by recorded meaning (#631)
