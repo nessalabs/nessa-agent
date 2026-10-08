@@ -2,9 +2,10 @@
 /**
  * A stdio MCP server for testing what reaches Nessa from an MCP tool call:
  * structured results, resource links and embedded resources, a dotted tool
- * name, a tool error, and MCP Apps tools with `ui://` resources — one of them
- * an app that calls, through its host, a destructive tool only apps may call
- * and tools hidden from apps (#384). It has no side effects and no
+ * name, a tool error, and MCP Apps tools with `ui://` resources. `show_chart`
+ * is a minimal app: it handshakes and draws its tool result. `review_rows`
+ * calls, through its host, a destructive tool only apps may call and tools
+ * hidden from apps (#384). It has no side effects and no
  * dependencies; every answer is fixed, so a recording of one run can be
  * compared with another.
  *
@@ -43,8 +44,86 @@ export const APP_CALLS = {
   hiddenWithUi: "model_only_chart",
 }
 
-const CHART_HTML =
-  "<!doctype html><html><body><p id=chart>chart for nessa-test</p></body></html>"
+/**
+ * The chart app: a minimal MCP App (2026-01-26), speaking `ui/*` by hand as
+ * the spec shows an app can without an SDK. It asks `ui/initialize`, and once
+ * the host answers it says `ui/notifications/initialized` and
+ * `ui/notifications/size-changed`. It draws nothing until
+ * `ui/notifications/tool-result`: `#chart` then shows the result's
+ * `structuredContent.series` as `name value` pairs joined by ", "
+ * (`alpha 10, beta 20` for this server's rows). Asked
+ * `ui/resource-teardown`, it answers `{ result: {} }` and nothing else. Its
+ * state is `data-chart-state` on its body (`loading`, then `live`, or
+ * `refused`).
+ */
+const CHART_HTML = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Chart</title>
+<style>
+  body { margin: 0; padding: 16px; font: 16px/1.4 system-ui, sans-serif; background: #fff; color: #142033; }
+  h1 { font-size: 13px; font-weight: 600; margin: 0 0 10px; }
+  #chart { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: 0; }
+</style>
+</head>
+<body data-chart-state="loading">
+<h1>Chart (nessa-test)</h1>
+<p id="chart"></p>
+<script>
+(function () {
+  var parentWindow = window.parent;
+  var next = 1;
+  var waiting = {};
+  var body = document.body;
+  function post(message) { parentWindow.postMessage(message, "*"); }
+  function ask(method, params) {
+    var id = next++;
+    post({ jsonrpc: "2.0", id: id, method: method, params: params });
+    return new Promise(function (resolve) { waiting[id] = resolve; });
+  }
+  function tell(method, params) { post({ jsonrpc: "2.0", method: method, params: params }); }
+  function seriesText(params) {
+    var series = params && params.structuredContent && params.structuredContent.series || [];
+    return series.map(function (point) { return point.name + " " + point.value; }).join(", ");
+  }
+  window.addEventListener("message", function (event) {
+    if (event.source !== parentWindow) return;
+    var message = event.data;
+    if (!message || message.jsonrpc !== "2.0") return;
+    if (message.id !== undefined && !message.method) {
+      var resolve = waiting[message.id];
+      delete waiting[message.id];
+      if (resolve) resolve(message);
+      return;
+    }
+    if (message.method === "ui/resource-teardown") {
+      post({ jsonrpc: "2.0", id: message.id, result: {} });
+      return;
+    }
+    if (message.method === "ui/notifications/tool-result")
+      document.getElementById("chart").textContent = seriesText(message.params);
+  });
+  function reportSize() {
+    tell("ui/notifications/size-changed", {
+      width: document.documentElement.scrollWidth,
+      height: document.documentElement.scrollHeight
+    });
+  }
+  ask("ui/initialize", {
+    appInfo: { name: "Chart", version: "1.0.0" },
+    appCapabilities: {},
+    protocolVersion: "2026-01-26"
+  }).then(function (answer) {
+    if (answer.error) { body.setAttribute("data-chart-state", "refused"); return; }
+    body.setAttribute("data-chart-state", "live");
+    tell("ui/notifications/initialized", {});
+    reportSize();
+    new ResizeObserver(reportSize).observe(body);
+  });
+})();
+</script>
+</body>
+</html>
+`
 
 /**
  * The review app: speaks the MCP Apps `ui/*` bridge by hand (2026-01-26), as
