@@ -36,17 +36,17 @@ export function NightScene({ still = false }: { still?: boolean }) {
     const frame = frameRef.current
     if (!frame) return
     const naturalHeight = nightSceneSillRows * nightSceneLayoutFontPx
-    const measure = () => {
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries.find((entry) => entry.target === frame)
+      if (!entry) return
       // The content height: the box's padding holds the faded rows, whose size
-      // follows the scale, so it must not feed back into it.
-      const height = Number.parseFloat(getComputedStyle(frame).height)
-      const scale = nightSceneScale(height, naturalHeight)
+      // follows the scale, so it must not feed back into it. The observer owns
+      // this measurement; reading computed height here would flush layout again.
+      const scale = nightSceneScale(entry.contentRect.height, naturalHeight)
       frame.style.setProperty("--night-scene-scale", String(scale))
       frame.style.setProperty("--night-scene-em", `${scale * nightSceneLayoutFontPx}px`)
       frame.dataset.measured = ""
-    }
-    measure()
-    const observer = new ResizeObserver(measure)
+    })
     observer.observe(frame)
     return () => observer.disconnect()
   }, [])
@@ -76,12 +76,12 @@ export function NightScene({ still = false }: { still?: boolean }) {
       }
     >
       <span className="desktop-night-scene-layers">
-        <Rain depth="far" pattern={nightSceneRainFar} />
-        <Rain depth="mid" pattern={nightSceneRainMid} />
-        <Rain depth="near" pattern={nightSceneRainNear} />
+        <Rain depth="far" pattern={nightSceneRainFar} still={still} />
+        <Rain depth="mid" pattern={nightSceneRainMid} still={still} />
+        <Rain depth="near" pattern={nightSceneRainNear} still={still} />
         <span>{nightSceneDim.join("\n")}</span>
         <span data-lit="">{nightSceneLit.join("\n")}</span>
-        <Steam />
+        <Steam still={still} />
       </span>
     </pre>
   )
@@ -94,24 +94,28 @@ export function NightScene({ still = false }: { still?: boolean }) {
 function Rain({
   depth,
   pattern,
+  still,
 }: {
   depth: "far" | "mid" | "near"
   pattern: readonly string[]
+  still: boolean
 }) {
-  const text = pattern.join("\n")
+  // A static window sees only its first rows. The copies below the clip exist
+  // for an animation's travel; laying them out in every header wastes work.
+  const text = (still ? pattern.slice(0, nightSceneWindow.rows) : pattern).join("\n")
   return (
     <span className="desktop-night-scene-rain" data-depth={depth}>
-      <span>{`${text}\n${text}`}</span>
+      <span>{still ? text : `${text}\n${text}`}</span>
     </span>
   )
 }
 
 /** Steam over the mug: the tiling wisps doubled, rising by one copy in a loop. */
-function Steam() {
+function Steam({ still }: { still: boolean }) {
   const text = nightSceneSteam.pattern.join("\n")
   return (
     <span className="desktop-night-scene-steam">
-      <span>{`${text}\n${text}`}</span>
+      <span>{still ? text : `${text}\n${text}`}</span>
     </span>
   )
 }

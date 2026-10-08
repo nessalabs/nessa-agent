@@ -1,4 +1,4 @@
-import { forwardRef, type RefObject } from "react"
+import type { RefObject } from "react"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectChannel, selectSession } from "../../adapters/store/selectors"
 import { revealSession } from "../../adapters/store/commands"
@@ -13,10 +13,13 @@ import { tooltip } from "../../../ui/tooltip"
  * channel is left out when the session list beside already names it, and
  * reveals the session in the sidebar when chosen.
  */
-export const TranscriptHeading = forwardRef<
-  HTMLDivElement,
-  { sessionId: string; titleRef: RefObject<HTMLHeadingElement | null> }
->(function TranscriptHeading({ sessionId, titleRef }, ref) {
+export function TranscriptHeading({
+  sessionId,
+  titleRef,
+}: {
+  sessionId: string
+  titleRef: RefObject<HTMLHeadingElement | null>
+}) {
   const dispatch = useWorkspaceDispatch()
   const frame = useWorkspaceFrame()
   const session = useWorkspaceSelector((state) => selectSession(state, sessionId))
@@ -28,7 +31,7 @@ export const TranscriptHeading = forwardRef<
   if (!session) return null
   const showChannel = channel !== undefined && channel.id !== listed
   return (
-    <div className="workspace-heading" ref={ref}>
+    <div className="workspace-heading">
       <h2 ref={titleRef}>{session.title}</h2>
       <p>
         {showChannel ? (
@@ -51,4 +54,4 @@ export const TranscriptHeading = forwardRef<
       </p>
     </div>
   )
-})
+}

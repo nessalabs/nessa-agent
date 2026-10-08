@@ -228,7 +228,8 @@ writing the full defaults on first launch is buying.
   the split panes' source in `store/`; the gateway's source and its mapping
   of conversation views in `gateway/`; the in-memory source in `in-memory/`;
   focus, Escape for the widget in front (`widget-escape.ts`), the panes'
-  room, what the workspace adds to a drag, keys and the clock in `dom/`; the
+  room, what the workspace adds to a drag, first-send motion (`arrival.ts`),
+  keys and the clock in `dom/`; the
   host callbacks each place gives a widget's view in
   `store/widget-hosts.ts`) and `ui/` (each component once, and `layouts/`
   that only arrange them; `ui/panes/` a session's pane, a widget's
@@ -261,6 +262,11 @@ writing the full defaults on first launch is buying.
   `ui/linked-devices-tab.tsx`, which composes the UI kit's settings rows,
   switch, pairing code, fingerprint and orbs. See
   [adr/done/238-desktop-workspace-frontend.md](adr/done/238-desktop-workspace-frontend.md).
+  `ui/source-list/overview-quiet.ts` owns delayed sidebar metadata for one
+  workspace store and DOM root; `WorkspaceShell` supplies that pair through
+  `OverviewQuietProvider`. The overview owns interaction suppression on
+  `.workspace-content`, leaving each region’s independent state intact.
+
 - Widgets are the desktop window's vertical for what a plugin draws
   ([ADR 326](adr/todo/326-widgets.md)): `src/desktop/widgets/` (its map is
   `index.ts`) owns the reference (`model/widget-ref.ts`), the states and
@@ -327,7 +333,8 @@ writing the full defaults on first launch is buying.
 - Split panes are a module of the desktop window's, not of the workspace:
   `src/desktop/split-panes/` (its map is `index.ts`) owns the pane layout, its
   sizing, drops and the drag's phases (`model/`, pure), the port a host
-  implements (`application/ports.ts`, `SplitPanesSource`), the drag, FLIP,
+  implements (`application/ports.ts`, `SplitPanesSource`), the drag, FLIP and
+  their shared cancellable body restoration (`adapters/dom/staged-reveal.ts`),
   Tab order and the names a host may see of the page (`adapters/dom/`,
   `marks.ts`), and the grid and its stylesheet (`ui/`). A host supplies one
   source that reads its layout and carries out every change through its own
@@ -763,7 +770,14 @@ forwarded `tools/call` result's `structuredContent` for the ACP worker to
 attach, `servers` for the live configured set (replaced whole, read at each
 opening), the open sessions and their tool lists, and a session opened once
 for no conversation (`open_once`, a host's look at a server), `process` for a
-server's process group, `wire` for MCP's JSON), tested in
+server's process group, `wire` for MCP's JSON, and `http` for remote identity,
+bounded JSON/SSE body and recovery ownership over injected `http_exchange`.
+HTTP replacement handoff and immutable peer-reply binding use `connection`'s
+existing bounded writer queue; `http` owns provisional/validated binding claims
+and the modern POST authorization/status policy shared by startup and recovery;
+[ADR 392](adr/todo/392-remote-mcp-servers.md) maps its orderings to
+`http_progress`, the owning `http_shutdown` close-fence tests, `post_streams`
+and their shared `post_body` test fixture, tested in
 `tests/infrastructure/mcp/` against in-process and process fixtures. The
 gateway's `src/mcp_servers/` owns the stand-in rules, the session token and
 the resource ticket, and a user's server as stored with the edits made to

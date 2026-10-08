@@ -195,7 +195,7 @@ export function series(samples, read) {
   }
   if (values.length === 0) return { median: null, max: null, runs: "" }
   return {
-    median: median(values.map((value) => Math.round(value))),
+    median: Math.round(median(values)),
     max: Math.round(Math.max(...values)),
     runs: values.map((value) => Math.round(value)).join(" "),
   }

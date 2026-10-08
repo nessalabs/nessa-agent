@@ -82,6 +82,11 @@ production build at 4× CPU throttling.
   _Check:_ `perf-budget.mjs` (defaults: `--mode prod --throttle 4 --runs 3`).
   Read max and median per row; every over-budget frame carries its Long
   Animation Frame attribution (scripts, forced layout, style-and-layout time).
+- [ ] **Frame gaps use callback execution time.** Sampling `performance.now()`
+  inside rAF keeps delayed callbacks, the interaction origin and attribution
+  on one clock. A nominal frame timestamp must not shorten known blocking work.
+  _Check:_ `lib/perf.test.mjs` (delayed timestamps and a zero first timestamp),
+  `perf-budget.mjs` (known-cost calibration).
 - [ ] **The budget decides on the unrounded frame** (#369). The table rounds
   maxima for display. A 50.1 ms frame fails when that table shows 50; an exact
   50 ms frame and a 49.6 ms frame pass.
@@ -199,30 +204,29 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
 - [ ] **Only the primary button carries**: the right button joining the left
   mid-drag ends the drag; nothing is carried after it and its release drops
   nothing. _Check:_ `drag.mjs` (`chord-right-button`).
-- [ ] **Nothing carried is painted under the window's controls**, the corner
-  pane's copy included, every frame, and the corner pane's copy lays its
-  header out as the pane does, its title as far in (± 2 px). _Check:_
-  `drag.mjs` (`copy-under-controls`).
-- [ ] **No text selection is left behind**, during or after a drag. _Check:_
-  `drag.mjs` (`sweep-across-zones`, `outside-cancels`).
-- [ ] **Preview equals commit** — the placeholder marks exactly the rect the
-  drop takes. _Check:_ unit test `panes.test.ts`; by eye with `--headed`.
-- [ ] **The copy takes the shape of where it would land** (ADR 238 › _What
-  the copy and the panes are drawn at_): with a zone shown and the pointer
-  at rest, the copy's painted size is the placeholder's (± 2 px) and its
-  centre is on the pointer (± 2 px); with no zone it is the carried pane's
-  own size; each change of size runs one way, never past where it goes,
-  with nothing painted under the controls and no title drawn stretched.
-  _Check:_ `drag.mjs` (`copy-takes-slot-shape`; `--shots <dir>` saves it
-  below, beside, and over its own place); unit tests `split-panes/model/drag.test.ts`,
-  `split-panes/adapters/dom/drag.test.tsx`,
+- [ ] **Nothing carried paints under the window controls.** The compact
+  card is clipped below the titlebar during every frame.
+  _Check:_ `drag.mjs` (`copy-under-controls`).
+- [ ] **No text selection is left behind**, during or after a drag.
+  _Check:_ `drag.mjs` (`sweep-across-zones`, `outside-cancels`).
+- [ ] **The shown zone commits the same drop outcome.** The target highlight
+  identifies the gesture's zone; the model's proposal determines the final
+  layout. _Check:_ unit test `panes.test.ts`; `drag.mjs` (`stationary-drag-target`).
+- [ ] **The carried card stays compact.** Its row-sized box keeps the same
+  dimensions over every target and its centre follows the pointer within 2px;
+  its title never stretches. It contains no transcript, image band or composer.
+  _Check:_ `drag.mjs` (`compact-drag-card`; `--shots <dir>` saves target views),
   `workspace/adapters/dom/split-panes-drag.test.tsx`.
-- [ ] **Every pane previews the shape it lands at**: with a zone shown and
-  the pointer at rest, each pane is painted at the rect the drop then gives
-  it (± 2 px), its conversation centred across that shape (± 2 px), its
-  header held to the top left, and cut to it —
-  its title never drawn stretched, any frame — and a drag leaves no pane at a size of its own. _Check:_
-  `drag.mjs` (`preview-panes-take-shape`; every drag check's residue).
+- [ ] **Live chats stay still during targeting.** Their rects stay within 2px
+  of their starting geometry, pane material and body visibility stay unchanged,
+  and the highlight marks the hovered half or whole pane. Release commits the
+  split; cancellation leaves the layout unchanged and removes owned resources.
+  _Check:_ `drag.mjs` (`stationary-drag-target`; every drag check's residue).
+- [ ] **A layout flight leaves stationary chats live.** Closing or swapping panes keeps
+  unchanged panes' bodies and material visible. A temporary measurement hold
+  never reaches paint; only moving panes restore one body per frame.
+  _Check:_ `drag.mjs` (`stationary-layout-flight`, `stationary-drop-commit`),
+  `split-panes/adapters/dom/flip.test.tsx` (interrupted subsets).
 - _Harmless, and not a failure:_ a single read of a title's transforms in
   WebKit that mixes two moments. How the two stretch checks read a title is
   `recordShapeFrames` (`scripts/lib/shape-sampler.mjs`), and why, with the runs and probes, is #365.
@@ -728,6 +732,11 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   position. _ADR 238 › A new session's home takes its pane's shape_.
   _Check:_ `responsive.mjs --only home-shape --shots <dir>`, then look at the
   shots beside the conversation pane.
+- [ ] **First-message handoff has one composer.** Sending from a new-session
+  home replaces it without overlapping composer instances; the reply receives
+  the caret and keeps the next draft. The composer glides into its dock and
+  the sent words rise into their bubble; reduced motion performs neither flight.
+  _Check:_ `focus.mjs` (`focus-home-handoff`, `focus-home-handoff-reduced`).
 - [ ] **Focus on Customize survives the home becoming small.** Customize
   focused in a new session's home, the window shortened until the home takes
   a small pane's shape: the header stays, and focus stays on Customize.

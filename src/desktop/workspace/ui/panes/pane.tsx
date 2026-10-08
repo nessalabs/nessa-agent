@@ -1,4 +1,12 @@
-import { memo, startTransition, useCallback, useEffect, useRef, useState } from "react"
+import {
+  memo,
+  startTransition,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react"
 import { sendMessage } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
@@ -7,10 +15,9 @@ import {
   selectPaneSession,
   selectSession,
 } from "../../adapters/store/selectors"
-import { measureArrival, type Arrival } from "../../adapters/dom/arrival"
 import { settleOnReshape } from "../../adapters/dom/home-shape"
 import { focusedPaneAttribute } from "../../adapters/dom/focus"
-import { durationToken } from "../../../adapters/motion"
+import { captureArrival, type Arrival } from "../../adapters/dom/arrival"
 import { usePictureInConversationsPreference } from "../../../adapters/window-preferences"
 import { HeaderSliver } from "../../../ui/header-art"
 import type { PaneFrame } from "../../../split-panes"
@@ -27,8 +34,8 @@ import { usePaneFocus } from "./use-pane-focus"
  *
  * A session or another pane carried over it (`split-panes/adapters/dom/drag.ts`)
  * lands by zone: a side splits, the middle opens in place or swaps. Sending a
- * new session's first message measures its home first, so the composer can
- * glide into the conversation.
+ * new session's first message replaces its home with the conversation; the
+ * workspace's focus owner follows the removed field.
  */
 export const Pane = memo(function Pane({
   placement,
@@ -62,22 +69,14 @@ export const Pane = memo(function Pane({
     return () => cancelAnimationFrame(frame)
   }, [])
 
-  // Sending a first message: the home lifts away over the conversation that
-  // replaces it, while its composer travels there as the conversation's own.
   const homeRef = useRef<HTMLDivElement>(null)
-  // The arrival belongs to the session whose first message it carries: another
-  // session opened in this pane meanwhile does not arrive.
   const [arriving, setArriving] = useState<{
     sessionId: string
-    arrival: Arrival
+    from: Arrival
   } | null>(null)
-  const arrival = arriving?.sessionId === sessionId ? arriving.arrival : null
-  // Another session opened here ends the arrival: coming back does not replay it.
   if (arriving && arriving.sessionId !== sessionId) setArriving(null)
-  const leaveTimer = useRef(0)
-  useEffect(() => () => window.clearTimeout(leaveTimer.current), [])
-  // The caret follows the first message into the conversation.
-  const handoff = useRef<string | null>(null)
+  const arrival = arriving?.sessionId === sessionId ? arriving.from : null
+  const finishArrival = useCallback(() => setArriving(null), [])
   // The session shown now, for the callbacks below: they keep their identity
   // for the pane's life, so the memoised home and conversation they are
   // handed render only for what they show, never because this pane did.
@@ -86,32 +85,21 @@ export const Pane = memo(function Pane({
   const sendFromHome = useCallback(
     (text: string) => {
       const shown = shownRef.current
-      handoff.current = shown
-      const measured = measureArrival(homeRef.current)
-      if (measured) {
-        setArriving({ sessionId: shown, arrival: measured })
-        window.clearTimeout(leaveTimer.current)
-        // The home stays over the conversation until its composer has landed.
-        const home = homeRef.current ?? document.body
-        const duration =
-          durationToken(home, "--desktop-arrival") +
-          durationToken(home, "--desktop-stagger") / 2
-        leaveTimer.current = window.setTimeout(() => setArriving(null), duration)
-      }
-      void dispatch(sendMessage({ sessionId: shown, text, initiator: "person" }))
+      const from = captureArrival(homeRef.current)
+      setArriving(from ? { sessionId: shown, from } : null)
+      void dispatch(sendMessage({ sessionId: shown, text, initiator: "person" })).then(
+        (outcome) => {
+          if (outcome === "not-asked")
+            setArriving((current) => (current?.from === from ? null : current))
+        },
+      )
     },
     [dispatch],
   )
-  const takeFocus = useCallback(() => {
-    const mine = handoff.current === shownRef.current
-    handoff.current = null
-    return mine
-  }, [])
-
-  const showHome = draft || arrival !== null
+  const showHome = draft
   // A new session's home settles when its pane changes its shape, not as it appears.
   const homeShown = filled && showHome
-  useEffect(() => {
+  useLayoutEffect(() => {
     const home = homeRef.current
     if (!homeShown || !home) return
     return settleOnReshape(home)
@@ -143,7 +131,6 @@ export const Pane = memo(function Pane({
             ref={homeRef}
             className="workspace-pane-home"
             data-split-keeps="middle"
-            data-leaving={(!draft && arrival !== null) || undefined}
           >
             <PaneHome sessionId={sessionId} onSend={sendFromHome} />
           </div>
@@ -152,9 +139,9 @@ export const Pane = memo(function Pane({
           <Conversation
             key={sessionId}
             sessionId={sessionId}
-            arrival={arrival}
-            takeFocus={takeFocus}
             onHeadingVisible={setHeadingVisible}
+            arrival={arrival}
+            onArrivalDone={finishArrival}
           />
         ) : null}
       </div>

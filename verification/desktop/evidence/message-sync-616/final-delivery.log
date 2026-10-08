@@ -1,0 +1,18 @@
+building production into /var/folders/1w/wp9n0wwd22qgrf0zkhb2fk6r0000gn/T/nessa-desktop-verify-yD1Qn7…
+previewing production at http://127.0.0.1:54726/desktop.html
+ok    console
+ok    calibration [chromium]
+ok    delivery [chromium columns]
+ok    delivery [chromium columns]
+ok    delivery [chromium columns]
+ok    delivery [chromium sidebar]
+ok    delivery [chromium sidebar]
+ok    delivery [chromium sidebar]
+ok    delivery [webkit columns]
+ok    delivery [webkit columns]
+ok    delivery [webkit columns]
+ok    delivery [webkit sidebar]
+ok    delivery [webkit sidebar]
+ok    delivery [webkit sidebar]
+ok    delivery-statistics
+message-sync: 15/15 held

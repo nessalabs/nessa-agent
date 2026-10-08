@@ -77,7 +77,7 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
  * The pane being carried leaves its place empty and dimmed — its slot, which
  * a preview moves to where it would land, under the placeholder.
  */
-.workspace-pane[data-drag-lifted] {
+.workspace:not([data-drag-card]) .workspace-pane[data-drag-lifted] {
   background: color-mix(in oklab, var(--foreground) 2%, transparent);
   box-shadow: inset 0 0 0 1px var(--desktop-rim);
   /* The slot snaps. Interpolating the resting blur shadow would paint a new
@@ -88,13 +88,17 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
 
 /* Not painted while carried. Opacity would still raster the conversation on
    the frame it lifts (`styles.test.ts`). */
-.workspace-pane[data-drag-lifted] > .workspace-pane-header,
-.workspace-pane[data-drag-lifted] > .workspace-pane-body {
+.workspace:not([data-drag-card])
+  .workspace-pane[data-drag-lifted]
+  > .workspace-pane-header,
+.workspace:not([data-drag-card])
+  .workspace-pane[data-drag-lifted]
+  > .workspace-pane-body {
   content-visibility: hidden;
 }
 
 /*
- * While panes travel — a flight (`data-split-flipping`), or a drag's preview of
+ * While panes travel — a flight (`data-split-flying`), or a drag's preview of
  * where a drop would put them (`data-drag-reflow`) — nothing inside them
  * repaints expensively: the glass blur and deep shadows wait until they have
  * landed. One set of rules for both, so a drop that hands a preview over to a
@@ -102,15 +106,18 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
  * as `> *`: a rule whose subject is any element makes the browser restyle
  * every element in every pane as a flight begins; named, two per pane.
  */
-.workspace:is([data-split-flipping], [data-drag-reflow]) .workspace-pane,
-.workspace:is([data-split-flipping], [data-drag-reflow])
+.workspace:is([data-split-measuring], [data-drag-reflow]) .workspace-pane,
+.workspace-pane[data-split-flying],
+.workspace:is([data-split-measuring], [data-drag-reflow])
   .workspace-pane
   > .workspace-pane-header,
-.workspace[data-split-flipping] .workspace-pane > .workspace-pane-body {
+.workspace-pane[data-split-flying] > .workspace-pane-header,
+.workspace-pane[data-split-flying] > .workspace-pane-body {
   will-change: transform;
 }
 
-.workspace:is([data-split-flipping], [data-drag-reflow]) .workspace-pane {
+.workspace:is([data-split-measuring], [data-drag-reflow]) .workspace-pane,
+.workspace-pane[data-split-flying] {
   box-shadow: inset 0 0 0 1px var(--desktop-rim);
   transition: none;
   /* Opaque while it travels. The resting tint composites the blurred ambient
@@ -138,15 +145,19 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
   content-visibility: hidden;
 }
 
-/* The copy omits the conversation. A body pictured in it stays out of its
-   paint (`styles.test.ts`). */
-.split-panes-ghost .workspace-pane-body {
+/* The root hold collects final geometry within the commit and never reaches
+   paint. Only moving panes keep their bodies held through the flight and
+   restore one per frame; stationary chats remain visible. */
+.workspace[data-split-measuring] .workspace-pane > .workspace-pane-body,
+.workspace-pane[data-split-flying] > .workspace-pane-body,
+.workspace-pane[data-split-restoring] > .workspace-pane-body {
   content-visibility: hidden;
 }
 
-.workspace:is([data-split-flipping], [data-drag-reflow])
+.workspace:is([data-split-measuring], [data-drag-reflow])
   .workspace-pane
-  .desktop-composer {
+  .desktop-composer,
+.workspace-pane[data-split-flying] .desktop-composer {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   box-shadow: none;
@@ -158,7 +169,8 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
  * rests in the corner (`styles.css`), so a pane sliding out of the corner, or
  * into it, would carry it beneath them.
  */
-.workspace:is([data-split-flipping], [data-drag-reflow]) .desktop-header[data-sliver] {
+.workspace:is([data-split-measuring], [data-drag-reflow]) .desktop-header[data-sliver],
+.workspace-pane[data-split-flying] .desktop-header[data-sliver] {
   opacity: 0;
   transition: none;
 }

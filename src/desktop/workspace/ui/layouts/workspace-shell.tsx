@@ -99,6 +99,7 @@ import { OverviewLayer } from "../overview/overview-layer"
 import { PaneGrid } from "../panes/pane-grid"
 import { QuickSwitcher, type SwitcherMode } from "../quick-switcher/quick-switcher"
 import { SessionList } from "../session-list/session-list"
+import { OverviewQuietProvider } from "../source-list/overview-quiet"
 import { SourceList } from "../source-list/source-list"
 import {
   ListedChannelProvider,
@@ -355,7 +356,7 @@ export function WorkspaceShell({
   useFocusFollowsPane(store, root)
   // The panes' drag spans the window: sessions are picked up from its lists.
   const splitPanes = useMemo(() => workspaceSplitPanes(store), [store])
-  const dragOptions = useMemo(() => workspaceDragOptions(store), [store])
+  const dragOptions = useMemo(workspaceDragOptions, [])
   useSplitPanesDrag(root, splitPanes, dragOptions)
   const peek = useEdgePeek(!sidebarOpen, sidebarOpen)
   // Each widget host on the page, by scope, for Escape to find (`widget-escape.ts`).
@@ -405,132 +406,134 @@ export function WorkspaceShell({
     [region.sidebar.variant, compose, composeShortcut],
   )
   return (
-    <WorkspaceFrameProvider value={frame}>
-      <EscapeScopesProvider value={escapeScopes}>
-        <ListedChannelProvider value={listOpen ? view.channelId : null}>
-          <SidebarPeekProvider value={peek}>
-            <FlipScope shape={shape} root={root}>
-              <div
-                className="workspace-window"
-                data-rail={!railOffered ? "off" : railDrawn ? "open" : "closed"}
-                data-rail-view={shownRailItem?.id}
-                data-host={hostKind}
-                data-surface={browserSurface ? "browser" : "window"}
-                data-desktop-theme={theme}
-                data-sidebar={sidebarOpen ? "open" : "closed"}
-                // The person's own choice, apart from a fold for room: the
-                // rail's toggle hides only with a sidebar they closed.
-                data-sidebar-chosen={chrome.sidebar.open ? "open" : "closed"}
-                style={{ "--rail-width": `${RAIL_WIDTH}px` } as CSSProperties}
-              >
-                {railOffered ? (
-                  <>
-                    <SideRail
-                      open={railDrawn}
-                      active={railItem}
-                      onPick={(id) => {
-                        // Picking a place is leaving whatever had the keyboard here.
-                        setSwitcher(null)
-                        setRailItem(id)
-                      }}
-                    />
-                    <SideRailButton
-                      open={railDrawn}
-                      room={railRoom}
-                      toggle={() => setRailOpen((open) => !open)}
-                    />
-                  </>
-                ) : null}
+    <OverviewQuietProvider store={store} root={root}>
+      <WorkspaceFrameProvider value={frame}>
+        <EscapeScopesProvider value={escapeScopes}>
+          <ListedChannelProvider value={listOpen ? view.channelId : null}>
+            <SidebarPeekProvider value={peek}>
+              <FlipScope shape={shape} root={root}>
                 <div
-                  ref={root}
-                  className="workspace"
-                  // Under an item's full view it takes no focus, pointer or Escape.
-                  inert={shownRailItem !== undefined || undefined}
-                  data-workspace
+                  className="workspace-window"
+                  data-rail={!railOffered ? "off" : railDrawn ? "open" : "closed"}
+                  data-rail-view={shownRailItem?.id}
                   data-host={hostKind}
                   data-surface={browserSurface ? "browser" : "window"}
                   data-desktop-theme={theme}
-                  data-peek={(peek.shown && !peek.handedOff) || undefined}
                   data-sidebar={sidebarOpen ? "open" : "closed"}
-                  data-list={
-                    region.sessionList ? (listOpen ? "open" : "closed") : undefined
-                  }
-                  data-panes-alone={(!sidebarOpen && !listOpen) || undefined}
-                  style={
-                    {
-                      "--workspace-sidebar-width": `${sidebarWidth}px`,
-                      ...(region.sessionList
-                        ? { "--workspace-list-width": `${listWidth}px` }
-                        : {}),
-                    } as CSSProperties
-                  }
+                  // The person's own choice, apart from a fold for room: the
+                  // rail's toggle hides only with a sidebar they closed.
+                  data-sidebar-chosen={chrome.sidebar.open ? "open" : "closed"}
+                  style={{ "--rail-width": `${RAIL_WIDTH}px` } as CSSProperties}
                 >
-                  <div className="desktop-ambient" aria-hidden="true">
-                    <span className="desktop-grain" />
-                  </div>
-                  {sidebarOpen ? null : (
-                    <EdgePeekStrip
-                      peek={peek}
-                      onDragOut={() => dispatch(toggleSidebar({ open: true }))}
-                    />
-                  )}
-                  <WorkspaceTitlebar>
-                    <IconButton
-                      icon="sidebar"
-                      label={`${sidebarOpen ? "Hide" : "Show"} Sidebar`}
-                      shortcut={frame.shortcut("toggleSidebar")}
-                      aria-expanded={sidebarOpen}
-                      aria-controls="workspace-sidebar"
-                      onClick={() => dispatch(toggleSidebar())}
-                    />
-                    <HistoryButtons />
-                    {region.sessionList ? (
-                      <IconButton
-                        icon="sessionList"
-                        label={`${listOpen ? "Hide" : "Show"} Session List`}
-                        shortcut={frame.shortcut("toggleSessionList")}
-                        aria-expanded={listOpen}
-                        onClick={() => dispatch(toggleSessionList())}
+                  {railOffered ? (
+                    <>
+                      <SideRail
+                        open={railDrawn}
+                        active={railItem}
+                        onPick={(id) => {
+                          // Picking a place is leaving whatever had the keyboard here.
+                          setSwitcher(null)
+                          setRailItem(id)
+                        }}
                       />
-                    ) : (
-                      <IconButton
-                        className="workspace-titlebar-compose"
-                        icon="newSession"
-                        label="New Session"
-                        shortcut={composeShortcut}
-                        tabIndex={sidebarOpen ? -1 : 0}
-                        aria-hidden={sidebarOpen || undefined}
-                        onClick={compose}
+                      <SideRailButton
+                        open={railDrawn}
+                        room={railRoom}
+                        toggle={() => setRailOpen((open) => !open)}
+                      />
+                    </>
+                  ) : null}
+                  <div
+                    ref={root}
+                    className="workspace"
+                    // Under an item's full view it takes no focus, pointer or Escape.
+                    inert={shownRailItem !== undefined || undefined}
+                    data-workspace
+                    data-host={hostKind}
+                    data-surface={browserSurface ? "browser" : "window"}
+                    data-desktop-theme={theme}
+                    data-peek={(peek.shown && !peek.handedOff) || undefined}
+                    data-sidebar={sidebarOpen ? "open" : "closed"}
+                    data-list={
+                      region.sessionList ? (listOpen ? "open" : "closed") : undefined
+                    }
+                    data-panes-alone={(!sidebarOpen && !listOpen) || undefined}
+                    style={
+                      {
+                        "--workspace-sidebar-width": `${sidebarWidth}px`,
+                        ...(region.sessionList
+                          ? { "--workspace-list-width": `${listWidth}px` }
+                          : {}),
+                      } as CSSProperties
+                    }
+                  >
+                    <div className="desktop-ambient" aria-hidden="true">
+                      <span className="desktop-grain" />
+                    </div>
+                    {sidebarOpen ? null : (
+                      <EdgePeekStrip
+                        peek={peek}
+                        onDragOut={() => dispatch(toggleSidebar({ open: true }))}
                       />
                     )}
-                  </WorkspaceTitlebar>
-                  <ContentMark root={root} />
-                  <Columns
-                    region={region}
-                    root={root}
-                    sidebarOpen={sidebarOpen}
-                    listOpen={listOpen}
-                    sidebarWidth={sidebarWidth}
-                    listWidth={listWidth}
-                    top={top}
-                    splitPanes={splitPanes}
-                  />
-                  <OverviewLayer root={root} />
-                  {switcher ? (
-                    <SwitcherHost
-                      mode={switcher}
-                      onClose={() => setSwitcher(null)}
-                      onPick={pick}
+                    <WorkspaceTitlebar>
+                      <IconButton
+                        icon="sidebar"
+                        label={`${sidebarOpen ? "Hide" : "Show"} Sidebar`}
+                        shortcut={frame.shortcut("toggleSidebar")}
+                        aria-expanded={sidebarOpen}
+                        aria-controls="workspace-sidebar"
+                        onClick={() => dispatch(toggleSidebar())}
+                      />
+                      <HistoryButtons />
+                      {region.sessionList ? (
+                        <IconButton
+                          icon="sessionList"
+                          label={`${listOpen ? "Hide" : "Show"} Session List`}
+                          shortcut={frame.shortcut("toggleSessionList")}
+                          aria-expanded={listOpen}
+                          onClick={() => dispatch(toggleSessionList())}
+                        />
+                      ) : (
+                        <IconButton
+                          className="workspace-titlebar-compose"
+                          icon="newSession"
+                          label="New Session"
+                          shortcut={composeShortcut}
+                          tabIndex={sidebarOpen ? -1 : 0}
+                          aria-hidden={sidebarOpen || undefined}
+                          onClick={compose}
+                        />
+                      )}
+                    </WorkspaceTitlebar>
+                    <ContentMark root={root} />
+                    <Columns
+                      region={region}
+                      root={root}
+                      sidebarOpen={sidebarOpen}
+                      listOpen={listOpen}
+                      sidebarWidth={sidebarWidth}
+                      listWidth={listWidth}
+                      top={top}
+                      splitPanes={splitPanes}
                     />
-                  ) : null}
+                    <OverviewLayer root={root} />
+                    {switcher ? (
+                      <SwitcherHost
+                        mode={switcher}
+                        onClose={() => setSwitcher(null)}
+                        onPick={pick}
+                      />
+                    ) : null}
+                  </div>
+                  {shownRailItem ? <RailView item={shownRailItem} /> : null}
                 </div>
-                {shownRailItem ? <RailView item={shownRailItem} /> : null}
-              </div>
-            </FlipScope>
-          </SidebarPeekProvider>
-        </ListedChannelProvider>
-      </EscapeScopesProvider>
-    </WorkspaceFrameProvider>
+              </FlipScope>
+            </SidebarPeekProvider>
+          </ListedChannelProvider>
+        </EscapeScopesProvider>
+      </WorkspaceFrameProvider>
+    </OverviewQuietProvider>
   )
 }
 

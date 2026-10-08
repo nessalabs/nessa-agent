@@ -1,0 +1,4 @@
+2026-10-07T10:50:18.068043Z  WARN nessa_sdk::infrastructure::acp::executions::worker: provider refused code=-32603 phase="prompt" the scenario stopped the turn
+2026-10-07T10:50:23.855358Z ERROR nessa_server::conversation::application::service: conversation agent opening failed conversation_id=68768d0f-5208-441f-acb2-68a172b55e07 error=agent: Unsupported("provider does not support restoring a closed session")
+2026-10-07T10:50:33.121345Z  WARN nessa_sdk::infrastructure::acp::executions::worker: provider refused code=-32603 phase="prompt" the scenario stopped the turn
+2026-10-07T10:50:36.887442Z ERROR nessa_server::conversation::application::service: conversation agent opening failed conversation_id=f303ca25-187d-4f4b-b573-0c5c0bdc4c30 error=agent: Unsupported("provider does not support restoring a closed session")

@@ -555,6 +555,15 @@ const checks = {
     const settling = () =>
       page.evaluate(() => window.__homeSettling.splice(0, window.__homeSettling.length))
     const settles = async (tag, name) => {
+      // ResizeObserver and animationstart are separate browser deliveries.
+      // Wait on the owner's event instead of assuming two RAFs delivered it.
+      if (name)
+        await until(
+          page,
+          (expected) => window.__homeSettling.some((event) => event.name === expected),
+          name,
+          1_000,
+        )
       const moved = await settling()
       if (!name) {
         if (moved.length)

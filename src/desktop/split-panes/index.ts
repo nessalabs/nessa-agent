@@ -52,7 +52,7 @@
  * - it may style or read the grid (`.split-panes-grid`, `data-split-grid`,
  *   found with `gridOf`, and `data-split-multi`), a pane's corner
  *   (`data-split-corner`, and `data-drag-corner` while a preview moves it),
- *   motion in progress (`data-split-flipping`, `data-drag-reflow`), a drag
+ *   motion in progress (`data-split-flipping`, `data-split-restoring`, `data-drag-reflow`), a drag
  *   (`data-drag-carrying`, `data-drag-lifted`, `data-drag-waiting`,
  *   `data-drag-takes-spare`), and the carried copy and its layer
  *   (`.split-panes-ghost`, `-layer`, `-carrier`, `-placeholder`, `-shield`);

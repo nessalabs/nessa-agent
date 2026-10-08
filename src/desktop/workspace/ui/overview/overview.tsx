@@ -11,6 +11,7 @@ import {
 import { flushSync } from "react-dom"
 import { reducedMotion } from "../../../adapters/motion-preference"
 import { useNow } from "../../adapters/dom/clock"
+import { focusAfterPaint } from "../../adapters/dom/focus"
 import { leaveInPlace, useReflow } from "../../adapters/dom/overview-reflow"
 import { isMac } from "../../../adapters/platform"
 import { matchesChord } from "../../../model/keyboard"
@@ -165,23 +166,12 @@ export function AgentsOverview({
   // callback, so the render does not slip into the next row's frame.
   const [peekDrawn, setPeekDrawn] = useState(false)
   useEffect(() => {
-    if (drawn === 0) return
+    if (drawn === 0 || peekDrawn) return
     const frame = requestAnimationFrame(() => {
       flushSync(() => setPeekDrawn(true))
     })
     return () => cancelAnimationFrame(frame)
-  }, [drawn])
-  useEffect(() => {
-    if (!filled || drawn >= rowCount) return
-    // The second row waits until the peek has painted (`overview.test.tsx`).
-    if (drawn === 1 && !peekDrawn) return
-    const frame = requestAnimationFrame(() => {
-      flushSync(() =>
-        setDrawn((current) => Math.min(rowCount, current + rowsPerOpenFrame)),
-      )
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [filled, drawn, rowCount, peekDrawn])
+  }, [drawn, peekDrawn])
   // The workspace keeps a listed session chosen while it lists one (`keepOverviewChoice`).
   const current = selected !== null && order.includes(selected) ? selected : null
   const choose = useCallback(
@@ -267,10 +257,9 @@ export function AgentsOverview({
   // a time, after the title, so a try on the open commit finds nothing and
   // would give up (`overview.test.tsx`). It waits, and lands once, the frame
   // after the row is there, so the caret never makes the frame that drew the
-  // row lay the page out early. A later chunk does not move it again. A row
-  // that moved past the rows drawn so far is not a landing: the try stays
-  // open until that row is focused (`overview.test.tsx`). A cancelled try
-  // (StrictMode's second mount, a quick leave) leaves the next to land.
+  // row lay the page out early. A later chunk does not move it again. A
+  // cancelled try (StrictMode's second mount, a quick leave) leaves the next
+  // to land.
   const landed = useRef(false)
   const cancelLand = useRef<(() => void) | null>(null)
   useEffect(() => () => cancelLand.current?.(), [])
@@ -287,31 +276,42 @@ export function AgentsOverview({
       column.querySelector(`[data-overview-item="${CSS.escape(id)}"]`) === null
     )
       return
-    let frame = 0
+    let stop = () => {}
     const cancel = () => {
-      cancelAnimationFrame(frame)
+      stop()
       if (cancelLand.current === cancel) cancelLand.current = null
     }
-    // After this paint. The row is already in view, so the land does not scroll.
-    frame = requestAnimationFrame(() => {
-      if (cancelLand.current !== cancel) return
-      cancelLand.current = null
-      if (landed.current) return
-      const id = currentNow.current
-      const column = list.current
-      if (!column) return
-      const item =
-        id === null
+    // Registered before the next row's paint, so focus does not force layout
+    // for a row that another callback just inserted on this same frame.
+    stop = focusAfterPaint(
+      () => {
+        const column = list.current
+        if (!column) return null
+        const id = currentNow.current
+        return id === null
           ? column
           : column.querySelector<HTMLElement>(`[data-overview-item="${CSS.escape(id)}"]`)
-      // Still past the drawn rows. Marking this landed would leave the
-      // keyboard off the row when it mounts (`overview.test.tsx`).
-      if (!item) return
-      focusItem(id, false)
-      if (document.activeElement === item) landed.current = true
-    })
+      },
+      () => {
+        if (cancelLand.current !== cancel) return
+        cancelLand.current = null
+        landed.current = true
+      },
+    )
     cancelLand.current = cancel
   }, [ready, drawn, peekDrawn, focusItem])
+
+  useEffect(() => {
+    if (!filled || drawn >= rowCount) return
+    // The second row waits until the peek has painted (`overview.test.tsx`).
+    if (drawn === 1 && !peekDrawn) return
+    const frame = requestAnimationFrame(() => {
+      flushSync(() =>
+        setDrawn((current) => Math.min(rowCount, current + rowsPerOpenFrame)),
+      )
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [filled, drawn, rowCount, peekDrawn])
 
   const timers = useRef(new Set<number>())
   const watches = useRef(new Set<() => void>())
@@ -495,11 +495,16 @@ export function AgentsOverview({
         ? (event.target.closest<HTMLElement>("[data-overview-item]")?.dataset
             .overviewItem ?? null)
         : null
-    // Only rows on the page. End and the arrows would name one the list has
-    // not drawn yet while it is still arriving, and focus would stay where
-    // it was (`overview.test.tsx`).
-    const to = stepFrom(order.slice(0, drawn), from, step)
-    if (to !== null) focusItem(to)
+    const visible = [
+      ...(list.current?.querySelectorAll<HTMLElement>("[data-overview-item]") ?? []),
+    ]
+      .map((item) => item.dataset.overviewItem)
+      .filter((id): id is string => id !== undefined)
+    const to = stepFrom(visible, from, step)
+    // Native focus and its roving-tab state must agree before another key
+    // can run in this turn (`keysWhileRowsArrive`). Other focus paths may
+    // run from lifecycle cleanup and cannot synchronously flush React.
+    if (to !== null) flushSync(() => focusItem(to))
   }
 
   // ⌥ held turns Allow into Always Allow where the review offers it, as ⌥ shows the other choice in a Mac menu.
@@ -751,7 +756,9 @@ export function AgentsOverview({
               >
                 {ready && (rowCount === 0 || drawn > 0) ? (
                   <Groups
-                    glance={rowCount === 0 ? glance : listedThrough(glance, drawn)}
+                    glance={
+                      rowCount === 0 ? glance : listedThrough(glance, drawn, expanded)
+                    }
                     current={current}
                     selected={split ? current : null}
                     expanded={split ? null : expanded}
@@ -827,12 +834,20 @@ const listMax = (surface: number) => Math.max(listMin, surface - peekMin)
  * full glance's. The footer's "outside this view" waits until the prefix is
  * the whole list, so it does not sit in the middle while later rows arrive.
  */
-function listedThrough(glance: AgentsGlance, count: number): AgentsGlance {
+function listedThrough(
+  glance: AgentsGlance,
+  count: number,
+  kept: string | null,
+): AgentsGlance {
   let left = count
   const take = (ids: readonly string[]) => {
     const slice = ids.slice(0, Math.max(0, left))
     left -= slice.length
-    return slice
+    // An opened reply keeps its row when it changes group during the opening.
+    // The normal prefix still grows one row per frame.
+    return kept !== null && ids.includes(kept) && !slice.includes(kept)
+      ? ids.filter((id) => id === kept || slice.includes(id))
+      : slice
   }
   const needsYou = take(glance.needsYou)
   const working = take(glance.working)

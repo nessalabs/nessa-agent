@@ -1,0 +1,41 @@
+
+ RUN  v3.2.7 /Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent
+
+(node:32870) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ❯ src/desktop/workspace/ui/panes/pane-picture.test.tsx (6 tests | 1 failed) 790ms
+   × registers home observation in the layout commit, before a paint can intervene 183ms
+     → expected false to be true // Object.is equality
+   ✓ draws the night scene, still, at the top of every conversation pane 85ms
+   ✓ leaves a new session's home to its own header 103ms
+   ✓ goes when Settings turns the picture in conversations off 84ms
+   ✓ moves a GIF only in the focused pane; the others show its first frame 95ms
+   ✓ offers the header picture in a pane's menu, and the scene back once there is one 237ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/desktop/workspace/ui/panes/pane-picture.test.tsx > registers home observation in the layout commit, before a paint can intervene
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ src/desktop/workspace/ui/panes/pane-picture.test.tsx:109:47
+    107|     })
+    108|     expect(registeredAtCommit.length).toBeGreaterThan(0)
+    109|     expect(registeredAtCommit.every(Boolean)).toBe(true)
+       |                                               ^
+    110|   } finally {
+    111|     globalThis.ResizeObserver = before
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 5 passed (6)
+   Start at  01:42:39
+   Duration  6.53s (transform 2.78s, setup 0ms, collect 4.37s, tests 790ms, environment 1.02s, prepare 86ms)
+
