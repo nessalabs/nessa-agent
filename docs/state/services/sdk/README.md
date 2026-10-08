@@ -99,7 +99,9 @@ flowchart LR
     Attachment[Agent attachment cleanup]
     Callback[Attachment report callback]
     Graph[First-owner facts and exact audit debt]
-    Caller -->|await result| Drain
+    Scope[Graph-derived first close owner]
+    Caller -->|requested lifetime| Scope
+    Scope -->|await selected generation| Drain
     Drain -->|await physical outcome| Physical
     Physical -->|await Agent close| Attachment
     Attachment -->|report observed cleanup| Callback
@@ -111,7 +113,10 @@ flowchart LR
 Physical release returns capacity before auditing its exact observation. A Released
 resource can therefore remain Closing while audit debt exists. Each independently
 closing child keeps its own operation; the parent's drain joins that child's
-Completion. An acknowledged Closing proof lets resume recover a rejected final
+Completion. A child already cascaded into an ancestor's close reads and retries
+that ancestor's generation. Its external attachment choice applies only to the
+requested target. The [first-owner regressions](../../../../crates/nessa-sdk/tests/application/agent_execution/subagents/settlement.rs)
+exercise both arrival orders and preserve the ancestor's physical cleanup. An acknowledged Closing proof lets resume recover a rejected final
 Closed write without inferring ownership from empty memory.
 
 The [public lifecycle regressions](../../../../crates/nessa-sdk/tests/application/agent_execution/subagents.rs)

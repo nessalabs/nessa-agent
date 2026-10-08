@@ -546,13 +546,27 @@ struct ParentCompletionAudit {
     root: Mutex<Option<AgentLifetimeId>>,
     records: Mutex<Vec<OwnershipEvidence>>,
     rejections: AtomicUsize,
+    intent: Mutex<Option<Arc<ObservationGate>>>,
 }
 
 #[async_trait]
 impl OwnershipAudit for ParentCompletionAudit {
     async fn record(&self, record: &OwnershipEvidence) -> Result<(), PortFailure> {
         self.records.lock().unwrap().push(record.clone());
-        let selected = self.root.lock().unwrap().as_ref() == Some(&record.parent_lifetime)
+        let root_record = self.root.lock().unwrap().as_ref() == Some(&record.parent_lifetime);
+        let intent = if root_record
+            && record.before == OwnershipMeaning::Open
+            && record.after == OwnershipMeaning::Closing
+        {
+            self.intent.lock().unwrap().take()
+        } else {
+            None
+        };
+        if let Some(intent) = intent {
+            intent.entered.notify_one();
+            intent.release.notified().await;
+        }
+        let selected = root_record
             && record.child_lifetime.as_ref() == Some(&record.parent_lifetime)
             && record.close_detail == Some(CloseEvidenceDetail::Completion);
         if selected && take_rejection(&self.rejections) {
@@ -570,6 +584,7 @@ async fn cascaded_owner_case(gate_only: bool) {
         root: Mutex::new(None),
         records: Mutex::new(Vec::new()),
         rejections: AtomicUsize::new(2),
+        intent: Mutex::new(None),
     });
     world.coordinator = OwnershipCoordinator::new(OwnershipDependencies {
         store: world.store.clone(),
@@ -622,8 +637,8 @@ async fn cascaded_owner_case(gate_only: bool) {
         bounded(close_with(
             &world.coordinator,
             &child,
-            LifetimeCause::ParentDeletion,
-            Initiator::Runtime
+            LifetimeCause::Deletion,
+            Initiator::Host(actor("delete-cascaded"))
         ))
         .await,
         Err(failure.clone()),
@@ -672,4 +687,67 @@ async fn cascaded_child_gate_joins_first_owner_failed_generation() {
 #[tokio::test]
 async fn cascaded_child_close_retries_first_owner_completion_without_physical_replay() {
     cascaded_owner_case(false).await;
+}
+
+#[tokio::test]
+async fn cascaded_child_external_close_does_not_skip_first_owner_physical_cleanup() {
+    use nessa_sdk::application::agent_execution::permissions::ActionContext;
+    let mut world = World::new(2);
+    let audit = Arc::new(ParentCompletionAudit {
+        root: Mutex::new(None),
+        records: Mutex::new(Vec::new()),
+        rejections: AtomicUsize::new(0),
+        intent: Mutex::new(None),
+    });
+    world.coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+        store: world.store.clone(),
+        audit: audit.clone(),
+        factory: world.factory.clone(),
+        room: Arc::new(LiveCapacity::new(2)),
+    });
+    let root = bounded(world.root()).await;
+    *audit.root.lock().unwrap() = Some(root.clone());
+    let root_resources = Arc::new(ScriptResources {
+        closes: AtomicUsize::new(0),
+        report: released(),
+        hold: None,
+    });
+    world
+        .coordinator
+        .bind_resources(root.clone(), root_resources.clone())
+        .unwrap();
+    let child = bounded(
+        world
+            .coordinator
+            .spawn(world.command(&root, "external-cascaded", "task")),
+    )
+    .await
+    .unwrap()
+    .child;
+    let child_resources = world.factory.children.lock().unwrap()[0].clone();
+    let child_gate = world.factory.last_gate.lock().unwrap().clone().unwrap();
+    let intent = Arc::new(ObservationGate {
+        entered: Notify::new(),
+        release: Notify::new(),
+    });
+    *audit.intent.lock().unwrap() = Some(intent.clone());
+    let mut parent_close = Box::pin(world.close(&root));
+    poll_pending(parent_close.as_mut());
+    bounded(intent.entered.notified()).await;
+    assert_eq!(root_resources.closes.load(Ordering::SeqCst), 0);
+    assert_eq!(child_resources.closes.load(Ordering::SeqCst), 0);
+    bounded(
+        child_gate
+            .seal_for_host(&ActionContext::new("owner", "desktop", "external-child").unwrap()),
+    )
+    .await
+    .unwrap();
+    intent.release.notify_one();
+    assert_eq!(bounded(parent_close).await, Ok(()));
+    assert_eq!(root_resources.closes.load(Ordering::SeqCst), 1);
+    assert_eq!(child_resources.closes.load(Ordering::SeqCst), 1);
+    let restored = OwnershipGraph::restore(bounded(world.store.read()).await.unwrap());
+    assert!(restored.refusal().is_none());
+    assert_eq!(restored.lifetime_state(&root), Some(LifetimeState::Closed));
+    assert_eq!(restored.lifetime_state(&child), Some(LifetimeState::Closed));
 }
