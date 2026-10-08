@@ -116,9 +116,10 @@ export interface WorkspaceSource {
   send(message: OutgoingMessage): Promise<void>
   /**
    * Allows, or refuses, what a session's agent waits to run. Like pinning and
-   * archiving, a consequential call: the source records it — what was asked,
-   * who asked it — before it carries it out, and then what became of it, so a
-   * refused or failed one is on record too. The gateway's source records
+   * archiving, a consequential call: the in-memory source records it — what
+   * was asked, who asked it — as it begins to carry the call out, before the
+   * effect, in the order calls are carried out, and then what became of it,
+   * so a refused or failed one is on record too. The gateway's source records
    * nothing itself: what it sends is the gateway's to record, as this
    * window's authenticated caller (not person or agent), and what it refuses
    * without sending — an "always" answer, a pin, a session taken out — is on
