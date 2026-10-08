@@ -81,10 +81,10 @@ impl Shared {
             state.ended = Some(cause.clone());
             std::mem::take(&mut state.pending)
         };
+        self.ended.send_replace(Some(cause.clone()));
         for (_, waiter) in pending {
             let _ = waiter.send(Err(cause.clone()));
         }
-        self.ended.send_replace(Some(cause));
     }
 
     /// Fail one admitted call and leave the connection open. The first end
@@ -423,9 +423,13 @@ impl Connection {
 
     /// Admission waits observe the existing end publication without draining the writer.
     async fn send_frame(&self, frame: Vec<u8>) -> Result<(), McpError> {
+        let ended = self.ended();
+        if let Some(cause) = self.end_cause() {
+            return Err(cause);
+        }
         tokio::select! {
             biased;
-            cause = self.ended() => Err(cause),
+            cause = ended => Err(cause),
             sent = self.outgoing.send(Outgoing::Frame(frame)) => {
                 sent.map_err(|_| self.end_cause().unwrap_or(McpError::ServerGone))
             }
@@ -461,10 +465,10 @@ impl Connection {
     /// End the connection with `cause` and close the server's stdin. Calls
     /// waiting on it get `cause`.
     pub(crate) fn close(&self, cause: McpError) {
-        self.shared.end(cause);
         if let Some(http) = &self.http {
             http.shutdown();
         }
+        self.shared.end(cause);
         self.writer.abort();
     }
 }
@@ -651,3 +655,7 @@ async fn read_messages(
     }
     shared.end(cause);
 }
+
+#[cfg(all(test, unix))]
+#[path = "../../../tests/infrastructure/mcp/connection_end.rs"]
+mod end_tests;

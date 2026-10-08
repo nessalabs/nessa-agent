@@ -19,15 +19,46 @@ use std::future::{poll_fn, Future};
 use std::pin::Pin;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
 };
-use std::task::Poll;
+use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 use tokio::sync::{
     mpsc::{self, error::TrySendError},
     Notify, Semaphore,
 };
 use uuid::Uuid;
+
+#[derive(Default)]
+struct ClosingWake {
+    entered: Notify,
+    released: Mutex<bool>,
+    ready: Condvar,
+}
+impl ClosingWake {
+    fn release(&self) {
+        *self.released.lock().unwrap() = true;
+        self.ready.notify_all();
+    }
+}
+impl Wake for ClosingWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.entered.notify_one();
+        let mut released = self.released.lock().unwrap();
+        while !*released {
+            released = self.ready.wait(released).unwrap();
+        }
+    }
+}
+struct ReleaseClosingWake(Arc<ClosingWake>);
+impl Drop for ReleaseClosingWake {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
 
 struct Gate {
     entered: AtomicUsize,
@@ -3260,4 +3291,48 @@ async fn j26_close_or_writer_failure_refuses_queued_saturated_reply() {
             1
         );
     }
+}
+
+#[tokio::test]
+async fn j26_close_fences_http_and_publishes_before_response_wakes() {
+    let (connection, session, peer, probe, gate, _) = held_recovery(202).await;
+    let connection = Arc::new(connection);
+    let wake = Arc::new(ClosingWake::default());
+    let release = ReleaseClosingWake(wake.clone());
+    let waker = Waker::from(wake.clone());
+    let mut call = Box::pin(connection.call("tools/list", None));
+    {
+        let mut future = std::pin::pin!(tokio::task::unconstrained(call.as_mut()));
+        assert!(future
+            .as_mut()
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending());
+    }
+    let closing_connection = connection.clone();
+    let closing = tokio::task::spawn_blocking(move || closing_connection.close(McpError::Closed));
+    bounded(wake.entered.notified()).await;
+    assert_eq!(connection.end_cause(), Some(McpError::Closed));
+    // Capture all three boundaries while close is paused inside a response wake.
+    let notified = bounded(connection.notify("notifications/test", None)).await;
+    let mut ended = Box::pin(connection.ended());
+    let published = poll_fn(|context| Poll::Ready(ended.as_mut().poll(context))).await;
+    let dispatched = bounded(session.dispatch(br#"{"method":"notifications/direct"}"#)).await;
+    let direct_posts = peer.count(|request| method_of(request, "notifications/direct"));
+    eprintln!(
+        "close snapshot: notify={notified:?}, watch={published:?}, direct_posts={direct_posts}"
+    );
+    drop(release);
+    closing.await.unwrap();
+    gate.release();
+    stop(&session).await;
+    probe.released().await;
+    assert_eq!(notified, Err(McpError::Closed));
+    assert_eq!(published, Poll::Ready(McpError::Closed));
+    assert!(matches!(dispatched, SendOutcome::End(McpError::Closed)));
+    assert_eq!(direct_posts, 0);
+    assert_eq!(bounded(call).await.unwrap_err(), McpError::Closed);
+    assert_eq!(
+        peer.count(|request| method_of(request, "notifications/test")),
+        0
+    );
 }
