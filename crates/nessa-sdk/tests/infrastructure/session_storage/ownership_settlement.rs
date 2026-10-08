@@ -1,4 +1,4 @@
-//! Public ownership adapter refuses a persisted nonresource slot without rewriting evidence.
+//! Public ownership storage preserves decoded refused history without rewriting evidence.
 use nessa_sdk::{
     application::agent_execution::subagents::OwnershipStore,
     domain::agent_execution::{
