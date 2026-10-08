@@ -332,7 +332,7 @@ function measureBadges(sel) {
 }
 
 /** The cards set into a surface, which share one edge (`--desktop-card-rim`). */
-const cards = [css.codeBlock, css.approvalCommand, css.widgetCard, ".agents-clear"]
+const cards = [css.codeBlock, css.approvalCommand, css.widgetCard, css.allClear]
 
 /** Every card on the page against `--desktop-card-rim`, by kind. In the page. */
 function measureCardRims(selectors) {
@@ -355,13 +355,13 @@ function measureCardRims(selectors) {
 
 const rowKinds = {
   columns: {
-    "sidebar row": ".workspace-sidebar [data-slot='sidebar-menu-item-row'] > [data-size]",
-    "pinned session": ".workspace-sidebar [data-row='session']",
-    "session list row": ".workspace-list [data-session-row]",
+    "sidebar row": `${css.sidebar} ${css.kitRow}`,
+    "pinned session": `${css.sidebar} [data-row='session']`,
+    "session list row": css.sessionListRow,
   },
   sidebar: {
-    "channel row": ".workspace-sidebar [data-row='channel']",
-    "branch session": ".workspace-sidebar [data-row='session']",
+    "channel row": `${css.sidebar} [data-row='channel']`,
+    "branch session": `${css.sidebar} [data-row='session']`,
   },
 }
 
@@ -623,7 +623,9 @@ const checks = {
         getComputedStyle(row).backgroundColor,
       ])
     measured.hover["switcher row left by the keys"] = left[1]
-    if (left[0] !== "true" && left[1] !== "rgba(0, 0, 0, 0)")
+    if (left[0] === "true")
+      failures.push("the keys did not move the switcher's choice off the row pointed at")
+    else if (left[1] !== "rgba(0, 0, 0, 0)")
       failures.push(
         `a switcher row the keys left is ${left[1]} under the pointer, not at rest`,
       )
@@ -684,7 +686,8 @@ Checks, per engine and layout (--only badges,empty,identity,keys,rims,rows,segme
              --desktop-selected pressed, nothing moves as one is chosen, and the
              pressed one chosen again lets go.
 
-Settings is left out (#632 › Settings is redesigned on its own branch).`,
+Settings' own controls are left out (#632 › Settings is redesigned on its own
+branch); its identity at the foot is measured.`,
   },
   async ({ options, rep, url }) => {
     const names = chosen(options.only, Object.keys(checks), options.list)

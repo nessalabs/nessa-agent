@@ -3,6 +3,7 @@ import { Badge } from "@nessa-ui/react/badge"
 import { SidebarMenuItem } from "@nessa-ui/react/sidebar"
 import { DesktopIcon } from "../../../ui/icons"
 import { tooltip } from "../../../ui/tooltip"
+import { statusLabels } from "../../model/session-groups"
 import { StatusGlyph } from "../chrome/status-glyph"
 
 /**
@@ -55,7 +56,7 @@ export function SidebarRow({
       // its name says them, as the row's words did when they were inside.
       aria-label={[
         label,
-        badge ? (badgeLabel ?? String(badge)) : running ? "Running" : null,
+        badge ? (badgeLabel ?? String(badge)) : running ? statusLabels.running : null,
       ]
         .filter(Boolean)
         .join(" ")}

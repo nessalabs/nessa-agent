@@ -126,6 +126,7 @@ export const css = {
   litPoint: '.workspace-status:is([data-status="needs-you"], [data-status="unread"])', // class: StatusGlyph's lit points
   needsYouHeading: "#agents-needs-you", // the overview's Needs you heading
   codeBlock: ".workspace-code", // class: a code block in a transcript
+  allClear: ".agents-clear", // class: the overview's "Nothing needs you" card
 
   // Side columns
   sidebar: ".workspace-sidebar", // class
