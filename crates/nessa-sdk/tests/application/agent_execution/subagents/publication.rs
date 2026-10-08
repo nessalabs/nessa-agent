@@ -2650,3 +2650,131 @@ async fn private_child_completion_is_excluded_while_eligible_neighbor_completion
     assert_eq!(factory.submits(), 0);
     assert!(factory.children.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn refused_sqlite_history_remains_readable_without_recovery_writes() {
+    use nessa_sdk::infrastructure::session_storage::SqliteOwnershipStore;
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("private");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let path = private.join("refused.sqlite3");
+    let root = AgentLifetimeId::new("root").unwrap();
+    let child = AgentLifetimeId::new("child").unwrap();
+    let operation = CloseOperationId::new("interrupted").unwrap();
+    let mut graph = OwnershipGraph::new();
+    let _ = graph
+        .open_root(
+            SessionId::new("root").unwrap(),
+            root.clone(),
+            Initiator::Runtime,
+        )
+        .unwrap();
+    let _ = graph
+        .admit_spawn(SpawnAdmission {
+            child_lifetime: child.clone(),
+            child_session: SessionId::new("child").unwrap(),
+            binding: SpawnBinding {
+                parent_lifetime: root.clone(),
+                parent_session: SessionId::new("root").unwrap(),
+                request_id: SpawnRequestId::new("child").unwrap(),
+                task_digest: TaskDigest::new("a".repeat(64)).unwrap(),
+                policy: ApprovalPolicy::new("read-only", "ask", "revision").unwrap(),
+                model: None,
+                origin: SpawnOrigin::Host(HostActor::new("person", "desktop", "child").unwrap()),
+            },
+            live_room: true,
+        })
+        .unwrap();
+    let _ = graph
+        .begin_close(
+            &root,
+            operation.clone(),
+            LifetimeCause::HostClose,
+            Initiator::Runtime,
+        )
+        .unwrap();
+    let record = graph
+        .apply_report(
+            &root,
+            &operation,
+            &root,
+            PhysicalFact::Released,
+            EvidenceFact::Acknowledged,
+        )
+        .unwrap();
+    graph
+        .acknowledge_observation(&record, EvidenceFact::Acknowledged)
+        .unwrap();
+    let mut history = graph.snapshot();
+    let row = history
+        .lifetimes
+        .iter_mut()
+        .find(|row| row.lifetime_id == child)
+        .unwrap();
+    row.state = LifetimeState::Open;
+    row.close_operation = None;
+    row.cause = None;
+    row.initiator = None;
+    row.cascaded_from = None;
+    let control = OwnershipGraph::restore(history.clone());
+    assert!(control.refusal().is_none());
+    assert_eq!(control.recovery_records().len(), 1);
+    assert_eq!(control.snapshot().settlements, history.settlements);
+    history.settlements[0].evidence = EvidenceFact::Failed;
+    let store = Arc::new(SqliteOwnershipStore::open(&path).unwrap());
+    store.write(&history).await.unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let body = {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .query_row::<String, _, _>(
+                "SELECT body FROM ownership_snapshot WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    let audit = IndependentAudit::new();
+    let factory = ScriptFactory::new();
+    let c = coordinator(
+        store.clone(),
+        audit.clone(),
+        factory.clone(),
+        Arc::new(LiveCapacity::new(8)),
+    );
+    bounded(c.resume()).await.unwrap();
+    let page = c.children(&root, None, 10).unwrap();
+    assert_eq!(page.children.len(), 1);
+    assert_eq!(page.children[0].lifetime, child);
+    assert_eq!(c.lifetime_state(&child), Some(LifetimeState::Open));
+    assert!(c.participation(&child).unwrap().is_sealed());
+    let owner: Arc<dyn ChildResources> = Arc::new(ScriptResources {
+        closes: AtomicUsize::new(0),
+        report: released(),
+        hold: None,
+    });
+    let refused = c.bind_resources(child, owner.clone()).unwrap_err();
+    assert_eq!(refused.reason, BindResourcesRefusal::RefusedHistory);
+    assert!(Arc::ptr_eq(&refused.resources, &owner));
+    assert_eq!(store.read().await.unwrap(), history);
+    assert_eq!(factory.prepares(), 0);
+    assert!(audit.records.lock().unwrap().is_empty());
+    drop(c);
+    drop(store);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let retained: String = connection
+        .query_row(
+            "SELECT body FROM ownership_snapshot WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(retained, body);
+    assert_eq!(
+        connection
+            .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+            .unwrap(),
+        1
+    );
+}

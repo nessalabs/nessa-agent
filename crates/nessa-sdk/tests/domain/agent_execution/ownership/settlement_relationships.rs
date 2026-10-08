@@ -584,3 +584,61 @@ fn cyclic_restored_ancestry_keeps_its_first_refusal_and_returns_with_completion(
         "public restore must return its typed structural refusal after the accepted control"
     );
 }
+
+fn interrupted_cascade_with_retained_proof() -> OwnershipSnapshot {
+    let mut graph = OwnershipGraph::new();
+    root(&mut graph, "outside");
+    admit(&mut graph, "outside", "a", "outside-a");
+    admit(&mut graph, "a", "z", "a-z");
+    graph
+        .begin_close(
+            &life("outside"),
+            close_id("interrupted"),
+            LifetimeCause::HostClose,
+            Initiator::Runtime,
+        )
+        .unwrap();
+    let record = graph
+        .apply_report(
+            &life("outside"),
+            &close_id("interrupted"),
+            &life("outside"),
+            PhysicalFact::Released,
+            EvidenceFact::Acknowledged,
+        )
+        .unwrap();
+    graph
+        .acknowledge_observation(&record, EvidenceFact::Acknowledged)
+        .unwrap();
+    let mut snapshot = graph.snapshot();
+    for row in &mut snapshot.lifetimes {
+        if row.lifetime_id != life("outside") {
+            row.state = LifetimeState::Open;
+            row.close_operation = None;
+            row.cause = None;
+            row.initiator = None;
+            row.cascaded_from = None;
+        }
+    }
+    snapshot
+}
+
+#[test]
+fn refused_proof_keeps_interrupted_cascade_original_rows_and_no_recovery() {
+    let history = interrupted_cascade_with_retained_proof();
+    let accepted = OwnershipGraph::restore(history.clone());
+    assert!(accepted.refusal().is_none());
+    assert_eq!(accepted.recovery_records().len(), 2);
+    assert_eq!(accepted.snapshot().settlements, history.settlements);
+    assert_eq!(
+        accepted.lifetime_state(&life("a")),
+        Some(LifetimeState::Closing)
+    );
+    assert_eq!(accepted.close_owner(&life("z")), Some(life("outside")));
+    let mut invalid = history;
+    invalid.settlements[0].evidence = EvidenceFact::Failed;
+    let refused = OwnershipGraph::restore(invalid.clone());
+    assert_eq!(refused.refusal(), Some(&OwnershipError::Contradictory));
+    assert_eq!(refused.snapshot(), invalid);
+    assert!(refused.recovery_records().is_empty());
+}

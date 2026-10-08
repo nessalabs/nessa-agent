@@ -217,15 +217,17 @@ automatic session storage, hooks, invocation, and UI integration.
   error. Lookup/conflict/pre-admission errors cannot revoke another operation's
   child. Restored Closing and nonrunnable progress preserve the seal. Legacy
   Open + Ended Reserved startup history refuses new transfer; current failed
-  startup is conservatively Closing until authoritative settlement (#649).
+  startup retains actual rejection absence, while uncertainty remains Closing;
+  authoritative Completion follows the [owned-settlement table](../../docs/adr/todo/329-subagents.md#owned-settlement-and-supervision-625-646-649).
   Other factual milestones and unfinished cleanup can regain a vacant
   cleanup owner without attachment authority. Captured safety facts use
   the same snapshot writer even when their audit rejects or is uncertain.
-  Never-bound root settlement consumes the actual absence audit result; rejection
-  leaves Closing with failed evidence. Restored identities do not prove never-bound
-  absence. Additional cleanup audit/storage debt (#646), whole-transaction panic
-  supervision (#625), and production gateway
-  child composition remain separate work. `providers`
+  Never-bound root settlement retains actual absence and reconciles its exact
+  audit debt through the owned drain. Rejection leaves Closing with failed
+  evidence; restored identity alone does not prove never-bound absence.
+  Outcome-scoped cleanup debt and panic supervision are implemented by the
+  [owned-settlement table](../../docs/adr/todo/329-subagents.md#owned-settlement-and-supervision-625-646-649).
+  Production gateway child composition remains separate work. `providers`
   injected execution ports, `sessions`
   automatic snapshot management and the streaming commit clock port,
   `hooks` typed callbacks registered on Agent,

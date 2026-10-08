@@ -245,8 +245,8 @@ actual cleanup ownership and any provider-acknowledged task receipt; capacity
 remains held until actual physical Released evidence. A rejected startup with no
 cleanup owner records `Ended` and returns its unused slot, while the admitted
 child lifetime is sealed `Closing` under row 38. Neither `Ended` nor a returned
-slot proves absence or `Closed`; failed-startup completion remains tracked in
-#649. Uncertain initial publication retains its slot.
+slot proves absence or `Closed`; actual rejection absence and Completion settle
+through the [owned-settlement table](#owned-settlement-and-supervision-625-646-649). Uncertain initial publication retains its slot.
 
 ## Statechart design contract
 
@@ -635,7 +635,8 @@ This differs from the explicit approval-mode recovery retirement defined above.
    cleanup ownership and any acknowledged task receipt until physical release.
    Rejected startup with no cleanup owner records Ended and returns unused
    capacity, but its admitted child is already sealed Closing by row 38. The
-   retained binding is not absence or Closed proof (#649).
+   retained binding is not absence or Closed proof; settlement uses the
+   [owned-settlement table](#owned-settlement-and-supervision-625-646-649).
 5. Retain each child's physical cleanup, review/queue settlement and audit result.
    Failure on one child does not suppress cleanup attempts for the rest.
 6. Report aggregate success only after parent and descendants confirm cleanup
@@ -780,8 +781,10 @@ A queued successful send does not transfer root ownership; claiming its internal
 delivery ticket when `open_root` returns Ready does. Eligible or uncertain IDs
 remain retained; only a definite preeligible audit rejection removes its target.
 
-The table shares ordering requirements with #625. #628 verifies rejected and
-uncertain ports; whole-transaction panic supervision is separate #625 work.
+The table shares ordering requirements with the
+[owned-settlement supervision](#owned-settlement-and-supervision-625-646-649).
+#628 established rejected and uncertain-port containment; the coupled settlement
+implementation also contains construction, poll and destruction faults.
 
 | # | Ordering | Required result |
 |---|---|---|
@@ -865,7 +868,8 @@ and `row_35_failed_factory_revokes_stale_real_agent_attachment_authority` enforc
 the accepted typed gate and attachment revocation. `row_35_restored_unfinished_cleanup_accepts_vacant_binding_but_keeps_attachment_sealed`
 preserves cleanup recovery. Legacy restored Open + Ended { known: Reserved } completed-startup history refuses new transfer;
 current failed startup revokes to Closing and conservatively permits vacant
-cleanup binding until authoritative absence/release settlement (#649). Closing
+cleanup binding until authoritative absence/release settlement through the
+[owned-settlement table](#owned-settlement-and-supervision-625-646-649). Closing
 + Ended Reserved alone does not prove absence: draining after preparation can
 emit it while cleanup is Failed/Pending.
 Ended Prepared/TaskAdmitted facts do not prove physical absence; their sealed
@@ -873,11 +877,11 @@ identities accept a vacant cleanup owner. Closing with unfinished physical
 cleanup remains recoverable. Factory inflight
 ownership remains the existing admitted transaction, not a progress-string flag.
 
-Row 8 proves release/capacity ordering, not propagation of every extra
-coordinator cleanup audit/storage failure: that evidence debt is tracked in #646
-with #625 supervision. Report admission uses independently held audit in
+Row 8 proves release/capacity ordering. Outcome-specific audit/storage debt and
+owned supervision are enforced by the
+[owned-settlement table](#owned-settlement-and-supervision-625-646-649). Report admission uses independently held audit in
 `private_report_does_not_leak_through_unrelated_commit`. These SDK tests do not
-claim the proposed gateway wiring or #625 panic supervision is implemented.
+claim the proposed gateway wiring is implemented.
 
 Validate retained ownership before allowing child dispatch on startup:
 
@@ -1241,7 +1245,7 @@ terminal results. Runtime shutdown and process abort are outside unwind recovery
 | Legitimate later Released+Ack report | Improve release witness without replacing first observation or physically replaying. `failed_provider_witness_cannot_acknowledge_release_and_legitimate_improvement_keeps_record`; `mixed_close_debt_and_later_release_witness_survive_sqlite_reopen`. |
 | Report token presented as Completion / foreign request, cause or operation | StaleOutcome; no coarse after-state authority. `absence_proof_rejects_foreign_request_and_restored_contradictions_without_repair` and contradictory SQLite cases. |
 | Closing safety write rejects vs final Closed write rejects | Former prevents Completion; latter allows only honest writer retry/recovery. `rejected_safety_write_blocks_completion_and_final_rejection_retries_only_writer`. |
-| Saved absence/mixed outstanding debts, resume | Validate exact correlation, retry retained records without factory/physical replay. Malformed or empty Resource proof with Completion retains its original history but refuses dispatch; derived readiness remains total while inspecting refused history. Structural refusal precedes ancestry-dependent proof/Completion validation, so cyclic history returns its first typed refusal without traversal or repair. Acknowledged Completion requires every lifetime sharing that first close owner to be Closed; a partly Closing group is contradictory, unlike a genuinely independent close owner. `mixed_close_debt_and_later_release_witness_survive_sqlite_reopen`, `restored_completion_cannot_borrow_authority_from_a_nonresource_observation`, `restored_completion_with_empty_resource_proof_is_refused_without_repair`, `cyclic_restored_ancestry_keeps_its_first_refusal_and_returns_with_completion`, `acknowledged_completion_refuses_a_partly_reopened_owned_group_without_repair`, `public_sqlite_refuses_a_partly_closed_completed_cascade_without_rewrite`; recovery anchor above. |
+| Saved absence/mixed outstanding debts, resume | Validate exact correlation, retry retained records without factory/physical replay. Malformed or empty Resource proof with Completion retains its original history but refuses dispatch; derived readiness remains total while inspecting refused history. Structural refusal precedes ancestry-dependent proof/Completion validation, so cyclic history returns its first typed refusal without traversal or repair. Repair of an interrupted cascade occurs only after every retained relationship is accepted. The SQLite codec rejects undecodable shapes but returns decoded refused history for sealed, read-only coordinator inspection; refused resume never audits or persists recovery. Acknowledged Completion requires every lifetime sharing that first close owner to be Closed; a partly Closing group is contradictory, unlike a genuinely independent close owner. `mixed_close_debt_and_later_release_witness_survive_sqlite_reopen`, `restored_completion_cannot_borrow_authority_from_a_nonresource_observation`, `restored_completion_with_empty_resource_proof_is_refused_without_repair`, `cyclic_restored_ancestry_keeps_its_first_refusal_and_returns_with_completion`, `acknowledged_completion_refuses_a_partly_reopened_owned_group_without_repair`, `public_sqlite_refuses_a_partly_closed_completed_cascade_without_rewrite`, `refused_proof_keeps_interrupted_cascade_original_rows_and_no_recovery`, `refused_sqlite_history_remains_readable_without_recovery_writes`; recovery anchor above. |
 | Independent child audit held/rejected while parent joins; ancestor closes before descendant end or gate join | Derive the first close owner for generation registration and lookup. Independent child keeps its own operation; cascaded descendant joins the ancestor result and explicitly retries that original operation after failure. The requested descendant’s external-attachment choice cannot skip the ancestor’s physical cleanup. `parent_joins_failed_independent_child_and_preserves_its_first_close_owner`, `cascaded_child_gate_joins_first_owner_failed_generation`, `cascaded_child_close_retries_first_owner_completion_without_physical_replay`, `cascaded_child_external_close_does_not_skip_first_owner_physical_cleanup`. |
 | Parent overtakes factory/submit output | No reopening/dispatch; Ready owner/receipt survives before future Drop. Definite startup failure hands installed proof/owner to the registered first-owner drain and removes only its completed preparation flight before joining; there is no local parallel reconciliation or post-terminal startup writer. |
 | Initial publication fails before factory with concurrent bind | Live flight and same graph scope validate/install exclusion; persist the newly installed proof in Closing before returning the immutable failure; no restored inference. `eligible_store_rejection_keeps_live_flight_until_durable_absence_excludes_binding` checks concurrent live and restored bind exclusion; `row_38_publication_error_matrix_seals_actual_gate_preserves_owner_receipt_and_restore` checks retained actual exclusion. |
