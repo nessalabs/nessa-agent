@@ -984,6 +984,14 @@ it is redesigned on its own branch.
   `status-glyph.test.tsx` for what each says. Rules: `source-list.css` ›
   `.workspace-badge`, `chrome.css` › `.workspace-status`. At the base commit
   the unread point and the heading's point were drawn by their own rules.
+- [ ] **A card set into a surface has one edge (#657).** A code block, an
+  agent's command, a widget's card and "Nothing needs you" take
+  `--desktop-card-rim`, a 0.5px hairline at 10% of the ink; a pane's glass
+  keeps `--desktop-rim`. _Check:_ `shared-controls.mjs` (`rims`: on load, in
+  the widget sample, in the overview's peek). Rule: `styles.css` ›
+  `--desktop-card-rim`. At the base commit the four had four edges (1px at
+  4%, 1px `--desktop-rim`, 0.5px at 9% and at 10%). Settings' cards are left
+  to its redesign; warm edges (a review, the peek's request) are their own.
 
 ## Menus and tooltips
 

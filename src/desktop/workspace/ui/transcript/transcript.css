@@ -259,7 +259,7 @@
   overflow-x: auto;
   border-radius: var(--desktop-radius-md);
   background: color-mix(in oklab, var(--foreground) 4.5%, transparent);
-  box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 9%, transparent);
+  box-shadow: var(--desktop-card-rim);
   color: color-mix(in oklab, var(--foreground) 86%, transparent);
   font-size: var(--desktop-text-footnote);
   line-height: 1.6;

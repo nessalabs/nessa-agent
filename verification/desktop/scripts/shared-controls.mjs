@@ -8,7 +8,7 @@
 import { openPage, need, withEngines } from "./lib/browser.mjs"
 import { attempt, chosen } from "./lib/cli.mjs"
 import { main } from "./lib/run.mjs"
-import { css, keys } from "./lib/selectors.mjs"
+import { css, keys, names } from "./lib/selectors.mjs"
 
 /**
  * Measures every key cap on the page against the kit's `Kbd` as the window
@@ -323,6 +323,33 @@ function measureBadges() {
   }
 }
 
+/** The cards set into a surface, which share one edge (`--desktop-card-rim`). */
+const cards = [
+  ".workspace-code",
+  ".workspace-approval-command",
+  "[data-widget-inline]",
+  ".agents-clear",
+]
+
+/** Every card on the page against `--desktop-card-rim`, by kind. In the page. */
+function measureCardRims(selectors) {
+  const probe = document.createElement("div")
+  document.querySelector("[data-surface]").append(probe)
+  probe.style.boxShadow = "var(--desktop-card-rim)"
+  const want = getComputedStyle(probe).boxShadow
+  probe.remove()
+  const failures = []
+  const seen = {}
+  for (const selector of selectors)
+    for (const card of document.querySelectorAll(selector)) {
+      if (card.getClientRects().length === 0) continue
+      seen[selector] = (seen[selector] ?? 0) + 1
+      const rim = getComputedStyle(card).boxShadow
+      if (rim !== want) failures.push(`${selector}: its edge is ${rim}, not ${want}`)
+    }
+  return { failures, seen, want }
+}
+
 const rowKinds = {
   columns: {
     "sidebar row": ".workspace-sidebar [data-slot='sidebar-menu-item-row'] > [data-size]",
@@ -392,6 +419,33 @@ const checks = {
     const inOverview = await page.evaluate(measureBadges)
     failures.push(...inOverview.failures.map((f) => `in the overview: ${f}`))
     return { failures, measured: { onLoad, inOverview } }
+  },
+  rims: async (page) => {
+    const failures = []
+    const seen = {}
+    const measure = async (where) => {
+      const result = await page.evaluate(measureCardRims, cards)
+      failures.push(...result.failures.map((f) => `${where}: ${f}`))
+      for (const [kind, count] of Object.entries(result.seen))
+        seen[kind] = (seen[kind] ?? 0) + count
+    }
+    await measure("on load")
+    // The sample's widget cards, in a conversation.
+    await page.keyboard.press(keys.switcher)
+    await page.waitForSelector(css.switcherField, { state: "visible" })
+    await page.keyboard.type(names.widgetSession)
+    await page.keyboard.press(keys.enter)
+    await need(page, css.widgetCard, "a widget's card")
+    await measure("in the widget sample")
+    // An agent's command, in the overview's peek.
+    await page.keyboard.press(keys.overview)
+    await need(page, css.overviewRequest, "a request in the overview")
+    await page.locator(css.overviewRequest).first().click()
+    await need(page, css.peekCommand, "the command in the peek")
+    await measure("in the overview")
+    for (const kind of ["[data-widget-inline]", ".workspace-approval-command"])
+      if (!seen[kind]) failures.push(`no ${kind} was shown to measure`)
+    return { failures, measured: seen }
   },
   empty: async (page, { layout, open }) => {
     const failures = []
@@ -495,7 +549,7 @@ await main(
       only: { type: "string" },
     },
     help: `
-Checks, per engine and layout (--only badges,empty,identity,keys,rows):
+Checks, per engine and layout (--only badges,empty,identity,keys,rims,rows):
   badges     every count is the kit's Badge as a row's caption (16px tall, at
              least 18 wide, no border, the needs light for what waits); every
              lit point — unread, needs you, the overview's heading included —
@@ -512,6 +566,9 @@ Checks, per engine and layout (--only badges,empty,identity,keys,rows):
              search, the quick switcher's rows) is the kit's Kbd: 18px tall and at
              least as wide, 11px medium type, --desktop-radius-xs, a 7% fill and
              --desktop-muted ink. Measured on load and with the switcher open.
+  rims       every card set into a surface — a code block, an agent's command,
+             a widget's card, "Nothing needs you" — has --desktop-card-rim for
+             its edge. On load, in the widget sample, in the overview's peek.
   rows       every row of the window's lists — the sidebar's, the session list's,
              the overview's sessions and the switcher's — is the kit's
              SidebarMenuItem or ListRow; under the pointer each kind fills with
