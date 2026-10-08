@@ -5,9 +5,11 @@
 //! and it is returned only for a read that says linger is on.
 
 /// The account logind was asked about.
+#[cfg(any(test, target_os = "linux"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LoginUserId(u32);
 
+#[cfg(any(test, target_os = "linux"))]
 impl LoginUserId {
     pub(crate) fn new(uid: u32) -> Self {
         Self(uid)
@@ -19,6 +21,7 @@ impl LoginUserId {
 }
 
 /// What the latest read said about this user's linger.
+#[cfg(any(test, target_os = "linux"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LingerObservation {
     /// logind's `Linger` property is true, or the linger file is present.
@@ -32,6 +35,7 @@ pub(crate) enum LingerObservation {
 }
 
 /// How a finished `SetUserLinger` came back, before the confirming read.
+#[cfg(any(test, target_os = "linux"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LingerCall {
     Succeeded,
@@ -41,8 +45,9 @@ pub(crate) enum LingerCall {
     Failed,
 }
 
-/// What setup shows. `not-applicable` is a host with no logind API;
-/// [`show`] never returns it.
+/// What setup shows. `not-applicable` is a host with no logind API.
+/// The read-and-call function never returns that variant.
+#[cfg_attr(not(any(test, target_os = "linux")), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LingerShown {
     /// This host has no logind API. Setup does not ask.
@@ -61,12 +66,14 @@ pub(crate) enum LingerShown {
 }
 
 /// One read: which account, and what it said.
+#[cfg(any(test, target_os = "linux"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LingerSnapshot {
     user: LoginUserId,
     observation: LingerObservation,
 }
 
+#[cfg(any(test, target_os = "linux"))]
 impl LingerSnapshot {
     pub(crate) fn new(user: LoginUserId, observation: LingerObservation) -> Self {
         Self { user, observation }
@@ -85,6 +92,7 @@ impl LingerSnapshot {
 ///
 /// `enabled` is returned only when `observation` is [`LingerObservation::Enabled`].
 /// A successful call cannot promote a read that still says linger is off.
+#[cfg(any(test, target_os = "linux"))]
 #[must_use]
 pub(crate) fn show(observation: LingerObservation, call: Option<LingerCall>) -> LingerShown {
     match observation {

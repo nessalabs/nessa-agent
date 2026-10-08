@@ -10,5 +10,5 @@ mod session;
 pub(crate) use session::LingerOffer;
 #[cfg(not(target_os = "linux"))]
 pub(crate) use session::NotApplicableLinger;
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(target_os = "linux")]
 pub(crate) use session::{LingerSession, LogindLinger};

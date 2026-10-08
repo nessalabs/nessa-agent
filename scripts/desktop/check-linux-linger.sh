@@ -82,10 +82,11 @@ sudo systemd-run --wait --pipe --collect \
   -p PAMName=login \
   /bin/bash -lc 'systemctl --user daemon-reload && systemctl --user enable --now nessa-gateway-dev.service'
 
+# systemd-run --wait returns when that PAM login session has ended.
 # A per-user systemctl machine match starts user@ itself, so it is not evidence.
-# After terminate-user, linger keeps the manager and the enabled sleep process.
+# TerminateUser stops user@ even while the linger file exists (ubuntu-latest
+# left state=closing and the user manager inactive), so it is not this proof.
 lt_uid="$(id -u lt)"
-sudo loginctl terminate-user lt
 linger_state=""
 user_unit=""
 kept=0
@@ -98,10 +99,10 @@ for _ in $(seq 1 20); do
   fi
   sleep 0.5
 done
-echo "after terminate-user: state=${linger_state} user@${lt_uid}.service=${user_unit}"
+echo "after the login session ended: state=${linger_state} user@${lt_uid}.service=${user_unit}"
 pgrep -u lt -a -f 'sleep infinity' || true
 if [ "$kept" != 1 ]; then
-  echo "linger did not keep user@${lt_uid}.service and sleep infinity after terminate-user" >&2
+  echo "linger did not keep user@${lt_uid}.service and sleep infinity after the login session ended" >&2
   exit 1
 fi
 

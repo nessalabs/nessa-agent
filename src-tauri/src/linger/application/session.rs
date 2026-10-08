@@ -1,11 +1,11 @@
 //! One explicit linger choice: read logind, and call it only from accept.
 
+#[cfg(any(test, target_os = "linux"))]
 use std::sync::Arc;
 
-use crate::linger::domain::{show, LingerCall, LingerObservation, LingerShown, LingerSnapshot};
-
+use crate::linger::domain::LingerShown;
 #[cfg(any(test, target_os = "linux"))]
-use crate::linger::domain::LoginUserId;
+use crate::linger::domain::{show, LingerCall, LingerObservation, LingerSnapshot, LoginUserId};
 
 /// Setup's linger question.
 pub(crate) trait LingerOffer: Send + Sync {

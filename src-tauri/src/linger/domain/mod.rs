@@ -8,6 +8,6 @@
 
 mod show;
 
-pub(crate) use show::{
-    show, LingerCall, LingerObservation, LingerShown, LingerSnapshot, LoginUserId,
-};
+pub(crate) use show::LingerShown;
+#[cfg(any(test, target_os = "linux"))]
+pub(crate) use show::{show, LingerCall, LingerObservation, LingerSnapshot, LoginUserId};
