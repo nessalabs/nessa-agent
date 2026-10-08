@@ -303,8 +303,45 @@ async fn startup_timing_logs_success_error_and_deadline_without_request_payloads
     }
 }
 
-#[tokio::test]
-async fn startup_first_frame_duration_excludes_later_frames_and_uses_injected_clock() {
+const STARTUP_TIMING_CHILD: &str = "NESSA_STARTUP_TIMING_CHILD";
+
+/// `rpc` records the phase-finished line before it returns. macOS CI still
+/// missed that line after an `Ok` result and a first frame at `elapsed_ms=30`.
+/// Tracing's callsite interest and max level are process-wide, and the
+/// multi-thread runtime can finish the exchange on another worker. These
+/// assertions run in a one-test process, on the thread that installed the
+/// subscriber. The clock still moves only between the gates.
+#[test]
+fn startup_first_frame_duration_excludes_later_frames_and_uses_injected_clock() {
+    let name = format!(
+        "{}::startup_first_frame_duration_excludes_later_frames_child",
+        module_path!().split_once("::").unwrap().1
+    );
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &name, "--ignored", "--test-threads=1"])
+        .env(STARTUP_TIMING_CHILD, "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "startup timing child failed: {:?}\n{stdout}\n{stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "the child ran {name}: {stdout}\n{stderr}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "run in a child process by startup_first_frame_duration_excludes_later_frames_and_uses_injected_clock"]
+async fn startup_first_frame_duration_excludes_later_frames_child() {
+    assert!(
+        std::env::var_os(STARTUP_TIMING_CHILD).is_some(),
+        "run through startup_first_frame_duration_excludes_later_frames_and_uses_injected_clock"
+    );
     let (mut worker, _commands, _close, _events) = worker_with_ready_frames(&[], "").await;
     worker
         .scope
@@ -384,7 +421,7 @@ sys.stdin.read()
     let finished = log
         .lines()
         .find(|line| line.contains("agent startup phase finished"))
-        .unwrap();
+        .unwrap_or_else(|| panic!("phase finished was not recorded\n{log}"));
     assert!(finished.contains("elapsed_ms=100"), "{log}");
     assert_eq!(
         log.matches("agent startup first frame received").count(),
