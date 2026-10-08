@@ -102,11 +102,12 @@ html:not(.dark) .workspace-switcher {
   scrollbar-width: thin;
 }
 
-/* Rows in the menus' own type: 13px words, quiet trailing detail, a soft rounded highlight. */
+/* The kit's dense GroupHeader, held to the switcher's caption: 11px/600 at 50% ink. */
 .workspace-results-group {
+  --nessa-group-header-ink: color-mix(in oklab, var(--foreground) 50%, transparent);
+  --nessa-group-header-height: 27px;
+  margin: 0;
   padding: 8px 10px 3px;
-  color: color-mix(in oklab, var(--foreground) 50%, transparent);
-  font: 600 11px / 16px var(--nessa-font-sans);
   letter-spacing: 0.01em;
   -webkit-user-select: none;
   user-select: none;

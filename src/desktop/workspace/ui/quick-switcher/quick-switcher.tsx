@@ -6,6 +6,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react"
+import { GroupHeader } from "@nessa-ui/react/group-header"
 import { Kbd } from "@nessa-ui/react/kbd"
 import { DesktopIcon } from "../../../ui/icons"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
@@ -235,9 +236,13 @@ export function QuickSwitcher({
             return (
               <Fragment key={rowKey(row)}>
                 {heading ? (
-                  <div className="workspace-results-group" role="presentation">
-                    {heading}
-                  </div>
+                  <GroupHeader
+                    className="workspace-results-group"
+                    level={3}
+                    size="dense"
+                    tone="quiet"
+                    label={heading}
+                  />
                 ) : null}
                 <ListRow
                   id={`workspace-result-${index}`}
