@@ -249,6 +249,7 @@ function formattedJson(json, filepath) {
   try {
     bin = require.resolve("prettier/bin/prettier.cjs")
   } catch {
+    log("prettier was not found; wrote the evidence file without formatting it")
     return json
   }
   const result = spawnSync(process.execPath, [bin, "--stdin-filepath", filepath], {

@@ -138,6 +138,12 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
   content-visibility: hidden;
 }
 
+/* The copy omits the conversation. A body pictured in it stays out of its
+   paint (`styles.test.ts`). */
+.split-panes-ghost .workspace-pane-body {
+  content-visibility: hidden;
+}
+
 .workspace:is([data-split-flipping], [data-drag-reflow])
   .workspace-pane
   .desktop-composer {

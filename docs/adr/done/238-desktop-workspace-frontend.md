@@ -505,7 +505,7 @@ in what the content is laid out at, chosen by measurement:
 - **The copy is laid out at the slot's size, once per zone change**, so its
   title reads as the pane will; at rest nothing in it is scaled. It is the
   pane's chrome in a box of its own (`contain: strict`). The conversation
-  stays in the copy and is not painted: laying that body out on each shape
+  is left out of the copy: laying that body out on each shape
   change misses the frame budget.
 - **A pane keeps its layout and is cut to its would-be shape**: its box
   takes the rect by transform (`overflow: hidden` clips it) and its content,
@@ -582,7 +582,7 @@ the same outcome the drop's command commits, so nothing jumps
 held inside the grid). A zone the fit rule refuses offers nothing; a session
 already on screen offers "Go to Pane". What is carried is an opaque copy
 of the pane's title and chrome, in a box of the shape it would land in
-(`contain: strict`). Its conversation is in the copy and not painted.
+(`contain: strict`). The conversation is left out of the copy.
 A session from a list is drawn from what the window holds of it. Nothing of
 the page is read after the press's frame: where a preview has drawn a pane is
 known from the preview's own motion, and the preview and

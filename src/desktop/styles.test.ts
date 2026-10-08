@@ -245,8 +245,12 @@ it("lifts a drag's copy without painting a shadow", () => {
   expect(picture).toMatch(/container-name:\s*none\s*!important/)
   expect(picture).toMatch(/box-shadow:\s*none\s*!important/)
   expect(picture).toMatch(/(?:^|[;\n])\s*filter:\s*none\s*!important/)
-  const bodyHidden = sheet
-    .slice(sheet.indexOf(".split-panes-ghost .workspace-pane-body {"))
+  const panes = readFileSync(
+    new URL("./workspace/ui/panes/panes.css", import.meta.url),
+    "utf8",
+  )
+  const bodyHidden = panes
+    .slice(panes.indexOf(".split-panes-ghost .workspace-pane-body {"))
     .split("}")[0]
   expect(bodyHidden).toMatch(/content-visibility:\s*hidden/)
 })
