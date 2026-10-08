@@ -769,7 +769,8 @@ HTTP replacement handoff and immutable peer-reply binding use `connection`'s
 existing bounded writer queue; `http` owns provisional/validated binding claims
 and the modern POST authorization/status policy shared by startup and recovery;
 [ADR 392](adr/todo/392-remote-mcp-servers.md) maps its orderings to
-`http_progress`, `post_streams` and their shared `post_body` test fixture, tested in
+`http_progress`, the owning `http_shutdown` close-fence tests, `post_streams`
+and their shared `post_body` test fixture, tested in
 `tests/infrastructure/mcp/` against in-process and process fixtures. The
 gateway's `src/mcp_servers/` owns the stand-in rules, the session token and
 the resource ticket, and a user's server as stored with the edits made to

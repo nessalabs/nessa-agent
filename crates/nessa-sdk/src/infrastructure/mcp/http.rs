@@ -265,12 +265,12 @@ impl HttpSession {
     /// Legacy sessions and sessions with no id record that DELETE does not
     /// apply and do not send one.
     pub fn shutdown(&self) {
-        if self.delete_started.swap(true, Ordering::SeqCst) {
-            return;
-        }
         let (readers, get_task): (Vec<_>, _) = {
             let mut readers = self.readers.lock().expect("http readers");
             self.closing.store(true, Ordering::SeqCst);
+            if self.delete_started.swap(true, Ordering::SeqCst) {
+                return;
+            }
             (
                 std::mem::take(&mut readers.post),
                 std::mem::take(&mut readers.get),
@@ -1644,3 +1644,7 @@ async fn forward_stream_message(
             .map_err(|_| McpError::ServerGone)
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "../../../tests/infrastructure/mcp/http_shutdown.rs"]
+mod shutdown_tests;
