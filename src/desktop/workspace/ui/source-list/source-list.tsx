@@ -4,6 +4,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react"
+import { Kbd } from "@nessa-ui/react/kbd"
 import { DesktopIcon } from "../../../ui/icons"
 import { IconButton } from "../../../ui/icon-button"
 import {
@@ -148,7 +149,7 @@ function TreeTop() {
       >
         <DesktopIcon name="search" />
         <span>Search</span>
-        {shortcut ? <kbd className="workspace-kbd">{shortcut}</kbd> : null}
+        {shortcut ? <Kbd>{shortcut}</Kbd> : null}
       </button>
       <OverviewRow />
     </>

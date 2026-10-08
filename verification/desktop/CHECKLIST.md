@@ -823,6 +823,20 @@ pointer, and outlined by `--desktop-focus-outline` under the keyboard.
 - [ ] **Keyboard focus on one draws an outline.** _Check:_ `icon-buttons.mjs`
   (`focus`). At the base commit the workspace's resets left these with none.
 
+## Shared controls (#632)
+
+Patterns the window drew several ways, each now one component of the kit
+(`@nessa-ui/react`), given the window's inks in one rule. Settings is left out:
+it is redesigned on its own branch.
+
+- [ ] **Every key cap is the kit's `Kbd`, skinned once.** 18px tall and at least
+  as wide, 11px medium type, `--desktop-radius-xs`, a 7% fill and
+  `--desktop-muted` ink — the sidebar's search, the session list's search and
+  the quick switcher's rows alike. _Check:_ `shared-controls.mjs` (`keys`, per
+  engine and layout, on load and with the switcher open). Rule: `chrome.css` ›
+  Keys. At the base commit the session list's and the switcher's keys were
+  bare text, unlike the sidebar's cap.
+
 ## Menus and tooltips
 
 _ADR 238 › Interaction and visual rules_ holds the rules; check each by hand,

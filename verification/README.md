@@ -44,6 +44,7 @@ verification/
       committed-transcript.mjs history notices, permission controls, re-enable
       smoke.mjs             loads, sends, splits, Settings, overview; console errors
       icon-buttons.mjs      every icon button: size, shape, name, tooltip, hover, keyboard focus
+      shared-controls.mjs   key caps: one kit component, measured
       perf-budget.mjs       the frame budget, production build, 4× CPU throttling
       alpha-perf.mjs        cold/warm startup, the pane cap, one long transcript; --with-gateway seeds a scripted gateway (opt-in; not in run-all)
       safe-area.mjs         nothing painted under the window controls, per frame
