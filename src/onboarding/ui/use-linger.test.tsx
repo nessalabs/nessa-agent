@@ -157,7 +157,7 @@ describe("linger at the end of setup", () => {
     expect(container.textContent).toContain("Nessa keeps running when you log out")
   })
 
-  it("keeps the last screen when the repeated read also fails", async () => {
+  it("shows failed when the enable reply and the repeated read both fail", async () => {
     let statuses = 0
     const linger: LingerSource = {
       status: async () => {
@@ -179,7 +179,35 @@ describe("linger at the end of setup", () => {
       button("Keep it running").click()
     })
     expect(container.querySelector("[data-linger]")?.getAttribute("data-linger")).toBe(
-      "offer",
+      "failed",
+    )
+    expect(container.textContent).toContain("Nessa could not turn that on")
+    expect(container.textContent).toContain("loginctl enable-linger")
+    expect(container.textContent).not.toContain("keeps running")
+  })
+
+  it("shows failed when both replies are unreadable", async () => {
+    let statuses = 0
+    const linger: LingerSource = {
+      status: async () => {
+        statuses += 1
+        if (statuses === 1) return { shown: "offer" }
+        return undefined
+      },
+      accept: async () => undefined,
+    }
+    await React.act(async () => {
+      root.render(<Surface linger={linger} />)
+    })
+    await React.act(async () => {
+      button("Skip this step").click()
+    })
+    await React.act(async () => {
+      button("Keep it running").click()
+    })
+    expect(statuses).toBe(2)
+    expect(container.querySelector("[data-linger]")?.getAttribute("data-linger")).toBe(
+      "failed",
     )
     expect(container.textContent).not.toContain("keeps running")
   })

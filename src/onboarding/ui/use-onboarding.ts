@@ -312,11 +312,12 @@ export function useOnboarding(
       }
       void linger.status().then(
         (fresh) => {
-          if (fresh) setState((current) => recordLinger(current, fresh))
+          // The confirming read decides the screen. A payload this shell cannot
+          // read is the same as no read: failed claims nothing.
+          setState((current) => recordLinger(current, fresh ?? { shown: "failed" }))
         },
         () => {
-          // The confirming read could not be repeated. The screen stays on the
-          // last view it has, which is not a new claim.
+          setState((current) => recordLinger(current, { shown: "failed" }))
         },
       )
     },
