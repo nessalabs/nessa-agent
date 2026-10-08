@@ -689,6 +689,20 @@ async fn cascaded_child_close_retries_first_owner_completion_without_physical_re
     cascaded_owner_case(false).await;
 }
 
+struct ParentPhysicalWitness {
+    closes: AtomicUsize,
+    started: Notify,
+}
+
+#[async_trait]
+impl ChildResources for ParentPhysicalWitness {
+    async fn close(&self, _: &LifetimeCause, _: &Initiator) -> ResourceReport {
+        self.closes.fetch_add(1, Ordering::SeqCst);
+        self.started.notify_one();
+        released()
+    }
+}
+
 #[tokio::test]
 async fn cascaded_child_external_close_does_not_skip_first_owner_physical_cleanup() {
     use nessa_sdk::application::agent_execution::permissions::ActionContext;
@@ -707,10 +721,9 @@ async fn cascaded_child_external_close_does_not_skip_first_owner_physical_cleanu
     });
     let root = bounded(world.root()).await;
     *audit.root.lock().unwrap() = Some(root.clone());
-    let root_resources = Arc::new(ScriptResources {
+    let root_resources = Arc::new(ParentPhysicalWitness {
         closes: AtomicUsize::new(0),
-        report: released(),
-        hold: None,
+        started: Notify::new(),
     });
     world
         .coordinator
@@ -743,8 +756,18 @@ async fn cascaded_child_external_close_does_not_skip_first_owner_physical_cleanu
     .await
     .unwrap();
     intent.release.notify_one();
+    let started =
+        tokio::time::timeout(Duration::from_secs(2), root_resources.started.notified()).await;
+    assert_eq!(
+        root_resources.closes.load(Ordering::SeqCst),
+        1,
+        "descendant external choice must not skip the first owner's physical cleanup"
+    );
+    assert!(
+        started.is_ok(),
+        "actual first-owner physical close signals progress"
+    );
     assert_eq!(bounded(parent_close).await, Ok(()));
-    assert_eq!(root_resources.closes.load(Ordering::SeqCst), 1);
     assert_eq!(child_resources.closes.load(Ordering::SeqCst), 1);
     let restored = OwnershipGraph::restore(bounded(world.store.read()).await.unwrap());
     assert!(restored.refusal().is_none());
