@@ -306,11 +306,12 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    # Windows took at most 27.9 minutes, macOS 18.5, and Ubuntu 54.5 when apt
-    # was still transferring (21 green runs, 2026-10-07, #653). Ninety minutes
-    # sits above the Rust test step's 45 minute bound and the apt step's 20,
-    # so those fire first.
-    timeout-minutes: 90
+    # The apt step can run 65 minutes and the Rust tests can run to their own
+    # 45 (#366). On the 21 green Ubuntu legs of 2026-10-07, every other step
+    # together was at most 11.3 minutes in one run. 65 + 45 + 11.3 is 121.3,
+    # so 130 minutes lets both step bounds finish before the job does.
+    # Windows, which does not install these packages, took at most 27.9.
+    timeout-minutes: 130
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -383,16 +384,17 @@ jobs:
         # The WebDriver and virtual display are this job's own, for the native
         # window smoke below.
         #
-        # A stalled mirror held this step for 315 minutes and for 79 minutes
-        # (runs 37668027204 and 37670890766, #653). The script kills each
-        # apt-get; twenty minutes kills the step if that does not run. Three
-        # failed updates take about seventeen minutes, so a mirror that never
-        # answers fails here with the script's own message. Healthy installs
-        # in the same window finished in under five minutes. Two green installs
-        # took 30.6 and 41.5 minutes on a mirror at 24.8 kB/s; this bound fails
-        # those and the step ends.
+        # A silent stall on `apt-get update` held this step for 315 minutes and
+        # for 79 minutes (runs 37668027204 and 37670890766, #653). The script's
+        # worst case is 62.75 minutes: three updates of five minutes, a 30s
+        # kill-after on each of those and on install, the 15s and 30s backoff
+        # sleeps, and a 45 minute install. Sixty-five minutes is that budget
+        # plus a small margin, so a mirror that never answers fails here with
+        # the script's own message. Installs that were still moving, including
+        # the 30.6 and 41.5 minute green ones, finish inside the 45 minute
+        # install ceiling.
         run: bash scripts/desktop/install-linux-build-deps.sh webkit2gtk-driver xvfb
-        timeout-minutes: 20
+        timeout-minutes: 65
       - run: node scripts/check-desktop.mjs
       # Hosted Windows runners are administrators with UAC off, so this leg can
       # prove the Task Scheduler identity and cleanup agreement only for an

@@ -10,9 +10,12 @@
 # A stalled Ubuntu mirror held local-auth for hours twice on 2026-10-07: after
 # azure.archive.ubuntu.com failed over to archive.ubuntu.com, `apt-get update`
 # printed `Get:5 https://archive.ubuntu.com/ubuntu noble-security InRelease`
-# and never printed again (runs 37668027204 and 37670890766, #653). apt's own
-# timeouts did not end it, so every fetch is bounded, each command is killed
-# past a ceiling, and `update` is retried before the step gives up.
+# and never printed again (runs 37668027204 and 37670890766, #653). That stall
+# was silence, not a slow transfer. `update` stays three attempts of five
+# minutes. `install` is allowed 45 minutes: two green installs that day were
+# still moving and finished in 30.6 and 41.5 minutes (the slower one fetched
+# 61.4 MB at 24.8 kB/s). A transfer at that pace passes. A mirror that goes
+# silent, or one slower than this ceiling, fails.
 #
 # DEBIAN_FRONTEND is a sudo assignment on purpose. Preserving the whole
 # environment would hand apt the release job's updater signing key.
@@ -32,6 +35,6 @@ for attempt in 1 2 3; do
   fi
   sleep $((attempt * 15))
 done
-sudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 15m apt-get "${apt_options[@]}" install -y \
+sudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 45m apt-get "${apt_options[@]}" install -y \
   libwebkit2gtk-4.1-dev libgtk-3-dev \
   libayatana-appindicator3-dev librsvg2-dev libxdo-dev "$@"

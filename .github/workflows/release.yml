@@ -204,10 +204,11 @@ jobs:
             target: x86_64-unknown-linux-gnu
             updater-target: linux-x86_64
     runs-on: ${{ matrix.runner }}
-    # macOS build jobs on those runs took at most 25.7 minutes, and no Linux
-    # release job has completed. Ninety minutes covers the apt install step's
-    # bound plus a slow bundle.
-    timeout-minutes: 90
+    # The apt step can run 65 minutes. macOS build jobs on runs 35483042120,
+    # 35478911855, 35475799232 and 35472485973 took at most 25.7 minutes, and
+    # no Linux release job has completed. 65 + 25.7 is 90.7, past the previous
+    # 90 minute bound. 120 minutes sits above that sum.
+    timeout-minutes: 120
     env:
       # Produces each update artifact's .sig beside it — the .app.tar.gz or the
       # .deb. Without it the bundle is built and signs nothing,
@@ -285,10 +286,11 @@ jobs:
       # as on macOS.
       - name: Install the desktop host's Linux build dependencies
         if: runner.os == 'Linux'
-        # The same step bound as local-auth (#653). The script owns the
-        # per-command ceilings.
+        # The same 65 minute step bound as local-auth (#653), above the
+        # script's 62.75 minute worst case. The script owns the per-command
+        # ceilings: five minutes for each update, 45 for install.
         run: bash scripts/desktop/install-linux-build-deps.sh
-        timeout-minutes: 20
+        timeout-minutes: 65
       # --target is passed although it is always the runner's own architecture,
       # and that is the point: prepare-macos.mjs and prepare-linux.mjs refuse a
       # triple that is not the host's, so if a runner image ever changes
