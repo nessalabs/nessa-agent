@@ -12,6 +12,7 @@ mod gateway_endpoint;
 mod host;
 mod host_refusal;
 mod launch;
+mod linger;
 mod links;
 mod local_data;
 mod page_load;
