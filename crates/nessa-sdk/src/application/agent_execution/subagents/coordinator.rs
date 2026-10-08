@@ -1725,6 +1725,12 @@ impl Shared {
         external: bool,
         intent: Option<OwnershipEvidence>,
     ) -> Option<watch::Receiver<Option<Result<(), OwnershipFailure>>>> {
+        let requested = root;
+        let root = self.with_graph(|graph| graph.close_owner(&requested))?;
+        // An external descendant caller cannot excuse its first owner's own
+        // attachment cleanup. Registration still joins that owner's generation.
+        // Enforcer: cascaded_child_external_close_does_not_skip_first_owner_physical_cleanup.
+        let external = external && requested == root;
         // Closing is decided before the drains lock. Nothing holds the tree
         // scope and then takes `drains`, so holding `drains` across the later
         // graph read cannot cycle. The running-slot check and the insert share
@@ -1808,11 +1814,15 @@ impl Shared {
     }
 
     async fn wait_drain(&self, id: &AgentLifetimeId) -> Result<(), OwnershipFailure> {
+        // Enforcer: cascaded_child_gate_joins_first_owner_failed_generation.
+        let owner = self
+            .with_graph(|graph| graph.close_owner(id))
+            .ok_or(OwnershipFailure::Incomplete)?;
         let receiver = self
             .drains
             .lock()
             .expect("close drains")
-            .get(id)
+            .get(&owner)
             .map(|slot| slot.receiver.clone());
         let Some(mut receiver) = receiver else {
             return Err(OwnershipFailure::Incomplete);
