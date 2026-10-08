@@ -1,0 +1,116 @@
+Issue665 capacity-review correction author report
+Exact head: a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e
+Exact base: d59d9272ed7afdb512c13263c8b9620ebd591db0
+Checkout: /workspace/nessa-agent-peer-reply-capacity (clean, not pushed pending root coordination)
+PR: https://github.com/nessalabs/nessa-agent/pull/671
+Finding: inline4216937095, saturation workloads duplicated ordinary bound64.
+
+Correction: existing OUTGOING_FRAMES remains64, now pub(super), and internal
+HTTP-progress held_calls/J24 constructor and loop consume that owner. Reserve
+remains private; J24's reserve1 is an explicit local queue fixture input. No new
+mutable authority, public SDK API, queue design or production scheduling change.
+The test-only pending helper uses unconstrained polling to reach an actual queue
+or reply wait rather than treating cooperative yield as admission evidence. Its
+uses are limited to new #665 tests. Initial65 probe exposed that false wait:
+exit101,54pass2fail (J22 late call Ok/J23 overflow timeout). Preserved unchanged.
+After the helper fix, owner65 gives actual exit0, all56 HTTP-progress tests pass.
+Removing reserve at owner65 fails derived J21 with actual exit101. A copied64
+J21 workload with the corrected helper also fails101 because its dropped excess
+call fills the spare slot; that attempted false-negative witness did not pass and
+is honestly retained. No claimed reproduction beyond those observed outcomes.
+Production bound64/reserve1 and corrected tests were restored with fresh mtimes;
+full MCP221 passed,1 existing ignored,0fail. Diff/log/restoration paths in manifest.
+
+Authority and identity: queue clones share sender and ordinary semaphore, without
+new mutable session/binding authority. Outgoing exhaustively classifies Frame vs
+PeerReply/RecoveryReady in one owner. HttpSession remains binding/version/phase
+owner; Shared remains first end cause and pending ID owner. Captured ReplyContext
+travels unchanged through the envelope. J21/J22 verify exact replacement SID and
+unnegotiated version both before and after validated matching initialization.
+
+Domain invariants: no execution/domain transition or persistence rule changes.
+Transport invariants remain HTTP owned: provisional reply binding is not readiness,
+initialized acceptance gates ordinary calls, and captured request identity cannot
+adopt replacement state. Existing J17-J20 plus new J21/J22 cover those relations.
+
+Admission and concurrency: physical HTTP FIFO derives ordinary64+reserve1.
+Ordinary permits cover queued frames or an in-progress send and release at dequeue.
+Controls bypass the ordinary permit, remain FIFO and may consume free ordinary
+slots. Full is explicit; controls have no priority/unbounded progress promise.
+J24 proves exact ordinary bound, dequeue before dispatch release, cancellation both
+before acquiring capacity and after acquisition behind full controls, receiver loss.
+J21-J23 cover actual writer pressure and reader progress; J22 retains control order.
+
+Failure and cleanup: full reply admission follows deliver -> HTTP shutdown fence ->
+Shared.end, preserving one typed cause. J23 proves TooLarge through later close,
+no queued effect, joined startup and one DELETE; actual lost receiver yields
+ServerGone. J25 Timeout/J26 Closed/Unauthorized remain first through later close.
+Existing J19/http_shutdown proofs retain first fence and one DELETE. No replay.
+Custom-exchange writer panic before end publication is an existing adjacent gap,
+not repaired by this scoped change; a later peer reply now explicitly ends the
+lost receiver. Separately tracked as issue #670 (https://github.com/nessalabs/nessa-agent/issues/670); explicitly excluded from this PR.
+
+Observations and restoration: inbound reader never waits for reply admission.
+Actual reply and matching result are separately gated, including matching result
+before writer drain. No session snapshot/restoration changes; retained phase and
+reader ownership remain existing HttpSession contracts. Existing J9-J20 controls
+are retained, including ordinary/cancellation responses and timer/ready ordering.
+
+Audit: no product permission/lifecycle audited transition or durable audit port
+changes. Transport failure cause and physical cleanup ownership remain distinct;
+no invented actor or cancellation acknowledgement. Tests assert actual exchanges,
+causes, reader destruction and DELETE rather than diagnostic logs.
+
+Representation boundaries: real JSON/SSE fixtures create originating context;
+queued peer answers preserve IDs/results/-32601 and exact headers. Frame encoding
+and body/session-ID bounds remain owning existing adapters. New queue does not
+parse messages for scheduling or classify by strings. Both ping and unsupported
+request variants use reserved admission; controls/cancellations use exhaustive
+Outgoing classification. Custom writer loss is tested independently of HTTP codes.
+
+Resource bounds: HTTP retains at most65 queue envelopes and at most64 ordinary
+admission permits, including sends blocked behind controls. Returned frame has no
+queue permit. Frame byte bound remains MAX_FRAME_BYTES; the change adds one bounded
+physical envelope/frame/context, not another reader registry or session identity
+copy. Pending calls retain MAX_IN_FLIGHT; ReplyContext retains shared bounded binding
+and existing protocol version. Caller-owned futures retain existing frame payloads;
+no spawned/unbounded transport queue is introduced. Best-effort cancellation still
+directly aborts HTTP reader independent of remote notification capacity.
+
+Public surface and organization: no public SDK API, schema, dependency, process
+fixture or production test switch. Queue wrapper is crate-private in the owning
+Connection module. Direct installed writer tests consume that owner with reserve0.
+Test-only try_recv compiles only all(test,unix), matching MCP tests' platform gate.
+ADR392 J21-J26 precede source edits; module maps retain existing feature ownership.
+
+Agreement: pending RPC ID belongs to Shared, ordinary permit to queued envelope,
+reply ID/version to HttpMessage/ReplyContext, validated phase/dispatch admission and
+close fence to HttpSession, final connection cause to Shared.end, reader/DELETE
+ownership to existing registry and SessionClaims. Tests cross these relationships:
+queued calls Busy while reply carries provisional SID; matching result cannot alter
+captured reply version; overflow/close/timeout refuse effects without leaking the
+provisional cleanup claim; dequeue/cancel free capacity without publishing phase.
+No persistence/application/UI data path changes; those boundaries are excluded.
+
+
+Gate15: ADR392 J21-J26 ordering and production contract unchanged. Corrected
+workloads now derive admission owner;65positive and broken-reserve J21red prove
+actual saturation. No new state/order rows or narrative were added to source docs.
+Gate16: one existing FIFO owner and root/Astra bounded-reserve direction retained.
+Gate17: retained browser source11977855 passed Apps16/Gateway13/Scenarios8 on both
+engines. Source155 only changed test imports afterward; this final source changes
+production visibility only (normalized complete connection.rs is byte-identical)
+and internal tests. No current-head browser rerun is claimed or required by root.
+
+Current exact-head format/full MCP/all-target six-package Clippy/strict SDKdocs/
+architecture checker and74 architecture unit tests all numeric0. Broader runtime
+suite4419 on f5f4 and original six applied behavior mutations101/restored56 on
+ee798 remain historical evidence; no broad rerun or six-probe repeat. New narrow
+65capacity probes are separate. manifest.json lists source heads and raw records.
+
+Environment unchanged: Linux x86_64, warm exclusive target/jobs1/no debug or
+incremental; existing verification subreaper for process tests. Browser origin
+119 with pinnedUI1f22c046, headless bundled Chromium/WebKit, real assertions; only
+ldconfig preflight bypassed. Native WKWebView/performance not asserted. Root owns
+hosted CI/reviews/push. Existing custom-adapter writer-panic gap #670 remains
+explicitly excluded. No unresolved finding within #665 scope after this correction.

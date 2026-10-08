@@ -1,0 +1,23 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-peer-reply-capacity/crates/nessa-sdk)
+    Finished `test` profile [unoptimized] target(s) in 53.46s
+     Running unittests src/lib.rs (/workspace/665-cargo-target/debug/deps/nessa_sdk-3d68afc9996ff363)
+
+running 1 test
+test infrastructure::mcp::tests::http_progress::j21_saturated_ordinary_queue_preserves_early_recovery_answers ... FAILED
+
+failures:
+
+---- infrastructure::mcp::tests::http_progress::j21_saturated_ordinary_queue_preserves_early_recovery_answers stdout ----
+
+thread 'infrastructure::mcp::tests::http_progress::j21_saturated_ordinary_queue_preserves_early_recovery_answers' (800192) panicked at crates/nessa-sdk/src/infrastructure/mcp/../../../tests/infrastructure/mcp/http_progress.rs:2856:43:
+peer request admission ended connection: TooLarge("queued MCP control frames")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    infrastructure::mcp::tests::http_progress::j21_saturated_ordinary_queue_preserves_early_recovery_answers
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-sdk --lib`
+verification init reaped orphan descendants: 0

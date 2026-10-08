@@ -1,0 +1,11 @@
+{
+  "remote_merge": "f8a054c9c6048d02bace795989614bc87ec494e9",
+  "parents": [
+    "d59d9272ed7afdb512c13263c8b9620ebd591db0",
+    "15555cfba6d5c3b6570c5bee9370b70cccba97e6"
+  ],
+  "merge_tree": "80247758fff790249ec379a7fa7a7ce222174af7",
+  "head": "15555cfba6d5c3b6570c5bee9370b70cccba97e6",
+  "head_tree": "80247758fff790249ec379a7fa7a7ce222174af7",
+  "tree_equal": true
+}

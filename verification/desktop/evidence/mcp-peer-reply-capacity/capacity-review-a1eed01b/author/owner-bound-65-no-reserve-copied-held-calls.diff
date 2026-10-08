@@ -1,0 +1,49 @@
+diff --git a/crates/nessa-sdk/src/infrastructure/mcp/connection.rs b/crates/nessa-sdk/src/infrastructure/mcp/connection.rs
+index e66627e0..28906879 100644
+--- a/crates/nessa-sdk/src/infrastructure/mcp/connection.rs
++++ b/crates/nessa-sdk/src/infrastructure/mcp/connection.rs
+@@ -46,9 +46,9 @@ use tokio::{
+ /// The most calls waiting on one server at a time.
+ pub(crate) const MAX_IN_FLIGHT: usize = 256;
+ /// Frames queued for the server's stdin before callers wait.
+-const OUTGOING_FRAMES: usize = 64;
++pub(super) const OUTGOING_FRAMES: usize = 65;
+ /// Extra physical room for HTTP controls under ordinary frame pressure.
+-const HTTP_CONTROL_RESERVE: usize = 1;
++const HTTP_CONTROL_RESERVE: usize = 0;
+ /// Change notices held for a stand-in that has not read them yet. They are
+ /// idempotent, so one that lags misses only repeats.
+ const NOTICES: usize = 16;
+diff --git a/crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs b/crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs
+index 8a78c291..c74e878a 100644
+--- a/crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs
++++ b/crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs
+@@ -1,5 +1,5 @@
+ //! ADR 392 J1–J26: JSON/initialization progress and replacement cleanup ownership.
+-use super::super::connection::{Connection, Outgoing, OutgoingQueue, Reply};
++use super::super::connection::{Connection, Outgoing, OutgoingQueue, Reply, OUTGOING_FRAMES};
+ use super::super::http::{HttpSession, SendOutcome};
+ use super::super::{
+     Bearer, HttpBody, HttpExchange, HttpFailure, HttpMethod, HttpRequest, HttpResponse, McpError,
+@@ -2791,7 +2791,9 @@ async fn j19_reader_failure_fences_http_owner_before_ended() {
+     );
+ }
+ 
+-async fn pending<F: Future>(mut future: Pin<&mut F>) {
++// Poll to an actual queue or reply wait, rather than Tokio's cooperative yield.
++async fn pending<F: Future>(future: Pin<&mut F>) {
++    let mut future = std::pin::pin!(tokio::task::unconstrained(future));
+     assert!(poll_fn(|context| Poll::Ready(future.as_mut().poll(context).is_pending())).await);
+ }
+ 
+@@ -3052,8 +3054,8 @@ async fn j23_closed_control_queue_is_explicit() {
+ 
+ #[tokio::test]
+ async fn j24_ordinary_capacity_releases_on_dequeue_and_cancellation() {
+-    let (queue, mut frames) = OutgoingQueue::new(64, 1);
+-    for id in 0..64 {
++    let (queue, mut frames) = OutgoingQueue::new(OUTGOING_FRAMES, 1);
++    for id in 0..OUTGOING_FRAMES {
+         queue
+             .send(Outgoing::Frame(
+                 serde_json::to_vec(&json!({"id":id,"method":"tools/list"})).unwrap(),

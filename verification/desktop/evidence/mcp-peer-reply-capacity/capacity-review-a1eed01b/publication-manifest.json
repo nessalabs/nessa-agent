@@ -1,0 +1,237 @@
+{
+  "source_head": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+  "base": "d59d9272ed7afdb512c13263c8b9620ebd591db0",
+  "review_finding": 4216937095,
+  "previous_immutable_evidence": "fade9bd8e05571abcbc7e03eba7f6d92f154ff41/final-15555cfb",
+  "browser_source_head": "11977855d7f031bbac5a967647de6cbb73652e2c",
+  "browser_relationship": "Retained source119 actual execution. Later imports then only internal constant visibility in production preserve behavior; test saturation/polling now strengthened. No current browser execution claimed.",
+  "hosted_CI": "Current a1 run37755077142 pending at publication; previous155all11success historicalonly.",
+  "files": [
+    {
+      "file": "author/architecture-unit-tests.command.json",
+      "bytes": 682,
+      "sha256": "a75194b34ddcd7124c2285000a5932dae6f7828428438f588175d91fda52b5f1"
+    },
+    {
+      "file": "author/architecture-unit-tests.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "file": "author/architecture-unit-tests.log",
+      "bytes": 5866,
+      "sha256": "63a7ff7405ca660995e5f247b2e35aa3b837f33627ea07473265fe74d0670659"
+    },
+    {
+      "file": "author/architecture.command.json",
+      "bytes": 43,
+      "sha256": "98a2af81defc0306c3f81fa0851956f2a5385e71d5a920af4a16faf575d45fe7"
+    },
+    {
+      "file": "author/architecture.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "file": "author/architecture.log",
+      "bytes": 26,
+      "sha256": "2a2462c6729eeb5ecb05a41a9fb9ed10f97b1bdb34772bac68dd984b7907a5d8"
+    },
+    {
+      "file": "author/author-review.txt",
+      "bytes": 8139,
+      "sha256": "313cd0794378d67f6435786343d0bdfeb5cfca24e1e4143de3f7cd5f9a2d65b8"
+    },
+    {
+      "file": "author/clippy.command.json",
+      "bytes": 202,
+      "sha256": "fb144e29d416bddeb4d8ad2e4efc700be283cae528b360232d684d1279f21167"
+    },
+    {
+      "file": "author/clippy.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "file": "author/clippy.log",
+      "bytes": 461,
+      "sha256": "5382e40b6f8582403f765d3351f24ada8593510d3b694a5661e1b991a13a883c"
+    },
+    {
+      "file": "author/fixed-connection.rs",
+      "bytes": 23001,
+      "sha256": "08d267101efe3f1a342082a51f833bb2ea8483aeafcc1492ac23bf2d2a863d79"
+    },
+    {
+      "file": "author/fixed-http-progress.rs",
+      "bytes": 109656,
+      "sha256": "7624f2d7641f435a79b8374789a80e0bd0cb09172eb244d207fd87845f6fafbd"
+    },
+    {
+      "file": "author/format.command.json",
+      "bytes": 175,
+      "sha256": "0fdef87d62aa423b0709c951c248cde0dbe9575a0c3553f68194def17ff0522e"
+    },
+    {
+      "file": "author/format.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "file": "author/format.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "author/full-mcp.command.json",
+      "bytes": 119,
+      "sha256": "8c490cfc40f2e8b5a2b410510ebc4401eb973a47c235e44142c875686e1ef39d"
+    },
+    {
+      "file": "author/full-mcp.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "file": "author/full-mcp.log",
+      "bytes": 23976,
+      "sha256": "5f543bdc6426c3975492ed8fe20a3ba99ac601fac81140fce02a6c2386078bf3"
+    },
+    {
+      "file": "author/manifest.json",
+      "bytes": 14003,
+      "sha256": "d4a7d571617e6ee42713708fa541fa9d7a5db907dfcc8f102b8ba492e82aec84"
+    },
+    {
+      "file": "author/owner-bound-65-derived-workload.command.json",
+      "bytes": 134,
+      "sha256": "1917c642241aa854333554acb51f3cec7cc624d4fc12bbc09cd0cf0adcfcc286"
+    },
+    {
+      "file": "author/owner-bound-65-derived-workload.diff",
+      "bytes": 2297,
+      "sha256": "e17793dcc7d3553a1bd35da4979a700d05265aff13228623a012d5c40bb1997f"
+    },
+    {
+      "file": "author/owner-bound-65-derived-workload.exit",
+      "bytes": 4,
+      "sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+    },
+    {
+      "file": "author/owner-bound-65-derived-workload.log",
+      "bytes": 7772,
+      "sha256": "d954b9e4e18b4128d770ecc39661fdf6f2e49e427fe1c2998b256936c3cbef42"
+    },
+    {
+      "file": "author/owner-bound-65-no-reserve-copied-held-calls.command.json",
+      "bytes": 197,
+      "sha256": "c66c7f8b29ac8640af81ba059aad1ee46d0fb858cb247677958d9e1fdf2c4535"
+    },
+    {
+      "file": "author/owner-bound-65-no-reserve-copied-held-calls.diff",
+      "bytes": 2559,
+      "sha256": "0835d3fe2ecfd92e35f0dead23414cdf5735b001b04ea3fc9041d2adf33e4bb0"
+    },
+    {
+      "file": "author/owner-bound-65-no-reserve-copied-held-calls.exit",
+      "bytes": 4,
+      "sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+    },
+    {
+      "file": "author/owner-bound-65-no-reserve-copied-held-calls.log",
+      "bytes": 1246,
+      "sha256": "6f5428744614e540de409781481b8b63434f21454b7a21d43462574fc2b67d18"
+    },
+    {
+      "file": "author/owner-bound-65-no-reserve-derived-held-calls.command.json",
+      "bytes": 197,
+      "sha256": "c66c7f8b29ac8640af81ba059aad1ee46d0fb858cb247677958d9e1fdf2c4535"
+    },
+    {
+      "file": "author/owner-bound-65-no-reserve-derived-held-calls.diff",
+      "bytes": 2808,
+      "sha256": "4d687d5f06be596d6b713d31b2c0e7f95f0c52a8650b7205b405c97ade9e9c19"
+    },
+    {
+      "file": "author/owner-bound-65-no-reserve-derived-held-calls.exit",
+      "bytes": 4,
+      "sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+    },
+    {
+      "file": "author/owner-bound-65-no-reserve-derived-held-calls.log",
+      "bytes": 1246,
+      "sha256": "75360fc06e2ca2de88fd7a875eba0b0a015f49a08c10982512c03943cda05b6a"
+    },
+    {
+      "file": "author/owner-bound-65-real-wait-derived-workload.command.json",
+      "bytes": 134,
+      "sha256": "1917c642241aa854333554acb51f3cec7cc624d4fc12bbc09cd0cf0adcfcc286"
+    },
+    {
+      "file": "author/owner-bound-65-real-wait-derived-workload.diff",
+      "bytes": 2685,
+      "sha256": "6ecfe05c6f45c53b9a0cc42c76a43ab94fa1c635a6c4848b5052b7f6d3f5c17f"
+    },
+    {
+      "file": "author/owner-bound-65-real-wait-derived-workload.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "file": "author/owner-bound-65-real-wait-derived-workload.log",
+      "bytes": 6670,
+      "sha256": "6e70dd73d551eadab3deb5f5c8811bd758409d3d8154cb076b2a844b95709b79"
+    },
+    {
+      "file": "author/restoration-real-wait.json",
+      "bytes": 95,
+      "sha256": "42326b1e01d979d4150bac360c46d7172433a0666d9dd3d234024d394a581354"
+    },
+    {
+      "file": "author/restoration.json",
+      "bytes": 68,
+      "sha256": "6c3ba8b2b43dc5f450a33257713ffa66cb782534d0d1a4cc6f444e58baee244f"
+    },
+    {
+      "file": "author/sdk-docs.command.json",
+      "bytes": 39,
+      "sha256": "5aee479dd687c2b8575a36fb8f7963cb2ac4e440b9d00a030225fdd586c19c81"
+    },
+    {
+      "file": "author/sdk-docs.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "file": "author/sdk-docs.log",
+      "bytes": 218,
+      "sha256": "a55246dae85c392b5b30600522c891aad0fca25f5af54978a701abd21fd7decc"
+    },
+    {
+      "file": "author/source-identities.json",
+      "bytes": 1111,
+      "sha256": "8ae25874d6488a35dffff0daf39556da0008d9eb9f7a72189e09269b26307286"
+    },
+    {
+      "file": "root/assembled155-tree-identity.json",
+      "bytes": 375,
+      "sha256": "cc907b70e44c645af02bba1a36256a5deba6caa70d57aa9ca612a90d0e5eee2a"
+    },
+    {
+      "file": "root/finala1-independent-inspection.json",
+      "bytes": 1466,
+      "sha256": "76d342c389f29bbf821c2aa1097ae9c6ffc567b6ef30fbd7de403659fb2f3881"
+    },
+    {
+      "file": "root/hosted155-checks.json",
+      "bytes": 3410,
+      "sha256": "98ef9ca8be36ce5235d2240264eae22c4b810c7fc915d8785cd9f4ac8c8c3eba"
+    },
+    {
+      "file": "root/review-r3-capacity-final.md",
+      "bytes": 7894,
+      "sha256": "2725143b22ab69f8c7ed2e91f06c086646883b29d03aa4762d57a17186d2019a"
+    }
+  ],
+  "review": "Fresh independent R3 full combineddiff review clean at all priorities; report included. External Codex duplicate-workload correction verified."
+}

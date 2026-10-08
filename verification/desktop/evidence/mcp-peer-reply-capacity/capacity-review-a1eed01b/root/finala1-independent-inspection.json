@@ -1,0 +1,50 @@
+{
+  "head": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+  "clean": true,
+  "checks": {
+    "format": {
+      "exit": 0,
+      "source_head": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+      "log_hash_matches": true
+    },
+    "full-mcp": {
+      "exit": 0,
+      "source_head": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+      "log_hash_matches": true
+    },
+    "clippy": {
+      "exit": 0,
+      "source_head": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+      "log_hash_matches": true
+    },
+    "six-package-full-suite": {
+      "exit": 0,
+      "source_head": null,
+      "log_hash_matches": true
+    },
+    "sdk-docs": {
+      "exit": 0,
+      "source_head": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+      "log_hash_matches": true
+    },
+    "architecture-unit-tests": {
+      "exit": 0,
+      "source_head": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+      "log_hash_matches": true
+    },
+    "architecture": {
+      "exit": 0,
+      "source_head": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+      "log_hash_matches": true
+    },
+    "scripted-browser": {
+      "exit": 0,
+      "source_head": "11977855d7f031bbac5a967647de6cbb73652e2c",
+      "log_hash_matches": true
+    }
+  },
+  "source_hashes_match": 8,
+  "capacity_probe_hashes_match": 4,
+  "production_constant_visibility_normalizes_exactly_to_155": true,
+  "probes": "owner65 realwaiting56pass0; noreserve derivedJ21 fails101; initial cooperative54pass2fail101; copiedworkload disconfirms101"
+}

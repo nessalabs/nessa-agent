@@ -1,0 +1,14 @@
+{
+  "head": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+  "base": "d59d9272ed7afdb512c13263c8b9620ebd591db0",
+  "hashes": {
+    "crates/nessa-sdk/src/infrastructure/mcp/connection.rs": "08d267101efe3f1a342082a51f833bb2ea8483aeafcc1492ac23bf2d2a863d79",
+    "crates/nessa-sdk/src/infrastructure/mcp/http.rs": "0e7aadb9be3cd217cbba6c896ea3c4b6d8f24e47bbca20c45595aa4ef944b718",
+    "crates/nessa-sdk/src/infrastructure/mcp/mod.rs": "0574953b9729feefbb25a08f069f41bd3b4d1d4886961c27748b636b1f262ff6",
+    "crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs": "7624f2d7641f435a79b8374789a80e0bd0cb09172eb244d207fd87845f6fafbd",
+    "crates/nessa-sdk/tests/infrastructure/mcp/mod.rs": "782a2d9712f2d3a49bc3da990c199744fb5d5f0038d124c0b59ce28a3468d986",
+    "crates/nessa-sdk/tests/infrastructure/mcp/post_streams.rs": "bd15d846e9719e7fbcfbfc30ac492b501551dc33ad43545a20367ad83c626911",
+    "docs/adr/todo/392-remote-mcp-servers.md": "a95f43d5a814e3e62b72e17c28f54a01259d6b5fbeaa17fcd7066528b4861ed4",
+    "docs/codebase-structure.md": "88a2629a351ea5e60482a97139e5ec9991145030c2f38147d1e423ad0897afc3"
+  }
+}

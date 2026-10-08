@@ -1,0 +1,258 @@
+{
+  "head": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+  "base": "d59d9272ed7afdb512c13263c8b9620ebd591db0",
+  "clean": true,
+  "checks": {
+    "format": {
+      "exit": 0,
+      "source_head": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+      "command": "/workspace/665-capacity-review-evidence/format.command.json",
+      "log": "/workspace/665-capacity-review-evidence/format.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "full-mcp": {
+      "exit": 0,
+      "source_head": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+      "command": "/workspace/665-capacity-review-evidence/full-mcp.command.json",
+      "log": "/workspace/665-capacity-review-evidence/full-mcp.log",
+      "log_sha256": "5f543bdc6426c3975492ed8fe20a3ba99ac601fac81140fce02a6c2386078bf3",
+      "passed": 221,
+      "ignored": 1,
+      "failed": 0
+    },
+    "clippy": {
+      "exit": 0,
+      "source_head": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+      "command": "/workspace/665-capacity-review-evidence/clippy.command.json",
+      "log": "/workspace/665-capacity-review-evidence/clippy.log",
+      "log_sha256": "5382e40b6f8582403f765d3351f24ada8593510d3b694a5661e1b991a13a883c"
+    },
+    "six-package-full-suite": {
+      "exit": 0,
+      "command": "/workspace/665-final-author-evidence/six-package-full-suite.command.json",
+      "log": "/workspace/665-final-author-evidence/six-package-full-suite.log",
+      "log_sha256": "1fd456466c6b01d190eb6e5f7d8d880dbf54d1d3203b479c083c46ffbbe8079f",
+      "successful_verdicts": 25,
+      "passed": 4419,
+      "ignored": 30,
+      "failed": 0,
+      "provenance": "Historical f5f4 exact-head runtime result; not rerun for type spelling correction. Qualified expansion establishes unchanged behavior/rules."
+    },
+    "sdk-docs": {
+      "exit": 0,
+      "source_head": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+      "command": "/workspace/665-capacity-review-evidence/sdk-docs.command.json",
+      "log": "/workspace/665-capacity-review-evidence/sdk-docs.log",
+      "log_sha256": "a55246dae85c392b5b30600522c891aad0fca25f5af54978a701abd21fd7decc"
+    },
+    "architecture-unit-tests": {
+      "exit": 0,
+      "source_head": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+      "command": "/workspace/665-capacity-review-evidence/architecture-unit-tests.command.json",
+      "log": "/workspace/665-capacity-review-evidence/architecture-unit-tests.log",
+      "log_sha256": "63a7ff7405ca660995e5f247b2e35aa3b837f33627ea07473265fe74d0670659",
+      "passed": 74,
+      "failed": 0
+    },
+    "architecture": {
+      "exit": 0,
+      "source_head": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+      "command": "/workspace/665-capacity-review-evidence/architecture.command.json",
+      "log": "/workspace/665-capacity-review-evidence/architecture.log",
+      "log_sha256": "2a2462c6729eeb5ecb05a41a9fb9ed10f97b1bdb34772bac68dd984b7907a5d8"
+    },
+    "scripted-browser": {
+      "exit": 0,
+      "command": "/workspace/665-import-correction-evidence/scripted-browser.command.json",
+      "log": "/workspace/665-import-correction-evidence/scripted-browser.log",
+      "log_sha256": "8730b403069a2d25502c5dc71d3754a2916165bfd0b43c00d2d0d1db19884318",
+      "source_head": "11977855d7f031bbac5a967647de6cbb73652e2c",
+      "provenance": "Retained actual119 result, not a current a1 execution. Later import/type spelling corrections are whole-file normalized; a1 adds only parent-module visibility for the unchanged ordinary bound in production and changes test workload/polling. UI and browser scripts are byte-identical."
+    }
+  },
+  "browser": {
+    "mcp-apps-gateway": {
+      "held": 16,
+      "failed": 0,
+      "engines": {
+        "shared": 2,
+        "chromium": 7,
+        "webkit": 7
+      },
+      "raw": "/workspace/665-import-correction-evidence/scripted-browser/mcp-apps-gateway/result.json",
+      "sha256": "49c201b65a8065e64963c2896c7b9da951453dbf76658bf3fa123135471f60da"
+    },
+    "gateway-window": {
+      "held": 13,
+      "failed": 0,
+      "engines": {
+        "shared": 1,
+        "chromium": 6,
+        "webkit": 6
+      },
+      "raw": "/workspace/665-import-correction-evidence/scripted-browser/gateway-window/result.json",
+      "sha256": "7d217c4b73f436ad9f44c6b12d9b4962582a7a47e59732593ae34798e51de43a"
+    },
+    "scripted-scenarios": {
+      "held": 8,
+      "failed": 0,
+      "engines": {
+        "chromium": 4,
+        "webkit": 4
+      },
+      "raw": "/workspace/665-import-correction-evidence/scripted-browser/scripted-scenarios/result.json",
+      "sha256": "abf7d57d0ecdc850b9b22a21032fb0375f0af14daafff0becd30512063bf8a79"
+    }
+  },
+  "browser_summary": "/workspace/665-import-correction-evidence/scripted-browser/summary.json",
+  "environment": {
+    "head": "11977855d7f031bbac5a967647de6cbb73652e2c",
+    "base": "d59d9272ed7afdb512c13263c8b9620ebd591db0",
+    "platform": "x86_64-unknown-linux-gnu",
+    "jobs": 1,
+    "dev_debug": 0,
+    "test_debug": 0,
+    "incremental": 0,
+    "target": "/workspace/665-cargo-target",
+    "cargo_home": "/tmp/nessa-cargo",
+    "rustup_home": "/tmp/nessa-rustup",
+    "binary": "/workspace/665-cargo-target/debug/nessa",
+    "binary_sha256": "4edffa1529a6e8679246aeb6779625cf48bb5a011baaaf6d1578ef0e67da5400",
+    "binary_mtime": 1791448622.6870742,
+    "binary_origin": "Supported scripted umbrella cargo build -p nessa-server on clean browser source11977855d7f031bbac5a967647de6cbb73652e2c; MCP_LIVE_NESSA targets its exclusive output. Actual binary remains source119. Later import spelling corrections and a1eed01b internal constant visibility preserve production behavior; a1 test workload/polling changes are explicitly separate. No current a1 browser execution claimed.",
+    "ui_pin": "1f22c0467f935b9f3fcac8a0340c96e8d0c31439",
+    "ui_actual": "1f22c0467f935b9f3fcac8a0340c96e8d0c31439",
+    "browser_mode": "dev",
+    "browser_channel": "bundled",
+    "browser_engines": [
+      "chromium",
+      "webkit"
+    ],
+    "browser_layout": "columns",
+    "libgles2": "/tmp/637-browser-libs/extracted/usr/lib/x86_64-linux-gnu/libGLESv2.so.2.1.0",
+    "libgles2_sha256": "3d07baa9b15672660df7e19f068499310f5922b238991daaf2cefa704d2bb7ef",
+    "library_path": [
+      "/tmp/nessa-browser-libs/usr/lib/x86_64-linux-gnu",
+      "/tmp/637-browser-libs/extracted/usr/lib/x86_64-linux-gnu"
+    ],
+    "host_preflight": "only ldconfig-cache validation skipped; actual engines and unmodified browser assertions ran",
+    "process_supervision": "existing verification subreaper /tmp/637-verify-subreaper.py wraps repository suite and browser helpers; no new process fixtures",
+    "limits": "local Rust gates on Linux; hosted supported-platform CI inspected separately by root; headless WebKit is not native WKWebView; no UI/performance behavior changed"
+  },
+  "restack_provenance": "/workspace/665-final-author-evidence/restack-provenance.json",
+  "mutation_proof_head": "ee798344ddf921f5a60abd97ea7e5b0e547f7c36",
+  "mutation_proofs": [
+    {
+      "mutation": "reserve-zero",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j21_saturated_ordinary_queue_preserves_early_recovery_answers",
+      "diff": "/workspace/665-author-evidence/reserve-zero.diff",
+      "log": "/workspace/665-author-evidence/reserve-zero.log"
+    },
+    {
+      "mutation": "ordinary-bypass",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j24_ordinary_capacity_releases_on_dequeue_and_cancellation",
+      "diff": "/workspace/665-author-evidence/ordinary-bypass.diff",
+      "log": "/workspace/665-author-evidence/ordinary-bypass.log"
+    },
+    {
+      "mutation": "ignored-overflow",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j23_control_overflow_retains_first_cause_and_one_cleanup",
+      "diff": "/workspace/665-author-evidence/ignored-overflow.diff",
+      "log": "/workspace/665-author-evidence/ignored-overflow.log"
+    },
+    {
+      "mutation": "dequeue-permit-leak",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j24_ordinary_capacity_releases_on_dequeue_and_cancellation",
+      "diff": "/workspace/665-author-evidence/dequeue-permit-leak.diff",
+      "log": "/workspace/665-author-evidence/dequeue-permit-leak.log"
+    },
+    {
+      "mutation": "recovery-takes-ordinary-permit",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j24_ordinary_capacity_releases_on_dequeue_and_cancellation",
+      "diff": "/workspace/665-author-evidence/recovery-takes-ordinary-permit.diff",
+      "log": "/workspace/665-author-evidence/recovery-takes-ordinary-permit.log"
+    },
+    {
+      "mutation": "closed-cause-wrong",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j23_closed_control_queue_is_explicit",
+      "diff": "/workspace/665-author-evidence/closed-cause-wrong.diff",
+      "log": "/workspace/665-author-evidence/closed-cause-wrong.log"
+    }
+  ],
+  "restored_proof": {
+    "head": "ee798344ddf921f5a60abd97ea7e5b0e547f7c36",
+    "exit": 0,
+    "passed": 56,
+    "log": "/workspace/665-author-evidence/mutation-restored-http-progress.log"
+  },
+  "historical_ee798_evidence": "/workspace/665-author-evidence",
+  "excluded_followup": "https://github.com/nessalabs/nessa-agent/issues/670",
+  "prior_exact_head": "f5f4f2b5b1fd04796301383dd0e73bb93eddc923",
+  "prior_exact_head_manifest": "/workspace/665-final-author-evidence/manifest.json",
+  "import_correction_provenance": "/workspace/665-import-correction-evidence/source-normalization.json",
+  "source_identities": {
+    "crates/nessa-sdk/src/infrastructure/mcp/connection.rs": "08d267101efe3f1a342082a51f833bb2ea8483aeafcc1492ac23bf2d2a863d79",
+    "crates/nessa-sdk/src/infrastructure/mcp/http.rs": "0e7aadb9be3cd217cbba6c896ea3c4b6d8f24e47bbca20c45595aa4ef944b718",
+    "crates/nessa-sdk/src/infrastructure/mcp/mod.rs": "0574953b9729feefbb25a08f069f41bd3b4d1d4886961c27748b636b1f262ff6",
+    "crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs": "7624f2d7641f435a79b8374789a80e0bd0cb09172eb244d207fd87845f6fafbd",
+    "crates/nessa-sdk/tests/infrastructure/mcp/mod.rs": "782a2d9712f2d3a49bc3da990c199744fb5d5f0038d124c0b59ce28a3468d986",
+    "crates/nessa-sdk/tests/infrastructure/mcp/post_streams.rs": "bd15d846e9719e7fbcfbfc30ac492b501551dc33ad43545a20367ad83c626911",
+    "docs/adr/todo/392-remote-mcp-servers.md": "a95f43d5a814e3e62b72e17c28f54a01259d6b5fbeaa17fcd7066528b4861ed4",
+    "docs/codebase-structure.md": "88a2629a351ea5e60482a97139e5ec9991145030c2f38147d1e423ad0897afc3"
+  },
+  "previous_head_manifest": "/workspace/665-test-import-correction-evidence/manifest.json",
+  "browser_source_head": "11977855d7f031bbac5a967647de6cbb73652e2c",
+  "test_import_provenance": "/workspace/665-test-import-correction-evidence/source-normalization.json",
+  "browser_final_head_relationship": {
+    "browser_source_head": "11977855d7f031bbac5a967647de6cbb73652e2c",
+    "relationship": "Production change only constant parent-module visibility; unchanged values/behavior. Tests derive the bound and disable cooperative yield only during explicit pending polling. Supported browser kept as historical source119 evidence, not relabeled."
+  },
+  "historical_import_proof_scope": "Earlier import corrections only; current test workload/helper differences are explicit capacity-review changes.",
+  "review_finding": "https://github.com/nessalabs/nessa-agent/pull/671#discussion_r4216937095",
+  "production_behavior_relationship": {
+    "baseline": "15555cfba6d5c3b6570c5bee9370b70cccba97e6",
+    "only_production_change": "Private ordinary bound becomes parent-module visible, retaining 64. Removing pub(super) returns byte-identical entire previous connection.rs. Other production/UI/scripts unchanged.",
+    "normalized_connection_sha256": "994fecf9b36170483efc1810cb28e1e08edbbce660b4f1e4629e5989a4c1c6ab"
+  },
+  "capacity_probes": [
+    {
+      "name": "owner-bound-65-derived-workload",
+      "exit": 101,
+      "command": "/workspace/665-capacity-review-evidence/owner-bound-65-derived-workload.command.json",
+      "diff": "/workspace/665-capacity-review-evidence/owner-bound-65-derived-workload.diff",
+      "log": "/workspace/665-capacity-review-evidence/owner-bound-65-derived-workload.log",
+      "log_sha256": "d954b9e4e18b4128d770ecc39661fdf6f2e49e427fe1c2998b256936c3cbef42"
+    },
+    {
+      "name": "owner-bound-65-real-wait-derived-workload",
+      "exit": 0,
+      "command": "/workspace/665-capacity-review-evidence/owner-bound-65-real-wait-derived-workload.command.json",
+      "diff": "/workspace/665-capacity-review-evidence/owner-bound-65-real-wait-derived-workload.diff",
+      "log": "/workspace/665-capacity-review-evidence/owner-bound-65-real-wait-derived-workload.log",
+      "log_sha256": "6e70dd73d551eadab3deb5f5c8811bd758409d3d8154cb076b2a844b95709b79"
+    },
+    {
+      "name": "owner-bound-65-no-reserve-copied-held-calls",
+      "exit": 101,
+      "command": "/workspace/665-capacity-review-evidence/owner-bound-65-no-reserve-copied-held-calls.command.json",
+      "diff": "/workspace/665-capacity-review-evidence/owner-bound-65-no-reserve-copied-held-calls.diff",
+      "log": "/workspace/665-capacity-review-evidence/owner-bound-65-no-reserve-copied-held-calls.log",
+      "log_sha256": "6f5428744614e540de409781481b8b63434f21454b7a21d43462574fc2b67d18"
+    },
+    {
+      "name": "owner-bound-65-no-reserve-derived-held-calls",
+      "exit": 101,
+      "command": "/workspace/665-capacity-review-evidence/owner-bound-65-no-reserve-derived-held-calls.command.json",
+      "diff": "/workspace/665-capacity-review-evidence/owner-bound-65-no-reserve-derived-held-calls.diff",
+      "log": "/workspace/665-capacity-review-evidence/owner-bound-65-no-reserve-derived-held-calls.log",
+      "log_sha256": "75360fc06e2ca2de88fd7a875eba0b0a015f49a08c10982512c03943cda05b6a"
+    }
+  ],
+  "capacity_restoration": "/workspace/665-capacity-review-evidence/restoration-real-wait.json"
+}
