@@ -737,6 +737,22 @@ describe("the agents overview", () => {
     // reach and a later one it must not name.
     expect(before.length).toBeGreaterThanOrEqual(2)
     const lastMounted = before[before.length - 1]
+    await act(async () => {
+      focused?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          code: "End",
+          key: "End",
+          bubbles: true,
+          cancelable: true,
+        }),
+      )
+      const active = document.activeElement?.closest<HTMLElement>("[data-overview-item]")
+      const tabbable = [
+        ...host.querySelectorAll<HTMLElement>("[data-overview-item]"),
+      ].find((item) => item.tabIndex === 0)
+      expect(active?.dataset.overviewItem).toBe(lastMounted)
+      expect(tabbable).toBe(active)
+    })
     await press(focused as HTMLElement, "End")
     const afterEnd = document.activeElement?.closest<HTMLElement>("[data-overview-item]")
     expect(afterEnd?.dataset.overviewItem).toBe(lastMounted)
@@ -2077,14 +2093,20 @@ it("asks in its peek with the pane's own approval parts, one component for both"
 it("keeps an early reply's row when it changes group before the list finishes opening", async () => {
   const originalObserver = globalThis.ResizeObserver
   class NarrowObserver {
+    private active = true
     constructor(private readonly callback: ResizeObserverCallback) {}
     observe(target: Element) {
-      this.callback(
-        [{ target, contentRect: { width: 700 } } as ResizeObserverEntry],
-        this as unknown as ResizeObserver,
-      )
+      queueMicrotask(() => {
+        if (!this.active) return
+        this.callback(
+          [{ target, contentRect: { width: 700 } } as ResizeObserverEntry],
+          this as unknown as ResizeObserver,
+        )
+      })
     }
-    disconnect() {}
+    disconnect() {
+      this.active = false
+    }
   }
   Object.assign(globalThis, { ResizeObserver: NarrowObserver })
   try {

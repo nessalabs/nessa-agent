@@ -416,7 +416,10 @@ export function AgentsOverview({
       .map((item) => item.dataset.overviewItem)
       .filter((id): id is string => id !== undefined)
     const to = stepFrom(visible, from, step)
-    if (to !== null) focusItem(to)
+    // Native focus and its roving-tab state must agree before another key
+    // can run in this turn (`keysWhileRowsArrive`). Other focus paths may
+    // run from lifecycle cleanup and cannot synchronously flush React.
+    if (to !== null) flushSync(() => focusItem(to))
   }
 
   // ⌥ held turns Allow into Always Allow where the review offers it, as ⌥ shows the other choice in a Mac menu.
