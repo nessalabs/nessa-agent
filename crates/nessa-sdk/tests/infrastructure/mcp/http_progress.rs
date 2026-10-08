@@ -1,5 +1,7 @@
 //! ADR 392 J1–J26: JSON/initialization progress and replacement cleanup ownership.
-use super::super::connection::{Connection, Outgoing, OutgoingQueue, Reply, OUTGOING_FRAMES};
+use super::super::connection::{
+    Connection, Outgoing, OutgoingQueue, Reply, HTTP_CONTROL_RESERVE, OUTGOING_FRAMES,
+};
 use super::super::http::{HttpSession, SendOutcome};
 use super::super::{
     Bearer, HttpBody, HttpExchange, HttpFailure, HttpMethod, HttpRequest, HttpResponse, McpError,
@@ -2983,10 +2985,16 @@ async fn j23_control_overflow_retains_first_cause_and_one_cleanup() {
     for call in &mut calls {
         pending(call.as_mut()).await;
     }
+    let mut excess = Box::pin(connection.call("tools/list", None));
+    pending(excess.as_mut()).await;
+    let mut notification = Box::pin(connection.notify("notifications/test", None));
+    pending(notification.as_mut()).await;
     acknowledge_peer_request(&connection, &probe, 70, "ping").await;
     probe.event(json!({"id":71,"method":"ping"}));
     let cause = McpError::TooLarge("queued MCP control frames");
     assert_eq!(bounded(connection.ended()).await, cause);
+    assert_eq!(bounded(excess).await.unwrap_err(), cause);
+    assert_eq!(bounded(notification).await.unwrap_err(), cause);
     connection.close(McpError::Closed);
     gate.release();
     for call in calls {
@@ -3005,6 +3013,72 @@ async fn j23_control_overflow_retains_first_cause_and_one_cleanup() {
             .is_some_and(|message| message["id"] == 70 || message["id"] == 71)),
         0
     );
+}
+
+#[tokio::test]
+async fn j23_terminal_admission_wakes_physical_waiters_and_refuses_ended_notifications() {
+    for physical_wait in [true, false] {
+        let (connection, session, peer, probe, gate, clock) = held_recovery(202).await;
+        let cause = if physical_wait {
+            // Controls hold every physical slot while ordinary permits remain free.
+            for id in 0..OUTGOING_FRAMES + HTTP_CONTROL_RESERVE {
+                acknowledge_peer_request(&connection, &probe, 70 + id as u64, "ping").await;
+            }
+            let mut excess = Box::pin(connection.call("tools/list", None));
+            pending(excess.as_mut()).await;
+            let mut notification = Box::pin(connection.notify("notifications/test", None));
+            pending(notification.as_mut()).await;
+            probe.event(
+                json!({"id":70 + (OUTGOING_FRAMES + HTTP_CONTROL_RESERVE) as u64,"method":"ping"}),
+            );
+            let cause = McpError::TooLarge("queued MCP control frames");
+            assert_eq!(bounded(connection.ended()).await, cause);
+            assert_eq!(bounded(excess).await.unwrap_err(), cause);
+            assert_eq!(bounded(notification).await.unwrap_err(), cause);
+            cause
+        } else {
+            // The writer is held, but the queue is empty when the deadline ends admission.
+            clock.advance(INITIALIZE_TIMEOUT);
+            let cause = McpError::Timeout;
+            assert_eq!(bounded(connection.ended()).await, cause);
+            cause
+        };
+        assert_eq!(
+            bounded(connection.notify("notifications/test", None))
+                .await
+                .unwrap_err(),
+            cause
+        );
+        assert_eq!(
+            bounded(connection.call("tools/list", None))
+                .await
+                .unwrap_err(),
+            cause
+        );
+        assert_eq!(
+            peer.count(|request| method_of(request, "notifications/test")),
+            0
+        );
+        assert_eq!(peer.count(|request| method_of(request, "tools/list")), 1);
+        assert_eq!(
+            peer.count(|request| method_of(request, "notifications/cancelled")),
+            1
+        );
+        // Every terminal assertion above completes before this custom exchange drains.
+        gate.release();
+        stop(&session).await;
+        probe.released().await;
+        connection.close(McpError::Closed);
+        assert_eq!(connection.end_cause(), Some(cause));
+        assert_eq!(
+            peer.count(|request| method_of(request, "notifications/test")),
+            0
+        );
+        assert_eq!(
+            peer.count(|request| request.method == HttpMethod::Delete),
+            usize::from(physical_wait)
+        );
+    }
 }
 
 #[tokio::test]

@@ -48,7 +48,7 @@ pub(crate) const MAX_IN_FLIGHT: usize = 256;
 /// Frames queued for the server's stdin before callers wait.
 pub(super) const OUTGOING_FRAMES: usize = 64;
 /// Extra physical room for HTTP controls under ordinary frame pressure.
-const HTTP_CONTROL_RESERVE: usize = 1;
+pub(super) const HTTP_CONTROL_RESERVE: usize = 1;
 /// Change notices held for a stand-in that has not read them yet. They are
 /// idempotent, so one that lags misses only repeats.
 const NOTICES: usize = 16;
@@ -381,9 +381,7 @@ impl Connection {
             id,
             sent: false,
         };
-        if self.outgoing.send(Outgoing::Frame(frame)).await.is_err() {
-            return Err(self.end_cause().unwrap_or(McpError::ServerGone));
-        }
+        self.send_frame(frame).await?;
         guard.sent = true;
         let reply = answered.await.unwrap_or(Err(McpError::ServerGone));
         guard.id = 0;
@@ -420,10 +418,18 @@ impl Connection {
             notification["params"] = params;
         }
         let frame = framing::encode(&notification)?;
-        self.outgoing
-            .send(Outgoing::Frame(frame))
-            .await
-            .map_err(|_| self.end_cause().unwrap_or(McpError::ServerGone))
+        self.send_frame(frame).await
+    }
+
+    /// Admission waits observe the existing end publication without draining the writer.
+    async fn send_frame(&self, frame: Vec<u8>) -> Result<(), McpError> {
+        tokio::select! {
+            biased;
+            cause = self.ended() => Err(cause),
+            sent = self.outgoing.send(Outgoing::Frame(frame)) => {
+                sent.map_err(|_| self.end_cause().unwrap_or(McpError::ServerGone))
+            }
+        }
     }
 
     /// Why the connection ended, or `None` while it is open.
