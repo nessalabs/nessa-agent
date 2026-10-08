@@ -27,9 +27,19 @@ use std::{
     },
     time::Duration,
 };
+#[cfg(all(test, unix))]
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    sync::{broadcast, mpsc, oneshot, watch, OwnedSemaphorePermit, Semaphore},
+    sync::{
+        broadcast,
+        mpsc::{
+            self,
+            error::{SendError, TrySendError},
+            Receiver, Sender,
+        },
+        oneshot, watch, OwnedSemaphorePermit, Semaphore,
+    },
     task::JoinHandle,
 };
 
@@ -108,7 +118,7 @@ pub(crate) enum Outgoing {
 /// HTTP controls can use reserved or otherwise free physical capacity.
 #[derive(Clone)]
 pub(crate) struct OutgoingQueue {
-    sender: mpsc::Sender<Queued>,
+    sender: Sender<Queued>,
     ordinary: Arc<Semaphore>,
 }
 
@@ -119,7 +129,7 @@ struct Queued {
 
 /// The writer releases queue capacity before it starts dispatching a frame.
 pub(crate) struct OutgoingFrames {
-    receiver: mpsc::Receiver<Queued>,
+    receiver: Receiver<Queued>,
 }
 
 impl Outgoing {
@@ -145,14 +155,11 @@ impl OutgoingQueue {
     }
 
     /// Wait for bounded admission; cancellation releases any acquired permit.
-    pub(crate) async fn send(
-        &self,
-        message: Outgoing,
-    ) -> Result<(), mpsc::error::SendError<Outgoing>> {
+    pub(crate) async fn send(&self, message: Outgoing) -> Result<(), SendError<Outgoing>> {
         let permit = if message.is_ordinary() {
             match self.ordinary.clone().acquire_owned().await {
                 Ok(permit) => Some(permit),
-                Err(_) => return Err(mpsc::error::SendError(message)),
+                Err(_) => return Err(SendError(message)),
             }
         } else {
             None
@@ -163,21 +170,18 @@ impl OutgoingQueue {
                 _ordinary: permit,
             })
             .await
-            .map_err(|error| mpsc::error::SendError(error.0.message))
+            .map_err(|error| SendError(error.0.message))
     }
 
     /// A peer-answer reader and a dropped caller cannot wait for queue capacity.
-    pub(crate) fn try_send(
-        &self,
-        message: Outgoing,
-    ) -> Result<(), mpsc::error::TrySendError<Outgoing>> {
+    pub(crate) fn try_send(&self, message: Outgoing) -> Result<(), TrySendError<Outgoing>> {
         if self.sender.is_closed() {
-            return Err(mpsc::error::TrySendError::Closed(message));
+            return Err(TrySendError::Closed(message));
         }
         let permit = if message.is_ordinary() {
             match self.ordinary.clone().try_acquire_owned() {
                 Ok(permit) => Some(permit),
-                Err(_) => return Err(mpsc::error::TrySendError::Full(message)),
+                Err(_) => return Err(TrySendError::Full(message)),
             }
         } else {
             None
@@ -188,12 +192,8 @@ impl OutgoingQueue {
                 _ordinary: permit,
             })
             .map_err(|error| match error {
-                mpsc::error::TrySendError::Full(queued) => {
-                    mpsc::error::TrySendError::Full(queued.message)
-                }
-                mpsc::error::TrySendError::Closed(queued) => {
-                    mpsc::error::TrySendError::Closed(queued.message)
-                }
+                TrySendError::Full(queued) => TrySendError::Full(queued.message),
+                TrySendError::Closed(queued) => TrySendError::Closed(queued.message),
             })
     }
 }
@@ -204,7 +204,7 @@ impl OutgoingFrames {
     }
 
     #[cfg(all(test, unix))]
-    pub(crate) fn try_recv(&mut self) -> Result<Outgoing, mpsc::error::TryRecvError> {
+    pub(crate) fn try_recv(&mut self) -> Result<Outgoing, TryRecvError> {
         self.receiver.try_recv().map(|queued| queued.message)
     }
 }
@@ -570,10 +570,10 @@ fn deliver(
                     Some(context) => {
                         match outgoing.try_send(Outgoing::PeerReply { frame, context }) {
                             Ok(()) => {}
-                            Err(mpsc::error::TrySendError::Full(_)) => {
+                            Err(TrySendError::Full(_)) => {
                                 return Some(McpError::TooLarge("queued MCP control frames"));
                             }
-                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                            Err(TrySendError::Closed(_)) => {
                                 return Some(
                                     shared
                                         .state
