@@ -292,8 +292,8 @@
 
 /*
  * The kit's `Kbd` draws the cap (18px, 11px medium type); the window gives it
- * its own inks and corner. Every key cap in the window is that component
- * (`shared-controls.mjs`, `keys`).
+ * its own inks and corner. Every key cap in the workspace is that component
+ * (`shared-controls.mjs`, `keys`); Settings keeps its own until its redesign.
  */
 [data-surface] [data-slot="kbd"] {
   border-radius: var(--desktop-radius-xs);
