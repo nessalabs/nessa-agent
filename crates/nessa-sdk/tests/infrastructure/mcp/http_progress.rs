@@ -2011,12 +2011,23 @@ async fn j19_peer_answer_404_ends_without_recovery_or_replay() {
             expected
         );
         assert_eq!(bounded(connection.ended()).await, expected);
+        assert!(matches!(
+            session
+                .dispatch(br#"{"method":"notifications/cancelled"}"#)
+                .await,
+            SendOutcome::End(McpError::Closed)
+        ));
+        assert_eq!(connection.end_cause(), Some(expected));
         assert_eq!(
             peer.count(|r| method(r).as_deref() == Some("initialize")),
             1
         );
         assert_eq!(peer.count(|r| r.method == HttpMethod::Get), 0);
         stop(&session).await;
+        assert_eq!(
+            peer.count(|r| r.method == HttpMethod::Delete),
+            usize::from(bound)
+        );
         probe.released().await;
     }
 }
@@ -2633,4 +2644,137 @@ async fn j17_ordinary_terminal_ignores_non_authoritative_oversized_header() {
         json!({"tools":[]})
     );
     stop(&session).await;
+}
+
+async fn preterminal_recovery(stale_request: bool) {
+    let (old, old_body) = Probe::body();
+    let (replacement, replacement_body) = Probe::body();
+    let mut peer = Peer::new();
+    peer.call_sse = true;
+    peer.bodies.lock().unwrap().push_back(old_body);
+    *peer.replacement.lock().unwrap() = Some(replacement_body);
+    let peer = Arc::new(peer);
+    let (session, incoming) = transport(peer.clone(), Arc::default());
+    let connection = Arc::new(Connection::open_http(
+        session.clone(),
+        incoming,
+        Arc::new(RuntimeClock::new()),
+    ));
+    bounded(connection.call("initialize", None))
+        .await
+        .unwrap()
+        .unwrap();
+    let waiting = tokio::spawn({
+        let connection = connection.clone();
+        async move { connection.call("tools/list", None).await }
+    });
+    old.polled(1).await;
+    peer.expire.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        bounded(connection.call("tools/list", None)).await,
+        Err(McpError::SessionExpired)
+    ));
+    replacement.polled(1).await;
+    if stale_request {
+        old.event(json!({"id":70,"method":"ping"}));
+        assert_eq!(bounded(connection.ended()).await, McpError::SessionExpired);
+        assert!(matches!(
+            bounded(waiting).await.unwrap(),
+            Err(McpError::SessionExpired)
+        ));
+    } else {
+        old.event(json!({"id":2,"result":{"tools":[]}}));
+        bounded(waiting).await.unwrap().unwrap().unwrap();
+    }
+    // Retirement is a finite barrier after the late terminal is consumed,
+    // rather than a delay used to infer absence of replacement effects.
+    let _ = replacement.send.send(Ok(Some(
+        format!(
+            "data: {}\n\n",
+            json!({"id":0,"result":{"protocolVersion":"2025-06-18"}})
+        )
+        .into_bytes(),
+    )));
+    replacement.released().await;
+    if stale_request {
+        let outcome = session
+            .dispatch(br#"{"method":"notifications/cancelled"}"#)
+            .await;
+        assert!(
+            matches!(
+                outcome,
+                SendOutcome::End(McpError::SessionExpired | McpError::Closed)
+            ),
+            "ended connection's HTTP owner admitted a late notification: {outcome:?}"
+        );
+        assert_eq!(connection.end_cause(), Some(McpError::SessionExpired));
+        assert_eq!(
+            peer.count(|r| r.method == HttpMethod::Get
+                && header(r, "Mcp-Session-Id") == Some("replacement")),
+            0
+        );
+        assert_eq!(
+            peer.count(
+                |r| method(r).as_deref() == Some("notifications/initialized")
+                    && header(r, "Mcp-Session-Id") == Some("replacement")
+            ),
+            0
+        );
+    } else {
+        peer.observed(|r| {
+            method(r).as_deref() == Some("notifications/initialized")
+                && header(r, "Mcp-Session-Id") == Some("replacement")
+        })
+        .await;
+        bounded(connection.call("tools/list", None))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(connection.end_cause(), None);
+        assert_eq!(
+            peer.count(|r| r.method == HttpMethod::Get
+                && header(r, "Mcp-Session-Id") == Some("replacement")),
+            1
+        );
+    }
+    connection.close(McpError::Closed);
+    stop(&session).await;
+    old.released().await;
+    assert_eq!(
+        peer.count(|r| method(r).as_deref() == Some("initialize")),
+        2
+    );
+}
+
+#[tokio::test]
+async fn j19_preterminal_stale_request_cannot_revive_ended_connection() {
+    preterminal_recovery(true).await;
+}
+
+#[tokio::test]
+async fn j19_preterminal_ordinary_terminal_preserves_recovery_control() {
+    preterminal_recovery(false).await;
+}
+
+#[tokio::test]
+async fn j19_reader_failure_fences_http_owner_before_ended() {
+    let peer = Arc::new(Peer::new());
+    let (session, _incoming) = transport(peer.clone(), Arc::default());
+    initialize(&session).await;
+    let (inbound, incoming) = mpsc::channel(1);
+    let connection =
+        Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+    inbound.send(Err(McpError::Unreachable)).await.unwrap();
+    assert_eq!(bounded(connection.ended()).await, McpError::Unreachable);
+    assert!(matches!(
+        call(&session, 2).await,
+        SendOutcome::End(McpError::Closed)
+    ));
+    assert_eq!(connection.end_cause(), Some(McpError::Unreachable));
+    stop(&session).await;
+    assert_eq!(peer.count(|r| r.method == HttpMethod::Delete), 1);
+    assert_eq!(
+        peer.count(|r| method(r).as_deref() == Some("tools/list")),
+        0
+    );
 }

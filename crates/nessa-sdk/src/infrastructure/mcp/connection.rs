@@ -22,7 +22,7 @@ use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, Weak,
     },
     time::Duration,
 };
@@ -207,6 +207,7 @@ impl Connection {
                             }
                         }
                         SendOutcome::End(error) => {
+                            session.shutdown();
                             shared.end(error);
                             return;
                         }
@@ -214,7 +215,12 @@ impl Connection {
                 }
             }
         });
-        let reader = tokio::spawn(read_messages(incoming, shared.clone(), outgoing.clone()));
+        let reader = tokio::spawn(read_messages(
+            incoming,
+            shared.clone(),
+            outgoing.clone(),
+            Arc::downgrade(&session),
+        ));
         Self {
             shared,
             outgoing,
@@ -492,6 +498,7 @@ async fn read_messages(
     mut incoming: mpsc::Receiver<Result<super::http::HttpMessage, McpError>>,
     shared: Arc<Shared>,
     outgoing: mpsc::Sender<Outgoing>,
+    session: Weak<HttpSession>,
 ) {
     let cause = loop {
         let bytes = match incoming.recv().await {
@@ -506,5 +513,8 @@ async fn read_messages(
             break cause;
         }
     };
+    if let Some(session) = session.upgrade() {
+        session.shutdown();
+    }
     shared.end(cause);
 }
