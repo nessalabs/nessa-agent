@@ -2019,14 +2019,14 @@ impl Shared {
                 );
             }
         });
+        if refused {
+            return Ok(());
+        }
         for evidence in &advances {
             let _ = self.persist_evidence(evidence).await;
         }
         for evidence in &recovery {
             let _ = self.persist_evidence(evidence).await;
-        }
-        if refused {
-            return Ok(());
         }
         let closing: Vec<_> = rows
             .into_iter()

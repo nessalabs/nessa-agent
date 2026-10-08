@@ -894,15 +894,8 @@ impl OwnershipGraph {
                 .spawns
                 .insert(row.binding.request_id.clone(), Spawn { row });
         }
-        let cascade = if graph.has_cycle() {
-            Some(OwnershipError::Cycle)
-        } else if refusal.is_some() {
-            None
-        } else {
-            graph.continue_interrupted_cascade()
-        };
-        if let Some(error) = cascade {
-            note_refusal(&mut refusal, error);
+        if graph.has_cycle() {
+            note_refusal(&mut refusal, OwnershipError::Cycle);
         }
         // Refused ancestry cannot authorize dependent traversal. Keep every
         // retained row, but preserve the structural refusal before proof checks.
@@ -955,6 +948,13 @@ impl OwnershipGraph {
                 continue;
             }
             graph.reports.insert(row.report_id.clone(), row);
+        }
+        // Repair only accepted history. A later proof refusal must not replace
+        // the original rows or create recovery effects for a refused snapshot.
+        if refusal.is_none() {
+            if let Some(error) = graph.continue_interrupted_cascade() {
+                note_refusal(&mut refusal, error);
+            }
         }
         graph.refusal = refusal;
         graph

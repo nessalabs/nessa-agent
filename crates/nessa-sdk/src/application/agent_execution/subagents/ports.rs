@@ -170,6 +170,8 @@ pub trait OwnershipStore: Send + Sync {
     /// Replace the retained snapshot after a transition.
     async fn write(&self, snapshot: &OwnershipSnapshot) -> Result<(), PortFailure>;
     /// Load the retained snapshot. An empty store returns an empty snapshot.
+    /// Decoded refused history remains available for sealed graph inspection;
+    /// graph restoration owns relationship validation before any recovery effect.
     async fn read(&self) -> Result<OwnershipSnapshot, PortFailure>;
 }
 

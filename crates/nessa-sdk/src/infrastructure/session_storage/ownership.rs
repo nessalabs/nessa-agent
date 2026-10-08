@@ -32,7 +32,7 @@ use crate::domain::agent_execution::{
         AbsenceAudit, AbsenceProof, AgentLifetimeId, ApprovalPolicy, CloseCompletionRow,
         CloseEvidenceDetail, CloseOperationId, DeliveryState, EvidenceFact, HostActor, Initiator,
         KnownMilestone, LifetimeCause, LifetimeRow, LifetimeState, ModelChoice, OwnershipEvidence,
-        OwnershipGraph, OwnershipMeaning, OwnershipSnapshot, PhysicalFact, ReportId, ReportRow,
+        OwnershipMeaning, OwnershipSnapshot, PhysicalFact, ReportId, ReportRow,
         ResourceObservationAudit, SettlementProof, SettlementRow, SpawnBinding, SpawnOrigin,
         SpawnProgress, SpawnRequestId, SpawnRow, TaskDigest, TaskReceiptId,
     },
@@ -179,14 +179,7 @@ impl OwnershipState {
         };
         let body: String = body;
         let dto: SnapshotDto = serde_json::from_str(&body).map_err(|_| PortFailure::Rejected)?;
-        let snapshot: OwnershipSnapshot = dto.try_into().map_err(|_| PortFailure::Rejected)?;
-        if OwnershipGraph::restore(snapshot.clone())
-            .refusal()
-            .is_some()
-        {
-            return Err(PortFailure::Rejected);
-        }
-        Ok(snapshot)
+        dto.try_into().map_err(|_| PortFailure::Rejected)
     }
 }
 

@@ -1,6 +1,6 @@
 //! Public ownership adapter refuses a persisted nonresource slot without rewriting evidence.
 use nessa_sdk::{
-    application::agent_execution::subagents::{OwnershipStore, PortFailure},
+    application::agent_execution::subagents::OwnershipStore,
     domain::agent_execution::{
         sessions::SessionId,
         subagents::{
@@ -79,7 +79,15 @@ async fn public_sqlite_restore_refuses_nonresource_observation_with_actual_compl
     drop(connection);
     let before = std::fs::read(&path).unwrap();
     let store = SqliteOwnershipStore::open(&path).unwrap();
-    assert_eq!(store.read().await, Err(PortFailure::Rejected));
+    let decoded = store.read().await.unwrap();
+    let expected = decoded.clone();
+    let restored = OwnershipGraph::restore(decoded);
+    assert_eq!(
+        restored.refusal(),
+        Some(&nessa_sdk::domain::agent_execution::subagents::OwnershipError::Contradictory)
+    );
+    assert_eq!(restored.snapshot(), expected);
+    assert!(restored.recovery_records().is_empty());
     drop(store);
     assert_eq!(std::fs::read(&path).unwrap(), before);
     let connection = rusqlite::Connection::open(&path).unwrap();
@@ -196,7 +204,15 @@ async fn public_sqlite_refuses_a_partly_closed_completed_cascade_without_rewrite
         drop(connection);
         let before = std::fs::read(&path).unwrap();
         let store = SqliteOwnershipStore::open(&path).unwrap();
-        assert_eq!(store.read().await, Err(PortFailure::Rejected));
+        let decoded = store.read().await.unwrap();
+        let expected = decoded.clone();
+        let restored = OwnershipGraph::restore(decoded);
+        assert_eq!(
+            restored.refusal(),
+            Some(&nessa_sdk::domain::agent_execution::subagents::OwnershipError::Contradictory)
+        );
+        assert_eq!(restored.snapshot(), expected);
+        assert!(restored.recovery_records().is_empty());
         drop(store);
         assert_eq!(std::fs::read(&path).unwrap(), before);
         let connection = rusqlite::Connection::open(&path).unwrap();

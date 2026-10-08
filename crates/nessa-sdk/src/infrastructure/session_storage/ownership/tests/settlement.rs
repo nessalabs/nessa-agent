@@ -117,7 +117,33 @@ async fn reject_body_without_rewrite(path: &Path, body: &str, case: &str) {
     drop(connection);
     let before = std::fs::read(path).unwrap();
     let store = SqliteOwnershipStore::open(path).unwrap();
-    assert_eq!(store.read().await, Err(PortFailure::Rejected), "{case}");
+    let decoded = store.read().await;
+    if matches!(
+        case,
+        "synthetic provider field"
+            | "missing current Completion collection"
+            | "proofless settlement despite current outer shape"
+            | "proofless historical body"
+    ) {
+        assert_eq!(decoded, Err(PortFailure::Rejected), "{case}");
+    } else {
+        let decoded = decoded.unwrap_or_else(|error| {
+            panic!("{case}: decoded history must remain readable: {error:?}")
+        });
+        let expected = decoded.clone();
+        let refused = OwnershipGraph::restore(decoded);
+        assert_eq!(
+            refused.refusal(),
+            Some(&OwnershipError::Contradictory),
+            "{case}"
+        );
+        // The decoded carrier retains duplicate rows; the refused graph indexes
+        // identities once. Unique histories must remain exactly unchanged.
+        if !matches!(case, "duplicate settlement" | "Completion duplicate") {
+            assert_eq!(refused.snapshot(), expected, "{case}");
+        }
+        assert!(refused.recovery_records().is_empty(), "{case}");
+    }
     drop(store);
     assert_eq!(stored_body(path), body, "body changed for {case}");
     assert_eq!(
