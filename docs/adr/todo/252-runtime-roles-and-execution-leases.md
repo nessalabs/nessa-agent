@@ -61,8 +61,13 @@ and three transports: an in-process port (the default), SSH to a host the
 person names (the gateway installs and starts `nessa env serve` there on
 first use and carries lease frames over its stdio), and a paired, pinned-key
 TLS connection initiated outbound by the environment side, with a relay that
-forwards what it cannot read as fallback. Surfaces fold committed records
-and send intents; replicas have no role and no grants; a gateway's mesh is
+forwards what it cannot read as fallback. Files move between machines only as **artifacts**: bytes by digest, held
+by the conversation, carried on an artifact channel beside the lease's
+control channel, verified on receipt. Access to a conversation is granted
+**per conversation id** with a role (Read, Comment, Drive) and a **tool
+policy per principal**, carried on each accepted turn and enforced as 0014
+verdicts attributed to that turn's initiator. Surfaces fold committed
+records and send intents; replicas have no role and no grants; a gateway's mesh is
 its table of paired and named peers with pinned keys and last addresses,
 riding on whatever network exists. One binary runs any role by
 configuration; a hosted worker is `nessa env serve` in a container; a home
@@ -99,6 +104,14 @@ are identical wherever the work ran.
   the same auth, policy, audit, SDK composition and process supervision
   with conversation streams and surfaces switched off. A second crate would
   hold a second copy of that.
+- **A shared filesystem or mount between machines.** Would make "build
+  there, run here" feel like one disk, at the cost of a second trust path
+  the gateway cannot audit and files crossing without a digest. Artifacts
+  by digest over their own channel keep one owner and one verification.
+- **Grants per machine or per folder.** Simpler to express, but a friend
+  who may read one thread would see the rest. A grant names one
+  conversation id; the tool policy names the person, so the same thread
+  runs with your tools for you and narrowed tools for them.
 - **A relay that stores a catch-up feed.** Better offline reads, but a
   relay that holds records is a replica with an address, and the trust
   statement changes. The first relay forwards opaque TLS and stores nothing.
@@ -109,17 +122,23 @@ Easier: a phone, a CLI, a second desktop and a peer's view are the same kind
 of thing and share `nessa-client-core`; a build box, a home server, a
 friend's machine and a hosted worker are the same kind of thing and share
 one binary's environment role; "run on buildbox" needs nothing a developer
-does not already have; every transcript everywhere is one fold of one
+does not already have; a DMG built on the Mac mini is a verified download
+on every surface and the next turn can open it here; one thread can be
+shared with one person under narrowed tools without exposing anything
+else; every transcript everywhere is one fold of one
 record stream. Phone sync ships before any remote environment exists, and
 SSH environments ship before any new trust is built. Harder: the gateway
 stays a single point per organization, so its availability is the
 product's; the lease adds a record, a deadline and a cleanup obligation to
 every turn even locally; the environment running a conversation sees all of
 it, and the composer must say so; a sandbox is only what a binding and an
-environment can prove, and today that is "harness default"; first-use
+environment can prove, and today that is "harness default"; a tool policy
+can gate only what the binding's permission exchange gates, and the share
+dialog must say which tools that excludes; first-use
 install over SSH and version skew between gateway and environment are new
 operational surface. We accept extracting the port with no behavior change
 before any wire is designed. Signs this has stopped being right: a grant
 that lets a surface run a tool, a path that commits a record without a live
-lease, a conversation found in two streams, a file byte crossing the lease
-channel, or a replica that answers a command.
+lease, a conversation found in two streams, a file byte crossing the lease's
+control channel, a grant that names a folder or a machine instead of a
+conversation, or a replica that answers a command.

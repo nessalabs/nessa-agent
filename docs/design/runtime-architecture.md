@@ -20,9 +20,10 @@ each slice is an issue of its own.
 ## How to read this
 
 Start with [the words](#the-words), then [the picture](#the-picture), then
-[five situations](#five-situations), which walk through what happens on one
+[seven situations](#seven-situations), which walk through what happens on one
 laptop, with a phone, with a home server, with another machine you can SSH
-into, and with a machine that is not yours. Everything after that is the
+into, with a machine that is not yours, when you build on the Mac mini and
+run the result here, and when you share one conversation with a friend. Everything after that is the
 contract behind those stories. [What we borrowed](#what-we-borrowed) says
 where the ideas come from, with sources.
 
@@ -91,7 +92,7 @@ you already have access to, and a paired, encrypted connection to a machine
 that is not yours or cannot be reached by SSH. The gateway does not change
 between them, and neither do the records, the approvals or the audit.
 
-## Five situations
+## Seven situations
 
 **1. One laptop.** You install Nessa. Setup creates the owner credential and
 the panel's credential, starts the gateway, and the desktop window connects
@@ -150,6 +151,95 @@ conversation stays in your record stream; they keep their own audit of what
 ran on their machine. The same mechanism, in the other direction, lets a
 friend watch or command one of your conversations as a surface, under what
 you grant. A conversation is never owned by both.
+
+**6. Build on the Mac mini, run it here.** You are on the laptop. The Rust
+build and the iPhone build belong on the Mac mini, where Xcode and the
+toolchain are, and you want the DMG back on the laptop to run, and the
+simulator's screenshots in the transcript as they happen. Two ways, both
+inside the model:
+
+- *Move the conversation.* Pick "run on macmini" for this conversation.
+  The gateway leases it to the Mac mini over SSH (situation 4); the agent
+  builds there. When it produces the DMG, the agent attaches it to the
+  conversation: the environment publishes the file **by digest** to the
+  gateway's artifact store over a separate artifact channel (sftp on the
+  same SSH connection), the gateway records the hold, and every surface
+  sees it in the transcript with a Download that fetches by digest and
+  verifies it. A screenshot from the simulator is the same path with an
+  image, so it appears in the pane on the laptop and on the phone as the
+  agent takes it. To run the DMG here, the next turn is leased "here"; the
+  laptop is itself an environment, and the agent opens the artifact it
+  fetched by digest, after your approval. The harness session does not
+  move with the lease; the new environment's harness starts fresh with
+  Nessa's transcript as its context, and the map says so rather than
+  pretending the native session resumed.
+- *Delegate the build.* Keep the conversation on the laptop and have the
+  agent hand "build the DMG and the screenshots" to a **child
+  conversation** leased to the Mac mini ([ADR 329](../adr/todo/329-subagents.md)
+  subagents, with the lease choosing the child's environment). The child's
+  artifacts are delivered to the parent as results, by digest, and the
+  parent carries on locally with its own context intact. This is the
+  better fit when the local conversation is long-lived and the remote
+  work is a step in it.
+
+Either way the files travel only as artifacts: content-addressed, held by
+the conversation, verified on receipt, audited on both sides. Nothing
+mounts a filesystem across machines, and no file byte rides the lease's
+control channel.
+
+```mermaid
+sequenceDiagram
+    participant L as Laptop surface
+    participant G as Gateway (laptop)
+    participant M as Mac mini (nessa env serve over SSH)
+    L->>G: "build the DMG" (run on macmini)
+    G->>M: lease: conversation, binding, sandbox profile, deadline
+    M-->>G: granted
+    M->>M: harness runs cargo build, xcodebuild, simulator
+    M-->>G: events (text, tool calls) tagged lease + turn
+    M-->>G: artifact by digest over the artifact channel (screenshot.png)
+    G->>G: commit records; record hold
+    G-->>L: transcript shows the screenshot
+    M-->>G: artifact by digest (Nessa.dmg)
+    M-->>G: turn complete; cleanup evidence; lease ends
+    L->>G: download Nessa.dmg
+    G-->>L: bytes by digest, verified
+    L->>G: "install and run it" (run here)
+    G->>G: lease to the local environment; agent opens the artifact after approval
+```
+
+**7. Share one conversation with a friend.** You want Priya to see one
+conversation, maybe to drive it, but never your others, and never with a
+tool that could do harm on your machine. Her Nessa is paired with yours
+(situation 5). In the conversation's header, Share: pick Priya, pick a
+role, pick a tool policy. The grant names exactly one conversation id and
+nothing else, so Cedar admits her commands on that resource and refuses
+every other. The roles:
+
+| Role | What Priya can do | Built on |
+| --- | --- | --- |
+| Read | Fold the records, watch it live | `conversation.read` on that id; the same grant a phone has |
+| Comment | Leave notes the agent will see on the next turn you start, without starting one | 0011 phase B `record_only` and `next_turn` messages |
+| Drive | Start turns, steer, stop, answer approvals, under her tool policy | `turn.start` and controls on that id |
+
+The **tool policy** is per person, per conversation. Yours might be "all
+tools, ask as usual"; hers "read-only tools" or "everything but shell
+commands matching these patterns". It is a policy under 0014: a turn
+Priya starts carries her policy revision in its acceptance record, the
+gateway evaluates verdicts for that turn against it, and the environment
+enforces the pre-tool verdicts from the snapshot the lease carries. Her
+denied tool call is recorded with her as initiator and the rule as cause,
+so the audit says who tried what and which rule said no. Your turns in the
+same conversation run under your policy. Revoke is one row; her next
+command is refused, and a turn she already started finishes under the
+policy it was accepted with.
+
+What is honest here: a pre-tool denial covers only calls the binding
+gates through its permission exchange (0014). For Claude Code over ACP
+that includes shell commands, so "no `rm -rf`" is enforceable as a deny
+on the permission request; a tool the harness runs without asking is not
+covered, and the share dialog says which tools the policy can and cannot
+gate for this binding, from the capability declaration of #142.
 
 ## Leases
 
@@ -268,6 +358,49 @@ The binding declares which profiles it can set up; the environment declares
 which it can enforce; a request for more is refused at configuration time,
 loudly (0014, #142). 0008 forbids claiming a sandbox that is not there.
 
+## Sharing a conversation
+
+A grant is `(principal, conversation id, role, tool policy revision)`,
+stored by the gateway, evaluated by Cedar on every command and every
+subscription batch, and recorded as a semantic record with the owner as
+initiator. Nothing is granted by conversation list, by folder or by
+default; a peer with no grant on an id cannot tell it exists.
+
+- **Role** is Read, Comment or Drive, as in situation 7. Drive never
+  includes delete, export, re-share or changing the model; those stay the
+  owner's.
+- **Tool policy** is a named 0014 policy: a preset ("read-only tools",
+  "no shell", "ask for everything") or an allowlist and deny patterns.
+  The turn's acceptance record carries the initiator's policy revision;
+  verdicts and their evidence name it. Changing a policy affects turns
+  accepted after the change.
+- **Environment** is the owner's choice, not the sharer's. Priya driving a
+  conversation leased to the owner's Mac mini runs on the owner's Mac mini
+  under Priya's policy; the environment's own admission may narrow further.
+- **Disclosure** follows the role: Read and Comment see the records;
+  Drive additionally has its prompts become part of the conversation the
+  environment sees.
+
+## Artifacts across devices
+
+An artifact is bytes identified by digest, media type and size, held by a
+conversation, with one owner: the gateway's artifact store
+(`attachments`, extended by #273). Everything that moves a file between
+machines is a transfer of an artifact:
+
+| Movement | Channel | Verified by |
+| --- | --- | --- |
+| Agent output on an environment to the gateway (a DMG, a screenshot, a log) | The **artifact channel**: sftp on the SSH connection; a bounded artifact stream on a paired connection | Digest on receipt; hold recorded with the lease as cause |
+| Gateway to a surface (download, preview) | The existing ticketed `/attachments` path; the device's protected channel for phones | Digest on receipt |
+| Gateway to an environment (an image in a prompt, a file the agent needs) | Lease-scoped ticket, fetched by digest | Digest on receipt |
+| Surface upload (a screenshot you drag in) | The existing ticketed upload | Digest at the gateway |
+
+The lease's control channel carries events and effect requests, never
+file bytes. Artifact transfers are bounded per lease and per device
+(budgets below), resumable by digest, and audited on both sides. A large
+build output is an artifact like any other; what differs is only the
+budget it is checked against.
+
 ## Records and replication
 
 - The record is the unit. A semantic fact committed to a conversation
@@ -356,7 +489,8 @@ locally.
 | Sandboxes | Whatever the harness does by default | Sandbox profiles in the lease, declared per binding and per environment, refused when unenforceable | SDK bindings; environment adapters | Step 7 declaration; later profiles |
 | Policy hooks | Capability reporting merged (#142); no configured pre-tool runtime | Verdicts at the gateway; pre-tool verdicts enforced by the environment's SDK from the snapshot the lease carries, with evidence | SDK application owner (0014) | #130 slices |
 | Extensions | MCP Apps in a sandboxed iframe; one MCP connection per harness session; remote MCP with gateway-owned OAuth | Unchanged; an extension holds only the opening's token | Gateway `mcp_servers`, `mcp_authorization` | 344, 392 |
-| Artifacts | Held by digest; single-use upload tickets; local manifest and range reads | Lease-scoped tickets for remote environments; protected sync to devices | Gateway `attachments` | #273 |
+| Artifacts | Held by digest; single-use upload tickets; local manifest and range reads; uploads from surfaces only | An artifact channel from environments (sftp over SSH; bounded stream over a paired connection); lease-scoped tickets for environments; protected sync to devices | Gateway `attachments` | #273; step 8 |
+| Sharing | Grants are per principal across its organization's conversations; devices get `conversation.read` on all of the owner's | Grants per conversation id with a role (Read, Comment, Drive) and a per-principal tool policy revision carried on each accepted turn | Gateway `auth`, `conversation`; 0014 policy owner | 0011 phase B; #130 slices; step 9 |
 | Backup and restore | None | Export cut with deletion inventory; quarantined restore | New gateway module | #270 |
 | Budgets | Every lane bounded; [limits.md](../limits.md) rendered from owners | Per-lease, per-peer and per-organization rows in the same table | `config.json`, protocol fixed values | Each slice |
 
@@ -415,6 +549,8 @@ needs them:
 | `organization.environments`, `organization.leases` | Concurrent environments and leases per organization |
 | `device.subscriptions`, `device.outbox_bytes` | Subscriptions one device may hold; intents it may hold unsent |
 | `artifact.lease_bytes` | Bytes one lease may fetch by digest |
+| `artifact.environment_bytes`, `artifact.environment_files` | Bytes and files one lease may publish to the gateway |
+| `share.grants_per_conversation` | Grants one conversation may hold |
 
 ## Performance
 
@@ -482,6 +618,12 @@ needs them:
 - **Where it runs is one chip on the composer.** "Here", "buildbox", "Priya's
   Nessa", "org workers", each saying what it discloses and what sandbox it
   can give. Transcript, approvals and audit look the same for all of them.
+- **Build there, run here, in one thread.** The DMG the Mac mini built is
+  a Download in the transcript on every surface; the next turn can run on
+  the laptop and open it. Screenshots arrive as the agent takes them.
+- **Share one conversation, not your machine.** Pick a person, a role and
+  a tool policy in the conversation's header. They see that thread and
+  nothing else, and the audit says what they did.
 - **Nothing to run that is not already running.** No daemon on the phone
   beyond the app, no VPN to install, no server on the build box until the
   first lease asks for it.
@@ -502,8 +644,8 @@ pairing of gateways because it needs no new trust.
 | 5. Backup and quarantined restore (#270) | A lost gateway is recoverable | Restore drill proves deletion boundaries, refuses ambiguous authority |
 | 6. Artifacts over the paired channel (#273) | Images and files reach devices, verified | Digest verification; bulk audit bounded |
 | 7. `Environment` port and local leases (new issue) | Today's behavior behind one typed port; a lease recorded for every run; per-binding sandbox-profile declaration | No behavior change; identical records and cleanup evidence before and after |
-| 8. SSH environments (new issue) | `nessa env serve` over SSH stdio; "run on buildbox" in the composer | Lease ends on Stop, close and connection loss with cleanup evidence; late events dropped; first-use install verified on macOS and Linux hosts |
-| 9. Peer gateways (new issue) | Gateway-to-gateway pairing; outbound environment connection; relay fallback; local discovery | Narrowed grants recorded; a peer cannot hold both authorities; revocation refuses the next connection |
+| 8. SSH environments (new issue) | `nessa env serve` over SSH stdio; "run on buildbox" in the composer; the artifact channel from an environment (situation 6) | Lease ends on Stop, close and connection loss with cleanup evidence; late events dropped; first-use install verified on macOS and Linux hosts; a DMG built remotely downloads and verifies by digest |
+| 9. Peer gateways and per-conversation sharing (new issue) | Gateway-to-gateway pairing; outbound environment connection; relay fallback; local discovery; Share on one conversation with role and tool policy (situation 7) | Narrowed grants recorded; a peer cannot hold both authorities; revocation refuses the next connection; a shared turn runs under the sharer's policy with its denials attributed to them; an ungranted id is invisible |
 | 10. Hosted workers (new issue) | Environment-only gateways per organization in containers | Two-organization isolation across leases, artifacts, tools and audit |
 | 11. Hosted identity adapter (if hosted) | Login and membership from a provider behind Nessa's model | The adapter contract suite in the identity direction |
 
@@ -570,6 +712,14 @@ Named so they are not mistaken for settled:
   how that is written in Cedar.
 - **Local discovery.** Whether to announce at all by default, and what the
   announcement reveals.
+- **Which tools a policy can gate, per binding.** The share dialog must
+  say it; the answer comes from the #142 declaration and the 0014 survey.
+- **Artifact channel bounds and resumption.** Chunk size, per-lease
+  budgets, and resuming a large transfer by digest after a dropped SSH
+  connection.
+- **Delegating to an environment.** How a parent names the child's
+  environment under ADR 329, and how the child's artifacts are delivered
+  as results.
 - **Hook enforcement at the environment.** Which verdicts must land before
   a tool runs remotely and how the snapshot travels (0014).
 - **Fold checkpoints.** Deferred with a written trigger.
