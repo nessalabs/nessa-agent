@@ -1,11 +1,12 @@
-# Runtime architecture: authorities, leases and expansion boundaries
+# Runtime architecture: how Nessa runs agents on one machine, and then on many
 
 Owner: [#252](https://github.com/nessalabs/nessa-agent/issues/252). Status:
 proposed design map, the companion to
-[ADR 252](../adr/todo/252-runtime-roles-and-execution-leases.md). The ADR holds
-the decision; this document holds the boundaries, the current-versus-proposed
-state, where code goes, and the build order. It builds on
-[0008](../adr/todo/0008-agent-client-api.md) (runtime),
+[ADR 252](../adr/todo/252-runtime-roles-and-execution-leases.md). The ADR
+holds the decision in one page; this document explains it for someone who
+has not read the rest of the repository, then records the boundaries, the
+current-versus-proposed state, where code goes, and the build order. It
+builds on [0008](../adr/todo/0008-agent-client-api.md) (runtime),
 [0009](../adr/todo/0009-reusable-event-stream-crate.md) (records),
 [0011](../adr/todo/0011-nessa-session-protocol-and-authorities.md) (shared
 delivery), [0010](../adr/done/0010-local-authentication.md) (identity),
@@ -16,43 +17,53 @@ delivery), [0010](../adr/done/0010-local-authentication.md) (identity),
 redefines none of their protocols. Nothing here authorizes a runtime rewrite;
 each slice is an issue of its own.
 
-## The shape in one paragraph
+## How to read this
 
-There are two kinds of authority, and every gateway holds one or both. A
-**conversation authority** owns a conversation: its records, admission,
-receipts, approvals, policy, artifacts and the leases it issues. An
-**environment authority** owns a machine or container: its provider
-credentials, the harness processes it supervises, the files and terminals it
-serves, its isolation boundary and its own audit of what ran there. A
-**lease** is the contract between the two: the conversation authority asks an
-environment to run a harness (an execution lease) or to serve files and
-terminals (a workspace lease), bounded by grants and a deadline, and commits
-what comes back. On one laptop the same gateway is both authorities and the
-lease is issued and ended in process. On a home server the gateway moves
-whole. For a hosted worker, a bigger machine, or a friend's Nessa, only the
-environment side is elsewhere. **Surfaces** (desktop, CLI, phone) fold
-committed records and send intents; **replicas** (a phone cache, a relay, a
-backup) are copies with no role. Authority moves only by lease, never by
-owning a copy of the data.
+Start with [the words](#the-words), then [the picture](#the-picture), then
+[five situations](#five-situations), which walk through what happens on one
+laptop, with a phone, with a home server, with another machine you can SSH
+into, and with a machine that is not yours. Everything after that is the
+contract behind those stories. [What we borrowed](#what-we-borrowed) says
+where the ideas come from, with sources.
+
+## The words
+
+| Word | Meaning in Nessa |
+| --- | --- |
+| **Agent** or **harness** | The program that runs the model loop and its tools: Claude Code, Codex or OpenCode, started as a child process. Nessa does not run the model itself. |
+| **Binding** | Nessa's adapter to one harness, over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP). It starts the process, sends prompts, receives events, forwards permission requests, and cleans up. |
+| **Conversation** | One thread of work with one agent: its prompts, replies, tool calls, approvals and outcome. It has an id that survives restarts and reconnects. |
+| **Record** | One committed fact about a conversation: a prompt was accepted, a turn started, text arrived, a tool asked for permission, a turn ended. Records are appended to a stream in SQLite and never edited. Every view of a conversation is built by folding its records. |
+| **Gateway** | The `nessa server` process. It is the only thing that accepts commands, writes records, evaluates policy and holds credentials. On a laptop it also runs the agents. |
+| **Surface** | Anything a person looks at or types into: the desktop window, the floating panel, the CLI, a phone. A surface draws from records and sends intents. It never runs an agent and never writes a record. |
+| **Environment** | A place an agent can run: this gateway's own machine (the default), another machine you own, a container, or someone else's gateway. The agent and the files it works on are in the same environment. |
+| **Lease** | The gateway's recorded permission for one environment to run one conversation's agent for a bounded time with named limits. The only way execution moves. |
+| **Authority** | Who gets the final say. The gateway that owns a conversation is its **conversation authority**. The gateway (or service) that owns a machine is that machine's **environment authority**. One process can be both; on a laptop it is. |
+| **Replica** | A copy of records with no authority: a phone's cache, a relay's buffer, a backup. It can never act. |
+| **Pairing** | How two things that have never met come to trust each other: a short code typed once, which produces a credential bound to a key. Used for phones, for other people's gateways, and for hosted workers. |
+| **Mesh** | The set of gateways and devices a gateway has paired with or can reach over SSH, with each one's pinned key and last known addresses. Not a network of its own; it rides on whatever network exists. |
+| **Relay** | A server that forwards encrypted bytes between two parties that cannot reach each other directly. It cannot read them. |
+| **Sandbox** | A boundary the operating system or a container enforces around what the agent's commands may touch. A property of an environment, declared honestly. |
+
+## The picture
 
 ```mermaid
 flowchart LR
     subgraph Surfaces
         D["Desktop window / panel"]
         C["CLI"]
-        P["Phone (device client)"]
+        P["Phone"]
     end
-    subgraph CA["Gateway: conversation authority"]
-        A["Admission + Cedar"]
-        R["Record store (event-stream SQLite)"]
+    subgraph G["Gateway (nessa server): the conversation authority"]
+        A["Admission + policy (Cedar)"]
+        R["Records (event-stream SQLite)"]
         K["Credentials, leases, audit"]
         F["Artifacts (by digest)"]
     end
-    subgraph EAs["Environment authorities"]
-        L["Same gateway (local; default)<br/>agent harness runs here<br/>files and terminals here"]
-        H["Bigger machine or peer Nessa<br/>agent harness runs here under an execution lease"]
-        W["Hosted worker (environment-only gateway, per organization)<br/>agent harness runs here under an execution lease"]
-        S["Local sandbox (workspace only)<br/>no harness; files and terminals only"]
+    subgraph Envs["Environments: where the agent and its files are"]
+        L["Here (same process; default)<br/>agent runs here"]
+        H["Your other machine, over SSH<br/>agent runs here under a lease"]
+        E["Someone else's Nessa, or a hosted worker, paired<br/>agent runs here under a lease"]
     end
     D -- "intents + record subscription" --> A
     C -- "intents + record subscription" --> A
@@ -60,100 +71,294 @@ flowchart LR
     A --> R
     A --> K
     A --> F
-    A -- "execution or workspace lease" --> L
-    A -- "execution or workspace lease" --> H
-    A -- "execution or workspace lease" --> W
-    A -- "workspace lease" --> S
-    L -- "events, effect requests, evidence" --> A
-    H -- "events, effect requests, evidence" --> A
-    W -- "events, effect requests, evidence" --> A
-    H -. "files and terminals under a ticket" .-> S
-    Y["Relay (forwards opaque TLS; no authority, no feed)"] -.-> A
+    A -- "lease over in-process port" --> L
+    A -- "lease over SSH stdio" --> H
+    A -- "lease over paired TLS (outbound from E)" --> E
+    L -- "events, effect requests, cleanup evidence" --> A
+    H -- "events, effect requests, cleanup evidence" --> A
+    E -- "events, effect requests, cleanup evidence" --> A
+    Y["Relay: forwards encrypted bytes, reads nothing, stores nothing"] -.-> A
     P -.-> Y
+    E -.-> Y
 ```
 
 Arrows are calls. The **agent itself**, the Claude, Codex or OpenCode
-process running the model loop, lives inside whichever environment holds
-the execution lease: the laptop by default, a bigger machine, a peer's
-Nessa or a hosted worker when leased there. It never runs in a surface, a
-replica, the relay, or a workspace-only sandbox. The relay is dotted because
-it carries bytes it cannot read. The dotted edge between environments is a workspace channel: the
-harness runs in one environment and its file and terminal operations land in
-another, under a ticket the conversation authority issued. No environment
-touches the record store or the credential store; the conversation authority
-commits what a live lease reports.
+process, lives inside whichever environment holds the lease, together with
+the files it edits and the commands it runs. It never runs in a surface, a
+replica or the relay. There is **one lease contract** and **three ways to
+carry it**: an in-process port (the default), an SSH connection to a machine
+you already have access to, and a paired, encrypted connection to a machine
+that is not yours or cannot be reached by SSH. The gateway does not change
+between them, and neither do the records, the approvals or the audit.
 
-## Roles
+## Five situations
 
-| Role | Owns | Never does |
+**1. One laptop.** You install Nessa. Setup creates the owner credential and
+the panel's credential, starts the gateway, and the desktop window connects
+to it. You start a conversation; the gateway issues itself a lease, starts
+Claude Code as a child process in your account, and commits every event to
+the conversation's record stream. The window folds those records into the
+transcript. There is nothing to configure. The lease exists so that the
+audit record says "ran here, as you, from this time to this time", in the
+same shape it would have anywhere else.
+
+**2. A phone.** In Settings › Linked devices you see an eight-character
+code. You type it on the phone. Pairing (OPAQUE over TLS with the gateway's
+key pinned) issues the phone a credential bound to the phone's own key, with
+the grant to read your conversations. The phone keeps a private cache and
+reads records as they are committed, directly on your network, or through a
+relay when you are away. If the laptop is asleep, the phone shows what it
+has and says fresh activity is waiting. When device commands land (#267),
+you can send a prompt or stop a turn from the phone; the phone keeps the
+intent until the gateway's receipt comes back, so a lost reply never runs a
+prompt twice. The phone never runs an agent.
+
+**3. A home server.** You want agents to keep running when the laptop is
+closed. Run `nessa server` on the Mac mini. Pair the laptop's desktop app to
+it the same way the phone paired: the laptop is now a surface over the home
+server's conversations, with full grants because it is you. The records,
+approvals, device registry and provider keys live on the Mac mini. Nothing
+in this story needs a lease wire; the gateway moved whole, and that is the
+recommended way to get a home server.
+
+**4. Your other machine, over SSH.** You are on the laptop and want one
+conversation to run on the build box, where the repository and the toolchain
+are. You can already `ssh buildbox`. In the composer you pick "run on
+buildbox". The gateway opens an SSH connection, on first use installs the
+Nessa runtime there (the way VS Code's Remote-SSH installs its server), and
+starts `nessa env serve`, which speaks the lease contract over the SSH
+connection's standard input and output. The agent runs on buildbox, with
+buildbox's files, under a lease that says which conversation, which
+binding, which sandbox profile, and until when. Events come back over the
+same SSH connection and the gateway commits them; a permission request
+appears in your window exactly as a local one would; Stop ends the lease
+and buildbox reports what it cleaned up. No new ports, no new credentials,
+no relay: SSH is the authentication and the transport, and whatever makes
+buildbox reachable (your LAN, Tailscale, a VPN) is not Nessa's concern. The
+provider credential the agent uses is the one on buildbox, and buildbox
+sees the whole conversation, because that is where the model loop runs.
+
+**5. A machine that is not yours.** A friend offers their GPU box, or your
+organization runs workers in containers. You cannot SSH there, and you
+should not hold their credentials. Their gateway (or the worker, which is a
+gateway with only the environment role enabled) pairs with yours using the
+same eight-character code, and from then on connects **outbound** to your
+gateway, directly or through a relay, the way a phone does. Your gateway
+asks for a lease; theirs admits it under **their** policy, which may narrow
+it (this binding only, this sandbox, no network, two hours) or refuse. The
+conversation stays in your record stream; they keep their own audit of what
+ran on their machine. The same mechanism, in the other direction, lets a
+friend watch or command one of your conversations as a surface, under what
+you grant. A conversation is never owned by both.
+
+## Leases
+
+A lease is the only way execution moves. It is a record in the
+conversation's stream, with an `ActionContext` (who asked, from which
+surface, why), so replay shows who ran what, where, and when.
+
+| Field | Meaning |
+| --- | --- |
+| Conversation, optional turn | What may run. A conversation lease covers successive turns while live; a turn lease covers one. |
+| Environment | Which environment: this process, an SSH host, or a paired principal, identified by its pinned key. |
+| Binding and model | Which harness and model the environment is to run. |
+| Sandbox profile | What the environment must enforce around the agent's commands: none, the harness's own sandbox with these roots and domains, or a container. The environment declares what it can enforce; a profile it cannot enforce is refused at configuration, not silently weakened. |
+| Grants | Held artifacts the environment may fetch by digest; the Nessa tools the agent may call through the relay; the policy snapshot revision to enforce before a tool runs. |
+| Deadline and revision | When it lapses without renewal; which issuance this is. |
+
+Rules that keep authority where it belongs:
+
+- One conversation holds at most one live lease. Moving a conversation is:
+  end the lease, then issue another. Whether the harness's own session can
+  resume elsewhere is unknown per binding and is treated as unknown.
+- The environment may narrow or refuse. The gateway records what was
+  granted, not what was asked.
+- Events are accepted only while the lease is live and only when they carry
+  its id and the turn's id. Late or unlabelled output is dropped with
+  evidence, never attached to the next turn (0008).
+- A lease carries no right to write records and no right to answer
+  approvals. The gateway commits what the environment reports; the
+  environment keeps nothing durable past the lease but its own audit and
+  its cleanup evidence.
+- Ending a lease follows the 0008 Stop contract on the environment's side:
+  cancel over ACP, close the process supervision scope, reap descendants,
+  report exit and released resources within the deadline. Missing evidence
+  makes the turn `interrupted` and the environment unavailable until it is
+  accounted for.
+- A replica never holds a lease. A restored gateway issues new leases only
+  after the restore is explicitly accepted (#272).
+
+Choosing where a conversation runs is choosing who sees it. The environment
+runs the model loop with the prompt and its context, so it sees the whole
+conversation, and the composer says so at the choice.
+
+## Three transports, one contract
+
+| Transport | For | Who connects to whom | Authentication | Reachability |
+| --- | --- | --- | --- | --- |
+| In-process port | This machine (the default) | Nobody; a function call | None needed | None needed |
+| SSH | Machines you already have shell access to | The gateway runs `ssh host nessa env serve` and multiplexes the lease frames over its stdio | SSH's: your keys, your agent, your config | Whatever makes the host reachable today: LAN, Tailscale, a VPN, a bastion |
+| Paired | Phones, other people's gateways, hosted workers | The less reachable or less trusted side connects **outbound** to the gateway; the relay carries it when neither can reach the other | A credential bound to a key, issued once by pairing, revocable in one row | LAN discovery, then direct, then relay |
+
+The frames are the same on all three; only the pipe differs. That is what
+keeps the gateway's conversation code from knowing where an agent runs.
+
+**Why SSH is the first remote transport.** It is already there, already
+authenticated, already reachable on every machine a developer owns, and it
+is what people reach for first ("SSHing into that machine is pretty good
+already"). VS Code's Remote-SSH, Codex's self-hosted executor and Cursor's
+self-hosted workers all run the agent where the files are and carry the
+control connection over something that already exists. Nessa does the
+same, and builds no VPN.
+
+**Why pairing is the second.** A phone has no SSH server; a friend will not
+give you a shell; a container's lifetime is minutes. For these, the
+existing pairing flow (an eight-character code, OPAQUE, a key-bound
+credential) is the one way in, and the connection is outbound from their
+side so nothing inbound ever opens on a machine that is not yours. A relay
+is the fallback, and it forwards TLS it cannot open because the gateway's
+key was pinned at pairing.
+
+## The mesh
+
+A gateway keeps a **peer table**: for every paired device or gateway, and
+every SSH host it has been given, an id, a pinned public key, the grants in
+each direction, and the last addresses it was reached at. That table is the
+mesh. There is no coordination server, no overlay network and no address
+assignment; Nessa rides on whatever network is there.
+
+Finding a peer, in order:
+
+1. **Local discovery.** A paired gateway announces itself on the LAN; a
+   peer that hears it connects directly. (Syncthing's local discovery.)
+2. **Last known address.** Try where it was last reached.
+3. **Relay.** Both sides keep an outbound connection to a relay; the relay
+   pairs them by id and forwards. Move back to direct when direct works.
+   (Tailscale's DERP; Syncthing's relays.)
+
+Trust never comes from the network. A peer is trusted because its key was
+pinned at pairing, and what it may do comes from the grants in the table,
+checked by Cedar on every command and every lease. Revoking a peer removes
+its row; its next connection is refused.
+
+Later, for ease of use, one gateway can **introduce** its peers to a new
+device so a phone paired once sees the home server, the laptop and the
+build box without three codes. That is Syncthing's introducer and is
+deferred until there are three things to introduce.
+
+## Sandboxes, honestly
+
+Nessa does not sandbox the agent itself; the harness does, or the
+environment does. Claude Code encloses its shell commands with Seatbelt on
+macOS and bubblewrap on Linux, with a filesystem allowlist and a network
+proxy, and leaves its file tools, MCP servers and hooks outside that
+boundary; a separate runtime package can wrap the whole process. A
+container encloses everything. A plain account encloses nothing.
+
+So a sandbox profile in a lease is a request the environment answers with
+what it can actually do:
+
+| Profile | Enforced by | Covers | Does not cover |
+| --- | --- | --- | --- |
+| None | Nothing | Nothing | Everything; the agent runs as the account |
+| Harness sandbox | The harness's own OS sandbox, configured by the binding | Shell commands and their children | The harness's file tools, MCP servers, hooks, the model loop's network |
+| Container | The container runtime the environment was started in | The whole process tree | The container's own escape surface; whatever the lease let through |
+
+The binding declares which profiles it can set up; the environment declares
+which it can enforce; a request for more is refused at configuration time,
+loudly (0014, #142). 0008 forbids claiming a sandbox that is not there.
+
+## Records and replication
+
+- The record is the unit. A semantic fact committed to a conversation
+  stream, or to the principal's control stream for creation. Streams have
+  incarnations and cursors; a cursor from another incarnation is a typed
+  refusal, not a guess.
+- One fold. `nessa-protocol` owns `ConversationView` and the projection.
+  Every surface draws from it; nothing keeps a second transcript model.
+- Delivery is replay then live, from the client's last applied cursor, in
+  bounded batches, with the subscription closed when the client lags and
+  reopened from its checkpoint (0009, 0011). The desktop's polling (1 s
+  summaries, 250 ms transcript) is the interim and is retired by the same
+  change that gives the phone live reads (#296, #277), so there is one read
+  path to measure and secure.
+- Replicas verify, they do not trust. The phone cache keeps scope,
+  generation, deletion fences and reset receipts and refuses a record
+  whose identity changed meaning ([read-only sync](read-only-sync-example.md)).
+- Checkpoints of the fold are deferred until measured. The trigger: an
+  attach whose replay from zero exceeds the interactive budget on the
+  longest real history.
+- Backup is an export cut, not a cache: records, metadata and audit from
+  their owners at one consistent boundary, plus a deletion inventory. A
+  restored gateway is quarantined: it serves reads and issues no leases
+  until the person accepts it as the authority and every other copy is
+  told (#270).
+
+## Commands
+
+One contract across every surface, already specified in 0008 and used by
+the desktop today:
+
+- Every mutation has a `requestId` chosen once by the surface. The accepted
+  record is the receipt. An identical retry returns the receipt; a
+  different payload under the same id is refused.
+- A surface that may lose its process persists the intent before first
+  send and, after restart, looks the receipt up before any retry. The
+  phone outbox (#269) is the first implementation; the desktop adopts it
+  to close gap G04, so a crashed window and a backgrounded phone recover
+  the same way.
+- Stop names the exact turn. `turn_busy` returns to the surface's draft
+  and is never retried automatically.
+
+## Identity and trust
+
+| Principal | Credential | Grants | Issued by |
+| --- | --- | --- | --- |
+| Person (owner) | Local bootstrap, OS-protected | Everything on their organization | Setup; recovered offline |
+| Bundled surface (panel, desktop window) | Private surface credential served by the host once the gateway is ready | Product methods for that surface | Provisioning (`--provision-local`) |
+| Linked device | Key-bound credential from pairing | `conversation.read` first; command grants with #267 | The owner, in Settings › Linked devices |
+| SSH host | None of Nessa's; SSH's own | Environment only, for leases this gateway issues | The owner, by naming the host |
+| Peer gateway | Key-bound credential from pairing | Environment grants (admit leases, report events, request effects) and/or surface grants, each narrowed by the grantor's policy. Never both authorities over one conversation | The owner of each gateway, for the other |
+| Hosted worker | Key-bound credential from pairing | Environment grants only, for one organization. No reads outside its leases | The organization |
+| Extension | The opening's relay token | The tools its server exposes, under policy | The gateway, per harness opening |
+
+Scale is by organization and by environments. One conversation authority
+per organization deployment holds the records; environments are added for
+capacity; surfaces are added for people. Replicating one organization's
+conversation authority across gateways is not designed here and is gated
+behind the audience generalization the
+[identity direction](auth/identity-tenancy-and-cloud.md) already requires.
+
+## Mediated effects
+
+Three kinds of effect leave the environment and each has an owner. The
+lease channel carries them when the environment is remote; nothing changes
+locally.
+
+| Effect | Path | Decided by |
 | --- | --- | --- |
-| **Conversation authority** (a gateway, `crates/nessa-server`, conversation role) | Authentication and Cedar admission (0010); one active turn per conversation and every receipt (0008); the committed record streams and their catalogue (0009); approvals and their answers; policy verdicts (0014); surface, device and peer credentials; artifact holds; issuing and ending leases; audit of the conversation | Draw a transcript; keep a second turn state machine in a surface; accept a record from anything but a live lease; run a harness except through its own environment role |
-| **Environment authority** (a gateway, environment role; today the same process) | Provider credentials on that machine; harness processes and every OS resource they create, per lease supervision scope (0008 cleanup contract); the workspace: files, terminals and background commands it serves over ACP client methods; the isolation boundary, stated honestly; admitting or narrowing a lease under its own policy; its own audit of what ran there; translating harness events to the normalized payload; forwarding mediated effects to the conversation authority | Decide an approval; write a conversation record; keep conversation history past the lease; hold a conversation credential; run two leases of one kind for one conversation |
-| **Surface** (desktop, panel, CLI, phone; `src/`, `packages/nessa-client`, `crates/nessa-client-core`) | Folding committed records into a view with the one fold in `nessa-protocol`; drafts and an outbox of intents keyed by `requestId`; presentation and local preferences | Admit or retry a command on its own authority; execute a tool; write a record; infer turn state from provider text |
-| **Replica** (phone cache, relay, backup) | A verified copy with scope, generation and reset receipts ([read-only sync](read-only-sync-example.md)) | Anything. A replica has no grants. Promotion is an explicit, quarantined restore (#270, #272) |
-
-A gateway is one binary, `nessa server`, with roles enabled by
-configuration. A laptop runs both roles. A home server runs both. A hosted
-worker runs the environment role only, with no surfaces and no conversation
-streams, just its auth, its policy and its audit. A peer's Nessa runs both
-for its owner and serves the environment role to a paired conversation
-authority under its own policy.
-
-The test for a role boundary is the one `codebase-structure.md` already uses
-for the core: could this piece serve a Nessa with no menu bar at all? A rule
-about who may act on a conversation belongs to the conversation authority. A
-rule about a machine's processes, files and credentials belongs to the
-environment authority. A rule a phone needs as well as the desktop belongs
-to the surface libraries. Two roles may share one process, as they do today,
-but the seam between them is a typed port, not shared state.
-
-## Home server: move the gateway, not the environment
-
-The first way to run agents on another machine needs no lease wire at all.
-Run `nessa server` on the home server with both roles; the laptop and the
-phone are both linked devices to it through the same pairing (steps 2 to 4
-below). The records, the approvals, the device registry and the provider
-credentials live where the agents run, which is the simplest trust statement
-and the one most people mean by "my home server runs my agents".
-
-Leases to another environment exist for when the conversation authority
-should **not** move:
-
-- **Hosted workers.** The organization's records and policy stay in one
-  gateway; environment-only gateways are disposable containers that come and
-  go.
-- **One conversation elsewhere.** A build or a GPU job on a bigger machine
-  while history, approvals and every other conversation stay on the laptop.
-- **Effects elsewhere, model loop here.** The agent runs on the laptop and
-  its files and commands land in a local sandbox or on a remote box. That is
-  a workspace lease alone.
-- **A peer's Nessa.** Two gateways paired; one asks the other to run or host
-  something under the other's policy.
-- **Trust asymmetry.** A machine you will run code on but will not give your
-  history, credentials and device registry. A lease hands it one
-  conversation's worth of authority and nothing durable.
+| A tool needs permission | Harness → binding's permission exchange → gateway interaction record → a surface answers → the answer returns over the lease | The person, through any surface; hooks under 0014 may deny first |
+| The agent calls a Nessa tool | Harness → MCP stand-in → relay token → gateway product method under Cedar | The gateway, as for any caller |
+| The agent reads an artifact | Environment asks for held bytes by digest under a lease-scoped ticket | The gateway's hold and ticket owner (`attachments`) |
 
 ## Current versus proposed
 
 | Concern | Today | Proposed | Owner | Tracking |
 | --- | --- | --- | --- | --- |
-| Admission and policy | Mandatory `/session` auth, Cedar per operation, verified `ActionContext` into the SDK | Unchanged. Device, peer-gateway and environment principals get grant kinds of their own (below) | Gateway `auth` application | 0010 done; #481 publishes required grants |
-| Turn state and receipts | SDK `Agent` per conversation; creation receipts via `CreationCoordinator`; `requestId` on every mutation | Unchanged contract. The same receipt path answers the phone outbox (#269) and a desktop outbox (closes gap G04) | SDK scheduling; gateway `conversation` | 0008; #267, #268 |
-| Records | Semantic records on one event-stream SQLite runtime; bounded head/page reads over `/session`; watch hints | Replay-to-live **subscriptions** with cursors, bounded batches and lagging-subscriber close; gateway views served from committed records | SDK `session_storage` writer and source; gateway delivery adapter | 0009; #296, #277 |
-| Desktop reads | Polling: 1 s summaries, 250 ms active transcript, serialized per conversation | The desktop subscribes like any other surface. Polling is retired once subscriptions exist | `src/desktop/workspace/adapters/gateway` | #277 then a desktop slice |
-| Phone reads | Device client with private cache, finite passes, retained watch; real paired process tests | Deliver through pairing and the optional relay. No execution authority, ever | `nessa-client-core`; gateway `device_pairing` | #257, #263 (#264, #265, #266), #262 |
-| Phone commands | None | Durable intent outbox, read-only receipt lookup before any retry, exact-turn Stop, honest unknown outcomes | `nessa-client-core` outbox; gateway receipts | #267 (#268, #269) |
-| Execution environment | In process: gateway composes the SDK `Agent` and its ACP binding per conversation | An `ExecutionEnvironment` port in the conversation application; the in-process adapter first, a remote adapter speaking the lease wire later | Gateway `conversation` composition; SDK provider ports | New issue (step 7) |
-| Workspace | The harness acts on the gateway machine's filesystem through its own tools; Nessa serves no separate workspace | A `Workspace` port: files, terminals and background commands served to the harness over ACP client methods; local directory first, local sandbox and remote environments later. Split workspace is advertised only for a binding that routes those effects through the client | Gateway `conversation` composition; SDK ACP client capabilities | New issue (steps 7, 8) |
-| Remote environments | None | Any gateway serves execution and workspace leases to a paired conversation authority under its own policy; an environment-only gateway is the hosted worker | Gateway environment role; wire types in `nessa-protocol` | New issue (step 9) |
-| Peer gateways | None | Two gateways pair with the same OPAQUE flow under a `gateway` principal kind; each is an environment for the other and a surface over what the other grants | Gateway `device_pairing`; `nessa-auth` | New issue (step 9) |
-| Mediated effects | Approvals through ACP permission exchange, answered by a surface; Nessa tools through `nessa mcp-relay` per harness session; images by digest and ticket | Same paths, plus files and terminals over the workspace port, carried over the lease and workspace channels when remote. Nothing new is invented for the local case | SDK permissions; gateway `mcp_servers`, `attachments` | 0012, 344, #273 |
-| Policy hooks | Capability reporting merged (#142); no configured pre-tool runtime | Verdicts evaluated at the conversation authority; a verdict that must land before a tool runs is enforced by the environment's SDK from the policy snapshot the lease carries, with evidence returned | SDK application owner (0014) | #130, #132, #133, #136 |
-| Extensions | MCP Apps in a sandboxed iframe on another origin; one MCP connection per harness session; remote MCP with gateway-owned OAuth | Unchanged. An extension never holds a gateway credential; it holds the relay token for one opening | Gateway `mcp_servers`, `mcp_authorization`; desktop `widgets/app` | 344, 392 |
-| Artifacts | Held per conversation by digest; bytes over `PUT /attachments` under a single-use ticket; local manifest and range reads | Lease-scoped tickets so a remote environment reads held bytes by digest; protected sync of artifacts to devices | Gateway `attachments` | #273 |
-| Backup and restore | None | Consistent export cut across record, metadata and audit owners; deletion inventory; a restored gateway is quarantined until authority transfer is explicit | New gateway module | #270 (#271, #272) |
-| Identity | Principal, organization, credential; local bootstrap; devices paired with OPAQUE over pinned raw-key TLS | Environments and peers are principals with narrow grant kinds. Audience generalizes to a logical deployment before any gateway replica | `nessa-auth` | 0010 done; [identity direction](auth/identity-tenancy-and-cloud.md) |
-| Budgets | Every lane bounded; [limits.md](../limits.md) rendered from owners | Add per-lease, per-device and per-organization rows to the same table; no second limits document | `config.json`, protocol fixed values | Each slice adds its rows |
+| Admission and policy | Mandatory `/session` auth, Cedar per operation, verified `ActionContext` into the SDK | Unchanged. Peer and worker principals get grant kinds of their own | Gateway `auth` application | 0010 done; #481 |
+| Turn state and receipts | SDK `Agent` per conversation; creation receipts; `requestId` on every mutation | Unchanged. The same receipt path answers the phone outbox and a desktop outbox | SDK scheduling; gateway `conversation` | 0008; #267, #268 |
+| Records | Semantic records on one event-stream SQLite runtime; bounded head/page reads; watch hints | Replay-to-live subscriptions; gateway views from committed records; desktop off polling | SDK `session_storage`; gateway delivery | 0009; #296, #277 |
+| Phone reads | Device client with private cache, finite passes, retained watch; real paired process tests | Through pairing and the optional relay | `nessa-client-core`; gateway `device_pairing` | #257, #263, #262 |
+| Phone commands | None | Durable intent outbox, receipt lookup before retry, exact-turn Stop | `nessa-client-core`; gateway receipts | #267 |
+| Where agents run | In process only: gateway composes the SDK `Agent` and its ACP binding per conversation; Nessa advertises no ACP client filesystem or terminal | An `Environment` port in the conversation application with the in-process adapter first; a lease recorded for every run | Gateway `conversation` composition | New issue (step 7) |
+| SSH environments | None | `nessa env serve` on the remote host, installed on first use; lease frames over SSH stdio | Gateway environment adapter; `nessa-server` CLI | New issue (step 8) |
+| Peer gateways and hosted workers | None | Gateway-to-gateway pairing under a `gateway` principal kind; outbound connection from the environment side; relay fallback; environment-only gateways as workers | Gateway `device_pairing`, environment role; `nessa-auth` | New issues (steps 9, 10) |
+| Sandboxes | Whatever the harness does by default | Sandbox profiles in the lease, declared per binding and per environment, refused when unenforceable | SDK bindings; environment adapters | Step 7 declaration; later profiles |
+| Policy hooks | Capability reporting merged (#142); no configured pre-tool runtime | Verdicts at the gateway; pre-tool verdicts enforced by the environment's SDK from the snapshot the lease carries, with evidence | SDK application owner (0014) | #130 slices |
+| Extensions | MCP Apps in a sandboxed iframe; one MCP connection per harness session; remote MCP with gateway-owned OAuth | Unchanged; an extension holds only the opening's token | Gateway `mcp_servers`, `mcp_authorization` | 344, 392 |
+| Artifacts | Held by digest; single-use upload tickets; local manifest and range reads | Lease-scoped tickets for remote environments; protected sync to devices | Gateway `attachments` | #273 |
+| Backup and restore | None | Export cut with deletion inventory; quarantined restore | New gateway module | #270 |
+| Budgets | Every lane bounded; [limits.md](../limits.md) rendered from owners | Per-lease, per-peer and per-organization rows in the same table | `config.json`, protocol fixed values | Each slice |
 
 ## Where the code goes
 
@@ -164,418 +369,212 @@ nessa-auth            nessa-sdk  ◄── event-stream (pinned)
         ▲                 ▲
         └──── nessa-protocol ◄── nessa-sync (pinned)      what both ends agree on
                    ▲         ▲
-   nessa-client-core         nessa-server (one binary, roles by configuration;
-   (phone, CLI, desktop-     ▲   client-core as dev-dep only)
+   nessa-client-core         nessa-server (one binary: `nessa server`,
+   (phone, CLI, desktop-     ▲   `nessa env serve`; client-core as dev-dep only)
     as-device)               │
                        src-tauri host (reads endpoint + credential;
                                        never links the server)
 ```
 
 Arrows point at the dependency. The rules already enforced by
-`scripts/architecture/rust-dependency-graphs.mjs` stay: the gateway never
-links the device client in production; the device client never reaches the
-gateway; nothing portable links the desktop framework. No new crate is
-proposed. What is added:
+`scripts/architecture/rust-dependency-graphs.mjs` stay. No new crate is
+proposed. What is added, and where:
 
-- The lease and workspace wire types live in `nessa-protocol`, because both
-  ends of a gateway-to-gateway connection agree on them (483's admission
-  rule). The SDK's ACP client already owns the file and terminal method
-  shapes the harness speaks.
-- Inside the gateway, the two authorities are module boundaries.
-  `conversation/` is the conversation authority: admission, receipts, views,
-  and the two ports `ExecutionEnvironment` and `Workspace`. The environment
-  role is the SDK composition, `agents/`, the process and workspace adapters,
-  and the lease admission that serves a paired peer. `device_pairing/` and
-  `product/` are the surfaces' and peers' way in; `attachments/` is
-  artifacts; `mcp_servers/` and `mcp_authorization/` are extensions. The
-  proposal moves no module; it names which role each serves so a new file
-  has one place to go.
-- An environment-only gateway is this crate composed without conversation
-  streams or surface methods. Its audit store and auth are its own.
-
-## The five seams
-
-1. **Admission** (exists). A surface's command is authenticated, authorized by
-   Cedar on the server-resolved resource, given a verified `ActionContext`,
-   and only then reaches the SDK. Receipt retries pass the same gate. A
-   peer's lease request passes the same gate on the environment side, under
-   that gateway's policy. Nothing below the gate knows about grants.
-2. **Records** (exists; delivery proposed). The SDK commits semantic records
-   before publishing. The gateway serves committed records and nothing else:
-   bounded reads today, subscriptions under #296/#277. The fold that turns
-   records into a `ConversationView` lives once, in `nessa-protocol`, so the
-   phone, the desktop and a test draw the same transcript from the same bytes.
-3. **Environment** (proposed ports, existing behavior). Two ports in the
-   conversation application. `ExecutionEnvironment`: open under a lease;
-   prompt, steer, cancel; a stream of normalized events tagged with lease and
-   turn; effect requests the conversation authority must answer; close with
-   cleanup evidence. `Workspace`: the file, terminal and background-command
-   operations the harness asks its ACP client for, served from a root the
-   lease names, with evidence of what was touched. The in-process adapters
-   are today's code behind those interfaces. Extracting them changes no
-   behavior and is the gate for everything remote.
-4. **Pairing** (exists in part). OPAQUE pairing over pinned-key TLS issues a
-   credential bound to a key: a device credential with `conversation.read`
-   today ([device pairing](auth/device-pairing.md)); a `gateway` principal
-   with environment grants, or surface grants, later. Protected reads, watch
-   and the outbox run over that channel for devices; lease requests and
-   their event streams run over it for peers.
-5. **Extension** (exists). Each harness opening gets one MCP session per
-   configured server through the relay; apps reach their own server through
-   gateway methods under policy and audit; the window hosts them on a
-   sandbox origin. An extension's authority is the opening's token, revoked
-   when the opening ends.
-
-## Leases
-
-A **lease** is the conversation authority's record that one environment may
-do one kind of work for one conversation, for a bounded time, with named
-grants. It is a semantic record in the conversation's stream with an
-`ActionContext`, so replay shows who ran what, where, and why. There are two
-kinds with one lifecycle.
-
-| Field | Execution lease | Workspace lease |
-| --- | --- | --- |
-| Scope | `conversationId`, optional `turnId` | `conversationId` |
-| Environment | The environment authority's principal and pinned key | Same |
-| What it allows | Run the named binding and model; stream events; request effects | Serve files, terminals and background commands under the named root or sandbox descriptor |
-| Grants | Held artifacts by digest; the Nessa tool allowlist for the relay; the policy snapshot revision to enforce before a tool runs | The ticket the executing environment presents on the workspace channel; what may be read, written and run |
-| Deadline and revision | When it lapses without renewal; which issuance this is | Same |
-
-Rules that keep authority where it is:
-
-- A conversation holds at most one live lease of each kind. Its execution
-  and workspace leases may name different environments; by default they
-  name the same one, and on a laptop that is the gateway's own.
-- The environment authority admits a lease under its own policy and may
-  narrow or refuse it. The conversation authority records what was granted,
-  not what was asked.
-- Events are accepted only while the lease is live and only when they carry
-  its id and the turn's id. Late or unlabelled output is dropped with
-  evidence, never attached to the next turn (0008).
-- A lease carries no record-write right and no approval right. The
-  conversation authority commits what the environment reports; the
-  environment keeps nothing durable past the lease but its own audit and its
-  cleanup evidence.
-- Ending a lease follows the 0008 Stop contract from the environment's side:
-  cancel over the protocol, close the supervision scope, report exit and
-  released resources within the deadline. For a workspace lease: end the
-  terminals it serves and report what was written. Missing evidence makes
-  the turn `interrupted` and the environment unavailable until accounted
-  for.
-- A replica never holds a lease. A restored gateway issues new leases only
-  after the restore is explicitly accepted (#272).
-- Moving a conversation is end one lease, then issue another. The
-  provider's own session resumability is unknown until proved per binding.
-
-The local case needs none of this wire. It gets the same ports and a lease
-that is issued and ended in process, so that the audit record, the cleanup
-evidence and the turn state are identical whether the harness ran here or
-elsewhere. That is what lets a phone's view of a turn mean the same thing in
-both cases.
-
-### The workspace channel
-
-When the execution and workspace leases name different environments, the
-harness's file and terminal calls travel from the executing environment to
-the workspace environment directly, under the ticket in the workspace lease.
-They do not take a hop through the conversation authority: a terminal is a
-stream and a gateway in the middle of every byte would set the latency the
-person feels. The conversation authority tells the workspace environment,
-over their paired channel, which ticket to expect for which lease; the
-executing environment presents it; the workspace environment verifies it
-against its own policy and serves the calls. The workspace environment
-reports evidence (terminals started and ended, paths written) to the
-conversation authority on the lease, and keeps its own audit. Ending either
-lease ends the channel.
-
-### What a split workspace is honest about
-
-ACP already separates the loop from its effects: an agent may ask its client
-to read and write files and to run terminals. Nessa is that client. A split
-workspace is real exactly for the calls a harness routes through the client,
-and it is advertised per binding through the capability chain of #142: a
-binding that routes every file and terminal effect through the client
-supports it; one whose native tools act in its own process does not, and a
-split workspace is refused for it at configuration time, loudly, never
-silently degraded (0014). Nessa's own harness, when it exists, declares full
-support. The model loop itself still runs in the executing environment with
-that environment's network access and provider credential.
-
-## Mediated effects
-
-Four kinds of effect leave the harness and all four have an owner. The lease
-and workspace channels carry them when the environment is remote; nothing
-changes for the local case.
-
-| Effect | Path | Decided by |
-| --- | --- | --- |
-| A tool needs permission | Harness → environment SDK permission exchange → conversation authority interaction record → a surface answers → the answer returns over the lease | The person, through any surface; hooks under 0014 may deny first |
-| The agent reads or writes a file, or runs a command | Harness → ACP client file or terminal method → environment SDK → `Workspace` port: the local root, or the workspace environment over the ticketed channel | The workspace environment's policy on what the lease may touch; approvals still the person's |
-| The agent calls a Nessa tool | Harness → MCP stand-in → relay token → conversation authority product method under Cedar | The conversation authority, as for any caller |
-| The agent reads an artifact | Environment asks for held bytes by digest under a lease-scoped ticket | The conversation authority's hold and ticket owner (`attachments`) |
-
-Isolation is stated per boundary, because authorization is not a sandbox
-([identity direction](auth/identity-tenancy-and-cloud.md#isolation-without-a-network-hop-for-every-policy-check)):
-
-- **Local execution, local workspace**: the person's own account. There is
-  no sandbox and 0008 forbids claiming one. The ACP binding documents its
-  actual file and tool access.
-- **Local execution, sandboxed workspace**: the container around the
-  workspace bounds the effects the harness routes through the client. The
-  model loop still runs on the host with the host's network.
-- **Second machine or peer**: that machine's account and that owner's
-  policy. The same statement, made by them.
-- **Hosted worker**: a container or VM per organization. That boundary is
-  the isolation. A worker holds one organization's leases and nothing else;
-  two organizations never share a worker process.
-
-Disclosure follows the lease kind. An execution lease shows the environment
-the whole conversation, because the model loop runs there with the prompt
-and its context. A workspace lease shows it only the file and command
-operations. Choosing where a conversation runs is choosing who sees it, and
-the composer says which.
-
-## Peer gateways
-
-Two Nessas pair the way a phone pairs with one: OPAQUE over pinned-key TLS,
-a credential bound to the peer's key, under a `gateway` principal kind. From
-then on each is, to the other, whatever its grants say:
-
-- **An environment.** "Run this conversation on your machine" or "serve a
-  sandbox for it" is a lease request, admitted under the peer's Cedar
-  policy, which may narrow it (workspace only, a particular root, no
-  network). The conversation stays in the requester's stream; the peer
-  audits what ran on its machine.
-- **A surface.** "Let me watch and command that conversation of yours" is a
-  device-style grant on the peer's conversations. The conversation stays in
-  the peer's stream; the requester folds and sends intents like a phone.
-
-Which applies is decided by whose stream the conversation is in. A
-conversation is never co-owned, never mirrored into both stores, and never
-moved by anything but an explicit export and quarantined restore.
-
-## Records and replication
-
-- The record is the unit. A semantic fact committed to a conversation stream,
-  or to the principal's control stream for creation. Streams have
-  incarnations and cursors; a cursor from another incarnation is a typed
-  refusal, not a guess.
-- One fold. `nessa-protocol` owns `ConversationView` and the projection.
-  Every surface draws from it; nothing keeps a second transcript model.
-- Delivery is replay then live, from the client's last applied cursor, in
-  bounded batches, with the subscription closed when the client lags and
-  reopened from its checkpoint (0009, 0011). The desktop's polling is the
-  interim and is retired by the same change that gives the phone live
-  reads, so there is one read path to measure and secure.
-- Replicas verify, they do not trust. The phone cache keeps scope,
-  generation, deletion fences and reset receipts and refuses a record whose
-  identity changed meaning. The relay forwards TLS bytes it cannot open: the
-  gateway's key is pinned at pairing, so a relay cannot terminate the
-  connection or substitute records; it can only delay or drop, which the
-  client reports as unknown freshness. The relay stores no catch-up feed in
-  its first form (#266).
-- Checkpoints of the fold are deferred until measured. The trigger to build
-  them is written down: an attach whose replay from zero exceeds the
-  interactive budget on the longest real history. Until then, replay from
-  zero with bounded pages is the contract.
-- Backup is an export cut, not a cache. It carries records, metadata and
-  audit from their owners at one consistent boundary plus a deletion
-  inventory, so a restore cannot resurrect what was deleted. A restored
-  gateway is quarantined: it serves reads and issues no leases until the
-  person accepts it as the authority and every other copy is told (#270).
-
-## Commands
-
-One contract across every surface, already specified in 0008 and used by the
-desktop today:
-
-- Every mutation has a `requestId` chosen once by the surface. The accepted
-  record is the receipt. An identical retry returns the receipt; a different
-  payload under the same id is refused.
-- A surface that may lose its process persists the intent before first send
-  and, after restart, looks the receipt up before any retry. The phone outbox
-  (#269) is the first implementation; the desktop adopts it to close G04, so
-  a crashed window and a backgrounded phone recover the same way.
-- Stop names the exact turn. `turn_busy` returns to the surface's draft and
-  is never retried automatically.
-- The phone's intents travel the paired channel, pass the same admission as
-  the desktop's, and are recorded with the device's principal and surface.
-
-## Identity and trust
-
-| Principal kind | Credential | Grants | Issued by |
-| --- | --- | --- | --- |
-| Person (owner) | Local bootstrap, OS-protected | Everything on their organization | Setup; recovered offline |
-| Bundled surface (panel, desktop window) | Private surface credential served by the host once the gateway is ready | Product methods for that surface | Provisioning (`--provision-local`) |
-| Linked device | Credential bound to an Ed25519 key, issued after OPAQUE pairing | `conversation.read` first; command grants when #267 lands | The owner, through Settings › Linked devices |
-| Peer gateway | Credential bound to the peer gateway's key, after the same pairing | Environment grants (accept execution or workspace leases, report events, request effects) and/or surface grants, each narrowed by the grantor's policy. Never both authorities over one conversation | The owner of each gateway, for the other |
-| Hosted worker | Credential bound to the container's key | Environment grants only, for one organization. No reads outside its leases | The organization |
-| Extension | The opening's relay token | The tools its server exposes, under policy | The gateway, per harness opening |
-
-Scale is by organization and by environments. One conversation authority
-per organization deployment holds the records; environment-only gateways
-are added for capacity; surfaces are added for people. Replicating one
-organization's conversation authority across gateways is not designed here
-and is gated behind the audience generalization the identity direction
-already requires. Hosted login, when it comes, is an adapter behind Nessa's
-own identity model, never the model itself.
+- **Lease frames** in `nessa-protocol`, because both ends of a connection
+  agree on them (483's admission rule). The same frames travel the
+  in-process port, SSH stdio and the paired channel.
+- **`Environment` port** in the gateway's conversation application: open
+  under a lease; prompt, steer, cancel; a stream of normalized events
+  tagged with lease and turn; effect requests the gateway must answer;
+  close with cleanup evidence. The in-process adapter is today's SDK
+  composition behind that interface. The SSH adapter and the paired
+  adapter are the other two implementations and the only code that knows
+  a pipe.
+- **`nessa env serve`** in the server CLI: the environment role alone,
+  speaking lease frames on stdio (for SSH) or over a paired connection
+  (for peers and workers). Its auth and audit are its own; it has no
+  conversation streams and no surfaces.
+- Inside the gateway, the two authorities are module boundaries:
+  `conversation/` is the conversation authority; the SDK composition,
+  `agents/` and the environment adapters are the environment role;
+  `device_pairing/` and `product/` are the way in for surfaces and peers;
+  `attachments/` is artifacts; `mcp_servers/` and `mcp_authorization/` are
+  extensions. No module moves.
 
 ## Budgets
 
 Every lane is bounded and every bound has one owner that
-[limits.md](../limits.md) is rendered from. Proposed rows, added by the slice
-that needs them:
+[limits.md](../limits.md) is rendered from. Rows added by the slice that
+needs them:
 
 | Row | What it bounds |
 | --- | --- |
-| `lease.event_buffer_bytes`, `lease.event_batch` | Normalized events an environment may have in flight before the conversation authority applies backpressure or ends the lease |
+| `lease.event_buffer_bytes`, `lease.event_batch` | Events an environment may have in flight before backpressure or lease end |
 | `lease.cleanup_deadline` | How long an environment has to report cleanup before the turn is `interrupted` |
-| `workspace.terminals`, `workspace.write_bytes` | Terminals one workspace lease may hold open; bytes it may write |
-| `organization.environments`, `organization.leases` | Concurrent environments and live leases per organization |
+| `peer.connections`, `peer.leases` | Live connections and leases per paired peer |
+| `organization.environments`, `organization.leases` | Concurrent environments and leases per organization |
 | `device.subscriptions`, `device.outbox_bytes` | Subscriptions one device may hold; intents it may hold unsent |
 | `artifact.lease_bytes` | Bytes one lease may fetch by digest |
 
-Existing bounds keep their owners: the SDK's queue, channel, frame and
-controller limits; the gateway's admission and socket lanes; the client's
-preparing retries.
-
 ## Performance
 
-- **Latency a person sees** is commit latency plus one socket write once
-  subscriptions replace polling. Local commit p95 was measured at 108 ms
-  over 64 commits (#299); the 250 ms poll and the read behind it go away.
-  Measure again after #277 on the longest real conversation and record it.
-- **Replay cost** is linear in history. Bounded pages keep each read small;
-  checkpoints are the escape hatch and are built only when the recorded
-  trigger fires.
-- **Event streaming** keeps the SDK's commit cadence (100 ms, 16 KiB or 64
-  messages). A remote environment batches at the same cadence; the lease
-  buffer bounds what a slow link may hold.
-- **Workspace calls** go environment to environment. File reads and writes
-  are one round trip each; terminals stream. The conversation authority is
-  not on that path, so its load does not grow with keystrokes.
+- **What a person sees** is commit latency plus one socket write once
+  subscriptions replace polling. Local commit p95 measured 108 ms over 64
+  commits (#299). Measure again after #277 on the longest real
+  conversation.
+- **Replay** is linear in history; bounded pages keep each read small;
+  checkpoints are built when the recorded trigger fires.
+- **Remote environments** batch events at the SDK's commit cadence (100 ms,
+  16 KiB or 64 messages). Over SSH that is one multiplexed stream; the
+  lease buffer bounds what a slow link may hold. Files and shell output
+  never cross the link at all, because the agent is where the files are.
 - **Phone bandwidth** is cursor deltas in 16-record, 64 KiB pages with
-  metered scheduling measured under #262. Catalogue passes resolve only
-  changed entries.
-- **Gateway CPU** is the SDK and SQLite. Image normalization and record
-  validation are the measured hot spots today; leasing execution elsewhere
+  metered scheduling (#262).
+- **Gateway CPU** is the SDK and SQLite. Leasing a conversation elsewhere
   moves the harness off the gateway machine, which is the first real
   scaling step.
 
 ## Security
 
-What is enforced, and where:
-
-- The conversation authority is the only writer of its records and the only
-  place conversation policy runs. The environment authority is the only
-  holder of its provider credentials and the only place its machine's policy
-  runs. Each bounds the other through the lease: the lease bounds what the
-  environment may do to the conversation; the environment's admission bounds
-  what the conversation may do on the machine.
-- Surfaces, devices, peers and workers are authenticated principals with
-  grant kinds that cannot express what their role must not do: a device
-  cannot hold an environment grant; a worker cannot hold a read grant
+- The gateway is the only writer of its records and the only place
+  conversation policy runs. An environment is the only holder of its
+  provider credentials and the only place its machine's policy runs. The
+  lease bounds what the environment may do to the conversation; the
+  environment's admission bounds what the conversation may do on the
+  machine.
+- Principals carry grant kinds that cannot express what their role must
+  not do: a device cannot hold an environment grant; a worker cannot read
   outside its leases; a peer cannot hold both authorities over one
   conversation.
+- SSH environments inherit SSH's trust and add none: Nessa issues no
+  credential for a host you named, and the host's agent runs as the account
+  you logged in as.
+- Paired connections are outbound from the less trusted side; nothing
+  inbound opens on a phone, a worker or a friend's machine. Pinned keys
+  mean a relay forwards what it cannot read and cannot substitute.
 - Credentials live in the private credential store, never in settings,
   prompts, URLs, tool arguments or logs. Pairing secrets are 40 bits of
   generated entropy, one use, with a durable attempt budget.
-- The relay is untrusted by construction. Pinned raw-key TLS from device to
-  gateway means the relay sees metadata (timing, sizes, endpoints) and
-  nothing else. #266 measures that exposure.
-- Workspace tickets are single-lease and verified by the workspace
-  environment against its own policy; a ticket cannot widen a lease.
 - No implicit promotion. Copies cannot become the authority; restore is an
   explicit, audited, quarantined act.
 - Audit is part of the behavior on both sides: every lease issued, narrowed
-  and ended, every effect mediated, every verdict, with target, before/after,
-  cause and initiator, on cleanup and failure paths too. The environment's
-  audit and the conversation's audit are separate facts, and a lease's
-  evidence is reported as such, not relabelled as the other's.
-- Isolation claims are per boundary and honest. Local has none; a sandboxed
-  workspace bounds effects, not the loop; the hosted worker's boundary is
-  the container.
-- Disclosure is said at the choice: an execution lease shows the environment
-  the conversation; a workspace lease shows it the operations.
+  and ended, every effect mediated, every verdict, with target,
+  before/after, cause and initiator, on cleanup and failure paths too. The
+  environment's audit and the conversation's audit are separate facts.
+- Sandboxes are declared, not assumed. Disclosure is said at the choice:
+  the environment sees the conversation it runs.
 - Extensions are sandboxed by origin and CSP and reach only their own
   server through the gateway under policy.
 
 ## Ease of use
 
 - **Local first.** No account, no network, no signup. Setup provisions the
-  owner and the panel; the desktop just works, with both authorities in one
-  process and nothing to configure.
-- **One code to pair.** A phone, a second desktop, or another Nessa links by
-  typing eight characters shown in Settings. Revoke is one row. The desktop
-  app itself can be a linked device to a home server running `nessa server`,
-  through the same pairing; that is how "my Mac mini runs the agents" works
-  without a hosted account.
+  owner and the panel; the desktop just works.
+- **One code to pair, one host to name.** A phone or another Nessa links by
+  typing eight characters. A machine you can SSH into needs only its name.
+  Revoke is one row; forget a host is one row.
 - **Honest state everywhere.** A sleeping gateway leaves the phone's cache
   readable and says fresh activity is waiting. An uncertain send shows as
-  uncertain, with the receipt lookup doing the recovery. A lease an
-  environment narrowed shows what was granted.
-- **Same behavior on every surface.** Send, Stop, approve and queue mean the
-  same thing from the panel, the window, the CLI and the phone, because
-  they are one contract behind one gate.
-- **Where it runs and where it acts are two chips on the composer.** "Run
-  here, act in a sandbox", "run on my Mac mini", "act on the build box" are
-  per-conversation choices at creation, each saying what it discloses. The
-  transcript, the approvals and the audit look identical. A binding that
-  cannot split is told so there, not after.
+  uncertain. A lease an environment narrowed shows what was granted. A
+  sandbox that cannot be enforced is refused before the run, not after.
+- **Same behavior on every surface.** Send, Stop, approve and queue mean
+  the same thing from the panel, the window, the CLI and the phone.
+- **Where it runs is one chip on the composer.** "Here", "buildbox", "Priya's
+  Nessa", "org workers", each saying what it discloses and what sandbox it
+  can give. Transcript, approvals and audit look the same for all of them.
+- **Nothing to run that is not already running.** No daemon on the phone
+  beyond the app, no VPN to install, no server on the build box until the
+  first lease asks for it.
 
 ## Build order
 
 Each step is its own issue and lands behind the gates in
-`CODING_STANDARDS.md`. Phone sync is complete before any remote environment
-exists; the ports are extracted before any lease wire is written.
+`CODING_STANDARDS.md`. Phone sync finishes before any remote environment
+exists; the port is extracted before any wire is written; SSH comes before
+pairing of gateways because it needs no new trust.
 
 | Step | Delivers | Gate to pass |
 | --- | --- | --- |
 | 1. Record subscriptions and committed views (#296, #277) | Replay-to-live for every surface; desktop off polling | Lagging-subscriber close, replay/live changeover, slow-client isolation, measured latency |
-| 2. Device pairing and protected reads (#263: #264, #265) | A phone reads its conversations over its own credential | Real paired process tests; revocation ends the next read |
-| 3. Relay and sleeping state (#266) | A phone away from home reaches the gateway | Direct and relay converge to one checkpoint; metadata exposure measured |
+| 2. Device pairing and protected reads (#263: #264, #265) | A phone reads over its own credential | Real paired process tests; revocation ends the next read |
+| 3. Relay and sleeping state (#266) | A phone away from home reaches the gateway | Direct and relay converge; metadata exposure measured |
 | 4. Device commands (#267: #268, #269) | Prompt and exact-turn Stop from the phone, retry-safe | Lost acknowledgement cannot run twice; unknown outcomes rendered |
-| 5. Backup and quarantined restore (#270: #271, #272) | A lost gateway is recoverable | Restore drill proves deletion boundaries and refuses ambiguous authority |
+| 5. Backup and quarantined restore (#270) | A lost gateway is recoverable | Restore drill proves deletion boundaries, refuses ambiguous authority |
 | 6. Artifacts over the paired channel (#273) | Images and files reach devices, verified | Digest verification; bulk audit bounded |
-| 7. `ExecutionEnvironment` and `Workspace` ports (new issue) | Today's in-process behavior behind two typed ports; leases recorded locally; a per-binding declaration of whether file and terminal effects route through the client | No behavior change; identical records and cleanup evidence before and after; the declaration verified against each pinned binding |
-| 8. Local sandbox workspace (new issue) | A conversation runs here and acts in a container | Effects land only inside the root; refused at configuration for a binding that cannot split; terminals ended with the lease |
-| 9. Environment service and peer pairing (new issue) | A gateway serves execution and workspace leases to a paired conversation authority; the workspace channel under a ticket | Lease ends on Stop, close and revocation with cleanup evidence on both sides; narrowed grants recorded; late events dropped; one lease per kind per conversation |
-| 10. Hosted workers and organization isolation (new issue) | Environment-only gateways per organization in containers | Two-organization isolation tests across leases, workspaces, artifacts, tools and audit |
+| 7. `Environment` port and local leases (new issue) | Today's behavior behind one typed port; a lease recorded for every run; per-binding sandbox-profile declaration | No behavior change; identical records and cleanup evidence before and after |
+| 8. SSH environments (new issue) | `nessa env serve` over SSH stdio; "run on buildbox" in the composer | Lease ends on Stop, close and connection loss with cleanup evidence; late events dropped; first-use install verified on macOS and Linux hosts |
+| 9. Peer gateways (new issue) | Gateway-to-gateway pairing; outbound environment connection; relay fallback; local discovery | Narrowed grants recorded; a peer cannot hold both authorities; revocation refuses the next connection |
+| 10. Hosted workers (new issue) | Environment-only gateways per organization in containers | Two-organization isolation across leases, artifacts, tools and audit |
 | 11. Hosted identity adapter (if hosted) | Login and membership from a provider behind Nessa's model | The adapter contract suite in the identity direction |
 
 Steps 1 to 6 are the phone. Steps 7 to 10 are environments. Step 1 serves
-both and is why it goes first; step 7 is behavior-neutral and is why it
-precedes any wire.
+both and is why it goes first.
+
+## What we borrowed
+
+- **Run the agent where the files are; carry only control.** VS Code's
+  Remote-SSH installs its server on the remote host over SSH and keeps the
+  UI local; OpenAI's self-hosted Codex runs the harness on their side and a
+  `codex exec-server` executor in your environment that connects outbound
+  over WebSocket with a key that can do nothing else; Cursor's self-hosted
+  workers run the CLI and hold a long-lived outbound HTTPS connection. All
+  three avoid inbound ports and avoid moving files over the control link.
+  Nessa's SSH and paired transports follow that shape.
+- **Control plane and data plane apart; relays that cannot read.**
+  Tailscale's coordination server is a "key drop box" that distributes
+  public keys and policy and never sees traffic; DERP relays forward
+  already-encrypted packets. Nessa's gateway holds keys and policy, and its
+  relay forwards TLS it cannot open.
+- **Identity is a key; find by id, not by address.** Syncthing's device id
+  is the hash of the device's certificate, peers are added by id, and
+  discovery (local broadcast, then a discovery server, then a relay) finds
+  the address. Nessa's pinned keys from pairing, its peer table and its
+  find-order follow that; introducers are the later convenience.
+- **Sandboxing belongs to the thing that runs the commands.** Claude Code
+  encloses shell commands with Seatbelt or bubblewrap and leaves file tools,
+  MCP servers and hooks outside; Codex cloud and Cursor cloud run each task
+  in a fresh container. Nessa asks for a profile and records what the
+  environment could enforce.
+- **Do not build the client filesystem seam.** ACP v1 lets a client serve
+  files and terminals to the agent, but neither clients nor agents adopted
+  it, Nessa advertises it as unsupported today, and ACP's v2 draft removes
+  it in favor of agent-owned sandboxing and execution configuration. An
+  earlier draft of this map proposed a "workspace lease" over that seam; it
+  is withdrawn.
+
+Sources: [How Tailscale works](https://tailscale.com/blog/how-tailscale-works),
+[DERP servers](https://tailscale.com/kb/1232/derp-servers),
+[Tailscale SSH](https://tailscale.com/blog/tailscale-ssh),
+[Syncthing security](https://www.mankier.com/7/syncthing-security),
+[Syncthing local discovery](https://docs.syncthing.net/specs/localdisco-v4.html),
+[Syncthing introducer](https://docs.syncthing.net/users/introducer.html),
+[VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh),
+[VS Code Server](https://code.visualstudio.com/docs/remote/vscode-server),
+[Codex self-hosted environments](https://developers.openai.com/api/docs/guides/agents-api/environments/self-hosted),
+[Claude Code sandboxing](https://code.claude.com/docs/en/sandboxing),
+[ACP v2 RFD: client filesystem and terminal capabilities](https://agentclientprotocol.com/rfds/v2/client-filesystem-terminal-capabilities).
 
 ## Unresolved contracts
 
 Named so they are not mistaken for settled:
 
-- **Lease and workspace wire formats.** The fields above are the contract;
-  the frames, their bounds and their place in `nessa-protocol` are step 9's
-  design.
-- **Workspace ticket.** How the conversation authority tells the workspace
-  environment what to expect, and how the executing environment presents it,
-  is step 9's design. The property it must have is written: single lease,
-  cannot widen it.
-- **Which bindings can split.** A survey per pinned binding of which file
-  and terminal effects route through the ACP client, under #142; until it
-  exists, no binding advertises a split workspace.
-- **Peer policy vocabulary.** What an environment may narrow in a lease
-  (roots, network, binding, model, time) and how that is expressed in Cedar.
-- **Hook enforcement at the environment.** Which verdicts must land before a
-  tool runs remotely, and how the policy snapshot travels, is 0014's
-  remaining work extended by step 9.
-- **Fold checkpoints.** Deferred with a written trigger; the storage shape
-  is undecided.
-- **Relay with storage.** A relay that holds a catch-up feed changes the
-  trust statement and is a separate decision.
-- **Provider session portability.** Whether a harness's native session can
-  resume in another environment is unknown per binding and is treated as
-  unknown.
-- **Absent-person approvals.** Remembered approvals and bounded automatic
-  decisions (#141) decide what an unattended environment does at a
-  permission prompt.
-- **Multi-replica conversation authority.** Not planned; gated behind
-  audience generalization.
+- **Lease frame format.** The fields above are the contract; the frames,
+  their bounds and their place in `nessa-protocol` are step 7's design.
+- **First-use install over SSH.** What `nessa env serve` needs on the host
+  (Rust binary per platform, the harness itself, its credential), and how
+  version skew between gateway and environment is refused.
+- **Sandbox profiles.** Which profiles each pinned binding can set up and
+  how an environment proves what it enforces; today's answer for every
+  binding is "harness default".
+- **Peer policy vocabulary.** What an environment may narrow in a lease and
+  how that is written in Cedar.
+- **Local discovery.** Whether to announce at all by default, and what the
+  announcement reveals.
+- **Hook enforcement at the environment.** Which verdicts must land before
+  a tool runs remotely and how the snapshot travels (0014).
+- **Fold checkpoints.** Deferred with a written trigger.
+- **Relay with storage.** A relay that holds a catch-up feed is a replica
+  with an address; separate decision.
+- **Provider session portability.** Unknown per binding.
+- **Absent-person approvals** (#141).
+- **Multi-replica conversation authority.** Not planned.
