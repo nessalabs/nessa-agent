@@ -80,9 +80,13 @@ export function observers() {
   } catch {
     window.__perf.noLongtask = true
   }
-  let last = 0
-  const tick = (t) => {
-    if (last) window.__perf.gaps.push([t, t - last])
+  let last = null
+  const tick = () => {
+    // The supplied rAF timestamp is a frame timestamp, not when this
+    // callback actually executes. Delayed callbacks must share the clock
+    // used by the interaction origin, long tasks and LoAF entries.
+    const t = performance.now()
+    if (last !== null) window.__perf.gaps.push([t, t - last])
     last = t
     requestAnimationFrame(tick)
   }
@@ -194,6 +198,7 @@ export function measurementFrom(raw, t0) {
   // perf.test.mjs holds attribution across that sample boundary.
   const sampleStart = t0 + gaps[0][0] - gaps[0][1]
   return {
+    frameClock: "raf-callback-execution",
     maxFrame: Math.max(...durations),
     over: durations.filter(exceedsFrameBudget).length,
     frames: durations.length,

@@ -82,6 +82,11 @@ production build at 4× CPU throttling.
   _Check:_ `perf-budget.mjs` (defaults: `--mode prod --throttle 4 --runs 3`).
   Read max and median per row; every over-budget frame carries its Long
   Animation Frame attribution (scripts, forced layout, style-and-layout time).
+- [ ] **Frame gaps use callback execution time.** Sampling `performance.now()`
+  inside rAF keeps delayed callbacks, the interaction origin and attribution
+  on one clock. A nominal frame timestamp must not shorten known blocking work.
+  _Check:_ `lib/perf.test.mjs` (delayed timestamps and a zero first timestamp),
+  `perf-budget.mjs` (known-cost calibration).
 - [ ] **The budget decides on the unrounded frame** (#369). The table rounds
   maxima for display. A 50.1 ms frame fails when that table shows 50; an exact
   50 ms frame and a 49.6 ms frame pass.

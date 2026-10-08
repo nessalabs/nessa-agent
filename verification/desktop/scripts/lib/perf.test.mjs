@@ -7,6 +7,7 @@
  */
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
+import { runInNewContext } from "node:vm"
 
 import { CannotRun } from "./cli.mjs"
 import {
@@ -15,6 +16,7 @@ import {
   median,
   measurementFrom,
   missingFrameSample,
+  observers,
   sampleLoaf,
   styleAndLayoutMs,
 } from "./perf.mjs"
@@ -27,6 +29,45 @@ const script = {
   source: "pane.js:10",
   forcedLayout: 30,
 }
+
+it("samples callback execution rather than delayed nominal frame timestamps", () => {
+  let now = 50
+  const callbacks = []
+  const scope = {
+    window: {},
+    performance: { now: () => now },
+    requestAnimationFrame: (callback) => callbacks.push(callback),
+    PerformanceObserver: class {
+      observe() {}
+    },
+  }
+  runInNewContext(`(${observers.toString()})()`, scope)
+  callbacks.shift()(20)
+  now = 200
+  callbacks.shift()(120)
+  assert.equal(scope.window.__perf.gaps.length, 1)
+  assert.equal(scope.window.__perf.gaps[0][0], 200)
+  assert.equal(scope.window.__perf.gaps[0][1], 150)
+})
+
+it("retains a first frame whose execution clock starts at zero", () => {
+  let now = 0
+  const callbacks = []
+  const scope = {
+    window: {},
+    performance: { now: () => now },
+    requestAnimationFrame: (callback) => callbacks.push(callback),
+    PerformanceObserver: class {
+      observe() {}
+    },
+  }
+  runInNewContext(`(${observers.toString()})()`, scope)
+  callbacks.shift()(0)
+  now = 10
+  callbacks.shift()(10)
+  assert.equal(scope.window.__perf.gaps.length, 1)
+  assert.equal(scope.window.__perf.gaps[0][1], 10)
+})
 
 it("keeps median precision and averages the middle pair of an even series", () => {
   const samples = [50.1, 33.2, 49.8, 50.3]
