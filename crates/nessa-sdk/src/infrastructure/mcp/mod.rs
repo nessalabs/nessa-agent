@@ -16,7 +16,9 @@
 //!     └── revoke (a grant's sessions closed, none opened under it after)
 //!
 //! Connection: framing (bounded newline JSON-RPC) ─ wire (MCP JSON → domain)
-//! Remote: HttpExchange (injected) ─ HttpSession (streamable HTTP, legacy SSE) ─ the same Connection
+//! Remote: HttpExchange (injected) ─ HttpSession (owned JSON/SSE bodies and recovery) ─ the same Connection
+//! RecoveryReady / captured peer reply ──existing queue──▶ Connection writer
+//! HttpSession owns binding claims and the shared authorized modern POST policy.
 //! ```
 //!
 //! Arrows are calls. `McpServers` owns the configured set, which a host
