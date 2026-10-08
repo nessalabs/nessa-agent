@@ -1,0 +1,1 @@
+["cargo", "test", "-p", "nessa-sdk", "--lib", "infrastructure::mcp::tests::http_progress::j24_ordinary_capacity_releases_on_dequeue_and_cancellation", "--", "--exact", "--nocapture"]

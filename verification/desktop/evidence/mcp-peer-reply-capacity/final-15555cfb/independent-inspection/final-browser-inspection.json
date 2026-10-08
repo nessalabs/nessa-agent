@@ -1,0 +1,38 @@
+{
+  "head": "f5f4f2b5b1fd04796301383dd0e73bb93eddc923",
+  "clean": true,
+  "exit": 0,
+  "checks": [
+    {
+      "check": "mcp-apps-gateway",
+      "passed": 16,
+      "failed": 0,
+      "engines": [
+        "chromium",
+        "webkit"
+      ],
+      "sha256": "21b0fadd744c9a49edf5b5a84e1ada9c0b88ae64af44c2f0d87e065d9624c172"
+    },
+    {
+      "check": "scripted-scenarios",
+      "passed": 8,
+      "failed": 0,
+      "engines": [
+        "chromium",
+        "webkit"
+      ],
+      "sha256": "e7bf6cfcd92811cb8a53fa9a26eae9d8ece4eb108af7f87af50528f8cb8b549e"
+    },
+    {
+      "check": "gateway-window",
+      "passed": 13,
+      "failed": 0,
+      "engines": [
+        "chromium",
+        "webkit"
+      ],
+      "sha256": "9f90760a84cc9d5c3a56504add91181fa749afe8b8b7765ce4dc8478daebb063"
+    }
+  ],
+  "limits": "Dev mode, columns, real Playwright Chromium/WebKit. No WKWebView or live-provider/performance claim. Existing #485 abort-after-204 is labeled harmless by the script."
+}

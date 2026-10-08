@@ -1,0 +1,12 @@
+--- accepted/connection.rs
++++ mutated/connection.rs
+@@ -126,7 +126,8 @@
+     fn is_ordinary(&self) -> bool {
+         match self {
+             Self::Frame(_) => true,
+-            Self::PeerReply { .. } | Self::RecoveryReady { .. } => false,
++            Self::PeerReply { .. } => false,
++            Self::RecoveryReady { .. } => true,
+         }
+     }
+ }

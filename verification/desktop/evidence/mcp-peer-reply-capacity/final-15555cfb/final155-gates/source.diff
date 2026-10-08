@@ -1,0 +1,34 @@
+diff --git a/crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs b/crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs
+index 09f1a005..8a78c291 100644
+--- a/crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs
++++ b/crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs
+@@ -21,7 +21,10 @@ use std::sync::{
+ };
+ use std::task::Poll;
+ use std::time::Duration;
+-use tokio::sync::{mpsc, Notify, Semaphore};
++use tokio::sync::{
++    mpsc::{self, error::TrySendError},
++    Notify, Semaphore,
++};
+ use uuid::Uuid;
+ 
+ struct Gate {
+@@ -3043,7 +3046,7 @@ async fn j23_closed_control_queue_is_explicit() {
+             deadline: ManualClock::default().now(),
+             completed
+         }),
+-        Err(mpsc::error::TrySendError::Closed(_))
++        Err(TrySendError::Closed(_))
+     ));
+ }
+ 
+@@ -3079,7 +3082,7 @@ async fn j24_ordinary_capacity_releases_on_dequeue_and_cancellation() {
+             deadline: ManualClock::default().now(),
+             completed
+         }),
+-        Err(mpsc::error::TrySendError::Full(_))
++        Err(TrySendError::Full(_))
+     ));
+     let mut closed = Box::pin(queue.send(Outgoing::Frame(b"closed".to_vec())));
+     pending(closed.as_mut()).await;

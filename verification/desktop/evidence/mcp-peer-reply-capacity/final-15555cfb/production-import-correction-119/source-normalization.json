@@ -1,0 +1,12 @@
+{
+  "previous_head": "f5f4f2b5b1fd04796301383dd0e73bb93eddc923",
+  "changed_files": [
+    "crates/nessa-sdk/src/infrastructure/mcp/connection.rs"
+  ],
+  "qualified_expansion_rustfmt_equals_previous_entire_source": true,
+  "old_sha256": "dfeb1f5ad71b0772b399727542f57a524a3ab13cab4634dd5f1092a6d9d26301",
+  "new_sha256": "994fecf9b36170483efc1810cb28e1e08edbbce660b4f1e4629e5989a4c1c6ab",
+  "expanded_sha256": "dfeb1f5ad71b0772b399727542f57a524a3ab13cab4634dd5f1092a6d9d26301",
+  "normalization": "Restore old imports; expand short error names and the two new helper fields to their prior mpsc-qualified types; rustfmt. Exact byte equality to old complete file.",
+  "corrected_head": "11977855d7f031bbac5a967647de6cbb73652e2c"
+}

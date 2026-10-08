@@ -1,0 +1,11 @@
+--- accepted/connection.rs
++++ mutated/connection.rs
+@@ -571,7 +571,7 @@
+                         match outgoing.try_send(Outgoing::PeerReply { frame, context }) {
+                             Ok(()) => {}
+                             Err(mpsc::error::TrySendError::Full(_)) => {
+-                                return Some(McpError::TooLarge("queued MCP control frames"));
++                                // Deliberately discard the saturated peer answer.
+                             }
+                             Err(mpsc::error::TrySendError::Closed(_)) => {
+                                 return Some(

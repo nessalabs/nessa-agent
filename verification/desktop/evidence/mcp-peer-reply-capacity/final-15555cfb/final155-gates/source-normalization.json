@@ -1,0 +1,10 @@
+{
+  "previous_head": "11977855d7f031bbac5a967647de6cbb73652e2c",
+  "changed_file": "crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs",
+  "qualified_expansion_rustfmt_equals_previous_entire_source": true,
+  "old_sha256": "3fecc2aeefb75e0bd211d56e634c99004e71e1805592725a04d963e98d52df73",
+  "new_sha256": "36e4786c32c2b34a07a7be08312814c5d9e54e7af28a3061228c81dd8e90da9f",
+  "expanded_sha256": "3fecc2aeefb75e0bd211d56e634c99004e71e1805592725a04d963e98d52df73",
+  "normalization": "Restore old imports; expand two TrySendError expressions to prior mpsc::error::TrySendError spelling; rustfmt. Byte-identical entire previous test file.",
+  "corrected_head": "15555cfba6d5c3b6570c5bee9370b70cccba97e6"
+}

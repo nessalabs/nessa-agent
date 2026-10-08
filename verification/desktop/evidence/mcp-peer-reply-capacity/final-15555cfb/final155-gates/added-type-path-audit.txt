@@ -1,0 +1,58 @@
++use tokio::sync::mpsc::error::TryRecvError;
++            Receiver, Sender,
++    sender: Sender<Queued>,
++    receiver: Receiver<Queued>,
++            Self::Frame(_) => true,
++            Self::PeerReply { .. } | Self::RecoveryReady { .. } => false,
++            return Err(TrySendError::Closed(message));
++                Err(_) => return Err(TrySendError::Full(message)),
++                TrySendError::Full(queued) => TrySendError::Full(queued.message),
++                TrySendError::Closed(queued) => TrySendError::Closed(queued.message),
++                        match outgoing.try_send(Outgoing::PeerReply { frame, context }) {
++                            Err(TrySendError::Full(_)) => {
++                                return Some(McpError::TooLarge("queued MCP control frames"));
++                            Err(TrySendError::Closed(_)) => {
++                                        .unwrap_or(McpError::ServerGone),
++                        let _ = outgoing.try_send(Outgoing::Frame(frame));
++use std::pin::Pin;
++use std::task::Poll;
++    mpsc::{self, error::TrySendError},
++                            !self.control_panic.swap(false, Ordering::SeqCst),
++    assert!(poll_fn(|context| Poll::Ready(future.as_mut().poll(context).is_pending())).await);
++    peer.expire.store(true, Ordering::SeqCst);
++        McpError::SessionExpired
++            assert_eq!(bounded(call).await.unwrap_err(), McpError::Busy);
++            peer.count(|request| request.method == HttpMethod::Delete),
++        request.method == HttpMethod::Get
++        assert_eq!(bounded(call).await.unwrap_err(), McpError::Busy);
++    let cause = McpError::TooLarge("queued MCP control frames");
++    connection.close(McpError::Closed);
++        peer.count(|request| request.method == HttpMethod::Delete),
++    peer.control_panic.store(true, Ordering::SeqCst);
++                assert_eq!(error, McpError::ServerGone);
++    assert_eq!(bounded(connection.ended()).await, McpError::ServerGone);
++    connection.close(McpError::Closed);
++    assert_eq!(connection.end_cause(), Some(McpError::ServerGone));
++        peer.count(|request| request.method == HttpMethod::Delete),
++        queue.try_send(Outgoing::RecoveryReady {
++        Err(TrySendError::Closed(_))
++            .send(Outgoing::Frame(
++    let mut waiting = Box::pin(queue.send(Outgoing::Frame(b"waiting".to_vec())));
++    let mut next = Box::pin(queue.send(Outgoing::Frame(b"next".to_vec())));
++    assert!(matches!(held, Outgoing::Frame(_)));
++        .try_send(Outgoing::RecoveryReady {
++        queue.try_send(Outgoing::RecoveryReady {
++        Err(TrySendError::Full(_))
++    let mut closed = Box::pin(queue.send(Outgoing::Frame(b"closed".to_vec())));
++            .try_send(Outgoing::RecoveryReady {
++    let mut waiting = Box::pin(queue.send(Outgoing::Frame(b"waiting behind controls".to_vec())));
++        .try_send(Outgoing::Frame(b"reuses cancelled permit".to_vec()))
++    assert!(matches!(held_control, Outgoing::RecoveryReady { .. }));
++    assert_eq!(bounded(connection.ended()).await, McpError::Timeout);
++        assert_eq!(bounded(call).await.unwrap_err(), McpError::Timeout);
++        peer.count(|request| request.method == HttpMethod::Delete),
++    assert_eq!(connection.end_cause(), Some(McpError::Timeout));
++            McpError::Closed
++            McpError::Unauthorized
++        connection.close(McpError::Stopped);
++            peer.count(|request| request.method == HttpMethod::Delete),

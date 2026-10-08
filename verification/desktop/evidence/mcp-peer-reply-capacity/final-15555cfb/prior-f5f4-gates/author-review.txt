@@ -1,0 +1,131 @@
+Issue 665 final author review
+Exact head: f5f4f2b5b1fd04796301383dd0e73bb93eddc923
+Exact base: d59d9272ed7afdb512c13263c8b9620ebd591db0
+Checkout: /workspace/nessa-agent-peer-reply-capacity (clean)
+PR: https://github.com/nessalabs/nessa-agent/pull/671
+Owned scope: MCP Connection FIFO admission, HTTP writer sender type, existing
+writer test construction, ADR392 and module maps. No uncommitted source changes.
+
+Authority and identity: queue clones share sender and ordinary semaphore, without
+new mutable session/binding authority. Outgoing exhaustively classifies Frame vs
+PeerReply/RecoveryReady in one owner. HttpSession remains binding/version/phase
+owner; Shared remains first end cause and pending ID owner. Captured ReplyContext
+travels unchanged through the envelope. J21/J22 verify exact replacement SID and
+unnegotiated version both before and after validated matching initialization.
+
+Domain invariants: no execution/domain transition or persistence rule changes.
+Transport invariants remain HTTP owned: provisional reply binding is not readiness,
+initialized acceptance gates ordinary calls, and captured request identity cannot
+adopt replacement state. Existing J17-J20 plus new J21/J22 cover those relations.
+
+Admission and concurrency: physical HTTP FIFO derives ordinary64+reserve1.
+Ordinary permits cover queued frames or an in-progress send and release at dequeue.
+Controls bypass the ordinary permit, remain FIFO and may consume free ordinary
+slots. Full is explicit; controls have no priority/unbounded progress promise.
+J24 proves exact ordinary bound, dequeue before dispatch release, cancellation both
+before acquiring capacity and after acquisition behind full controls, receiver loss.
+J21-J23 cover actual writer pressure and reader progress; J22 retains control order.
+
+Failure and cleanup: full reply admission follows deliver -> HTTP shutdown fence ->
+Shared.end, preserving one typed cause. J23 proves TooLarge through later close,
+no queued effect, joined startup and one DELETE; actual lost receiver yields
+ServerGone. J25 Timeout/J26 Closed/Unauthorized remain first through later close.
+Existing J19/http_shutdown proofs retain first fence and one DELETE. No replay.
+Custom-exchange writer panic before end publication is an existing adjacent gap,
+not repaired by this scoped change; a later peer reply now explicitly ends the
+lost receiver. Separately tracked as issue #670 (https://github.com/nessalabs/nessa-agent/issues/670); explicitly excluded from this PR.
+
+Observations and restoration: inbound reader never waits for reply admission.
+Actual reply and matching result are separately gated, including matching result
+before writer drain. No session snapshot/restoration changes; retained phase and
+reader ownership remain existing HttpSession contracts. Existing J9-J20 controls
+are retained, including ordinary/cancellation responses and timer/ready ordering.
+
+Audit: no product permission/lifecycle audited transition or durable audit port
+changes. Transport failure cause and physical cleanup ownership remain distinct;
+no invented actor or cancellation acknowledgement. Tests assert actual exchanges,
+causes, reader destruction and DELETE rather than diagnostic logs.
+
+Representation boundaries: real JSON/SSE fixtures create originating context;
+queued peer answers preserve IDs/results/-32601 and exact headers. Frame encoding
+and body/session-ID bounds remain owning existing adapters. New queue does not
+parse messages for scheduling or classify by strings. Both ping and unsupported
+request variants use reserved admission; controls/cancellations use exhaustive
+Outgoing classification. Custom writer loss is tested independently of HTTP codes.
+
+Resource bounds: HTTP retains at most65 queue envelopes and at most64 ordinary
+admission permits, including sends blocked behind controls. Returned frame has no
+queue permit. Frame byte bound remains MAX_FRAME_BYTES; the change adds one bounded
+physical envelope/frame/context, not another reader registry or session identity
+copy. Pending calls retain MAX_IN_FLIGHT; ReplyContext retains shared bounded binding
+and existing protocol version. Caller-owned futures retain existing frame payloads;
+no spawned/unbounded transport queue is introduced. Best-effort cancellation still
+directly aborts HTTP reader independent of remote notification capacity.
+
+Public surface and organization: no public SDK API, schema, dependency, process
+fixture or production test switch. Queue wrapper is crate-private in the owning
+Connection module. Direct installed writer tests consume that owner with reserve0.
+Test-only try_recv compiles only all(test,unix), matching MCP tests' platform gate.
+ADR392 J21-J26 precede source edits; module maps retain existing feature ownership.
+
+Agreement: pending RPC ID belongs to Shared, ordinary permit to queued envelope,
+reply ID/version to HttpMessage/ReplyContext, validated phase/dispatch admission and
+close fence to HttpSession, final connection cause to Shared.end, reader/DELETE
+ownership to existing registry and SessionClaims. Tests cross these relationships:
+queued calls Busy while reply carries provisional SID; matching result cannot alter
+captured reply version; overflow/close/timeout refuse effects without leaking the
+provisional cleanup claim; dequeue/cancel free capacity without publishing phase.
+No persistence/application/UI data path changes; those boundaries are excluded.
+
+
+Gate15: ADR392 J21-J26 ordering rows preceded source implementation. Each row has
+regression evidence; actual saturated HTTP replies prove binding and matching-init
+progress, with positive and failure/close/deadline controls.
+Gate16: root/Astra accepted one existing FIFO reserve and explicit overflow;
+no priority lane, scheduling controller, replay or second session authority.
+Gate17: supported current scripted-browser umbrella exited0 on this clean combined
+head. Apps16/16 (2 shared +7 Chromium +7 WebKit), Gateway13/13 (1 shared +6 each),
+Scenarios8/8 (4 each), all rows ok and zero failures. Dev/headless/columns/bundled
+Chromium and WebKit; source assertions unchanged. No UI/performance behavior added.
+
+Final numeric gates: format0; fullMCP0 (221 passed,1 existing ignored); selected
+six-package all-target Clippy0; full six-package runner0 (25 successful verdicts,
+4419 passed,30 existing ignored/child probes,0 failed); strict SDK docs0;
+architecture checker0; architecture unit tests0 (74 passed,0 failed); supported
+scripted-browser0 (16/13/8 held, both engines). Command/exit/log records are in
+/workspace/665-final-author-evidence/manifest.json and its referenced files.
+
+Environment: x86_64-unknown-linux-gnu, exclusive transferred665 Cargo target,
+jobs1/devdebug0/testdebug0/incremental0, injected existing manual clocks and gates.
+Existing verification subreaper owns process-test/browser descendants. Copied
+checkout-owned dependencies and vendored UI match exact pin1f22c0467f935b9f3fcac8a0340c96e8d0c31439.
+Browser library paths and exact current gateway/libGLES binary hashes are in
+browser-environment.json. PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS skips only
+ldconfig-cache preflight; real Chromium/WebKit assertions ran without exemptions.
+Local Rust checks cover Linux; root verifies hosted supported-platform CI.
+Headless WebKit was exercised, native WKWebView was not; no perf claim was made.
+
+Historical proof, not final-head checks: clean ee798344 on b228750b had all initial
+gates green plus six independent applied rule mutations, each exit101 and a FAILED
+regression: reserve removal; ordinary admission bypass; ignored overflow; missing
+dequeue permit release; RecoveryReady consuming ordinary permit; wrong Closed
+cause. Each mutation has an asserted source edit/diff, command and raw failure log
+under /workspace/665-author-evidence. The first sixth-selector attempt was rejected
+before source editing, recorded, then narrowed and successfully applied. Sources
+were restored with fresh mtimes; restored HTTP progress exited0 with56 passing.
+One rebase onto upstream desktop-rendering d59d9272 preserved all six Rust/test
+files and ADR392 byte-for-byte; final module map combines both owners' sections.
+These preserved source hashes make the six mutation proofs applicable to this
+final rule/test implementation. All final-tree gates were rerun separately; old
+logs and identities remain intact. Restack-provenance.json records that relationship.
+
+Explicit exclusion: existing custom-HttpExchange writer-panic supervision gap is
+tracked separately in #670. The Closed regression proves receiver loss becomes
+ServerGone when a later peer request is admitted; this fix does not supervise
+panics or establish panic=abort process behavior. Built-in-adapter panic was not
+claimed. No #670 implementation belongs to this PR.
+
+Author completion: all nine dimensions, agreement relationships, gates15-17,
+mutation failure/restoration, and final local checks complete. No unresolved
+finding within #665 scope. Fresh independent reviewers may now inspect the frozen
+final head against its exact current base and retained evidence.

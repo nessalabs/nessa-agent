@@ -1,0 +1,20 @@
+{
+  "old_head": "ee798344ddf921f5a60abd97ea7e5b0e547f7c36",
+  "old_base": "b228750b5f8fe4582e8480ee8264de9f9d498b26",
+  "new_base": "d59d9272ed7afdb512c13263c8b9620ebd591db0",
+  "new_head": "f5f4f2b5b1fd04796301383dd0e73bb93eddc923",
+  "new_tree": "5133291d06bfecb251023fcb8520830e59666d89",
+  "clean": true,
+  "unchanged_rule_files": {
+    "crates/nessa-sdk/src/infrastructure/mcp/connection.rs": "dfeb1f5ad71b0772b399727542f57a524a3ab13cab4634dd5f1092a6d9d26301",
+    "crates/nessa-sdk/src/infrastructure/mcp/http.rs": "0e7aadb9be3cd217cbba6c896ea3c4b6d8f24e47bbca20c45595aa4ef944b718",
+    "crates/nessa-sdk/src/infrastructure/mcp/mod.rs": "0574953b9729feefbb25a08f069f41bd3b4d1d4886961c27748b636b1f262ff6",
+    "crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs": "3fecc2aeefb75e0bd211d56e634c99004e71e1805592725a04d963e98d52df73",
+    "crates/nessa-sdk/tests/infrastructure/mcp/mod.rs": "782a2d9712f2d3a49bc3da990c199744fb5d5f0038d124c0b59ce28a3468d986",
+    "crates/nessa-sdk/tests/infrastructure/mcp/post_streams.rs": "bd15d846e9719e7fbcfbfc30ac492b501551dc33ad43545a20367ad83c626911",
+    "docs/adr/todo/392-remote-mcp-servers.md": "a95f43d5a814e3e62b72e17c28f54a01259d6b5fbeaa17fcd7066528b4861ed4"
+  },
+  "old_evidence": "/workspace/665-author-evidence",
+  "upstream_overlap": "desktop rendering/browser scripts and separate module-map sections; no Rust/Cargo/standards/architecture/CI source changed",
+  "module_map_verified": "final diff against d59 contains only the665 HTTP FIFO ownership update; upstream desktop sections retained"
+}

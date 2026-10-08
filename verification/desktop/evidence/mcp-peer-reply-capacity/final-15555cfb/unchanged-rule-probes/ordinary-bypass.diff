@@ -1,0 +1,11 @@
+--- accepted/connection.rs
++++ mutated/connection.rs
+@@ -125,7 +125,7 @@
+ impl Outgoing {
+     fn is_ordinary(&self) -> bool {
+         match self {
+-            Self::Frame(_) => true,
++            Self::Frame(_) => false,
+             Self::PeerReply { .. } | Self::RecoveryReady { .. } => false,
+         }
+     }

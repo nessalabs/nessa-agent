@@ -1,0 +1,44 @@
+[
+  {
+    "mutation": "reserve-zero",
+    "exit": 101,
+    "test": "infrastructure::mcp::tests::http_progress::j21_saturated_ordinary_queue_preserves_early_recovery_answers",
+    "diff": "reserve-zero.diff",
+    "log": "reserve-zero.log"
+  },
+  {
+    "mutation": "ordinary-bypass",
+    "exit": 101,
+    "test": "infrastructure::mcp::tests::http_progress::j24_ordinary_capacity_releases_on_dequeue_and_cancellation",
+    "diff": "ordinary-bypass.diff",
+    "log": "ordinary-bypass.log"
+  },
+  {
+    "mutation": "ignored-overflow",
+    "exit": 101,
+    "test": "infrastructure::mcp::tests::http_progress::j23_control_overflow_retains_first_cause_and_one_cleanup",
+    "diff": "ignored-overflow.diff",
+    "log": "ignored-overflow.log"
+  },
+  {
+    "mutation": "dequeue-permit-leak",
+    "exit": 101,
+    "test": "infrastructure::mcp::tests::http_progress::j24_ordinary_capacity_releases_on_dequeue_and_cancellation",
+    "diff": "dequeue-permit-leak.diff",
+    "log": "dequeue-permit-leak.log"
+  },
+  {
+    "mutation": "recovery-takes-ordinary-permit",
+    "exit": 101,
+    "test": "infrastructure::mcp::tests::http_progress::j24_ordinary_capacity_releases_on_dequeue_and_cancellation",
+    "diff": "recovery-takes-ordinary-permit.diff",
+    "log": "recovery-takes-ordinary-permit.log"
+  },
+  {
+    "mutation": "closed-cause-wrong",
+    "exit": 101,
+    "test": "infrastructure::mcp::tests::http_progress::j23_closed_control_queue_is_explicit",
+    "diff": "closed-cause-wrong.diff",
+    "log": "closed-cause-wrong.log"
+  }
+]

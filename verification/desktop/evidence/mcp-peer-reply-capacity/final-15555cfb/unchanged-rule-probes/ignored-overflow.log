@@ -1,0 +1,19 @@
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-peer-reply-capacity/crates/nessa-sdk)
+    Finished `test` profile [unoptimized] target(s) in 57.36s
+     Running unittests src/lib.rs (/workspace/665-cargo-target/debug/deps/nessa_sdk-3d68afc9996ff363)
+
+running 1 test
+
+thread 'infrastructure::mcp::tests::http_progress::j23_control_overflow_retains_first_cause_and_one_cleanup' (757326) panicked at crates/nessa-sdk/src/infrastructure/mcp/../../../tests/infrastructure/mcp/post_body.rs:130:10:
+controlled lifecycle completes: Elapsed(())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test infrastructure::mcp::tests::http_progress::j23_control_overflow_retains_first_cause_and_one_cleanup ... FAILED
+
+failures:
+
+failures:
+    infrastructure::mcp::tests::http_progress::j23_control_overflow_retains_first_cause_and_one_cleanup
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 3.01s
+
+error: test failed, to rerun pass `-p nessa-sdk --lib`

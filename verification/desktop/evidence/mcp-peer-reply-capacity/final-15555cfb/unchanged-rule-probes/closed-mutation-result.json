@@ -1,0 +1,8 @@
+[
+  {
+    "mutation": "closed-cause-wrong",
+    "exit": 101,
+    "test": "j23_closed_control_queue_is_explicit",
+    "seconds": 56.36
+  }
+]

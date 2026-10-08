@@ -1,0 +1,90 @@
+{
+  "head": "ee798344ddf921f5a60abd97ea7e5b0e547f7c36",
+  "clean": true,
+  "initial_checks": {
+    "format": {
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "full-mcp": {
+      "exit": 0,
+      "log_sha256": "ebca9f61c11f9dfced730b90c9ff72ced7939d8479810a9201dcf7bc8d379856"
+    },
+    "clippy": {
+      "exit": 0,
+      "log_sha256": "3c6406f849bb455d0685cb26dca812c58f0c74b3f478f32bf3fe84fb2e9a0415"
+    },
+    "architecture": {
+      "exit": 0,
+      "log_sha256": "2a2462c6729eeb5ecb05a41a9fb9ed10f97b1bdb34772bac68dd984b7907a5d8"
+    }
+  },
+  "mutations": [
+    {
+      "mutation": "reserve-zero",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j21_saturated_ordinary_queue_preserves_early_recovery_answers",
+      "diff": "reserve-zero.diff",
+      "log": "reserve-zero.log",
+      "runtime_failure_verified": true,
+      "log_sha256": "ca8d3b697b7dcfce3b8efd39340a789f599cde5bbb6f42cfb374a880cdb4d5e3",
+      "diff_sha256": "99fb1814f44548e44fe41edc2fee0710152c20d6c2f2e4c160ca16208312d4af"
+    },
+    {
+      "mutation": "ordinary-bypass",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j24_ordinary_capacity_releases_on_dequeue_and_cancellation",
+      "diff": "ordinary-bypass.diff",
+      "log": "ordinary-bypass.log",
+      "runtime_failure_verified": true,
+      "log_sha256": "0946a84d39fe9fd91c0815441522f7804a19e81c35e105944b84eb406f68dd2a",
+      "diff_sha256": "8e5cf36122f1c766d29da5c72ac0bc5f1cb8745ad8b0aee0de0ac6af88490551"
+    },
+    {
+      "mutation": "ignored-overflow",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j23_control_overflow_retains_first_cause_and_one_cleanup",
+      "diff": "ignored-overflow.diff",
+      "log": "ignored-overflow.log",
+      "runtime_failure_verified": true,
+      "log_sha256": "cc3d6c9d95fd1c0ad66fe090a0d9af405a874d4d1ef4cf8fa6681e0505bdff1e",
+      "diff_sha256": "4c6bb5538465a95ffbb025d9bb34ea1e3688c02e4d7c9136edae58657917bf35"
+    },
+    {
+      "mutation": "dequeue-permit-leak",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j24_ordinary_capacity_releases_on_dequeue_and_cancellation",
+      "diff": "dequeue-permit-leak.diff",
+      "log": "dequeue-permit-leak.log",
+      "runtime_failure_verified": true,
+      "log_sha256": "490c7c349fda84f6e3f03b1b6d18e0e05de718baa40190183a55b13c9678dea9",
+      "diff_sha256": "bcf200d3543786266b9f7a1e5d06e5f1cc074d77232bd82f93823f1e2f5aa486"
+    },
+    {
+      "mutation": "recovery-takes-ordinary-permit",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j24_ordinary_capacity_releases_on_dequeue_and_cancellation",
+      "diff": "recovery-takes-ordinary-permit.diff",
+      "log": "recovery-takes-ordinary-permit.log",
+      "runtime_failure_verified": true,
+      "log_sha256": "c46edcc2e2ced97098adfe0f3317fc3c29ce60c1e14e67241aa4500269995f82",
+      "diff_sha256": "c0742169f85b56ecc2b2996a192ad05ba3eb50f525ac82bf9e0fd8b1f3f68ad8"
+    },
+    {
+      "mutation": "closed-cause-wrong",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j23_closed_control_queue_is_explicit",
+      "diff": "closed-cause-wrong.diff",
+      "log": "closed-cause-wrong.log",
+      "runtime_failure_verified": true,
+      "log_sha256": "d3384ce7601e3d7d4bba581baad4f7e5c3dc58a695d13c1d454b30fe40dc18f2",
+      "diff_sha256": "a306bd77df9c0ed8d24766bca07233afc55af8138de3d316629b35f4f916c187"
+    }
+  ],
+  "restored_http_progress": {
+    "passed": 56,
+    "failed": 0,
+    "log_sha256": "28031fadab01450c22e7213b2a12c90ab9ae23b8c933e9d67dd8e53f25879ef3"
+  },
+  "limits": "Broader suite, docs, browser, independent code reviews and CI remain pending. Numeric mutation exits supplied by author; raw failure counts and diffs independently inspected."
+}

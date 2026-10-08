@@ -1,0 +1,49 @@
+{
+  "old_head": "ee798344ddf921f5a60abd97ea7e5b0e547f7c36",
+  "head": "f5f4f2b5b1fd04796301383dd0e73bb93eddc923",
+  "base": "d59d9272ed7afdb512c13263c8b9620ebd591db0",
+  "clean": true,
+  "files": [
+    {
+      "file": "crates/nessa-sdk/src/infrastructure/mcp/connection.rs",
+      "unchanged": true,
+      "sha256": "dfeb1f5ad71b0772b399727542f57a524a3ab13cab4634dd5f1092a6d9d26301"
+    },
+    {
+      "file": "crates/nessa-sdk/src/infrastructure/mcp/http.rs",
+      "unchanged": true,
+      "sha256": "0e7aadb9be3cd217cbba6c896ea3c4b6d8f24e47bbca20c45595aa4ef944b718"
+    },
+    {
+      "file": "crates/nessa-sdk/src/infrastructure/mcp/mod.rs",
+      "unchanged": true,
+      "sha256": "0574953b9729feefbb25a08f069f41bd3b4d1d4886961c27748b636b1f262ff6"
+    },
+    {
+      "file": "crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs",
+      "unchanged": true,
+      "sha256": "3fecc2aeefb75e0bd211d56e634c99004e71e1805592725a04d963e98d52df73"
+    },
+    {
+      "file": "crates/nessa-sdk/tests/infrastructure/mcp/mod.rs",
+      "unchanged": true,
+      "sha256": "782a2d9712f2d3a49bc3da990c199744fb5d5f0038d124c0b59ce28a3468d986"
+    },
+    {
+      "file": "crates/nessa-sdk/tests/infrastructure/mcp/post_streams.rs",
+      "unchanged": true,
+      "sha256": "bd15d846e9719e7fbcfbfc30ac492b501551dc33ad43545a20367ad83c626911"
+    },
+    {
+      "file": "docs/adr/todo/392-remote-mcp-servers.md",
+      "unchanged": true,
+      "sha256": "a95f43d5a814e3e62b72e17c28f54a01259d6b5fbeaa17fcd7066528b4861ed4"
+    },
+    {
+      "file": "docs/codebase-structure.md",
+      "unchanged": false,
+      "sha256": "88a2629a351ea5e60482a97139e5ec9991145030c2f38147d1e423ad0897afc3"
+    }
+  ],
+  "note": "All six Rust/test files and ADR unchanged; module map combines upstream desktop edits and #665 queue ownership."
+}

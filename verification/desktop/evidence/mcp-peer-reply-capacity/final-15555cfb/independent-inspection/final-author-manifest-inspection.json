@@ -1,0 +1,51 @@
+{
+  "head": "f5f4f2b5b1fd04796301383dd0e73bb93eddc923",
+  "base": "d59d9272ed7afdb512c13263c8b9620ebd591db0",
+  "checks": [
+    {
+      "name": "format",
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "full-mcp",
+      "exit": 0,
+      "log_sha256": "46fafb3476a2bcc069c4cd4e13289827679c27109988fa19be0d313e7aeb43f8"
+    },
+    {
+      "name": "clippy",
+      "exit": 0,
+      "log_sha256": "f20e133088b9eb18f54d3e4b6753d82c710daf7465f1087292cebe50729844b8"
+    },
+    {
+      "name": "six-package-full-suite",
+      "exit": 0,
+      "log_sha256": "1fd456466c6b01d190eb6e5f7d8d880dbf54d1d3203b479c083c46ffbbe8079f"
+    },
+    {
+      "name": "sdk-docs",
+      "exit": 0,
+      "log_sha256": "d0decda1aa7450f60229908b505fbd036865004fa8a3e5044dd4e791f7d4d8bd"
+    },
+    {
+      "name": "architecture-unit-tests",
+      "exit": 0,
+      "log_sha256": "b1586031d6eeeec0cc5f3920cf8e1b0e2a2dbb90f415a7e6651b23c8bb12670f"
+    },
+    {
+      "name": "architecture",
+      "exit": 0,
+      "log_sha256": "2a2462c6729eeb5ecb05a41a9fb9ed10f97b1bdb34772bac68dd984b7907a5d8"
+    },
+    {
+      "name": "scripted-browser",
+      "exit": 0,
+      "log_sha256": "3c9828d01b16ee450f09f801a1d813d141f7274cd4e158d076ce8974c4eb9add"
+    }
+  ],
+  "source_hashes_verified": 7,
+  "binary_hash_verified": true,
+  "clean": true,
+  "browser_results_independently_verified": "final-browser-inspection.json",
+  "limits": "Author local Linux gates. Fresh reviews and hosted supported-platform CI are tracked separately."
+}

@@ -1,0 +1,196 @@
+{
+  "head": "f5f4f2b5b1fd04796301383dd0e73bb93eddc923",
+  "base": "d59d9272ed7afdb512c13263c8b9620ebd591db0",
+  "clean": true,
+  "checks": {
+    "format": {
+      "exit": 0,
+      "command": "/workspace/665-final-author-evidence/format.command.json",
+      "log": "/workspace/665-final-author-evidence/format.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "full-mcp": {
+      "exit": 0,
+      "command": "/workspace/665-final-author-evidence/full-mcp.command.json",
+      "log": "/workspace/665-final-author-evidence/full-mcp.log",
+      "log_sha256": "46fafb3476a2bcc069c4cd4e13289827679c27109988fa19be0d313e7aeb43f8",
+      "passed": 221,
+      "ignored": 1,
+      "failed": 0
+    },
+    "clippy": {
+      "exit": 0,
+      "command": "/workspace/665-final-author-evidence/clippy.command.json",
+      "log": "/workspace/665-final-author-evidence/clippy.log",
+      "log_sha256": "f20e133088b9eb18f54d3e4b6753d82c710daf7465f1087292cebe50729844b8"
+    },
+    "six-package-full-suite": {
+      "exit": 0,
+      "command": "/workspace/665-final-author-evidence/six-package-full-suite.command.json",
+      "log": "/workspace/665-final-author-evidence/six-package-full-suite.log",
+      "log_sha256": "1fd456466c6b01d190eb6e5f7d8d880dbf54d1d3203b479c083c46ffbbe8079f",
+      "successful_verdicts": 25,
+      "passed": 4419,
+      "ignored": 30,
+      "failed": 0
+    },
+    "sdk-docs": {
+      "exit": 0,
+      "command": "/workspace/665-final-author-evidence/sdk-docs.command.json",
+      "log": "/workspace/665-final-author-evidence/sdk-docs.log",
+      "log_sha256": "d0decda1aa7450f60229908b505fbd036865004fa8a3e5044dd4e791f7d4d8bd"
+    },
+    "architecture-unit-tests": {
+      "exit": 0,
+      "command": "/workspace/665-final-author-evidence/architecture-unit-tests.command.json",
+      "log": "/workspace/665-final-author-evidence/architecture-unit-tests.log",
+      "log_sha256": "b1586031d6eeeec0cc5f3920cf8e1b0e2a2dbb90f415a7e6651b23c8bb12670f",
+      "passed": 74,
+      "failed": 0
+    },
+    "architecture": {
+      "exit": 0,
+      "command": "/workspace/665-final-author-evidence/architecture.command.json",
+      "log": "/workspace/665-final-author-evidence/architecture.log",
+      "log_sha256": "2a2462c6729eeb5ecb05a41a9fb9ed10f97b1bdb34772bac68dd984b7907a5d8"
+    },
+    "scripted-browser": {
+      "exit": 0,
+      "command": "/workspace/665-final-author-evidence/scripted-browser.command.json",
+      "log": "/workspace/665-final-author-evidence/scripted-browser.log",
+      "log_sha256": "3c9828d01b16ee450f09f801a1d813d141f7274cd4e158d076ce8974c4eb9add"
+    }
+  },
+  "browser": {
+    "mcp-apps-gateway": {
+      "held": 16,
+      "failed": 0,
+      "engines": {
+        "shared": 2,
+        "chromium": 7,
+        "webkit": 7
+      },
+      "raw": "/workspace/665-final-author-evidence/scripted-browser/mcp-apps-gateway/result.json",
+      "sha256": "21b0fadd744c9a49edf5b5a84e1ada9c0b88ae64af44c2f0d87e065d9624c172"
+    },
+    "gateway-window": {
+      "held": 13,
+      "failed": 0,
+      "engines": {
+        "shared": 1,
+        "chromium": 6,
+        "webkit": 6
+      },
+      "raw": "/workspace/665-final-author-evidence/scripted-browser/gateway-window/result.json",
+      "sha256": "9f90760a84cc9d5c3a56504add91181fa749afe8b8b7765ce4dc8478daebb063"
+    },
+    "scripted-scenarios": {
+      "held": 8,
+      "failed": 0,
+      "engines": {
+        "chromium": 4,
+        "webkit": 4
+      },
+      "raw": "/workspace/665-final-author-evidence/scripted-browser/scripted-scenarios/result.json",
+      "sha256": "e7bf6cfcd92811cb8a53fa9a26eae9d8ece4eb108af7f87af50528f8cb8b549e"
+    }
+  },
+  "browser_summary": "/workspace/665-final-author-evidence/scripted-browser/pr-summary.md",
+  "environment": {
+    "head": "f5f4f2b5b1fd04796301383dd0e73bb93eddc923",
+    "base": "d59d9272ed7afdb512c13263c8b9620ebd591db0",
+    "platform": "x86_64-unknown-linux-gnu",
+    "jobs": 1,
+    "dev_debug": 0,
+    "test_debug": 0,
+    "incremental": 0,
+    "target": "/workspace/665-cargo-target",
+    "cargo_home": "/tmp/nessa-cargo",
+    "rustup_home": "/tmp/nessa-rustup",
+    "binary": "/workspace/665-cargo-target/debug/nessa",
+    "binary_sha256": "68be972a61d7c072508b5d4be9cd67ead292ec784fe66157de072b66b3b9af77",
+    "binary_mtime": 1791447669.5544944,
+    "binary_origin": "supported scripted umbrella cargo build -p nessa-server on clean final head; MCP_LIVE_NESSA targets its exclusive output",
+    "ui_pin": "1f22c0467f935b9f3fcac8a0340c96e8d0c31439",
+    "ui_actual": "1f22c0467f935b9f3fcac8a0340c96e8d0c31439",
+    "browser_mode": "dev",
+    "browser_channel": "bundled",
+    "browser_engines": [
+      "chromium",
+      "webkit"
+    ],
+    "browser_layout": "columns",
+    "libgles2": "/tmp/637-browser-libs/extracted/usr/lib/x86_64-linux-gnu/libGLESv2.so.2.1.0",
+    "libgles2_sha256": "3d07baa9b15672660df7e19f068499310f5922b238991daaf2cefa704d2bb7ef",
+    "library_path": [
+      "/tmp/nessa-browser-libs/usr/lib/x86_64-linux-gnu",
+      "/tmp/637-browser-libs/extracted/usr/lib/x86_64-linux-gnu"
+    ],
+    "host_preflight": "only ldconfig-cache validation skipped; actual engines and unmodified browser assertions ran",
+    "process_supervision": "existing verification subreaper /tmp/637-verify-subreaper.py wraps repository suite and browser helpers; no new process fixtures",
+    "limits": "local Rust gates on Linux; hosted supported-platform CI inspected separately by root; headless WebKit is not native WKWebView; no UI/performance behavior changed"
+  },
+  "restack_provenance": "/workspace/665-final-author-evidence/restack-provenance.json",
+  "unchanged_rule_sources": {
+    "crates/nessa-sdk/src/infrastructure/mcp/connection.rs": "dfeb1f5ad71b0772b399727542f57a524a3ab13cab4634dd5f1092a6d9d26301",
+    "crates/nessa-sdk/src/infrastructure/mcp/http.rs": "0e7aadb9be3cd217cbba6c896ea3c4b6d8f24e47bbca20c45595aa4ef944b718",
+    "crates/nessa-sdk/src/infrastructure/mcp/mod.rs": "0574953b9729feefbb25a08f069f41bd3b4d1d4886961c27748b636b1f262ff6",
+    "crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs": "3fecc2aeefb75e0bd211d56e634c99004e71e1805592725a04d963e98d52df73",
+    "crates/nessa-sdk/tests/infrastructure/mcp/mod.rs": "782a2d9712f2d3a49bc3da990c199744fb5d5f0038d124c0b59ce28a3468d986",
+    "crates/nessa-sdk/tests/infrastructure/mcp/post_streams.rs": "bd15d846e9719e7fbcfbfc30ac492b501551dc33ad43545a20367ad83c626911",
+    "docs/adr/todo/392-remote-mcp-servers.md": "a95f43d5a814e3e62b72e17c28f54a01259d6b5fbeaa17fcd7066528b4861ed4"
+  },
+  "mutation_proof_head": "ee798344ddf921f5a60abd97ea7e5b0e547f7c36",
+  "mutation_proofs": [
+    {
+      "mutation": "reserve-zero",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j21_saturated_ordinary_queue_preserves_early_recovery_answers",
+      "diff": "/workspace/665-author-evidence/reserve-zero.diff",
+      "log": "/workspace/665-author-evidence/reserve-zero.log"
+    },
+    {
+      "mutation": "ordinary-bypass",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j24_ordinary_capacity_releases_on_dequeue_and_cancellation",
+      "diff": "/workspace/665-author-evidence/ordinary-bypass.diff",
+      "log": "/workspace/665-author-evidence/ordinary-bypass.log"
+    },
+    {
+      "mutation": "ignored-overflow",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j23_control_overflow_retains_first_cause_and_one_cleanup",
+      "diff": "/workspace/665-author-evidence/ignored-overflow.diff",
+      "log": "/workspace/665-author-evidence/ignored-overflow.log"
+    },
+    {
+      "mutation": "dequeue-permit-leak",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j24_ordinary_capacity_releases_on_dequeue_and_cancellation",
+      "diff": "/workspace/665-author-evidence/dequeue-permit-leak.diff",
+      "log": "/workspace/665-author-evidence/dequeue-permit-leak.log"
+    },
+    {
+      "mutation": "recovery-takes-ordinary-permit",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j24_ordinary_capacity_releases_on_dequeue_and_cancellation",
+      "diff": "/workspace/665-author-evidence/recovery-takes-ordinary-permit.diff",
+      "log": "/workspace/665-author-evidence/recovery-takes-ordinary-permit.log"
+    },
+    {
+      "mutation": "closed-cause-wrong",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j23_closed_control_queue_is_explicit",
+      "diff": "/workspace/665-author-evidence/closed-cause-wrong.diff",
+      "log": "/workspace/665-author-evidence/closed-cause-wrong.log"
+    }
+  ],
+  "restored_proof": {
+    "head": "ee798344ddf921f5a60abd97ea7e5b0e547f7c36",
+    "exit": 0,
+    "passed": 56,
+    "log": "/workspace/665-author-evidence/mutation-restored-http-progress.log"
+  },
+  "historical_ee798_evidence": "/workspace/665-author-evidence",
+  "excluded_followup": "https://github.com/nessalabs/nessa-agent/issues/670"
+}

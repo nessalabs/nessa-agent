@@ -1,0 +1,37 @@
+{
+  "head": "ee798344ddf921f5a60abd97ea7e5b0e547f7c36",
+  "exit": 0,
+  "checks": [
+    {
+      "check": "mcp-apps-gateway",
+      "passed": 16,
+      "failed": 0,
+      "engines": [
+        "chromium",
+        "webkit"
+      ],
+      "sha256": "2d66204b9af2c84061ba83f5ef35bfa873590b74d10831a5893afc855eeec2ec"
+    },
+    {
+      "check": "scripted-scenarios",
+      "passed": 8,
+      "failed": 0,
+      "engines": [
+        "chromium",
+        "webkit"
+      ],
+      "sha256": "fce630bdf3519c90f52847cfc6893b5eb2172b0a521ce9dc5b07caece9702086"
+    },
+    {
+      "check": "gateway-window",
+      "passed": 13,
+      "failed": 0,
+      "engines": [
+        "chromium",
+        "webkit"
+      ],
+      "sha256": "55f2d973fb7ce8da22639fa3a317eaf0f8d2a9bb2dec32bdcc1fd582676015d6"
+    }
+  ],
+  "note": "Historical pre-restack browser evidence; final combined-source run remains required."
+}

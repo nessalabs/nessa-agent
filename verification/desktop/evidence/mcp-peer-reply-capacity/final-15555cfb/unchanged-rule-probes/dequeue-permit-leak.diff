@@ -1,0 +1,11 @@
+--- accepted/connection.rs
++++ mutated/connection.rs
+@@ -200,7 +200,7 @@
+ 
+ impl OutgoingFrames {
+     pub(crate) async fn recv(&mut self) -> Option<Outgoing> {
+-        self.receiver.recv().await.map(|queued| queued.message)
++        self.receiver.recv().await.map(|queued| { std::mem::forget(queued._ordinary); queued.message })
+     }
+ 
+     #[cfg(all(test, unix))]

@@ -1,0 +1,11 @@
+--- accepted/connection.rs
++++ mutated/connection.rs
+@@ -581,7 +581,7 @@
+                                         .expect("connection state")
+                                         .ended
+                                         .clone()
+-                                        .unwrap_or(McpError::ServerGone),
++                                        .unwrap_or(McpError::Unconfirmed),
+                                 );
+                             }
+                         }

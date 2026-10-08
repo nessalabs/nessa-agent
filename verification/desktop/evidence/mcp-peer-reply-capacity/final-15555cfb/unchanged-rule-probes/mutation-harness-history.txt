@@ -1,0 +1,1 @@
+Sixth probe selector initially matched two existing ServerGone fallbacks; assertion rejected selector before editing. Source restored in finally. Selector narrowed to the closed peer-reply arm, then closed-cause-wrong applied and test failed with exit101. Restored source received fresh mtime and HTTP progress passed56 tests, exit0.

@@ -1,0 +1,134 @@
+{
+  "conversationId": "dbd6cde5-7c27-4b8b-b8e2-38af8086b555",
+  "revision": "6c11608e-59ff-443c-ae80-dcf8aba04565:6",
+  "messages": [
+    {
+      "executionId": "6a04c1c5-184e-48a4-b5db-37fea23b557a",
+      "userText": "S9e3b0851 permission",
+      "attachments": [],
+      "files": [],
+      "status": "running",
+      "parts": [
+        {
+          "offset": 0,
+          "kind": "text",
+          "text": "Asking",
+          "toolId": "",
+          "noticeId": "",
+          "messageId": "msg-8bcb653f-6559-4f0e-b626-1981dd91f4a4"
+        },
+        {
+          "offset": 1,
+          "kind": "text",
+          "text": " for review.",
+          "toolId": "",
+          "noticeId": "",
+          "messageId": "msg-8bcb653f-6559-4f0e-b626-1981dd91f4a4"
+        },
+        {
+          "offset": 2,
+          "kind": "tool",
+          "text": "",
+          "toolId": "toolu_scripted_192cb7ba-cdcb-4f4d-85f3-189066bbf0e2",
+          "noticeId": ""
+        }
+      ]
+    }
+  ],
+  "pending": [],
+  "permissions": [
+    {
+      "executionId": "6a04c1c5-184e-48a4-b5db-37fea23b557a",
+      "permissionId": "1",
+      "toolId": "toolu_scripted_192cb7ba-cdcb-4f4d-85f3-189066bbf0e2",
+      "title": "Report the rows",
+      "options": [
+        {
+          "id": "allow-once",
+          "label": "Allow once",
+          "effect": "allow"
+        },
+        {
+          "id": "deny-once",
+          "label": "Deny once",
+          "effect": "deny"
+        }
+      ],
+      "toolName": "mcp__mcptest__report_rows",
+      "origin": {
+        "kind": "harness"
+      },
+      "ask": "tool",
+      "argumentsJson": "{}"
+    }
+  ],
+  "tools": [
+    {
+      "executionId": "6a04c1c5-184e-48a4-b5db-37fea23b557a",
+      "toolId": "toolu_scripted_192cb7ba-cdcb-4f4d-85f3-189066bbf0e2",
+      "title": "Report the rows",
+      "kind": "other",
+      "status": "pending",
+      "details": "",
+      "input": "{}",
+      "mcp": {
+        "server": "mcptest",
+        "tool": "report_rows"
+      }
+    }
+  ],
+  "capabilities": {
+    "queue": true,
+    "steer": true,
+    "resume": false,
+    "permissions": true,
+    "imageInput": false,
+    "agentFeatures": {
+      "permissionDenial": "supported_for_offered_permission_reviews",
+      "nativeHookSuppression": "unknown",
+      "compactionReporting": "unsupported_not_implemented",
+      "modelSwitchReporting": "unsupported_not_implemented",
+      "permissionDeferral": "unsupported_not_implemented",
+      "elicitationForwarding": "unknown",
+      "preToolPolicy": "unsupported_not_implemented",
+      "policyEndTurn": "unsupported_not_implemented",
+      "policyCloseSession": "unsupported_not_implemented",
+      "incomingElicitation": "supported_with_correlated_round_trip"
+    }
+  },
+  "lifecycle": {
+    "phase": "attached"
+  },
+  "truncated": false,
+  "queueComplete": true,
+  "transcriptState": "complete",
+  "runtime": {
+    "model": "claude-sonnet-5",
+    "provider": "claude-acp",
+    "workspace": "/tmp/nessa-mcp-live-claude-zN4Tgd/workspace",
+    "agent": "claude",
+    "modelName": "Claude Sonnet 5",
+    "contextWindowTokens": 1000000,
+    "reasoning": true
+  },
+  "title": "S9e3b0851 permission",
+  "questions": [],
+  "approvalMode": "ask",
+  "approvalModes": [
+    {
+      "id": "ask",
+      "name": "Provider asks",
+      "description": "Claude may read without asking and requests approval where its native policy requires it."
+    },
+    {
+      "id": "auto",
+      "name": "Claude automatic review",
+      "description": "Claude's reviewer may allow or deny an action without asking. Some actions still request approval."
+    },
+    {
+      "id": "full",
+      "name": "Claude full access",
+      "description": "Claude may run allowed actions without asking; Nessa's fixed denied tools remain unavailable."
+    }
+  ]
+}
