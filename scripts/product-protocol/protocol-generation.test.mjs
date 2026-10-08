@@ -127,6 +127,17 @@ test("late product grammar refusal preserves schema and artifacts", () =>
     )
     assert.match(result.stderr, /Unsupported wire schema/)
   }))
+test("a method with no declared grant is refused before any artifact is written", () =>
+  fixture((path) => {
+    edit(path, "protocol/product/manifest.json", (manifest) => {
+      delete manifest.methods["mcpServers.list"].grant
+    })
+    const result = unchanged(path, productOutputs, () =>
+      generate(path, "generate-product-protocol"),
+    )
+    assert.match(result.stderr, /mcpServers\.list has no declared grant/)
+  }))
+
 test("current supported generators publish complete outputs", () =>
   fixture((path) => {
     for (const script of ["generate-protocol-types", "generate-product-protocol"]) {

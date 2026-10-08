@@ -5,6 +5,7 @@ import {
 import type { RequestDeadline, RpcRequester } from "../application/session-port.js"
 import {
   mcpServerInspect,
+  productMethodGrants,
   ProductMethod,
   type McpServersAuthorizeParams,
   type McpServersAuthorizeResult,
@@ -15,6 +16,7 @@ import {
   type McpServersRevokeResult,
   type McpServersSaveParams,
   type McpServersWriteResult,
+  type ProductSessionReady,
 } from "../generated/product.js"
 import {
   mcpServersAuthorizeResult,
@@ -23,6 +25,32 @@ import {
   mcpServersRevokeResult,
   mcpServersWriteResult,
 } from "../protocol/mcp-servers-validate.js"
+
+// The methods this API calls, named by the published table rather than listed again.
+const mcpServersGrants = Object.entries(productMethodGrants).flatMap(([method, grant]) =>
+  method.startsWith("mcpServers.") ? [grant] : [],
+)
+const mcpServersGrant = mcpServersGrants[0]
+if (
+  mcpServersGrants.length === 0 ||
+  typeof mcpServersGrant !== "string" ||
+  mcpServersGrants.some((grant) => grant !== mcpServersGrant)
+)
+  throw new Error("mcpServers methods do not share one published grant")
+
+/**
+ * Whether `session` carries the grant every mcpServers method asks for.
+ *
+ * The grant is `productMethodGrants`, generated from
+ * `protocol/product/manifest.json`. Carrying it is not permission: the
+ * gateway can still answer `forbidden`, and that answer is the one a
+ * surface goes by.
+ */
+export function carriesMcpServersGrant(
+  session: Pick<ProductSessionReady, "grants">,
+): boolean {
+  return session.grants.some((grant) => grant.action === mcpServersGrant)
+}
 
 /**
  * The gateway's stored MCP servers: list them, save one, remove one, and

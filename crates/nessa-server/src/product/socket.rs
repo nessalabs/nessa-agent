@@ -35,10 +35,10 @@ use nessa_auth::domain::{Action, AudienceId, CredentialId};
 #[cfg(test)]
 use nessa_protocol::product::generated::wire_shape_product_session_ready;
 use nessa_protocol::product::generated::{
-    CredentialIssueParams, CredentialListParams, CredentialListResult, CredentialRevokeParams,
-    CredentialRevokeResult, ExistingCredentialResult, IssuedCredentialResult, ProductSessionReady,
-    SessionAuthenticateParams, SessionChallenge, SessionTermination,
-    MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
+    action_for_method, CredentialIssueParams, CredentialListParams, CredentialListResult,
+    CredentialRevokeParams, CredentialRevokeResult, ExistingCredentialResult,
+    IssuedCredentialResult, ProductSessionReady, SessionAuthenticateParams, SessionChallenge,
+    SessionTermination, MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
     MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS, PRODUCT_VERSION,
 };
 use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
@@ -1608,63 +1608,6 @@ pub(super) fn success<T: serde::Serialize>(request_id: &str, payload: &T) -> Out
         .unwrap_or_else(|_| failure(request_id, "internal_error"))
 }
 
-fn action_for_method(method: &str) -> Option<&'static str> {
-    match method {
-        "server.health" | "agents.list" | "agents.installOptions" => Some("server.read"),
-        "conversation.recordsHead" | "conversation.recordsPage" | "conversation.catalogueHead" | "conversation.catalogueManifest" | "conversation.catalogueResolve" => Some("conversation.read"),
-        "agents.install"
-        | "conversation.create"
-        | "conversation.setApprovalMode"
-        | "conversation.read"
-        | "conversation.list"
-        | "conversation.observe"
-        | "conversation.send"
-        | "conversation.steer"
-        | "conversation.stop"
-        | "conversation.receipt"
-        | "conversation.remove"
-        | "conversation.reorder"
-        | "conversation.answer"
-        // Answering the agent's own question is input to the conversation, so
-        // it is writing to it like any other reply.
-        | "conversation.answerQuestion"
-        | "conversation.cancel"
-        | "conversation.close"
-        | "conversation.archive"
-        | "conversation.unarchive"
-        | "conversation.delete"
-        // Uploading into a conversation is writing to it.
-        | "attachment.begin"
-        // An app acts in its conversation, on its caller's behalf.
-        | "mcp.callTool"
-        | "mcp.readResource"
-        | "mcp.sendMessage"
-        | "mcp.updateModelContext"
-        | "mcp.releaseApp" => Some("conversation.write"),
-        "credential.issue" | "credential.list" | "credential.revoke" => Some("credential.manage"),
-        // A configured MCP server is started with the gateway's authority
-        // and given its variables, credentials among them (#391).
-        // Inspecting runs a stored server's executable with those variables.
-        "mcpServers.list"
-        | "mcpServers.save"
-        | "mcpServers.remove"
-        | "mcpServers.inspect"
-        | "mcpServers.authorize"
-        | "mcpServers.revoke" => {
-            Some("credential.manage")
-        }
-        // Enrolling a device creates a credential for it; Auth asks again for
-        // the exact consent inside the runtime.
-        "pairing.create"
-        | "pairing.pending"
-        | "pairing.status"
-        | "pairing.approve"
-        | "pairing.deny"
-        | "pairing.cancel" => Some("credential.manage"),
-        _ => None,
-    }
-}
-
 // Which request to blame for a frame that did not decode. Answer
 // `invalid_request` when the envelope parser reads one JSON object, no decoded
 // envelope name appears twice, `type` is `req`, and `id` is one Unicode string
@@ -2200,6 +2143,29 @@ mod tests {
             assert!(
                 action_for_method(method).is_some(),
                 "advertised method has no authorization/dispatch path: {method}"
+            );
+        }
+    }
+
+    /// The manifest is the only declaration of each method's grant.
+    /// A method with no `grant` field fails here, and so does a generated
+    /// mapping that answers something else.
+    #[test]
+    fn action_for_method_is_the_manifest_grant() {
+        let manifest: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../protocol/product/manifest.json"
+        )))
+        .unwrap();
+        for (method, spec) in manifest["methods"].as_object().unwrap() {
+            assert!(
+                spec.get("grant").is_some(),
+                "{method} has no declared grant"
+            );
+            assert_eq!(
+                action_for_method(method),
+                spec["grant"].as_str(),
+                "{method}"
             );
         }
     }
