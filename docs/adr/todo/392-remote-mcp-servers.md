@@ -432,6 +432,7 @@ Close alone owns DELETE, retaining the ID claim through the attempt's completion
 stateDiagram-v2
     [*] --> Available
     Available --> Initializing: session-bound 404 / register startup before header I/O
+    Initializing --> Initializing: early peer request / provisional reply binding only
     Initializing --> ReadyForWriter: matching validated initialize / publish identity
     Initializing --> Failed: startup failure or budget / retain first cause
     ReadyForWriter --> Completed: initialized accepted + valid predeadline delivery / atomic registry commit
@@ -457,13 +458,13 @@ a prior terminal recovery cause remains authoritative during teardown.
 | J1 | JSON headers arrive, body stalls; call times out/drops | Writer can send cancellation and another call; direct cancellation aborts registered body; no replay | `j1_stalled_json_timeout_allows_cancel_and_next_call` |
 | J2 | JSON/SSE completion without own terminal, valid terminal completion, body failure, oversize, or close | Forward neighboring evidence before typed Unconfirmed for an unanswered correlated call (P3); accept matching result/error. Bounded body and retained permit release only after destruction/reaping or joins | `j2_complete_streamed_json_settles_and_releases_body`, `j2_complete_body_without_own_terminal_settles_deadline_less_call`, `j2_matching_json_result_and_error_remain_accepted`, `j2_json_read_failure_and_bound_are_typed`, `j2_json_capacity_is_retained_through_physical_destruction` |
 | J3 | Matching initialize SSE result; peer holds body | Commit validated identity/version before GET/readiness, retire body, initialized/list/ping answer dispatch before EOF | `j3_public_open_held_initialize_dispatches_initialized_list_and_ping` |
-| J4 | Initialize has wrong id, request envelope, invalid version, repeated result or bad trailing bytes | Only first matching valid result establishes phase; invalid evidence does not start GET; terminal retirement ignores trailing bytes | `j4_invalid_initialize_version_does_not_claim_or_start_get`, `j4_initialize_terminal_precedes_bad_trailing_bytes`, P12/P13/P14 |
-| J5 | Close wins before initialization publication | Refuse publication/admission, no new claim or GET; owned reader/startup is joined | `j5_close_held_initialize_body_has_no_late_publication`, `j5_drop_initial_reader_does_not_retain_session`, P10 |
+| J4 | Initialize has wrong id, request envelope, invalid version, repeated result or bad trailing bytes | Only first matching valid result establishes validated phase; invalid evidence does not start GET; terminal retirement ignores trailing bytes | `j4_invalid_initialize_version_does_not_claim_or_start_get`, `j4_initialize_terminal_precedes_bad_trailing_bytes`, P12/P13/P14 |
+| J5 | Close wins before initialization publication | Refuse validated publication/admission, no new claim or GET after close; owned reader/startup is joined | `j5_close_held_initialize_body_has_no_late_publication`, `j5_drop_initial_reader_does_not_retain_session`, P10 |
 | J6 | Initialization publication wins then close/caller loss | Close owns one DELETE and its completion; no independent cleanup attempt | `j6_recovery_publication_then_close_owns_one_retained_delete`, `j6_j7_close_owns_delete_and_retains_claim_through_completion` |
 | J7 | DELETE held; duplicate close or a new opening repeats its ID | Finished waits; retained claim refuses collision and prevents DELETE targeting a new owner | `j7_public_open_collision_while_delete_is_held_is_not_deleted`, `j6_j7_close_owns_delete_and_retains_claim_through_completion` |
 | J8 | Session 404; recovery header/body held | Failed call is SessionExpired without replay; recovery is owned before header I/O; ordinary requests Busy while controls remain available | `j8_recovery_owned_before_headers_and_controls_remain_available`, `j8_stalled_recovery_json_is_owned_and_bounded`, `j8_recovery_server_ping_reply_dispatches_before_initialize_result` |
 | J9 | Recovery succeeds, fails, times out, or races close before initialized dispatch | Identity publication is separate from call admission. Gate queued calls before RecoveryReady and while initialized headers are held. One remaining initialization budget covers headers/body, queue handoff and initialized dispatch; writer revalidates its correlated handoff before dispatch and admission. Timeout/close/stale handoff/rejected initialized cannot release admission. Close joins startup and owns any claimed ID | `j9_recovery_gate_covers_queued_calls_and_initialized_headers`, `j9_expired_queued_handoff_cannot_dispatch_initialized`, `j9_saturated_queue_budget_expiry_retains_close_ownership`, `j9_timeout_while_initialized_headers_held_cannot_reopen`, `j9_rejected_initialized_does_not_release_admission`, J6 recovery-close test |
-| J10 | JSON/SSE private recovery carries another pending call's reply, then ends without its own terminal | Forward the observed neighboring result before SessionExpired; do not claim replacement identity, GET or initialized | `j10_recovery_neighbor_reply_precedes_invalid_initialize` |
+| J10 | JSON/SSE private recovery carries another pending call's reply, then ends without its own terminal | Forward the observed neighboring result before SessionExpired; no validated identity, GET or initialized; absent an early peer request, no replacement claim | `j10_recovery_neighbor_reply_precedes_invalid_initialize` |
 | J11 | Budget expires after initialized acceptance but before admission; stale queued handoff or completion channel loss follows a failure | Retain typed Timeout or first non-timeout failure; actual close is Closed, unknown loss alone is Unconfirmed; no admission from stale handoff | `j11_accepted_initialized_at_expiry_reports_timeout`, `j11_completion_loss_preserves_writer_failure`, `j9_expired_queued_handoff_cannot_dispatch_initialized`, J6 actual-close test |
 
 The completion channel and recovery phase share one terminal owner. The writer
@@ -491,6 +492,37 @@ infer which request produced it.
 | --- | --- | --- | --- |
 | J15 | Stateless control waits on headers; private initialize publishes replacement; control returns 404 | Classify actual stateless attempt as Malformed FailCall(None), preserve queued Ready and successful subsequent replacement call; no second initialize/replay | `j15_control_response_uses_its_actual_request_context` |
 | J16 | Stateless control returns 401 after replacement publication; refreshed retry emits replacement ID and returns 404 | Classify final bound attempt as SessionExpired, end without second recovery/replay; capture context separately for each real attempt | `j16_refreshed_control_retry_uses_its_own_bound_context` |
+
+Early peer replies carry immutable response binding through Connection's framing
+queue. A provisional claim permits that answer only; validation remains the owner
+of version, GET and ordinary admission. A captured binding is checked on each real
+POST attempt, including authorization retry, and cannot adopt a replacement.
+Private initialize and ordinary POST share authorization/status policy; private
+initialize has no legacy eligibility. A bound peer-answer 404 ends SessionExpired; a stateless 404 is Malformed.
+Neither starts recovery or replay; ordinary-call 404 retains its existing single recovery.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Absent
+    Absent --> Provisional: early peer request / bounded claim
+    Absent --> Validated: matching valid initialize / bounded claim
+    Provisional --> Validated: matching valid initialize / promote same binding
+    Absent --> Closed: close fence
+    Provisional --> Closed: close fence / retain claim through DELETE
+    Validated --> Closed: close fence / retain claim through DELETE
+```
+
+| Row | Trigger/order | Required outcome and ownership | Enforcer |
+| --- | --- | --- | --- |
+| J17 | Initial/replacement SSE request precedes matching result; peer waits for answer | Answer carries originating ID, without negotiated version. Provisional claim starts no GET/initialized/admission; valid result promotes same binding. No-ID response remains stateless | `j17_initial_peer_reply_keeps_response_binding_before_validation`, `j17_public_open_waits_for_bound_peer_answer_before_validation`, `j8_recovery_server_ping_reply_dispatches_before_initialize_result`, `j17_ordinary_body_reply_keeps_request_binding_and_ignores_returned_identity`, `j17_ordinary_terminal_ignores_non_authoritative_oversized_header` |
+| J18 | Provisional ID collides, exceeds 1024 bytes, or close wins | Typed refusal before answer effect/publication. Collision loser DELETE=0; owning close retains provisional claim through sole DELETE | `j18_early_peer_claim_refuses_collision_and_oversize_before_answer`, `j18_provisional_claim_is_retained_through_close_delete`, `j18_public_open_error_closes_provisional_binding` |
+| J19 | Reply queues before replacement, timeout, failure or close; peer answer returns 404 | Stale answer cannot acquire current identity. Refuse before dispatch after close/failure; bound peer-answer404 ends SessionExpired (stateless404 is Malformed), without recovery/replay. Ordinary-call404 positive control recovers | `j19_queued_reply_keeps_unnegotiated_version_and_is_refused_after_close`, `j19_old_reply_cannot_adopt_reused_or_stateless_replacement_binding`, `j19_peer_answer_404_ends_without_recovery_or_replay`, `j19_close_during_reply_authorization_refuses_post_effect`, `j19_reply_retry_cannot_adopt_identity_published_during_authorization`; ordinary recovery control in J20 |
+| J20 | Private initialize receives 401/retry, 403, 5xx, 400/404/405, 202 or exchange failure | One rejected retry maximum; observe exact scope challenge; Unauthorized/InsufficientScope/Unreachable/Malformed remain typed. 202/missing terminal is SessionExpired. No legacy GET, replacement GET/initialized or replay on failure; healthy and retry-success controls remain accepted | `j20_private_initialize_preserves_shared_authorization_and_status_policy`, `j20_private_initialize_healthy_and_retry_success_controls`, `j20_private_initialize_exchange_failure_is_unreachable`, J10 missing-terminal controls |
+
+J4/J5/J10's no-claim requirements describe bodies without an early claim for a peer answer.
+An already answered request may own provisional cleanup but cannot validate
+initialization. J8 previously checked dispatch only, and J14 covers the later
+initialized notification; neither established J17/J20's header/status guarantees.
 
 ```mermaid
 sequenceDiagram

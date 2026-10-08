@@ -91,6 +91,10 @@ impl Shared {
 /// Frames and the replacement handshake share the existing bounded writer queue.
 pub(crate) enum Outgoing {
     Frame(Vec<u8>),
+    PeerReply {
+        frame: Vec<u8>,
+        context: super::http::ReplyContext,
+    },
     RecoveryReady {
         deadline: ClockInstant,
         completed: oneshot::Sender<Result<(), McpError>>,
@@ -166,7 +170,7 @@ impl Connection {
     /// the HTTP session down so its DELETE runs once.
     pub(crate) fn open_http(
         session: Arc<HttpSession>,
-        incoming: mpsc::Receiver<Result<Vec<u8>, McpError>>,
+        incoming: mpsc::Receiver<Result<super::http::HttpMessage, McpError>>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         let shared = Arc::new(Shared {
@@ -187,6 +191,9 @@ impl Connection {
                 while let Some(frame) = frames.recv().await {
                     let outcome = match frame {
                         Outgoing::Frame(frame) => session.dispatch(&frame).await,
+                        Outgoing::PeerReply { frame, context } => {
+                            session.dispatch_reply(&frame, context).await
+                        }
                         Outgoing::RecoveryReady {
                             deadline,
                             completed,
@@ -416,7 +423,7 @@ async fn read<R: AsyncRead + Unpin>(
         let Ok(message) = serde_json::from_slice::<Value>(&bytes) else {
             break McpError::Malformed("a frame from the MCP server is not JSON".into());
         };
-        if let Some(cause) = deliver(&message, &shared, &outgoing) {
+        if let Some(cause) = deliver(&message, &shared, &outgoing, None) {
             break cause;
         }
     };
@@ -428,6 +435,7 @@ fn deliver(
     message: &Value,
     shared: &Shared,
     outgoing: &mpsc::Sender<Outgoing>,
+    reply: Option<super::http::ReplyContext>,
 ) -> Option<McpError> {
     let method = message.get("method").and_then(Value::as_str);
     let id = message.get("id").filter(|id| !id.is_null());
@@ -444,7 +452,11 @@ fn deliver(
             // Never awaited: waiting here for room in a queue the server
             // is not draining would stop reading what it writes.
             if let Ok(frame) = framing::encode(&answer) {
-                let _ = outgoing.try_send(Outgoing::Frame(frame));
+                let frame = match reply {
+                    Some(context) => Outgoing::PeerReply { frame, context },
+                    None => Outgoing::Frame(frame),
+                };
+                let _ = outgoing.try_send(frame);
             }
         }
         (Some(method), None) => {
@@ -477,7 +489,7 @@ fn deliver(
 /// The HTTP reader's loop: one JSON message at a time, the same correlation
 /// as [`read`].
 async fn read_messages(
-    mut incoming: mpsc::Receiver<Result<Vec<u8>, McpError>>,
+    mut incoming: mpsc::Receiver<Result<super::http::HttpMessage, McpError>>,
     shared: Arc<Shared>,
     outgoing: mpsc::Sender<Outgoing>,
 ) {
@@ -490,7 +502,7 @@ async fn read_messages(
         let Ok(message) = serde_json::from_slice::<Value>(&bytes) else {
             break McpError::Malformed("a frame from the MCP server is not JSON".into());
         };
-        if let Some(cause) = deliver(&message, &shared, &outgoing) {
+        if let Some(cause) = deliver(&message, &shared, &outgoing, bytes.reply) {
             break cause;
         }
     };

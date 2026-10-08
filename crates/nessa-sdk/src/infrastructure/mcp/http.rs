@@ -7,7 +7,7 @@
 //!        ▲                                              ├── POST modern, or legacy endpoint
 //!        │                                              ├── HttpExchange
 //!        │                                              ├── bounded owned POST readers (abort/join on close)
-//!        └── reader ◀── inbound JSON messages ─────────┴── optional GET stream
+//!        └── reader ◀── JSON + immutable reply context ─┴── optional GET stream
 //! ```
 //!
 //! Arrows are messages. One [`HttpSession`] is one local opening. It keeps the
@@ -15,7 +15,10 @@
 //! opening of the same URL already holds, and DELETE that id at most once on
 //! close. A 404 on a session-bound request fails that request with
 //! [`McpError::SessionExpired`] and starts one fresh `initialize` without the
-//! old id under its registered startup owner. Ordinary frames and initialized
+//! old id under its registered startup owner. Early peer answers retain a bounded
+//! provisional binding without publishing validated readiness (ADR 392 J17–J19).
+//! Initial and recovery POSTs share authorization/status policy (J20).
+//! Ordinary frames and initialized
 //! use the connection writer; the failed request is not replayed.
 //! Legacy mode records that DELETE
 //! does not apply.
@@ -23,7 +26,7 @@
 //! Streamed POST bodies (JSON and SSE, including initialize) are session-owned
 //! and separately bounded. An SSE request reader
 //! forwards notices/requests until its matching result/error, then drops the body
-//! even if the peer leaves it open (ADR 392 P1–P14/J1–J16,
+//! even if the peer leaves it open (ADR 392 P1–P14/J1–J20,
 //! `tests::post_streams` and `tests::http_progress`).
 //!
 //! Dropping the session aborts its GET and POST streams and asks for the same single
@@ -90,14 +93,43 @@ impl SessionClaims {
     }
 }
 
+#[derive(Debug)]
+struct SessionBinding {
+    id: Option<String>,
+}
+
+/// Immutable HTTP evidence accompanying a peer request's generated answer.
+#[derive(Clone, Debug)]
+pub(crate) struct ReplyContext {
+    binding: Option<Arc<SessionBinding>>,
+    version: Option<String>,
+}
+
+/// One received JSON frame, retaining transport evidence for a generated reply.
+/// The connection owns JSON framing; HTTP owns the private binding evidence.
+#[derive(Debug)]
+pub(crate) struct HttpMessage {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) reply: Option<ReplyContext>,
+}
+impl std::ops::Deref for HttpMessage {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+impl From<Vec<u8>> for HttpMessage {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self { bytes, reply: None }
+    }
+}
+
 struct Phase {
-    /// `None` when the server omitted `Mcp-Session-Id`.
-    session_id: Option<String>,
+    /// One claimed binding, provisional until `open` records validated initialize.
+    binding: Option<Arc<SessionBinding>>,
     version: Option<String>,
     /// Set once the initial POST took the legacy path.
     legacy_post: Option<String>,
-    /// The id was claimed in [`SessionClaims`]; close retains it through DELETE.
-    claimed: bool,
     recovery: Recovery,
     open: bool,
 }
@@ -132,7 +164,7 @@ pub struct HttpSession {
     exchange: Arc<dyn HttpExchange>,
     authorization: Arc<dyn RemoteAuthorization>,
     claims: Arc<SessionClaims>,
-    inbound: mpsc::Sender<Result<Vec<u8>, McpError>>,
+    inbound: mpsc::Sender<Result<HttpMessage, McpError>>,
     phase: Mutex<Phase>,
     closing: AtomicBool,
     delete_started: AtomicBool,
@@ -187,13 +219,13 @@ impl HttpSession {
     /// # Panics
     ///
     /// Panics when called outside a Tokio runtime.
-    pub fn open(
+    pub(crate) fn open(
         server: Uuid,
         url: RemoteMcpUrl,
         exchange: Arc<dyn HttpExchange>,
         authorization: Arc<dyn RemoteAuthorization>,
         claims: Arc<SessionClaims>,
-    ) -> (Arc<Self>, mpsc::Receiver<Result<Vec<u8>, McpError>>) {
+    ) -> (Arc<Self>, mpsc::Receiver<Result<HttpMessage, McpError>>) {
         let (inbound, incoming) = mpsc::channel(64);
         let session = Arc::new_cyclic(|weak| Self {
             local: NEXT_LOCAL.fetch_add(1, Ordering::Relaxed),
@@ -207,10 +239,9 @@ impl HttpSession {
             claims,
             inbound,
             phase: Mutex::new(Phase {
-                session_id: None,
+                binding: None,
                 version: None,
                 legacy_post: None,
-                claimed: false,
                 recovery: Recovery::Available,
                 open: false,
             }),
@@ -254,9 +285,10 @@ impl HttpSession {
         let phase = self.phase.lock().expect("http phase");
         let legacy = phase.legacy_post.is_some();
         let session_id = phase
-            .session_id
-            .clone()
-            .filter(|_| phase.claimed && !legacy);
+            .binding
+            .as_ref()
+            .filter(|_| !legacy)
+            .and_then(|binding| binding.id.clone());
         let url = self.url.as_str().to_owned();
         let claims = self.claims.clone();
         let local = self.local;
@@ -302,6 +334,15 @@ impl HttpSession {
 
     /// Send one newline-framed JSON-RPC message.
     pub async fn dispatch(&self, frame: &[u8]) -> SendOutcome {
+        self.dispatch_frame(frame, PostPurpose::Ordinary).await
+    }
+
+    pub(crate) async fn dispatch_reply(&self, frame: &[u8], context: ReplyContext) -> SendOutcome {
+        self.dispatch_frame(frame, PostPurpose::PeerReply(context))
+            .await
+    }
+
+    async fn dispatch_frame(&self, frame: &[u8], purpose: PostPurpose) -> SendOutcome {
         if self.closing.load(Ordering::SeqCst) {
             return SendOutcome::End(McpError::Closed);
         }
@@ -318,7 +359,10 @@ impl HttpSession {
             .get("method")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        let id = message.get("id").and_then(Value::as_u64);
+        let peer_reply = matches!(purpose, PostPurpose::PeerReply(_));
+        let id = (!peer_reply)
+            .then(|| message.get("id").and_then(Value::as_u64))
+            .flatten();
         if method.as_deref() == Some("notifications/cancelled") {
             if let Some(id) = message
                 .get("params")
@@ -360,14 +404,20 @@ impl HttpSession {
         } else {
             None
         };
-        match self.post_modern(bytes).await {
+        match self.post_modern(bytes, purpose).await {
             Ok(Modern::Response(attempt)) => {
                 self.deliver_body(attempt, method.as_deref(), id, permit)
                     .await
             }
             Ok(Modern::Accepted) => SendOutcome::Done,
             Ok(Modern::Legacy) => self.enter_legacy(bytes, id).await,
-            Err(error) => self.terminal(id, error),
+            Err(error) => {
+                if peer_reply {
+                    SendOutcome::End(error)
+                } else {
+                    self.terminal(id, error)
+                }
+            }
         }
     }
 
@@ -402,15 +452,23 @@ impl HttpSession {
         id: Option<u64>,
         permit: Option<OwnedSemaphorePermit>,
     ) -> SendOutcome {
-        let PostResponse { response, context } = attempt;
+        let PostResponse {
+            response,
+            context,
+            origin,
+            failure,
+        } = attempt;
         let status = response.status;
         if status == 202 {
             return SendOutcome::Done;
         }
-        if status == 403 {
-            return self.refuse_scope(response).await;
-        }
-        if let Some(error) = response_failure(status, context) {
+        if let Some(error) = failure {
+            if matches!(
+                context,
+                ResponseContext::PeerReplyBound | ResponseContext::PeerReplyStateless
+            ) {
+                return SendOutcome::End(error);
+            }
             if error == McpError::SessionExpired {
                 return self.recover(id, permit);
             }
@@ -448,6 +506,7 @@ impl HttpSession {
                     BodyPurpose::public(request_id, initialize),
                     &weak,
                     &inbound,
+                    &origin,
                 )
                 .await
                 {
@@ -475,6 +534,7 @@ impl HttpSession {
             BodyPurpose::public(method.and(id), method == Some("initialize")),
             &self.weak,
             &self.inbound,
+            &origin,
         )
         .await
         {
@@ -486,65 +546,64 @@ impl HttpSession {
         }
     }
 
-    async fn post_modern(&self, body: &[u8]) -> Result<Modern, McpError> {
-        let bearer = self.authorization.bearer(self.server).await?;
-        let first = self.exchange(body, bearer.as_ref()).await?;
-        if first.response.status == 401 {
-            let challenge = first
-                .response
-                .header("www-authenticate")
-                .unwrap_or("Bearer")
-                .to_owned();
-            // Drop the body without treating 401 as legacy.
-            drop(first);
-            if let Some(retry) = self.authorization.rejected(self.server, &challenge).await? {
-                let second = self.exchange(body, Some(&retry)).await?;
-                return Ok(Self::classify(second));
-            }
-            return Err(McpError::Unauthorized);
-        }
-        Ok(Self::classify(first))
+    async fn post_modern(&self, body: &[u8], purpose: PostPurpose) -> Result<Modern, McpError> {
+        authorized_modern_post(
+            &self.weak,
+            self.exchange.clone(),
+            self.authorization.clone(),
+            self.server,
+            body,
+            purpose,
+        )
+        .await
     }
 
-    fn classify(attempt: PostResponse) -> Modern {
-        if matches!(attempt.response.status, 400 | 404 | 405)
-            && matches!(
-                attempt.context,
-                ResponseContext::Initialize {
-                    legacy_allowed: true
-                }
-            )
-        {
-            return Modern::Legacy;
-        }
-        if attempt.response.status == 202 {
-            Modern::Accepted
-        } else {
-            Modern::Response(attempt)
-        }
-    }
-
-    async fn exchange(
+    /// Build evidence synchronously; external I/O holds no upgraded session.
+    fn modern_request(
         &self,
         body: &[u8],
         bearer: Option<&Bearer>,
-    ) -> Result<PostResponse, McpError> {
+        purpose: &PostPurpose,
+    ) -> Result<(HttpRequest, ResponseContext, ReplyContext), McpError> {
+        let _readers = self.readers.lock().expect("http readers");
         if self.closing.load(Ordering::SeqCst) {
             return Err(McpError::Closed);
         }
+        let phase = self.phase.lock().expect("http phase");
         let initialize = body_is_initialize(body);
-        let (session_id, version, open) = {
-            let phase = self.phase.lock().expect("http phase");
-            (phase.session_id.clone(), phase.version.clone(), phase.open)
+        let binding = match purpose {
+            PostPurpose::PeerReply(reply) => {
+                check_reply_binding(&phase, reply)?;
+                reply.binding.clone()
+            }
+            PostPurpose::RecoveryInitialize => {
+                if let Recovery::Failed(error) = &phase.recovery {
+                    return Err(error.clone());
+                }
+                None
+            }
+            PostPurpose::Ordinary => phase.binding.clone(),
+        };
+        let version = if initialize {
+            None
+        } else {
+            match purpose {
+                PostPurpose::PeerReply(reply) => reply.version.clone(),
+                _ => phase.version.clone(),
+            }
         };
         let mut context = if initialize {
             ResponseContext::Initialize {
-                legacy_allowed: !open && session_id.is_none(),
+                legacy_allowed: matches!(purpose, PostPurpose::Ordinary)
+                    && !phase.open
+                    && phase.binding.is_none()
+                    && matches!(phase.recovery, Recovery::Available),
             }
+        } else if matches!(purpose, PostPurpose::PeerReply(_)) {
+            ResponseContext::PeerReplyStateless
         } else {
             ResponseContext::Stateless
         };
-        let include_version = version.is_some() && !initialize;
         let mut headers = vec![
             (
                 "Accept".into(),
@@ -552,31 +611,32 @@ impl HttpSession {
             ),
             ("Content-Type".into(), "application/json".into()),
         ];
-        if include_version {
-            if let Some(version) = version {
-                headers.push(("MCP-Protocol-Version".into(), version));
+        if !initialize {
+            if let Some(id) = binding.as_ref().and_then(|binding| binding.id.as_ref()) {
+                headers.push(("Mcp-Session-Id".into(), id.clone()));
+                context = if matches!(purpose, PostPurpose::PeerReply(_)) {
+                    ResponseContext::PeerReplyBound
+                } else {
+                    ResponseContext::SessionBound
+                };
             }
-        }
-        if let Some(session_id) = session_id {
-            if !initialize {
-                headers.push(("Mcp-Session-Id".into(), session_id));
-                context = ResponseContext::SessionBound;
+            if let Some(version) = &version {
+                headers.push(("MCP-Protocol-Version".into(), version.clone()));
             }
         }
         if let Some(bearer) = bearer {
             headers.push(("Authorization".into(), format!("Bearer {}", bearer.token())));
         }
-        let response = self
-            .exchange
-            .exchange(HttpRequest {
+        Ok((
+            HttpRequest {
                 method: HttpMethod::Post,
                 url: self.url.as_str().to_owned(),
                 headers,
                 body: body.to_vec(),
-            })
-            .await
-            .map_err(|_| lost_exchange(body))?;
-        Ok(PostResponse { response, context })
+            },
+            context,
+            ReplyContext { binding, version },
+        ))
     }
 
     async fn enter_legacy(&self, initialize: &[u8], id: Option<u64>) -> SendOutcome {
@@ -613,9 +673,12 @@ impl HttpSession {
             if self.closing.load(Ordering::SeqCst) {
                 return SendOutcome::End(McpError::Closed);
             }
-            let task = self
-                .runtime
-                .spawn(read_legacy_stream(response, inbound, Some(endpoint_tx)));
+            let task = self.runtime.spawn(read_legacy_stream(
+                response,
+                inbound,
+                Some(endpoint_tx),
+                None,
+            ));
             readers.stop_get();
             readers.get.push(task);
         }
@@ -735,37 +798,85 @@ impl HttpSession {
         }
         wire::initialized(result)?;
         let version = result["protocolVersion"].as_str().map(str::to_owned);
-        let Some(session_id) = session_header.filter(|id| !id.is_empty()) else {
-            let mut phase = self.phase.lock().expect("http phase");
-            phase.version = version;
-            phase.open = true;
-            drop(phase);
-            self.start_get(None, &mut readers);
-            return Ok(());
-        };
-        if session_id.len() > 1024 {
-            return Err(McpError::TooLarge("Mcp-Session-Id"));
-        }
-        if !self.claims.claim(self.url.as_str(), session_id, self.local) {
-            return Err(McpError::SessionCollision);
-        }
         let mut phase = self.phase.lock().expect("http phase");
-        phase.session_id = Some(session_id.to_owned());
+        let binding = self.claim_binding(&mut phase, session_header)?;
         phase.version = version;
-        phase.claimed = true;
         phase.open = true;
         drop(phase);
-        self.start_get(Some(session_id.to_owned()), &mut readers);
+        self.start_get(binding, &mut readers);
         Ok(())
     }
 
-    fn start_get(&self, session_id: Option<String>, readers: &mut ReaderTasks) {
+    fn claim_binding(
+        &self,
+        phase: &mut Phase,
+        header: Option<&str>,
+    ) -> Result<Option<Arc<SessionBinding>>, McpError> {
+        let id = bounded_session_id(header)?;
+        if let Some(binding) = &phase.binding {
+            return if binding.id.as_deref() == id {
+                Ok(Some(binding.clone()))
+            } else {
+                Err(McpError::Malformed(
+                    "initialize changed its response binding".into(),
+                ))
+            };
+        }
+        if let Some(id) = id {
+            if !self.claims.claim(self.url.as_str(), id, self.local) {
+                return Err(McpError::SessionCollision);
+            }
+        }
+        let binding = Arc::new(SessionBinding {
+            id: id.map(str::to_owned),
+        });
+        phase.binding = Some(binding.clone());
+        Ok(Some(binding))
+    }
+
+    fn peer_reply_context(
+        &self,
+        purpose: BodyPurpose,
+        header: Option<&str>,
+        origin: &ReplyContext,
+    ) -> Result<ReplyContext, McpError> {
+        let _readers = self.readers.lock().expect("http readers");
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(McpError::Closed);
+        }
+        let mut phase = self.phase.lock().expect("http phase");
+        if let Recovery::Failed(error) = &phase.recovery {
+            return Err(error.clone());
+        }
+        if matches!(
+            purpose,
+            BodyPurpose::Initialize(_) | BodyPurpose::RecoveryInitialize
+        ) {
+            Ok(ReplyContext {
+                binding: self.claim_binding(&mut phase, header)?,
+                version: phase.version.clone(),
+            })
+        } else {
+            check_reply_binding(&phase, origin)?;
+            Ok(origin.clone())
+        }
+    }
+
+    fn start_get(&self, binding: Option<Arc<SessionBinding>>, readers: &mut ReaderTasks) {
         if self.phase.lock().expect("http phase").legacy_post.is_some() {
             return;
         }
-        let Some(session_id) = session_id else {
+        let Some(binding) = binding else {
             return;
         };
+        let Some(session_id) = binding.id.clone() else {
+            return;
+        };
+        let origin = ReplyContext {
+            binding: Some(binding),
+            version: self.phase.lock().expect("http phase").version.clone(),
+        };
+        let weak = self.weak.clone();
         let exchange = self.exchange.clone();
         let url = self.url.as_str().to_owned();
         let version = self.phase.lock().expect("http phase").version.clone();
@@ -796,7 +907,7 @@ impl HttpSession {
             if response.status == 405 || response.status != 200 {
                 return;
             }
-            read_legacy_stream(response, inbound, None).await;
+            read_legacy_stream(response, inbound, None, Some((weak, origin))).await;
         });
         readers.stop_get();
         readers.get.push(task);
@@ -819,12 +930,11 @@ impl HttpSession {
             return SendOutcome::End(McpError::SessionExpired);
         }
         phase.recovery = Recovery::Initializing;
-        if phase.claimed {
-            if let Some(old) = phase.session_id.take() {
-                self.claims.release(self.url.as_str(), &old, self.local);
+        if let Some(old) = phase.binding.take() {
+            if let Some(id) = &old.id {
+                self.claims.release(self.url.as_str(), id, self.local);
             }
         }
-        phase.claimed = false;
         phase.open = false;
         phase.version = None;
         drop(phase);
@@ -843,7 +953,6 @@ impl HttpSession {
         let exchange = self.exchange.clone();
         let authorization = self.authorization.clone();
         let server = self.server;
-        let url = self.url.as_str().to_owned();
         let weak = self.weak.clone();
         let inbound = self.inbound.clone();
         let deadline = clock.now() + super::servers::INITIALIZE_TIMEOUT;
@@ -853,34 +962,34 @@ impl HttpSession {
                 return;
             }
             let startup = async {
-                let bearer = authorization.bearer(server).await?;
-                let mut headers = vec![
-                    (
-                        "Accept".into(),
-                        "application/json, text/event-stream".into(),
-                    ),
-                    ("Content-Type".into(), "application/json".into()),
-                ];
-                if let Some(bearer) = bearer {
-                    headers.push(("Authorization".into(), format!("Bearer {}", bearer.token())));
-                }
                 let body = serde_json::to_vec(&json!({
                     "jsonrpc": "2.0", "id": 0, "method": "initialize",
                     "params": wire::initialize_params(),
                 }))
                 .unwrap_or_default();
-                let response = exchange
-                    .exchange(HttpRequest {
-                        method: HttpMethod::Post,
-                        url,
-                        headers,
-                        body,
-                    })
-                    .await
-                    .map_err(|_| McpError::SessionExpired)?;
-                if !(200..300).contains(&response.status) || response.status == 202 {
-                    return Err(McpError::SessionExpired);
+                let attempt = match authorized_modern_post(
+                    &weak,
+                    exchange,
+                    authorization,
+                    server,
+                    &body,
+                    PostPurpose::RecoveryInitialize,
+                )
+                .await?
+                {
+                    Modern::Response(attempt) => attempt,
+                    Modern::Accepted => return Err(McpError::SessionExpired),
+                    Modern::Legacy => {
+                        return Err(McpError::Malformed(
+                            "recovery initialize selected legacy transport".into(),
+                        ))
+                    }
+                };
+                if let Some(error) = attempt.failure {
+                    return Err(error);
                 }
+                let response = attempt.response;
+                let origin = attempt.origin;
                 let content_type = response.header("content-type");
                 let event_stream = sse::is_event_stream(content_type);
                 if !event_stream && content_type.is_some() && !sse::is_json(content_type) {
@@ -892,6 +1001,7 @@ impl HttpSession {
                     BodyPurpose::RecoveryInitialize,
                     &weak,
                     &inbound,
+                    &origin,
                 )
                 .await
                 .map_err(|error| match error {
@@ -962,16 +1072,13 @@ impl HttpSession {
             serde_json::to_vec(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
                 .unwrap_or_default();
         let sending = async {
-            match self.post_modern(&body).await {
+            match self.post_modern(&body, PostPurpose::Ordinary).await {
                 Ok(Modern::Accepted) => SendOutcome::Done,
-                Ok(Modern::Response(attempt)) if attempt.response.status == 403 => {
-                    self.refuse_scope(attempt.response).await
+                Ok(Modern::Response(attempt)) => {
+                    SendOutcome::End(attempt.failure.unwrap_or_else(|| {
+                        McpError::Malformed("recovery initialized was not accepted".into())
+                    }))
                 }
-                Ok(Modern::Response(attempt)) => SendOutcome::End(
-                    response_failure(attempt.response.status, attempt.context).unwrap_or_else(
-                        || McpError::Malformed("recovery initialized was not accepted".into()),
-                    ),
-                ),
                 Ok(Modern::Legacy) => SendOutcome::End(McpError::Malformed(
                     "recovery initialized selected legacy transport".into(),
                 )),
@@ -1068,9 +1175,17 @@ async fn consume_body(
     event_stream: bool,
     purpose: BodyPurpose,
     weak: &Weak<HttpSession>,
-    inbound: &mpsc::Sender<Result<Vec<u8>, McpError>>,
+    inbound: &mpsc::Sender<Result<HttpMessage, McpError>>,
+    origin: &ReplyContext,
 ) -> Result<bool, McpError> {
-    let header = response.header("mcp-session-id").map(str::to_owned);
+    let header = if matches!(
+        purpose,
+        BodyPurpose::Initialize(_) | BodyPurpose::RecoveryInitialize
+    ) {
+        bounded_session_id(response.header("mcp-session-id"))?.map(str::to_owned)
+    } else {
+        None
+    };
     if !event_stream {
         let bytes = response
             .bytes(MAX_FRAME_BYTES)
@@ -1081,7 +1196,9 @@ async fn consume_body(
                 }
                 super::http_exchange::BodyRead::Closed => McpError::Unconfirmed,
             })?;
-        return match receive_message(bytes, purpose, header.as_deref(), weak, inbound).await? {
+        return match receive_message(bytes, purpose, header.as_deref(), weak, inbound, origin)
+            .await?
+        {
             MessageOutcome::Terminal { initialized } => Ok(initialized),
             MessageOutcome::Continue => {
                 completed_body(purpose.request_id(), false)?;
@@ -1120,6 +1237,7 @@ async fn consume_body(
                 header.as_deref(),
                 weak,
                 inbound,
+                origin,
             )
             .await?
             {
@@ -1178,7 +1296,8 @@ async fn receive_message(
     purpose: BodyPurpose,
     header: Option<&str>,
     weak: &Weak<HttpSession>,
-    inbound: &mpsc::Sender<Result<Vec<u8>, McpError>>,
+    inbound: &mpsc::Sender<Result<HttpMessage, McpError>>,
+    origin: &ReplyContext,
 ) -> Result<MessageOutcome, McpError> {
     let message: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     let matched = purpose
@@ -1192,8 +1311,19 @@ async fn receive_message(
             .publish_initialize(&message["result"], header)?;
     }
     if !matched || !matches!(purpose, BodyPurpose::RecoveryInitialize) {
+        let reply = if message.get("method").and_then(Value::as_str).is_some()
+            && message.get("id").is_some_and(|id| !id.is_null())
+        {
+            Some(
+                weak.upgrade()
+                    .ok_or(McpError::Closed)?
+                    .peer_reply_context(purpose, header, origin)?,
+            )
+        } else {
+            None
+        };
         inbound
-            .send(Ok(bytes))
+            .send(Ok(HttpMessage { bytes, reply }))
             .await
             .map_err(|_| McpError::ServerGone)?;
     }
@@ -1215,6 +1345,8 @@ fn is_response_to(message: &Value, id: u64) -> bool {
 struct PostResponse {
     response: HttpResponse,
     context: ResponseContext,
+    origin: ReplyContext,
+    failure: Option<McpError>,
 }
 
 enum Modern {
@@ -1227,6 +1359,8 @@ enum Modern {
 enum ResponseContext {
     Initialize { legacy_allowed: bool },
     SessionBound,
+    PeerReplyBound,
+    PeerReplyStateless,
     Stateless,
 }
 
@@ -1234,7 +1368,13 @@ enum ResponseContext {
 fn response_failure(status: u16, context: ResponseContext) -> Option<McpError> {
     match status {
         401 => Some(McpError::Unauthorized),
-        404 if matches!(context, ResponseContext::SessionBound) => Some(McpError::SessionExpired),
+        404 if matches!(
+            context,
+            ResponseContext::SessionBound | ResponseContext::PeerReplyBound
+        ) =>
+        {
+            Some(McpError::SessionExpired)
+        }
         500.. => Some(if matches!(context, ResponseContext::Initialize { .. }) {
             McpError::Unreachable
         } else {
@@ -1317,8 +1457,9 @@ fn body_is_initialize(body: &[u8]) -> bool {
 
 async fn read_legacy_stream(
     response: HttpResponse,
-    inbound: mpsc::Sender<Result<Vec<u8>, McpError>>,
+    inbound: mpsc::Sender<Result<HttpMessage, McpError>>,
     mut endpoint: Option<tokio::sync::oneshot::Sender<String>>,
+    modern: Option<(Weak<HttpSession>, ReplyContext)>,
 ) {
     let mut stream = match response.body {
         super::http_exchange::HttpBody::Stream(stream) => stream,
@@ -1331,7 +1472,16 @@ async fn read_legacy_stream(
                             let _ = tx.send(event.data);
                         }
                     } else if !event.data.is_empty() {
-                        let _ = inbound.send(Ok(event.data.into_bytes())).await;
+                        if let Err(error) = forward_stream_message(
+                            event.data.into_bytes(),
+                            &inbound,
+                            modern.as_ref(),
+                        )
+                        .await
+                        {
+                            let _ = inbound.send(Err(error)).await;
+                            return;
+                        }
                     }
                 }
             }
@@ -1370,9 +1520,127 @@ async fn read_legacy_stream(
             if event.data.is_empty() {
                 continue;
             }
-            if inbound.send(Ok(event.data.into_bytes())).await.is_err() {
+            if let Err(error) =
+                forward_stream_message(event.data.into_bytes(), &inbound, modern.as_ref()).await
+            {
+                let _ = inbound.send(Err(error)).await;
                 return;
             }
         }
+    }
+}
+
+fn check_reply_binding(phase: &Phase, reply: &ReplyContext) -> Result<(), McpError> {
+    if let Recovery::Failed(error) = &phase.recovery {
+        return Err(error.clone());
+    }
+    match (&phase.binding, &reply.binding) {
+        (None, None) => Ok(()),
+        (Some(current), Some(captured)) if Arc::ptr_eq(current, captured) => Ok(()),
+        _ => Err(McpError::SessionExpired),
+    }
+}
+
+#[derive(Clone)]
+enum PostPurpose {
+    Ordinary,
+    PeerReply(ReplyContext),
+    RecoveryInitialize,
+}
+
+async fn authorized_modern_post(
+    weak: &Weak<HttpSession>,
+    exchange: Arc<dyn HttpExchange>,
+    authorization: Arc<dyn RemoteAuthorization>,
+    server: Uuid,
+    body: &[u8],
+    purpose: PostPurpose,
+) -> Result<Modern, McpError> {
+    let mut bearer = authorization.bearer(server).await?;
+    for attempt_index in 0..2 {
+        let (request, context, origin) = {
+            let session = weak.upgrade().ok_or(McpError::Closed)?;
+            session.modern_request(body, bearer.as_ref(), &purpose)?
+        };
+        let response = exchange
+            .exchange(request)
+            .await
+            .map_err(|_| lost_exchange(body))?;
+        if response.status == 401 && attempt_index == 0 {
+            let challenge = response
+                .header("www-authenticate")
+                .unwrap_or("Bearer")
+                .to_owned();
+            drop(response);
+            bearer = authorization.rejected(server, &challenge).await?;
+            if bearer.is_some() {
+                continue;
+            }
+            return Err(McpError::Unauthorized);
+        }
+        if response.status == 403 {
+            let challenge = response
+                .header("www-authenticate")
+                .unwrap_or("Bearer")
+                .to_owned();
+            drop(response);
+            authorization.insufficient_scope(server, &challenge).await;
+            return Err(McpError::InsufficientScope);
+        }
+        if matches!(response.status, 400 | 404 | 405)
+            && matches!(
+                context,
+                ResponseContext::Initialize {
+                    legacy_allowed: true
+                }
+            )
+        {
+            return Ok(Modern::Legacy);
+        }
+        if response.status == 202 {
+            return Ok(Modern::Accepted);
+        }
+        let failure = response_failure(response.status, context);
+        return Ok(Modern::Response(PostResponse {
+            response,
+            context,
+            origin,
+            failure,
+        }));
+    }
+    unreachable!("the second authorization attempt returns its classified response")
+}
+
+/// The single initialize identity bound, applied before copying authoritative headers.
+fn bounded_session_id(header: Option<&str>) -> Result<Option<&str>, McpError> {
+    let id = header.filter(|id| !id.is_empty());
+    if id.is_some_and(|id| id.len() > 1024) {
+        Err(McpError::TooLarge("Mcp-Session-Id"))
+    } else {
+        Ok(id)
+    }
+}
+
+async fn forward_stream_message(
+    bytes: Vec<u8>,
+    inbound: &mpsc::Sender<Result<HttpMessage, McpError>>,
+    modern: Option<&(Weak<HttpSession>, ReplyContext)>,
+) -> Result<(), McpError> {
+    if let Some((weak, origin)) = modern {
+        receive_message(
+            bytes,
+            BodyPurpose::Protocol(None),
+            None,
+            weak,
+            inbound,
+            origin,
+        )
+        .await?;
+        Ok(())
+    } else {
+        inbound
+            .send(Ok(bytes.into()))
+            .await
+            .map_err(|_| McpError::ServerGone)
     }
 }

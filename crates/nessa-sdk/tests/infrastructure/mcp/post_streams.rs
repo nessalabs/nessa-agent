@@ -75,7 +75,12 @@ impl HttpExchange for Peer {
     }
 }
 
-fn session(peer: Arc<Peer>) -> (Arc<HttpSession>, mpsc::Receiver<Result<Vec<u8>, McpError>>) {
+fn session(
+    peer: Arc<Peer>,
+) -> (
+    Arc<HttpSession>,
+    mpsc::Receiver<Result<super::super::http::HttpMessage, McpError>>,
+) {
     HttpSession::open(
         Uuid::from_u128(1),
         RemoteMcpUrl::parse("http://127.0.0.1/mcp").unwrap(),
@@ -204,10 +209,10 @@ async fn post_eof_and_failure_release_body() {
             .unwrap();
         let (session, mut incoming) = session(Peer::new(vec![body]));
         dispatch(&session, 1).await;
-        assert_eq!(
+        assert!(matches!(
             bounded(incoming.recv()).await.unwrap(),
             Err(McpError::Unconfirmed)
-        );
+        ));
         probe.released().await;
         finish(&session).await;
     }

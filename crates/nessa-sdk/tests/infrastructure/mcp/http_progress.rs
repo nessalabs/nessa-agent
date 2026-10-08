@@ -1,4 +1,4 @@
-//! ADR 392 J1–J16: JSON/initialization progress and replacement cleanup ownership.
+//! ADR 392 J1–J20: JSON/initialization progress and replacement cleanup ownership.
 use super::super::connection::{Connection, Outgoing};
 use super::super::http::{HttpSession, SendOutcome};
 use super::super::{
@@ -69,6 +69,11 @@ struct Peer {
     initialized_expiry: Option<Arc<ManualClock>>,
     replacement_json: bool,
     call_sse: bool,
+    recovery_statuses: Mutex<VecDeque<u16>>,
+    initial_id: Option<String>,
+    replacement_id: Option<String>,
+    ordinary_response_id: Option<String>,
+    recovery_exchange_failure: AtomicBool,
 }
 impl Peer {
     fn new() -> Self {
@@ -87,6 +92,11 @@ impl Peer {
             initialized_expiry: None,
             replacement_json: false,
             call_sse: false,
+            recovery_statuses: Mutex::default(),
+            initial_id: Some("initial".into()),
+            replacement_id: Some("replacement".into()),
+            ordinary_response_id: None,
+            recovery_exchange_failure: AtomicBool::new(false),
         }
     }
     async fn observed(&self, predicate: impl Fn(&HttpRequest) -> bool) {
@@ -160,6 +170,23 @@ impl HttpExchange for Peer {
                             gate.enter().await;
                         }
                     }
+                    if recovery {
+                        if self.recovery_exchange_failure.swap(false, Ordering::SeqCst) {
+                            return Err(HttpFailure::Unreachable);
+                        }
+                        if let Some(status) = self.recovery_statuses.lock().unwrap().pop_front() {
+                            if status != 200 {
+                                return Ok(HttpResponse {
+                                    status,
+                                    headers: vec![(
+                                        "www-authenticate".into(),
+                                        "Bearer scope=tools".into(),
+                                    )],
+                                    body: HttpBody::Buffered(vec![]),
+                                });
+                            }
+                        }
+                    }
                     let body = if recovery {
                         self.replacement.lock().unwrap().take()
                     } else {
@@ -168,10 +195,13 @@ impl HttpExchange for Peer {
                     let mut response = json_response(
                         json!({"jsonrpc":"2.0","id":message["id"],"result":{"protocolVersion":"2025-06-18"}}),
                     );
-                    response.headers.push((
-                        "mcp-session-id".into(),
-                        if recovery { "replacement" } else { "initial" }.into(),
-                    ));
+                    if let Some(id) = if recovery {
+                        &self.replacement_id
+                    } else {
+                        &self.initial_id
+                    } {
+                        response.headers.push(("mcp-session-id".into(), id.clone()));
+                    }
                     if let Some(body) = body {
                         response.headers[0].1 = if recovery && self.replacement_json {
                             "application/json"
@@ -232,6 +262,9 @@ impl HttpExchange for Peer {
                 let mut response = json_response(
                     json!({"jsonrpc":"2.0","id":message["id"],"result":{"tools":[]}}),
                 );
+                if let Some(id) = &self.ordinary_response_id {
+                    response.headers.push(("mcp-session-id".into(), id.clone()));
+                }
                 if let Some(body) = self.bodies.lock().unwrap().pop_front() {
                     response.body = body;
                     if self.call_sse {
@@ -246,7 +279,10 @@ impl HttpExchange for Peer {
 fn transport(
     peer: Arc<Peer>,
     claims: Arc<SessionClaims>,
-) -> (Arc<HttpSession>, mpsc::Receiver<Result<Vec<u8>, McpError>>) {
+) -> (
+    Arc<HttpSession>,
+    mpsc::Receiver<Result<super::super::http::HttpMessage, McpError>>,
+) {
     HttpSession::open(
         Uuid::from_u128(1),
         RemoteMcpUrl::parse("http://127.0.0.1/mcp").unwrap(),
@@ -379,6 +415,20 @@ async fn j3_public_open_held_initialize_dispatches_initialized_list_and_ping() {
             .is_some_and(|message| message["id"] == 100 && message.get("result").is_some())
     })
     .await;
+    let answer = peer
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|request| {
+            serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .is_some_and(|message| message["id"] == 100)
+        })
+        .unwrap()
+        .clone();
+    assert_eq!(header(&answer, "Mcp-Session-Id"), Some("initial"));
+    assert_eq!(header(&answer, "MCP-Protocol-Version"), None);
     session.close().await;
 }
 
@@ -1105,13 +1155,57 @@ async fn j8_recovery_server_ping_reply_dispatches_before_initialize_result() {
             .is_some_and(|message| message["id"] == 70 && message.get("result").is_some())
     })
     .await;
+    let answer = peer
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|request| {
+            serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .is_some_and(|message| message["id"] == 70)
+        })
+        .unwrap()
+        .clone();
+    assert_eq!(header(&answer, "Mcp-Session-Id"), Some("replacement"));
+    assert_eq!(header(&answer, "MCP-Protocol-Version"), None);
+    assert_eq!(peer.count(|request| request.method == HttpMethod::Get), 1);
     assert_eq!(
         bounded(connection.call("tools/list", None))
             .await
             .unwrap_err(),
         McpError::Busy
     );
+    assert_eq!(
+        peer.count(|r| method(r).as_deref() == Some("notifications/initialized")),
+        0
+    );
+    probe.event(json!({"id":0,"result":{"protocolVersion":"2025-06-18"}}));
+    peer.observed(|r| method(r).as_deref() == Some("notifications/initialized"))
+        .await;
+    bounded(connection.call("tools/list", None))
+        .await
+        .unwrap()
+        .unwrap();
+    peer.observed(|r| {
+        r.method == HttpMethod::Get && header(r, "Mcp-Session-Id") == Some("replacement")
+    })
+    .await;
+    assert_eq!(peer.count(|r| r.method == HttpMethod::Get), 2);
+    assert_eq!(
+        peer.count(|r| method(r).as_deref() == Some("initialize")),
+        2
+    );
+    assert_eq!(
+        peer.count(|r| method(r).as_deref() == Some("notifications/initialized")),
+        1
+    );
+    assert_eq!(
+        peer.count(|r| method(r).as_deref() == Some("tools/list")),
+        2
+    );
     stop(&session).await;
+    assert_eq!(peer.count(|r| r.method == HttpMethod::Delete), 1);
     probe.released().await;
 }
 
@@ -1668,4 +1762,875 @@ async fn j16_refreshed_control_retry_uses_its_own_bound_context() {
     for public_writer in [false, true] {
         control_context_ordering(true, public_writer).await;
     }
+}
+
+struct MatrixAuthorization {
+    retry: bool,
+    rejected: AtomicUsize,
+    scope: Mutex<Vec<String>>,
+}
+#[async_trait]
+impl RemoteAuthorization for MatrixAuthorization {
+    async fn bearer(&self, _: Uuid) -> Result<Option<Bearer>, McpError> {
+        Ok(Some(Bearer::new("first", 0)))
+    }
+    async fn rejected(&self, _: Uuid, challenge: &str) -> Result<Option<Bearer>, McpError> {
+        assert_eq!(challenge, "Bearer scope=tools");
+        self.rejected.fetch_add(1, Ordering::SeqCst);
+        Ok(self.retry.then(|| Bearer::new("retry", 1)))
+    }
+    async fn insufficient_scope(&self, _: Uuid, challenge: &str) {
+        self.scope.lock().unwrap().push(challenge.to_owned());
+    }
+}
+
+#[tokio::test]
+async fn j20_private_initialize_preserves_shared_authorization_and_status_policy() {
+    for (statuses, retry, expected) in [
+        (vec![401], false, McpError::Unauthorized),
+        (vec![401, 401], true, McpError::Unauthorized),
+        (vec![403], true, McpError::InsufficientScope),
+        (vec![401, 403], true, McpError::InsufficientScope),
+        (vec![503], true, McpError::Unreachable),
+        (vec![401, 503], true, McpError::Unreachable),
+        (vec![400], true, McpError::Malformed("HTTP 400".into())),
+        (vec![404], true, McpError::Malformed("HTTP 404".into())),
+        (vec![405], true, McpError::Malformed("HTTP 405".into())),
+        (vec![202], true, McpError::SessionExpired),
+    ] {
+        let peer = Arc::new(Peer::new());
+        *peer.recovery_statuses.lock().unwrap() = statuses.clone().into();
+        let authorization = Arc::new(MatrixAuthorization {
+            retry,
+            rejected: AtomicUsize::new(0),
+            scope: Mutex::default(),
+        });
+        let (session, incoming) = HttpSession::open(
+            Uuid::from_u128(1),
+            RemoteMcpUrl::parse("http://127.0.0.1/mcp").unwrap(),
+            peer.clone(),
+            authorization.clone(),
+            Arc::default(),
+        );
+        let connection =
+            Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+        bounded(connection.call("initialize", None))
+            .await
+            .unwrap()
+            .unwrap();
+        peer.expire.store(true, Ordering::SeqCst);
+        assert_eq!(
+            bounded(connection.call("tools/list", None))
+                .await
+                .unwrap_err(),
+            McpError::SessionExpired
+        );
+        assert_eq!(
+            bounded(connection.ended()).await,
+            expected,
+            "statuses={statuses:?}"
+        );
+        assert_eq!(
+            bounded(connection.call("tools/list", None))
+                .await
+                .unwrap_err(),
+            expected
+        );
+        assert_eq!(
+            authorization.rejected.load(Ordering::SeqCst),
+            usize::from(statuses[0] == 401)
+        );
+        assert_eq!(
+            *authorization.scope.lock().unwrap(),
+            if statuses.contains(&403) {
+                vec!["Bearer scope=tools".to_owned()]
+            } else {
+                vec![]
+            }
+        );
+        assert_eq!(
+            peer.count(|r| method(r).as_deref() == Some("initialize")),
+            1 + statuses.len()
+        );
+        assert_eq!(peer.count(|r| r.method == HttpMethod::Get), 1);
+        assert_eq!(
+            peer.count(|r| method(r).as_deref() == Some("notifications/initialized")),
+            0
+        );
+        assert_eq!(
+            peer.count(|r| method(r).as_deref() == Some("tools/list")),
+            1
+        );
+        for request in peer
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| method(r).as_deref() == Some("initialize"))
+        {
+            assert_eq!(header(request, "Mcp-Session-Id"), None);
+            assert_eq!(header(request, "MCP-Protocol-Version"), None);
+        }
+        stop(&session).await;
+    }
+}
+
+#[tokio::test]
+async fn j17_initial_peer_reply_keeps_response_binding_before_validation() {
+    for (session_id, request_id, peer_method) in [
+        (Some("initial".to_owned()), json!(70), "ping"),
+        (None, json!("peer-string-id"), "unsupported/method"),
+        (Some("x".repeat(1024)), json!(71), "ping"),
+    ] {
+        let (probe, body) = Probe::body();
+        probe.event(json!({"id":request_id,"method":peer_method}));
+        let mut peer = Peer::new();
+        peer.initial_id = session_id.clone();
+        *peer.initial.lock().unwrap() = Some(body);
+        let peer = Arc::new(peer);
+        let (session, incoming) = transport(peer.clone(), Arc::default());
+        let connection = Arc::new(Connection::open_http(
+            session.clone(),
+            incoming,
+            Arc::new(RuntimeClock::new()),
+        ));
+        let opening = tokio::spawn({
+            let connection = connection.clone();
+            async move { connection.call("initialize", None).await }
+        });
+        peer.observed(|r| {
+            serde_json::from_slice::<Value>(&r.body)
+                .ok()
+                .is_some_and(|m| m["id"] == request_id && m.get("method").is_none())
+        })
+        .await;
+        let answer = peer
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| {
+                serde_json::from_slice::<Value>(&r.body)
+                    .ok()
+                    .is_some_and(|m| m["id"] == request_id)
+            })
+            .unwrap()
+            .clone();
+        assert_eq!(header(&answer, "Mcp-Session-Id"), session_id.as_deref());
+        assert_eq!(header(&answer, "MCP-Protocol-Version"), None);
+        assert_eq!(peer.count(|r| r.method == HttpMethod::Get), 0);
+        assert_eq!(
+            peer.count(|r| method(r).as_deref() == Some("notifications/initialized")),
+            0
+        );
+        probe.event(json!({"id":1,"result":{"protocolVersion":"2025-06-18"}}));
+        bounded(opening).await.unwrap().unwrap().unwrap();
+        if session_id.is_some() {
+            peer.observed(|r| r.method == HttpMethod::Get).await;
+        }
+        assert!(bounded(connection.call("tools/list", None)).await.is_ok());
+        stop(&session).await;
+        assert_eq!(
+            peer.count(|r| r.method == HttpMethod::Delete),
+            usize::from(session_id.is_some())
+        );
+        probe.released().await;
+    }
+}
+
+#[tokio::test]
+async fn j18_early_peer_claim_refuses_collision_and_oversize_before_answer() {
+    for collision in [false, true] {
+        let (probe, body) = Probe::body();
+        probe.event(json!({"id":70,"method":"ping"}));
+        let mut peer = Peer::new();
+        peer.initial_id = Some(if collision {
+            "occupied".into()
+        } else {
+            "x".repeat(1025)
+        });
+        *peer.initial.lock().unwrap() = Some(body);
+        let peer = Arc::new(peer);
+        let claims = Arc::new(SessionClaims::default());
+        if collision {
+            assert!(claims.claim("http://127.0.0.1/mcp", "occupied", u64::MAX));
+        }
+        let (session, incoming) = transport(peer.clone(), claims.clone());
+        let connection =
+            Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+        assert_eq!(
+            bounded(connection.call("initialize", None))
+                .await
+                .unwrap_err(),
+            if collision {
+                McpError::SessionCollision
+            } else {
+                McpError::TooLarge("Mcp-Session-Id")
+            }
+        );
+        assert_eq!(
+            peer.count(|r| serde_json::from_slice::<Value>(&r.body)
+                .ok()
+                .is_some_and(|m| m["id"] == 70)),
+            0
+        );
+        assert_eq!(peer.count(|r| r.method == HttpMethod::Get), 0);
+        stop(&session).await;
+        assert_eq!(peer.count(|r| r.method == HttpMethod::Delete), 0);
+        if collision {
+            assert!(!claims.claim("http://127.0.0.1/mcp", "occupied", 0));
+        }
+        probe.released().await;
+    }
+}
+
+#[tokio::test]
+async fn j19_peer_answer_404_ends_without_recovery_or_replay() {
+    for bound in [true, false] {
+        let (probe, body) = Probe::body();
+        probe.event(json!({"id":70,"method":"ping"}));
+        let mut peer = Peer::new();
+        if !bound {
+            peer.initial_id = None;
+        }
+        let peer = Arc::new(peer);
+        let expected = if bound {
+            McpError::SessionExpired
+        } else {
+            McpError::Malformed("HTTP 404".into())
+        };
+        *peer.initial.lock().unwrap() = Some(body);
+        peer.controls.lock().unwrap().push_back((404, None));
+        let (session, incoming) = transport(peer.clone(), Arc::default());
+        let connection =
+            Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+        assert_eq!(
+            bounded(connection.call("initialize", None))
+                .await
+                .unwrap_err(),
+            expected
+        );
+        assert_eq!(bounded(connection.ended()).await, expected);
+        assert_eq!(
+            peer.count(|r| method(r).as_deref() == Some("initialize")),
+            1
+        );
+        assert_eq!(peer.count(|r| r.method == HttpMethod::Get), 0);
+        stop(&session).await;
+        probe.released().await;
+    }
+}
+
+#[tokio::test]
+async fn j18_provisional_claim_is_retained_through_close_delete() {
+    let (probe, body) = Probe::body();
+    probe.event(json!({"id":70,"method":"ping"}));
+    let gate = Arc::new(Gate::default());
+    let mut peer = Peer::new();
+    peer.delete = Some(gate.clone());
+    *peer.initial.lock().unwrap() = Some(body);
+    let peer = Arc::new(peer);
+    let claims = Arc::new(SessionClaims::default());
+    let (session, incoming) = transport(peer.clone(), claims.clone());
+    let connection = Arc::new(Connection::open_http(
+        session.clone(),
+        incoming,
+        Arc::new(RuntimeClock::new()),
+    ));
+    let opening = tokio::spawn({
+        let connection = connection.clone();
+        async move { connection.call("initialize", None).await }
+    });
+    peer.observed(|r| {
+        serde_json::from_slice::<Value>(&r.body)
+            .ok()
+            .is_some_and(|m| m["id"] == 70)
+    })
+    .await;
+    probe.event(json!({"id":1,"result":{"protocolVersion":"invalid"}}));
+    assert!(matches!(
+        bounded(opening).await.unwrap(),
+        Err(McpError::Handshake(_))
+    ));
+    let mut done = session.finished();
+    connection.close(McpError::Closed);
+    gate.reached().await;
+    session.shutdown();
+    assert!(!*done.borrow());
+    assert!(!claims.claim("http://127.0.0.1/mcp", "initial", u64::MAX));
+    assert_eq!(peer.count(|r| r.method == HttpMethod::Delete), 1);
+    assert_eq!(peer.count(|r| r.method == HttpMethod::Get), 0);
+    gate.release();
+    bounded(done.wait_for(|done| *done)).await.unwrap();
+    assert!(claims.claim("http://127.0.0.1/mcp", "initial", u64::MAX));
+    probe.released().await;
+}
+
+#[tokio::test]
+async fn j18_public_open_error_closes_provisional_binding() {
+    let (probe, body) = Probe::body();
+    probe.event(json!({"id":70,"method":"ping"}));
+    let gate = Arc::new(Gate::default());
+    let mut peer = Peer::new();
+    peer.delete = Some(gate.clone());
+    *peer.initial.lock().unwrap() = Some(body);
+    let peer = Arc::new(peer);
+    let servers = McpServers::new(vec![], Arc::new(RuntimeClock::new())).unwrap();
+    servers.set_remote_transport(peer.clone(), Arc::new(NoAuthorization));
+    let opening = tokio::spawn(async move {
+        servers
+            .open_remote_once(
+                &RemoteMcpServer::new(Uuid::from_u128(1), "remote", "http://127.0.0.1/mcp")
+                    .unwrap(),
+            )
+            .await
+    });
+    peer.observed(|r| {
+        serde_json::from_slice::<Value>(&r.body)
+            .ok()
+            .is_some_and(|m| m["id"] == 70)
+    })
+    .await;
+    probe.event(json!({"id":1,"result":{"protocolVersion":"invalid"}}));
+    assert!(matches!(
+        bounded(opening).await.unwrap(),
+        Err(McpError::Handshake(_))
+    ));
+    gate.reached().await;
+    assert_eq!(peer.count(|r| r.method == HttpMethod::Delete), 1);
+    assert_eq!(peer.count(|r| r.method == HttpMethod::Get), 0);
+    gate.release();
+    probe.released().await;
+}
+
+#[tokio::test]
+async fn j19_queued_reply_keeps_unnegotiated_version_and_is_refused_after_close() {
+    let (probe, body) = Probe::body();
+    probe.event(json!({"id":70,"method":"ping"}));
+    let peer = Arc::new(Peer::new());
+    *peer.initial.lock().unwrap() = Some(body);
+    let (session, mut incoming) = transport(peer.clone(), Arc::default());
+    initialize(&session).await;
+    let request = bounded(incoming.recv()).await.unwrap().unwrap();
+    let context = request.reply.unwrap();
+    probe.event(json!({"id":1,"result":{"protocolVersion":"2025-06-18"}}));
+    bounded(incoming.recv()).await.unwrap().unwrap();
+    let answer = br#"{"id":70,"result":{}}"#;
+    assert!(matches!(
+        session.dispatch_reply(answer, context.clone()).await,
+        SendOutcome::Done
+    ));
+    let sent = peer
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|r| {
+            serde_json::from_slice::<Value>(&r.body)
+                .ok()
+                .is_some_and(|m| m["id"] == 70)
+        })
+        .unwrap()
+        .clone();
+    assert_eq!(header(&sent, "Mcp-Session-Id"), Some("initial"));
+    assert_eq!(header(&sent, "MCP-Protocol-Version"), None);
+    stop(&session).await;
+    assert!(matches!(
+        session.dispatch_reply(answer, context).await,
+        SendOutcome::End(McpError::Closed)
+    ));
+    assert_eq!(
+        peer.count(|r| serde_json::from_slice::<Value>(&r.body)
+            .ok()
+            .is_some_and(|m| m["id"] == 70)),
+        1
+    );
+    probe.released().await;
+}
+
+#[tokio::test]
+async fn j20_private_initialize_healthy_and_retry_success_controls() {
+    for retry in [false, true] {
+        let peer = Arc::new(Peer::new());
+        *peer.recovery_statuses.lock().unwrap() =
+            if retry { vec![401, 200] } else { vec![200] }.into();
+        let authorization = Arc::new(MatrixAuthorization {
+            retry,
+            rejected: AtomicUsize::new(0),
+            scope: Mutex::default(),
+        });
+        let (session, incoming) = HttpSession::open(
+            Uuid::from_u128(1),
+            RemoteMcpUrl::parse("http://127.0.0.1/mcp").unwrap(),
+            peer.clone(),
+            authorization.clone(),
+            Arc::default(),
+        );
+        let connection =
+            Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+        bounded(connection.call("initialize", None))
+            .await
+            .unwrap()
+            .unwrap();
+        peer.expire.store(true, Ordering::SeqCst);
+        assert_eq!(
+            bounded(connection.call("tools/list", None))
+                .await
+                .unwrap_err(),
+            McpError::SessionExpired
+        );
+        peer.observed(|r| method(r).as_deref() == Some("notifications/initialized"))
+            .await;
+        bounded(connection.call("tools/list", None))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            authorization.rejected.load(Ordering::SeqCst),
+            usize::from(retry)
+        );
+        assert_eq!(
+            peer.count(|r| method(r).as_deref() == Some("initialize")),
+            if retry { 3 } else { 2 }
+        );
+        assert_eq!(
+            peer.count(|r| method(r).as_deref() == Some("tools/list")),
+            2
+        );
+        if retry {
+            let requests = peer.seen.lock().unwrap();
+            let refreshed = requests
+                .iter()
+                .rfind(|r| method(r).as_deref() == Some("initialize"))
+                .unwrap();
+            assert_eq!(header(refreshed, "Authorization"), Some("Bearer retry"));
+            assert_eq!(header(refreshed, "Mcp-Session-Id"), None);
+            assert_eq!(header(refreshed, "MCP-Protocol-Version"), None);
+        }
+        stop(&session).await;
+    }
+}
+
+#[tokio::test]
+async fn j19_old_reply_cannot_adopt_reused_or_stateless_replacement_binding() {
+    for old_stateless in [false, true] {
+        let (probe, body) = Probe::body();
+        probe.event(json!({"id":70,"method":"ping"}));
+        let mut peer = Peer::new();
+        peer.call_sse = true;
+        peer.replacement_id = if old_stateless {
+            None
+        } else {
+            Some("initial".into())
+        };
+        peer.bodies.lock().unwrap().push_back(body);
+        let peer = Arc::new(peer);
+        let (session, mut incoming) = transport(peer.clone(), Arc::default());
+        let (writer, mut queue) = mpsc::channel(8);
+        session.set_writer(writer, Arc::new(RuntimeClock::new()));
+        if !old_stateless {
+            initialize(&session).await;
+            bounded(incoming.recv()).await.unwrap().unwrap();
+        }
+        assert!(matches!(call(&session, 10).await, SendOutcome::Done));
+        let request = bounded(incoming.recv()).await.unwrap().unwrap();
+        let context = request.reply.unwrap();
+        if old_stateless {
+            initialize(&session).await;
+            bounded(incoming.recv()).await.unwrap().unwrap();
+        }
+        peer.expire.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            call(&session, 11).await,
+            SendOutcome::FailCall {
+                error: McpError::SessionExpired,
+                ..
+            }
+        ));
+        let Outgoing::RecoveryReady {
+            deadline,
+            completed,
+        } = bounded(queue.recv()).await.unwrap()
+        else {
+            panic!("missing handoff")
+        };
+        assert!(matches!(
+            session.finish_recovery(deadline, completed).await,
+            SendOutcome::Done
+        ));
+        assert!(matches!(
+            session
+                .dispatch_reply(br#"{"id":70,"result":{}}"#, context)
+                .await,
+            SendOutcome::End(McpError::SessionExpired)
+        ));
+        assert_eq!(
+            peer.count(|r| serde_json::from_slice::<Value>(&r.body)
+                .ok()
+                .is_some_and(|m| m["id"] == 70)),
+            0
+        );
+        assert!(matches!(call(&session, 12).await, SendOutcome::Done));
+        stop(&session).await;
+        probe.released().await;
+    }
+}
+
+#[tokio::test]
+async fn j17_ordinary_body_reply_keeps_request_binding_and_ignores_returned_identity() {
+    for returned_id in ["other-session".to_owned(), "x".repeat(1025)] {
+        let (probe, body) = Probe::body();
+        probe.event(json!({"id":70,"method":"ping"}));
+        let mut peer = Peer::new();
+        peer.ordinary_response_id = Some(returned_id);
+        peer.call_sse = true;
+        peer.bodies.lock().unwrap().push_back(body);
+        let peer = Arc::new(peer);
+        let (session, incoming) = transport(peer.clone(), Arc::default());
+        let connection = Arc::new(Connection::open_http(
+            session.clone(),
+            incoming,
+            Arc::new(RuntimeClock::new()),
+        ));
+        bounded(connection.call("initialize", None))
+            .await
+            .unwrap()
+            .unwrap();
+        let call = tokio::spawn({
+            let connection = connection.clone();
+            async move { connection.call("tools/list", None).await }
+        });
+        peer.observed(|r| {
+            serde_json::from_slice::<Value>(&r.body)
+                .ok()
+                .is_some_and(|m| m["id"] == 70)
+        })
+        .await;
+        let answer = peer
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| {
+                serde_json::from_slice::<Value>(&r.body)
+                    .ok()
+                    .is_some_and(|m| m["id"] == 70)
+            })
+            .unwrap()
+            .clone();
+        assert_eq!(header(&answer, "Mcp-Session-Id"), Some("initial"));
+        assert_eq!(header(&answer, "MCP-Protocol-Version"), Some("2025-06-18"));
+        probe.event(json!({"id":2,"result":{"tools":[]}}));
+        bounded(call).await.unwrap().unwrap().unwrap();
+        stop(&session).await;
+        probe.released().await;
+    }
+}
+
+#[tokio::test]
+async fn j20_private_initialize_exchange_failure_is_unreachable() {
+    let peer = Arc::new(Peer::new());
+    peer.recovery_exchange_failure.store(true, Ordering::SeqCst);
+    let (session, incoming) = transport(peer.clone(), Arc::default());
+    let connection =
+        Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+    bounded(connection.call("initialize", None))
+        .await
+        .unwrap()
+        .unwrap();
+    peer.expire.store(true, Ordering::SeqCst);
+    assert_eq!(
+        bounded(connection.call("tools/list", None))
+            .await
+            .unwrap_err(),
+        McpError::SessionExpired
+    );
+    assert_eq!(bounded(connection.ended()).await, McpError::Unreachable);
+    assert_eq!(
+        bounded(connection.call("tools/list", None))
+            .await
+            .unwrap_err(),
+        McpError::Unreachable
+    );
+    assert_eq!(
+        peer.count(|r| method(r).as_deref() == Some("initialize")),
+        2
+    );
+    assert_eq!(peer.count(|r| r.method == HttpMethod::Get), 1);
+    assert_eq!(
+        peer.count(|r| method(r).as_deref() == Some("notifications/initialized")),
+        0
+    );
+    stop(&session).await;
+}
+
+struct ReplyGateAuthorization {
+    bearer_calls: AtomicUsize,
+    gate: Arc<Gate>,
+}
+#[async_trait]
+impl RemoteAuthorization for ReplyGateAuthorization {
+    async fn bearer(&self, _: Uuid) -> Result<Option<Bearer>, McpError> {
+        if self.bearer_calls.fetch_add(1, Ordering::SeqCst) == 1 {
+            self.gate.enter().await;
+        }
+        Ok(None)
+    }
+    async fn rejected(&self, _: Uuid, _: &str) -> Result<Option<Bearer>, McpError> {
+        Ok(None)
+    }
+    async fn insufficient_scope(&self, _: Uuid, _: &str) {}
+}
+
+#[tokio::test]
+async fn j19_close_during_reply_authorization_refuses_post_effect() {
+    let (probe, body) = Probe::body();
+    probe.event(json!({"id":70,"method":"ping"}));
+    let peer = Arc::new(Peer::new());
+    *peer.initial.lock().unwrap() = Some(body);
+    let gate = Arc::new(Gate::default());
+    let authorization = Arc::new(ReplyGateAuthorization {
+        bearer_calls: AtomicUsize::new(0),
+        gate: gate.clone(),
+    });
+    let (session, mut incoming) = HttpSession::open(
+        Uuid::from_u128(1),
+        RemoteMcpUrl::parse("http://127.0.0.1/mcp").unwrap(),
+        peer.clone(),
+        authorization,
+        Arc::default(),
+    );
+    initialize(&session).await;
+    let context = bounded(incoming.recv())
+        .await
+        .unwrap()
+        .unwrap()
+        .reply
+        .unwrap();
+    let sending = tokio::spawn({
+        let session = session.clone();
+        async move {
+            session
+                .dispatch_reply(br#"{"id":70,"result":{}}"#, context)
+                .await
+        }
+    });
+    gate.reached().await;
+    session.shutdown();
+    gate.release();
+    assert!(matches!(
+        bounded(sending).await.unwrap(),
+        SendOutcome::End(McpError::Closed)
+    ));
+    assert_eq!(
+        peer.count(|r| serde_json::from_slice::<Value>(&r.body)
+            .ok()
+            .is_some_and(|m| m["id"] == 70)),
+        0
+    );
+    stop(&session).await;
+    assert_eq!(peer.count(|r| r.method == HttpMethod::Delete), 1);
+    probe.released().await;
+}
+
+struct ReplyRetryAuthorization {
+    gate: Arc<Gate>,
+}
+#[async_trait]
+impl RemoteAuthorization for ReplyRetryAuthorization {
+    async fn bearer(&self, _: Uuid) -> Result<Option<Bearer>, McpError> {
+        Ok(None)
+    }
+    async fn rejected(&self, _: Uuid, _: &str) -> Result<Option<Bearer>, McpError> {
+        self.gate.enter().await;
+        Ok(Some(Bearer::new("retry", 1)))
+    }
+    async fn insufficient_scope(&self, _: Uuid, _: &str) {}
+}
+
+#[tokio::test]
+async fn j19_reply_retry_cannot_adopt_identity_published_during_authorization() {
+    let (probe, body) = Probe::body();
+    probe.event(json!({"id":70,"method":"ping"}));
+    let mut peer = Peer::new();
+    peer.call_sse = true;
+    let peer = Arc::new(peer);
+    peer.bodies.lock().unwrap().push_back(body);
+    peer.controls.lock().unwrap().push_back((401, None));
+    let gate = Arc::new(Gate::default());
+    let (session, mut incoming) = HttpSession::open(
+        Uuid::from_u128(1),
+        RemoteMcpUrl::parse("http://127.0.0.1/mcp").unwrap(),
+        peer.clone(),
+        Arc::new(ReplyRetryAuthorization { gate: gate.clone() }),
+        Arc::default(),
+    );
+    let (writer, mut queue) = mpsc::channel(8);
+    session.set_writer(writer, Arc::new(RuntimeClock::new()));
+    initialize(&session).await;
+    bounded(incoming.recv()).await.unwrap().unwrap();
+    assert!(matches!(call(&session, 10).await, SendOutcome::Done));
+    let context = bounded(incoming.recv())
+        .await
+        .unwrap()
+        .unwrap()
+        .reply
+        .unwrap();
+    let sending = tokio::spawn({
+        let session = session.clone();
+        async move {
+            session
+                .dispatch_reply(br#"{"id":70,"result":{}}"#, context)
+                .await
+        }
+    });
+    gate.reached().await;
+    peer.expire.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        call(&session, 11).await,
+        SendOutcome::FailCall {
+            error: McpError::SessionExpired,
+            ..
+        }
+    ));
+    let Outgoing::RecoveryReady {
+        deadline,
+        completed,
+    } = bounded(queue.recv()).await.unwrap()
+    else {
+        panic!("missing handoff")
+    };
+    assert!(matches!(
+        session.finish_recovery(deadline, completed).await,
+        SendOutcome::Done
+    ));
+    gate.release();
+    assert!(matches!(
+        bounded(sending).await.unwrap(),
+        SendOutcome::End(McpError::SessionExpired)
+    ));
+    assert_eq!(
+        peer.count(|r| serde_json::from_slice::<Value>(&r.body)
+            .ok()
+            .is_some_and(|m| m["id"] == 70)),
+        1
+    );
+    let first = peer
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|r| {
+            serde_json::from_slice::<Value>(&r.body)
+                .ok()
+                .is_some_and(|m| m["id"] == 70)
+        })
+        .unwrap()
+        .clone();
+    assert_eq!(header(&first, "Mcp-Session-Id"), Some("initial"));
+    assert_eq!(
+        peer.count(|r| method(r).as_deref() == Some("initialize")),
+        2
+    );
+    stop(&session).await;
+    probe.released().await;
+}
+
+#[tokio::test]
+async fn j17_public_open_waits_for_bound_peer_answer_before_validation() {
+    for session_id in [Some("initial".to_owned()), None] {
+        let (probe, body) = Probe::body();
+        probe.event(json!({"id":"peer","method":"unsupported/method"}));
+        let mut peer = Peer::new();
+        peer.initial_id = session_id.clone();
+        *peer.initial.lock().unwrap() = Some(body);
+        let peer = Arc::new(peer);
+        let servers = Arc::new(McpServers::new(vec![], Arc::new(RuntimeClock::new())).unwrap());
+        servers.set_remote_transport(peer.clone(), Arc::new(NoAuthorization));
+        let opening = tokio::spawn({
+            let servers = servers.clone();
+            async move {
+                servers
+                    .open_remote_once(
+                        &RemoteMcpServer::new(Uuid::from_u128(1), "remote", "http://127.0.0.1/mcp")
+                            .unwrap(),
+                    )
+                    .await
+            }
+        });
+        peer.observed(|r| {
+            serde_json::from_slice::<Value>(&r.body)
+                .ok()
+                .is_some_and(|m| m["id"] == "peer")
+        })
+        .await;
+        let answer = peer
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| {
+                serde_json::from_slice::<Value>(&r.body)
+                    .ok()
+                    .is_some_and(|m| m["id"] == "peer")
+            })
+            .unwrap()
+            .clone();
+        assert_eq!(header(&answer, "Mcp-Session-Id"), session_id.as_deref());
+        assert_eq!(header(&answer, "MCP-Protocol-Version"), None);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&answer.body).unwrap()["error"]["code"],
+            -32601
+        );
+        assert_eq!(peer.count(|r| r.method == HttpMethod::Get), 0);
+        assert_eq!(
+            peer.count(|r| method(r).as_deref() == Some("notifications/initialized")),
+            0
+        );
+        probe.event(json!({"id":1,"result":{"protocolVersion":"2025-06-18"}}));
+        let session = bounded(opening).await.unwrap().unwrap();
+        bounded(session.list_tools()).await.unwrap();
+        if let Some(id) = session_id.as_deref() {
+            peer.observed(|r| {
+                r.method == HttpMethod::Get && header(r, "Mcp-Session-Id") == Some(id)
+            })
+            .await;
+        }
+        assert_eq!(
+            peer.count(|r| r.method == HttpMethod::Get),
+            usize::from(session_id.is_some())
+        );
+        assert_eq!(
+            peer.count(|r| method(r).as_deref() == Some("notifications/initialized")),
+            1
+        );
+        session.close().await;
+        assert_eq!(
+            peer.count(|r| r.method == HttpMethod::Delete),
+            usize::from(session_id.is_some())
+        );
+        probe.released().await;
+    }
+}
+
+#[tokio::test]
+async fn j17_ordinary_terminal_ignores_non_authoritative_oversized_header() {
+    let mut peer = Peer::new();
+    peer.ordinary_response_id = Some("x".repeat(1025));
+    let peer = Arc::new(peer);
+    let (session, incoming) = transport(peer.clone(), Arc::default());
+    let connection =
+        Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+    bounded(connection.call("initialize", None))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        bounded(connection.call("tools/list", None))
+            .await
+            .unwrap()
+            .unwrap(),
+        json!({"tools":[]})
+    );
+    stop(&session).await;
 }
