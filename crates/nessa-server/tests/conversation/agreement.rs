@@ -93,6 +93,12 @@ fn a_tool_states_the_mcp_name_and_structured_result_bounds_the_view_keeps() {
         mcp["resourceUri"]["x-utf8MaxBytes"].as_u64(),
         Some(MAX_UI_URI_BYTES as u64)
     );
+    // The call's arguments are the SDK's one bound, the same a review and an
+    // app's own call already state.
+    assert_eq!(
+        mcp["argumentsJson"]["x-utf8MaxBytes"].as_u64(),
+        Some(nessa_sdk::domain::agent_execution::tools::MAX_MCP_ARGUMENTS_BYTES as u64)
+    );
 }
 
 #[test]
@@ -107,10 +113,15 @@ fn an_app_calls_schema_states_the_bounds_the_gateway_keeps() {
         arguments["x-utf8MaxBytes"].as_u64(),
         Some(MAX_APP_ARGUMENTS_BYTES as u64)
     );
-    // An app's arguments are shown whole in its review.
+    // An app's arguments are shown whole in its review, and the view carries
+    // the same text for a call the connection saw.
     assert_eq!(
         arguments["x-utf8MaxBytes"],
         defs["ConversationPermission"]["properties"]["argumentsJson"]["x-utf8MaxBytes"]
+    );
+    assert_eq!(
+        arguments["x-utf8MaxBytes"],
+        defs["ConversationMcpTool"]["properties"]["argumentsJson"]["x-utf8MaxBytes"]
     );
     assert_eq!(
         defs["McpCallToolResult"]["properties"]["resultJson"]["x-utf8MaxBytes"].as_u64(),

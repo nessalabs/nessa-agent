@@ -368,6 +368,14 @@ pub struct ConversationMcpTool {
     /// it is not known.
     #[serde(rename = "resourceUri", skip_serializing_if = "Option::is_none")]
     pub resource_uri: Option<String>,
+    /// The call's arguments, one JSON object encoded, as the gateway's MCP
+    /// connection saw them. At most
+    /// [`MAX_MCP_ARGUMENTS_BYTES`](nessa_sdk::domain::agent_execution::tools::MAX_MCP_ARGUMENTS_BYTES),
+    /// the bound the schema publishes. Absent when the call did not go
+    /// through that connection, the harness named no call id it could match,
+    /// or the arguments did not fit — never cut.
+    #[serde(rename = "argumentsJson", skip_serializing_if = "Option::is_none")]
+    pub arguments_json: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

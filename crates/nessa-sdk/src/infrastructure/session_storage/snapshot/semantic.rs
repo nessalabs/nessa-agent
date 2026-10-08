@@ -391,7 +391,8 @@ mod tests {
     #[test]
     fn a_tool_observation_keeps_its_mcp_identity_and_structured_result_through_storage() {
         use crate::domain::agent_execution::tools::{
-            McpTool, ToolCallId, ToolCallUpdate, ToolContent, MAX_MCP_NAME_BYTES,
+            McpCallArguments, McpTool, ToolCallId, ToolCallUpdate, ToolContent,
+            MAX_MCP_ARGUMENTS_BYTES, MAX_MCP_NAME_BYTES,
         };
         let context = ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
         let tool = |update| {
@@ -419,6 +420,28 @@ mod tests {
         let text = round_trip(&named);
         // A tool no update named is written as before, without the field.
         assert!(!round_trip(&tool(bare())).contains("mcp_tool"));
+        let with_arguments =
+            tool(bare().with_mcp_arguments(McpCallArguments::new(r#"{"city":"Oslo"}"#).unwrap()));
+        let arguments_text = round_trip(&with_arguments);
+        assert!(arguments_text.contains(r#""mcp_arguments":"{\"city\":\"Oslo\"}""#));
+        assert!(!round_trip(&tool(bare())).contains("mcp_arguments"));
+        let over = arguments_text.replacen("Oslo", &"x".repeat(MAX_MCP_ARGUMENTS_BYTES), 1);
+        assert_ne!(over, arguments_text);
+        assert!(
+            decode_one(over.as_bytes(), &context)
+                .unwrap_err()
+                .to_string()
+                .contains("exceeds decoded string limit"),
+            "{over}"
+        );
+        let not_an_object = arguments_text.replacen(r#"{\"city\":\"Oslo\"}"#, "[1]", 1);
+        assert!(
+            decode_one(not_an_object.as_bytes(), &context)
+                .unwrap_err()
+                .to_string()
+                .contains("InvalidMcpCallArguments"),
+            "{not_an_object}"
+        );
         // A saved identity or result the domain would refuse is corrupt, and a
         // name past its bound is refused before it is decoded.
         // Which refuses is part of the rule: past its bound, or with a field

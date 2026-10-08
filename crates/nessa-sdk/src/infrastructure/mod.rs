@@ -24,7 +24,7 @@
 //!            ^                 (domain::mcp_apps values)
 //! stand-in --'  (a harness's MCP traffic, forwarded over that connection)
 //!    |
-//!    v keeps a tools/call result's structuredContent
+//!    v keeps a tools/call's arguments and its result's structuredContent
 //! acp::sessions::ForwardedResults <- take -- ACP worker
 //!
 //! mcp -> acp, one way: mcp reads acp's launch entries, its identifier rule,

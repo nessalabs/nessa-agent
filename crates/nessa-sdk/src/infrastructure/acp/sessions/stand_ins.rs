@@ -44,9 +44,9 @@ impl StandInGrant {
     /// This grant, with the results its stand-ins forward to their harness:
     /// those of the owner it is granted as, which only that owner gives
     /// ([`McpOwner::stand_in_grant`](crate::infrastructure::mcp::McpOwner::stand_in_grant)).
-    /// The binding attaches each to the tool call the harness reports it
-    /// under, on that call's completed update. Without them, nothing is
-    /// attached.
+    /// The binding attaches a result to the completed update of the tool
+    /// call the harness reports it under, and the arguments to any update
+    /// that names that call. Without them, nothing is attached.
     pub(crate) fn with_forwarded(self, forwarded: ForwardedResults) -> Self {
         Self {
             forwarded: Some(forwarded),

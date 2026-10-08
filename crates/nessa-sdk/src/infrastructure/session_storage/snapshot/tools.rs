@@ -18,6 +18,9 @@ pub(super) struct Tool {
     /// Absent in a record of a tool no update named an MCP identity for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mcp_tool: Option<Mcp>,
+    /// Absent when no update carried the arguments the gateway's connection saw.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mcp_arguments: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -72,7 +75,7 @@ impl From<&ToolCallUpdate> for Tool {
             value.status(),
             value.locations(),
             value.content(),
-            value.mcp_tool(),
+            (value.mcp_tool(), value.mcp_arguments()),
         )
     }
 }
@@ -85,7 +88,7 @@ impl Tool {
             value.status(),
             value.locations(),
             value.content(),
-            value.mcp_tool(),
+            (value.mcp_tool(), value.mcp_arguments()),
         )
     }
     fn fields(
@@ -95,8 +98,13 @@ impl Tool {
         status: &Option<ToolStatus>,
         locations: &Option<Vec<FileLocation>>,
         content: &Option<Vec<ToolContent>>,
-        mcp_tool: Option<&McpTool>,
+        mcp: (Option<&McpTool>, Option<&McpCallArguments>),
     ) -> Self {
+        let mcp_tool = mcp.0.map(|tool| Mcp {
+            server: tool.server().into(),
+            tool: tool.tool().into(),
+        });
+        let mcp_arguments = mcp.1.map(|value| value.as_str().to_owned());
         Self {
             id: id.as_str().into(),
             title: title.clone(),
@@ -141,10 +149,8 @@ impl Tool {
                     })
                     .collect()
             }),
-            mcp_tool: mcp_tool.map(|value| Mcp {
-                server: value.server().into(),
-                tool: value.tool().into(),
-            }),
+            mcp_tool,
+            mcp_arguments,
         }
     }
     pub(super) fn decode(self) -> Result<ToolCallUpdate, StorageError> {
@@ -153,6 +159,11 @@ impl Tool {
             .mcp_tool
             .map(|value| McpTool::new(value.server, value.tool).map_err(corrupt))
             .transpose()?;
+        let mcp_arguments = self
+            .mcp_arguments
+            .map(McpCallArguments::new)
+            .transpose()
+            .map_err(corrupt)?;
         let update = ToolCallUpdate::new(
             ToolCallId::new(self.id).map_err(corrupt)?,
             self.title,
@@ -208,8 +219,12 @@ impl Tool {
                 })
                 .transpose()?,
         );
-        Ok(match mcp_tool {
+        let update = match mcp_tool {
             Some(mcp_tool) => update.with_mcp_tool(mcp_tool),
+            None => update,
+        };
+        Ok(match mcp_arguments {
+            Some(arguments) => update.with_mcp_arguments(arguments),
             None => update,
         })
     }

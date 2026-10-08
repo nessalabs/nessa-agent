@@ -19,8 +19,9 @@
 //! delete. `thought_level` reads the reasoning effort option an agent
 //! advertises, whatever it calls it. `stand_ins` holds the host's grant for
 //! one open, whose environment every MCP server process of that open gets;
-//! `forwarded` holds the results that open's stand-ins forwarded, and attaches
-//! each to the completed call it answers.
+//! `forwarded` holds the results that open's stand-ins forwarded, and the
+//! arguments kept when each call was accepted, and attaches each to the
+//! call it answers.
 pub(crate) mod binding;
 pub(crate) mod cleanup;
 mod config;
