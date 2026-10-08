@@ -198,14 +198,19 @@ automatic session storage, hooks, invocation, and UI integration.
   identity-bearing observations; permissions own once-only decisions/cancellations;
   prompts own attributed system instructions. `subagents` owns the parent/child
   lifetime graph: identities, spawn progress, inherited policy selection, and
-  close evidence. It does not run a model loop. Public imports name the feature
+  bounded exact resource/absence evidence and first-operation aggregate Completion.
+  Observation acknowledgement and Completion are separate domain decisions.
+  It does not run a model loop. Public imports name the feature
   explicitly.
 - `application/agent_execution/`: `agents` exposes `Agent` and its errors,
   `subagents` the ownership coordinator that reserves, prepares, and closes
   ordinary child agents. Its private `publication` module projects audit-eligible
   identities/progress plus live safety facts; `root` owns admissions through
   synchronous ID delivery and reconciles failed or unclaimed eligible roots.
-  Snapshot revisions and the write fence preserve copy order. The read-only
+  The private `supervision` module installs Ready owners and facts before
+  containing effect future destruction. Registered drain generations retain
+  immutable results; they save actual Closing proof before Completion and the
+  final Closed write. Snapshot revisions and the write fence preserve copy order. The read-only
   `active_root_for_session` exposes eligible Open/Closing roots for explicit
   reconciliation without making `open_root` an idempotent retry.
   `bind_resources` now returns a typed refusal plus the unchanged owner when
@@ -221,21 +226,23 @@ automatic session storage, hooks, invocation, and UI integration.
   error. Lookup/conflict/pre-admission errors cannot revoke another operation's
   child. Restored Closing and nonrunnable progress preserve the seal. Legacy
   Open + Ended Reserved startup history refuses new transfer; current failed
-  startup is conservatively Closing until authoritative settlement (#649).
+  startup retains actual rejection absence, while uncertainty remains Closing;
+  authoritative Completion follows the [owned-settlement table](../../docs/adr/todo/329-subagents.md#owned-settlement-and-supervision-625-646-649).
   Other factual milestones and unfinished cleanup can regain a vacant
   cleanup owner without attachment authority. Captured safety facts use
   the same snapshot writer even when their audit rejects or is uncertain.
-  Never-bound root settlement consumes the actual absence audit result; rejection
-  leaves Closing with failed evidence. Restored identities do not prove never-bound
-  absence. Additional cleanup audit/storage debt (#646), whole-transaction panic
-  supervision (#625), and production gateway
-  child composition remain separate work. `providers`
+  Never-bound root settlement retains actual absence and reconciles its exact
+  audit debt through the owned drain. Rejection leaves Closing with failed
+  evidence; restored identity alone does not prove never-bound absence.
+  Outcome-scoped cleanup debt and panic supervision are implemented by the
+  [owned-settlement table](../../docs/adr/todo/329-subagents.md#owned-settlement-and-supervision-625-646-649).
+  Production gateway child composition remains separate work. `providers`
   injected execution ports, `sessions`
   automatic snapshot management and the streaming commit clock port,
   `hooks` typed callbacks registered on Agent,
   `executions` the request/controller/event projections and mandatory execution audit port,
   `permissions` attribution and answer/cancellation evidence, and `tools` the original review input.
-  The `caller_wake` module keeps a panic from a caller's `Waker` inside the
+  The `caller_wake` module contains caller `Waker` wake and destruction faults inside the
   waits listed in [Caller wakers](docs/agent_execution/lifecycle.md#caller-wakers).
   It is visible inside this crate and is not a public export. Agent waits and
   the infrastructure waits in that table — MCP sessions, process cleanup,

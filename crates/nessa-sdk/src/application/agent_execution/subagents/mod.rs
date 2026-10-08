@@ -12,7 +12,12 @@
 //! as later correlated transitions. The write fence drops an older snapshot copy
 //! after a newer copy has been acknowledged. `publication` owns audit eligibility;
 //! `root` owns admission and unclaimed-result reconciliation. The domain graph
-//! owns lifecycle and correlated settlement. The coordinator does not run a model loop.
+//! owns lifecycle, bounded exact observation debt and first-owner Completion.
+//! `supervision` contains effect construction, poll and destruction after Ready
+//! output has entered those existing owners. Captured Ready failures keep their
+//! primary result; destruction faults are independently diagnosed. Registered drain generations own
+//! intent publication, Closing safety writes and immutable waiter outcomes.
+//! The coordinator does not run a model loop.
 #![deny(missing_docs)]
 
 mod coordinator;
@@ -21,6 +26,7 @@ mod memory;
 mod ports;
 mod publication;
 mod root;
+mod supervision;
 
 pub use coordinator::{
     CloseCommand, OwnershipCoordinator, OwnershipDependencies, SpawnCommand, SpawnReceipt,

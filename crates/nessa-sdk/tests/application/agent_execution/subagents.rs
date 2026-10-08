@@ -1,4 +1,7 @@
 //! Ownership coordinator regressions for ADR 329 rows S1–S7, S11, S13, C1, C4–C8, C11, C12, C14, and R1–R5.
+//! Feature children own publication eligibility, supervised effect phases, Ready
+//! transfers, exact settlement generations, live admission absence exclusion
+//! and SDK-issued participation-gate notification.
 use std::{
     collections::VecDeque,
     sync::{
@@ -22,14 +25,23 @@ use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::agent_execution::subagents::{
     AgentLifetimeId, ApprovalPolicy, CloseOperationId, DeliveryState, EvidenceFact, HostActor,
     Initiator, LifetimeCause, LifetimeRow, LifetimeState, OwnershipError, OwnershipEvidence,
-    OwnershipGraph, OwnershipSnapshot, PhysicalFact, PolicyRead, ReportId, SpawnAdmission,
-    SpawnBinding, SpawnOrigin, SpawnProgress, SpawnRequestId, SpawnRow, TaskDigest, TaskReceiptId,
+    OwnershipGraph, OwnershipMeaning, OwnershipSnapshot, PhysicalFact, PolicyRead, ReportId,
+    SpawnAdmission, SpawnBinding, SpawnOrigin, SpawnProgress, SpawnRequestId, SpawnRow, TaskDigest,
+    TaskReceiptId,
 };
 use tokio::sync::Notify;
 
 struct ScriptAudit {
     fail: Mutex<Option<PortFailure>>,
     records: Mutex<Vec<OwnershipEvidence>>,
+    reject_close_observation: Mutex<Option<Arc<RejectedCloseObservation>>>,
+}
+
+struct RejectedCloseObservation {
+    child: AgentLifetimeId,
+    attempts: Mutex<Vec<OwnershipEvidence>>,
+    entered: Notify,
+    release: Notify,
 }
 
 impl ScriptAudit {
@@ -37,6 +49,7 @@ impl ScriptAudit {
         Arc::new(Self {
             fail: Mutex::new(None),
             records: Mutex::new(Vec::new()),
+            reject_close_observation: Mutex::new(None),
         })
     }
 
@@ -48,6 +61,31 @@ impl ScriptAudit {
 #[async_trait]
 impl OwnershipAudit for ScriptAudit {
     async fn record(&self, evidence: &OwnershipEvidence) -> Result<(), PortFailure> {
+        let rejection = {
+            let mut selected = self
+                .reject_close_observation
+                .lock()
+                .expect("close observation");
+            if selected.as_ref().is_some_and(|selected| {
+                evidence.child_lifetime.as_ref() == Some(&selected.child)
+                    && evidence.close_operation.is_some()
+                    && evidence.before == OwnershipMeaning::Closing
+            }) {
+                selected.take()
+            } else {
+                None
+            }
+        };
+        if let Some(rejection) = rejection {
+            rejection
+                .attempts
+                .lock()
+                .expect("close attempts")
+                .push(evidence.clone());
+            rejection.entered.notify_one();
+            rejection.release.notified().await;
+            return Err(PortFailure::Rejected);
+        }
         if let Some(failure) = self.fail.lock().expect("audit").take() {
             return Err(failure);
         }
@@ -177,6 +215,41 @@ struct World {
     factory: Arc<ScriptFactory>,
     audit: Arc<ScriptAudit>,
     store: Arc<MemoryOwnershipStore>,
+}
+
+struct RejectTerminalRootStore {
+    memory: MemoryOwnershipStore,
+    root: Mutex<Option<AgentLifetimeId>>,
+    rejections: AtomicUsize,
+}
+
+#[async_trait]
+impl OwnershipStore for RejectTerminalRootStore {
+    async fn write(&self, snapshot: &OwnershipSnapshot) -> Result<(), PortFailure> {
+        let rejected = {
+            let mut root = self.root.lock().expect("terminal root");
+            if root.as_ref().is_some_and(|root| {
+                snapshot
+                    .lifetimes
+                    .iter()
+                    .any(|row| &row.lifetime_id == root && row.state == LifetimeState::Closed)
+            }) {
+                root.take();
+                true
+            } else {
+                false
+            }
+        };
+        if rejected {
+            self.rejections.fetch_add(1, Ordering::SeqCst);
+            return Err(PortFailure::Rejected);
+        }
+        self.memory.write(snapshot).await
+    }
+
+    async fn read(&self) -> Result<OwnershipSnapshot, PortFailure> {
+        self.memory.read().await
+    }
 }
 
 impl World {
@@ -489,6 +562,83 @@ async fn rejected_startup_without_cleanup_returns_the_live_slot() {
 }
 
 #[tokio::test]
+async fn rejected_startup_without_owner_then_parent_close_settles() {
+    let world = World::new(1);
+    let root = world.root().await;
+    world.bind_root(&root);
+    *world.factory.fail.lock().expect("factory") = Some(PrepareFailure {
+        failure: PortFailure::Rejected,
+        cleanup: None,
+    });
+    let rejected = tokio::time::timeout(
+        Duration::from_secs(2),
+        world
+            .coordinator
+            .spawn(world.command(&root, "req-1", "draft the note")),
+    )
+    .await
+    .expect("rejected preparation must finish");
+    assert!(matches!(
+        rejected,
+        Err(OwnershipFailure::Startup(PortFailure::Rejected))
+    ));
+    let child = world
+        .factory
+        .last_child
+        .lock()
+        .expect("child")
+        .clone()
+        .unwrap();
+    assert!(world
+        .factory
+        .last_gate
+        .lock()
+        .expect("gate")
+        .as_ref()
+        .unwrap()
+        .is_sealed());
+    assert_eq!(
+        world.coordinator.close_cause(&child),
+        Some(LifetimeCause::TerminalFailure)
+    );
+    assert_eq!(
+        world.coordinator.close_initiator(&child),
+        Some(Initiator::Runtime)
+    );
+    assert_eq!(world.factory.prepares(), 1);
+    assert_eq!(world.factory.submits(), 0);
+    assert!(world.factory.children.lock().expect("children").is_empty());
+
+    let closed = tokio::time::timeout(Duration::from_secs(2), world.close(&root))
+        .await
+        .expect("parent close must finish after definite preparation rejection");
+    assert_eq!(
+        closed,
+        Ok(()),
+        "no child cleanup owner remains after definite rejection"
+    );
+    assert_eq!(
+        world.coordinator.lifetime_state(&root),
+        Some(LifetimeState::Closed)
+    );
+    assert_eq!(
+        world.coordinator.lifetime_state(&child),
+        Some(LifetimeState::Closed)
+    );
+    assert_eq!(
+        world.coordinator.close_cause(&child),
+        Some(LifetimeCause::TerminalFailure)
+    );
+    assert_eq!(
+        world.coordinator.close_initiator(&child),
+        Some(Initiator::Runtime)
+    );
+    assert_eq!(world.factory.prepares(), 1);
+    assert_eq!(world.factory.submits(), 0);
+    assert!(world.factory.children.lock().expect("children").is_empty());
+}
+
+#[tokio::test]
 async fn s7_dropped_waiter_keeps_the_attempt() {
     let world = World::new(8);
     let root = world.root().await;
@@ -532,9 +682,11 @@ async fn rejected_submission_stays_attached_and_is_not_submitted_again() {
     let again = world
         .coordinator
         .spawn(world.command(&root, "req-1", "draft the note"))
-        .await
-        .unwrap();
-    assert!(matches!(again.progress, SpawnProgress::Attached));
+        .await;
+    assert_eq!(
+        again,
+        Err(OwnershipFailure::Submission(PortFailure::Rejected))
+    );
     assert_eq!(world.factory.prepares(), 1);
     assert_eq!(world.factory.submits(), 1);
 }
@@ -649,9 +801,17 @@ async fn s13_rejected_and_uncertain_publication_does_not_prepare() {
     let retained = world
         .coordinator
         .spawn(world.command(&root, "req-reject", "draft"))
-        .await
-        .unwrap();
-    assert!(matches!(retained.progress, SpawnProgress::Reserved));
+        .await;
+    assert_eq!(
+        retained,
+        Err(OwnershipFailure::Audit(PortFailure::Rejected))
+    );
+    assert_eq!(
+        world
+            .coordinator
+            .spawn_progress(&SpawnRequestId::new("req-reject").unwrap()),
+        Some(SpawnProgress::Reserved)
+    );
     assert_eq!(world.factory.prepares(), 0);
 
     world.audit.fail_next(PortFailure::Uncertain);
@@ -688,9 +848,17 @@ async fn rejected_reservation_publication_returns_the_live_slot() {
     let retained = world
         .coordinator
         .spawn(world.command(&root, "req-reject", "draft"))
-        .await
-        .unwrap();
-    assert!(matches!(retained.progress, SpawnProgress::Reserved));
+        .await;
+    assert_eq!(
+        retained,
+        Err(OwnershipFailure::Audit(PortFailure::Rejected))
+    );
+    assert_eq!(
+        world
+            .coordinator
+            .spawn_progress(&SpawnRequestId::new("req-reject").unwrap()),
+        Some(SpawnProgress::Reserved)
+    );
     assert_eq!(world.factory.prepares(), 0);
     world
         .coordinator
@@ -712,9 +880,17 @@ async fn rejected_reservation_publication_returns_the_live_slot() {
     let retained = world
         .coordinator
         .spawn(world.command(&root, "req-store", "draft"))
-        .await
-        .unwrap();
-    assert!(matches!(retained.progress, SpawnProgress::Reserved));
+        .await;
+    assert_eq!(
+        retained,
+        Err(OwnershipFailure::Store(PortFailure::Rejected))
+    );
+    assert_eq!(
+        world
+            .coordinator
+            .spawn_progress(&SpawnRequestId::new("req-store").unwrap()),
+        Some(SpawnProgress::Reserved)
+    );
     assert_eq!(world.factory.prepares(), 0);
     world
         .coordinator
@@ -928,6 +1104,96 @@ async fn c5_released_process_with_failed_audit_is_not_an_audited_close() {
 }
 
 #[tokio::test]
+async fn released_child_with_rejected_coordinator_observation_is_not_closed() {
+    let world = World::new(1);
+    let root = world.root().await;
+    world.bind_root(&root);
+    let child = world
+        .coordinator
+        .spawn(world.command(&root, "child", "task"))
+        .await
+        .unwrap();
+    let resources = Arc::clone(&world.factory.children.lock().expect("children")[0]);
+    assert_eq!(resources.report, released());
+    let rejection = Arc::new(RejectedCloseObservation {
+        child: child.child.clone(),
+        attempts: Mutex::new(Vec::new()),
+        entered: Notify::new(),
+        release: Notify::new(),
+    });
+    *world
+        .audit
+        .reject_close_observation
+        .lock()
+        .expect("close observation") = Some(Arc::clone(&rejection));
+    let coordinator = world.coordinator.clone();
+    let closing_root = root.clone();
+    let closing = tokio::spawn(async move {
+        coordinator
+            .end_lifetime(CloseCommand {
+                lifetime: closing_root,
+                cause: LifetimeCause::HostClose,
+                initiator: Initiator::Host(actor("close")),
+                external_attachment: false,
+                timeout: None,
+            })
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), rejection.entered.notified())
+        .await
+        .expect("child observation audit must be attempted after physical release");
+    assert_eq!(resources.closes.load(Ordering::SeqCst), 1);
+    assert!(
+        world
+            .audit
+            .records
+            .lock()
+            .expect("audit")
+            .iter()
+            .any(|record| {
+                record.parent_lifetime == root
+                    && record.close_operation.is_some()
+                    && record.before == OwnershipMeaning::Open
+                    && record.after == OwnershipMeaning::Closing
+            }),
+        "close intent must be accepted before selectively rejecting the child observation"
+    );
+    let neighbor = world
+        .coordinator
+        .open_root(
+            SessionId::new("neighbor-session").unwrap(),
+            Initiator::Host(actor("neighbor")),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        world
+            .coordinator
+            .spawn(world.command(&neighbor, "neighbor-child", "another task")),
+    )
+    .await
+    .expect("capacity must be free while coordinator observation audit is held")
+    .expect("physical release returns the single live slot before audit acknowledgement");
+    assert_eq!(rejection.attempts.lock().expect("close attempts").len(), 1);
+    rejection.release.notify_one();
+    let closed = tokio::time::timeout(Duration::from_secs(2), closing)
+        .await
+        .expect("rejected observation must settle the close waiter")
+        .unwrap();
+    assert_eq!(resources.closes.load(Ordering::SeqCst), 1);
+    assert_eq!(closed, Err(OwnershipFailure::Audit(PortFailure::Rejected)));
+    assert_eq!(
+        world.coordinator.lifetime_state(&root),
+        Some(LifetimeState::Closing)
+    );
+    assert_eq!(
+        world.coordinator.lifetime_state(&child.child),
+        Some(LifetimeState::Closing)
+    );
+}
+
+#[tokio::test]
 async fn c6_timeout_leaves_the_drain_running() {
     let world = World::new(8);
     let root = world.root().await;
@@ -1122,6 +1388,97 @@ async fn c14_close_audit_failure_still_cleans_up() {
 }
 
 #[tokio::test]
+async fn never_bound_root_terminal_store_rejection_recovers_after_resume() {
+    let store = Arc::new(RejectTerminalRootStore {
+        memory: MemoryOwnershipStore::new(),
+        root: Mutex::new(None),
+        rejections: AtomicUsize::new(0),
+    });
+    let factory = ScriptFactory::new();
+    let audit = ScriptAudit::new();
+    let build = || {
+        OwnershipCoordinator::new(OwnershipDependencies {
+            store: store.clone(),
+            audit: audit.clone(),
+            factory: factory.clone(),
+            room: Arc::new(LiveCapacity::new(1)),
+        })
+    };
+    let coordinator = build();
+    let session = SessionId::new("never-bound-session").unwrap();
+    let root = coordinator
+        .open_root(session.clone(), Initiator::Host(actor("open")))
+        .await
+        .unwrap();
+    *store.root.lock().expect("terminal root") = Some(root.clone());
+    let close = |coordinator: OwnershipCoordinator| {
+        let root = root.clone();
+        async move {
+            coordinator
+                .end_lifetime(CloseCommand {
+                    lifetime: root,
+                    cause: LifetimeCause::HostClose,
+                    initiator: Initiator::Host(actor("close")),
+                    external_attachment: false,
+                    timeout: None,
+                })
+                .await
+        }
+    };
+    let first = tokio::time::timeout(Duration::from_secs(2), close(coordinator.clone()))
+        .await
+        .expect("first close must return the terminal store rejection");
+    assert_eq!(first, Err(OwnershipFailure::Store(PortFailure::Rejected)));
+    assert_eq!(store.rejections.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        coordinator.lifetime_state(&root),
+        Some(LifetimeState::Closed)
+    );
+    let retained = store.read().await.unwrap();
+    assert_eq!(
+        retained
+            .lifetimes
+            .iter()
+            .find(|row| row.lifetime_id == root)
+            .unwrap()
+            .state,
+        LifetimeState::Closing
+    );
+    assert_eq!(factory.prepares(), 0);
+    assert_eq!(factory.submits(), 0);
+    assert!(factory.children.lock().expect("children").is_empty());
+    drop(coordinator);
+
+    // Recovery must consume absence observed and saved by the original close;
+    // a fresh coordinator's empty resource map cannot establish that proof.
+    let resumed = build();
+    tokio::time::timeout(Duration::from_secs(2), resumed.resume())
+        .await
+        .expect("resume must finish")
+        .unwrap();
+    let recovered = tokio::time::timeout(Duration::from_secs(2), close(resumed.clone()))
+        .await
+        .expect("explicit close after resume must finish");
+    assert_eq!(
+        recovered,
+        Ok(()),
+        "observed never-bound absence must survive rejected terminal publication"
+    );
+    assert_eq!(resumed.lifetime_state(&root), Some(LifetimeState::Closed));
+    let reopened = tokio::time::timeout(
+        Duration::from_secs(2),
+        resumed.open_root(session, Initiator::Host(actor("reopen"))),
+    )
+    .await
+    .expect("session reopen must finish")
+    .unwrap();
+    assert_ne!(reopened, root);
+    assert_eq!(factory.prepares(), 0);
+    assert_eq!(factory.submits(), 0);
+    assert!(factory.children.lock().expect("children").is_empty());
+}
+
+#[tokio::test]
 async fn r1_r2_resume_does_not_prepare_or_submit_again() {
     let store = Arc::new(MemoryOwnershipStore::new());
     let mut graph = OwnershipGraph::new();
@@ -1218,6 +1575,7 @@ async fn r3_an_open_child_of_a_closing_parent_is_not_runnable() {
     let child = AgentLifetimeId::new("child-life").unwrap();
     let request = SpawnRequestId::new("child-req").unwrap();
     let snapshot = OwnershipSnapshot {
+        close_completions: Vec::new(),
         lifetimes: vec![
             LifetimeRow {
                 lifetime_id: parent.clone(),
@@ -1284,6 +1642,7 @@ async fn r5_an_open_child_under_a_closed_parent_is_not_runnable() {
     let child = AgentLifetimeId::new("child-life").unwrap();
     let request = SpawnRequestId::new("child-req").unwrap();
     let snapshot = OwnershipSnapshot {
+        close_completions: Vec::new(),
         lifetimes: vec![
             LifetimeRow {
                 lifetime_id: parent.clone(),
@@ -1374,6 +1733,7 @@ async fn r5_a_cycle_stays_readable_and_refuses_dispatch() {
     let left = AgentLifetimeId::new("life-left").unwrap();
     let right = AgentLifetimeId::new("life-right").unwrap();
     let snapshot = OwnershipSnapshot {
+        close_completions: Vec::new(),
         lifetimes: vec![open_row(&left, "sess-left"), open_row(&right, "sess-right")],
         spawns: vec![
             spawn_row(&right, &left, "req-left"),
@@ -1508,5 +1868,11 @@ fn spawn_row(child: &AgentLifetimeId, parent: &AgentLifetimeId, request: &str) -
     }
 }
 
+mod effects;
+mod gate_waiters;
+mod inflight_absence;
 #[path = "subagents/publication.rs"]
 mod publication;
+mod settlement;
+mod supervision;
+mod transfers;

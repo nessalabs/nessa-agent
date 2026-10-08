@@ -2,15 +2,19 @@
 //! The aggregate decides legal transitions. It does not call storage, a clock, or a provider.
 #![deny(missing_docs)]
 
+mod settlement;
+pub use settlement::CloseCompletion;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::error::OwnershipError;
 use super::values::{
-    AgentLifetimeId, CloseOperationId, DeliveryState, EvidenceFact, Initiator, KnownMilestone,
-    LifetimeCause, LifetimeRow, LifetimeState, OwnershipEvidence, OwnershipMeaning,
-    OwnershipSnapshot, PhysicalFact, ReportId, ReportRow, SettlementRow, SpawnBinding,
-    SpawnProgress, SpawnRequestId, SpawnRow, MAX_DEPTH, MAX_DIRECT_CHILDREN, MAX_READ_PAGE,
-    MAX_RETAINED_REQUESTS,
+    AbsenceAudit, AbsenceProof, AgentLifetimeId, CloseCompletionRow, CloseEvidenceDetail,
+    CloseOperationId, DeliveryState, EvidenceFact, Initiator, KnownMilestone, LifetimeCause,
+    LifetimeRow, LifetimeState, OwnershipEvidence, OwnershipMeaning, OwnershipSnapshot,
+    PhysicalFact, ReportId, ReportRow, ResourceObservationAudit, SettlementProof, SettlementRow,
+    SpawnBinding, SpawnProgress, SpawnRequestId, SpawnRow, MAX_DEPTH, MAX_DIRECT_CHILDREN,
+    MAX_READ_PAGE, MAX_RETAINED_REQUESTS,
 };
 use crate::domain::agent_execution::sessions::SessionId;
 
@@ -26,8 +30,7 @@ struct Spawn {
 
 #[derive(Clone, Debug)]
 struct Settlement {
-    physical: PhysicalFact,
-    evidence: EvidenceFact,
+    row: SettlementRow,
 }
 
 /// Relationship graph for one ownership store.
@@ -38,6 +41,7 @@ pub struct OwnershipGraph {
     spawns: BTreeMap<SpawnRequestId, Spawn>,
     child_request: BTreeMap<AgentLifetimeId, SpawnRequestId>,
     settlements: BTreeMap<(AgentLifetimeId, AgentLifetimeId), Settlement>,
+    close_completions: BTreeMap<AgentLifetimeId, CloseCompletionRow>,
     reports: BTreeMap<ReportId, ReportRow>,
     refusal: Option<OwnershipError>,
     /// Open descendants joined to a closing ancestor while reloading.
@@ -130,6 +134,7 @@ impl OwnershipGraph {
             spawns: BTreeMap::new(),
             child_request: BTreeMap::new(),
             settlements: BTreeMap::new(),
+            close_completions: BTreeMap::new(),
             reports: BTreeMap::new(),
             refusal: None,
             recovery: Vec::new(),
@@ -243,7 +248,7 @@ impl OwnershipGraph {
     ) -> Option<PhysicalFact> {
         self.settlements
             .get(&(close_lifetime.clone(), target.clone()))
-            .map(|settlement| settlement.physical)
+            .map(|settlement| settlement.row.physical)
     }
 
     /// Find an active root for a session, excluding child identities and closed history.
@@ -304,13 +309,8 @@ impl OwnershipGraph {
         {
             return Err(OwnershipError::StaleOutcome);
         }
-        let evidence = self.apply_report(
-            root,
-            operation,
-            root,
-            PhysicalFact::Released,
-            EvidenceFact::Pending,
-        )?;
+        let evidence =
+            self.note_absence(root, operation, root, AbsenceProof::NeverTransferredRoot)?;
         Ok(UnboundRootSettlement {
             root: root.clone(),
             operation: operation.clone(),
@@ -330,19 +330,10 @@ impl OwnershipGraph {
         token: UnboundRootSettlement,
         evidence: EvidenceFact,
     ) -> Result<(), OwnershipError> {
-        self.ensure_dispatch()?;
-        if self.lifetime_state(&token.root) != Some(LifetimeState::Closing)
-            || self.close_operation(&token.root) != Some(&token.operation)
-            || self.physical(&token.root, &token.root) != Some(PhysicalFact::Released)
-        {
+        if self.close_operation(&token.root) != Some(&token.operation) {
             return Err(OwnershipError::StaleOutcome);
         }
-        self.settlements
-            .get_mut(&(token.root.clone(), token.root.clone()))
-            .expect("correlated absence")
-            .evidence = evidence;
-        self.settle_if_ready(&token.root);
-        Ok(())
+        self.acknowledge_observation(&token.evidence, evidence)
     }
 
     /// Open a root lifetime for a session that has no open or closing lifetime.
@@ -376,6 +367,7 @@ impl OwnershipGraph {
             },
         );
         Ok(OwnershipEvidence {
+            close_detail: None,
             parent_lifetime: lifetime,
             child_lifetime: None,
             close_operation: None,
@@ -496,6 +488,83 @@ impl OwnershipGraph {
         ))
     }
 
+    /// Retain actual transferred factory ownership before its returned future is destroyed.
+    /// Existing terminal safety progress stays terminal and gains the known preparation.
+    ///
+    /// # Errors
+    /// Rejects unknown requests or a preparation unrelated to the retained chart.
+    pub fn note_prepared_owner(
+        &mut self,
+        request: &SpawnRequestId,
+    ) -> Result<OwnershipEvidence, OwnershipError> {
+        self.ensure_dispatch()?;
+        let spawn = self
+            .spawns
+            .get_mut(request)
+            .ok_or(OwnershipError::UnknownSpawn)?;
+        if spawn.row.progress.known() != KnownMilestone::Reserved {
+            return Err(OwnershipError::IllegalSpawnProgress);
+        }
+        let before = meaning_of(&spawn.row.progress);
+        spawn.row.progress = match spawn.row.progress {
+            SpawnProgress::Draining { .. } => SpawnProgress::Draining {
+                known: KnownMilestone::Prepared,
+            },
+            SpawnProgress::Unconfirmed { .. } => SpawnProgress::Unconfirmed {
+                known: KnownMilestone::Prepared,
+            },
+            SpawnProgress::Ended { .. } | SpawnProgress::StartupFailed { .. } => {
+                return Err(OwnershipError::StaleOutcome)
+            }
+            _ => SpawnProgress::Prepared,
+        };
+        Ok(evidence_for_spawn(
+            &spawn.row,
+            before,
+            meaning_of(&spawn.row.progress),
+            Initiator::Runtime,
+        ))
+    }
+
+    /// Install an actually returned task receipt without reopening a sealed lifetime.
+    ///
+    /// # Errors
+    /// Rejects unknown requests, pre-attachment progress or conflicting known receipts.
+    pub fn note_task_receipt(
+        &mut self,
+        request: &SpawnRequestId,
+        receipt: super::values::TaskReceiptId,
+    ) -> Result<OwnershipEvidence, OwnershipError> {
+        self.ensure_dispatch()?;
+        let spawn = self
+            .spawns
+            .get_mut(request)
+            .ok_or(OwnershipError::UnknownSpawn)?;
+        let before = meaning_of(&spawn.row.progress);
+        let known = KnownMilestone::TaskAdmitted {
+            receipt: receipt.clone(),
+        };
+        if let KnownMilestone::TaskAdmitted { receipt: existing } = spawn.row.progress.known() {
+            if existing != receipt {
+                return Err(OwnershipError::StaleOutcome);
+            }
+        } else if spawn.row.progress.known() != KnownMilestone::Attached {
+            return Err(OwnershipError::IllegalSpawnProgress);
+        }
+        spawn.row.progress = match spawn.row.progress {
+            SpawnProgress::Draining { .. } => SpawnProgress::Draining { known },
+            SpawnProgress::Ended { .. } => SpawnProgress::Ended { known },
+            SpawnProgress::Unconfirmed { .. } => SpawnProgress::Unconfirmed { known },
+            _ => SpawnProgress::TaskAdmitted { receipt },
+        };
+        Ok(evidence_for_spawn(
+            &spawn.row,
+            before,
+            meaning_of(&spawn.row.progress),
+            Initiator::Runtime,
+        ))
+    }
+
     /// After the factory returns, say whether the child may be dispatched.
     ///
     /// Both lifetimes must be open. A closing or closed parent returns
@@ -591,51 +660,44 @@ impl OwnershipGraph {
         evidence: EvidenceFact,
     ) -> Result<OwnershipEvidence, OwnershipError> {
         self.ensure_dispatch()?;
-        let lifetime = self
-            .lifetimes
-            .get(close_lifetime)
-            .ok_or(OwnershipError::ParentMissing)?;
-        if lifetime.row.state == LifetimeState::Open
-            || lifetime.row.close_operation.as_ref() != Some(operation)
+        self.validate_target(close_lifetime, operation, target)?;
+        let key = (close_lifetime.clone(), target.clone());
+        if self.physical(close_lifetime, target) == Some(PhysicalFact::Released)
+            && physical != PhysicalFact::Released
         {
             return Err(OwnershipError::StaleOutcome);
         }
-        if !self.in_subtree(close_lifetime, target) {
-            return Err(OwnershipError::StaleOutcome);
-        }
-        let before = self
-            .settlements
-            .get(&(close_lifetime.clone(), target.clone()))
-            .map(|settlement| settlement.physical)
-            .unwrap_or(PhysicalFact::Pending);
-        self.settlements.insert(
-            (close_lifetime.clone(), target.clone()),
-            Settlement { physical, evidence },
+        let slot = physical_slot(physical);
+        let record = self.observation_record(
+            close_lifetime,
+            operation,
+            target,
+            CloseEvidenceDetail::ResourceObservation {
+                physical,
+                provider_evidence: evidence,
+            },
         );
-        self.settle_if_ready(close_lifetime);
-        let after_state = self
-            .lifetime_state(close_lifetime)
-            .expect("lifetime remains");
-        Ok(OwnershipEvidence {
-            parent_lifetime: close_lifetime.clone(),
-            child_lifetime: Some(target.clone()),
-            close_operation: Some(operation.clone()),
-            before: match before {
-                PhysicalFact::Pending => OwnershipMeaning::Closing,
-                PhysicalFact::Released => OwnershipMeaning::Closed,
-                PhysicalFact::Failed => OwnershipMeaning::Closing,
+        let settlement = self.settlements.entry(key).or_insert_with(|| Settlement {
+            row: SettlementRow {
+                close_lifetime: close_lifetime.clone(),
+                target: target.clone(),
+                physical,
+                evidence,
+                proof: SettlementProof::Resource(Box::new([None, None, None])),
             },
-            after: if after_state == LifetimeState::Closed {
-                OwnershipMeaning::Closed
-            } else {
-                OwnershipMeaning::Closing
-            },
-            cause: self.close_cause(close_lifetime).cloned(),
-            initiator: self
-                .close_initiator(close_lifetime)
-                .cloned()
-                .unwrap_or(Initiator::Runtime),
-        })
+        });
+        let SettlementProof::Resource(slots) = &mut settlement.row.proof else {
+            return Err(OwnershipError::StaleOutcome);
+        };
+        let observation = slots[slot].get_or_insert(ResourceObservationAudit {
+            record,
+            acknowledgement: EvidenceFact::Pending,
+            provider_acknowledged: false,
+        });
+        observation.provider_acknowledged |= evidence == EvidenceFact::Acknowledged;
+        let result = observation.record.clone();
+        refresh_summary(&mut settlement.row);
+        Ok(result)
     }
 
     /// Admit or suppress a child result for the parent lifetime.
@@ -757,6 +819,7 @@ impl OwnershipGraph {
     /// Copy the rows a store can write.
     pub fn snapshot(&self) -> OwnershipSnapshot {
         OwnershipSnapshot {
+            close_completions: self.close_completions.values().cloned().collect(),
             lifetimes: self
                 .lifetimes
                 .values()
@@ -769,13 +832,8 @@ impl OwnershipGraph {
                 .collect(),
             settlements: self
                 .settlements
-                .iter()
-                .map(|((close_lifetime, target), settlement)| SettlementRow {
-                    close_lifetime: close_lifetime.clone(),
-                    target: target.clone(),
-                    physical: settlement.physical,
-                    evidence: settlement.evidence,
-                })
+                .values()
+                .map(|settlement| settlement.row.clone())
                 .collect(),
             reports: self.reports.values().cloned().collect(),
         }
@@ -836,24 +894,53 @@ impl OwnershipGraph {
                 .spawns
                 .insert(row.binding.request_id.clone(), Spawn { row });
         }
-        let cascade = if graph.has_cycle() {
-            Some(OwnershipError::Cycle)
-        } else if refusal.is_some() {
-            None
-        } else {
-            graph.continue_interrupted_cascade()
-        };
-        if let Some(error) = cascade {
-            note_refusal(&mut refusal, error);
+        if graph.has_cycle() {
+            note_refusal(&mut refusal, OwnershipError::Cycle);
         }
+        // Refused ancestry cannot authorize dependent traversal. Keep every
+        // retained row, but preserve the structural refusal before proof checks.
+        let structural_refusal = refusal.is_some();
         for row in snapshot.settlements {
-            graph.settlements.insert(
-                (row.close_lifetime, row.target),
-                Settlement {
-                    physical: row.physical,
-                    evidence: row.evidence,
-                },
-            );
+            let key = (row.close_lifetime.clone(), row.target.clone());
+            if graph.settlements.contains_key(&key)
+                || (!structural_refusal && !graph.valid_settlement(&row))
+            {
+                note_refusal(&mut refusal, OwnershipError::Contradictory);
+            }
+            graph.settlements.insert(key, Settlement { row });
+        }
+        for row in snapshot.close_completions {
+            let root = row.close_lifetime.clone();
+            if graph.close_completions.contains_key(&root)
+                || (!structural_refusal
+                    && (row.record.close_detail != Some(CloseEvidenceDetail::Completion)
+                        || !graph.valid_record(&root, &root, &row.record)
+                        || graph.cascaded_from(&root).is_some()
+                        || !graph.completion_ready(&root)
+                        || (row.acknowledgement == EvidenceFact::Acknowledged
+                            && !graph.owned_lifetimes(&root).all(|id| {
+                                graph.lifetime_state(id) == Some(LifetimeState::Closed)
+                            }))))
+            {
+                note_refusal(&mut refusal, OwnershipError::Contradictory);
+            }
+            graph.close_completions.insert(root, row);
+        }
+        for (id, lifetime) in &graph.lifetimes {
+            if lifetime.row.state != LifetimeState::Open && graph.close_owner(id).is_none() {
+                note_refusal(&mut refusal, OwnershipError::Contradictory);
+            }
+            if lifetime.row.state == LifetimeState::Open && lifetime.row.cascaded_from.is_some() {
+                note_refusal(&mut refusal, OwnershipError::Contradictory);
+            }
+            if lifetime.row.state == LifetimeState::Closed
+                && !graph
+                    .close_owner(id)
+                    .and_then(|owner| graph.close_completions.get(&owner))
+                    .is_some_and(|row| row.acknowledgement == EvidenceFact::Acknowledged)
+            {
+                note_refusal(&mut refusal, OwnershipError::Contradictory);
+            }
         }
         for row in snapshot.reports {
             if graph.reports.contains_key(&row.report_id) {
@@ -861,6 +948,11 @@ impl OwnershipGraph {
                 continue;
             }
             graph.reports.insert(row.report_id.clone(), row);
+        }
+        // Repair only accepted history. A later proof refusal must not replace
+        // the original rows or create recovery effects for a refused snapshot.
+        if refusal.is_none() {
+            graph.continue_interrupted_cascade();
         }
         graph.refusal = refusal;
         graph
@@ -945,20 +1037,16 @@ impl OwnershipGraph {
         sealed
     }
 
-    /// Join open descendants to a closing ancestor. An open descendant of a
-    /// closed ancestor is left unchanged and reported as contradictory.
-    fn continue_interrupted_cascade(&mut self) -> Option<OwnershipError> {
+    /// Repair accepted history after structural and Completion validation.
+    /// Completion readiness owns refusal of Open descendants of a Closed owner;
+    /// see completed_ancestor_refuses_open_descendants_without_repairing_retained_history.
+    fn continue_interrupted_cascade(&mut self) {
         let open: Vec<AgentLifetimeId> = self
             .lifetimes
             .iter()
             .filter(|(_, lifetime)| lifetime.row.state == LifetimeState::Open)
             .map(|(id, _)| id.clone())
             .collect();
-        for id in &open {
-            if self.non_open_ancestor(id) == Some(LifetimeState::Closed) {
-                return Some(OwnershipError::Contradictory);
-            }
-        }
         let gaps: Vec<AgentLifetimeId> = open
             .into_iter()
             .filter(|id| {
@@ -991,6 +1079,7 @@ impl OwnershipGraph {
                     .get(&lifetime)
                     .expect("sealed lifetime is recorded");
                 records.push(OwnershipEvidence {
+                    close_detail: None,
                     parent_lifetime: lifetime,
                     child_lifetime: None,
                     close_operation: row.row.close_operation.clone(),
@@ -1006,21 +1095,6 @@ impl OwnershipGraph {
             }
         }
         self.recovery = records;
-        None
-    }
-
-    fn non_open_ancestor(&self, lifetime: &AgentLifetimeId) -> Option<LifetimeState> {
-        let mut current = lifetime.clone();
-        loop {
-            let parent = self.parent_id(&current)?;
-            let state = self
-                .lifetime_state(&parent)
-                .expect("a spawn parent is a recorded lifetime");
-            if state != LifetimeState::Open {
-                return Some(state);
-            }
-            current = parent;
-        }
     }
 
     fn parent_id(&self, lifetime: &AgentLifetimeId) -> Option<AgentLifetimeId> {
@@ -1049,11 +1123,13 @@ impl OwnershipGraph {
         targets: &mut Vec<AgentLifetimeId>,
     ) {
         let state = self.lifetime_state(lifetime);
-        if state == Some(LifetimeState::Closing) {
+        if state == Some(LifetimeState::Closing)
+            && self.close_owner(lifetime).as_ref() == Some(root)
+        {
             let released = self
                 .settlements
                 .get(&(root.clone(), lifetime.clone()))
-                .is_some_and(|settlement| settlement.physical == PhysicalFact::Released);
+                .is_some_and(|settlement| settlement.row.physical == PhysicalFact::Released);
             if !released {
                 targets.push(lifetime.clone());
             }
@@ -1085,41 +1161,6 @@ impl OwnershipGraph {
             }
         }
         false
-    }
-
-    fn settle_if_ready(&mut self, root: &AgentLifetimeId) {
-        let mut pending = vec![root.clone()];
-        let mut all = Vec::new();
-        while let Some(current) = pending.pop() {
-            all.push(current.clone());
-            for spawn in self.spawns.values() {
-                if spawn.row.binding.parent_lifetime == current {
-                    pending.push(spawn.row.child_lifetime.clone());
-                }
-            }
-        }
-        let ready = all.iter().all(|lifetime| {
-            self.lifetime_state(lifetime) != Some(LifetimeState::Closing)
-                || self
-                    .settlements
-                    .get(&(root.clone(), lifetime.clone()))
-                    .is_some_and(|settlement| {
-                        settlement.physical == PhysicalFact::Released
-                            && settlement.evidence == EvidenceFact::Acknowledged
-                    })
-        });
-        if !ready {
-            return;
-        }
-        for lifetime in all {
-            if self.lifetime_state(&lifetime) == Some(LifetimeState::Closing) {
-                self.lifetimes
-                    .get_mut(&lifetime)
-                    .expect("settled lifetime is recorded")
-                    .row
-                    .state = LifetimeState::Closed;
-            }
-        }
     }
 
     fn has_cycle(&self) -> bool {
@@ -1255,6 +1296,7 @@ fn evidence_for_spawn(
     initiator: Initiator,
 ) -> OwnershipEvidence {
     OwnershipEvidence {
+        close_detail: None,
         parent_lifetime: row.binding.parent_lifetime.clone(),
         child_lifetime: Some(row.child_lifetime.clone()),
         close_operation: None,
@@ -1267,6 +1309,7 @@ fn evidence_for_spawn(
 
 fn close_evidence(lifetime: &Lifetime, before: OwnershipMeaning) -> OwnershipEvidence {
     OwnershipEvidence {
+        close_detail: None,
         parent_lifetime: lifetime.row.lifetime_id.clone(),
         child_lifetime: None,
         close_operation: lifetime.row.close_operation.clone(),
@@ -1287,6 +1330,7 @@ fn report_evidence(
     after: DeliveryState,
 ) -> OwnershipEvidence {
     OwnershipEvidence {
+        close_detail: None,
         parent_lifetime: row.parent_lifetime.clone(),
         child_lifetime: Some(row.child_lifetime.clone()),
         close_operation: None,
@@ -1304,4 +1348,55 @@ fn delivery_meaning(state: DeliveryState) -> OwnershipMeaning {
         DeliveryState::Suppressed => OwnershipMeaning::Suppressed,
         DeliveryState::Unconfirmed => OwnershipMeaning::Unconfirmed,
     }
+}
+
+fn physical_slot(physical: PhysicalFact) -> usize {
+    match physical {
+        PhysicalFact::Pending => 0,
+        PhysicalFact::Failed => 1,
+        PhysicalFact::Released => 2,
+    }
+}
+
+/// One derivation owns both the coarse inspection summary and aggregate readiness.
+fn settlement_summary(proof: &SettlementProof) -> (PhysicalFact, EvidenceFact) {
+    match proof {
+        SettlementProof::Absence(absence) => (PhysicalFact::Released, absence.acknowledgement),
+        SettlementProof::Resource(slots) => {
+            let Some(observation) = slots.iter().rev().flatten().next() else {
+                // Refused restored history is retained for inspection. Its
+                // missing observation supplies no aggregate readiness.
+                return (PhysicalFact::Pending, EvidenceFact::Pending);
+            };
+            let Some(CloseEvidenceDetail::ResourceObservation {
+                physical,
+                provider_evidence,
+            }) = observation.record.close_detail
+            else {
+                return (PhysicalFact::Pending, EvidenceFact::Pending);
+            };
+            let evidence = if slots
+                .iter()
+                .flatten()
+                .any(|a| a.acknowledgement == EvidenceFact::Failed)
+            {
+                EvidenceFact::Failed
+            } else if slots
+                .iter()
+                .flatten()
+                .any(|a| a.acknowledgement != EvidenceFact::Acknowledged)
+            {
+                EvidenceFact::Pending
+            } else if observation.provider_acknowledged {
+                EvidenceFact::Acknowledged
+            } else {
+                provider_evidence
+            };
+            (physical, evidence)
+        }
+    }
+}
+
+fn refresh_summary(row: &mut SettlementRow) {
+    (row.physical, row.evidence) = settlement_summary(&row.proof);
 }

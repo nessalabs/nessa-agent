@@ -109,7 +109,7 @@ async fn c18_disposal_seals_without_replacing_the_earlier_attachment_cause() {
 }
 
 mod factory_owned_gate {
-    use super::{actor, agent, AgentError, Arc, Mutex, OwnedLifetime};
+    use super::{actor, agent, AgentError, Arc, AtomicUsize, Mutex, Ordering, OwnedLifetime};
     use async_trait::async_trait;
     use nessa_sdk::application::agent_execution::{
         agents::{Agent, AttachmentRequest},
@@ -134,10 +134,11 @@ mod factory_owned_gate {
             Ok(())
         }
     }
-    struct AgentResources(Agent);
+    struct AgentResources(Agent, Arc<AtomicUsize>);
     #[async_trait]
     impl ChildResources for AgentResources {
         async fn close(&self, _: &LifetimeCause, _: &Initiator) -> ResourceReport {
+            self.1.fetch_add(1, Ordering::SeqCst);
             self.0.close(actor()).await.unwrap();
             ResourceReport {
                 physical: PhysicalFact::Released,
@@ -156,6 +157,7 @@ mod factory_owned_gate {
         child: Mutex<Option<Agent>>,
         gate: Mutex<Option<Arc<dyn OwnedLifetime>>>,
         failed: bool,
+        closes: Arc<AtomicUsize>,
     }
     #[async_trait]
     impl ChildFactory for Factory {
@@ -169,11 +171,11 @@ mod factory_owned_gate {
             if self.failed {
                 Err(PrepareFailure {
                     failure: PortFailure::Uncertain,
-                    cleanup: Some(Arc::new(AgentResources(child))),
+                    cleanup: Some(Arc::new(AgentResources(child, self.closes.clone()))),
                 })
             } else {
                 Ok(PreparedChild {
-                    resources: Arc::new(AgentResources(child)),
+                    resources: Arc::new(AgentResources(child, self.closes.clone())),
                     submit: Arc::new(Submit),
                 })
             }
@@ -184,6 +186,7 @@ mod factory_owned_gate {
             child: Mutex::new(None),
             gate: Mutex::new(None),
             failed,
+            closes: Arc::new(AtomicUsize::new(0)),
         });
         let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
             store: Arc::new(MemoryOwnershipStore::new()),
@@ -198,8 +201,9 @@ mod factory_owned_gate {
             )
             .await
             .unwrap();
-        let result = coordinator
-            .spawn(SpawnCommand {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            coordinator.spawn(SpawnCommand {
                 parent: root.clone(),
                 request_id: SpawnRequestId::new("child").unwrap(),
                 task: "task".into(),
@@ -209,8 +213,10 @@ mod factory_owned_gate {
                 child_supports_policy: true,
                 model: None,
                 origin: SpawnOrigin::Host(HostActor::new("person", "desktop", "child").unwrap()),
-            })
-            .await;
+            }),
+        )
+        .await
+        .expect("factory gate startup must settle independently of close");
         if failed {
             assert_eq!(
                 result,
@@ -237,16 +243,24 @@ mod factory_owned_gate {
                 Err(AgentError::Closed)
             ));
         }
-        coordinator
-            .end_lifetime(CloseCommand {
-                lifetime,
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            coordinator.end_lifetime(CloseCommand {
+                lifetime: lifetime.clone(),
                 cause: LifetimeCause::HostClose,
                 initiator: Initiator::Runtime,
                 external_attachment: false,
                 timeout: None,
-            })
-            .await
-            .unwrap();
+            }),
+        )
+        .await
+        .expect("physical Agent report must not wait for its own coordinator generation")
+        .unwrap();
+        assert_eq!(factory.closes.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            coordinator.lifetime_state(&lifetime),
+            Some(nessa_sdk::domain::agent_execution::subagents::LifetimeState::Closed)
+        );
         assert!(gate.is_sealed());
         let child = factory.child.lock().unwrap().clone().unwrap();
         assert!(matches!(
