@@ -34,6 +34,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const functional = [
   "smoke",
   "icon-buttons",
+  "shared-controls",
   "focus",
   "drag",
   "responsive",

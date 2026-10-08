@@ -1,5 +1,6 @@
 import { memo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { shallowEqual } from "react-redux"
+import { Kbd } from "@nessa-ui/react/kbd"
 import { useRunningFirstPreference } from "../../../adapters/window-preferences"
 import { DesktopIcon } from "../../../ui/icons"
 import { newSession, openSession } from "../../adapters/store/commands"
@@ -119,7 +120,7 @@ export const SessionList = memo(function SessionList() {
                 setQuery("")
               }}
             />
-            {query || !shortcut ? null : <kbd>{shortcut}</kbd>}
+            {query || !shortcut ? null : <Kbd>{shortcut}</Kbd>}
           </label>
         </ColumnHeader>
         <div

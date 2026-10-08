@@ -308,24 +308,19 @@
   opacity: 0.5;
 }
 
-/* ——— Keys, as a tooltip or a footer writes them ——— */
+/* ——— Key caps: the kit's Kbd in the window's inks ——— */
 
-.workspace-kbd {
-  display: inline-flex;
-  min-width: 18px;
-  height: 18px;
-  align-items: center;
-  justify-content: center;
-  padding: 0 4px;
+/*
+ * The kit's `Kbd` draws the cap (18px, 11px medium type); the window gives it
+ * its own inks and corner. A raw `<kbd>` outside Settings is refused by `styles.test.ts`, and
+ * `shared-controls.mjs` (`keys`) measures the caps that show; Settings keeps its
+ * own until its redesign.
+ */
+[data-surface] [data-slot="kbd"] {
   border-radius: var(--desktop-radius-xs);
   background: color-mix(in oklab, var(--foreground) 7%, transparent);
   color: var(--desktop-muted);
-  font: 500 var(--desktop-text-caption) / 1 var(--nessa-font-sans);
   letter-spacing: 0.02em;
-}
-
-.workspace-kbd + .workspace-kbd {
-  margin-left: 4px;
 }
 
 /* ——— Carrying a pane or a session (`split-panes/adapters/dom/drag.ts`) ——— */

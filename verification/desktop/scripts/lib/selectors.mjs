@@ -114,6 +114,10 @@ export const css = {
 
   // Quick switcher (⌘K, ⌘\\)
   switcherField: '[role="dialog"] input', // the switcher's search field
+  switcherResults: "#workspace-switcher-results", // the switcher's listbox
+
+  // Shared controls (#632): the kit's components, by the slot each draws
+  keyCap: "kbd", // every key cap; each must be the kit's (data-slot="kbd")
 
   // Side columns
   sidebar: ".workspace-sidebar", // class
