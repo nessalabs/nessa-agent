@@ -21,7 +21,7 @@ sources:
   - "src/desktop/workspace/ui/layouts/widgets.test.tsx"
   - "src/desktop/workspace/model/pane-item.test.ts"
   - "verification/desktop/scripts/widgets.mjs"
-  - "docs/adr/todo/326-widgets.md"
+  - "docs/adr/done/326-widgets.md"
   - "src/desktop/dependencies.ts"
   - "src/desktop/main.tsx"
   - "src/desktop/widgets/app/ui/use-app-call.ts"

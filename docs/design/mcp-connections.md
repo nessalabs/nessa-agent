@@ -1,6 +1,6 @@
 # One MCP connection per server for each harness session, owned by the gateway
 
-Design for #346, under [ADR 344](../adr/todo/344-mcp-ui.md). The ADR decides
+Design for #346, under [ADR 344](../adr/done/344-mcp-ui.md). The ADR decides
 that the gateway owns the connection to each configured MCP server and hands
 the harness a stand-in. This document says how, and writes down the states
 and orderings the tests come from ([gate 15](../../CODING_STANDARDS.md#gates)).
@@ -981,7 +981,7 @@ This section is the one statement of what the restoration identity means for
 MCP servers; other documents link here. The SDK's restoration fingerprint does
 not hash the MCP servers. Its inputs are listed once, on `fingerprint` in
 [`acp/sessions/identity.rs`](../../crates/nessa-sdk/src/infrastructure/acp/sessions/identity.rs)
-(#391, [ADR 344](../adr/todo/344-mcp-ui.md)).
+(#391, [ADR 344](../adr/done/344-mcp-ui.md)).
 
 - **A per-open attachment.** The server list — for the gateway, its stand-ins
   — is given to each provider open, like the session token, and selects no

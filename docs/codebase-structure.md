@@ -268,7 +268,7 @@ writing the full defaults on first launch is buying.
   `.workspace-content`, leaving each region’s independent state intact.
 
 - Widgets are the desktop window's vertical for what a plugin draws
-  ([ADR 326](adr/todo/326-widgets.md)): `src/desktop/widgets/` (its map is
+  ([ADR 326](adr/done/326-widgets.md)): `src/desktop/widgets/` (its map is
   `index.ts`) owns the reference (`model/widget-ref.ts`), the states and
   places, and the one table of what a host draws for each
   (`model/host-table.ts`); the registry plugins are looked up in — native

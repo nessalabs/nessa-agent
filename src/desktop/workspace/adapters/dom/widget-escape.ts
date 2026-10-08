@@ -1,6 +1,6 @@
 /**
  * Escape for the widget in front: the last rows of ADR 326's table of who
- * takes Escape, in order (_Focus_ and _Escape_, `docs/adr/todo/326-widgets.md`).
+ * takes Escape, in order (_Focus_ and _Escape_, `docs/adr/done/326-widgets.md`).
  * The owners before these — a menu or dialog, a carrying drag, the edge peek,
  * the search clearing its query — mark the event as theirs
  * (`defaultPrevented`) or stop it, and Settings makes the window inert; the

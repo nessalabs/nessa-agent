@@ -3,8 +3,8 @@
 ## Purpose
 
 Some of what a conversation produces is better seen than read: an experiment
-a swarm is running ([333](333-experiments.md)), the subagents a conversation
-has put to work ([329](329-subagents.md)), and later whatever else a plugin
+a swarm is running ([333](../todo/333-experiments.md)), the subagents a conversation
+has put to work ([329](../todo/329-subagents.md)), and later whatever else a plugin
 draws. This record settles how the desktop window hosts such a view — where it
 can appear, how a person moves it between those places and back, and what is
 drawn when it cannot be — without the window knowing any plugin, and without
@@ -40,7 +40,7 @@ own like a chat's, and Escape back. Its structure is what cannot ship:
 What binds:
 
 - **Split panes stay host-agnostic.** A pane shows an opaque `item` string
-  ([253](../done/253-split-panes-component.md)); its meaning is the host's.
+  ([253](253-split-panes-component.md)); its meaning is the host's.
 - **A plugin owns its data.** An experiment is read from `ExperimentSource`,
   subagents from `SubagentSource`; the widget layer is not a second path to
   either, and some of those sources will read over the wire, so a widget can

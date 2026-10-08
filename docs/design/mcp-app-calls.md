@@ -1,6 +1,6 @@
 # An MCP App's calls, held to policy and audited
 
-An MCP App ([ADR 344](../adr/todo/344-mcp-ui.md)) reaches its own server
+An MCP App ([ADR 344](../adr/done/344-mcp-ui.md)) reaches its own server
 through the gateway: `mcp.callTool` and `mcp.readResource`, on the
 conversation's own session of that server
 ([one connection per harness session](mcp-connections.md)). Its host releases
