@@ -952,9 +952,7 @@ impl OwnershipGraph {
         // Repair only accepted history. A later proof refusal must not replace
         // the original rows or create recovery effects for a refused snapshot.
         if refusal.is_none() {
-            if let Some(error) = graph.continue_interrupted_cascade() {
-                note_refusal(&mut refusal, error);
-            }
+            graph.continue_interrupted_cascade();
         }
         graph.refusal = refusal;
         graph
@@ -1039,20 +1037,16 @@ impl OwnershipGraph {
         sealed
     }
 
-    /// Join open descendants to a closing ancestor. An open descendant of a
-    /// closed ancestor is left unchanged and reported as contradictory.
-    fn continue_interrupted_cascade(&mut self) -> Option<OwnershipError> {
+    /// Repair accepted history after structural and Completion validation.
+    /// Completion readiness owns refusal of Open descendants of a Closed owner;
+    /// see completed_ancestor_refuses_open_descendants_without_repairing_retained_history.
+    fn continue_interrupted_cascade(&mut self) {
         let open: Vec<AgentLifetimeId> = self
             .lifetimes
             .iter()
             .filter(|(_, lifetime)| lifetime.row.state == LifetimeState::Open)
             .map(|(id, _)| id.clone())
             .collect();
-        for id in &open {
-            if self.non_open_ancestor(id) == Some(LifetimeState::Closed) {
-                return Some(OwnershipError::Contradictory);
-            }
-        }
         let gaps: Vec<AgentLifetimeId> = open
             .into_iter()
             .filter(|id| {
@@ -1101,21 +1095,6 @@ impl OwnershipGraph {
             }
         }
         self.recovery = records;
-        None
-    }
-
-    fn non_open_ancestor(&self, lifetime: &AgentLifetimeId) -> Option<LifetimeState> {
-        let mut current = lifetime.clone();
-        loop {
-            let parent = self.parent_id(&current)?;
-            let state = self
-                .lifetime_state(&parent)
-                .expect("a spawn parent is a recorded lifetime");
-            if state != LifetimeState::Open {
-                return Some(state);
-            }
-            current = parent;
-        }
     }
 
     fn parent_id(&self, lifetime: &AgentLifetimeId) -> Option<AgentLifetimeId> {
