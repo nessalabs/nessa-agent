@@ -46,6 +46,9 @@ jobs:
   workflows:
     name: Workflow files are valid
     runs-on: ubuntu-latest
+    # Twenty-one green runs on 2026-10-07 finished this job in at most 0.2
+    # minutes. Ten minutes bounds a hung actionlint download.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Install actionlint
@@ -81,6 +84,9 @@ jobs:
   changes:
     name: What this change needs
     runs-on: ubuntu-latest
+    # At most 0.2 minutes across those same runs. Ten minutes bounds the
+    # file-list API call, which is the only thing here that can stall.
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: read
@@ -123,6 +129,10 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
+    # Warm runs in that sample finished in at most 1.6 minutes. Before the
+    # cache, this job compiled the workspace dependency graph and was most of
+    # a thirty-minute run, so forty-five minutes covers a cold graph.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -246,6 +256,10 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: macos-latest
+    # Warm release-profile checks finished in at most 3 minutes in that sample,
+    # about half a minute of that in the compile. Forty-five minutes covers a
+    # cold macOS check.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -266,6 +280,9 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
+    # `pnpm frontend:check` finished in at most 5.8 minutes in that sample.
+    # Thirty minutes covers a cold install in front of it.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -289,6 +306,11 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # Windows took at most 27.9 minutes, macOS 18.5, and Ubuntu 54.5 when apt
+    # was still transferring (21 green runs, 2026-10-07, #653). Ninety minutes
+    # sits above the Rust test step's 45 minute bound and the apt step's 20,
+    # so those fire first.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -360,7 +382,17 @@ jobs:
         if: runner.os == 'Linux'
         # The WebDriver and virtual display are this job's own, for the native
         # window smoke below.
+        #
+        # A stalled mirror held this step for 315 minutes and for 79 minutes
+        # (runs 37668027204 and 37670890766, #653). The script kills each
+        # apt-get; twenty minutes kills the step if that does not run. Three
+        # failed updates take about seventeen minutes, so a mirror that never
+        # answers fails here with the script's own message. Healthy installs
+        # in the same window finished in under five minutes. Two green installs
+        # took 30.6 and 41.5 minutes on a mirror at 24.8 kB/s; this bound fails
+        # those and the step ends.
         run: bash scripts/desktop/install-linux-build-deps.sh webkit2gtk-driver xvfb
+        timeout-minutes: 20
       - run: node scripts/check-desktop.mjs
       # Hosted Windows runners are administrators with UAC off, so this leg can
       # prove the Task Scheduler identity and cleanup agreement only for an
@@ -466,6 +498,10 @@ jobs:
     env:
       CARGO_TARGET_DIR: target/sdk-domain-coverage
       NESSA_SDK_COVERAGE_TARGET: target/sdk-domain-coverage
+    # The instrumented suite took at most 11.9 minutes in that sample, and its
+    # step bound is 40 minutes (#366). Sixty minutes lets that step bound fire
+    # before the job does.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -507,6 +543,8 @@ jobs:
       - sdk-domain-coverage
     if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
+    # At most 0.2 minutes in that sample. Ten minutes bounds a hung checkout.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:

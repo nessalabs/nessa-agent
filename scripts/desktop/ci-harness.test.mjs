@@ -162,6 +162,94 @@ test("every Linux build installs the one list of host build dependencies", () =>
   }
 })
 
+/**
+ * Job keys sit at two spaces. A job timeout sits at four, which is what keeps
+ * it distinct from a step timeout further in.
+ */
+function workflowJobs(workflow) {
+  const jobsAt = workflow.search(/\njobs:\r?\n/)
+  if (jobsAt === -1) return []
+  // `on:` uses the same two-space keys (`push:`). Jobs are only what follows
+  // `jobs:`.
+  const jobs = workflow.slice(jobsAt)
+  const headers = [...jobs.matchAll(/\n  ([a-z][a-z0-9-]*):\r?\n/g)]
+  return headers.map((header, index) => {
+    const start = header.index + 1
+    const end = index + 1 < headers.length ? headers[index + 1].index + 1 : jobs.length
+    return [header[1], jobs.slice(start, end)]
+  })
+}
+
+test("apt installs and every CI job are bounded", () => {
+  // #653. A silent mirror used to hold the install step until GitHub's
+  // six-hour job limit, because nothing around apt-get had a bound.
+  const script = readFileSync("scripts/desktop/install-linux-build-deps.sh", "utf8")
+  assert.match(script, /Acquire::Retries=3/)
+  assert.match(script, /Acquire::http::Timeout=30/)
+  assert.match(script, /Acquire::https::Timeout=30/)
+  assert.doesNotMatch(script, /sudo\s+-E\b/)
+  assert.equal(script.match(/apt-get "\$\{apt_options\[@\]\}"/g)?.length, 2)
+  // `update` is the command the mirror stalled in, so it is the one that is
+  // retried. `install` stays after the loop: one attempt, its own ceiling.
+  assert.match(
+    script,
+    /for attempt in 1 2 3; do\r?\n {2}if sudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 5m apt-get "\$\{apt_options\[@\]\}" update; then\r?\n {4}break\r?\n {2}fi\r?\n {2}if \[ "\$attempt" -eq 3 \]; then\r?\n {4}echo "apt-get update failed on all three attempts" >&2\r?\n {4}exit 1\r?\n {2}fi\r?\n {2}sleep \$\(\(attempt \* 15\)\)\r?\ndone\r?\nsudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 15m apt-get "\$\{apt_options\[@\]\}" install -y \\/,
+  )
+
+  // Minutes, from 21 green local-auth runs on 2026-10-07 and the four release
+  // runs that exist. local-auth is 90 because Windows took 27.9 minutes and
+  // the apt step's own bound has to fit under the job.
+  const bounds = {
+    "local-auth.yml": {
+      workflows: 10,
+      changes: 10,
+      "gateway-contract": 45,
+      "desktop-release-profile": 45,
+      frontend: 30,
+      "local-auth": 90,
+      "sdk-domain-coverage": 60,
+      "required-checks": 10,
+    },
+    "release.yml": {
+      version: 10,
+      "updater-key": 30,
+      build: 90,
+      release: 15,
+    },
+  }
+  for (const [file, expected] of Object.entries(bounds)) {
+    const original = readFileSync(`.github/workflows/${file}`, "utf8")
+    // Hosted Windows checks the workflow out with CRLF. A job split or a
+    // timeout line that requires a bare LF passes here and fails that leg.
+    const asWindowsCheckout = original.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n")
+    for (const workflow of [original, asWindowsCheckout]) {
+      const jobs = workflowJobs(workflow)
+      assert.deepEqual(
+        jobs.map(([name]) => name).sort(),
+        Object.keys(expected).sort(),
+        `${file} jobs`,
+      )
+      for (const [name, body] of jobs) {
+        const found = [...body.matchAll(/^    timeout-minutes: (\d+)\r?$/gm)].map(
+          (match) => Number(match[1]),
+        )
+        assert.deepEqual(found, [expected[name]], `${file} ${name}`)
+      }
+    }
+  }
+
+  const localAuth = readFileSync(".github/workflows/local-auth.yml", "utf8")
+  const release = readFileSync(".github/workflows/release.yml", "utf8")
+  for (const workflow of [localAuth, release]) {
+    const asWindowsCheckout = workflow.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n")
+    const step =
+      workflow === localAuth
+        ? /run: bash scripts\/desktop\/install-linux-build-deps\.sh webkit2gtk-driver xvfb\r?\n\s+timeout-minutes: 20\r?\n/
+        : /run: bash scripts\/desktop\/install-linux-build-deps\.sh\r?\n\s+timeout-minutes: 20\r?\n/
+    for (const checkout of [workflow, asWindowsCheckout]) assert.match(checkout, step)
+  }
+})
+
 test("the existing Windows matrix leg uniquely owns the Task Scheduler model proof", () => {
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
   const proof = "./scripts/desktop/check-windows-task-scheduler.ps1"
