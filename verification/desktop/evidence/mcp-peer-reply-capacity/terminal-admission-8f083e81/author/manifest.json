@@ -1,0 +1,239 @@
+{
+  "head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+  "base": "d59d9272ed7afdb512c13263c8b9620ebd591db0",
+  "clean": true,
+  "checks": {
+    "format": {
+      "exit": 0,
+      "source_head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+      "command": "/workspace/665-terminal-admission-evidence/format.command.json",
+      "log": "/workspace/665-terminal-admission-evidence/format.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "executed_head_at_command_start": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+      "executed_worktree": "Dirty with exact source bytes subsequently committed as 8f083e81e2c323c818cb51612c45edcef42c61b6; no source changes between these successful gates and commit creation.",
+      "source_commit_identity": "8f083e81e2c323c818cb51612c45edcef42c61b6"
+    },
+    "full-mcp": {
+      "exit": 0,
+      "source_head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+      "command": "/workspace/665-terminal-admission-evidence/full-mcp.command.json",
+      "log": "/workspace/665-terminal-admission-evidence/full-mcp.log",
+      "log_sha256": "22f547a23098bb9bdeafb20fe3242b6755d37f8ab9f1ae14026bc4cdd96a8fad",
+      "executed_head_at_command_start": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+      "executed_worktree": "Dirty with exact source bytes subsequently committed as 8f083e81e2c323c818cb51612c45edcef42c61b6; no source changes between these successful gates and commit creation.",
+      "source_commit_identity": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+      "passed": 222,
+      "ignored": 1,
+      "failed": 0
+    },
+    "clippy": {
+      "exit": 0,
+      "source_head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+      "command": "/workspace/665-terminal-admission-evidence/clippy.command.json",
+      "log": "/workspace/665-terminal-admission-evidence/clippy.log",
+      "log_sha256": "c17353dd62f6b100e79b76bf3c85fff5426bb26f4fec31957c0cb2f6b0ba0dea",
+      "executed_head_at_command_start": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+      "executed_worktree": "Dirty with exact source bytes subsequently committed as 8f083e81e2c323c818cb51612c45edcef42c61b6; no source changes between these successful gates and commit creation.",
+      "source_commit_identity": "8f083e81e2c323c818cb51612c45edcef42c61b6"
+    },
+    "six-package-full-suite": {
+      "exit": 0,
+      "source_head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+      "command": "/workspace/665-terminal-admission-evidence/six-package-full-suite.command.json",
+      "log": "/workspace/665-terminal-admission-evidence/six-package-full-suite.log",
+      "log_sha256": "234686173f2a3286fc974128b80665419b7bc6aca7b53f9c286d9083c6366111",
+      "successful_verdicts": 25,
+      "passed": 4420,
+      "ignored": 30,
+      "failed": 0
+    },
+    "sdk-docs": {
+      "exit": 0,
+      "source_head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+      "command": "/workspace/665-terminal-admission-evidence/sdk-docs.command.json",
+      "log": "/workspace/665-terminal-admission-evidence/sdk-docs.log",
+      "log_sha256": "f36a1fd76b66a4da7d9e891df0c6ee9a7153aae566f08ef586750ed8322da9fd"
+    },
+    "architecture-unit-tests": {
+      "exit": 0,
+      "source_head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+      "command": "/workspace/665-terminal-admission-evidence/architecture-unit-tests.command.json",
+      "log": "/workspace/665-terminal-admission-evidence/architecture-unit-tests.log",
+      "log_sha256": "e4303c66438febd25f4ae8b21838753240893ad02c5d6b2ca4f81f096c0b74fd",
+      "passed": 74,
+      "failed": 0
+    },
+    "architecture": {
+      "exit": 0,
+      "source_head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+      "command": "/workspace/665-terminal-admission-evidence/architecture.command.json",
+      "log": "/workspace/665-terminal-admission-evidence/architecture.log",
+      "log_sha256": "2a2462c6729eeb5ecb05a41a9fb9ed10f97b1bdb34772bac68dd984b7907a5d8"
+    },
+    "scripted-browser": {
+      "exit": 0,
+      "source_head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+      "command": "/workspace/665-terminal-admission-evidence/scripted-browser.command.json",
+      "log": "/workspace/665-terminal-admission-evidence/scripted-browser.log",
+      "log_sha256": "d616c4bcc071685834723a83aff72f6ed5bb4fbe9775d553b638ecf092604122"
+    }
+  },
+  "historical_capacity_manifest": "/workspace/665-capacity-review-evidence/manifest.json",
+  "queue_rule_provenance": "/workspace/665-terminal-admission-evidence/unchanged-queue-rule-provenance.json",
+  "review_finding": "https://github.com/nessalabs/nessa-agent/pull/671#discussion_r4217187360",
+  "browser": {
+    "mcp-apps-gateway": {
+      "held": 16,
+      "failed": 0,
+      "engines": {
+        "shared": 2,
+        "chromium": 7,
+        "webkit": 7
+      },
+      "raw": "/workspace/665-terminal-admission-evidence/scripted-browser/mcp-apps-gateway/result.json",
+      "sha256": "c442d781384c9970f5f8a0272f6cd1d44618e6d99eab45e958f47cb36ffdbb37"
+    },
+    "gateway-window": {
+      "held": 13,
+      "failed": 0,
+      "engines": {
+        "shared": 1,
+        "chromium": 6,
+        "webkit": 6
+      },
+      "raw": "/workspace/665-terminal-admission-evidence/scripted-browser/gateway-window/result.json",
+      "sha256": "30f1e3e21ca20f9e73630d670687886c5a4e06b3e1da6b98f240e41bbf41b341"
+    },
+    "scripted-scenarios": {
+      "held": 8,
+      "failed": 0,
+      "engines": {
+        "chromium": 4,
+        "webkit": 4
+      },
+      "raw": "/workspace/665-terminal-admission-evidence/scripted-browser/scripted-scenarios/result.json",
+      "sha256": "c98153c357720882658f2917bf06cc5f50faafa904dbf75dd37c62e21c36aee3"
+    }
+  },
+  "browser_source_head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+  "environment": {
+    "head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+    "base": "d59d9272ed7afdb512c13263c8b9620ebd591db0",
+    "platform": "x86_64-unknown-linux-gnu",
+    "jobs": 1,
+    "dev_debug": 0,
+    "test_debug": 0,
+    "incremental": 0,
+    "target": "/workspace/665-cargo-target",
+    "cargo_home": "/tmp/nessa-cargo",
+    "rustup_home": "/tmp/nessa-rustup",
+    "binary": "/workspace/665-cargo-target/debug/nessa",
+    "binary_sha256": "acdcd95a111572a6b6087dd68eb32a3924cbcb72f604d89dbe42425ee775f20c",
+    "binary_mtime": 1791452655.8265908,
+    "binary_origin": "Supported scripted umbrella cargo build -p nessa-server on exact clean current source head 8f083e81e2c323c818cb51612c45edcef42c61b6; no old-head browser result reused.",
+    "ui_pin": "1f22c0467f935b9f3fcac8a0340c96e8d0c31439",
+    "ui_actual": "1f22c0467f935b9f3fcac8a0340c96e8d0c31439",
+    "browser_mode": "dev",
+    "browser_channel": "bundled",
+    "browser_engines": [
+      "chromium",
+      "webkit"
+    ],
+    "browser_layout": "columns",
+    "libgles2": "/tmp/637-browser-libs/extracted/usr/lib/x86_64-linux-gnu/libGLESv2.so.2.1.0",
+    "libgles2_sha256": "3d07baa9b15672660df7e19f068499310f5922b238991daaf2cefa704d2bb7ef",
+    "library_path": [
+      "/tmp/nessa-browser-libs/usr/lib/x86_64-linux-gnu",
+      "/tmp/637-browser-libs/extracted/usr/lib/x86_64-linux-gnu"
+    ],
+    "host_preflight": "only ldconfig-cache validation skipped; actual engines and unmodified browser assertions ran",
+    "process_supervision": "existing verification subreaper /tmp/637-verify-subreaper.py wraps repository suite and browser helpers; no new process fixtures",
+    "limits": "local Rust gates on Linux; hosted supported-platform CI inspected separately by root; headless WebKit is not native WKWebView; no UI/performance behavior changed"
+  },
+  "source_identities": {
+    "crates/nessa-sdk/src/infrastructure/mcp/connection.rs": "408207518d483127de6e4ad16ee92d7ffa0c88e3ee43b6161b2d7675eeb85c9a",
+    "crates/nessa-sdk/src/infrastructure/mcp/http.rs": "0e7aadb9be3cd217cbba6c896ea3c4b6d8f24e47bbca20c45595aa4ef944b718",
+    "crates/nessa-sdk/src/infrastructure/mcp/mod.rs": "0574953b9729feefbb25a08f069f41bd3b4d1d4886961c27748b636b1f262ff6",
+    "crates/nessa-sdk/tests/infrastructure/mcp/http_progress.rs": "587fc63b7aff04ad9a72a091c55901cba257a8c2fa0201464fa6e2b702fba95f",
+    "crates/nessa-sdk/tests/infrastructure/mcp/mod.rs": "782a2d9712f2d3a49bc3da990c199744fb5d5f0038d124c0b59ce28a3468d986",
+    "crates/nessa-sdk/tests/infrastructure/mcp/post_streams.rs": "bd15d846e9719e7fbcfbfc30ac492b501551dc33ad43545a20367ad83c626911",
+    "docs/adr/todo/392-remote-mcp-servers.md": "f9f13592208831eb45dd78d6c28d9c3b0f77c7961cddd52e4999025ed2e6b3f8",
+    "docs/codebase-structure.md": "88a2629a351ea5e60482a97139e5ec9991145030c2f38147d1e423ad0897afc3"
+  },
+  "mutation_proof_head": "ee798344ddf921f5a60abd97ea7e5b0e547f7c36",
+  "mutation_proofs": [
+    {
+      "mutation": "reserve-zero",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j21_saturated_ordinary_queue_preserves_early_recovery_answers",
+      "diff": "/workspace/665-author-evidence/reserve-zero.diff",
+      "log": "/workspace/665-author-evidence/reserve-zero.log"
+    },
+    {
+      "mutation": "ordinary-bypass",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j24_ordinary_capacity_releases_on_dequeue_and_cancellation",
+      "diff": "/workspace/665-author-evidence/ordinary-bypass.diff",
+      "log": "/workspace/665-author-evidence/ordinary-bypass.log"
+    },
+    {
+      "mutation": "ignored-overflow",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j23_control_overflow_retains_first_cause_and_one_cleanup",
+      "diff": "/workspace/665-author-evidence/ignored-overflow.diff",
+      "log": "/workspace/665-author-evidence/ignored-overflow.log"
+    },
+    {
+      "mutation": "dequeue-permit-leak",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j24_ordinary_capacity_releases_on_dequeue_and_cancellation",
+      "diff": "/workspace/665-author-evidence/dequeue-permit-leak.diff",
+      "log": "/workspace/665-author-evidence/dequeue-permit-leak.log"
+    },
+    {
+      "mutation": "recovery-takes-ordinary-permit",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j24_ordinary_capacity_releases_on_dequeue_and_cancellation",
+      "diff": "/workspace/665-author-evidence/recovery-takes-ordinary-permit.diff",
+      "log": "/workspace/665-author-evidence/recovery-takes-ordinary-permit.log"
+    },
+    {
+      "mutation": "closed-cause-wrong",
+      "exit": 101,
+      "test": "infrastructure::mcp::tests::http_progress::j23_closed_control_queue_is_explicit",
+      "diff": "/workspace/665-author-evidence/closed-cause-wrong.diff",
+      "log": "/workspace/665-author-evidence/closed-cause-wrong.log"
+    }
+  ],
+  "restored_historical_proof": {
+    "head": "ee798344ddf921f5a60abd97ea7e5b0e547f7c36",
+    "exit": 0,
+    "passed": 56,
+    "log": "/workspace/665-author-evidence/mutation-restored-http-progress.log"
+  },
+  "historical_mutation_scope": "Historical six mutation proofs on ee798, not current-head reruns. Original queue and deliver rule blocks unchanged through earlier import normalization; exact155/current block hashes recorded. New terminal-admission rule proved by old-source RED below; saturation workload/poll helper changed since old proofs.",
+  "new_terminal_rule_red": {
+    "source_head": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+    "regression_diff": "/workspace/665-terminal-admission-evidence/blocked-call-before-fix.diff",
+    "exit": 101,
+    "log": "/workspace/665-terminal-admission-evidence/blocked-call-before-fix.log",
+    "command": "/workspace/665-terminal-admission-evidence/blocked-call-before-fix.command.json",
+    "outcome": "ended() reported TooLarge but excess call timed out while custom writer gate remained held; old RED exit101"
+  },
+  "restored_current_proof": {
+    "exit": 0,
+    "source_head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+    "command": "/workspace/665-terminal-admission-evidence/full-mcp.command.json",
+    "log": "/workspace/665-terminal-admission-evidence/full-mcp.log",
+    "log_sha256": "22f547a23098bb9bdeafb20fe3242b6755d37f8ab9f1ae14026bc4cdd96a8fad",
+    "executed_head_at_command_start": "a1eed01ba9ffdbe7e3b90bf12cdba6a1787a346e",
+    "executed_worktree": "Dirty with exact source bytes subsequently committed as 8f083e81e2c323c818cb51612c45edcef42c61b6; no source changes between these successful gates and commit creation.",
+    "source_commit_identity": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+    "passed": 222,
+    "ignored": 1,
+    "failed": 0
+  },
+  "adr_preimplementation": "/workspace/665-terminal-admission-evidence/adr-before-implementation.diff",
+  "preserved_initial_attempts": "/workspace/665-terminal-admission-evidence/verification-startup-history.txt",
+  "excluded_followup": "https://github.com/nessalabs/nessa-agent/issues/670"
+}

@@ -1,0 +1,15 @@
+{
+  "head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+  "previous_head": "15555cfba6d5c3b6570c5bee9370b70cccba97e6",
+  "parts": {
+    "queue": {
+      "exact_byte_equal_to_155": true,
+      "sha256": "24c4994e1b494b568527340e20f83bf996131bc4e63b31c4a4dda297cf8862ef"
+    },
+    "deliver": {
+      "exact_byte_equal_to_155": true,
+      "sha256": "4a093e4830d5af78573eb6f8fae8b57c0a76c444b31ebdbb99f49202ea26dbfb"
+    }
+  },
+  "scope": "Historical six rule mutations remain linked to original implementation, not rerun on current source. Queue implementation and deliver error classification unchanged; new admission watch bridge proved separately by old-source J23 RED. Test workload/helper changes are explicit."
+}

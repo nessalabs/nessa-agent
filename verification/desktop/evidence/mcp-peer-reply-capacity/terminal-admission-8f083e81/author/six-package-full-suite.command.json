@@ -1,0 +1,1 @@
+["python3", "/tmp/637-verify-subreaper.py", "node", "scripts/cargo-test-parallel.mjs", "--concurrency", "2", "--", "-p", "nessa-local-storage", "-p", "nessa-auth", "-p", "nessa-server", "-p", "nessa-protocol", "-p", "nessa-client-core", "-p", "nessa-sdk"]

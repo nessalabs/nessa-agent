@@ -1,0 +1,34 @@
+{
+  "head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+  "base": "d59d9272ed7afdb512c13263c8b9620ebd591db0",
+  "platform": "x86_64-unknown-linux-gnu",
+  "jobs": 1,
+  "dev_debug": 0,
+  "test_debug": 0,
+  "incremental": 0,
+  "target": "/workspace/665-cargo-target",
+  "cargo_home": "/tmp/nessa-cargo",
+  "rustup_home": "/tmp/nessa-rustup",
+  "binary": "/workspace/665-cargo-target/debug/nessa",
+  "binary_sha256": "acdcd95a111572a6b6087dd68eb32a3924cbcb72f604d89dbe42425ee775f20c",
+  "binary_mtime": 1791452655.8265908,
+  "binary_origin": "Supported scripted umbrella cargo build -p nessa-server on exact clean current source head 8f083e81e2c323c818cb51612c45edcef42c61b6; no old-head browser result reused.",
+  "ui_pin": "1f22c0467f935b9f3fcac8a0340c96e8d0c31439",
+  "ui_actual": "1f22c0467f935b9f3fcac8a0340c96e8d0c31439",
+  "browser_mode": "dev",
+  "browser_channel": "bundled",
+  "browser_engines": [
+    "chromium",
+    "webkit"
+  ],
+  "browser_layout": "columns",
+  "libgles2": "/tmp/637-browser-libs/extracted/usr/lib/x86_64-linux-gnu/libGLESv2.so.2.1.0",
+  "libgles2_sha256": "3d07baa9b15672660df7e19f068499310f5922b238991daaf2cefa704d2bb7ef",
+  "library_path": [
+    "/tmp/nessa-browser-libs/usr/lib/x86_64-linux-gnu",
+    "/tmp/637-browser-libs/extracted/usr/lib/x86_64-linux-gnu"
+  ],
+  "host_preflight": "only ldconfig-cache validation skipped; actual engines and unmodified browser assertions ran",
+  "process_supervision": "existing verification subreaper /tmp/637-verify-subreaper.py wraps repository suite and browser helpers; no new process fixtures",
+  "limits": "local Rust gates on Linux; hosted supported-platform CI inspected separately by root; headless WebKit is not native WKWebView; no UI/performance behavior changed"
+}

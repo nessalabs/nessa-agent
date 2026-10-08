@@ -1,0 +1,81 @@
+{
+  "head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+  "clean": true,
+  "eight_checks_exits_hashes_verified": true,
+  "source_hashes_verified": 8,
+  "browser_result_hashes_verified": 3,
+  "initial_gate_git_metadata": "First3executions a1dirtyexactfinal8fbytes explicitlydisclosed; laterclean8f",
+  "new_rule_red": {
+    "exit": 101,
+    "raw_log": "blocked-call-before-fix.log"
+  },
+  "broad_runtime": {
+    "exit": 0,
+    "source_head": "8f083e81e2c323c818cb51612c45edcef42c61b6",
+    "command": "/workspace/665-terminal-admission-evidence/six-package-full-suite.command.json",
+    "log": "/workspace/665-terminal-admission-evidence/six-package-full-suite.log",
+    "log_sha256": "234686173f2a3286fc974128b80665419b7bc6aca7b53f9c286d9083c6366111",
+    "successful_verdicts": 25,
+    "passed": 4420,
+    "ignored": 30,
+    "failed": 0
+  },
+  "browser": {
+    "mcp-apps-gateway": {
+      "held": 16,
+      "failed": 0,
+      "engines": {
+        "shared": 2,
+        "chromium": 7,
+        "webkit": 7
+      },
+      "raw": "/workspace/665-terminal-admission-evidence/scripted-browser/mcp-apps-gateway/result.json",
+      "sha256": "c442d781384c9970f5f8a0272f6cd1d44618e6d99eab45e958f47cb36ffdbb37"
+    },
+    "gateway-window": {
+      "held": 13,
+      "failed": 0,
+      "engines": {
+        "shared": 1,
+        "chromium": 6,
+        "webkit": 6
+      },
+      "raw": "/workspace/665-terminal-admission-evidence/scripted-browser/gateway-window/result.json",
+      "sha256": "30f1e3e21ca20f9e73630d670687886c5a4e06b3e1da6b98f240e41bbf41b341"
+    },
+    "scripted-scenarios": {
+      "held": 8,
+      "failed": 0,
+      "engines": {
+        "chromium": 4,
+        "webkit": 4
+      },
+      "raw": "/workspace/665-terminal-admission-evidence/scripted-browser/scripted-scenarios/result.json",
+      "sha256": "c98153c357720882658f2917bf06cc5f50faafa904dbf75dd37c62e21c36aee3"
+    }
+  },
+  "actual_browser_cases": [
+    {
+      "group": "mcp-apps-gateway",
+      "all_ok": true,
+      "count": 16
+    },
+    {
+      "group": "gateway-window",
+      "all_ok": true,
+      "count": 13
+    },
+    {
+      "group": "scripted-scenarios",
+      "all_ok": true,
+      "count": 8
+    }
+  ],
+  "webKit_scope_refusal_screenshot_visually_inspected": true,
+  "raw_broad_verdicts_independently_counted": {
+    "successful": 25,
+    "passed": 4420,
+    "failed": 0,
+    "ignored": 30
+  }
+}

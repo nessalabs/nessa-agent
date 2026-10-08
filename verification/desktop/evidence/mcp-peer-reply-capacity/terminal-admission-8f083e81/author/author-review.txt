@@ -1,0 +1,102 @@
+Issue665 terminal-admission correction final author report
+Exact head: 8f083e81e2c323c818cb51612c45edcef42c61b6
+Exact base: d59d9272ed7afdb512c13263c8b9620ebd591db0
+Checkout: /workspace/nessa-agent-peer-reply-capacity (clean, local; root coordinates push)
+PR: https://github.com/nessalabs/nessa-agent/pull/671
+External finding: inline4217187360, live ordinary admission could remain blocked
+following published control overflow while a custom HTTP exchange stayed held.
+
+Authority and identity: Shared.end remains sole first terminal-cause publisher.
+Connection's private send_frame subscribes to existing ended() and selects it
+against the same OutgoingQueue.send; call and notify use this single bridge.
+No new terminal flag, semaphore close, scheduling controller or mutable authority.
+HttpSession retains binding/version/phase/fence; queue retains admission permits.
+HTTP_CONTROL_RESERVE is parent-module visible so internal physical-bound tests
+derive the owning value rather than repeat it. Bounds remain ordinary64+reserve1.
+
+Domain invariants: no domain, persistence, public API or execution decision change.
+Transport cause/phase invariants remain existing owners' contracts. An early reply
+cannot validate readiness; matching initialize cannot alter captured identity.
+
+Admission and concurrency: end watch wakes ordinary-permit and physical-capacity
+waits without requiring the held writer to drain. Biased end observation wins when
+already published, including an empty queue; dropped send future releases an
+acquired permit/envelope. Normal enqueue and FIFO order remain unchanged. The
+select is not an atomic Shared.state/queue commit: a send can race publication.
+No universal queue-empty or no-enqueue-after-state-write promise is made; existing
+HTTP shutdown fence remains the downstream effect guard. No reply-oneshot select
+can accept a malicious early correlated reply before queue admission.
+
+Failure and cleanup: old-source J23 RED actually exited101: ended() reported
+TooLarge but live excess call timed out before writer-gate release. Corrected J23
+asserts both live call and notify return retained cause before gate release.
+New control-only saturation proves acquired ordinary permit/physical wait wakes;
+empty-queue deadline control proves already-ended notify returns Timeout. Actual
+POST counts show no notification or call effects/cancellation acknowledgement
+created by terminal wake. Pressure owns one provisional DELETE; no-claim empty
+case owns none. Later close preserves first cause; cleanup/startup stay existing.
+
+Observations and restoration: existing watch receivers observe Shared publication;
+no restored session snapshots or new notification authority. reader still never
+awaits peer-answer admission. RecoveryReady send/completion remain deadline-owned
+startup task work, canceled/joined by HttpSession.shutdown; direct cancellation and
+try_send controls never wait. J21/J22/J24-J26 and existing lifecycle cases pass.
+
+Audit: no durable/product audited transition changed. Cause publication and
+physical cleanup remain distinct, tested via typed causes and actual exchanges.
+No fabricated cancellation POST or acknowledgement is added on unadmitted calls.
+
+Representation boundaries: captured peer request ID/context and headers, JSON/SSE
+and remote error representation unchanged. Control overflow remains typed TooLarge,
+Closed maps retained cause/ServerGone. No text parsing determines lifecycle errors.
+
+Resource bounds: same FIFO65 and ordinary64 permits; send futures retain bounded
+queue admission and release resources on cancellation. watch subscriptions observe
+existing Shared owner, with no unbounded queue or second dispatch lane. Process
+fixtures and runtime ownership unchanged; existing verification subreaper used.
+
+Public surface and organization: one private Connection helper, internal bound
+visibility, existing HTTP-progress tests and ADR392 J23/J24 ordering rows. Rows
+were updated before implementation and linked to the live waiter regression.
+No dependency, UI, schema, application port, process fixture or unrelated fix.
+
+Agreement: Shared owns RPC pending IDs/end cause; queue envelope owns ordinary
+permit; ReplyContext owns immutable peer identity; HttpSession owns admission
+phase/close fence and claims own retained DELETE. Terminal queue waiting now asks
+existing Shared publication, dropping its send future before Pending.sent becomes
+true. Tests cross cause publication, blocked permit/physical wait, zero downstream
+effects, retained first cause and appropriate one/no provisional cleanup.
+
+Gate15: J23/J24 order table was updated before patch. Actual held-writer tests
+prove end-publication -> call/notify completion before writer-drain order; matching
+init/readiness/binding regressions remain intact. Gate16: accepted bounded single
+FIFO and owner direction retained; terminal watch bridge uses the existing owner.
+Gate17: current supported scripted-browser on exact head passed Apps16, Gateway13,
+Scenarios8, all rows ok, Chromium and WebKit. Actual runtime binary rebuilt by
+supported umbrella; old browser results are historical, not relabeled.
+
+All current numeric exits0: format; full MCP222passed/1existing ignored; selected
+six-package all-target Clippy; broad six-package runtime 4420passed/
+30existing ignored/child probes/25successful verdicts; strict SDKdocs;
+architecture checker/74unit tests; supported browser. manifest.json records
+commands, numeric exits, raw log hashes, current source identities and browser JSON.
+Initial format/MCP/Clippy ran before commit creation on a1 HEAD with dirty final
+source bytes, subsequently frozen as this hash without edits. Broad suite/docs/
+architecture/browser ran on the clean actual current head; no initial command
+start HEAD is invented or relabeled.
+
+Historical proof: six independent applied rule mutations on ee798 each exit101,
+restored56pass0; previous a1 owner65positive56pass0 and derived broken-reserve RED101
+remain preserved in earlier directories. Queue/deliver blocks still byte-identical
+to155 (prior import normalization links155 to historical rules). New terminal
+rule has its own old-source RED101 and restored current MCP222pass0; no claim that
+historical probes were rerun on this head. Initial wrong-directory formatting,
+verification-wrapper startup SyntaxError, and initial new-test DELETE expectation
+failure were preserved/corrected with explicit history; no assertion exemptions.
+
+Environment: Linux x86_64, exclusive warm target, jobs1/no debug/no incremental;
+existing subreaper for process tests and browser. Pinned UI1f22c046, bundled
+headless Chromium/WebKit dev/columns. Only ldconfig-cache host preflight bypassed;
+real assertions run. Native WKWebView/performance unverified; root owns hosted
+platform CI and fresh review handoff. #670 writer-panic supervision remains excluded.
+All nine dimensions, agreement, gates15-17 and author prerequisites complete.

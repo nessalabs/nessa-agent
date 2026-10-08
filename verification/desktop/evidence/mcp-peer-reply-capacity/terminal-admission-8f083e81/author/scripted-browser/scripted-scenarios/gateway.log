@@ -1,0 +1,2 @@
+2026-10-08T09:45:38.659554Z ERROR nessa_server::conversation::application::service: conversation agent opening failed conversation_id=b33cb5fc-aad8-4595-80be-564abee99a9e error=agent: Unsupported("provider does not support restoring a closed session")
+2026-10-08T09:45:55.044505Z ERROR nessa_server::conversation::application::service: conversation agent opening failed conversation_id=38b1becc-e4ef-452c-90f3-ccac07038acf error=agent: Unsupported("provider does not support restoring a closed session")

@@ -1,0 +1,3 @@
+Initial cargo fmt was launched from /workspace without manifest and failed before formatting. Following recorded format check exited1; saved as format-before-rustfmt.*. Corrected worktree format and check passed0.
+Initial current MCP run exited101 (221pass1fail1ignore) because empty/no-claim cleanup assertion incorrectly expected DELETE1 instead of0; preserved as full-mcp-before-cleanup-assertion.*. No production changes accompanied test expectation correction.
+Initial final-gate wrapper launch exited1 with Python SyntaxError: unterminated string literal (detected at line1), before any child gate. Wrapper fixed and restarted; repository source unchanged.

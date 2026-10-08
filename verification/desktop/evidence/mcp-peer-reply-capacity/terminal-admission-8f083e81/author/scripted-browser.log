@@ -1,0 +1,89 @@
+$ node verification/desktop/scripts/scripted-e2e.mjs -- --channel bundled --evidence /workspace/665-terminal-admission-evidence/scripted-browser
+building nessa-server…
+   Compiling nessa-sdk v0.1.0 (/workspace/nessa-agent-peer-reply-capacity/crates/nessa-sdk)
+   Compiling nessa-protocol v0.1.0 (/workspace/nessa-agent-peer-reply-capacity/crates/nessa-protocol)
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent-peer-reply-capacity/crates/nessa-server)
+    Finished `dev` profile [unoptimized] target(s) in 1m 00s
+
+mcp-apps-gateway
+starting a dev server of its own on port 34741…
+warmed 473 modules in 2902 ms
+conversation ready: review_rows completed, in 1216 ms
+ok    setup
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    renders [chromium columns]
+ok    hidden [chromium columns]
+ok    allow [chromium columns]
+ok    deny [chromium columns]
+ok    release [chromium columns]
+ok    message [chromium columns]
+ok    context [chromium columns]
+ok    console
+chromium columns: 10332 ms
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    renders [webkit columns]
+ok    hidden [webkit columns]
+ok    allow [webkit columns]
+ok    deny [webkit columns]
+ok    release [webkit columns]
+ok    message [webkit columns]
+ok    context [webkit columns]
+webkit columns: 13422 ms
+wrote /workspace/665-terminal-admission-evidence/scripted-browser/mcp-apps-gateway/result.json
+mcp-apps-gateway: 16/16 held
+
+gateway-window
+starting a dev server of its own on port 39763…
+warmed 473 modules in 3173 ms
+conversation ready in 1198 ms
+ok    setup
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    handshake [chromium columns]
+ok    lists [chromium columns]
+ok    opens [chromium columns]
+ok    live [chromium columns]
+ok    apps [chromium columns]
+ok    handshakes [chromium columns]
+chromium columns: 13300 ms
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    handshake [webkit columns]
+ok    lists [webkit columns]
+ok    opens [webkit columns]
+ok    live [webkit columns]
+ok    apps [webkit columns]
+ok    handshakes [webkit columns]
+webkit columns: 16748 ms
+wrote /workspace/665-terminal-admission-evidence/scripted-browser/gateway-window/result.json
+gateway-window: 13/13 held
+
+scripted-scenarios
+starting a dev server of its own on port 38499…
+warmed 473 modules in 3003 ms
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    permission [chromium columns]
+ok    allow [chromium columns]
+ok    fail [chromium columns]
+ok    cancel [chromium columns]
+chromium columns: 14538 ms
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+ok    permission [webkit columns]
+ok    allow [webkit columns]
+ok    fail [webkit columns]
+ok    cancel [webkit columns]
+webkit columns: 16420 ms
+wrote /workspace/665-terminal-admission-evidence/scripted-browser/scripted-scenarios/result.json
+scripted-scenarios: 8/8 held
+
+Verdict: pass
+
+| Check | Chromium | WebKit |
+| --- | --- | --- |
+| mcp-apps-gateway | pass | pass |
+| gateway-window | pass | pass |
+| scripted-scenarios | pass | pass |
+
+Relevant log lines:
+
+- console: requestfailed: http://127.0.0.1:34741/browser/check net::ERR_ABORTED (aborted after a 204 response, #485) (harmless)
+{"verdict":"pass","evidence":"/workspace/665-terminal-admission-evidence/scripted-browser","summary":"/workspace/665-terminal-admission-evidence/scripted-browser/pr-summary.md"}
+verification init reaped orphan descendants: 19

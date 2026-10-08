@@ -1,0 +1,1 @@
+["python3", "/tmp/637-verify-subreaper.py", "pnpm", "test:e2e:scripted", "--", "--channel", "bundled", "--evidence", "/workspace/665-terminal-admission-evidence/scripted-browser"]
