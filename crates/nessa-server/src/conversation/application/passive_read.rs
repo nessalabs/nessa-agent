@@ -14,6 +14,7 @@ use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::{
     CatalogueReadScope, ReadRefusal, ReceiverReadScope,
 };
+use nessa_protocol::product::generated::action_for_method;
 use std::{future::Future, pin::Pin};
 
 /// A binding authority reads committed state. A missing or unavailable binding
@@ -31,6 +32,9 @@ pub struct AdmitPassiveRead<'a> {
     pub gateway: &'a Resource,
     pub receivers: &'a dyn ReceiverAuthority,
     pub conversations: &'a dyn ConversationRepository,
+    /// Product method being admitted. Cedar is asked for the grant that method
+    /// publishes (`action_for_method`), which is the manifest's grant.
+    pub method: &'a str,
 }
 
 impl AdmitPassiveRead<'_> {
@@ -122,7 +126,10 @@ impl AdmitPassiveRead<'_> {
         if receiver_id.is_empty() || receiver_id.len() > 128 || access_epoch == 0 {
             return Err(ReadRefusal::InvalidRequest);
         }
-        let action = Action::new("conversation.read").expect("static action");
+        // The manifest is the only declaration of this grant. A method with no
+        // published grant, or a grant that is not an action, cannot be admitted.
+        let action_name = action_for_method(self.method).ok_or(ReadRefusal::Unverifiable)?;
+        let action = Action::new(action_name).map_err(|_| ReadRefusal::Unverifiable)?;
         match self
             .authorization
             .execute(session, &action, self.gateway)

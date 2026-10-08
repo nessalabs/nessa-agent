@@ -27,6 +27,7 @@ use nessa_protocol::conversation::domain::{
 use nessa_protocol::conversation::read_scope::{
     CatalogueReadScope, ReadRefusal, ReceiverReadScope,
 };
+use nessa_protocol::product::generated::product_method;
 use nessa_sync::replication::catalogue::{
     CataloguePass, EntryKey, ManifestEntry, ManifestPage, ManifestRequest, ResolvedEntry,
 };
@@ -134,6 +135,7 @@ async fn record_use_case_admits_before_metadata_and_rechecks_each_request() {
             gateway: &gateway,
             receivers: &bindings,
             conversations: &conversations,
+            method: product_method::CONVERSATION_RECORDS_HEAD,
         },
         source: &source,
     };
@@ -338,6 +340,7 @@ async fn passive_admission_preserves_unverifiable_authority_failures() {
             gateway: &gateway,
             receivers: &bindings,
             conversations: &conversations,
+            method: product_method::CONVERSATION_CATALOGUE_HEAD,
         };
         let calls = AtomicUsize::new(0);
         assert_eq!(
@@ -475,6 +478,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
         gateway: &gateway,
         receivers: &bindings,
         conversations: &conversations,
+        method: product_method::CONVERSATION_RECORDS_HEAD,
     };
     let calls = AtomicUsize::new(0);
     let source = |_: ReceiverReadScope| {
@@ -715,6 +719,7 @@ async fn catalogue_use_case_correlates_admitted_selector_and_operation_before_re
             gateway: &gateway,
             receivers: &bindings,
             conversations: &conversations,
+            method: product_method::CONVERSATION_CATALOGUE_HEAD,
         },
         source: &source,
     };

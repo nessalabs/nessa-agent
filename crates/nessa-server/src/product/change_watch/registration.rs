@@ -165,6 +165,12 @@ impl WatchSelector {
             .passive_read
             .as_ref()
             .ok_or(WatchRefusal::Unavailable)?;
+        // Watch methods publish no grant of their own. This admission asks for
+        // the grant of the read the watch follows.
+        let method = match self {
+            Self::Records { .. } => product_method::CONVERSATION_RECORDS_HEAD,
+            Self::Catalogue { .. } => product_method::CONVERSATION_CATALOGUE_HEAD,
+        };
         let admission = AdmitPassiveRead {
             authorization: AuthorizeAction {
                 access: state.access.as_ref(),
@@ -174,6 +180,7 @@ impl WatchSelector {
             gateway: &state.gateway,
             receivers: receivers.as_ref(),
             conversations: conversations.as_ref(),
+            method,
         };
         let admitted = match self {
             Self::Records {

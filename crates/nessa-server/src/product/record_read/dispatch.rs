@@ -84,6 +84,7 @@ pub(crate) async fn dispatch(
             gateway: &state.gateway,
             receivers: receivers.as_ref(),
             conversations: repository.as_ref(),
+            method: &frame.method,
         },
         source: source.as_ref(),
     };
