@@ -558,6 +558,43 @@ fn an_mcp_tool_carries_the_arguments_its_connection_saw_and_a_later_update_keeps
 }
 
 #[test]
+fn arguments_on_a_later_update_join_the_identity_that_update_does_not_repeat() {
+    let tool = ToolCallId::new("chart").unwrap();
+    let mut events = vec![event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(tool.clone(), None, None, None, None, None)
+            .with_mcp_tool(McpTool::new("charts", "show").unwrap()),
+    ))];
+    assert!(committed_tool_view(&events).tools[0]
+        .mcp
+        .as_ref()
+        .unwrap()
+        .arguments_json
+        .is_none());
+    events.push(event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(tool, None, None, Some(ToolStatus::Completed), None, None)
+            .with_mcp_arguments(McpCallArguments::new(r#"{"city":"Oslo"}"#).unwrap()),
+    )));
+    let joined = committed_tool_view(&events);
+    let mcp = joined.tools[0].mcp.as_ref().unwrap();
+    assert_eq!(mcp.server, "charts");
+    assert_eq!(mcp.tool, "show");
+    assert_eq!(mcp.arguments_json.as_deref(), Some(r#"{"city":"Oslo"}"#));
+    // No identity to join: the arguments are not invented onto the row.
+    let bare = committed_tool_view(&[event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(
+            ToolCallId::new("plain").unwrap(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .with_mcp_arguments(McpCallArguments::new("{}").unwrap()),
+    ))]);
+    assert!(bare.tools[0].mcp.is_none());
+}
+
+#[test]
 fn a_view_past_its_budget_gives_up_call_arguments_after_its_history_and_before_the_tool() {
     let mut view = committed_tool_view(&[event(ExecutionUpdate::Tool(
         ToolCallUpdate::new(

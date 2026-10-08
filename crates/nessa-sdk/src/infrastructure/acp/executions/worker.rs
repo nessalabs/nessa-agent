@@ -2065,6 +2065,9 @@ impl<P: AcpProfile> Worker<P> {
             }
             self.emit(event)?;
             self.shutdown_deadline = previous_deadline;
+            // After this turn's updates have taken what they will. The next
+            // turn of this grant must not be told arguments that were left.
+            self.discard_unclaimed_arguments();
             let active = self.active.take().expect("validated active prompt");
             let _ = active
                 .reply
@@ -2076,6 +2079,13 @@ impl<P: AcpProfile> Worker<P> {
             self.provider_result = None;
         }
         Ok(())
+    }
+    /// Arguments still waiting were not claimed by an update of the execution
+    /// that just ended. Drop them before the session accepts another turn.
+    fn discard_unclaimed_arguments(&self) {
+        if let Some(forwarded) = self.config.stand_ins.forwarded() {
+            forwarded.discard_arguments();
+        }
     }
     fn emit(&mut self, event: ExecutionEvent) -> Result<(), AgentError> {
         let result = self.events.try_send(event);

@@ -962,6 +962,14 @@ impl Projection {
                         resource_uri: None,
                         arguments_json,
                     });
+                } else if let Some(arguments) = update.mcp_arguments() {
+                    // The identity was named on an earlier update. This one
+                    // carries the arguments and does not repeat it, so they
+                    // join the identity already on this call. With no identity
+                    // yet there is no server to show them under.
+                    if let Some(existing) = tool.mcp.as_mut() {
+                        existing.arguments_json = Some(arguments.as_str().to_owned());
+                    }
                 }
                 if let Some(content) = update.content() {
                     // The structured result is read apart from the text, so a

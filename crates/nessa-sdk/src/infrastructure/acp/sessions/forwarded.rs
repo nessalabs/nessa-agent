@@ -22,7 +22,7 @@
 //! find nothing. The states and orderings are tabled in
 //! `docs/design/mcp-connections.md` ("Forwarded results", "Forwarded
 //! arguments"): the stand-in's rows (S1–S8, S11, A1–A6, A9) are tested in
-//! `tests/infrastructure/mcp/forwarded.rs`, this store's (S9, S10, A7, A8)
+//! `tests/infrastructure/mcp/forwarded.rs`, this store's (S9, S10, A7, A8, A15)
 //! and W1–W8, A10–A13 in `tests/infrastructure/acp/sessions/forwarded.rs`.
 #![deny(missing_docs)]
 
@@ -150,6 +150,19 @@ impl ForwardedResults {
             .iter()
             .position(|item| item.call == *tool_call && *item.server == *server)?;
         kept.arguments.remove(index).map(|item| item.arguments)
+    }
+
+    /// Drop arguments no update has taken. The next execution of this grant
+    /// must not be told them: its running update can arrive before its own
+    /// `tools/call`, and `tool-input` is sent at most once, so the previous
+    /// execution's arguments would stick. Results stay; a cancelled call's
+    /// result was already dropped when the call was cancelled.
+    pub(crate) fn discard_arguments(&self) {
+        self.kept
+            .lock()
+            .expect("forwarded results")
+            .arguments
+            .clear();
     }
 
     /// How many results are kept now.

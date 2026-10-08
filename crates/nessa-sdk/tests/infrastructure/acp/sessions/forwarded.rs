@@ -1,5 +1,5 @@
 //! The store of forwarded results and arguments, and attaching each to the
-//! call it belongs to: rows S9, S10, A7, A8 and W1–W8, A10–A13 of the tables
+//! call it belongs to: rows S9, S10, A7, A8, A15 and W1–W8, A10–A13 of the tables
 //! in `docs/design/mcp-connections.md`, each test named after its row.
 use super::*;
 use crate::domain::agent_execution::tools::{McpCallArguments, McpTool, ToolCallId};
@@ -156,6 +156,36 @@ fn s9_past_the_bound_the_oldest_result_is_dropped() {
 
 fn arguments(json: &str) -> McpCallArguments {
     McpCallArguments::new(json).unwrap()
+}
+
+#[test]
+fn a15_an_execution_ending_drops_arguments_it_did_not_take_and_leaves_results() {
+    let forwarded = ForwardedResults::new();
+    forwarded.record(id("toolu_1"), "mcptest", rows());
+    forwarded.record_arguments(id("toolu_1"), "mcptest", arguments(r#"{"city":"Oslo"}"#));
+    forwarded.discard_arguments();
+    assert_eq!(forwarded.arguments_len(), 0);
+    assert_eq!(forwarded.len(), 1);
+    assert_eq!(
+        attach_arguments(
+            call_update(Some(ToolStatus::Running), None, true),
+            Some(&forwarded),
+        )
+        .mcp_arguments()
+        .map(McpCallArguments::as_str),
+        None
+    );
+    forwarded.record_arguments(id("toolu_1"), "mcptest", arguments(r#"{"city":"Bergen"}"#));
+    assert_eq!(
+        attach_arguments(
+            call_update(Some(ToolStatus::Running), None, true),
+            Some(&forwarded),
+        )
+        .mcp_arguments()
+        .map(McpCallArguments::as_str),
+        Some(r#"{"city":"Bergen"}"#)
+    );
+    assert_eq!(forwarded.take(&id("toolu_1"), "mcptest"), Some(rows()));
 }
 
 #[test]

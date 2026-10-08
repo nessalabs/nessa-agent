@@ -394,7 +394,9 @@ of that call keeps nothing (S4). A call cancelled after it was accepted
 keeps its arguments until they are taken or evicted; its result keeps
 nothing (S6). A `failed` update takes them (A10): they were the request.
 The view keeps what an update carried when a later update of the same server
-and tool does not repeat them. Past the view's byte budget, history yields
+and tool does not repeat them. An update that carries arguments and does not
+repeat the identity joins them to the identity already on that call. Past the
+view's byte budget, history yields
 first; arguments are then left off the tool, which stays, and the view does
 not say it was truncated for that. A tool row removed instead would leave
 the desktop on the previous state.
@@ -415,6 +417,7 @@ the desktop on the previous state.
 | A12 | a second update of the call | nothing more: taken. The view keeps what the first carried when it names the same server and tool |
 | A13 | an open without a grant | the update unchanged |
 | A14 | an ACP update before the request is seen | that update carries none; a later update after the request takes them. The harness sends `tools/call` before it can report the call completed, so the update that arrives first is the running announcement. A last update that still arrived first leaves the arguments in the store until they are dropped, and the app is told `{}` |
+| A15 | the execution ends with the session still open | arguments no update took are dropped; results are not. The next execution's running update cannot be told the previous execution's arguments, which `tool-input` would then keep |
 | V1 | the arguments fit the view's byte budget | on `ConversationMcpTool.argumentsJson` |
 | V2 | the view is over budget and the arguments are why a tool row would be removed | the arguments omitted, the tool kept; the view does not say it was truncated |
 | V3 | the view is over budget because of an older message | the message yields first; the arguments stay |
