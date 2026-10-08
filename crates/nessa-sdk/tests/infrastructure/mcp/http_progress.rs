@@ -1,5 +1,5 @@
 //! ADR 392 J1–J26: JSON/initialization progress and replacement cleanup ownership.
-use super::super::connection::{Connection, Outgoing, OutgoingQueue, Reply};
+use super::super::connection::{Connection, Outgoing, OutgoingQueue, Reply, OUTGOING_FRAMES};
 use super::super::http::{HttpSession, SendOutcome};
 use super::super::{
     Bearer, HttpBody, HttpExchange, HttpFailure, HttpMethod, HttpRequest, HttpResponse, McpError,
@@ -2791,14 +2791,16 @@ async fn j19_reader_failure_fences_http_owner_before_ended() {
     );
 }
 
-async fn pending<F: Future>(mut future: Pin<&mut F>) {
+// Poll to an actual queue or reply wait, rather than Tokio's cooperative yield.
+async fn pending<F: Future>(future: Pin<&mut F>) {
+    let mut future = std::pin::pin!(tokio::task::unconstrained(future));
     assert!(poll_fn(|context| Poll::Ready(future.as_mut().poll(context).is_pending())).await);
 }
 
 fn held_calls(
     connection: &Connection,
 ) -> Vec<Pin<Box<impl Future<Output = Result<Reply, McpError>> + '_>>> {
-    (0..64)
+    (0..OUTGOING_FRAMES)
         .map(|_| Box::pin(connection.call("tools/list", None)))
         .collect()
 }
@@ -3052,8 +3054,8 @@ async fn j23_closed_control_queue_is_explicit() {
 
 #[tokio::test]
 async fn j24_ordinary_capacity_releases_on_dequeue_and_cancellation() {
-    let (queue, mut frames) = OutgoingQueue::new(64, 1);
-    for id in 0..64 {
+    let (queue, mut frames) = OutgoingQueue::new(OUTGOING_FRAMES, 1);
+    for id in 0..OUTGOING_FRAMES {
         queue
             .send(Outgoing::Frame(
                 serde_json::to_vec(&json!({"id":id,"method":"tools/list"})).unwrap(),

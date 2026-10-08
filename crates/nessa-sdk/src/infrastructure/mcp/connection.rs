@@ -46,7 +46,7 @@ use tokio::{
 /// The most calls waiting on one server at a time.
 pub(crate) const MAX_IN_FLIGHT: usize = 256;
 /// Frames queued for the server's stdin before callers wait.
-const OUTGOING_FRAMES: usize = 64;
+pub(super) const OUTGOING_FRAMES: usize = 64;
 /// Extra physical room for HTTP controls under ordinary frame pressure.
 const HTTP_CONTROL_RESERVE: usize = 1;
 /// Change notices held for a stand-in that has not read them yet. They are
