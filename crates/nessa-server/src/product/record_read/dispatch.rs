@@ -4,6 +4,7 @@
 //! about a source page, and writes the response through a capped JSON writer.
 //! It carries no credential, ownership, or stream-incarnation decision.
 
+use super::super::passive_read::PUBLISHED_PASSIVE_READ_GRANTS;
 use super::super::state::ProductRouteState;
 use crate::conversation::application::{
     AdmitPassiveRead, ReadRecords, RecordReadError, RecordReadLease, RecordReadOperation,
@@ -84,7 +85,7 @@ pub(crate) async fn dispatch(
             gateway: &state.gateway,
             receivers: receivers.as_ref(),
             conversations: repository.as_ref(),
-            method: &frame.method,
+            grants: &PUBLISHED_PASSIVE_READ_GRANTS,
         },
         source: source.as_ref(),
     };

@@ -1,6 +1,6 @@
 //! Fresh passive admission followed by one exact, bounded physical record read.
 
-use super::super::AdmitPassiveRead;
+use super::super::{AdmitPassiveRead, PassiveRead};
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::{
@@ -93,9 +93,13 @@ impl ReadRecords<'_> {
         operation: RecordReadOperation,
         lease: RecordReadLease,
     ) -> Result<RecordReadResponse, RecordReadError> {
+        let read = match &operation {
+            RecordReadOperation::Head => PassiveRead::RecordHead,
+            RecordReadOperation::Page(_) => PassiveRead::RecordPage,
+        };
         let admitted = self
             .admission
-            .execute(session, conversation, receiver_id, access_epoch)
+            .execute(session, conversation, receiver_id, access_epoch, read)
             .await
             .map_err(RecordReadError::Admission)?;
         passive_read_selector(&admitted.receiver_id, admitted.access_epoch)

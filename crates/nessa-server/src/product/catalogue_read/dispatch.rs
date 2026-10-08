@@ -3,6 +3,7 @@
 //! `nessa_protocol::product::catalogue_read` maps generated DTOs. `ReadCatalogue` owns admission ordering; source
 //! workers own physical I/O and sync-engine validates finite passes and values.
 
+use super::super::passive_read::PUBLISHED_PASSIVE_READ_GRANTS;
 use super::super::state::ProductRouteState;
 use crate::conversation::application::{
     AdmitPassiveRead, CatalogueReadError, CatalogueReadOperation, CatalogueReadValue,
@@ -93,7 +94,7 @@ pub(in crate::product) async fn dispatch(
             gateway: &state.gateway,
             receivers: receivers.as_ref(),
             conversations: repository.as_ref(),
-            method: &frame.method,
+            grants: &PUBLISHED_PASSIVE_READ_GRANTS,
         },
         source: source.as_ref(),
     };
