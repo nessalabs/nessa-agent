@@ -1,5 +1,5 @@
 //! ADR 392 P1–P14: owned HTTP readers under controlled chunk/header/cleanup ordering.
-use super::super::connection::Connection;
+use super::super::connection::{Connection, OutgoingQueue};
 use super::super::framing::MAX_FRAME_BYTES;
 use super::super::http::{HttpSession, SendOutcome, SessionClaims, MAX_POST_STREAMS};
 use super::super::{
@@ -687,7 +687,7 @@ async fn retired_get_reader_remains_close_owned() {
         Arc::new(NoAuthorization),
         Arc::new(SessionClaims::default()),
     );
-    let (writer, _controls) = mpsc::channel(8);
+    let (writer, _controls) = OutgoingQueue::new(8, 0);
     session.set_writer(writer, Arc::new(RuntimeClock::new()));
     let initialize = serde_json::to_vec(&json!({"id":1,"method":"initialize"})).unwrap();
     assert!(matches!(
@@ -909,7 +909,7 @@ async fn wrong_id_json_recovery_does_not_publish_readiness() {
         Arc::new(NoAuthorization),
         claims.clone(),
     );
-    let (writer, _controls) = mpsc::channel(8);
+    let (writer, _controls) = OutgoingQueue::new(8, 0);
     session.set_writer(writer, Arc::new(RuntimeClock::new()));
     let initialize = serde_json::to_vec(&json!({"id":1,"method":"initialize"})).unwrap();
     assert!(matches!(

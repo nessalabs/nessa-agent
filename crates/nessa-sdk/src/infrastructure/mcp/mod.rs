@@ -17,7 +17,7 @@
 //!
 //! Connection: framing (bounded newline JSON-RPC) ─ wire (MCP JSON → domain)
 //! Remote: HttpExchange (injected) ─ HttpSession (owned JSON/SSE bodies and recovery) ─ the same Connection
-//! RecoveryReady / captured peer reply ──existing queue──▶ Connection writer
+//! RecoveryReady / captured peer reply ──bounded FIFO with control reserve──▶ Connection writer
 //! HttpSession owns binding claims and the shared authorized modern POST policy.
 //! ```
 //!

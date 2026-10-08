@@ -519,6 +519,37 @@ stateDiagram-v2
 | J19 | Reply queues before replacement, timeout, failure or close; peer answer returns 404 | Stale answer cannot acquire current identity. Refuse before dispatch after close/failure; a stale preterminal request ending the connection fences private startup against late replacement publication/admission. Every overlapping shutdown caller raises the HTTP admission fence before returning, even if another caller already claimed cleanup. An ordinary neighboring terminal preserves healthy recovery; bound peer-answer404 ends SessionExpired (stateless404 is Malformed), without recovery/replay. Ordinary-call404 positive control recovers | `j19_queued_reply_keeps_unnegotiated_version_and_is_refused_after_close`, `j19_old_reply_cannot_adopt_reused_or_stateless_replacement_binding`, `j19_peer_answer_404_ends_without_recovery_or_replay`, `j19_close_during_reply_authorization_refuses_post_effect`, `j19_reply_retry_cannot_adopt_identity_published_during_authorization`, `j19_preterminal_stale_request_cannot_revive_ended_connection`, `j19_preterminal_ordinary_terminal_preserves_recovery_control`, `j19_reader_failure_fences_http_owner_before_ended`, `j19_duplicate_shutdown_fences_effects_after_cleanup_claim`, `repeated_shutdown_keeps_one_delete_and_releases_its_claim`; ordinary recovery control in J20 |
 | J20 | Private initialize receives 401/retry, 403, 5xx, 400/404/405, 202 or exchange failure | One rejected retry maximum; observe exact scope challenge; Unauthorized/InsufficientScope/Unreachable/Malformed remain typed. 202/missing terminal is SessionExpired. No legacy GET, replacement GET/initialized or replay on failure; healthy and retry-success controls remain accepted | `j20_private_initialize_preserves_shared_authorization_and_status_policy`, `j20_private_initialize_healthy_and_retry_success_controls`, `j20_private_initialize_exchange_failure_is_unreachable`, J10 missing-terminal controls |
 
+### Bounded peer-reply admission (#665)
+
+The existing FIFO writer reserves one physical slot against ordinary frame
+pressure. Its queue owner limits ordinary frames (including best-effort remote
+cancellation notifications) to 64 and derives HTTP capacity as 64 + 1. Stdio
+retains 64 slots without a reserve. A queued ordinary frame owns a permit until
+it is dequeued; dropping a waiting send or the receiver releases its ownership.
+`PeerReply` and `RecoveryReady` consume no ordinary permit. Controls may occupy
+otherwise free ordinary slots, but the physical queue remains bounded at 65.
+This provides admission against ordinary saturation, without control priority or
+unlimited progress. Root accepted this single-FIFO design with Astra advisory;
+a separate priority lane would add scheduling and ordering decisions.
+
+Peer replies never await queue capacity in the reader. A full HTTP control
+admission ends with typed `TooLarge("queued MCP control frames")`; a closed
+writer ends with its retained terminal cause or `ServerGone`. The existing
+reader shutdown fence and connection end owner retain the first cause and one
+cleanup. `RecoveryReady` still awaits FIFO admission and completion under the
+remaining initialization budget. Direct local cancellation remains independent
+of its best-effort remote notification. The HTTP owner remains the authority
+for captured binding, recovery admission, deadlines and close.
+
+| Row | Trigger/order | Required outcome and ownership | Enforcer |
+| --- | --- | --- | --- |
+| J21 | 64 ordinary frames wait behind a held writer; early recovery ping or unsupported request arrives before matching initialize | Reserve admits the answer without blocking the reader. Drain pressure; ordinary calls remain Busy and answer uses originating SID and unnegotiated version. Matching initialization supplied after actual answer advances | `j21_saturated_ordinary_queue_preserves_early_recovery_answers` |
+| J22 | Matching initialize arrives while saturated ordinary frames and early answer remain queued | Captured answer retains unnegotiated version; FIFO answer precedes RecoveryReady/initialized. Ordinary admission remains fenced until valid initialized completion | `j22_matching_initialize_preserves_queued_reply_order` |
+| J23 | Physical queue fills with ordinary frames and one answer or entirely with controls; a live call/notification waits for ordinary or physical admission, then another peer request overflows, or writer is closed | Explicit typed overflow/closed termination through existing reader fence; first cause survives later close/failure, no queued answer effect after fence, one retained DELETE and joined startup. Connection admission observes existing Shared end publication so blocked calls/notifications resolve retained cause before the held writer drains; admission subscribes before its retained-State snapshot, and a recorded end returns that cause even while watch publication is paused. Watch publishes after releasing State and before pending response wakes. HTTP shutdown remains the downstream effect fence | `j23_control_overflow_retains_first_cause_and_one_cleanup`, `j23_terminal_admission_wakes_physical_waiters_and_refuses_ended_notifications`, `connection::end_tests::recorded_end_refuses_admission_while_watch_publication_is_held`, `j23_closed_control_queue_is_explicit` |
+| J24 | Ordinary sender waits for capacity and is dropped; dequeue retains returned frame; receiver is dropped | No permit leak; dequeue releases ordinary capacity before dispatch completion; later frames progress; closed receiver rejects remaining sends. Canceling terminal Connection admission drops pending send permits/envelopes without inventing a second terminal owner | `j24_ordinary_capacity_releases_on_dequeue_and_cancellation`, `j23_terminal_admission_wakes_physical_waiters_and_refuses_ended_notifications` |
+| J25 | Recovery budget expires while early answer or handoff waits behind writer pressure | Timeout remains authoritative; queued reply/initialized cannot dispatch or reopen admission after expiry; provisional claim remains close-owned | `j25_deadline_refuses_queued_saturated_reply`, existing J9/J11 handoff expiry tests |
+| J26 | Explicit close or control POST failure wins before queued saturated answer dispatch | No downstream answer/initialized effect; explicit HTTP close raises its existing shutdown fence before committing the first Shared end cause, then publishes watch outside State before waking responses. Later competing causes cannot replace the first commit. Admission checked open before that commit may race queue insertion, but HTTP effects remain fenced | `j26_close_or_writer_failure_refuses_queued_saturated_reply`, `j26_close_fences_http_and_publishes_before_response_wakes`, existing J19 close-fence tests |
+
 J4/J5/J10's no-claim requirements describe bodies without an early claim for a peer answer.
 An already answered request may own provisional cleanup but cannot validate
 initialization. J8 previously checked dispatch only, and J14 covers the later
