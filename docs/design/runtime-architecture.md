@@ -15,7 +15,7 @@ delivery), [0010](../adr/done/0010-local-authentication.md) (identity),
 [344](../adr/done/344-mcp-ui.md) and [392](../adr/todo/392-remote-mcp-servers.md)
 (extensions), and the sync lanes under #257, #263, #267, #270 and #273. It
 redefines none of their protocols. Nothing here authorizes a runtime rewrite;
-each slice is an issue of its own.ead
+each slice is an issue of its own.
 
 ## How to read this
 
@@ -36,7 +36,7 @@ where the ideas come from, with sources.
 | **Binding** | Nessa's adapter to one harness, over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP). It starts the process, sends prompts, receives events, forwards permission requests, and cleans up. |
 | **Conversation** | One thread of work with one agent: its prompts, replies, tool calls, approvals and outcome. It has an id that survives restarts and reconnects. |
 | **Record** | One committed fact about a conversation: a prompt was accepted, a turn started, text arrived, a tool asked for permission, a turn ended. Records are appended to a stream in SQLite and never edited. Every view of a conversation is built by folding its records. |
-| **Gateway** | The `nessa server` process. It is the only thing that accepts commands, writes records, evaluates policy and holds credentials. On a laptop it also runs the agents. |
+| **Gateway** | The `nessa server` process. It is the only thing that accepts commands, writes records, evaluates policy and holds the credentials [Identity and trust](#identity-and-trust) assigns to it. On a laptop it also runs the agents. |
 | **Surface** | Anything a person looks at or types into: the desktop window, the floating panel, the CLI, a phone. A surface draws from records and sends intents. It never runs an agent and never writes a record. |
 | **Environment** | A place an agent can run: this gateway's own machine (the default), another machine you own, a container, or someone else's gateway. The agent and the files it works on are in the same environment. |
 | **Lease** | The gateway's recorded permission for one environment to run one conversation's agent for a bounded time with named limits. The only way execution moves. |
@@ -46,6 +46,7 @@ where the ideas come from, with sources.
 | **Mesh** | The set of gateways and devices a gateway has paired with or can reach over SSH, with each one's pinned key and last known addresses. Not a network of its own; it rides on whatever network exists. |
 | **Relay** | A server that forwards encrypted bytes between two parties that cannot reach each other directly. It cannot read them. |
 | **Sandbox** | A boundary the operating system or a container enforces around what the agent's commands may touch. A property of an environment, declared honestly. |
+| **Preview** | A loopback port on the environment, owned by the leased agent's processes, reached on the laptop's own loopback for the life of the lease. How a dev server that runs there is opened here. |
 
 ## The picture
 
@@ -183,6 +184,13 @@ inside the model:
   better fit when the local conversation is long-lived and the remote
   work is a step in it.
 
+If the work is a web app rather than a DMG, the thing to bring back is
+not a file but a running server. The agent starts it on the Mac mini and
+asks for a **preview**: the port its own process is listening on is
+forwarded over the same SSH connection to the laptop's loopback, the
+composer shows `http://localhost:3000`, and the forward ends with the
+lease ([Previews](#previews-a-port-not-a-file)).
+
 Either way the files travel only as artifacts: content-addressed, held by
 the conversation, verified on receipt, audited on both sides. Nothing
 mounts a filesystem across machines, and no file byte rides the lease's
@@ -252,15 +260,19 @@ surface, why), so replay shows who ran what, where, and when.
 | --- | --- |
 | Conversation, optional turn | What may run. A conversation lease covers successive turns while live; a turn lease covers one. |
 | Environment | Which environment: this process, an SSH host, or a paired principal, identified by its pinned key. |
-| Work | What to run: an **agent** (binding and model) for a conversation, or a **command** (argv, working directory, timeout, captured output) for one bounded run. Both have the same lifecycle, cleanup evidence and audit; a command is the small case of the same contract, not a second mechanism. |
+| Work | What to run: an **agent** (binding and model) for a conversation, or a **command** (argv, working directory, timeout, captured output) for one bounded run. Both have the same lifecycle, cleanup evidence and audit; a command is the small case of the same contract, not a second mechanism. A command lease is a **child** of the conversation's live agent lease when an agent asked for it (the `run` tool), or stands alone when a person asked; a child ends with its command and ends when its parent ends. |
 | Sandbox profile | What the environment must enforce around the agent's commands: none, the harness's own sandbox with these roots and domains, or a container. The environment declares what it can enforce; a profile it cannot enforce is refused at configuration, not silently weakened. |
 | Grants | Held artifacts the environment may fetch by digest; the Nessa tools the agent may call through the relay; the policy snapshot revision to enforce before a tool runs. |
 | Deadline and revision | When it lapses without renewal; which issuance this is. |
 
 Rules that keep authority where it belongs:
 
-- One conversation holds at most one live lease. Moving a conversation is:
-  end the lease, then issue another. Whether the harness's own session can
+- One conversation holds at most one live **agent** lease. Command leases
+  nest under it: an agent calling `run` holds its own lease while its
+  tool call is open, so a build on another box does not end the harness
+  that is waiting for the result; many may be live at once, each bounded
+  by its timeout and budget, and all end when the parent ends. Moving a
+  conversation is: end the agent lease, then issue another. Whether the harness's own session can
   resume elsewhere is unknown per binding and is treated as unknown.
 - The environment may narrow or refuse. The gateway records what was
   granted, not what was asked.
@@ -268,9 +280,14 @@ Rules that keep authority where it belongs:
   its id and the turn's id. Late or unlabelled output is dropped with
   evidence, never attached to the next turn (0008).
 - A lease carries no right to write records and no right to answer
-  approvals. The gateway commits what the environment reports; the
-  environment keeps nothing durable past the lease but its own audit and
-  its cleanup evidence.
+  approvals. The gateway commits what the environment reports. Ending a
+  lease removes what the lease created: the harness process tree, its
+  session state, terminals and temporary files. It does not remove the
+  workspace: repository files on the environment belong to the
+  environment and persist, as they do for any tool run there. The
+  environment keeps no conversation records and no conversation
+  credentials past the lease; it keeps its own audit and its cleanup
+  evidence.
 - Ending a lease follows the 0008 Stop contract on the environment's side:
   cancel over ACP, close the process supervision scope, reap descendants,
   report exit and released resources within the deadline. Missing evidence
@@ -278,10 +295,53 @@ Rules that keep authority where it belongs:
   accounted for.
 - A replica never holds a lease. A restored gateway issues new leases only
   after the restore is explicitly accepted (#272).
+- A Live lease may **sleep**: after the idle budget the environment stops
+  the harness process and keeps the lease; the next prompt wakes it
+  through the binding's native resume. A resume that fails is a typed
+  `process_lost` and the turn is `interrupted`; the environment never
+  starts a fresh harness and presents it as the old session, because
+  Nessa's transcript does not prove a native session resumed (0008).
 
 Choosing where a conversation runs is choosing who sees it. The environment
 runs the model loop with the prompt and its context, so it sees the whole
 conversation, and the composer says so at the choice.
+
+### Lease states and orderings
+
+The states, the events that move them, and what happens when events
+arrive together. Slice A derives its regression table from these rows;
+a row without a test is not implemented.
+
+States: **Requested** (recorded, not yet admitted), **Live** (admitted,
+possibly narrowed; work may run), **Ending** (end requested, cleanup
+evidence awaited), **Ended** with a cause (completed, stopped, revoked,
+expired, closed, lost), **Interrupted** (ended without cleanup evidence
+within the deadline; the environment is unavailable for new leases until
+accounted for). Final states never reopen. A replacement agent lease for
+the same conversation is issued only after the previous one is Ended or
+Interrupted and that record is committed.
+
+| Row | Input or order | Decision and durable meaning |
+| --- | --- | --- |
+| L1 | Request admitted, possibly narrowed | Commit Live with what was granted, never what was asked; events accepted from this cursor on |
+| L2 | Request refused, or no admission by its deadline | Commit Ended(refused or expired) with the refusal; no work ran; the surface says why |
+| L3 | Renewal before the deadline | Extend the deadline in place; revision unchanged; the environment learns the new deadline before the old one passes |
+| L4 | Deadline passes with work running | Ending; the environment must stop and report within the cleanup deadline; a terminal result already committed stays as the turn's outcome |
+| L5 | Stop, conversation close, grant revoked, or policy stop while Live | Ending with that cause recorded first; the same cleanup contract as 0008; a late terminal result is recorded as evidence, never as a second outcome |
+| L6 | Terminal event, expiry and cleanup evidence arrive together | The first committed of terminal result or Ending cause owns the turn's outcome; the others are appended as evidence; the lease becomes Ended with the earliest cause |
+| L7 | Cleanup evidence arrives within the deadline | Ended; the environment is available again |
+| L8 | Cleanup deadline passes without evidence | Interrupted; the turn is `interrupted` under 0008; the environment is unavailable until it reports or a person clears it with the reason recorded |
+| L9 | Event carries an unknown, ended or interrupted lease id, or a turn id the lease does not cover | Dropped with evidence (lease id, turn id, cursor); never applied to another turn or a later lease |
+| L10 | Control channel lost while Live (SSH or paired connection drops) | Ending(lost) after the reconnect budget; an environment that reconnects first resumes the same lease at the last acknowledged cursor; one that reconnects after Ending reports cleanup evidence against the ended lease |
+| L11 | Gateway restarts with a Live lease | Recovery replays the lease; the environment is asked for its state; absent an answer within the cleanup deadline the lease is Interrupted, never silently Live |
+| L12 | Environment restarts with a Live lease | On reconnect it has no process for the lease and says so; Ended(lost) with that evidence; the turn is `interrupted` |
+| L13 | Second agent lease requested while one is Live | Refused with `lease_busy`; the surface offers Stop; never two agents for one conversation |
+| L14 | Command lease requested by the agent under its Live agent lease | Live as a child; ends with its command, its timeout, or its parent's end, whichever first; its evidence names the parent |
+| L15 | Command lease outlives the tool call that opened it (caller gone) | Ended(closed) on the parent's end or the call's cancellation; captured output is retained as evidence under its budget |
+| L17 | Idle budget passes while Live and no turn is running | Live(sleeping): the harness process is stopped with its session state kept; the lease, its deadline and its grants are unchanged; `environments.list` shows sleeping |
+| L18 | Prompt arrives while sleeping | The environment resumes the harness natively; on success Live and the turn proceeds; on failure `process_lost` is recorded, the turn is `interrupted`, and a new lease is needed |
+| L19 | Environment paused for low disk while leases are Live | Workloads frozen and the pause recorded on each lease; deadlines do not advance while paused; Stop still ends a lease; new leases refused with `environment_paused` until space returns |
+| L16 | Replacement lease requested after Ended or Interrupted | Admitted as a new lease with a new revision; the harness starts fresh with Nessa's transcript as context; native session resume is unknown per binding and recorded as such |
 
 ## Three transports, one contract
 
@@ -310,6 +370,43 @@ side so nothing inbound ever opens on a machine that is not yours. A relay
 is the fallback, and it forwards TLS it cannot open because the gateway's
 key was pinned at pairing.
 
+## Connecting to a dev environment
+
+The goal is that reaching a dev box through Nessa feels like `ssh` and
+costs nothing more than `ssh` already cost you.
+
+- **Name it the way you already do.** An environment over SSH is any
+  OpenSSH destination: a `~/.ssh/config` alias, `user@host`, a Tailscale
+  name. Nessa drives the system OpenSSH client, so your keys, agent,
+  jump hosts and per-host options are inherited and never retyped. Nessa
+  manages no SSH keys and issues no credential for a host.
+- **One session, three channels.** The gateway opens one multiplexed SSH
+  session per environment and carries the lease frames, the artifact
+  channel and any previews on it. Nothing else is opened; nothing listens
+  on the host.
+- **Nothing installed until asked.** The first lease installs
+  `nessa env serve` ([first-use install](#build-order)); until then the
+  host is untouched. Version skew is a typed refusal with the fix named.
+- **Agent forwarding is never used**, and the environment doctor says so
+  if a host's config turns it on. The host's key is pinned through the
+  same `known_hosts` your shell trusts; a changed key is a refusal, not a
+  prompt.
+- **A sign-in is handed to you, not hidden.** When OpenSSH needs a
+  passphrase or a second factor, the composer says so and offers a
+  terminal; the lease waits with a deadline rather than hanging.
+- **Reconnect is bounded and said.** A dropped connection retries within
+  the budget; the lease is Live(lost) meanwhile and Ended(lost) after it
+  (rows L10 to L12). The transcript shows the gap.
+- **Health is in the list.** `environments.list` and the composer's chip
+  show reachable, version, sandbox profiles, disk, paused or sleeping, and
+  open previews, so an agent or a person can choose a box with its state
+  in view.
+- **A container on the host is an environment too.** A host may be asked
+  to run the harness inside a container it starts (a dev container
+  definition in the repository, or an image the lease names); that is the
+  Container sandbox profile with the host as its environment authority.
+  Deferred until the plain-host path lands.
+
 ## What the agent gets
 
 Once the mesh exists, the agent should not need to know how any of it
@@ -325,6 +422,7 @@ refusals.
 | `environments.list` | The environments this conversation may use: `here`, SSH hosts, paired peers and workers, each with platform, declared sandbox profiles, reachability now, and what this caller may do there (`agent`, `command`) | `environment.list` | Caller's grants; peers filtered to what they grant this principal |
 | `thread.create` | Start a child conversation on a named environment with a prompt, a binding and a sandbox profile; returns the child's id and receipt | `conversation.create` with `environment`, under [ADR 329](../adr/todo/329-subagents.md) parent ownership | Caller's tool policy allows delegation; environment grants `agent`; budgets; parent closure fences children |
 | `run` | Run one command on a named environment with a timeout and bounded output; returns exit status, captured output, and any artifacts it published | `environment.run`: a lease whose work is a command | Caller's tool policy on the command (allowlist, deny patterns); environment grants `command`; sandbox profile; budgets; everything audited with the caller as initiator |
+| `preview.open`, `preview.close` | Forward a loopback port the agent's own processes listen on to the surface's loopback for the life of the lease; returns the local URL once a request through it succeeds | The forward on the SSH session, or a bounded stream on a paired connection | The port is owned by the lease's process scope; HTTP, WebSocket and SSE only; recorded and shown; closed with the lease |
 | `artifacts.publish`, `artifacts.fetch` | Attach a file from the environment to the conversation by digest; fetch one by digest into the environment | The artifact channel and lease-scoped tickets | Hold ownership; per-lease byte budgets |
 | `conversation.read`, `message.send`, `turn.cancel` | Already planned under 0012: read a thread's records, leave a note, stop a turn | Existing product methods | Existing grants |
 
@@ -341,7 +439,8 @@ local shell command.
 What the gateway refuses, typed: an environment the caller has no grant
 on; a command the caller's tool policy denies; a sandbox profile the
 environment cannot enforce; a budget exceeded; an environment unreachable
-now; a parent that is closing. The agent can read the refusal and choose
+now, paused for disk, or asleep and failing to wake; a parent that is
+closing; a preview port the lease's processes do not own. The agent can read the refusal and choose
 another environment or ask the person.
 
 **Why not let the agent `ssh macmini cargo build` itself?** It can, today,
@@ -431,6 +530,7 @@ what it can actually do:
 | Profile | Enforced by | Covers | Does not cover |
 | --- | --- | --- | --- |
 | None | Nothing | Nothing | Everything; the agent runs as the account |
+| Separate account | The environment runs the harness as a dedicated non-admin account that cannot read `nessa env serve`'s credentials, audit or peer table | The environment authority's own secrets and evidence; anything outside that account's permissions | Anything that account may already read; the model loop's network |
 | Harness sandbox | The harness's own OS sandbox, configured by the binding | Shell commands and their children | The harness's file tools, MCP servers, hooks, the model loop's network |
 | Container | The container runtime the environment was started in | The whole process tree | The container's own escape surface; whatever the lease let through |
 
@@ -475,7 +575,7 @@ Take a MacBook, a dev desktop and a phone, all paired:
 
 | From → To | What the MacBook sees of the dev desktop | What the dev desktop sees of the MacBook | What the phone sees |
 | --- | --- | --- | --- |
-| Grant (owner's choice) | All of the dev desktop's conversations, Read and Drive | Nothing | The MacBook's and the dev desktop's, Read; Drive when #267 lands |
+| Grant (owner's choice) | Each of the dev desktop's conversations, one grant per id (a bulk action in the UI makes them in one go); a new conversation needs a new grant | Nothing | The MacBook's and the dev desktop's, Read; Drive when #267 lands |
 | Follow (follower's choice) | Only the `nessa-agent` channel; keep two weeks | Not applicable | Everything granted; keep 200 MB |
 | Replica on the follower | Those conversations' records, folded locally, kept to the follow rule | None | A cache bounded by the follow rule |
 
@@ -495,11 +595,11 @@ never granted never leaves the machine it was created on.
 
 The pieces this rests on:
 
-- **Grant** (owner's table): per peer, per conversation id or per filter
-  (a channel, a project), with a role and a tool policy
-  ([Sharing a conversation](#sharing-a-conversation)). A filter is
-  evaluated at the owner on each change, so a conversation moved out of a
-  channel stops being granted.
+- **Grant** (owner's table): per peer, per conversation id, with a role
+  and a tool policy ([Sharing a conversation](#sharing-a-conversation)).
+  There is no grant by channel, project or filter: a new or moved
+  conversation never becomes visible without its own explicit grant. The
+  UI may create many grants in one action, and they are listed one by one.
 - **Follow** (follower's table): per peer, what of the granted set to
   replicate and how much to keep. The sync engine's scope, generation and
   reset receipts ([read-only sync](read-only-sync-example.md)) are keyed
@@ -532,6 +632,31 @@ file bytes. Artifact transfers are bounded per lease and per device
 (budgets below), resumable by digest, and audited on both sides. A large
 build output is an artifact like any other; what differs is only the
 budget it is checked against.
+
+## Previews: a port, not a file
+
+A dev server the agent started on an environment should open in the
+browser on the laptop without public hosting or any change to how the
+server binds. That is a **preview**: a loopback port on the environment,
+forwarded to the surface's own loopback, for the life of the lease.
+
+- **Scope.** Only ports the leased agent's process scope is listening on.
+  The environment supervises that scope, so it can list those ports
+  precisely rather than mirror everything on the host. A port outside the
+  scope is a typed refusal.
+- **Transport.** Over SSH it is a forward on the session the lease
+  already holds. Over a paired connection it is a bounded stream the
+  environment accepts only for ports its agent account listens on.
+- **Lifetime.** Opened by the agent (`preview.open`) or from the composer;
+  closed by either, or by the lease ending. The server keeps running until
+  the lease ends; the forward does not.
+- **Visibility.** Every open preview is recorded on the lease and shown on
+  the composer's chip and in `environments.list`. A forwarded port is
+  reachable by every process on the laptop and gets the browser's
+  `localhost` treatment, so it is an explicit act, never a default, and
+  the person sees which ports are open.
+- **Bounds.** HTTP, WebSocket and SSE on loopback; a count per lease; the
+  port check is admission, not a sandbox.
 
 ## Records and replication
 
@@ -587,6 +712,20 @@ the desktop today:
 | Hosted worker | Key-bound credential from pairing | Environment grants only, for one organization. No reads outside its leases | The organization |
 | Extension | The opening's relay token | The tools its server exposes, under policy | The gateway, per harness opening |
 
+Who holds which credential is decided here and nowhere else; other
+sections link to this table rather than restate it.
+
+| Credential | Held by | Never held by |
+| --- | --- | --- |
+| Owner bootstrap | The gateway's private registry, OS-protected | An environment, a surface, a peer |
+| Surface credential (panel, desktop window) | The host serves it to its own windows; the gateway verifies it | Any other process |
+| Device credential | The device, bound to its key; the gateway holds the key's public half and the grant | The relay; another device |
+| Peer gateway credential | Each gateway holds its own private key; the other holds the pinned public key and the grants | The relay; a worker of another organization |
+| Provider credential (API keys, harness logins) | The environment that runs the agent, in its private credential store | The gateway unless it is that environment; a surface; a lease; a tool argument |
+| Lease | Issued and recorded by the gateway; the environment holds a copy while the lease is live | A surface; a replica |
+| Extension relay token | The gateway, per harness opening | The extension past that opening |
+| SSH keys and host trust | The person's OpenSSH: their keys, agent and `known_hosts` | Nessa; it issues nothing for a host |
+
 Scale is by organization and by environments. One conversation authority
 per organization deployment holds the records; environments are added for
 capacity; surfaces are added for people. Replicating one organization's
@@ -612,20 +751,22 @@ locally.
 | --- | --- | --- | --- | --- |
 | Admission and policy | Mandatory `/session` auth, Cedar per operation, verified `ActionContext` into the SDK | Unchanged. Peer and worker principals get grant kinds of their own | Gateway `auth` application | 0010 done; #481 |
 | Turn state and receipts | SDK `Agent` per conversation; creation receipts; `requestId` on every mutation | Unchanged. The same receipt path answers the phone outbox and a desktop outbox | SDK scheduling; gateway `conversation` | 0008; #267, #268 |
-| Records | Semantic records on one event-stream SQLite runtime; bounded head/page reads; watch hints | Replay-to-live subscriptions; gateway views from committed records; desktop off polling | SDK `session_storage`; gateway delivery | 0009; #296, #277 |
+| Records | Semantic records on one event-stream SQLite runtime; bounded head/page reads; watch hints | Replay-to-live subscriptions; gateway views from committed records; desktop off polling | SDK `session_storage`; gateway delivery | 0009; E [#702](https://github.com/nessalabs/nessa-agent/issues/702) |
 | Phone reads | Device client with private cache, finite passes, retained watch; one-use pairing (#264) and authenticated direct reads (#265) done | Live reads through subscriptions (#702) and the optional relay (#266) | `nessa-client-core`; gateway `device_pairing` | #257, #263, #262 |
 | Phone commands | None | Durable intent outbox, receipt lookup before retry, exact-turn Stop | `nessa-client-core`; gateway receipts | #267 |
-| Where agents run | In process only: gateway composes the SDK `Agent` and its ACP binding per conversation; Nessa advertises no ACP client filesystem or terminal | An `Environment` port in the conversation application with the in-process adapter first; a lease recorded for every run | Gateway `conversation` composition | New issue (step 7) |
-| SSH environments | None | `nessa env serve` on the remote host, installed on first use; lease frames over SSH stdio | Gateway environment adapter; `nessa-server` CLI | New issue (step 8) |
-| Peer gateways and hosted workers | None | Gateway-to-gateway pairing under a `gateway` principal kind; outbound connection from the environment side; relay fallback; environment-only gateways as workers | Gateway `device_pairing`, environment role; `nessa-auth` | New issues (steps 9, 10) |
-| Sandboxes | Whatever the harness does by default | Sandbox profiles in the lease, declared per binding and per environment, refused when unenforceable | SDK bindings; environment adapters | Step 7 declaration; later profiles |
+| Where agents run | In process only: gateway composes the SDK `Agent` and its ACP binding per conversation; Nessa advertises no ACP client filesystem or terminal | An `Environment` port in the conversation application with the in-process adapter first; a lease recorded for every run | Gateway `conversation` composition | A [#698](https://github.com/nessalabs/nessa-agent/issues/698) |
+| SSH environments | None | `nessa env serve` on the remote host, installed on first use; lease frames over SSH stdio | Gateway environment adapter; `nessa-server` CLI | B [#699](https://github.com/nessalabs/nessa-agent/issues/699), F [#703](https://github.com/nessalabs/nessa-agent/issues/703) |
+| Peer gateways and hosted workers | None | Gateway-to-gateway pairing under a `gateway` principal kind; outbound connection from the environment side; relay fallback; environment-only gateways as workers | Gateway `device_pairing`, environment role; `nessa-auth` | H [#705](https://github.com/nessalabs/nessa-agent/issues/705), I [#706](https://github.com/nessalabs/nessa-agent/issues/706), K [#708](https://github.com/nessalabs/nessa-agent/issues/708) |
+| Sandboxes | Whatever the harness does by default | Sandbox profiles in the lease, declared per binding and per environment, refused when unenforceable | SDK bindings; environment adapters | A [#698](https://github.com/nessalabs/nessa-agent/issues/698) declares; later profiles per binding |
 | Policy hooks | Capability reporting merged (#142); no configured pre-tool runtime | Verdicts at the gateway; pre-tool verdicts enforced by the environment's SDK from the snapshot the lease carries, with evidence | SDK application owner (0014) | #130 slices |
 | Extensions | MCP Apps in a sandboxed iframe; one MCP connection per harness session; remote MCP with gateway-owned OAuth | Unchanged; an extension holds only the opening's token | Gateway `mcp_servers`, `mcp_authorization` | 344, 392 |
-| Artifacts | Held by digest; single-use upload tickets; local manifest and range reads; uploads from surfaces only | An artifact channel from environments (sftp over SSH; bounded stream over a paired connection); lease-scoped tickets for environments; protected sync to devices | Gateway `attachments` | #273; step 8 |
-| Agent tools for the mesh | `nessa-mcp` serves shell and other Nessa tools locally; no environment argument | `environments.list`, `thread.create` with an environment, `run` on an environment, `artifacts.publish`/`fetch`, all thin over product methods and validated by the gateway | `nessa-mcp`; gateway `environment.*` methods | 0012; steps 8, 9 |
+| Artifacts | Held by digest; single-use upload tickets; local manifest and range reads; uploads from surfaces only | An artifact channel from environments (sftp over SSH; bounded stream over a paired connection); lease-scoped tickets for environments; protected sync to devices | Gateway `attachments` | #273; D [#701](https://github.com/nessalabs/nessa-agent/issues/701) |
+| Agent tools for the mesh | `nessa-mcp` serves shell and other Nessa tools locally; no environment argument | `environments.list`, `thread.create` with an environment, `run` on an environment, `artifacts.publish`/`fetch`, all thin over product methods and validated by the gateway | `nessa-mcp`; gateway `environment.*` methods | 0012; C [#700](https://github.com/nessalabs/nessa-agent/issues/700), I [#706](https://github.com/nessalabs/nessa-agent/issues/706) |
 | Reaching the gateway from outside | Loopback `/session`; native listener with pairing to Approved when configured | Overlay or tunnel are the person's choice and need nothing new; the relay is #266; the native listener admits only minted credentials on both paths | Gateway `device_pairing`, composition | #263, #265, #266 |
-| Directional sync | The device client follows what its credential grants, all of it | Follow rules per peer (which granted conversations, how much to keep) beside grants per peer (which conversations, which role); two gateways never merge stores; environment policy per peer and per work kind | `nessa-client-core` follow table; gateway grants; sync engine scope | #257, #262; steps 2, 9 |
-| Sharing | Grants are per principal across its organization's conversations; devices get `conversation.read` on all of the owner's | Grants per conversation id with a role (Read, Comment, Drive) and a per-principal tool policy revision carried on each accepted turn | Gateway `auth`, `conversation`; 0014 policy owner | 0011 phase B; #130 slices; step 9 |
+| Directional sync | The device client follows what its credential grants, all of it | Follow rules per peer (which granted conversations, how much to keep) beside grants per peer (which conversations, which role); two gateways never merge stores; environment policy per peer and per work kind | `nessa-client-core` follow table; gateway grants; sync engine scope | #257, #262; G [#704](https://github.com/nessalabs/nessa-agent/issues/704) |
+| Sharing | Grants are per principal across its organization's conversations; devices get `conversation.read` on all of the owner's | Grants per conversation id with a role (Read, Comment, Drive) and a per-principal tool policy revision carried on each accepted turn | Gateway `auth`, `conversation`; 0014 policy owner | 0011 phase B; #130 slices; G [#704](https://github.com/nessalabs/nessa-agent/issues/704), J [#707](https://github.com/nessalabs/nessa-agent/issues/707) |
+| Previews | None | Lease-scoped loopback forwards over the SSH session or a paired stream, only for the lease's own ports, recorded and shown | Gateway environment adapters; `nessa-mcp` | B [#699](https://github.com/nessalabs/nessa-agent/issues/699), I [#706](https://github.com/nessalabs/nessa-agent/issues/706) |
+| Environment health and limits | None | Idle sleep with native resume, low-disk pause, health in `environments.list` | `nessa env serve`; environment adapters | B [#699](https://github.com/nessalabs/nessa-agent/issues/699) |
 | Backup and restore | None | Export cut with deletion inventory; quarantined restore | New gateway module | #270 |
 | Budgets | Every lane bounded; [limits.md](../limits.md) rendered from owners | Per-lease, per-peer and per-organization rows in the same table | `config.json`, protocol fixed values | Each slice |
 
@@ -683,6 +824,9 @@ needs them:
 | `peer.connections`, `peer.leases` | Live connections and leases per paired peer |
 | `organization.environments`, `organization.leases` | Concurrent environments and leases per organization |
 | `device.subscriptions`, `device.outbox_bytes` | Subscriptions one device may hold; intents it may hold unsent |
+| `lease.idle_sleep` | How long a leased harness may sit idle before the environment stops its process and the lease sleeps; a prompt wakes it by native resume, and a failed resume is `process_lost` |
+| `lease.previews` | Open previews one lease may hold |
+| `environment.disk_pause_bytes` | Free space below which an environment freezes its workloads, keeps the gateway's history readable, and refuses new leases until space returns |
 | `artifact.lease_bytes` | Bytes one lease may fetch by digest |
 | `artifact.environment_bytes`, `artifact.environment_files` | Bytes and files one lease may publish to the gateway |
 | `share.grants_per_conversation` | Grants one conversation may hold |
@@ -697,8 +841,10 @@ needs them:
   checkpoints are built when the recorded trigger fires.
 - **Remote environments** batch events at the SDK's commit cadence (100 ms,
   16 KiB or 64 messages). Over SSH that is one multiplexed stream; the
-  lease buffer bounds what a slow link may hold. Files and shell output
-  never cross the link at all, because the agent is where the files are.
+  lease buffer bounds what a slow link may hold. Bounded text crosses the
+  control channel: events, tool output and a command's captured output,
+  each under its budget. File bytes never do; they travel the artifact
+  channel, because the agent is where the files are.
 - **Phone bandwidth** is cursor deltas in 16-record, 64 KiB pages with
   metered scheduling (#262).
 - **Gateway CPU** is the SDK and SQLite. Leasing a conversation elsewhere
@@ -708,8 +854,9 @@ needs them:
 ## Security
 
 - The gateway is the only writer of its records and the only place
-  conversation policy runs. An environment is the only holder of its
-  provider credentials and the only place its machine's policy runs. The
+  conversation policy runs. An environment is the only place its
+  machine's policy runs. Which credential lives where is the one table in
+  [Identity and trust](#identity-and-trust). The
   lease bounds what the environment may do to the conversation; the
   environment's admission bounds what the conversation may do on the
   machine.
@@ -755,7 +902,12 @@ needs them:
   can give. Transcript, approvals and audit look the same for all of them.
 - **Build there, run here, in one thread.** The DMG the Mac mini built is
   a Download in the transcript on every surface; the next turn can run on
-  the laptop and open it. Screenshots arrive as the agent takes them.
+  the laptop and open it. Screenshots arrive as the agent takes them. A
+  dev server started there opens here at `localhost`, for as long as the
+  lease lives.
+- **A dev box is an `ssh` name.** Whatever you type after `ssh` today is
+  an environment, with your keys, jump hosts and Tailscale names
+  inherited; nothing is installed until the first lease asks.
 - **Share one conversation, not your machine.** Pick a person, a role and
   a tool policy in the conversation's header. They see that thread and
   nothing else, and the audit says what they did.
@@ -836,10 +988,20 @@ Sources: [How Tailscale works](https://tailscale.com/blog/how-tailscale-works),
 Named so they are not mistaken for settled:
 
 - **Lease frame format.** The fields above are the contract; the frames,
-  their bounds and their place in `nessa-protocol` are step 7's design.
+  their bounds and their place in `nessa-protocol` are A's design ([#698](https://github.com/nessalabs/nessa-agent/issues/698)).
 - **First-use install over SSH.** What `nessa env serve` needs on the host
   (Rust binary per platform, the harness itself, its credential), and how
   version skew between gateway and environment is refused.
+- **The harness's account on an environment.** How first-use install
+  creates the separate account on macOS and Linux, what it may read, and
+  what the profile says where it cannot be created.
+- **Workspace bootstrap.** When the files are not already on the host (a
+  fresh container, a new box), how a lease names a repository to clone or
+  an archive to push, and its size bound.
+- **Preview over a paired connection.** The bounded stream's framing and
+  how the environment proves a port belongs to the lease's process scope.
+- **Idle sleep per binding.** Which bindings support native resume well
+  enough to sleep at all; a binding without it does not sleep.
 - **Sandbox profiles.** Which profiles each pinned binding can set up and
   how an environment proves what it enforces; today's answer for every
   binding is "harness default".

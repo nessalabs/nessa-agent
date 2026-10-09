@@ -55,7 +55,8 @@ moves: a semantic record in the conversation's stream with an
 `ActionContext`, naming the environment, the work (an agent with its
 binding and model, or one bounded command), a sandbox profile the
 environment must enforce or refuse, grants, a deadline and a revision. One
-conversation holds at most one live lease. A lease carries no record-write
+conversation holds at most one live agent lease; a command lease an agent
+asks for nests under it and ends with it. A lease carries no record-write
 right and no approval right; the gateway commits what a live lease reports
 and drops the rest with evidence; ending a lease requires cleanup evidence
 or the turn is `interrupted`. There is one lease contract and three
@@ -93,6 +94,15 @@ What this decides for the rest, each settled in the map:
   ([Reaching your gateway from outside](../../design/runtime-architecture.md#reaching-your-gateway-from-outside)).
 - **Sandboxes are declared, not assumed**
   ([Sandboxes, honestly](../../design/runtime-architecture.md#sandboxes-honestly)).
+- **The lease's states and competing orderings are a table**, from which
+  slice A derives its regression table
+  ([Lease states and orderings](../../design/runtime-architecture.md#lease-states-and-orderings)).
+- **A dev box is an `ssh` name, and a preview is a lease-scoped port.**
+  OpenSSH's own config, keys and trust; one multiplexed session for lease,
+  artifacts and previews; a forwarded port only for the lease's own
+  processes, recorded, shown and ended with the lease
+  ([Connecting to a dev environment](../../design/runtime-architecture.md#connecting-to-a-dev-environment),
+  [Previews](../../design/runtime-architecture.md#previews-a-port-not-a-file)).
 
 ## Implementation plan
 
@@ -124,10 +134,14 @@ Environments lane, in order:
   Today's in-process SDK composition behind one typed port; a lease record
   for every run; per-binding sandbox-profile declaration. *Gate:* golden
   evidence identical before and after; the port has one adapter; the fold
-  renders the lease.
+  renders the lease; every row of the lease ordering table has a
+  regression, with L1, L5, L6, L8, L9 and L13 exercised in process.
 - [ ] **B. `nessa env serve` over SSH, binary placed by hand**
   ([#699](https://github.com/nessalabs/nessa-agent/issues/699)). The environment role alone, speaking lease frames on stdio;
-  the gateway's SSH adapter; "run on buildbox" in the composer. *Gate:* a
+  the gateway's SSH adapter driving the system OpenSSH client with one
+  multiplexed session; "run on buildbox" in the composer; a preview as a
+  forward on that session; idle sleep and low-disk pause as the
+  environment's own limits. *Gate:* a
   conversation runs on a named host; Stop, close and connection loss end
   the lease with cleanup evidence; late events dropped; no host named, no
   code reached.
