@@ -2312,11 +2312,8 @@ impl Drop for HostWatchFixture {
     }
 }
 
-/// Read grants row G1: a records watch on a conversation the device was not
-/// granted is refused at admission and installs no watch.
-#[tokio::test]
-async fn a_records_watch_on_an_ungranted_conversation_is_refused() {
-    let fixture = WatchFixture::new().await;
+/// Takes the fixture's grant on its conversation away from its device.
+async fn revoke_grant(fixture: &WatchFixture) {
     let grants = fixture.state.passive_read.as_ref().unwrap().2.clone();
     let revoked = grants
         .change(crate::conversation::application::ReadGrantChange {
@@ -2330,6 +2327,15 @@ async fn a_records_watch_on_an_ungranted_conversation_is_refused() {
         .await
         .unwrap();
     assert!(revoked);
+}
+
+/// Read grants row G1: a records watch on a conversation the device was not
+/// granted is refused at admission, as a conversation that is not its
+/// owner's, and installs no watch.
+#[tokio::test]
+async fn a_records_watch_on_an_ungranted_conversation_is_refused() {
+    let fixture = WatchFixture::new().await;
+    revoke_grant(&fixture).await;
     let (socket, mut peer) = test_socket(None);
     let socket = tokio::spawn(run_authenticated(
         socket,
@@ -2340,6 +2346,35 @@ async fn a_records_watch_on_an_ungranted_conversation_is_refused() {
     let reply = text(peer.message().await);
     assert_eq!(reply["id"], "install");
     assert_eq!(reply["ok"], false, "{reply}");
+    assert_eq!(reply["error"]["code"], "wrong_owner", "{reply}");
     assert_eq!(fixture.records.installed.load(Ordering::SeqCst), 0);
+    fixture.finish(peer, socket).await;
+}
+
+/// Read grants row G15: a records watch installed while granted delivers no
+/// notice once the grant is revoked: the next notice is admitted again,
+/// refused, and the connection closes as `authorization_lost`.
+#[tokio::test]
+async fn a_revoke_ends_an_installed_records_watch_at_its_next_notice() {
+    let fixture = WatchFixture::new().await;
+    let (socket, mut peer) = test_socket(None);
+    let socket = tokio::spawn(run_authenticated(
+        socket,
+        fixture.state.clone(),
+        fixture.session.clone(),
+    ));
+    fixture.watch(&peer, "install");
+    let installed = text(peer.message().await);
+    assert_eq!(installed["ok"], true, "{installed}");
+    revoke_grant(&fixture).await;
+    fixture.commit().await;
+    let Message::Close(Some(close)) = peer.message().await else {
+        panic!("the notice after a revoke must close rather than deliver");
+    };
+    assert_eq!(
+        close.code,
+        SessionCloseReason::AuthorizationLost.web_socket_code()
+    );
+    assert!(peer.output.try_recv().is_err());
     fixture.finish(peer, socket).await;
 }

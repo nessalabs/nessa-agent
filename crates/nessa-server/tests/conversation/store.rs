@@ -2579,6 +2579,46 @@ async fn a_repeated_share_or_unshare_changes_nothing() {
     assert_eq!(journaled, 1);
 }
 
+/// Row G8, in the store: a grant or revoke on another owner's conversation
+/// is refused as not found inside the transaction that would write it, and
+/// writes nothing.
+#[tokio::test]
+async fn a_grant_on_another_owners_conversation_writes_nothing() {
+    use crate::conversation::application::{ConversationError, ReadGrantTransition, ReadGrants};
+    let opened = opened();
+    let id = new_id();
+    opened
+        .store
+        .create(owned_by(&id, "org", "bob", 1))
+        .await
+        .unwrap();
+    for transition in [ReadGrantTransition::Grant, ReadGrantTransition::Revoke] {
+        let refused = opened
+            .store
+            .change(grant_change(
+                transition,
+                &id,
+                Some("phone"),
+                "phone-credential",
+                "share",
+            ))
+            .await;
+        assert!(
+            matches!(refused, Err(ConversationError::NotFound)),
+            "{:?}",
+            refused.map_err(|error| error.to_string())
+        );
+    }
+    let written: i64 = raw(&opened.path)
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM read_grants) + (SELECT COUNT(*) FROM read_grant_changes)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(written, 0);
+}
+
 /// One `read_grant_changes` row, in column order.
 type JournalRow = (
     String,

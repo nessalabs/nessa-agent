@@ -18,7 +18,7 @@
 //! A paired device's catalogue pages are narrowed by the store in SQL, because
 //! a filtered page must still be a whole page; the store answers
 //! [`ReadGrants::is_granted`] and those pages with one predicate
-//! (`store::read_grants::GRANTED`), so the two cannot disagree.
+//! (`store::read_grants::granted`), so the two cannot disagree.
 //!
 //! Who is a grantee is decided by construction, not by a list of credential
 //! kinds: a session whose credential has a receiver binding is a paired

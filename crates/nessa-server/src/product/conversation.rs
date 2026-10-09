@@ -131,18 +131,11 @@ pub(super) async fn dispatch(
             }
             "conversation.list" => {
                 let ConversationListParams { archived } = params!(ConversationListParams);
-                let listed = match read_list(
-                    state,
-                    service,
-                    session,
-                    archived.unwrap_or(false),
-                    &frame.id,
-                )
-                .await
-                {
-                    Ok(listed) => listed?,
-                    Err(code) => return Ok(failure(&frame.id, code)),
-                };
+                if let Err(code) = super::read_access::admit_list(state, session).await {
+                    return Ok(failure(&frame.id, code));
+                }
+                let listed =
+                    read_list(service, session, archived.unwrap_or(false), &frame.id).await?;
                 Ok(success(&frame.id, &listed))
             }
             "conversation.observe" => {
@@ -466,25 +459,20 @@ pub(super) async fn read_view(
 }
 
 /// The list `conversation.list` answers; a list subscription's frame is this
-/// same read.
-///
-/// The outer error is the read grant refusing the session as a reader
-/// (`read_access::admit_list`); the inner one is the list's own.
+/// same read. Its callers have asked `read_access::admit_list`.
 pub(super) async fn read_list(
-    state: &ProductRouteState,
     service: &ConversationService,
     session: &AuthenticatedSession,
     archived: bool,
     request_id: &str,
-) -> Result<Result<ConversationListResult, ConversationError>, &'static str> {
-    super::read_access::admit_list(state, session).await?;
+) -> Result<ConversationListResult, ConversationError> {
     let listed = service
         .list(caller(session, request_id.to_owned()), archived)
         .await;
     // The desktop's index asks this list first. An incomplete list continues
     // as conversation.observe. The subject tells a list from a read.
     trace_conversation_index(listed.as_ref().err());
-    Ok(listed.map(list_result))
+    Ok(list_result(listed?))
 }
 
 pub(super) fn caller(session: &AuthenticatedSession, request_id: String) -> ConversationCaller {

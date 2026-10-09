@@ -268,18 +268,21 @@ impl Sources {
 /// the method's grant still holds under current policy, and the browser
 /// session is still present. Asked before every read, so access lost between
 /// two batches ends the subscription before the next (row S14). A view also
-/// asks the read grant for its conversation here (`read_access`, rows G12 and
-/// G13), so a paired device's subscribe to an ungranted id takes no watch and
-/// a revoke ends the subscription before its next read; a list asks it in
-/// `read_list`, which every list batch reads through.
+/// asks the read grant for its conversation here, and a list is refused to a
+/// paired device here (`read_access`, rows G12 and G13), so a device's
+/// subscribe that may not read takes no watch and a revoke ends the
+/// subscription before its next read.
 pub(super) async fn authorize_batch(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     target: &Target,
 ) -> Result<AuthenticatedSession, &'static str> {
     let current = admit_now(state, session, target.method()).await?;
-    if let Target::View { conversation, .. } = target {
-        read_access::admit_conversation(state, &current, conversation).await?;
+    match target {
+        Target::View { conversation, .. } => {
+            read_access::admit_conversation(state, &current, conversation).await?
+        }
+        Target::List { .. } => read_access::admit_list(state, &current).await?,
     }
     Ok(current)
 }
@@ -364,12 +367,9 @@ async fn read_batch(
                     Err(error) => Err(error),
                 }
             }
-            Target::List { archived } => {
-                match read_list(state, service, &current, *archived, request_id).await {
-                    Ok(listed) => listed.map(Batch::List),
-                    Err(code) => return Err(code.to_owned()),
-                }
-            }
+            Target::List { archived } => read_list(service, &current, *archived, request_id)
+                .await
+                .map(Batch::List),
         };
         drop(permit);
         match read {

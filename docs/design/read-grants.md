@@ -62,6 +62,12 @@ nothing and writes nothing (row G9).
   (`forbidden`), rather than read whole and filtered: a filtered list could
   come back as empty pages, and its cursor would name the last ungranted row.
 
+Telling a device from the owner means resolving the session's receiver binding
+on every socket read and subscription batch, for the owner's surfaces too, on
+any gateway that keeps receiver bindings. If that lookup fails, the read is
+refused `temporarily_unavailable` rather than read as the owner: an unknown
+reader is never given the owner's view.
+
 Every read path asks it:
 
 | Path | Asks |
@@ -69,14 +75,13 @@ Every read path asks it:
 | A device's `conversation.recordsHead`, `recordsPage`, and `conversation.watchRecords` (admitted as a record head) | `AdmitPassiveRead::execute` → `admit_read` |
 | A device's catalogue head, manifest and resolve, and `conversation.watchCatalogue` | the store's page and resolve, narrowed in SQL |
 | `conversation.read` and every view subscription batch (`subscription::authorize_batch`) | `product::read_access::admit_conversation` → `admit_read` |
-| `conversation.list`, `conversation.observe`, every list subscription batch (`read_list`) | `product::read_access::admit_list`: the owner's surfaces only |
+| `conversation.list`, `conversation.observe`, every list subscription batch (`subscription::authorize_batch`) | `product::read_access::admit_list`: the owner's surfaces only |
 
 The catalogue is narrowed in SQL rather than filtered after the read, because
 a filtered page must still be a whole page: a page of 200 rows that loses 199
 after the limit would stop a device's pass. The store states "this receiver
 holds a grant on this conversation" once (`store::read_grants::granted`) and
-uses it for `is_granted`, for the grants on a conversation, and for the
-catalogue's page and resolve, so a device's catalogue and its reads cannot disagree.
+uses it for `is_granted` and for the catalogue's page and resolve, so a device's catalogue and its reads cannot disagree.
 
 ```mermaid
 sequenceDiagram
@@ -167,3 +172,4 @@ otherwise.
 | G12 | A socket session with a receiver binding | `conversation.read` and a view subscribe of an ungranted id answer `conversation_not_found`, a granted one is read; `conversation.list`, `.observe`, `.subscribeList` and the share commands answer `forbidden` | `a_paired_device_on_the_socket_sees_only_what_it_was_granted` |
 | G13 | A device's view subscription; the grant is revoked between batches | Ended `refused` with `conversation_not_found` before the next read | `a_revoke_ends_a_device_subscription_before_its_next_batch` |
 | G14 | A device unpaired (its binding inactive), whatever it was granted | Socket reads refused `unauthorized`; passive reads as before | `an_unpaired_device_reads_nothing_whatever_it_was_granted` |
+| G15 | A records watch installed while granted; the grant revoked; a record committed | No `conversation.changed` is delivered; the next notice is admitted again, refused, and the connection closes `authorization_lost` | `a_revoke_ends_an_installed_records_watch_at_its_next_notice` (`tests/product/socket/watches.rs`) |

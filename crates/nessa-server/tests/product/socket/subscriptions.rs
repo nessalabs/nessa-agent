@@ -1733,10 +1733,21 @@ impl SubscriptionFixture {
             let reply = self.call(method, json!({})).await;
             assert_eq!(reply["error"]["code"], "forbidden", "{method}: {reply}");
         }
+        // With the watch pool full, a refused subscribe answers `forbidden`,
+        // not `subscription_capacity`: it took no watch first (row S29).
+        let mut held = Vec::new();
+        loop {
+            match self.storage.watch_any_committed() {
+                Ok(watch) => held.push(watch),
+                Err(ChangeWatchError::Capacity) => break,
+                Err(error) => panic!("{error:?}"),
+            }
+        }
         let mut client = self.connect();
         client.send("list", "conversation.subscribeList", json!({}));
         let (reply, _) = client.reply("list").await;
         assert_eq!(reply["error"]["code"], "forbidden", "{reply}");
+        drop(held);
         client.close().await;
     }
 }
