@@ -660,6 +660,12 @@ forwarded to the surface's own loopback, for the life of the lease.
 
 ## Records and replication
 
+- One commit, one layer. The SDK coordinator (0008, 0011) admits a command
+  under the gateway's verified `ActionContext` and commits the record on
+  the one event-stream runtime the gateway opened; that commit is the
+  gateway's canonical record and the caller's receipt. The gateway keeps
+  no second record of its own beside it, and the `Environment` port sits
+  below that commit, not beside it.
 - The record is the unit. A semantic fact committed to a conversation
   stream, or to the principal's control stream for creation. Streams have
   incarnations and cursors; a cursor from another incarnation is a typed

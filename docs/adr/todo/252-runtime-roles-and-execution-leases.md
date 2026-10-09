@@ -45,8 +45,12 @@ files are and carry only control over an existing connection.
 The gateway, `nessa server`, is the **conversation authority**: it alone
 admits commands, evaluates conversation policy, writes and serves committed
 records, answers approvals, holds surface, device and peer credentials, and
-issues leases. An **environment** is a place an agent runs together with its
-files: this gateway's own machine by default, a machine reached over SSH, or
+issues leases. It exercises that authority through the SDK it embeds: the
+SDK coordinator of 0008 and 0011 admits under the gateway's verified
+context, and the record it commits on the shared event-stream runtime **is**
+the gateway's canonical record and receipt; there is one commit and one
+record layer, never a gateway record beside an SDK record. An
+**environment** is a place an agent runs together with its files: this gateway's own machine by default, a machine reached over SSH, or
 a paired gateway or worker. An environment is its own **environment
 authority**: it holds its provider credentials, supervises the processes it
 runs, enforces the sandbox it declares, admits or narrows a lease under its
