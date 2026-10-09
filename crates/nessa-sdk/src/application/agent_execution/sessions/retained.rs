@@ -1,7 +1,8 @@
 //! Conservatively account owned continuation allocations, using payload owners' byte accounting.
 use super::{
-    InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, QueueHistoryRecord,
-    SessionChange, SessionSnapshot, StorageError, SubmissionAcknowledgement,
+    CurrentLease, CurrentLeaseState, InvocationCancellationEvent, InvocationRecord,
+    InvocationSchedulingEvent, LeaseRecord, QueueHistoryRecord, SessionChange, SessionSnapshot,
+    StorageError, SubmissionAcknowledgement,
 };
 use crate::{
     application::agent_execution::{
@@ -9,6 +10,7 @@ use crate::{
     },
     domain::agent_execution::{
         executions::{ExecutionId, ExecutionOutcome, QueueMutation},
+        leases::{LeaseTerms, LeaseWork},
         prompts::{AppModelContext, MessageSender},
     },
 };
@@ -41,7 +43,66 @@ pub(super) fn snapshot(value: &SessionSnapshot) -> usize {
     for entry in &value.queue_history {
         bytes = bytes.saturating_add(queue_entry(entry));
     }
-    bytes
+    bytes.saturating_add(lease(value.lease.as_ref()))
+}
+
+/// The latest lease and its records, which a lease change replaces whole.
+pub(super) fn lease(value: Option<&CurrentLease>) -> usize {
+    let Some(value) = value else {
+        return 0;
+    };
+    let records = value
+        .records()
+        .iter()
+        .map(lease_record)
+        .fold(0usize, usize::saturating_add);
+    size_of::<CurrentLease>()
+        .saturating_add(records)
+        .saturating_add(match value.state() {
+            CurrentLeaseState::Held(lease) => lease_terms(lease.terms()),
+            CurrentLeaseState::Refused { lease, .. } => lease.as_str().len(),
+            CurrentLeaseState::Unreadable { kind } => kind.len(),
+        })
+}
+
+fn lease_terms(terms: &LeaseTerms) -> usize {
+    match &terms.work {
+        LeaseWork::Agent(work) => work.agent().len().saturating_add(work.model().len()),
+    }
+}
+
+fn lease_record(record: &LeaseRecord) -> usize {
+    size_of::<LeaseRecord>().saturating_add(match record {
+        LeaseRecord::Issued {
+            lease,
+            terms,
+            actor: who,
+            ..
+        }
+        | LeaseRecord::Refused {
+            lease,
+            terms,
+            actor: who,
+            ..
+        } => lease
+            .as_str()
+            .len()
+            .saturating_add(lease_terms(terms))
+            .saturating_add(actor(who)),
+        LeaseRecord::Ending {
+            lease, actor: who, ..
+        } => lease
+            .as_str()
+            .len()
+            .saturating_add(who.as_ref().map_or(0, actor)),
+        LeaseRecord::Ended { lease, .. }
+        | LeaseRecord::Interrupted { lease }
+        | LeaseRecord::CleanupReported { lease, .. } => lease.as_str().len(),
+        LeaseRecord::EventDropped { lease, turn, .. } => {
+            lease.as_str().len().saturating_add(turn.as_str().len())
+        }
+        LeaseRecord::Unreadable { kind, body } => kind.len().saturating_add(body.len()),
+    })
 }
 
 // Header and outer slots have one lifetime, separate from element payloads.
@@ -240,6 +301,7 @@ pub(super) fn touched(
             .recorded()
             .map_or(0, |id| id.as_str().len()),
         SessionChange::QueueDecision(_) => 0,
+        SessionChange::Lease(_) => lease(snapshot.lease.as_ref()),
     })
 }
 pub(super) fn append_payload(change: &SessionChange) -> usize {

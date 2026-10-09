@@ -255,6 +255,7 @@ pub(super) enum ChangeUndo {
         Option<Result<ExecutionOutcome, AgentError>>,
     ),
     Context(ProviderContext),
+    Lease(Option<super::CurrentLease>),
 }
 
 impl continuation::Continuation {
@@ -358,6 +359,7 @@ impl continuation::Continuation {
                     provider_context: context.clone(),
                     invocations: Vec::new(),
                     queue_history: Vec::new(),
+                    lease: None,
                 });
             }
             SessionChange::InputAccepted(record) => {
@@ -646,6 +648,13 @@ impl continuation::Continuation {
                     after.clone(),
                 )));
             }
+            SessionChange::Lease(record) => {
+                let snapshot = candidate
+                    .as_mut()
+                    .ok_or_else(|| corrupt("lease record precedes session open"))?;
+                let next = super::CurrentLease::apply(snapshot.lease.as_ref(), record)?;
+                undo.push(ChangeUndo::Lease(snapshot.lease.replace(next)));
+            }
         }
 
         Ok(())
@@ -796,6 +805,14 @@ impl continuation::Continuation {
             }
             ChangeUndo::Context(context) => {
                 self.snapshot.as_mut().expect("open").provider_context = context
+            }
+            ChangeUndo::Lease(prior) => {
+                let snapshot = self.snapshot.as_mut().expect("open");
+                self.snapshot_bytes = self
+                    .snapshot_bytes
+                    .saturating_sub(super::retained::lease(snapshot.lease.as_ref()))
+                    .saturating_add(super::retained::lease(prior.as_ref()));
+                snapshot.lease = prior;
             }
         }
     }

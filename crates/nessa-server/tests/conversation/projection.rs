@@ -313,6 +313,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
             local_outcome: None,
             result: None,
         }],
+        lease: None,
     }
 }
 

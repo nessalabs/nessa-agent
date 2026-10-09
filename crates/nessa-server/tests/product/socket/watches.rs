@@ -207,6 +207,7 @@ impl WatchFixture {
                     provider_context: context,
                     invocations: Vec::new(),
                     queue_history: Vec::new(),
+                    lease: None,
                 },
                 vec![SessionSaveUnit::new(changes).unwrap()],
             )

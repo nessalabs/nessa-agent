@@ -3668,6 +3668,7 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
         ),
         queue_history: vec![],
         invocations: vec![],
+        lease: None,
     };
     lease
         .save_changes(

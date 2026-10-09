@@ -349,6 +349,7 @@ async fn malformed_completion_remains_refused_after_physical_validator_advanced(
         provider_context: ProviderContext::Absent,
         invocations: Vec::new(),
         queue_history: Vec::new(),
+        lease: None,
     };
     lease
         .save_changes(
@@ -380,6 +381,7 @@ async fn malformed_completion_remains_refused_after_physical_validator_advanced(
         provider_context: ProviderContext::Absent,
         invocations: Vec::new(),
         queue_history: Vec::new(),
+        lease: None,
     };
     donor_lease
         .save_changes(

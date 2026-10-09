@@ -25,6 +25,7 @@ fn opening(id: &SessionId, name: &str) -> (SessionSaveUnit, SessionSnapshot) {
         provider_context: ProviderContext::Absent,
         invocations: Vec::new(),
         queue_history: Vec::new(),
+        lease: None,
     };
     (SessionSaveUnit::new(vec![change]).unwrap(), snapshot)
 }

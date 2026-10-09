@@ -464,6 +464,7 @@ async fn gateway_child() {
                             provider_context: context,
                             invocations: vec![],
                             queue_history: vec![],
+                            lease: None,
                         },
                         vec![SessionSaveUnit::new(changes).unwrap()],
                     )

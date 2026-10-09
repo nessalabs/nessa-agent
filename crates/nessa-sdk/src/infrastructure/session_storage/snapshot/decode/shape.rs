@@ -4,7 +4,9 @@ use crate::application::agent_execution::executions::{
     limits::{MAX_MESSAGE_CHUNK_BYTES, MAX_RETAINED_OUTPUT_EVENTS},
     ExecutionRequest,
 };
-use crate::application::agent_execution::sessions::{QueueHistoryRecord, SessionSnapshot};
+use crate::application::agent_execution::sessions::{
+    CurrentLease, LeaseRecord as SavedLeaseRecord, QueueHistoryRecord, SessionSnapshot,
+};
 use crate::domain::agent_execution::{
     executions::{ExecutionId, QueueOrderChange},
     permissions::PermissionOption,
@@ -55,6 +57,9 @@ pub(super) enum Shape {
     SemanticReport,
     SemanticSettlement,
     SemanticContext,
+    SnapshotLease,
+    LeaseRecords,
+    LeaseRecord,
     Metadata,
     Images,
     Image,
@@ -137,6 +142,11 @@ impl Shape {
             (Snapshot, "provider") => Provider,
             (Snapshot, "invocations") => Invocations,
             (Snapshot, "queue_history") => QueueHistory,
+            (Snapshot, "lease") => SnapshotLease,
+            (SnapshotLease, "records") => LeaseRecords,
+            (Semantic, "Lease") => LeaseRecord,
+            (LeaseRecord, "kind") => Text(SavedLeaseRecord::MAX_UNREADABLE_KIND_BYTES),
+            (LeaseRecord, "body") => Text(SavedLeaseRecord::MAX_UNREADABLE_BODY_BYTES),
             (Invocation, "metadata") => Metadata,
             (Invocation, "scheduling") => Scheduling,
             (Invocation, "events") => Events,
@@ -268,6 +278,8 @@ impl Shape {
             App => matches!(key, "execution_id" | "tool_id" | "server" | "tool"),
             AppModelContext => matches!(key, "app" | "update" | "text" | "structured_content"),
             McpTool => matches!(key, "server" | "tool"),
+            SnapshotLease => matches!(key, "revision" | "records"),
+            LeaseRecord => matches!(key, "kind" | "body"),
             ProviderError => matches!(key, "code" | "diagnostic"),
             AuthenticationError => key == "diagnostic",
             FailedAcknowledgement => matches!(key, "audit" | "storage"),
@@ -288,6 +300,7 @@ impl Shape {
             Self::Files => Self::FileLink,
             Self::AppModelContexts => Self::AppModelContext,
             Self::SemanticChanges => Self::Semantic,
+            Self::LeaseRecords => Self::LeaseRecord,
             Self::FinalizedComponents => Self::FinalizedComponent,
             Self::Hooks => Self::Hook,
             Self::QueueEntries => Self::QueueEntry,
@@ -309,6 +322,7 @@ impl Shape {
             }
             Self::SemanticChanges => 262_144 + 16 * 1024,
             Self::Hooks => 128,
+            Self::LeaseRecords => CurrentLease::MAX_RECORDS,
             Self::QueueEntries | Self::QueueIds => QueueOrderChange::MAX_PENDING,
             // The message's own constructor refuses more; refuse them here
             // before the excess references are built.

@@ -641,6 +641,7 @@ async fn initialization_unit_left_unfinished_is_completed_by_the_next_prepare() 
         provider_context: ProviderContext::Absent,
         invocations: Vec::new(),
         queue_history: Vec::new(),
+        lease: None,
     };
     assert_eq!(
         agent.session_manager().snapshot().await,
@@ -737,6 +738,7 @@ async fn prepare_leaves_an_unfinished_save_it_did_not_plan_unresolved() {
                     provider_context: ProviderContext::Absent,
                     invocations: Vec::new(),
                     queue_history: Vec::new(),
+                    lease: None,
                 },
                 vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                     id: foreign.clone(),

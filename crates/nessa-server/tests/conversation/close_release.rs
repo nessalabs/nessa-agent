@@ -23,6 +23,7 @@ fn snapshot(invocations: Vec<InvocationRecord>) -> SessionSnapshot {
         provider_context: ProviderContext::Recorded(ExecutionSessionId::new("provider-1").unwrap()),
         invocations,
         queue_history: Vec::new(),
+        lease: None,
     }
 }
 
