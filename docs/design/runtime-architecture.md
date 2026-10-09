@@ -467,8 +467,9 @@ sequenceDiagram
     H->>P: spawn from the host's own config.json
     G->>P: ACP over Input and Output frames
     P-->>G: events, permission requests, answered here
+    A->>H: Keepalive whenever nothing else was sent for 15 s
     S->>G: Stop
-    G->>A: harness cleanup (Stop frame)
+    G->>A: harness cleanup: its input pump sends the last Input, InputClosed, then Stop
     H-->>A: Stopped with cleanup evidence
     G->>A: lease end (End frame)
     H-->>A: Ended with cleanup evidence
@@ -476,8 +477,10 @@ sequenceDiagram
 ```
 
 **Where a conversation runs.** `config.json` names the hosts under
-`sshHosts`; `agents.list` returns them as `environments`, and the composer
-offers them under "Run on" only when there is at least one. A conversation
+`sshHosts`; `agents.list` returns them as `environments` — always present,
+empty when there are none, under the one-current-contract rule rather than
+an optional field — and the composer offers them under "Run on" only when
+there is at least one. A conversation
 is placed when it is created and never moves: one file per placed
 conversation, `conversations/placements/<id>.json`, written and synced
 before the conversation's record exists and erased with its history. No
@@ -495,11 +498,14 @@ never run somewhere else.
 | `ssh` command | `ssh -T -o BatchMode=yes -o ForwardAgent=no -o ForwardX11=no -o ClearAllForwardings=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -- <host> nessa env serve` | the user's own keys and config; no prompt, no forwarding; a silent network is noticed in about 45 s |
 | Connect and hello | 30 s | longer than a host's own 15 s wait for the previous serving process |
 | A grant's or an account's answer | 15 s | |
-| Harness stop | the binding's own grace and kill budgets; the host caps each at 60 s | the same budgets as a local child |
+| Harness stop | the binding's own grace and kill budgets; the host caps each at 60 s. The gateway waits for the answer through every step the host takes — the grace, three forced steps, one more for the output to end (`lease::stop_steps`) — and 5 s more for the record and the way back | the same budgets as a local child; the binding never gives up before the host does |
+| Order of a harness's frames | one sender per harness, its input pump: input, input end, then the Stop, however the stop was asked (cleanup, let go, output overflow) | a stop never overtakes the bytes written before it, so a normal stop drops nothing and records no drop |
+| A stop or end asked with the queue full | queued behind what is waiting, on a task of its own; an End is marked sent only once it is queued, so a close that gives up first still leaves the hold's drop to end it | never dropped for want of room |
 | Host-side stop of an ended lease | 2 s grace, then 5 s per forced step | |
 | Connections | one per host, shared by its leases | one `ssh` process per host |
+| Liveness | the gateway sends a `keepalive` frame whenever it sent nothing for 15 s; the host takes 45 s with nothing read (keepalives included), or a frame it cannot answer for that long, as the gateway gone: it ends every lease as lost, records it, and exits, releasing `serve.lock` | `ServerAliveInterval` only tells the gateway's side; a network that went away silently would otherwise leave the host serving, and every new connection `busy`, until TCP gives up |
 | Serving processes | one per host data directory, by a lock on `<data>/environment/serve.lock`, waited for up to 15 s, else `busy` | a second gateway, or a reconnect racing the old process's cleanup |
-| Host audit | `<data>/environment/leases.jsonl`, one JSON line per grant, refusal, start, stop, end and drop; accounting reads its last 64 MiB | the host's own evidence, kept past the lease |
+| Host audit | `<data>/environment/leases.jsonl`, one JSON line per grant, refusal, start, stop, end and drop, at most 64 drops recorded per connection; accounting, and the duplicate-grant check, read its last 64 MiB on every `Account` and `Grant` | the host's own evidence, kept past the lease. Known limit: the file is never rotated, so a lease recorded only before the last 64 MiB is answered `not_held` and its id could be granted again, and each read costs up to 64 MiB of I/O |
 | Gateway audit | `conversations/audit/environments/`, one record per connect, version refusal, busy, unconfigured, lost connection, dropped frame and output overflow | |
 | Frames | four-byte length then JSON, at most 256 KiB; harness bytes at most 64 KiB a frame, base64; a launch whose variables do not fit is refused to its binding, and the connection other leases share goes on | the pairing frame reader, bounded before allocation |
 | Harness output queued for a binding | 64 KiB pipe, then 128 frames; past that the harness is stopped and the overflow audited | a binding that stops reading never grows the gateway's memory |
@@ -525,6 +531,15 @@ binary over pipes) and `tests/conversation/leases.rs` (service).
 | S9 | Account for a lease from an earlier connection | What the ledger recorded for its last grant, `not_held` when it recorded nothing | host `account_answers_only_what_was_recorded`, ledger `accounting_answers_the_last_grant_s_end` |
 | S10 | A binding stops reading its harness's output | Overflow audited, harness stopped; the binding's own stop after it is answered with the host's cleanup | adapter `output_a_binding_does_not_read_is_bounded_and_stops_the_harness` |
 | S11 | No host named, unknown host, host no longer configured | Here, never SSH; refused `environment_not_configured`; refused, never run here | service `b_gate5_a_conversation_naming_no_host_never_reaches_one`, `b_a_host_the_configuration_does_not_name_is_refused_and_nothing_is_created`, `b_a_conversation_whose_host_is_no_longer_configured_is_refused_never_run_here` |
+| S12 | A harness stopped right after its binding's last write | The last Input and InputClosed reach the host before the Stop; no drop recorded | adapter `a_stop_follows_the_last_input_and_drops_nothing` |
+| S13 | A harness's stop racing its lease's End, or asked after it | No Stop once the End is queued; the stop is answered by the host's `Ended`, or after it by what the host recorded (`Account`) | adapter `a_stop_racing_the_lease_end_is_answered_with_the_hosts_evidence` |
+| S14 | Connection lost right after Granted, before the service watches it | The lease's watch is taken at its grant, so it resolves at once and the conversation stops as lost | adapter `a_connection_lost_before_its_watch_is_asked_for_is_still_seen` |
+| S15 | The network goes silent; the stream does not end | Gateway: keepalives while idle. Host: past 45 s every lease ends as lost, recorded, and serving ends | adapter `an_idle_connection_sends_keepalives`, host `a_silent_gateway_is_lost_and_serving_ends`, `keepalives_keep_a_quiet_gateway_served` |
+| S16 | A stop, an abandoned harness, an abandoned hold, or a close that gave up, while the host's queue is full | Each Stop and End is delivered once there is room, after the input before it | adapter `a_stop_or_end_asked_while_the_queue_is_full_still_reaches_the_host` |
+| S17 | `Account`, or `End` of a lease not held, while that lease's own End is under way on the host | Answered with that End's cleanup once recorded, never `uncertain` from a ledger that does not hold it yet | host `an_account_asked_while_the_lease_is_ending_answers_that_end` |
+| S18 | A stop's answer when the host takes every step it may | The gateway waits through all of them | adapter `a_stop_is_waited_for_through_every_step_the_host_takes` |
+| S19 | A creation retried, or its receipt read, naming another environment | A conflict: the environment is part of the creation's fingerprint, and `conversation.receipt` repeats it; a reopen never moves a placed conversation | `creation_commands::a_creation_identity_refuses_a_changed_environment`, service `b_a_reopen_keeps_the_host_the_conversation_was_created_on` |
+| S20 | A draft names a host the catalog no longer offers | The panel drops it from the draft, which then runs here as "Run on" shows | panel `use-agent-choices.test.ts` |
 
 Slice B's lease rows, beside slice A's above:
 

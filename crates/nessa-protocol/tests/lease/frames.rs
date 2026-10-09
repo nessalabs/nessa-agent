@@ -50,9 +50,13 @@ fn every_frame_round_trips_and_names_its_lease() {
     ];
     for frame in to {
         let decoded: ToEnvironment = decode(&body(&encode(&frame).unwrap())).unwrap();
-        assert_eq!(decoded.lease(), "l");
+        assert_eq!(decoded.lease(), Some("l"));
         assert_eq!(decoded, frame);
     }
+    let keepalive: ToEnvironment =
+        decode(&body(&encode(&ToEnvironment::Keepalive).unwrap())).unwrap();
+    assert_eq!(keepalive, ToEnvironment::Keepalive);
+    assert_eq!(keepalive.lease(), None);
     let from = [
         FromEnvironment::Stopped {
             lease: "l".into(),

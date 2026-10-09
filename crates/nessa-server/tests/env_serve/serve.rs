@@ -9,19 +9,26 @@ use std::sync::{
 use tokio::io::{duplex, split, AsyncReadExt, AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
 
 /// A harness that echoes its input, and counts how often it was stopped.
+/// Its stop takes `slow`.
 struct EchoLauncher {
     stopped: Arc<AtomicUsize>,
     launched: Mutex<Vec<BTreeMap<String, String>>>,
+    slow: Mutex<Duration>,
 }
 
 struct EchoControl {
     stopped: Arc<AtomicUsize>,
+    slow: Duration,
 }
 
 impl HarnessControl for EchoControl {
     fn cleanup(&mut self, _grace: Duration, _kill: Duration) -> HarnessCleanupFuture<'_> {
-        self.stopped.fetch_add(1, Ordering::SeqCst);
-        Box::pin(async { Ok(CloseOutcome { forced: false }) })
+        let slow = self.slow;
+        Box::pin(async move {
+            tokio::time::sleep(slow).await;
+            self.stopped.fetch_add(1, Ordering::SeqCst);
+            Ok(CloseOutcome { forced: false })
+        })
     }
 }
 
@@ -58,6 +65,7 @@ impl HarnessLauncher for EchoLauncher {
             output: Box::new(output),
             control: Box::new(EchoControl {
                 stopped: self.stopped.clone(),
+                slow: *self.slow.lock().unwrap(),
             }),
         })
     }
@@ -127,6 +135,7 @@ impl Gateway {
         let launcher = Arc::new(EchoLauncher {
             stopped: stopped.clone(),
             launched: Mutex::new(Vec::new()),
+            slow: Mutex::new(Duration::ZERO),
         });
         let served = tokio::spawn(serve(
             environment_in,
@@ -137,6 +146,7 @@ impl Gateway {
             ServeTimings {
                 grace: Duration::from_millis(10),
                 kill: Duration::from_millis(100),
+                ..ServeTimings::default()
             },
         ));
         let (reader, writer) = split(gateway);
@@ -653,6 +663,137 @@ async fn a_host_that_cannot_serve_says_its_build_then_why() {
         }
     );
     assert_eq!(frames.next().await.unwrap(), None);
+}
+
+/// A gateway that goes silent without closing its stream, as one cut off by
+/// the network, is noticed: past the silence bound every lease it held is
+/// ended as lost and recorded, and serving ends, so the next connection is
+/// not refused as busy for as long as TCP takes to give up.
+#[tokio::test(start_paused = true)]
+async fn a_silent_gateway_is_lost_and_serving_ends() {
+    let mut gateway = Gateway::start();
+    assert_eq!(gateway.next().await, hello());
+    gateway.granted(LEASE).await;
+    gateway
+        .send(ToEnvironment::Start {
+            lease: LEASE.into(),
+            channel: 1,
+            environment: BTreeMap::new(),
+        })
+        .await;
+    // Its stream stays open; nothing more arrives on it.
+    let Gateway {
+        writer: _writer,
+        frames: _frames,
+        served,
+        ledger,
+        stopped,
+        ..
+    } = gateway;
+    tokio::time::timeout(Duration::from_secs(120), served)
+        .await
+        .expect("serving ends once the gateway is silent past its bound")
+        .unwrap();
+    assert_eq!(stopped.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        ledger.entries().last(),
+        Some(&LedgerEntry::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Confirmed { forced: false },
+            lost: true,
+        })
+    );
+}
+
+/// A gateway's keepalives are what keep a quiet connection served.
+#[tokio::test(start_paused = true)]
+async fn keepalives_keep_a_quiet_gateway_served() {
+    let mut gateway = Gateway::start();
+    assert_eq!(gateway.next().await, hello());
+    gateway.granted(LEASE).await;
+    for _ in 0..8 {
+        tokio::time::sleep(nessa_protocol::lease::KEEPALIVE_INTERVAL).await;
+        gateway.send(ToEnvironment::Keepalive).await;
+    }
+    assert!(!gateway.served.is_finished());
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Confirmed { forced: false },
+        }
+    );
+}
+
+/// What a lease's own end is still recording is that end's to answer: an
+/// account, or a second end, asked meanwhile waits for it rather than
+/// reading the ledger before the end is in it.
+#[tokio::test]
+async fn an_account_asked_while_the_lease_is_ending_answers_that_end() {
+    let mut gateway = Gateway::start();
+    *gateway.launcher.slow.lock().unwrap() = Duration::from_millis(300);
+    assert_eq!(gateway.next().await, hello());
+    gateway.granted(LEASE).await;
+    gateway
+        .send(ToEnvironment::Start {
+            lease: LEASE.into(),
+            channel: 1,
+            environment: BTreeMap::new(),
+        })
+        .await;
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    gateway
+        .send(ToEnvironment::Account {
+            lease: LEASE.into(),
+        })
+        .await;
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    let mut answers = Vec::new();
+    while answers.len() < 3 {
+        match gateway.next().await {
+            FromEnvironment::OutputClosed { .. } => {}
+            other => answers.push(other),
+        }
+    }
+    let confirmed = Cleanup::Confirmed { forced: false };
+    for expected in [
+        FromEnvironment::Ended {
+            lease: LEASE.into(),
+            cleanup: confirmed,
+        },
+        FromEnvironment::Accounted {
+            lease: LEASE.into(),
+            cleanup: confirmed,
+        },
+    ] {
+        assert!(answers.contains(&expected), "{answers:?}");
+    }
+    assert!(
+        answers.iter().all(|answer| !matches!(
+            answer,
+            FromEnvironment::Ended {
+                cleanup: Cleanup::Uncertain,
+                ..
+            } | FromEnvironment::Accounted {
+                cleanup: Cleanup::Uncertain,
+                ..
+            }
+        )),
+        "{answers:?}"
+    );
 }
 
 use nessa_protocol::lease::read_hello;

@@ -12,13 +12,23 @@
 //!   gateway ── Stop{grace, kill} ──▶ … ── Stopped{cleanup} ──▶ gateway
 //! gateway ── End{lease} ──▶ environment ── Ended{cleanup} ──▶ gateway
 //! gateway ── Account{lease} ──▶ environment ── Accounted{cleanup} ──▶ gateway
+//! gateway ── Keepalive ──▶ environment   (every KEEPALIVE_INTERVAL, always)
 //! ```
 //!
 //! Arrows are frames, in the order the two ends exchange them. Every frame
-//! after the hello names the lease it belongs to, and every frame about a
-//! harness also names its channel: the gateway's number for one harness
-//! process under that lease. A frame naming no lease the reader holds is
-//! dropped with evidence by the reader, never applied to another lease.
+//! after the hello but the keepalive names the lease it belongs to, and
+//! every frame about a harness also names its channel: the gateway's number
+//! for one harness process under that lease. A frame naming no lease the
+//! reader holds is dropped with evidence by the reader, never applied to
+//! another lease. A harness's frames are sent in the order its binding gave
+//! them: its input, then its input's end, then its stop.
+//!
+//! The gateway is the only one who can tell the connection is still wanted,
+//! so it says so: a [`ToEnvironment::Keepalive`] at least every
+//! [`KEEPALIVE_INTERVAL`]. An environment that reads nothing at all for
+//! [`SILENCE_LIMIT`] takes the gateway as gone, as it does when the stream
+//! ends: a network that went away silently ends no stream until TCP gives
+//! up, hours later.
 //!
 //! On the wire each frame is [`crate::pairing::encode_frame`]'s four-byte
 //! big-endian length and a JSON body of at most [`MAX_FRAME_BYTES`]. A
@@ -29,13 +39,33 @@
 //! else its frames carry, and is refused before anything is sent to it.
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 /// Most bytes one frame's body may have.
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 /// Most harness bytes one [`ToEnvironment::Input`] or
 /// [`FromEnvironment::Output`] carries; larger writes are split.
 pub const MAX_DATA_BYTES: usize = 64 * 1024;
+
+/// Most time a gateway lets pass without sending anything; it sends a
+/// [`ToEnvironment::Keepalive`] when it has nothing else to say.
+pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+/// How long an environment waits for any frame before it takes the gateway
+/// as gone: three keepalives missed.
+pub const SILENCE_LIMIT: Duration = Duration::from_secs(45);
+/// Most an environment waits on a harness for one step of a
+/// [`ToEnvironment::Stop`]: a larger grace or kill is taken as this.
+pub const MAX_STOP_WAIT: Duration = Duration::from_secs(60);
+
+/// The longest an environment's stop of one harness can take before it
+/// answers, for a [`ToEnvironment::Stop`] asking `grace` and `kill`, each
+/// capped at [`MAX_STOP_WAIT`] as the environment caps them: the grace, a
+/// signal, a forced kill and reaping the process, each within `kill`, and
+/// then at most `kill` more for its output to end. Recording the stop comes
+/// after these, and is the caller's margin to allow.
+pub fn stop_steps(grace: Duration, kill: Duration) -> Duration {
+    grace.min(MAX_STOP_WAIT) + kill.min(MAX_STOP_WAIT) * 4
+}
 
 /// A harness's bytes, base64 on the wire.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -192,6 +222,8 @@ pub enum ToEnvironment {
         /// The lease's id.
         lease: String,
     },
+    /// The gateway is still there; nothing else.
+    Keepalive,
 }
 
 /// What an environment sends a gateway after its [`Hello`].
@@ -295,16 +327,17 @@ impl FromEnvironment {
 }
 
 impl ToEnvironment {
-    /// The lease the frame names.
-    pub fn lease(&self) -> &str {
+    /// The lease the frame names, if it names one.
+    pub fn lease(&self) -> Option<&str> {
         match self {
+            Self::Keepalive => None,
             Self::Grant { lease, .. }
             | Self::Start { lease, .. }
             | Self::Input { lease, .. }
             | Self::InputClosed { lease, .. }
             | Self::Stop { lease, .. }
             | Self::End { lease }
-            | Self::Account { lease } => lease,
+            | Self::Account { lease } => Some(lease),
         }
     }
 }

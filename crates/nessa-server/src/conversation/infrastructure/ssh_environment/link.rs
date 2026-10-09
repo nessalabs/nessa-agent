@@ -6,10 +6,13 @@
 //!          no ──▶ VersionRefused, nothing sent ──▶ EnvironmentVersionMismatch
 //!          empty workspace ──▶ Unavailable{busy | notConfigured} ──▶ refused
 //!          yes ──▶ writer task (frames out), demux task (frames in)
+//! writer: frames out, in the order queued; a Keepalive when idle `keepalive`
 //! demux: frame ──▶ lease route? ──▶ grant / channel output / stopped / ended
 //!                   none ──▶ FrameDropped, never applied elsewhere (row L9)
 //! end of stream ──▶ every route dropped: waiters unanswered, outputs ended,
 //!                   each lease's `gone` closed ──▶ ConnectionLost
+//! a harness: binding's input ──▶ its pump ──▶ Input… InputClosed ──▶ Stop
+//!            (cleanup, let go, or output overflow ask its pump for the Stop)
 //! ```
 //!
 //! Arrows are steps and frames, in order. A lease's frames are routed only
@@ -17,13 +20,21 @@
 //! until the host's `Ended`, a refusal, or the connection's end. Every wait
 //! here is bounded by its caller or by a deadline of its own, and no lock is
 //! held across one.
+//!
+//! Each harness's frames have one sender, its input pump, so they reach the
+//! host in the order its binding gave them: a stop, however it is asked,
+//! goes after the input written before it, never overtaking it. A stop or an
+//! end asked by a binding or hold that let go, or by an overflow, is always
+//! delivered — queued behind what is already waiting, on a task of its own —
+//! never dropped for want of room.
 use super::audit::{EnvironmentAudit, EnvironmentEvent};
 use super::connector::LeaseConnector;
 use crate::env::VERSION;
 use crate::env_serve::application::FrameStream;
+use futures_util::FutureExt;
 use nessa_protocol::lease::{
-    decode, encode, read_hello, Cleanup, Data, FromEnvironment, GrantRefusal, ToEnvironment,
-    Unavailability, MAX_DATA_BYTES,
+    decode, encode, read_hello, stop_steps, Cleanup, Data, FromEnvironment, GrantRefusal,
+    ToEnvironment, Unavailability, MAX_DATA_BYTES,
 };
 use nessa_sdk::domain::agent_execution::leases::{LeaseRefusal, SshDestination};
 use std::{
@@ -46,17 +57,45 @@ const OUTPUT_QUEUE: usize = 128;
 const PIPE_BYTES: usize = 64 * 1024;
 /// Most drops one connection records; more are counted in the log.
 const MAX_RECORDED_DROPS: u32 = 64;
-/// How long a stop waits beyond the harness's own budgets for the host's
-/// answer.
+/// How long a stop waits beyond every step the host takes
+/// ([`stop_steps`]) for its answer: the host recording it, and the frames'
+/// way there and back.
 const STOP_MARGIN: Duration = Duration::from_secs(5);
 /// Each forced step's budget for a harness stopped without its binding's
 /// own budgets: one let go, or one whose output overflowed.
 const ABANDON_KILL_MS: u64 = 5_000;
 
+/// A stop for one harness, sent by its input pump after its input.
+#[derive(Clone, Copy)]
+struct StopRequest {
+    grace_ms: u64,
+    kill_ms: u64,
+}
+
+impl StopRequest {
+    /// The stop of a harness nobody waits on any more.
+    const ABANDONED: Self = Self {
+        grace_ms: 0,
+        kill_ms: ABANDON_KILL_MS,
+    };
+
+    /// How long its answer is waited for.
+    fn bound(self) -> Duration {
+        stop_steps(
+            Duration::from_millis(self.grace_ms),
+            Duration::from_millis(self.kill_ms),
+        ) + STOP_MARGIN
+    }
+}
+
 /// One harness under a lease, as the demux routes to it.
 struct ChannelRoute {
     /// Its binding's output; `None` once ended.
     output: Option<mpsc::Sender<Vec<u8>>>,
+    /// Asks its input pump for the one Stop it sends; `None` once asked.
+    stop: Option<oneshot::Sender<StopRequest>>,
+    /// The stop asked of it, once asked.
+    asked: Option<StopRequest>,
     /// Waiting for the host's `Stopped`.
     stopped: Option<oneshot::Sender<Cleanup>>,
     /// The host's `Stopped`, once it came: kept, so a stop asked after the
@@ -70,11 +109,13 @@ struct ChannelRoute {
 struct LeaseRoute {
     grant: Option<oneshot::Sender<Result<(), GrantRefusal>>>,
     ended: Option<oneshot::Sender<Cleanup>>,
+    /// Its End is queued for the host: nothing more is asked of its
+    /// harnesses, whose stops its `Ended` answers.
+    end_sent: bool,
     channels: HashMap<u32, ChannelRoute>,
     next_channel: u32,
     /// Dropped with the route: the lease is no longer routed here.
     _gone: watch::Sender<()>,
-    gone: watch::Receiver<()>,
 }
 
 #[derive(Default)]
@@ -96,6 +137,9 @@ pub(crate) struct HostLink {
     keep: Mutex<Box<dyn Send>>,
 }
 
+/// How long the writer may be idle before it says the gateway is there.
+pub(crate) type Keepalive = Duration;
+
 /// What a started harness's binding is handed.
 pub(crate) struct StartedChannel {
     pub(crate) channel: u32,
@@ -113,6 +157,7 @@ impl HostLink {
         connector: &dyn LeaseConnector,
         audit: Arc<dyn EnvironmentAudit>,
         deadline: Duration,
+        keepalive: Keepalive,
     ) -> Result<Arc<Self>, LeaseRefusal> {
         let connection = connector.connect(host).map_err(|error| {
             tracing::warn!(host = host.as_str(), %error, "ssh could not be started");
@@ -156,7 +201,7 @@ impl HostLink {
             return Err(LeaseRefusal::EnvironmentUnreachable);
         }
         let (frames, outgoing) = mpsc::channel(TO_HOST_QUEUE);
-        tokio::spawn(write_frames(connection.to_environment, outgoing));
+        tokio::spawn(write_frames(connection.to_environment, outgoing, keepalive));
         let routes = Arc::new(Mutex::new(Routes::default()));
         let link = Arc::new(Self {
             host: host.clone(),
@@ -204,7 +249,6 @@ impl HostLink {
     fn shared(&self) -> Shared {
         Shared {
             host: self.host.clone(),
-            frames: self.frames.clone(),
             routes: self.routes.clone(),
             audit: self.audit.clone(),
         }
@@ -225,6 +269,10 @@ impl HostLink {
     }
 
     /// Ask the host to admit `lease` for `agent`, waiting at most `deadline`.
+    /// Granted, it answers the lease's watch: it closes once the lease is no
+    /// longer routed here — ended, or the connection lost — and, being the
+    /// lease's own from its grant, says so even when that happened before
+    /// anyone looked.
     ///
     /// # Errors
     /// The typed refusal; a connection lost or silent is unreachable.
@@ -233,9 +281,9 @@ impl HostLink {
         lease: &str,
         agent: &str,
         deadline: Duration,
-    ) -> Result<(), LeaseRefusal> {
+    ) -> Result<watch::Receiver<()>, LeaseRefusal> {
         let (answer, answered) = oneshot::channel();
-        {
+        let gone = {
             let mut routes = self.routes();
             if routes.closed || routes.leases.contains_key(lease) {
                 return Err(LeaseRefusal::EnvironmentUnreachable);
@@ -246,13 +294,14 @@ impl HostLink {
                 LeaseRoute {
                     grant: Some(answer),
                     ended: None,
+                    end_sent: false,
                     channels: HashMap::new(),
                     next_channel: 1,
                     _gone: gone_sender,
-                    gone,
                 },
             );
-        }
+            gone
+        };
         let sent = self
             .frames
             .send(ToEnvironment::Grant {
@@ -265,13 +314,18 @@ impl HostLink {
             return Err(LeaseRefusal::EnvironmentUnreachable);
         }
         match tokio::time::timeout(deadline, answered).await {
-            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Ok(()))) => Ok(gone),
             refused => {
                 self.routes().leases.remove(lease);
                 if refused.is_err() {
                     // No answer in time: the host may still admit it, so it
                     // is ended there rather than held for nobody.
-                    self.abandon_lease(lease);
+                    deliver(
+                        &self.frames,
+                        ToEnvironment::End {
+                            lease: lease.into(),
+                        },
+                    );
                 }
                 Err(match refused {
                     Ok(Ok(Err(GrantRefusal::AgentUnavailable))) => LeaseRefusal::AgentUnavailable,
@@ -279,15 +333,6 @@ impl HostLink {
                 })
             }
         }
-    }
-
-    /// Resolves once `lease` is no longer routed here: ended, or the
-    /// connection lost.
-    pub(crate) fn gone(&self, lease: &str) -> Option<watch::Receiver<()>> {
-        self.routes()
-            .leases
-            .get(lease)
-            .map(|route| route.gone.clone())
     }
 
     /// Start a harness under `lease` with the binding's `environment`.
@@ -301,12 +346,13 @@ impl HostLink {
         environment: BTreeMap<String, String>,
     ) -> Result<StartedChannel, StartError> {
         let (output_sender, output_receiver) = mpsc::channel(OUTPUT_QUEUE);
+        let (stop, stop_asked) = oneshot::channel();
         let channel = {
             let mut routes = self.routes();
             if routes.closed {
                 return Err(StartError::Closed);
             }
-            let Some(route) = routes.leases.get_mut(lease) else {
+            let Some(route) = routes.leases.get_mut(lease).filter(|route| !route.end_sent) else {
                 return Err(StartError::Closed);
             };
             let channel = route.next_channel;
@@ -315,6 +361,8 @@ impl HostLink {
                 channel,
                 ChannelRoute {
                     output: Some(output_sender),
+                    stop: Some(stop),
+                    asked: None,
                     stopped: None,
                     cleanup: None,
                     start_failed: false,
@@ -348,6 +396,7 @@ impl HostLink {
             self.frames.clone(),
             lease.to_owned(),
             channel,
+            stop_asked,
         ));
         Ok(StartedChannel {
             channel,
@@ -357,8 +406,11 @@ impl HostLink {
     }
 
     /// Stop one harness and wait for the host's evidence: `None` when it
-    /// cannot be had — the connection lost, the lease ended, or no answer in
-    /// time.
+    /// cannot be had — the connection lost, or no answer in time. The Stop
+    /// goes after the harness's input; a harness already asked to stop, or
+    /// under a lease whose end is queued, is answered by that stop or that
+    /// end; one under a lease the host already ended, by what the host
+    /// recorded of it.
     pub(crate) async fn stop(
         &self,
         lease: &str,
@@ -366,50 +418,74 @@ impl HostLink {
         grace: Duration,
         kill: Duration,
     ) -> Option<Cleanup> {
-        let answered = {
+        let request = StopRequest {
+            grace_ms: millis(grace),
+            kill_ms: millis(kill),
+        };
+        let waiting = {
             let mut routes = self.routes();
             if routes.closed {
                 return None;
             }
-            let route = routes.leases.get_mut(lease)?.channels.get_mut(&channel)?;
-            if route.start_failed {
-                return Some(Cleanup::NotHeld);
+            match routes.leases.get_mut(lease) {
+                None => None,
+                Some(route) => {
+                    let end_sent = route.end_sent;
+                    let route = route.channels.get_mut(&channel)?;
+                    if route.start_failed {
+                        return Some(Cleanup::NotHeld);
+                    }
+                    if let Some(cleanup) = route.cleanup {
+                        return Some(cleanup);
+                    }
+                    let (answer, answered) = oneshot::channel();
+                    route.stopped = Some(answer);
+                    let mut bound = request.bound();
+                    match (route.asked, route.stop.take()) {
+                        // Asked already: its own Stop is waited for too.
+                        (Some(asked), _) => bound = bound.max(asked.bound()),
+                        (None, Some(stop)) if !end_sent => {
+                            route.asked = Some(request);
+                            // A pump that is gone has ended with the
+                            // connection or the lease, which answer this.
+                            let _ = stop.send(request);
+                        }
+                        (None, _) => {}
+                    }
+                    Some((answered, bound))
+                }
             }
-            if let Some(cleanup) = route.cleanup {
-                return Some(cleanup);
-            }
-            let (answer, answered) = oneshot::channel();
-            route.stopped = Some(answer);
-            answered
         };
-        self.frames
-            .send(ToEnvironment::Stop {
-                lease: lease.into(),
-                channel,
-                grace_ms: millis(grace),
-                kill_ms: millis(kill),
-            })
-            .await
-            .ok()?;
-        // The host's own steps: the grace, a signal and a forced kill, then
-        // the harness's output ending, each step within `kill`.
-        let bound = grace + kill * 3 + STOP_MARGIN;
+        let Some((answered, bound)) = waiting else {
+            // No longer held here: the host ended it, and its record of
+            // that end covers every harness under it.
+            return tokio::time::timeout(request.bound(), self.account(lease))
+                .await
+                .ok()
+                .flatten();
+        };
         tokio::time::timeout(bound, answered).await.ok()?.ok()
     }
 
     /// Stop a harness whose binding let go of it without a stop: asked, not
-    /// waited for.
+    /// waited for, and always sent, after its input.
     pub(crate) fn abandon(&self, lease: &str, channel: u32) {
-        let _ = self.frames.try_send(ToEnvironment::Stop {
-            lease: lease.into(),
-            channel,
-            grace_ms: 0,
-            kill_ms: ABANDON_KILL_MS,
-        });
+        let mut routes = self.routes();
+        let Some(route) = routes.leases.get_mut(lease).filter(|route| !route.end_sent) else {
+            return;
+        };
+        if let Some(route) = route.channels.get_mut(&channel) {
+            if let Some(stop) = route.stop.take() {
+                route.asked = Some(StopRequest::ABANDONED);
+                let _ = stop.send(StopRequest::ABANDONED);
+            }
+        }
     }
 
     /// End `lease` and wait for the host's evidence; `None` when it cannot be
-    /// had. The caller bounds the wait.
+    /// had. The caller bounds the wait. Cancelled before its End is queued,
+    /// it leaves the lease as it was, for its hold's drop to end; once the
+    /// End is queued, nothing more is sent for it.
     pub(crate) async fn end(&self, lease: &str) -> Option<Cleanup> {
         let answered = {
             let mut routes = self.routes();
@@ -426,20 +502,35 @@ impl HostLink {
         let Some(answered) = answered else {
             return self.account(lease).await;
         };
-        self.frames
-            .send(ToEnvironment::End {
-                lease: lease.into(),
-            })
-            .await
-            .ok()?;
+        // Room first, then the End and its record together: cancelled while
+        // waiting for room, nothing was sent and nothing says it was.
+        let permit = self.frames.reserve().await.ok()?;
+        {
+            let mut routes = self.routes();
+            let route = routes.leases.get_mut(lease)?;
+            if !route.end_sent {
+                route.end_sent = true;
+                permit.send(ToEnvironment::End {
+                    lease: lease.into(),
+                });
+            }
+        }
         answered.await.ok()
     }
 
-    /// End `lease` without waiting: its hold was let go.
+    /// End `lease` without waiting, unless its End is already queued: its
+    /// hold was let go. Always sent.
     pub(crate) fn abandon_lease(&self, lease: &str) {
-        let _ = self.frames.try_send(ToEnvironment::End {
-            lease: lease.into(),
-        });
+        let mut routes = self.routes();
+        if let Some(route) = routes.leases.get_mut(lease).filter(|route| !route.end_sent) {
+            route.end_sent = true;
+            deliver(
+                &self.frames,
+                ToEnvironment::End {
+                    lease: lease.into(),
+                },
+            );
+        }
     }
 
     /// What the host recorded of `lease`; `None` when it cannot be had. The
@@ -486,7 +577,6 @@ fn millis(duration: Duration) -> u64 {
 /// What the demux needs of the link without keeping it alive.
 struct Shared {
     host: SshDestination,
-    frames: mpsc::Sender<ToEnvironment>,
     routes: Arc<Mutex<Routes>>,
     audit: Arc<dyn EnvironmentAudit>,
 }
@@ -540,22 +630,8 @@ impl Shared {
             Routed::Overflow { lease, channel } => {
                 self.record(EnvironmentEvent::OutputOverflow {
                     host: self.host.as_str().into(),
-                    lease: lease.clone(),
+                    lease,
                     channel,
-                });
-                // Sent even when the host's queue is full just now: a
-                // harness whose output is no longer read is never left
-                // running for want of room.
-                let frames = self.frames.clone();
-                tokio::spawn(async move {
-                    let _ = frames
-                        .send(ToEnvironment::Stop {
-                            lease,
-                            channel,
-                            grace_ms: 0,
-                            kill_ms: ABANDON_KILL_MS,
-                        })
-                        .await;
                 });
             }
         }
@@ -612,6 +688,13 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
                 if let Some(waiter) = route.ended.take() {
                     let _ = waiter.send(cleanup);
                 }
+                // The host stopped every harness under the lease before it
+                // ended it: a stop still waiting is answered by that end.
+                for channel in route.channels.into_values() {
+                    if let Some(waiter) = channel.stopped {
+                        let _ = waiter.send(cleanup);
+                    }
+                }
                 Routed::Done
             }
             None => Routed::Dropped,
@@ -639,8 +722,14 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
                         route.output = None;
                         Routed::Done
                     }
+                    // A harness whose output is no longer read is stopped,
+                    // never left running: its pump sends the Stop.
                     Err(mpsc::error::TrySendError::Full(_)) => {
                         route.output = None;
+                        if let Some(stop) = route.stop.take() {
+                            route.asked = Some(StopRequest::ABANDONED);
+                            let _ = stop.send(StopRequest::ABANDONED);
+                        }
                         Routed::Overflow { lease, channel }
                     }
                 },
@@ -765,8 +854,16 @@ async fn demux<R: AsyncRead + Unpin>(
 async fn write_frames(
     mut output: Box<dyn AsyncWrite + Send + Unpin>,
     mut frames: mpsc::Receiver<ToEnvironment>,
+    keepalive: Keepalive,
 ) {
-    while let Some(frame) = frames.recv().await {
+    loop {
+        // Idle for `keepalive`: the host is told the gateway is still there,
+        // which a network gone silent cannot tell it.
+        let frame = match tokio::time::timeout(keepalive, frames.recv()).await {
+            Ok(Some(frame)) => frame,
+            Ok(None) => break,
+            Err(_) => ToEnvironment::Keepalive,
+        };
         // A frame that cannot be encoded is that frame's failure alone; the
         // connection, which other leases share, goes on.
         let bytes = match encode(&frame) {
@@ -782,6 +879,28 @@ async fn write_frames(
         }
     }
     let _ = output.shutdown().await;
+}
+
+/// Queue `frame` for the host even when there is no room just now: on a
+/// task of its own, behind what is already queued, done once it is queued or
+/// the connection is gone. Outside a runtime, which a gateway never is, it is
+/// queued only if there is room.
+fn deliver(frames: &mpsc::Sender<ToEnvironment>, frame: ToEnvironment) {
+    match tokio::runtime::Handle::try_current() {
+        Ok(runtime) => {
+            let frames = frames.clone();
+            runtime.spawn(async move {
+                let _ = frames.send(frame).await;
+            });
+        }
+        Err(_) => {
+            if frames.try_send(frame).is_err() {
+                tracing::error!(
+                    "a lease frame asked outside a runtime found no room; it is not sent"
+                );
+            }
+        }
+    }
 }
 
 async fn write_all(
@@ -801,29 +920,91 @@ async fn pump_output(mut chunks: mpsc::Receiver<Vec<u8>>, mut output: DuplexStre
     let _ = output.shutdown().await;
 }
 
+/// The one sender of a harness's frames: its input as it arrives, its
+/// input's end, and then, once asked, its Stop, after whatever input was
+/// already written. Ends without a Stop when nobody can ask for one any
+/// more: the lease ended, or the connection is gone.
 async fn pump_input(
     mut input: DuplexStream,
     frames: mpsc::Sender<ToEnvironment>,
     lease: String,
     channel: u32,
+    mut stop: oneshot::Receiver<StopRequest>,
 ) {
     let mut buffer = vec![0; MAX_DATA_BYTES];
+    let mut open = true;
     loop {
-        match input.read(&mut buffer).await {
-            Ok(0) | Err(_) => break,
-            Ok(read) => {
-                let frame = ToEnvironment::Input {
-                    lease: lease.clone(),
-                    channel,
-                    data: Data(buffer[..read].to_vec()),
-                };
-                if frames.send(frame).await.is_err() {
-                    return;
+        let read = tokio::select! {
+            biased;
+            asked = &mut stop => {
+                let Ok(request) = asked else { return };
+                // What the binding wrote before it asked goes first: what is
+                // in the pipe now, at most one pipe's worth.
+                let mut drained = 0;
+                while open && drained < PIPE_BYTES {
+                    match tokio::task::unconstrained(input.read(&mut buffer)).now_or_never() {
+                        None => break,
+                        Some(Ok(read)) if read > 0 => {
+                            drained += read;
+                            if !send_input(&frames, &lease, channel, &buffer[..read]).await {
+                                return;
+                            }
+                        }
+                        Some(_) => {
+                            open = false;
+                            if !send_closed(&frames, &lease, channel).await {
+                                return;
+                            }
+                        }
+                    }
                 }
+                let _ = frames
+                    .send(ToEnvironment::Stop {
+                        lease,
+                        channel,
+                        grace_ms: request.grace_ms,
+                        kill_ms: request.kill_ms,
+                    })
+                    .await;
+                return;
             }
+            read = input.read(&mut buffer), if open => read,
+        };
+        let sent = match read {
+            Ok(read) if read > 0 => send_input(&frames, &lease, channel, &buffer[..read]).await,
+            _ => {
+                open = false;
+                send_closed(&frames, &lease, channel).await
+            }
+        };
+        if !sent {
+            return;
         }
     }
-    let _ = frames
-        .send(ToEnvironment::InputClosed { lease, channel })
-        .await;
+}
+
+async fn send_input(
+    frames: &mpsc::Sender<ToEnvironment>,
+    lease: &str,
+    channel: u32,
+    bytes: &[u8],
+) -> bool {
+    frames
+        .send(ToEnvironment::Input {
+            lease: lease.into(),
+            channel,
+            data: Data(bytes.to_vec()),
+        })
+        .await
+        .is_ok()
+}
+
+async fn send_closed(frames: &mpsc::Sender<ToEnvironment>, lease: &str, channel: u32) -> bool {
+    frames
+        .send(ToEnvironment::InputClosed {
+            lease: lease.into(),
+            channel,
+        })
+        .await
+        .is_ok()
 }

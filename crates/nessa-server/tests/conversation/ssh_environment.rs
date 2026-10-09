@@ -9,10 +9,11 @@ use super::{
 };
 use crate::conversation::application::{Environment, LeaseRelease};
 use crate::env::VERSION;
+use crate::env_serve::application::FrameStream;
 use crate::env_serve::application::{
     serve, HarnessLauncher, LeaseLedger, LedgerEntry, ServeTimings,
 };
-use nessa_protocol::lease::{Cleanup, Data, FromEnvironment};
+use nessa_protocol::lease::{decode, encode, Cleanup, Data, FromEnvironment, ToEnvironment};
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     providers::{
@@ -135,6 +136,9 @@ enum Reach {
     /// A host that writes these bodies and then holds the stream open,
     /// keeping what it was sent.
     Scripted(Vec<Vec<u8>>),
+    /// A host that grants the first lease it is asked for, then stops
+    /// reading until `gate` opens, and then keeps every frame it reads.
+    Stalling(tokio::sync::watch::Receiver<bool>),
     /// `ssh` cannot be started.
     Unreachable,
 }
@@ -149,21 +153,35 @@ struct Connector {
     relays: Mutex<Vec<(JoinHandle<()>, JoinHandle<()>)>>,
     /// What scripted hosts were sent.
     received: Arc<Mutex<Vec<u8>>>,
+    /// What a stalling host read once its gate opened.
+    frames: Arc<Mutex<Vec<ToEnvironment>>>,
 }
 
 impl Connector {
     fn new(reach: Reach) -> Arc<Self> {
         let stopped = Arc::new(AtomicUsize::new(0));
-        Arc::new(Self {
-            reach: Mutex::new(reach),
-            launcher: Arc::new(Echo {
+        Self::with(
+            reach,
+            Arc::new(Echo {
                 stopped: stopped.clone(),
             }),
+            stopped,
+        )
+    }
+    fn with(
+        reach: Reach,
+        launcher: Arc<dyn HarnessLauncher>,
+        stopped: Arc<AtomicUsize>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            reach: Mutex::new(reach),
+            launcher,
             ledger: Arc::new(Ledger::default()),
             stopped,
             connects: AtomicUsize::new(0),
             relays: Mutex::new(Vec::new()),
             received: Arc::new(Mutex::new(Vec::new())),
+            frames: Arc::new(Mutex::new(Vec::new())),
         })
     }
     /// Cut every connection both ways, as a network that went away.
@@ -204,8 +222,40 @@ impl LeaseConnector for Connector {
                     ServeTimings {
                         grace: Duration::from_millis(10),
                         kill: Duration::from_millis(100),
+                        ..ServeTimings::default()
                     },
                 ));
+            }
+            Reach::Stalling(mut gate) => {
+                let frames = self.frames.clone();
+                tokio::spawn(async move {
+                    let (host_in, mut host_out) = split(host);
+                    let mut stream = FrameStream::new(host_in);
+                    host_out
+                        .write_all(
+                            &encode(&FromEnvironment::Hello {
+                                build: VERSION.into(),
+                                workspace: "/srv/work".into(),
+                            })
+                            .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    while let Ok(Some(body)) = stream.next().await {
+                        if let Ok(ToEnvironment::Grant { lease, .. }) = decode(&body) {
+                            let granted = encode(&FromEnvironment::Granted { lease }).unwrap();
+                            host_out.write_all(&granted).await.unwrap();
+                            break;
+                        }
+                    }
+                    let _ = gate.wait_for(|open| *open).await;
+                    while let Ok(Some(body)) = stream.next().await {
+                        if let Ok(frame) = decode::<ToEnvironment>(&body) {
+                            frames.lock().unwrap().push(frame);
+                        }
+                    }
+                    drop(host_out);
+                });
             }
             Reach::Scripted(bodies) => {
                 let received = self.received.clone();
@@ -323,6 +373,7 @@ fn environment(connector: Arc<Connector>, audit: Arc<Audit>) -> SshEnvironment {
         SshTimings {
             connect: Duration::from_secs(5),
             answer: Duration::from_secs(5),
+            ..SshTimings::default()
         },
     )
 }
@@ -725,6 +776,7 @@ async fn a_grant_not_answered_in_time_is_ended_on_the_host() {
         SshTimings {
             connect: Duration::from_secs(5),
             answer: Duration::from_millis(50),
+            ..SshTimings::default()
         },
     );
     let id = lease();
@@ -793,4 +845,332 @@ async fn a_launch_too_large_for_a_frame_is_refused_and_the_connection_goes_on() 
     process.input.write_all(b"still").await.unwrap();
     assert_eq!(read_some(process.output.as_mut()).await, b"still");
     assert_eq!(connector.connects.load(Ordering::SeqCst), 1);
+}
+
+/// Row L10: a connection lost before anything asks for the lease's watch is
+/// still a lease that was lost. The watch is the lease's own from its grant,
+/// so it resolves at once, never answering that the lease cannot be lost.
+#[tokio::test]
+async fn a_connection_lost_before_its_watch_is_asked_for_is_still_seen() {
+    let connector = Connector::new(Reach::Serving);
+    let audit = Arc::new(Audit::default());
+    let environment = environment(connector.clone(), audit.clone());
+    let opened = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap_or_else(|_| panic!("granted"));
+    // Lost between the opening and the service asking for the watch.
+    connector.cut();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !audit
+            .events()
+            .iter()
+            .any(|event| matches!(event, EnvironmentEvent::ConnectionLost { .. }))
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the loss is recorded");
+    let lost = opened
+        .hold
+        .lost()
+        .expect("a lease on a host can be lost, and this one was");
+    tokio::time::timeout(Duration::from_secs(5), lost)
+        .await
+        .expect("an earlier loss resolves the watch at once");
+}
+
+/// A harness's stop follows everything its binding wrote before it: the
+/// last bytes reach the harness, its input is closed, and only then is it
+/// stopped, so an ordinary stop drops nothing and records no drop.
+#[tokio::test]
+async fn a_stop_follows_the_last_input_and_drops_nothing() {
+    let connector = Connector::new(Reach::Serving);
+    let environment = environment(connector.clone(), Arc::new(Audit::default()));
+    let (binding, host) = binding(true);
+    let _opened = environment
+        .open(&lease(), &terms("claude"), binding)
+        .await
+        .unwrap_or_else(|_| panic!("granted"));
+    let host = host.lock().unwrap().clone().unwrap();
+    let HarnessProcess {
+        mut input,
+        mut output,
+        mut control,
+    } = host.start(HarnessLaunch::default()).unwrap();
+    // As the binding's process scope stops it: the last bytes, its input
+    // dropped, then the cleanup.
+    input.write_all(b"bye").await.unwrap();
+    drop(input);
+    assert_eq!(
+        control
+            .cleanup(Duration::from_millis(10), Duration::from_millis(100))
+            .await
+            .unwrap(),
+        CloseOutcome { forced: false }
+    );
+    let mut echoed = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), output.read_to_end(&mut echoed))
+        .await
+        .expect("the output ends")
+        .unwrap();
+    assert_eq!(echoed, b"bye", "the last bytes reached the harness");
+    let drops: Vec<_> = connector
+        .ledger
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|entry| matches!(entry, LedgerEntry::Dropped { .. }))
+        .cloned()
+        .collect();
+    assert!(drops.is_empty(), "an ordinary stop dropped {drops:?}");
+}
+
+/// A harness's stop racing its lease's end is answered with the host's
+/// evidence, whichever the host handles first: the lease's end stops every
+/// harness under it, and says what that took.
+#[tokio::test]
+async fn a_stop_racing_the_lease_end_is_answered_with_the_hosts_evidence() {
+    let connector = Connector::new(Reach::Serving);
+    let environment = environment(connector.clone(), Arc::new(Audit::default()));
+    let (binding, host) = binding(true);
+    let opened = environment
+        .open(&lease(), &terms("claude"), binding)
+        .await
+        .unwrap_or_else(|_| panic!("granted"));
+    let host = host.lock().unwrap().clone().unwrap();
+    let HarnessProcess {
+        mut input,
+        mut output,
+        mut control,
+    } = host.start(HarnessLaunch::default()).unwrap();
+    input.write_all(b"x").await.unwrap();
+    assert_eq!(read_some(output.as_mut()).await, b"x");
+    let hold = opened.hold.clone();
+    let ending = tokio::spawn(async move { hold.end(LeaseEndCause::Stopped).await });
+    tokio::task::yield_now().await;
+    let stopped = control
+        .cleanup(Duration::from_millis(10), Duration::from_millis(100))
+        .await;
+    assert_eq!(stopped.unwrap(), CloseOutcome { forced: false });
+    assert_eq!(
+        ending.await.unwrap(),
+        LeaseRelease::Released(LeaseCleanup::Confirmed { forced: false })
+    );
+    // Asked after the lease ended, the stop is answered from what the host
+    // recorded of it, never left uncertain.
+    let (second, host) = self::binding(true);
+    let opened = environment
+        .open(&lease(), &terms("claude"), second)
+        .await
+        .unwrap_or_else(|_| panic!("granted"));
+    let host = host.lock().unwrap().clone().unwrap();
+    let mut process = host.start(HarnessLaunch::default()).unwrap();
+    process.input.write_all(b"y").await.unwrap();
+    assert_eq!(read_some(process.output.as_mut()).await, b"y");
+    assert_eq!(
+        opened.hold.end(LeaseEndCause::Stopped).await,
+        LeaseRelease::Released(LeaseCleanup::Confirmed { forced: false })
+    );
+    assert_eq!(
+        process
+            .control
+            .cleanup(Duration::from_millis(10), Duration::from_millis(100))
+            .await
+            .unwrap(),
+        CloseOutcome { forced: false }
+    );
+}
+
+/// A harness's stop and a lease's end are delivered even when the host's
+/// queue is full when they are asked: a stop let go of, an end abandoned,
+/// and an end whose caller stopped waiting before it was queued all reach
+/// the host once it reads again, each after the input written before it.
+#[tokio::test]
+async fn a_stop_or_end_asked_while_the_queue_is_full_still_reaches_the_host() {
+    let (open_gate, gate) = tokio::sync::watch::channel(false);
+    let connector = Connector::new(Reach::Stalling(gate));
+    let environment = environment(connector.clone(), Arc::new(Audit::default()));
+    let (binding, host) = binding(true);
+    let id = lease();
+    let opened = environment
+        .open(&id, &terms("claude"), binding)
+        .await
+        .unwrap_or_else(|_| panic!("granted"));
+    let host = host.lock().unwrap().clone().unwrap();
+    let HarnessProcess {
+        mut input,
+        output: _output,
+        control,
+    } = host.start(HarnessLaunch::default()).unwrap();
+    // More input than the pipes and the host's queue hold.
+    let written = Arc::new(AtomicUsize::new(0));
+    let counting = written.clone();
+    let writer = tokio::spawn(async move {
+        let chunk = vec![b'i'; 64 * 1024];
+        for _ in 0..512 {
+            if input.write_all(&chunk).await.is_err() {
+                return;
+            }
+            counting.fetch_add(chunk.len(), Ordering::SeqCst);
+        }
+    });
+    let mut last = usize::MAX;
+    loop {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let now = written.load(Ordering::SeqCst);
+        if now == last {
+            break;
+        }
+        last = now;
+    }
+    // The lease's end, given up on before the queue had room for it.
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(50),
+            opened.hold.end(LeaseEndCause::Closed)
+        )
+        .await
+        .is_err(),
+        "the full queue holds the end back"
+    );
+    drop(control);
+    drop(opened);
+    open_gate.send_replace(true);
+    let input_after_stop = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            {
+                let frames = connector.frames.lock().unwrap();
+                let ended = frames.iter().any(
+                    |frame| matches!(frame, ToEnvironment::End { lease } if lease == id.as_str()),
+                );
+                let stop = frames
+                    .iter()
+                    .position(|frame| matches!(frame, ToEnvironment::Stop { .. }));
+                if let (true, Some(stop)) = (ended, stop) {
+                    break frames[stop..]
+                        .iter()
+                        .any(|frame| matches!(frame, ToEnvironment::Input { .. }));
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the stop and the end reach the host");
+    writer.abort();
+    assert!(
+        !input_after_stop,
+        "nothing of the harness's input follows its stop"
+    );
+}
+
+/// The host's own worst case for a stop is its grace, three forced steps,
+/// and one more for its output to end: the binding waits past all of them
+/// for the host's evidence rather than giving up first.
+#[tokio::test(start_paused = true)]
+async fn a_stop_is_waited_for_through_every_step_the_host_takes() {
+    struct Slow;
+    struct SlowControl;
+    impl HarnessControl for SlowControl {
+        fn cleanup(&mut self, grace: Duration, kill: Duration) -> HarnessCleanupFuture<'_> {
+            Box::pin(async move {
+                tokio::time::sleep(grace + kill * 3).await;
+                Ok(CloseOutcome { forced: true })
+            })
+        }
+    }
+    impl HarnessLauncher for Slow {
+        fn workspace(&self) -> &str {
+            "/srv/work"
+        }
+        fn runs(&self, _agent: &str) -> bool {
+            true
+        }
+        fn launch(
+            &self,
+            _agent: &str,
+            _environment: &BTreeMap<String, String>,
+        ) -> Result<HarnessProcess, AgentError> {
+            let (input, _harness_in) = duplex(64);
+            let (harness_out, output) = duplex(64);
+            // Its output never ends by itself: the host waits for it.
+            tokio::spawn(async move {
+                let _held = harness_out;
+                std::future::pending::<()>().await;
+            });
+            Ok(HarnessProcess {
+                input: Box::new(input),
+                output: Box::new(output),
+                control: Box::new(SlowControl),
+            })
+        }
+    }
+    let connector = Connector::with(
+        Reach::Serving,
+        Arc::new(Slow),
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let environment = environment(connector, Arc::new(Audit::default()));
+    let (binding, host) = binding(true);
+    let _opened = environment
+        .open(&lease(), &terms("claude"), binding)
+        .await
+        .unwrap_or_else(|_| panic!("granted"));
+    let host = host.lock().unwrap().clone().unwrap();
+    let mut process = host.start(HarnessLaunch::default()).unwrap();
+    assert_eq!(
+        process
+            .control
+            .cleanup(Duration::from_millis(10), Duration::from_secs(60))
+            .await
+            .unwrap(),
+        CloseOutcome { forced: true }
+    );
+}
+
+/// A connection with nothing to say still tells the host the gateway is
+/// there: past its keepalive interval the writer sends a keepalive, which
+/// the host's silence bound counts on.
+#[tokio::test]
+async fn an_idle_connection_sends_keepalives() {
+    let connector = Connector::new(Reach::Scripted(vec![hello_body(VERSION)]));
+    let environment = SshEnvironment::new(
+        devbox(),
+        connector.clone(),
+        Arc::new(Audit::default()),
+        SshTimings {
+            connect: Duration::from_secs(5),
+            answer: Duration::from_secs(5),
+            keepalive: Duration::from_millis(20),
+        },
+    );
+    // The grant is never answered: the connection is otherwise idle.
+    let opening = tokio::spawn(async move {
+        environment
+            .open(&lease(), &terms("claude"), binding_only())
+            .await
+            .err()
+    });
+    let keepalive = encode(&ToEnvironment::Keepalive).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let received = connector.received.lock().unwrap().clone();
+            if received
+                .windows(keepalive.len())
+                .filter(|window| *window == keepalive)
+                .count()
+                >= 2
+            {
+                break;
+            }
+            drop(received);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("keepalives while idle");
+    opening.abort();
 }

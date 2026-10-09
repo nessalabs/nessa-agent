@@ -9,7 +9,9 @@
 //!                          ──Stop───▶ cleanup(grace, kill) ──▶ ledger: stopped ──▶ Stopped
 //!                          ──End────▶ stop every harness ──▶ ledger: ended ──▶ Ended
 //!                          ──Account▶ ledger ──▶ Accounted
-//! end of stream ──▶ every lease ended as lost ──▶ ledger: ended(lost)
+//!                          ──Keepalive▶ (nothing: the gateway is there)
+//! end of stream, or nothing read for `silence` ──▶ every lease ended as lost
+//!                                                ──▶ ledger: ended(lost)
 //! ```
 //!
 //! Arrows are frames and calls, in order. This side keeps no conversation:
@@ -24,11 +26,18 @@
 //! dropped and the drop recorded, never applied to another. The connection
 //! ending is the gateway gone: there is no reconnect, so every lease it held
 //! is ended as lost, its harnesses stopped, and that recorded; a later
-//! connection learns it through `Account`.
+//! connection learns it through `Account`. So is a connection on which
+//! nothing at all arrived for `silence`, past the gateway's keepalives: a
+//! network that went away ends no stream, and this side would otherwise go
+//! on holding the serving lock and running harnesses nobody supervises.
+//!
+//! A lease's end is answered by that end alone: an `Account`, or another
+//! `End`, of a lease whose end is still under way waits for it, rather than
+//! reading a ledger that does not hold it yet.
 use super::wire::{write_frame, FrameStream};
 use nessa_protocol::lease::{
     decode, Cleanup, Data, FromEnvironment, GrantRefusal, Hello, StartFailure, ToEnvironment,
-    Unavailability, MAX_DATA_BYTES,
+    Unavailability, MAX_DATA_BYTES, MAX_STOP_WAIT, SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -46,6 +55,7 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{mpsc, watch},
     task::JoinHandle,
+    time::Instant,
 };
 
 /// How the host starts an agent's harness: its own executable, arguments,
@@ -120,13 +130,17 @@ pub(crate) trait LeaseLedger: Send + Sync {
     fn accounted(&self, lease: &str) -> io::Result<Cleanup>;
 }
 
-/// How long ending a lease gives each harness still running under it.
+/// How long ending a lease gives each harness still running under it, and
+/// how long a silent gateway is believed.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ServeTimings {
     /// To leave by itself once its input is closed.
     pub(crate) grace: Duration,
     /// For each forced step after that.
     pub(crate) kill: Duration,
+    /// Nothing read from the gateway for this long, keepalives included, is
+    /// the gateway gone.
+    pub(crate) silence: Duration,
 }
 
 impl Default for ServeTimings {
@@ -134,12 +148,10 @@ impl Default for ServeTimings {
         Self {
             grace: Duration::from_secs(2),
             kill: Duration::from_secs(5),
+            silence: SILENCE_LIMIT,
         }
     }
 }
-
-/// Most a gateway's `Stop` may ask a harness to be waited on, for each step.
-const MAX_STOP_WAIT: Duration = Duration::from_secs(60);
 /// Most input chunks queued for one harness; past it the harness's input is
 /// closed rather than bytes dropped from the middle of its protocol.
 const INPUT_QUEUE: usize = 256;
@@ -180,7 +192,7 @@ pub(crate) async fn serve<R, W>(
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    let (frames, writer) = start_writer(output);
+    let (frames, mut writer) = start_writer(output);
     let _ = frames
         .send(FromEnvironment::Hello {
             build: build.into(),
@@ -190,7 +202,7 @@ pub(crate) async fn serve<R, W>(
     let mut served = Served {
         leases: HashMap::new(),
         granted: HashSet::new(),
-        ending: Vec::new(),
+        ends: HashMap::new(),
         frames,
         launcher,
         ledger,
@@ -198,26 +210,56 @@ pub(crate) async fn serve<R, W>(
         drops: 0,
     };
     let mut stream = FrameStream::new(input);
+    // Nothing read for `silence` is the gateway gone, whether this side is
+    // waiting for its next frame or is held up answering one: a frame this
+    // side cannot send is a gateway not reading, which a gateway always does.
+    let mut heard = Instant::now();
     loop {
-        let body = match stream.next().await {
-            Ok(Some(body)) => body,
-            Ok(None) => break,
-            Err(error) => {
+        let silent = heard + timings.silence;
+        // `next` keeps what a cancelled read had read, so the bound costs
+        // nothing of a frame arriving slowly.
+        let body = match tokio::time::timeout_at(silent, stream.next()).await {
+            Ok(Ok(Some(body))) => body,
+            Ok(Ok(None)) => break,
+            Ok(Err(error)) => {
                 tracing::warn!(%error, "the gateway's lease stream could not be read; serving ends");
                 break;
             }
-        };
-        match decode::<ToEnvironment>(&body) {
-            Ok(frame) => served.handle(frame).await,
-            Err(error) => {
-                tracing::warn!(%error, "an unreadable lease frame was dropped");
-                served.dropped(None, None, "unreadable");
+            Err(_) => {
+                served.silent(timings.silence);
+                break;
             }
+        };
+        heard = Instant::now();
+        let handled = async {
+            match decode::<ToEnvironment>(&body) {
+                Ok(frame) => served.handle(frame).await,
+                Err(error) => {
+                    tracing::warn!(%error, "an unreadable lease frame was dropped");
+                    served.dropped(None, None, "unreadable");
+                }
+            }
+        };
+        // Every state change a frame makes comes before the answer it waits
+        // to send, so one given up on here leaves nothing half-applied.
+        if tokio::time::timeout_at(heard + timings.silence, handled)
+            .await
+            .is_err()
+        {
+            served.silent(timings.silence);
+            break;
         }
     }
     served.lose_all().await;
     drop(served);
-    let _ = writer.await;
+    // What is still queued for a gateway that reads nothing is given up on,
+    // so serving, and the lock it holds, always ends.
+    if tokio::time::timeout(timings.silence, &mut writer)
+        .await
+        .is_err()
+    {
+        writer.abort();
+    }
 }
 
 fn start_writer<W>(mut output: W) -> (mpsc::Sender<FromEnvironment>, JoinHandle<()>)
@@ -245,6 +287,13 @@ struct Channel {
     output: JoinHandle<()>,
 }
 
+/// One harness's stop under way: its task, which answers the gateway when
+/// it asked, and its cleanup once recorded.
+struct Stopping {
+    task: JoinHandle<()>,
+    cleanup: watch::Receiver<Option<Cleanup>>,
+}
+
 /// One lease this connection holds.
 struct Held {
     /// The agent it was granted for; every harness under it is that agent's.
@@ -256,7 +305,7 @@ struct Held {
     /// first is still stopping it.
     stopped: HashMap<u32, watch::Receiver<Option<Cleanup>>>,
     /// Stops already under way, each answering its harness's cleanup.
-    stops: Vec<JoinHandle<Cleanup>>,
+    stops: Vec<Stopping>,
 }
 
 struct Served {
@@ -264,8 +313,10 @@ struct Served {
     /// Every lease id granted on this connection, ended ones included: an id
     /// is granted once.
     granted: HashSet<String>,
-    /// Leases ending, to be waited for before serving returns.
-    ending: Vec<JoinHandle<()>>,
+    /// Each lease whose end is under way on this connection: its cleanup
+    /// once recorded. What answers an account or end of it meanwhile, and
+    /// what serving waits for before it returns.
+    ends: HashMap<String, watch::Receiver<Option<Cleanup>>>,
     frames: mpsc::Sender<FromEnvironment>,
     launcher: Arc<dyn HarnessLauncher>,
     ledger: Arc<dyn LeaseLedger>,
@@ -306,11 +357,9 @@ impl Served {
                 });
                 match taken {
                     Some(Ok(running)) => {
-                        let (done, cleanup) = watch::channel(None);
-                        let stop =
-                            self.stop(lease.clone(), channel, running, grace, kill, Some(done));
+                        let stop = self.stop(lease.clone(), channel, running, grace, kill, true);
                         if let Some(held) = self.leases.get_mut(&lease) {
-                            held.stopped.insert(channel, cleanup);
+                            held.stopped.insert(channel, stop.cleanup.clone());
                             held.stops.push(stop);
                         }
                     }
@@ -347,22 +396,49 @@ impl Served {
                 }
             }
             ToEnvironment::End { lease } => match self.leases.remove(&lease) {
-                Some(held) => {
-                    let ending = self.end(lease, held, false);
-                    self.ending.push(ending);
-                }
-                // Not held on this connection: what the audit says of it.
+                Some(held) => self.end(lease, held, false),
+                // Not held on this connection: what its end under way, or
+                // the audit, says of it.
                 None => {
-                    let cleanup = self.accounted(&lease);
-                    self.send(FromEnvironment::Ended { lease, cleanup }).await;
+                    self.answer_ended(lease, |lease, cleanup| FromEnvironment::Ended {
+                        lease,
+                        cleanup,
+                    })
+                    .await;
                 }
             },
             ToEnvironment::Account { lease } => {
-                let cleanup = self.accounted(&lease);
-                self.send(FromEnvironment::Accounted { lease, cleanup })
-                    .await;
+                self.answer_ended(lease, |lease, cleanup| FromEnvironment::Accounted {
+                    lease,
+                    cleanup,
+                })
+                .await;
             }
+            ToEnvironment::Keepalive => {}
         }
+    }
+
+    /// Answer what became of `lease`, a lease this connection no longer
+    /// holds: once its end under way here is recorded, with what that took,
+    /// or else from the audit.
+    async fn answer_ended(
+        &mut self,
+        lease: String,
+        answer: impl FnOnce(String, Cleanup) -> FromEnvironment + Send + 'static,
+    ) {
+        let Some(mut ending) = self.ends.get(&lease).cloned() else {
+            let cleanup = self.accounted(&lease);
+            return self.send(answer(lease, cleanup)).await;
+        };
+        let frames = self.frames.clone();
+        tokio::spawn(async move {
+            // An end that never said (its task failed) is not known done.
+            let cleanup = match ending.wait_for(Option::is_some).await {
+                Ok(cleanup) => (*cleanup).unwrap_or(Cleanup::Uncertain),
+                Err(_) => Cleanup::Uncertain,
+            };
+            let _ = frames.send(answer(lease, cleanup)).await;
+        });
     }
 
     async fn send(&mut self, frame: FromEnvironment) {
@@ -556,8 +632,7 @@ impl Served {
     }
 
     /// Stop one harness on a task of its own, recording what that took and,
-    /// when the gateway asked for it (`done`), answering it and keeping it
-    /// for a second ask.
+    /// when the gateway asked for it (`answer`), answering it.
     fn stop(
         &self,
         lease: String,
@@ -565,11 +640,12 @@ impl Served {
         running: Channel,
         grace: Duration,
         kill: Duration,
-        done: Option<watch::Sender<Option<Cleanup>>>,
-    ) -> JoinHandle<Cleanup> {
+        answer: bool,
+    ) -> Stopping {
         let ledger = self.ledger.clone();
         let frames = self.frames.clone();
-        tokio::spawn(async move {
+        let (done, cleanup) = watch::channel(None);
+        let task = tokio::spawn(async move {
             let Channel {
                 input,
                 mut control,
@@ -602,8 +678,8 @@ impl Served {
                     Cleanup::Uncertain
                 }
             };
-            if let Some(done) = done {
-                done.send_replace(Some(cleanup));
+            done.send_replace(Some(cleanup));
+            if answer {
                 let _ = frames
                     .send(FromEnvironment::Stopped {
                         lease,
@@ -612,14 +688,19 @@ impl Served {
                     })
                     .await;
             }
-            cleanup
-        })
+        });
+        Stopping { task, cleanup }
     }
 
     /// End `lease` on a task of its own: stop every harness still running
     /// under it, wait for the stops already under way, record what all of it
-    /// took and, unless it was lost with the connection, answer it.
-    fn end(&self, lease: String, held: Held, lost: bool) -> JoinHandle<()> {
+    /// took and, unless it was lost with the connection, answer it after
+    /// every answer those stops send.
+    fn end(&mut self, lease: String, held: Held, lost: bool) {
+        let (done, ended) = watch::channel(None);
+        // Ends already recorded are the audit's to answer from.
+        self.ends.retain(|_, ended| ended.borrow().is_none());
+        self.ends.insert(lease.clone(), ended);
         let mut stops = held.stops;
         for (channel, running) in held.channels {
             stops.push(self.stop(
@@ -628,15 +709,19 @@ impl Served {
                 running,
                 self.timings.grace,
                 self.timings.kill,
-                None,
+                false,
             ));
         }
         let ledger = self.ledger.clone();
         let frames = self.frames.clone();
         tokio::spawn(async move {
             let mut cleanup = Cleanup::Confirmed { forced: false };
-            for stop in stops {
-                let stopped = stop.await.unwrap_or(Cleanup::Uncertain);
+            for stop in &mut stops {
+                // A stop whose task failed before recording is not known done.
+                let stopped = match stop.cleanup.wait_for(Option::is_some).await {
+                    Ok(stopped) => (*stopped).unwrap_or(Cleanup::Uncertain),
+                    Err(_) => Cleanup::Uncertain,
+                };
                 cleanup = combined(cleanup, stopped);
             }
             let entry = LedgerEntry::Ended {
@@ -651,10 +736,14 @@ impl Served {
                     Cleanup::Uncertain
                 }
             };
+            done.send_replace(Some(cleanup));
             if !lost {
+                for stop in stops {
+                    let _ = stop.task.await;
+                }
                 let _ = frames.send(FromEnvironment::Ended { lease, cleanup }).await;
             }
-        })
+        });
     }
 
     /// The gateway is gone: end every lease it held as lost, and wait for
@@ -663,12 +752,22 @@ impl Served {
         let leases: Vec<_> = self.leases.drain().collect();
         for (lease, held) in leases {
             tracing::warn!(lease, "the gateway's connection ended; its lease is lost");
-            let ending = self.end(lease, held, true);
-            self.ending.push(ending);
+            self.end(lease, held, true);
         }
-        for ending in self.ending.drain(..) {
-            let _ = ending.await;
+        // Each end is waited for until it is recorded, not until its answer
+        // is sent: a gateway that reads nothing more is never waited on.
+        for (_, mut ended) in self.ends.drain() {
+            let _ = ended.wait_for(Option::is_some).await;
         }
+    }
+
+    /// The gateway said nothing for `silence`.
+    fn silent(&self, silence: Duration) {
+        tracing::warn!(
+            silence_ms = silence.as_millis(),
+            leases = self.leases.len(),
+            "nothing arrived from the gateway, not even a keepalive; it is taken as gone"
+        );
     }
 }
 

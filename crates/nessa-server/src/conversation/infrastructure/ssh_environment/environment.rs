@@ -8,7 +8,8 @@
 //!   ──▶ link.grant(lease, agent) ──▶ EnvironmentLease { provider, SshHold }
 //! binding opens a session ──▶ LeaseHost::start ──▶ Start{lease, channel}
 //!   harness stdin/stdout ⇄ Input / Output frames
-//!   close ──▶ SshControl::cleanup ──▶ Stop ──▶ Stopped{cleanup}
+//!   close ──▶ SshControl::cleanup ──▶ (after its input) Stop ──▶ Stopped{cleanup}
+//! LiveLease::lost ──▶ the lease's watch, taken at its grant
 //! LiveLease::close ──▶ SshHold::end ──▶ End ──▶ Ended{cleanup}
 //!   connection lost? ──▶ a new connection ──▶ Account ──▶ what the host recorded
 //! account(lease) ──▶ Account ──▶ Accounted{cleanup}
@@ -29,7 +30,7 @@ use crate::conversation::application::{
     Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, LeaseHold,
     LeaseRelease,
 };
-use nessa_protocol::lease::Cleanup;
+use nessa_protocol::lease::{Cleanup, KEEPALIVE_INTERVAL};
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     providers::{
@@ -41,16 +42,8 @@ use nessa_sdk::domain::agent_execution::leases::{
     EnvironmentRef, LeaseCleanup, LeaseEndCause, LeaseId, LeaseRefusal, LeaseTerms, LeaseWork,
     SandboxProfiles, SshDestination,
 };
-use std::{
-    collections::BTreeMap,
-    path::Path,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
-use tokio::sync::Mutex;
+use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
+use tokio::sync::{watch, Mutex};
 
 /// How long reaching a host and its answers may take.
 #[derive(Clone, Copy, Debug)]
@@ -60,6 +53,9 @@ pub(crate) struct SshTimings {
     pub(crate) connect: Duration,
     /// A grant's or an account's answer.
     pub(crate) answer: Duration,
+    /// Most the connection is left without a frame to the host: past it a
+    /// keepalive is sent, which is how the host tells this gateway is there.
+    pub(crate) keepalive: Duration,
 }
 
 impl Default for SshTimings {
@@ -67,6 +63,7 @@ impl Default for SshTimings {
         Self {
             connect: Duration::from_secs(30),
             answer: Duration::from_secs(15),
+            keepalive: KEEPALIVE_INTERVAL,
         }
     }
 }
@@ -117,6 +114,7 @@ impl Inner {
             self.connector.as_ref(),
             self.audit.clone(),
             self.timings.connect,
+            self.timings.keepalive,
         )
         .await?;
         *held = Some(link.clone());
@@ -168,7 +166,8 @@ impl Environment for SshEnvironment {
                 tracing::warn!(agent = work.agent(), %error, "this agent's binding cannot start its harness on a host");
                 LeaseRefusal::AgentUnavailable
             })?;
-            link.grant(lease.as_str(), work.agent(), self.inner.timings.answer)
+            let gone = link
+                .grant(lease.as_str(), work.agent(), self.inner.timings.answer)
                 .await?;
             Ok(EnvironmentLease {
                 provider,
@@ -176,7 +175,7 @@ impl Environment for SshEnvironment {
                     inner: self.inner.clone(),
                     link,
                     lease: lease.as_str().into(),
-                    ended: AtomicBool::new(false),
+                    gone,
                 }),
             })
         })
@@ -192,21 +191,23 @@ struct SshHold {
     inner: Arc<Inner>,
     link: Arc<HostLink>,
     lease: String,
-    ended: AtomicBool,
+    /// Closed once the lease is no longer routed on its connection: taken
+    /// at its grant, so a loss before anyone asks is still seen.
+    gone: watch::Receiver<()>,
 }
 
 impl LeaseHold for SshHold {
     fn lost(&self) -> Option<EnvironmentFuture<'static, ()>> {
-        let mut gone = self.link.gone(&self.lease)?;
+        let mut gone = self.gone.clone();
         Some(Box::pin(async move {
-            // Only the route's end is waited for: it is never sent to.
+            // Only the route's end is waited for: it is never sent to, and
+            // a route already gone answers at once.
             while gone.changed().await.is_ok() {}
         }))
     }
 
     fn end(&self, _cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease> {
         Box::pin(async move {
-            self.ended.store(true, Ordering::SeqCst);
             let answered = match self.link.is_open() {
                 true => self.link.end(&self.lease).await.map(evidence),
                 false => None,
@@ -226,10 +227,10 @@ impl LeaseHold for SshHold {
 }
 
 impl Drop for SshHold {
+    /// Ends the lease on the host unless its End is already queued or it is
+    /// no longer held there.
     fn drop(&mut self) {
-        if !self.ended.load(Ordering::SeqCst) {
-            self.link.abandon_lease(&self.lease);
-        }
+        self.link.abandon_lease(&self.lease);
     }
 }
 
@@ -275,7 +276,6 @@ impl HarnessHost for LeaseHost {
                 link: self.link.clone(),
                 lease: self.lease.clone(),
                 channel: started.channel,
-                cleaned: false,
             }),
         })
     }
@@ -286,13 +286,12 @@ struct SshControl {
     link: Arc<HostLink>,
     lease: String,
     channel: u32,
-    cleaned: bool,
 }
 
 impl HarnessControl for SshControl {
     fn cleanup(&mut self, grace: Duration, kill_timeout: Duration) -> HarnessCleanupFuture<'_> {
         Box::pin(async move {
-            let outcome = match self
+            match self
                 .link
                 .stop(&self.lease, self.channel, grace, kill_timeout)
                 .await
@@ -300,19 +299,15 @@ impl HarnessControl for SshControl {
                 Some(Cleanup::Confirmed { forced }) => Ok(CloseOutcome { forced }),
                 Some(Cleanup::NotHeld) => Ok(CloseOutcome { forced: false }),
                 Some(Cleanup::Uncertain) | None => Err(AgentError::CleanupUncertain),
-            };
-            // Only a confirmation lets go of it: anything less, or a cleanup
-            // dropped part-way, still asks the host to stop it when dropped.
-            self.cleaned = outcome.is_ok();
-            outcome
+            }
         })
     }
 }
 
 impl Drop for SshControl {
+    /// Asks the host to stop the harness unless a stop was already asked of
+    /// it: its Stop is sent once, whoever asks.
     fn drop(&mut self) {
-        if !self.cleaned {
-            self.link.abandon(&self.lease, self.channel);
-        }
+        self.link.abandon(&self.lease, self.channel);
     }
 }
