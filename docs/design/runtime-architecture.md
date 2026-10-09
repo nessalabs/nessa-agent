@@ -685,10 +685,14 @@ forwarded to the surface's own loopback, for the life of the lease.
   attach whose replay from zero exceeds the interactive budget on the
   longest real history.
 - Backup is an export cut, not a cache: records, metadata and audit from
-  their owners at one consistent boundary, plus a deletion inventory. A
+  their owners at one consistent boundary, plus a deletion inventory
+  (#270). The cut also holds live leases, which a restore marks
+  `Interrupted` (row L11), and the grants, follow rules and peer table,
+  so a restore keeps the mesh and a revoked grant does not return. A
   restored gateway is quarantined: it serves reads and issues no leases
-  until the person accepts it as the authority and every other copy is
-  told (#270).
+  until the person accepts it as the authority and every device and peer
+  is told, through a restore generation they see on their next connection
+  or by re-pairing if the key was not in the backup; #272 chooses which.
 
 ## Commands
 

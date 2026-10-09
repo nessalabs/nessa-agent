@@ -193,7 +193,8 @@ Phone lane, beside it, already sliced and unchanged:
 protected reads (its #264 and #265 are done), [#266](https://github.com/nessalabs/nessa-agent/issues/266)
 relay, [#267](https://github.com/nessalabs/nessa-agent/issues/267) device
 commands, [#270](https://github.com/nessalabs/nessa-agent/issues/270)
-backup and restore, [#273](https://github.com/nessalabs/nessa-agent/issues/273)
+backup and restore (now a sub-issue here; its cut holds leases, grants and
+the peer table, and #272 settles identity after restore), [#273](https://github.com/nessalabs/nessa-agent/issues/273)
 artifacts to devices. Slice E unblocks its live reads.
 
 After A to D the Mac mini workflow works for its owner with nothing new on
