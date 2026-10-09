@@ -88,6 +88,7 @@ export const css = {
   workspaceEmptyText: '.workspace-empty[role="status"] [data-slot="empty-state-title"]', // class: its sentence
   workspaceEmptyRetry: '.workspace-empty[role="status"] button', // class: its Try Again
   transcriptNote: '.workspace-transcript-note[role="status"]', // class: why a shown conversation could not be read
+  unreadablePart: "[data-unreadable-position]", // a saved part this build could not read, drawn in place
   transcriptNoteText: ".workspace-transcript-note p", // class: that note's sentence
   peekFailure: '.agents-peek-failure[role="status"]', // class: a peek's sentence — a conversation it could not read, or an answer it could not confirm
   widgetTrail: '[data-slot="breadcrumb"]', // a widget's way back, in its chrome

@@ -1176,6 +1176,22 @@ says why where the conversations would be.
   _Not in a browser:_ a request row's unreadable. Needs you is a conversation
   whose read already asked the person something, so a first read that fails
   never lands there. `overview.test.tsx` holds that sentence.
+- [ ] **A saved part this build could not read is one muted row, and the messages
+  around it still show.** The gateway lists one conversation and reads it
+  with two completed turns and one `unreadable` part between them. The
+  transcript draws "Kept before", then "Answer before", then "Couldn't read
+  this part of the conversation", then "Kept after" and "Answer after". The
+  row is inside the chat area, has no button, and names the session,
+  position, and reason. No console error, page error, or failed request.
+  WebKit may report `ResizeObserver loop completed with undelivered
+  notifications`: that is the transcript's existing pin to the latest
+  message (`scrollTop` inside its `ResizeObserver` in `transcript.tsx`),
+  once the turns overflow. The check labels that one line harmless.
+  Chromium does not report it.
+  _[Browser verification for UI](../../CODING_STANDARDS.md#browser-verification-for-ui)._
+  _Check:_ `unreadable-part.mjs` (the real frontend as the desktop app,
+  against the same fake host as `conversation-unread.mjs` and a socket that
+  returns the part).
 - [ ] **A gateway that answers shows its conversations in the main window, and
   a turn made elsewhere without a reload.** Over the host's endpoint and the
   panel's credential (the file the gateway provisioned, which the native host

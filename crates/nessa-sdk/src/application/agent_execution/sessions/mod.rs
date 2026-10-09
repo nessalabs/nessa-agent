@@ -58,6 +58,7 @@
 //! evidence.
 
 mod app_sources;
+mod unreadable;
 pub use app_sources::UnknownApp;
 pub(crate) mod attachment;
 pub(crate) mod committed_changes;
@@ -91,6 +92,7 @@ pub use storage::{
     SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
     StorageShutdownFailure, SubmissionAcknowledgement,
 };
+pub use unreadable::{UnreadablePart, UnreadableReason};
 
 pub(crate) use transcript::CommittedTransactionState;
 

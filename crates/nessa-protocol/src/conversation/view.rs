@@ -59,6 +59,42 @@ pub struct ConversationView {
     /// the same title `conversation.list` shows, from the same summary — or
     /// `None` before anything was said. Always on the wire, as `null` then.
     pub title: Option<String>,
+    /// Parts of the transcript this build could not read, in stream order.
+    /// Empty when every saved record folded. Omitted from the wire when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unreadable: Vec<UnreadableTranscriptPart>,
+}
+
+/// One part of the transcript this build could not read.
+///
+/// `session`, `position`, and `reason` are the address a later report can
+/// name. `after_message` is how many messages in this view come before the row.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnreadableTranscriptPart {
+    /// The conversation this part was read for.
+    pub session: String,
+    /// First physical record of the dropped save group.
+    pub position: u64,
+    /// Why the group was dropped.
+    pub reason: UnreadableTranscriptReason,
+    /// The foreign `schemaVersion`, when `reason` is `another_version`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub found: Option<u64>,
+    /// How many messages in this view come before the row.
+    pub after_message: u64,
+}
+
+/// Why a saved part could not be folded. The names match the tracing warning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnreadableTranscriptReason {
+    /// The record's `schemaVersion` is missing or is not this build's.
+    AnotherVersion,
+    /// The record belongs to another chat.
+    Identity,
+    /// The body is corrupt, too large, or contradicts the fold.
+    Unreadable,
 }
 /// Product status of the last physical committed read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

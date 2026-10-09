@@ -29,6 +29,7 @@ import type {
   Part,
   StepKind,
   Transcript,
+  UnreadableRow,
 } from "../../model/transcript"
 import {
   defaultModel,
@@ -241,6 +242,7 @@ export function transcriptFrom(
     view.tools.map((tool) => [JSON.stringify([tool.executionId, tool.toolId]), tool]),
   )
   const messages: Message[] = []
+  const anchors: string[] = []
   let activity: Transcript["activity"] = null
   for (const turn of view.messages) {
     const input = inputId(turn.executionId)
@@ -282,6 +284,9 @@ export function transcriptFrom(
     if (parts.length > 0) {
       const reply = replyId(turn.executionId)
       messages.push({ id: reply, role: "agent", at: seen(reply), parts })
+      anchors.push(reply)
+    } else {
+      anchors.push(input)
     }
     // A turn at work with nothing streaming yet: what it is doing, and since it was asked.
     if (
@@ -321,11 +326,23 @@ export function transcriptFrom(
         ask: asked.ask,
       }
     : null
+  const unreadable: UnreadableRow[] = (view.unreadable ?? []).map((part) => {
+    const index = Math.min(part.afterMessage, anchors.length)
+    const afterId = index === 0 ? undefined : anchors[index - 1]
+    return {
+      sessionId: part.session,
+      position: part.position,
+      reason: part.reason,
+      ...(part.found === undefined ? {} : { found: part.found }),
+      ...(afterId === undefined ? {} : { afterId }),
+    }
+  })
   return {
     sessionId: view.conversationId,
     messages,
     activity,
     approval,
+    ...(unreadable.length === 0 ? {} : { unreadable }),
     revision,
     agent: view.runtime?.agent,
     authenticationRefusal: latestTurn?.authenticationRequired

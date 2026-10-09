@@ -135,11 +135,25 @@ export interface Activity {
   readonly since: number
 }
 
+/** One saved part this build could not read. A later report can name the same address. */
+export interface UnreadableRow {
+  readonly sessionId: string
+  readonly position: number
+  readonly reason: "another_version" | "identity" | "unreadable"
+  readonly found?: number
+  /** Message this row follows. Absent when the row leads the transcript. */
+  readonly afterId?: string
+}
+
+export const UNREADABLE_PART = "Couldn't read this part of the conversation"
+
 export interface Transcript {
   readonly sessionId: string
   readonly messages: readonly Message[]
   readonly activity: Activity | null
   readonly approval: Approval | null
+  /** Parts this build could not read, in stream order. Absent when every record folded. */
+  readonly unreadable?: readonly UnreadableRow[]
   /** A provider's typed authentication refusal on the latest turn. */
   readonly authenticationRefusal?: string
   /** Raw execution identity of the latest published input, including pending. */

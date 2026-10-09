@@ -15,6 +15,8 @@ export function applyView(current: Conversation, view: ConversationView): Conver
   const waiting = new Set(view.pending.map((item) => item.executionId))
   const projected: Turn[] = []
   const seen = new Set<string>()
+  // The user turn of each view message, so a placeholder can follow that turn.
+  const anchors: string[] = []
   for (const message of view.messages) {
     seen.add(message.executionId)
     const local = known.get(message.executionId)
@@ -39,6 +41,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
       steeringTarget: message.steeringTarget,
       steeringOffset: message.steeringOffset,
     })
+    anchors.push(local?.id ?? `${message.executionId}:user`)
     if (
       (message.status !== "queued" &&
         view.tools.some((tool) => tool.executionId === message.executionId)) ||
@@ -165,6 +168,17 @@ export function applyView(current: Conversation, view: ConversationView): Conver
       pending: view.pending,
       capabilities: view.capabilities,
       lifecycle: view.lifecycle,
+      unreadable: (view.unreadable ?? []).map((part) => {
+        const index = Math.min(part.afterMessage, anchors.length)
+        const anchor = index === 0 ? undefined : anchors[index - 1]
+        return {
+          session: part.session,
+          position: part.position,
+          reason: part.reason,
+          ...(part.found === undefined ? {} : { found: part.found }),
+          ...(anchor === undefined ? {} : { afterTurnId: anchor }),
+        }
+      }),
     },
   }
 }

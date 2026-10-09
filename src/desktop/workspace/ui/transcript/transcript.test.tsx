@@ -20,6 +20,7 @@ import { workspaceActions } from "../../adapters/store/slice"
 import { ClockProvider } from "../../adapters/dom/clock"
 import {
   emptyTranscript,
+  UNREADABLE_PART,
   type Transcript as TranscriptValue,
 } from "../../model/transcript"
 import { fakeSource, settle, testStore } from "../../testing"
@@ -180,6 +181,87 @@ describe("a conversation that cannot be read", () => {
     const said = host.querySelector(".workspace-transcript-note p")?.textContent
     expect(said).toBe("This window isn’t signed in to the local server.")
     expect(said).toBe(readFailureCopy("signed-out", "conversation"))
+  })
+})
+
+describe("a part this build could not read", () => {
+  it("draws the muted row between the messages around it, with no report button", async () => {
+    const source = fakeSource()
+    const store = testStore(source)
+    await store.dispatch(loadWorkspace())
+    store.dispatch(openSession({ sessionId: "b" }))
+    await act(async () => {
+      root.render(
+        <Provider store={store}>
+          <ClockProvider now={() => 1000}>
+            <Transcript sessionId="b" scrollRef={createRef()} onHeadingVisible={() => {}} />
+          </ClockProvider>
+        </Provider>,
+      )
+    })
+    await act(async () => {
+      store.dispatch(
+        workspaceActions.updateReceived({
+          update: {
+            kind: "transcript",
+            transcript: transcriptFrom(
+              view("b", {
+                messages: [
+                  {
+                    executionId: "before",
+                    userText: "Kept before",
+                    attachments: [],
+                    files: [],
+                    status: "completed",
+                    parts: [
+                      { kind: "text", offset: 0, text: "Answer before", toolId: "", noticeId: "" },
+                    ],
+                  },
+                  {
+                    executionId: "after",
+                    userText: "Kept after",
+                    attachments: [],
+                    files: [],
+                    status: "completed",
+                    parts: [
+                      { kind: "text", offset: 0, text: "Answer after", toolId: "", noticeId: "" },
+                    ],
+                  },
+                ],
+                unreadable: [
+                  {
+                    session: "b",
+                    position: 4,
+                    reason: "another_version",
+                    found: 2,
+                    afterMessage: 1,
+                  },
+                ],
+              }),
+              2,
+              () => 1000,
+            ),
+          },
+        }),
+      )
+    })
+    const row = host.querySelector("[data-unreadable-position]")
+    expect(row?.textContent).toBe(UNREADABLE_PART)
+    expect(row?.querySelector("button")).toBeNull()
+    expect(row?.getAttribute("data-unreadable-session")).toBe("b")
+    expect(row?.getAttribute("data-unreadable-position")).toBe("4")
+    expect(row?.getAttribute("data-unreadable-reason")).toBe("another_version")
+    expect(row?.getAttribute("data-unreadable-found")).toBe("2")
+    const order = [...host.querySelectorAll(".workspace-message, [data-unreadable-position]")].map(
+      (element) => element.textContent,
+    )
+    expect(order).toEqual([
+      "Kept before",
+      "Answer before",
+      UNREADABLE_PART,
+      "Kept after",
+      "Answer after",
+    ])
   })
 })
 

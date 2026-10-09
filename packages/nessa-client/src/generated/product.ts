@@ -579,6 +579,19 @@ export interface ConversationMcpTool {
   /** The call's arguments, one JSON object encoded, as the gateway's MCP connection saw them. The same bound as a review and an app's own call (maxMcpArgumentsBytes). Absent when the call did not go through that connection, the harness named no call id it could match, or the arguments did not fit — never cut. */
   argumentsJson?: string
 }
+/** One save group this build could not read. The chat shows it as a row. A later report can name the same session, position, and reason. */
+export interface UnreadablePart {
+  /** The conversation this part was read for. */
+  session: string
+  /** First physical record of the dropped save group. */
+  position: number
+  /** Why the group was dropped. The same name the tracing warning records. */
+  reason: "another_version" | "identity" | "unreadable"
+  /** The schemaVersion that was present, when reason is another_version and the marker was an unsigned integer. */
+  found?: number
+  /** How many messages in this view come before the row. */
+  afterMessage: number
+}
 /** Bounded full replacement of the current live conversation view. Polling never implies cancellation or durable streaming storage. */
 export interface ConversationView {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
@@ -618,6 +631,8 @@ export interface ConversationView {
   approvalModes: ApprovalModeChoice[]
   /** Present while a change is in progress or recovery is required. */
   approvalModeChange?: ApprovalModeChange
+  /** Parts of the transcript this build could not read, in order. Each one is a row in the chat. Absent when every saved record folded. */
+  unreadable?: UnreadablePart[]
 }
 /** Idempotently create or reopen one named conversation. */
 export interface ConversationCreateParams {

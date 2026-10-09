@@ -14,14 +14,17 @@ pub(super) fn restore_suffix(
 ) -> Result<(), CacheError> {
     let scope = &progress.scope;
     let limit = policy.suffix_page();
-    if let Some(through) = fold.gap_through() {
-        if through > progress.downloaded {
-            return Err(CacheError::Corrupt);
-        }
-        fold.resume_downloaded(through)
-            .map_err(super::records::transcript_error)?;
-    }
     while fold.downloaded() < progress.downloaded {
+        while let Some(through) = fold.unread_through(fold.downloaded().saturating_add(1)) {
+            if through > progress.downloaded {
+                return Err(CacheError::Corrupt);
+            }
+            fold.resume_downloaded(through)
+                .map_err(super::records::transcript_error)?;
+        }
+        if fold.downloaded() >= progress.downloaded {
+            break;
+        }
         let mut statement = connection
             .prepare(
                 "SELECT position, octet_length(record_id), length(payload) FROM transcript_records

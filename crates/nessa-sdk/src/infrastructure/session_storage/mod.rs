@@ -19,10 +19,11 @@
 //! integration tests; inherited private codec/allocation fixtures remain limited
 //! implementation observations, not public acceptance.
 //! TranscriptFold validates unit checkpoints through the one SDK session fold. A
-//! record this build cannot read, or that contradicts the prefix already folded,
-//! ends the fold there. The chat opens from that prefix. Later bytes stay on
-//! disk and are not folded. A committed read cache advances from a fixed head
-//! and remains separate from the writer's observed state.
+//! record this build cannot read, or that contradicts a group already dropped,
+//! becomes one placeholder in the chat at that group's position. Every other
+//! record is still folded. The bytes stay on disk. A committed read cache
+//! advances from a fixed head and does not retain a placeholder's span. It
+//! remains separate from the writer's observed state.
 //!
 //! ```text
 //! SessionStorage::open -> SessionStorageLease <- SessionManager
@@ -67,6 +68,7 @@ pub use record_source::{
 };
 pub use terminal_discovery::RecordReadStatus;
 mod transcript;
+mod unread;
 pub use transcript::{
     TranscriptCheckpoint, TranscriptError, TranscriptFold, TranscriptTransaction,
     MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES,
@@ -74,11 +76,26 @@ pub use transcript::{
 
 use crate::application::agent_execution::sessions::StorageError;
 
-/// A saved record that cannot join the prefix already folded.
+/// A saved record that cannot be folded as part of a valid save group.
 ///
 /// Unmarked bytes, another format version, a corrupt body, another chat's
-/// identity, a body past the size limit, and a unit that contradicts the
-/// prefix stop the fold. The chat stays open on that prefix.
+/// identity, a body past the size limit, and a unit that contradicts the fold
+/// drop that group. The chat stays open. Later records are still read.
+/// A decoded record whose save lineage disagrees with the fold.
+///
+/// A corrupt body is not this: it is its own placeholder. A later record that
+/// only disagrees because a group was dropped extends that group's placeholder.
+/// The record decoded, then disagreed with the folded lineage.
+///
+/// A frame that does not match its own header is a different corrupt
+/// message, so it stays its own placeholder instead of joining this one.
+pub(super) fn contradicts_fold(error: &StorageError) -> bool {
+    matches!(
+        error,
+        StorageError::Corrupt(text) if text == "semantic save envelope disagrees with its lineage"
+    )
+}
+
 pub(super) fn truncates_history(error: &StorageError) -> bool {
     matches!(
         error,
@@ -89,23 +106,19 @@ pub(super) fn truncates_history(error: &StorageError) -> bool {
     )
 }
 
-/// One warning for a fold that stopped early. The diagnostic text of a corrupt
-/// body stays out of the log. No protocol field carries this to the app.
+/// One warning for a save group this build could not read. The diagnostic text
+/// of a corrupt body stays out of the log. The same session, position, and
+/// reason identify the placeholder a transcript shows for that group.
 pub(super) fn warn_truncated(session: &str, position: u64, error: &StorageError) {
-    let found = match error {
-        StorageError::AnotherVersion { found } => *found,
-        _ => None,
-    };
-    let reason = match error {
-        StorageError::AnotherVersion { .. } => "another_version",
-        StorageError::IdentityMismatch => "identity",
-        _ => "unreadable",
-    };
+    use crate::application::agent_execution::sessions::UnreadableReason;
+    let reason = UnreadableReason::from_storage(error);
+    let found = reason.found();
+    let reason = reason.name();
     tracing::warn!(
         session,
         position,
         reason,
         found,
-        "session history truncated at the first unreadable record"
+        "could not read a session record"
     );
 }

@@ -779,3 +779,41 @@ it("accepts typed authentication only on a failed turn and rejects untyped value
     ),
   ).toThrow(/authenticationRequired/)
 })
+
+describe("an unreadable part", () => {
+  const part = {
+    session: "conversation",
+    position: 4,
+    reason: "another_version",
+    found: 2,
+    afterMessage: 1,
+  }
+  it("keeps the part and the messages around it", () => {
+    const read = conversationView({ ...view(), unreadable: [part] }, "conversation")
+    expect(read.unreadable).toEqual([part])
+    expect(read.messages.map((message) => message.executionId)).toEqual(["queued", "running"])
+  })
+  it("refuses a part that names another conversation, a bad reason, or a version it did not find", () => {
+    expect(() =>
+      conversationView(
+        { ...view(), unreadable: [{ ...part, session: "other" }] },
+        "conversation",
+      ),
+    ).toThrow(/another conversation/)
+    expect(() =>
+      conversationView(
+        { ...view(), unreadable: [{ ...part, reason: "corrupt" }] },
+        "conversation",
+      ),
+    ).toThrow(/state/)
+    expect(() =>
+      conversationView(
+        {
+          ...view(),
+          unreadable: [{ session: "conversation", position: 4, reason: "identity", found: 1, afterMessage: 0 }],
+        },
+        "conversation",
+      ),
+    ).toThrow(/version it did not find/)
+  })
+})

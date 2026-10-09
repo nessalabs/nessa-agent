@@ -61,6 +61,43 @@ const textPart = (text: string, offset: number, messageId?: string) => ({
 })
 
 describe("a conversation view as a transcript", () => {
+  it("keeps a message saved after a part this build could not read", () => {
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [
+          turn({ executionId: "before", userText: "Kept before", parts: [textPart("Answer before", 0)] }),
+          turn({ executionId: "after", userText: "Kept after", parts: [textPart("Answer after", 0)] }),
+        ],
+        unreadable: [
+          {
+            session: "c",
+            position: 4,
+            reason: "another_version",
+            found: 2,
+            afterMessage: 1,
+          },
+        ],
+      }),
+      1,
+      at,
+    )
+    expect(transcript.messages.map((message) => message.parts[0])).toEqual([
+      { kind: "text", text: "Kept before" },
+      { kind: "text", text: "Answer before" },
+      { kind: "text", text: "Kept after" },
+      { kind: "text", text: "Answer after" },
+    ])
+    expect(transcript.unreadable).toEqual([
+      {
+        sessionId: "c",
+        position: 4,
+        reason: "another_version",
+        found: 2,
+        afterId: replyId("before"),
+      },
+    ])
+  })
+
   it("keeps an MCP App's widget part after its tool's step, and none for a tool without a UI", () => {
     const transcript = transcriptFrom(
       view("c", {

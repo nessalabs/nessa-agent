@@ -346,6 +346,15 @@ type ConversationState = {
     transcriptState: ConversationTranscriptState
     truncated: boolean
     interactionViewError?: string
+    /** Parts this build could not read. Each one is a row after `afterTurnId`. */
+    unreadable?: {
+      session: string
+      position: number
+      reason: "another_version" | "identity" | "unreadable"
+      found?: number
+      /** Turn this row follows. Absent when the row leads the transcript. */
+      afterTurnId?: string
+    }[]
   }
 }
 export type IdleConversation = ConversationState & { phase: "idle" }
@@ -373,6 +382,7 @@ export function conversationHistoryEmpty(
   return (
     item.remote?.transcriptState === "complete_empty" &&
     !item.remote.truncated &&
-    item.turns.length === 0
+    item.turns.length === 0 &&
+    (item.remote.unreadable?.length ?? 0) === 0
   )
 }

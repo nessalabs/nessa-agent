@@ -7,12 +7,16 @@ use super::view::{
     ConversationPart, ConversationPending, ConversationPendingMode, ConversationPermission,
     ConversationPermissionAsk, ConversationPermissionOption, ConversationPermissionOptionEffect,
     ConversationPermissionOrigin, ConversationQuestion, ConversationTool,
-    ConversationTranscriptState, ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationTranscriptState, ConversationView, UnreadableTranscriptPart,
+    UnreadableTranscriptReason, MAX_STRUCTURED_CONTENT_BYTES,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     executions::{ExecutionEvent, ExecutionUpdate, SubmissionMode},
-    sessions::{CommittedSession, CommittedStatus, InvocationRecord, SessionSnapshot},
+    sessions::{
+        CommittedSession, CommittedStatus, InvocationRecord, SessionSnapshot, UnreadablePart,
+        UnreadableReason,
+    },
 };
 use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::domain::agent_execution::{
@@ -313,6 +317,7 @@ impl Projection {
                 interaction_view_error: None,
                 // Not the projection's: the service fills it from the summary.
                 title: None,
+                unreadable: Vec::new(),
             },
         };
         if let Some(snapshot) = snapshot {
@@ -451,6 +456,16 @@ impl Projection {
                 }
             }
         }
+        let invocations = snapshot
+            .map(|snapshot| snapshot.invocations.len())
+            .unwrap_or(0);
+        let evicted = invocations.saturating_sub(next.view.messages.len());
+        next.view.unreadable = unreadable_rows(
+            &next.view.conversation_id,
+            committed.unreadable(),
+            evicted,
+            next.view.messages.len(),
+        );
         let changed = serde_json::to_vec(&next.view).ok() != serde_json::to_vec(&self.view).ok();
         if changed {
             next.bump();
@@ -540,6 +555,7 @@ impl Projection {
             let evicted = self.view.messages.remove(0);
             self.tool_parts.remove(&evicted.execution_id);
             self.view.truncated = true;
+            shift_unreadable(&mut self.view);
         }
         self.view.messages.push(ConversationMessage {
             authentication_required: None,
@@ -1150,7 +1166,56 @@ impl Projection {
             .collect();
         view.questions = questions;
         view.permissions = permissions;
+        let visible = view.messages.len() as u64;
+        for part in &mut view.unreadable {
+            if part.after_message > visible {
+                part.after_message = visible;
+            }
+        }
         view
+    }
+}
+
+/// Product `ConversationView.unreadable` maxItems. A longer list would refuse
+/// the view, so the chat would not open. Further dropped groups stay out of
+/// the transcript. Later records that did fold still show.
+const MAX_UNREADABLE_PARTS: usize = 128;
+
+/// Place each dropped group after the visible messages that were already
+/// folded. `evicted` is how many invocations the bounded window left out at
+/// the front. An index past the window clamps to the last visible message.
+fn unreadable_rows(
+    conversation_id: &str,
+    parts: &[UnreadablePart],
+    evicted: usize,
+    visible: usize,
+) -> Vec<UnreadableTranscriptPart> {
+    parts
+        .iter()
+        .take(MAX_UNREADABLE_PARTS)
+        .map(|part| UnreadableTranscriptPart {
+            session: conversation_id.to_owned(),
+            position: part.position(),
+            reason: match part.reason() {
+                UnreadableReason::AnotherVersion { .. } => {
+                    UnreadableTranscriptReason::AnotherVersion
+                }
+                UnreadableReason::Identity => UnreadableTranscriptReason::Identity,
+                UnreadableReason::Unreadable => UnreadableTranscriptReason::Unreadable,
+            },
+            found: part.reason().found(),
+            after_message: part
+                .after_invocation()
+                .saturating_sub(evicted as u64)
+                .min(visible as u64),
+        })
+        .collect()
+}
+
+/// One message left the front of the window, so each row moves up with it.
+fn shift_unreadable(view: &mut ConversationView) {
+    for part in &mut view.unreadable {
+        part.after_message = part.after_message.saturating_sub(1);
     }
 }
 
@@ -1212,6 +1277,7 @@ pub fn bound_view_within(
         view.truncated = true;
         if view.messages.len() > 1 {
             view.messages.remove(0);
+            shift_unreadable(&mut view);
         } else if view
             .messages
             .first()

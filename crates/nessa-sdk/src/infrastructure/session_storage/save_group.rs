@@ -189,6 +189,9 @@ pub(super) struct GroupProgress {
     hash: Sha256,
     payload_length: u64,
     checkpoint: Option<GroupCheckpoint>,
+    /// Physical end of a dropped save, when a later group was written from
+    /// there. Semantic [`Self::published`] stays the last folded completion.
+    lineage_base: Option<u64>,
 }
 impl GroupProgress {
     pub(super) fn after(published: u64) -> Self {
@@ -199,7 +202,14 @@ impl GroupProgress {
             hash: Sha256::new(),
             payload_length: 0,
             checkpoint: None,
+            lineage_base: None,
         }
+    }
+    pub(super) fn lineage_base(&self) -> Option<u64> {
+        self.lineage_base
+    }
+    pub(super) fn set_lineage_base(&mut self, base: Option<u64>) {
+        self.lineage_base = base;
     }
     pub(super) fn allocation_bytes(&self) -> usize {
         self.prefix.capacity()
@@ -242,15 +252,6 @@ impl GroupProgress {
     pub(super) fn published(&self) -> u64 {
         self.published
     }
-    /// Generation of the next save after the published prefix. `Some(0)` when
-    /// nothing has been published. `None` when the published generation cannot
-    /// advance.
-    pub(super) fn next_generation(&self) -> Option<u64> {
-        match &self.checkpoint {
-            Some(group) => group.identity.generation.checked_add(1),
-            None => Some(0),
-        }
-    }
     pub(super) fn reset_frame(&mut self) {
         self.prefix.clear();
         self.hash = Sha256::new();
@@ -273,28 +274,43 @@ impl GroupProgress {
         position: u64,
     ) -> Result<Header, StorageError> {
         let header = Header::decode(&self.prefix)?;
+        // A frame that does not match its own header is corrupt on its own.
+        // It is not a later record that only contradicts a dropped group, so
+        // it must not join that group's placeholder.
         if key.ordinal() != header.ordinal
             || self.hash.clone().finalize().as_slice() != header.payload
         {
-            return Err(invalid());
+            return Err(StorageError::Corrupt(
+                "semantic save envelope payload does not match".into(),
+            ));
         }
         let same = self
             .extent
             .as_ref()
             .is_some_and(|extent| extent.group.identity == header.identity);
-        if !same
-            && (self.is_unfinished()
-                || header.identity.base != self.published
-                || self.extent.as_ref().map_or(
-                    self.published == 0 && header.identity.generation != 0,
-                    |extent| {
-                        extent.group.identity.generation.checked_add(1)
-                            != Some(header.identity.generation)
-                            || extent.group.identity.stream != header.identity.stream
-                            || extent.group.identity.incarnation != header.identity.incarnation
-                    },
-                ))
-        {
+        let base_matches = header.identity.base == self.published
+            || self
+                .lineage_base
+                .is_some_and(|base| base == header.identity.base);
+        // A group written from a dropped completion carries that physical base.
+        // Its generation is its own, not the last folded save's next generation.
+        let follows_dropped = self
+            .lineage_base
+            .is_some_and(|base| base == header.identity.base && base != self.published);
+        let generation_blocked = if follows_dropped {
+            false
+        } else {
+            self.extent.as_ref().map_or(
+                self.published == 0 && header.identity.generation != 0,
+                |extent| {
+                    extent.group.identity.generation.checked_add(1)
+                        != Some(header.identity.generation)
+                        || extent.group.identity.stream != header.identity.stream
+                        || extent.group.identity.incarnation != header.identity.incarnation
+                },
+            )
+        };
+        if !same && (self.is_unfinished() || !base_matches || generation_blocked) {
             return Err(invalid());
         }
         let (count, chain) = if same {
@@ -336,6 +352,7 @@ impl GroupProgress {
                 });
                 self.published = position;
                 self.checkpoint = Some(group);
+                self.lineage_base = None;
             }
             _ => return Err(invalid()),
         }

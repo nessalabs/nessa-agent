@@ -428,7 +428,7 @@ impl ReadOnlyCache {
         if downloaded != plan.expected().position() || loaded.progress != current {
             return Err(CacheError::Stale);
         }
-        let gap_before = loaded.fold.gap_through();
+        let gaps_before = loaded.fold.unread_spans();
         let mut candidate = loaded.fold.transaction();
         candidate.apply(plan.records()).map_err(transcript_error)?;
         if candidate.downloaded() != plan.next().position() {
@@ -436,7 +436,7 @@ impl ReadOnlyCache {
         }
         let checkpoint = if current.as_ref().is_none_or(|saved| {
             saved.applied != candidate.applied() || saved.facts != candidate.fact_count()
-        }) || candidate.gap_through() != gap_before
+        }) || candidate.unread_spans() != gaps_before
         {
             Some(
                 candidate

@@ -14,7 +14,7 @@ use crate::conversation::{
         ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
         ConversationAttachmentEvidenceFailureCode, ConversationCapabilities, ConversationLifecycle,
         ConversationLifecyclePhase, ConversationMessageStatus, ConversationView,
-        PermissionDenialSupport, MAX_STRUCTURED_CONTENT_BYTES,
+        PermissionDenialSupport, UnreadableTranscriptReason, MAX_STRUCTURED_CONTENT_BYTES,
     },
 };
 use nessa_sdk::application::agent_execution::agents::{AgentError, ProviderDiagnostic};
@@ -29,7 +29,7 @@ use nessa_sdk::application::agent_execution::providers::{
 use nessa_sdk::application::agent_execution::sessions::{
     CommittedCompleteness, CommittedFreshness, CommittedSession, CommittedStatus, InvocationRecord,
     InvocationSchedulingEvent, QueueHistoryRecord, SessionSnapshot, StorageError,
-    SubmissionAcknowledgement,
+    SubmissionAcknowledgement, UnreadablePart, UnreadableReason,
 };
 use nessa_sdk::application::agent_execution::tools::ToolReviewInput;
 use nessa_sdk::domain::agent_execution::executions::{
@@ -133,6 +133,85 @@ fn incomplete_committed_view_suppresses_controls_even_after_capability_refresh()
     assert!(complete.capabilities.queue);
     assert!(complete.capabilities.steer);
     assert!(complete.capabilities.permissions);
+}
+
+#[test]
+fn an_unreadable_part_stays_in_place_and_a_later_message_is_shown() {
+    let later = completed_snapshot("later", Vec::new());
+    let mut projection = projection();
+    let session = committed("incarnation", 2, 4, 4, Some(&later)).with_unreadable(vec![
+        UnreadablePart::new(2, 0, UnreadableReason::AnotherVersion { found: Some(2) }),
+        UnreadablePart::new(9, 1, UnreadableReason::Unreadable),
+    ]);
+    assert!(projection.replace_committed(&session, &[], None));
+    let view = projection.read();
+    assert_eq!(view.messages.len(), 1);
+    assert_eq!(view.messages[0].execution_id, "later");
+    assert_eq!(view.unreadable.len(), 2);
+    assert_eq!(view.unreadable[0].after_message, 0);
+    assert_eq!(view.unreadable[0].position, 2);
+    assert_eq!(view.unreadable[0].session, "conversation");
+    assert_eq!(
+        view.unreadable[0].reason,
+        UnreadableTranscriptReason::AnotherVersion
+    );
+    assert_eq!(view.unreadable[0].found, Some(2));
+    assert_eq!(view.unreadable[1].after_message, 1);
+    assert_eq!(
+        view.unreadable[1].reason,
+        UnreadableTranscriptReason::Unreadable
+    );
+    assert_eq!(view.unreadable[1].found, None);
+    let mut wire = serde_json::to_value(&view).unwrap();
+    assert!(wire.get("unreadable").is_some());
+    let fields = wire.as_object_mut().unwrap();
+    fields.insert("approvalMode".into(), serde_json::json!("ask"));
+    fields.insert(
+        "approvalModes".into(),
+        serde_json::json!([{ "id": "ask", "name": "Ask", "description": "Ask before tools." }]),
+    );
+    let decoded: crate::product::generated::ConversationView =
+        serde_json::from_value(wire).expect("unreadable part is on the wire");
+    let parts = decoded.unreadable.expect("part");
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0].position, 2);
+    assert_eq!(parts[0].reason, "another_version");
+    assert_eq!(parts[0].found, Some(2));
+    assert_eq!(parts[0].after_message, 0);
+    assert!(serde_json::to_value(projection_for("conversation").read())
+        .unwrap()
+        .get("unreadable")
+        .is_none());
+}
+
+#[test]
+fn an_unreadable_part_in_the_hidden_prefix_clamps_into_the_window() {
+    let rows = crate::conversation::projection::unreadable_rows(
+        "conversation",
+        &[
+            UnreadablePart::new(1, 0, UnreadableReason::Unreadable),
+            UnreadablePart::new(50, 30, UnreadableReason::Identity),
+            UnreadablePart::new(80, 100, UnreadableReason::AnotherVersion { found: None }),
+        ],
+        10,
+        24,
+    );
+    assert_eq!(rows[0].after_message, 0);
+    assert_eq!(rows[1].after_message, 20);
+    assert_eq!(rows[1].reason, UnreadableTranscriptReason::Identity);
+    assert_eq!(rows[2].after_message, 24);
+    assert_eq!(rows[2].found, None);
+}
+
+#[test]
+fn more_unreadable_parts_than_the_view_allows_keep_the_chat_open() {
+    let parts: Vec<_> = (0..130)
+        .map(|index| UnreadablePart::new(index + 1, 0, UnreadableReason::Unreadable))
+        .collect();
+    let rows = crate::conversation::projection::unreadable_rows("conversation", &parts, 0, 0);
+    assert_eq!(rows.len(), 128);
+    assert_eq!(rows[0].position, 1);
+    assert_eq!(rows[127].position, 128);
 }
 
 #[test]

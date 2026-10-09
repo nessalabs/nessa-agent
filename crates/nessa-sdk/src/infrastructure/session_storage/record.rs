@@ -3241,7 +3241,7 @@ mod tests {
     /// the prefix before that record. Siblings in the same store open, and the
     /// stored rows stay unchanged.
     #[tokio::test]
-    async fn an_unreadable_input_is_skipped_and_the_conversation_still_opens() {
+    async fn an_unreadable_input_drops_its_group_and_the_conversation_still_opens() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("sessions");
         let storage = RecordStorage::new(&root).unwrap();
@@ -3470,8 +3470,8 @@ mod tests {
     }
 
     /// Every record unmarked opens empty. A bad record in the middle keeps the
-    /// prefix and drops what follows. A send after an unreadable tail appends
-    /// from that prefix and is still there after reopen.
+    /// records after it. A send after an unreadable tail appends from the last
+    /// folded save and is still there after reopen.
     #[tokio::test]
     async fn unreadable_history_opens_on_the_prefix_and_a_later_send_appends() {
         let directory = tempfile::tempdir().unwrap();
@@ -3553,9 +3553,10 @@ mod tests {
 
         let middle = reopened.open_existing(middle_id).await.unwrap().unwrap();
         let middle_load = middle.load().await.unwrap();
+        let with_later =
+            records::fold_changes(Some(&middle_snapshot), std::slice::from_ref(&input)).unwrap();
         assert_eq!(middle_load.state(), SessionLoadState::Published);
-        assert_eq!(middle_load.snapshot(), Some(&middle_snapshot));
-        assert!(middle_load.snapshot().unwrap().invocations.is_empty());
+        assert_eq!(middle_load.snapshot(), Some(&with_later));
         drop(middle);
         assert_eq!(record_rows(&root), before);
 
@@ -3662,8 +3663,8 @@ mod tests {
         storage.shutdown().await.unwrap();
     }
 
-    /// A bad record in the middle, then a send. Reopen shows the prefix and
-    /// the new message. The valid group that followed the gap stays dropped.
+    /// A bad record in the middle, then a send. Reopen shows the valid group
+    /// that followed the gap and the new message.
     #[tokio::test]
     async fn a_middle_gap_then_a_send_survives_reopen() {
         let directory = tempfile::tempdir().unwrap();
@@ -3703,10 +3704,12 @@ mod tests {
         let storage = RecordStorage::new(&root).unwrap();
         let lease = storage.open_existing(id.clone()).await.unwrap().unwrap();
         let loaded = lease.load().await.unwrap();
-        assert_eq!(loaded.snapshot(), Some(&snapshot));
+        let with_dropped =
+            records::fold_changes(Some(&snapshot), std::slice::from_ref(&dropped)).unwrap();
+        assert_eq!(loaded.snapshot(), Some(&with_dropped));
         let sent_change = message("kept");
         let sent =
-            records::fold_changes(Some(&snapshot), std::slice::from_ref(&sent_change)).unwrap();
+            records::fold_changes(Some(&with_dropped), std::slice::from_ref(&sent_change)).unwrap();
         lease
             .save_changes(
                 loaded.binding().clone(),
@@ -3724,7 +3727,10 @@ mod tests {
         let loaded = lease.load().await.unwrap();
         assert_eq!(loaded.state(), SessionLoadState::Published);
         assert_eq!(loaded.snapshot(), Some(&sent));
-        assert_eq!(invocation_names(loaded.snapshot().unwrap()), ["kept"]);
+        assert_eq!(
+            invocation_names(loaded.snapshot().unwrap()),
+            ["dropped", "kept"]
+        );
         drop(lease);
         storage.shutdown().await.unwrap();
     }
@@ -3919,9 +3925,10 @@ mod tests {
         storage.shutdown().await.unwrap();
     }
 
-    /// A fact saved for another chat ends this chat's history there.
+    /// A fact saved for another chat is one placeholder. The opening snapshot
+    /// stays, and the chat still opens.
     #[tokio::test]
-    async fn another_chats_identity_ends_the_readable_prefix() {
+    async fn another_chats_identity_is_a_placeholder() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("sessions");
         let storage = RecordStorage::new(&root).unwrap();

@@ -7,12 +7,14 @@ use super::{
     save_group::{GroupCheckpoint, GroupProgress, Header, HEADER_BYTES},
     snapshot,
     stream_fact::{self, FrameStep, FrameValidator},
+    unread::{SavedUnread, UnreadTracker},
 };
 use crate::{
     application::agent_execution::sessions::{
         records::{FactKey, FactKind},
         CommittedFreshness, CommittedSession, CommittedStatus, CommittedTransactionState,
         CommittedTranscript, CommittedViewState, PublicationMark, SessionSnapshot, StorageError,
+        UnreadableReason,
     },
     domain::agent_execution::sessions::{ProviderContext, SessionId},
 };
@@ -61,29 +63,16 @@ struct SavedFold<S = snapshot::checkpoint::Snapshot> {
     facts: u64,
     snapshot: Option<S>,
     group: Option<GroupCheckpoint>,
-    /// The fold stopped. A later continuation clears this. The unread span
-    /// below can remain so a cache does not retain the gap.
-    truncated: bool,
-    /// Last folded position at the stop. Records after this and at or before
-    /// `gap_through` are not retained.
-    gap_prefix: Option<u64>,
-    /// Last physical position inside the unread span.
-    gap_through: Option<u64>,
-}
-
-/// Physical records after `prefix_end` and at or before `through` were
-/// downloaded and not folded. A cache drops them. A continuation sits after
-/// `through`.
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct UnreadSpan {
-    prefix_end: u64,
-    through: u64,
+    /// Physical end of a dropped save, when a later group continues from it.
+    physical_base: Option<u64>,
+    /// One entry per dropped save group. A cache does not retain those spans.
+    unread: Vec<SavedUnread>,
 }
 
 /// One source-scoped, effect-free semantic transcript receiver. `apply` stages
-/// an entire input batch. Reading stops at the first record that is unmarked,
-/// from another format version, corrupt, or in contradiction with the prefix
-/// already folded. That prefix stays. Nothing after the gap is folded. A caller
+/// an entire input batch. A record that is unmarked, from another format
+/// version, corrupt, or in contradiction with a dropped group becomes one
+/// placeholder at that group's position. Every other record is folded. A caller
 /// persists `checkpoint` and its own acknowledgement in one local transaction;
 /// this type performs no I/O or provider action.
 ///
@@ -105,12 +94,12 @@ pub struct TranscriptFold {
     semantic_decodes: usize,
     loaded: bool,
     freshness: CommittedFreshness,
-    /// A record ended the fold. Later bytes are consumed and not applied,
-    /// except a save that continues from the published prefix.
-    truncated: bool,
-    /// Unread positions. Stays after a continuation so those bytes are not
-    /// retained or folded again.
-    gap: Option<UnreadSpan>,
+    /// Dropped save groups. Later records are still folded.
+    unread: UnreadTracker,
+    /// First physical position of the save group currently being folded.
+    group_start: Option<u64>,
+    /// First physical position of the fact whose frames are in `pending`.
+    fact_start: Option<u64>,
     /// Continuation moved aside when sealing discards an open group that an
     /// earlier commit had already staged. A hard refusal of this batch puts
     /// it back. `None` outside that window. Moved, not cloned.
@@ -141,8 +130,9 @@ impl TranscriptFold {
             semantic_decodes: 0,
             loaded: false,
             freshness: CommittedFreshness::Current,
-            truncated: false,
-            gap: None,
+            unread: UnreadTracker::default(),
+            group_start: None,
+            fact_start: None,
             deep_restore: None,
         })
     }
@@ -232,14 +222,15 @@ impl TranscriptFold {
     /// save completion advances `applied` and its public snapshot together.
     /// A physical abort publishes no semantic progress.
     /// An unmarked unit, a unit from another format version, a corrupt body, or
-    /// a unit that contradicts the prefix stops the fold. The prefix stays, and
-    /// nothing after that record is folded. The stored bytes are not rewritten.
+    /// a unit that contradicts a dropped group becomes one placeholder. Later
+    /// records are still folded. The stored bytes are not rewritten.
     /// Accepted nonempty input invalidates Current to Unknown; Stale and Unknown
     /// remain unconfirmed until an explicit authenticated source-head observation.
     ///
     /// # Errors
     /// Returns the typed scope, position, or frame refusal. A record this build
-    /// cannot fold is not a refusal: the prefix stays and `apply` returns `Ok`.
+    /// cannot fold is not a refusal: that group becomes a placeholder and
+    /// `apply` returns `Ok`.
     pub fn apply(&mut self, batch: &[Record]) -> Result<(), TranscriptError> {
         let mut transaction = self.transaction();
         transaction.apply(batch)?;
@@ -288,8 +279,9 @@ impl TranscriptFold {
             pending: self.pending.clone(),
             loaded: self.loaded,
             freshness: self.freshness,
-            truncated: self.truncated,
-            gap: self.gap,
+            unread: self.unread.clone(),
+            group_start: self.group_start,
+            fact_start: self.fact_start,
             #[cfg(test)]
             semantic_decodes: self.semantic_decodes,
         };
@@ -333,6 +325,9 @@ impl TranscriptFold {
             .map_err(|_| TranscriptError::Frame)?
         {
             FrameStep::Pending(piece) => {
+                if self.fact_start.is_none() {
+                    self.fact_start = Some(record.position);
+                }
                 if let Some(piece) = piece {
                     self.pending.push(piece);
                 }
@@ -340,14 +335,16 @@ impl TranscriptFold {
             FrameStep::Aborted => {
                 self.pending.clear();
                 self.groups.reset_frame();
-                if self.truncated {
-                    self.extend_gap(record.position);
+                if self.unread.is_open() {
+                    self.unread.extend(record.position);
                 }
+                self.fact_start = None;
             }
             FrameStep::Complete {
                 key: physical_key,
                 body,
             } => {
+                let fact_start = self.fact_start.take().unwrap_or(record.position);
                 let assembled;
                 let body = match body {
                     Some(inline) => inline,
@@ -356,20 +353,32 @@ impl TranscriptFold {
                         &assembled
                     }
                 };
-                if self.truncated && !self.continuation_unit(&physical_key, body) {
-                    self.extend_gap(record.position);
-                    self.pending.clear();
-                } else {
-                    self.truncated = false;
-                    if let Err(error) = self.accept_fact(record, &physical_key, body, semantic) {
-                        let TranscriptError::Decision(cause) = &error else {
-                            return Err(error);
-                        };
-                        if !super::truncates_history(cause) {
-                            return Err(error);
+                let decoded = Header::decode(body);
+                if let Ok(header) = &decoded {
+                    if self.unread.consume_rest(
+                        &header.identity,
+                        physical_key.kind(),
+                        header.ordinal,
+                    ) {
+                        self.unread.extend(record.position);
+                        if physical_key.kind() == FactKind::SaveComplete {
+                            self.note_lineage(record.position);
                         }
-                        self.seal(semantic, record.position, cause)?;
+                        self.pending.clear();
+                    } else {
+                        self.fold_or_note(
+                            record,
+                            &physical_key,
+                            body,
+                            semantic,
+                            fact_start,
+                            Some(header),
+                        )?;
                     }
+                } else {
+                    self.group_start = Some(fact_start);
+                    let cause = decoded.expect_err("header decode failed");
+                    self.seal(semantic, record.position, &cause, None)?;
                 }
             }
         }
@@ -380,25 +389,44 @@ impl TranscriptFold {
         Ok(())
     }
 
-    /// The next save after the published prefix: first unit, same base, next
-    /// generation. Records from the broken tail use another base or ordinal.
-    fn continuation_unit(&self, key: &FactKey, body: &[u8]) -> bool {
-        if key.kind() != FactKind::SaveUnit || key.ordinal() != 0 {
-            return false;
+    /// Fold one complete fact, or drop its save group when this build cannot.
+    fn fold_or_note(
+        &mut self,
+        record: &Record,
+        physical_key: &FactKey,
+        body: &[u8],
+        semantic: &mut CommittedTransactionState,
+        fact_start: u64,
+        header: Option<&Header>,
+    ) -> Result<(), TranscriptError> {
+        if header.is_some_and(|header| header.ordinal == 0) {
+            self.group_start = Some(fact_start);
         }
-        let Ok(header) = Header::decode(body) else {
-            return false;
-        };
-        let Some(generation) = self.groups_at_publication.next_generation() else {
-            return false;
-        };
-        header.ordinal == 0
-            && header.identity.base == self.groups_at_publication.published()
-            && header.identity.generation == generation
-            && header.identity.matches_scope(
-                self.scope.stream().as_str(),
-                self.scope.incarnation().as_str(),
-            )
+        if let Err(error) = self.accept_fact(record, physical_key, body, semantic) {
+            let TranscriptError::Decision(cause) = &error else {
+                return Err(error);
+            };
+            if !super::truncates_history(cause) {
+                return Err(error);
+            }
+            self.seal(semantic, record.position, cause, header)?;
+            if physical_key.kind() == FactKind::SaveComplete && header.is_some() {
+                self.note_lineage(record.position);
+            }
+        } else {
+            self.unread.close();
+            if physical_key.kind() == FactKind::SaveComplete {
+                self.group_start = None;
+            }
+        }
+        Ok(())
+    }
+
+    /// A dropped completion's physical end is a valid base for the next group.
+    /// The last folded publication stays where it is.
+    fn note_lineage(&mut self, position: u64) {
+        self.groups.set_lineage_base(Some(position));
+        self.groups_at_publication.set_lineage_base(Some(position));
     }
 
     fn accept_fact(
@@ -460,12 +488,13 @@ impl TranscriptFold {
 
     /// Drop the open group that contains the unreadable record. The downloaded
     /// prefix stays, including this record's frames, so a later page is not a
-    /// hole. The published snapshot does not move past the gap.
+    /// hole. The published snapshot does not include the dropped group.
     fn seal(
         &mut self,
         semantic: &mut CommittedTransactionState,
         position: u64,
         error: &StorageError,
+        header: Option<&Header>,
     ) -> Result<(), TranscriptError> {
         let (applied, facts) = self.committed.seal_open_group(semantic, self.publication);
         if self.committed.snapshot() != self.published.as_deref() {
@@ -479,28 +508,24 @@ impl TranscriptFold {
         }
         self.groups = self.groups_at_publication.clone();
         self.pending.clear();
-        let prefix_end = self.groups.published();
-        self.gap = Some(match self.gap {
-            Some(gap) => UnreadSpan {
-                prefix_end: gap.prefix_end,
-                through: gap.through.max(position),
-            },
-            None => UnreadSpan {
-                prefix_end,
-                through: position,
-            },
-        });
-        if !self.truncated {
-            super::warn_truncated(self.scope.stream().as_str(), position, error);
+        let start = self.group_start.unwrap_or(position);
+        let reason = UnreadableReason::from_storage(error);
+        let contradiction = header.is_some() && super::contradicts_fold(error);
+        let added = self.unread.note(
+            start,
+            position,
+            self.published
+                .as_ref()
+                .map(|snapshot| snapshot.invocations.len() as u64)
+                .unwrap_or(0),
+            reason,
+            header.map(|header| header.identity.clone()),
+            contradiction,
+        );
+        if added {
+            super::warn_truncated(self.scope.stream().as_str(), start, error);
         }
-        self.truncated = true;
         Ok(())
-    }
-
-    fn extend_gap(&mut self, position: u64) {
-        if let Some(gap) = &mut self.gap {
-            gap.through = gap.through.max(position);
-        }
     }
 
     #[cfg(test)]
@@ -522,6 +547,12 @@ impl TranscriptFold {
             self.published.clone(),
             self.status(),
         )
+        .map(|session| session.with_unreadable(self.unread.parts()))
+    }
+
+    /// Save groups this fold could not read, in stream order.
+    pub fn unreadable(&self) -> Vec<crate::application::agent_execution::sessions::UnreadablePart> {
+        self.unread.parts()
     }
 
     #[cfg(test)]
@@ -572,19 +603,20 @@ impl TranscriptFold {
 
     /// Whether a downloaded record at `position` belongs in a cache.
     ///
-    /// Records inside an unread span are omitted. The prefix at or before the
-    /// stop, and a continuation after the span, are kept. With no span, every
-    /// position is kept.
+    /// Records inside a dropped group's span are omitted. Folded records
+    /// before and after that span are kept.
     pub fn retains(&self, position: u64) -> bool {
-        match self.gap {
-            None => true,
-            Some(gap) => position <= gap.prefix_end || position > gap.through,
-        }
+        self.unread.retains(position)
     }
 
-    /// End of the unread span, when one exists.
-    pub fn gap_through(&self) -> Option<u64> {
-        self.gap.map(|gap| gap.through)
+    /// End of the dropped span that contains `position`, when one does.
+    pub fn unread_through(&self, position: u64) -> Option<u64> {
+        self.unread.through_at(position)
+    }
+
+    /// Dropped spans, oldest first, as `(start, through)`.
+    pub fn unread_spans(&self) -> Vec<(u64, u64)> {
+        self.unread.spans()
     }
 
     /// Move the downloaded cursor forward across bytes that are not stored.
@@ -697,9 +729,8 @@ impl TranscriptFold {
             facts: self.fact_count(),
             snapshot: self.snapshot().map(snapshot::checkpoint::SnapshotRef),
             group: self.groups.checkpoint(),
-            truncated: self.truncated,
-            gap_prefix: self.gap.map(|gap| gap.prefix_end),
-            gap_through: self.gap.map(|gap| gap.through),
+            physical_base: self.groups.lineage_base(),
+            unread: self.unread.saved(),
         };
         let mut output = ChunkWriter::with_limit(max_bytes);
         if serde_json::to_writer(&mut output, &saved).is_err() {
@@ -765,24 +796,13 @@ impl TranscriptFold {
         {
             return Err(TranscriptError::Checkpoint);
         }
-        let gap = match (saved.gap_prefix, saved.gap_through) {
-            (None, None) if !saved.truncated => None,
-            (Some(prefix), Some(through))
-                if through > prefix
-                    && prefix <= saved.applied
-                    && (!saved.truncated || prefix == saved.applied)
-                    && (saved.truncated || saved.applied > through) =>
-            {
-                Some(UnreadSpan {
-                    prefix_end: prefix,
-                    through,
-                })
-            }
-            _ => return Err(TranscriptError::Checkpoint),
-        };
+        if saved.physical_base.is_some_and(|base| base < saved.applied) {
+            return Err(TranscriptError::Checkpoint);
+        }
+        let unread =
+            UnreadTracker::restore(saved.unread).map_err(|()| TranscriptError::Checkpoint)?;
         let mut fold = Self::new(scope)?;
-        fold.truncated = saved.truncated;
-        fold.gap = gap;
+        fold.unread = unread;
         fold.published = snapshot.as_ref().map(|snapshot| Arc::new(snapshot.clone()));
         fold.published_facts = saved.facts;
         fold.groups = GroupProgress::restore(
@@ -793,6 +813,7 @@ impl TranscriptFold {
             saved.facts,
         )
         .map_err(|_| TranscriptError::Checkpoint)?;
+        fold.groups.set_lineage_base(saved.physical_base);
         fold.groups_at_publication = fold.groups.clone();
         fold.committed = CommittedTranscript::restore(snapshot, saved.applied, saved.facts)
             .map_err(|_| TranscriptError::Checkpoint)?;
@@ -817,8 +838,9 @@ struct ReceiverBackup {
     pending: PendingBody,
     loaded: bool,
     freshness: CommittedFreshness,
-    truncated: bool,
-    gap: Option<UnreadSpan>,
+    unread: UnreadTracker,
+    group_start: Option<u64>,
+    fact_start: Option<u64>,
     #[cfg(test)]
     semantic_decodes: usize,
 }
@@ -859,8 +881,9 @@ impl TranscriptTransaction<'_> {
             self.fold.pending = backup.pending;
             self.fold.loaded = backup.loaded;
             self.fold.freshness = backup.freshness;
-            self.fold.truncated = backup.truncated;
-            self.fold.gap = backup.gap;
+            self.fold.unread = backup.unread;
+            self.fold.group_start = backup.group_start;
+            self.fold.fact_start = backup.fact_start;
             #[cfg(test)]
             {
                 self.fold.semantic_decodes = backup.semantic_decodes;
@@ -1439,7 +1462,7 @@ mod tests {
         // so it is not byte-identical.
         assert_eq!(fold.snapshot(), published.as_ref());
         assert_eq!(fold.applied(), applied);
-        assert!(fold.gap_through().is_some());
+        assert!(!fold.unreadable().is_empty());
         assert_ne!(fold.checkpoint().unwrap(), before);
         fold.committed.assert_retained_accounting();
     }
@@ -1689,31 +1712,35 @@ mod tests {
             fold.snapshot().unwrap().invocations[0].acknowledgement,
             SubmissionAcknowledgement::Pending
         ));
-        // A later generation is past the gap, so it is not folded.
-        let skipped = save_payload_frames(
+        // A valid record after the unreadable groups is folded. A second copy
+        // that still names the prefix contradicts that fold and stays a
+        // placeholder, so the receipt is not applied twice.
+        let prefix = fold.applied();
+        let successor = save_payload_frames(
             &scope,
             &snapshot::encode_semantic_batch(std::slice::from_ref(&change)).unwrap(),
             fold.downloaded(),
             generation,
         );
         let facts = fold.fact_count();
-        fold.apply(&records(&scope, fold.downloaded() + 1, &skipped))
+        let gaps = fold.unreadable().len();
+        fold.apply(&records(&scope, fold.downloaded() + 1, &successor))
             .unwrap();
-        assert_eq!(fold.fact_count(), facts);
-        assert!(matches!(
-            fold.snapshot().unwrap().invocations[0].acknowledgement,
-            SubmissionAcknowledgement::Pending
-        ));
-        // The next save continues from the prefix and is appended after the gap.
-        let valid = save_group_at(
+        assert_eq!(fold.fact_count(), facts + 1);
+        assert!(
+            matches!(&fold.snapshot().unwrap().invocations[0].acknowledgement, SubmissionAcknowledgement::Failed { storage: Some(saved), .. } if saved == &storage)
+        );
+        let contradicted = save_group_at(
             &scope,
             &snapshot::encode_semantic_batch(std::slice::from_ref(&change)).unwrap(),
-            fold.applied(),
+            prefix,
             2,
             fold.downloaded(),
         );
-        fold.apply(&records(&scope, fold.downloaded() + 1, &valid))
+        fold.apply(&records(&scope, fold.downloaded() + 1, &contradicted))
             .unwrap();
+        assert!(fold.unreadable().len() > gaps);
+        assert_eq!(fold.fact_count(), facts + 1);
         assert!(
             matches!(&fold.snapshot().unwrap().invocations[0].acknowledgement, SubmissionAcknowledgement::Failed { storage: Some(saved), .. } if saved == &storage)
         );
@@ -2166,7 +2193,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_record_ends_the_prefix_and_a_later_record_is_not_folded() {
+    fn a_valid_record_after_unreadable_groups_is_folded() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
         fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
@@ -2188,7 +2215,8 @@ mod tests {
                 .invocations
                 .remove(0),
         ));
-        // The first unreadable record ends the fold. The other two sit past it.
+        // Each unreadable group is a placeholder. The opening stays until a
+        // later valid record, which is folded after them.
         let mut generation = 1u64;
         for payload in [&future, &unmarked, &corrupt] {
             let frames = save_payload_frames(&scope, payload, fold.downloaded(), generation);
@@ -2198,6 +2226,7 @@ mod tests {
             assert_eq!(fold.snapshot(), Some(&opening));
             assert_eq!(fold.fact_count(), 1);
         }
+        assert_eq!(fold.unreadable().len(), 3);
         let past_the_gap = save_payload_frames(
             &scope,
             &snapshot::encode_semantic_batch(std::slice::from_ref(&input)).unwrap(),
@@ -2206,8 +2235,13 @@ mod tests {
         );
         fold.apply(&records(&scope, fold.downloaded() + 1, &past_the_gap))
             .unwrap();
-        assert_eq!(fold.snapshot(), Some(&opening));
-        assert_eq!(fold.fact_count(), 1);
+        assert_eq!(fold.fact_count(), 2);
+        assert_eq!(
+            fold.snapshot().unwrap().invocations.len(),
+            1,
+            "a valid record after the gaps is folded"
+        );
+        assert_eq!(fold.unreadable().len(), 3);
         let other_scope = Scope::new(
             id("receiver"),
             id("origin"),
@@ -3201,7 +3235,7 @@ mod tests {
     }
 
     #[test]
-    fn another_chats_identity_ends_the_client_prefix() {
+    fn another_chats_identity_is_a_placeholder_and_a_later_record_folds() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
         let foreign = Scope::new(
@@ -3240,7 +3274,7 @@ mod tests {
     }
 
     #[test]
-    fn a_snapshot_for_another_chat_ends_the_client_prefix() {
+    fn a_snapshot_for_another_chat_is_one_placeholder() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
         let mut other = opened();
@@ -3251,7 +3285,7 @@ mod tests {
             .unwrap();
         assert!(fold.snapshot().is_none());
         assert_eq!(fold.applied(), 0);
-        assert!(fold.gap_through().is_some());
+        assert!(!fold.unreadable().is_empty());
     }
 
     #[test]
@@ -3265,6 +3299,7 @@ mod tests {
         fold.apply(&records(&scope, applied + 1, &bad)).unwrap();
         assert_eq!(fold.applied(), applied);
         assert!(fold.snapshot().unwrap().invocations.is_empty());
+        assert_eq!(fold.unreadable().len(), 1);
         let dropped = snapshot::encode_semantic_batch(&[accepted_input("dropped")]).unwrap();
         let downloaded = fold.downloaded();
         fold.apply(&records(
@@ -3273,9 +3308,18 @@ mod tests {
             &save_group_at(&scope, &dropped, downloaded, 2, downloaded),
         ))
         .unwrap();
-        assert!(fold.snapshot().unwrap().invocations.is_empty());
+        assert_eq!(
+            fold.snapshot()
+                .unwrap()
+                .invocations
+                .iter()
+                .map(|record| record.request.execution_id.as_str())
+                .collect::<Vec<_>>(),
+            ["dropped"]
+        );
         let kept = snapshot::encode_semantic_batch(&[accepted_input("kept")]).unwrap();
         let downloaded = fold.downloaded();
+        let gaps = fold.unreadable().len();
         fold.apply(&records(
             &scope,
             downloaded + 1,
@@ -3289,12 +3333,13 @@ mod tests {
                 .iter()
                 .map(|record| record.request.execution_id.as_str())
                 .collect::<Vec<_>>(),
-            ["kept"]
+            ["dropped"],
+            "a save that still names the prefix contradicts the record after the gap"
         );
-        let through = fold.gap_through().unwrap();
-        assert!(fold.downloaded() > through);
-        assert!(!fold.retains(through));
-        assert!(fold.retains(fold.downloaded()));
+        assert!(fold.unreadable().len() > gaps);
+        let gap_end = fold.unread_spans()[0].1;
+        assert!(!fold.retains(gap_end));
+        assert!(fold.retains(gap_end + 1));
     }
 
     #[test]
@@ -3355,7 +3400,7 @@ mod tests {
         let restored =
             TranscriptFold::restore(scope, fold.applied(), &fold.checkpoint().unwrap()).unwrap();
         assert_eq!(restored.snapshot(), fold.snapshot());
-        assert_eq!(restored.gap_through(), fold.gap_through());
+        assert_eq!(restored.unread_spans(), fold.unread_spans());
         assert_eq!(restored.applied(), fold.applied());
         assert!(restored.applied() > applied);
     }

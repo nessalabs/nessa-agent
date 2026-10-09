@@ -97,6 +97,19 @@ export function Transcript({
   )
   const provider = conversation.remote?.runtime?.agent
   const sentTurns = conversation.turns.filter((turn) => turn.from === "user").length
+  const unreadable = conversation.remote?.unreadable ?? []
+  const anchored = new Set(
+    [
+      ...rows.flatMap((row) => (row.promptId ? [row.promptId] : [])),
+      ...waitingUsers.map((turn) => turn.id),
+    ],
+  )
+  const leading = unreadable.filter((part) => part.afterTurnId === undefined)
+  const unanchored = unreadable.filter(
+    (part) => part.afterTurnId !== undefined && !anchored.has(part.afterTurnId),
+  )
+  const afterTurn = (id: string | undefined) =>
+    id === undefined ? [] : unreadable.filter((part) => part.afterTurnId === id)
 
   return (
     <>
@@ -107,6 +120,7 @@ export function Transcript({
             className="mt-auto gap-5 select-text"
           >
             {conversation.turns.length === 0 &&
+            unreadable.length === 0 &&
             conversation.phase === "idle" &&
             emptyState ? (
               <EmptyState
@@ -116,6 +130,9 @@ export function Transcript({
                 statusLabel={statusLabel}
               />
             ) : null}
+            {leading.map((part, index) => (
+              <UnreadablePartRow key={`unreadable:lead:${index}:${part.position}`} part={part} />
+            ))}
             {rows.map((row) => {
               const user = row.promptId ? users.get(row.promptId) : undefined
               return (
@@ -193,17 +210,33 @@ export function Transcript({
                   ) : (
                     <TurnStatus key={`${row.key}:status`} status={row.status} />
                   )}
+                  {afterTurn(row.promptId).map((part, index) => (
+                    <UnreadablePartRow
+                      key={`unreadable:${row.key}:${index}:${part.position}`}
+                      part={part}
+                    />
+                  ))}
                 </React.Fragment>
               )
             })}
             {waitingUsers.map((turn) => (
-              <TurnRow
-                key={`${turn.id}:waiting`}
-                turn={turn}
-                streaming={false}
-                animateMount={animateMount}
-                onOpenPaste={onOpenPaste}
-              />
+              <React.Fragment key={`${turn.id}:waiting`}>
+                <TurnRow
+                  turn={turn}
+                  streaming={false}
+                  animateMount={animateMount}
+                  onOpenPaste={onOpenPaste}
+                />
+                {afterTurn(turn.id).map((part, index) => (
+                  <UnreadablePartRow
+                    key={`unreadable:${turn.id}:${index}:${part.position}`}
+                    part={part}
+                  />
+                ))}
+              </React.Fragment>
+            ))}
+            {unanchored.map((part, index) => (
+              <UnreadablePartRow key={`unreadable:rest:${index}:${part.position}`} part={part} />
             ))}
             {conversation.phase === "thinking" &&
             (rows.length === 0 || rows.at(-1)?.status === "running") &&
@@ -237,6 +270,27 @@ export function Transcript({
         />
       )}
     </>
+  )
+}
+
+const UNREADABLE_PART = "Couldn't read this part of the conversation"
+
+function UnreadablePartRow({
+  part,
+}: {
+  part: NonNullable<NonNullable<Conversation["remote"]>["unreadable"]>[number]
+}) {
+  return (
+    <p
+      role="status"
+      data-unreadable-session={part.session}
+      data-unreadable-position={part.position}
+      data-unreadable-reason={part.reason}
+      {...(part.found === undefined ? {} : { "data-unreadable-found": part.found })}
+      className="text-muted-foreground px-3 py-2 text-xs [overflow-wrap:anywhere]"
+    >
+      {UNREADABLE_PART}
+    </p>
   )
 }
 

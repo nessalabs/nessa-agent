@@ -1,5 +1,5 @@
 import { offersAuthenticationRecovery } from "../../../../provider-authentication/model/recovery"
-import { memo, useLayoutEffect, useMemo, useRef, type RefObject } from "react"
+import { Fragment, memo, useLayoutEffect, useMemo, useRef, type RefObject } from "react"
 import { retryTranscript } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
@@ -12,12 +12,32 @@ import { ProviderSignIn } from "./provider-sign-in"
 import { ApprovalCard } from "./approval-card"
 import { LiveRow } from "./live-row"
 import { Message } from "./message"
-import type { Message as MessageValue } from "../../model/transcript"
+import {
+  UNREADABLE_PART,
+  type Message as MessageValue,
+  type UnreadableRow,
+} from "../../model/transcript"
 import { TranscriptHeading } from "./transcript-heading"
 import "./transcript.css"
 import { readFailureCopy } from "../failure-copy"
 
 const noMessages: readonly MessageValue[] = []
+const noGaps: readonly UnreadableRow[] = []
+
+function UnreadableNote({ row }: { row: UnreadableRow }) {
+  return (
+    <div
+      className="workspace-transcript-note"
+      role="status"
+      data-unreadable-session={row.sessionId}
+      data-unreadable-position={row.position}
+      data-unreadable-reason={row.reason}
+      {...(row.found === undefined ? {} : { "data-unreadable-found": row.found })}
+    >
+      <p>{UNREADABLE_PART}</p>
+    </div>
+  )
+}
 
 /** How close to the end the reader must be for a growing reply to keep them there. */
 const pinnedWithin = 24
@@ -114,6 +134,10 @@ export const Transcript = memo(function Transcript({
     shownBefore.current = messages
   }, [messages])
   const loaded = transcript !== undefined
+  const gaps = transcript?.unreadable ?? noGaps
+  const seenIds = new Set(messages.map((message) => message.id))
+  const leading = gaps.filter((gap) => gap.afterId === undefined)
+  const missed = gaps.filter((gap) => gap.afterId !== undefined && !seenIds.has(gap.afterId))
 
   return (
     <div
@@ -139,13 +163,25 @@ export const Transcript = memo(function Transcript({
             </button>
           </div>
         ) : null}
+        {leading.map((gap, index) => (
+          <UnreadableNote key={`unreadable:lead:${index}:${gap.position}`} row={gap} />
+        ))}
         {messages.map((message) => (
-          <Message
-            key={message.id}
-            sessionId={sessionId}
-            message={message}
-            isNew={stayPut.current !== null && !stayPut.current.has(message.id)}
-          />
+          <Fragment key={message.id}>
+            <Message
+              sessionId={sessionId}
+              message={message}
+              isNew={stayPut.current !== null && !stayPut.current.has(message.id)}
+            />
+            {gaps
+              .filter((gap) => gap.afterId === message.id)
+              .map((gap, index) => (
+                <UnreadableNote key={`unreadable:${message.id}:${index}:${gap.position}`} row={gap} />
+              ))}
+          </Fragment>
+        ))}
+        {missed.map((gap, index) => (
+          <UnreadableNote key={`unreadable:rest:${index}:${gap.position}`} row={gap} />
         ))}
         {offersAuthenticationRecovery(
           transcript?.authenticationRefusal,

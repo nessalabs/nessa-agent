@@ -1,5 +1,11 @@
 import { expect, it } from "vitest"
-import { conversation, textContent, type Turn, type UserTurn } from "../../model"
+import {
+  conversation,
+  conversationHistoryEmpty,
+  textContent,
+  type Turn,
+  type UserTurn,
+} from "../../model"
 import { emptyLocalTabs } from "../local-tabs"
 import type { ConversationView } from "../view"
 import { applyView } from "./apply-view"
@@ -85,6 +91,49 @@ const view: ConversationView = {
   },
   lifecycle: { phase: "attached" },
 }
+it("places an unreadable part after the message it follows, and a chat of only those parts is not empty", () => {
+  const projected = applyView(conversation("tab"), {
+    ...view,
+    unreadable: [
+      {
+        session: "server",
+        position: 4,
+        reason: "another_version",
+        found: 2,
+        afterMessage: 1,
+      },
+    ],
+  })
+  expect(projected.remote?.unreadable).toEqual([
+    {
+      session: "server",
+      position: 4,
+      reason: "another_version",
+      found: 2,
+      afterTurnId: "run:user",
+    },
+  ])
+  const only = applyView(conversation("tab"), {
+    ...view,
+    messages: [],
+    pending: [],
+    permissions: [],
+    tools: [],
+    transcriptState: "complete_empty",
+    truncated: false,
+    unreadable: [
+      { session: "server", position: 1, reason: "unreadable", afterMessage: 0 },
+    ],
+  })
+  expect(only.turns).toEqual([])
+  expect(conversationHistoryEmpty(only)).toBe(false)
+  expect(
+    conversationHistoryEmpty({
+      ...only,
+      remote: only.remote ? { ...only.remote, unreadable: [] } : undefined,
+    }),
+  ).toBe(true)
+})
 it("projects exact review and tool targets while preserving the next unsent draft", () => {
   const current = {
     ...conversation("tab"),

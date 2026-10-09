@@ -593,6 +593,16 @@ pub struct ConversationMcpTool {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UnreadablePart {
+    pub session: String,
+    pub position: u64,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub found: Option<u64>,
+    pub after_message: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationView {
     pub conversation_id: String,
     pub revision: String,
@@ -616,6 +626,8 @@ pub struct ConversationView {
     pub approval_modes: Vec<ApprovalModeChoice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_mode_change: Option<ApprovalModeChange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreadable: Option<Vec<UnreadablePart>>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

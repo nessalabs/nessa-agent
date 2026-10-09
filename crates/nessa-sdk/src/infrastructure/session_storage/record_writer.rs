@@ -32,12 +32,14 @@ pub(super) struct RecordWriter {
     next: SessionSaveGeneration,
     pending: Option<FramedFact>,
     unfinished: bool,
-    /// Bytes after `cursor`'s logical prefix could not be folded. New writes
-    /// append at the physical tail and continue from [`Self::next`].
-    truncated: bool,
-    /// Physical offset where bytes after the gap begin. Zero when the stream
-    /// has no gap. A confirmation scan starts here so it does not re-read the
-    /// gap, including after a continuation unit has already been folded.
+    /// Dropped save groups. A later save still appends at the physical tail
+    /// and continues from [`Self::next`].
+    unread: super::unread::UnreadTracker,
+    /// First physical position of the save group currently being folded.
+    group_start: Option<u64>,
+    /// Physical offset where a confirmation scan starts. Zero when every
+    /// record folded. A scan starts here so it does not re-read a dropped
+    /// group, including after a later unit has already been folded.
     resume_from: u64,
     blocked: bool,
     receipt: Option<SessionSaveReceipt>,
@@ -66,7 +68,8 @@ impl RecordWriter {
             next,
             pending: None,
             unfinished: false,
-            truncated: false,
+            unread: super::unread::UnreadTracker::default(),
+            group_start: None,
             resume_from: 0,
             blocked: false,
             receipt: None,
@@ -86,8 +89,9 @@ impl RecordWriter {
                         .map_err(fact_error)?;
                 }
                 FactRead::Aborted { cursor, key, .. } => {
-                    if writer.truncated {
+                    if writer.unread.is_open() {
                         writer.resume_from = cursor.offset;
+                        writer.unread.extend(cursor.offset);
                         writer.cursor = cursor;
                         continue;
                     }
@@ -143,40 +147,52 @@ impl RecordWriter {
         &self.stream
     }
     fn accept(&mut self, fact: FramedFact, cursor: Cursor) -> Result<(), StorageError> {
-        if self.truncated && !self.is_continuation(&fact) {
-            self.resume_from = cursor.offset;
-            self.cursor = cursor;
-            return Ok(());
+        let kind = fact.key.kind();
+        let ordinal = fact.key.ordinal();
+        let fact_start = self.cursor.offset.saturating_add(1);
+        let decoded = Header::decode(&fact.body);
+        if let Ok(header) = &decoded {
+            if self.unread.consume_rest(&header.identity, kind, ordinal) {
+                self.resume_from = cursor.offset;
+                self.unread.extend(cursor.offset);
+                if kind == FactKind::SaveComplete {
+                    self.note_lineage(cursor.offset);
+                }
+                self.cursor = cursor;
+                return Ok(());
+            }
+            if ordinal == 0 {
+                self.group_start = Some(fact_start);
+            }
+        } else {
+            self.group_start = Some(fact_start);
         }
-        let resuming = self.truncated;
-        self.truncated = false;
         match self.fold_fact(fact, cursor.clone()) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.unread.close();
+                if kind == FactKind::SaveComplete {
+                    self.group_start = None;
+                }
+                Ok(())
+            }
             Err(error) if super::truncates_history(&error) => {
-                self.seal(cursor.offset, &error)?;
+                self.seal(cursor.offset, &error, decoded.as_ref().ok())?;
+                if kind == FactKind::SaveComplete && decoded.is_ok() {
+                    self.note_lineage(cursor.offset);
+                }
+                self.resume_from = cursor.offset;
                 self.cursor = cursor;
                 Ok(())
             }
-            Err(error) => {
-                self.truncated = resuming;
-                Err(error)
-            }
+            Err(error) => Err(error),
         }
     }
 
-    /// A save written after the gap. Its identity continues the readable prefix
-    /// and it is the first unit of that save. Older tail bytes use another base.
-    fn is_continuation(&self, fact: &FramedFact) -> bool {
-        if fact.key.kind() != FactKind::SaveUnit || fact.key.ordinal() != 0 {
-            return false;
-        }
-        let Ok(header) = Header::decode(&fact.body) else {
-            return false;
-        };
-        header.ordinal == 0
-            && header.identity.base == self.next.base()
-            && header.identity.generation == self.next.generation()
-            && header.identity.matches_stream(&self.stream)
+    /// A dropped completion's physical end is a valid base for the next group.
+    /// The logical binding in [`Self::next`] stays the last folded save.
+    fn note_lineage(&mut self, position: u64) {
+        let lineage = Some(position);
+        self.progress.set_lineage_base(lineage);
     }
 
     fn fold_fact(&mut self, fact: FramedFact, cursor: Cursor) -> Result<(), StorageError> {
@@ -245,21 +261,41 @@ impl RecordWriter {
         Ok(())
     }
 
-    /// Open from the last completed save and ignore the open group that held
-    /// the unreadable record. The physical cursor stays at the tail so a later
-    /// save appends after those bytes instead of colliding with them.
-    fn seal(&mut self, position: u64, error: &StorageError) -> Result<(), StorageError> {
+    /// Drop the open group that held the unreadable record. The last folded
+    /// save stays. The physical cursor stays at the tail so a later save
+    /// appends after those bytes instead of colliding with them.
+    fn seal(
+        &mut self,
+        position: u64,
+        error: &StorageError,
+        header: Option<&Header>,
+    ) -> Result<(), StorageError> {
+        let lineage = self.progress.lineage_base();
         self.staged = Continuation::restore(self.committed.clone())?;
         self.baseline = self.committed.clone();
         self.binding = None;
         self.unfinished = false;
         self.pending = None;
         self.progress = GroupProgress::after(self.next.base());
-        self.resume_from = position;
-        if !self.truncated {
-            super::warn_truncated(self.id.as_str(), position, error);
+        self.progress.set_lineage_base(lineage);
+        let start = self.group_start.unwrap_or(position);
+        let reason =
+            crate::application::agent_execution::sessions::UnreadableReason::from_storage(error);
+        let contradiction = header.is_some() && super::contradicts_fold(error);
+        let added = self.unread.note(
+            start,
+            position,
+            self.committed
+                .as_ref()
+                .map(|snapshot| snapshot.invocations.len() as u64)
+                .unwrap_or(0),
+            reason,
+            header.map(|header| header.identity.clone()),
+            contradiction,
+        );
+        if added {
+            super::warn_truncated(self.id.as_str(), start, error);
         }
-        self.truncated = true;
         Ok(())
     }
 
@@ -312,9 +348,9 @@ impl RecordWriter {
         let terminal = completion_for_prefix(&identity, &headers, chain, units.len())?;
         // Compare original committed bytes in one sequential bounded read, not
         // a retained copy of every earlier unit or digest-only equivalence.
-        // A truncated history's logical base sits before the physical tail.
-        // The gap is not this save. Scan from the first byte after it, which
-        // stays put once a continuation unit has been folded.
+        // A dropped group's logical base sits before the physical tail.
+        // Those bytes are not this save. Scan from the first byte after them,
+        // which stays put once a later unit has already been folded.
         debug_assert!(self.resume_from <= self.cursor.offset);
         let scan_from = if self.resume_from > original.base() {
             self.resume_from

@@ -173,6 +173,9 @@ pub struct CommittedSession {
     observed_head: u64,
     snapshot: Option<Arc<SessionSnapshot>>,
     status: CommittedStatus,
+    /// Save groups this build could not fold, in stream order. Empty when
+    /// every record folded. Not part of the snapshot a later save appends to.
+    unreadable: Vec<super::UnreadablePart>,
 }
 impl CommittedSession {
     /// Validate a replacement read from a storage adapter. Full snapshot validation
@@ -210,6 +213,7 @@ impl CommittedSession {
             observed_head,
             snapshot: snapshot.map(Arc::new),
             status,
+            unreadable: Vec::new(),
         })
     }
     pub(crate) fn from_transcript(
@@ -237,6 +241,7 @@ impl CommittedSession {
             observed_head,
             snapshot,
             status,
+            unreadable: Vec::new(),
         })
     }
     /// Exact session identity requested from storage.
@@ -268,6 +273,19 @@ impl CommittedSession {
     /// Orthogonal read completeness and freshness.
     pub fn status(&self) -> CommittedStatus {
         self.status
+    }
+    /// Save groups this read could not fold, in stream order.
+    ///
+    /// Each part names the session's first unread record, how many invocations
+    /// were already folded, and why. A later save does not rewrite those bytes.
+    pub fn unreadable(&self) -> &[super::UnreadablePart] {
+        &self.unreadable
+    }
+    /// Attach parts this read could not fold. The snapshot stays the history
+    /// that did fold, and a later save still appends to that snapshot.
+    pub fn with_unreadable(mut self, parts: Vec<super::UnreadablePart>) -> Self {
+        self.unreadable = parts;
+        self
     }
     /// Coarse display completeness and freshness.
     pub fn state(&self) -> CommittedViewState {
@@ -776,10 +794,10 @@ impl StorageError {
     /// This build reads this version and writes it on every batch and checkpoint.
     /// A record with no marker is [`Self::AnotherVersion`], as is any other
     /// unsigned integer. During alpha there is no migration and no reader for
-    /// an unmarked record. The reader stops at that record and the chat opens
-    /// on the prefix folded before it. The stored bytes stay where they are.
-    /// Nothing after the gap is folded. Semantic batches and transcript
-    /// checkpoints share this number: a change to either shape bumps both.
+    /// an unmarked record. That record drops its save group. The chat shows one
+    /// placeholder there and still folds every other record. The stored bytes
+    /// stay where they are. Semantic batches and transcript checkpoints share
+    /// this number: a change to either shape bumps both.
     pub const SCHEMA_VERSION: u64 = 1;
 
     /// Aggregate retained diagnostic text budget; structural slots are accounted separately.
