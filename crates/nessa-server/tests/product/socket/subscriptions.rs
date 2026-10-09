@@ -1859,18 +1859,19 @@ async fn a_revoke_ends_a_device_subscription_before_its_next_batch() {
 /// Receiver bindings that cannot be read for the next `failures` lookups,
 /// then show no device: an owner's surface on a gateway whose receiver
 /// store missed a beat.
-struct FlakyReceivers(std::sync::atomic::AtomicU32);
+struct FlakyReceivers(std::sync::Mutex<u32>);
 impl ReceiverAuthority for FlakyReceivers {
     fn resolve<'a>(
         &'a self,
         _credential: &'a CredentialId,
     ) -> Pin<Box<dyn Future<Output = Result<Option<ReceiverBinding>, ReadRefusal>> + Send + 'a>>
     {
-        use std::sync::atomic::Ordering;
-        let failed = self
-            .0
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(1))
-            .is_ok();
+        let failed = {
+            let mut left = self.0.lock().unwrap();
+            let failed = *left > 0;
+            *left = left.saturating_sub(1);
+            failed
+        };
         Box::pin(async move {
             if failed {
                 Err(ReadRefusal::Unverifiable)
@@ -1885,7 +1886,7 @@ impl ReceiverAuthority for FlakyReceivers {
 /// read slot is, so it does not end an owner's subscription.
 #[tokio::test]
 async fn an_owner_subscription_outlasts_one_failed_receiver_lookup() {
-    let receivers = Arc::new(FlakyReceivers(std::sync::atomic::AtomicU32::new(0)));
+    let receivers = Arc::new(FlakyReceivers(std::sync::Mutex::new(0)));
     let mut fixture = SubscriptionFixture::new().await;
     let metadata = fixture.metadata.clone();
     fixture.state = fixture
@@ -1895,7 +1896,7 @@ async fn an_owner_subscription_outlasts_one_failed_receiver_lookup() {
     let mut client = fixture.connect();
     let id = client.subscribe("subscribe", &fixture.id).await;
     client.next().await;
-    receivers.0.store(1, std::sync::atomic::Ordering::SeqCst);
+    *receivers.0.lock().unwrap() = 1;
     fixture.turn("after-a-miss").await;
     let frames = client
         .until(&id, |frame| {
@@ -1905,7 +1906,7 @@ async fn an_owner_subscription_outlasts_one_failed_receiver_lookup() {
         .await;
     let last = frames.last().unwrap();
     assert_eq!(last["event"], "conversation.view", "{last}");
-    assert_eq!(receivers.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(*receivers.0.lock().unwrap(), 0);
     client.close().await;
 }
 
