@@ -141,7 +141,14 @@
           "description": "Surface kind and instance. Descriptive only; the credential decides the principal."
         }
       },
-      "required": ["minVersion", "maxVersion", "nonce", "credential", "client", "surface"],
+      "required": [
+        "minVersion",
+        "maxVersion",
+        "nonce",
+        "credential",
+        "client",
+        "surface"
+      ],
       "description": "Wire request for session.authenticate. NessaClient.connect builds this after validating the server challenge; a successful response is ProductSessionReady."
     },
     "ProductSessionReady": {
@@ -1423,6 +1430,10 @@
           "$ref": "#/$defs/ConversationRuntime",
           "description": "Configured provider, model and working directory for this conversation."
         },
+        "lease": {
+          "$ref": "#/$defs/ConversationLease",
+          "description": "The conversation's latest lease: where its agent runs and under what limits, or why it could not. Absent before any lease was recorded."
+        },
         "title": {
           "type": ["string", "null"],
           "minLength": 1,
@@ -2222,6 +2233,56 @@
         }
       },
       "required": ["requestId", "outcome"]
+    },
+    "ConversationLease": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The conversation's latest lease as its records fold. A lease is the recorded permission for one environment to run this conversation's agent with named limits; every run of the agent has one. A lease this gateway cannot read is shown as unreadable with nothing else claimed about it.",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["live", "ending", "ended", "interrupted", "refused", "unreadable"],
+          "description": "live: the agent may run. ending: an end was decided and cleanup is awaited. ended: cleanup was confirmed. interrupted: cleanup was not confirmed within its deadline, so the agent's environment is not known to be released. refused: no lease was granted and nothing ran; refusal says why. unreadable: a record of this lease is of a kind this gateway cannot read."
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "Which issuance of this conversation's leases this is, counting refused ones; absent when not known."
+        },
+        "environment": {
+          "type": "string",
+          "enum": ["here"],
+          "description": "Where the agent runs. here: the gateway's own machine."
+        },
+        "sandbox": {
+          "type": "string",
+          "enum": ["harness_default"],
+          "description": "The sandbox granted, or for a refused lease the one asked for. harness_default: whatever the agent's harness encloses by default, configured by nothing Nessa sets, and nothing more."
+        },
+        "cause": {
+          "type": "string",
+          "enum": ["stopped", "closed", "revoked", "expired", "lost"],
+          "description": "Why the lease is ending or ended: the first cause recorded. lost: the environment no longer had a process for it, for example because the gateway started again."
+        },
+        "cleanup": {
+          "type": "string",
+          "enum": ["confirmed", "forced", "no_process"],
+          "description": "What the environment reported releasing, once it has: confirmed, released cooperatively; forced, released by forced termination; no_process, nothing was left to release. On an interrupted lease this is the evidence that arrived after its deadline."
+        },
+        "refusal": {
+          "type": "string",
+          "enum": ["sandbox_unavailable"],
+          "description": "Why the lease was refused. sandbox_unavailable: the sandbox asked for is not one both the agent's binding and the environment can enforce."
+        },
+        "droppedEvents": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Events that arrived after the lease ended and were dropped rather than applied."
+        }
+      },
+      "required": ["state", "droppedEvents"]
     },
     "ConversationRuntime": {
       "type": "object",
@@ -3308,6 +3369,7 @@
       "enum": [
         "agent_not_configured",
         "agent_unsupported",
+        "sandbox_unavailable",
         "model_unavailable",
         "approval_mode_unavailable",
         "approval_mode_not_applied",
@@ -3353,7 +3415,7 @@
         "mcp_unreachable",
         "mcp_insufficient_scope"
       ],
-      "description": "Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended."
+      "description": "Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. sandbox_unavailable means no lease could be granted to run the agent because the sandbox it asks for is not one both its agent binding and the place it would run can enforce; nothing ran, the refusal is in the conversation's records, and repeating the command fails the same way until that configuration changes. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended."
     },
     "ConversationAnswerOption": {
       "type": "object",

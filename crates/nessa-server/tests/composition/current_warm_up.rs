@@ -139,6 +139,7 @@ fn agent(factory: Arc<ProviderFactory>, model: &'static str) -> ConversationAgen
         execution_audit: Arc::new(AcceptingAudit),
         reserved_output_tokens: 4096,
         readiness: None,
+        sandbox: nessa_sdk::domain::agent_execution::leases::SandboxProfiles::HARNESS_DEFAULT,
     }
 }
 
@@ -255,6 +256,7 @@ async fn uncertain_cleanup_retains_the_lane_without_starting_a_waiting_fingerpri
         execution_audit: Arc::new(AcceptingAudit),
         reserved_output_tokens: 4096,
         readiness: None,
+        sandbox: nessa_sdk::domain::agent_execution::leases::SandboxProfiles::HARNESS_DEFAULT,
     };
     let second_factory = Arc::new(ProviderFactory::default());
     let second = agent(second_factory.clone(), "second");

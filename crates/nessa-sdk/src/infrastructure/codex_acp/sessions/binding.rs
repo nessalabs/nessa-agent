@@ -37,6 +37,11 @@ pub struct CodexAcpProvider {
     deletions: DeletionCleanups,
 }
 impl CodexAcpProvider {
+    /// The sandbox profiles this binding can set up: only the harness's own
+    /// default today, since it configures no sandbox of its own. A lease that
+    /// asks for any other is refused, never run under a weaker one.
+    pub const SANDBOX_PROFILES: crate::domain::agent_execution::leases::SandboxProfiles =
+        crate::domain::agent_execution::leases::SandboxProfiles::HARNESS_DEFAULT;
     /// Presets this binding has verified for an exact catalog model ID.
     pub fn approval_modes(
         model_id: &str,

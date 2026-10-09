@@ -3,6 +3,7 @@ mod mutation;
 use super::session_key::conversation_session;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
+    environment::{issue, open_lease, Environment, LeaseRequest, LiveLease},
     locks::ConversationLocks,
     mcp_apps::{McpAppError, McpAppInitiator, McpAppPorts, McpAppRef},
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
@@ -53,14 +54,17 @@ use nessa_sdk::application::agent_execution::{
         ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
         PermissionCancellationRequest, QuestionAnswer,
     },
-    providers::{AgentProvider, ApprovalMode as ProviderApprovalMode, OperationCapabilities},
+    providers::{
+        AgentProvider, ApprovalMode as ProviderApprovalMode, CloseOutcome, OperationCapabilities,
+    },
     sessions::{
-        MessageCommitClock, SessionManager, SessionSnapshot, SessionStorage, SessionStorageLease,
-        StorageError,
+        LeaseRecordError, MessageCommitClock, SessionManager, SessionSnapshot, SessionStorage,
+        SessionStorageLease, StorageError,
     },
 };
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
+    leases::{AgentWork, LeaseEndCause, SandboxProfile, SandboxProfiles},
     permissions::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
         PermissionOptionId,
@@ -262,6 +266,9 @@ pub struct ConversationAgent {
     /// prepares this runtime, so the first conversation on it pays the scan
     /// itself — an explicit no-op rather than a wrapper that returns at once.
     pub readiness: Option<Arc<dyn RuntimeReadiness>>,
+    /// The sandbox profiles this agent's binding can set up. A lease asks for
+    /// one of them; the environment admits it only if it can enforce it too.
+    pub sandbox: SandboxProfiles,
 }
 
 /// One asynchronous current-generation agent lookup.
@@ -544,6 +551,9 @@ enum SubmissionDelivery {
 }
 struct LiveConversation {
     agent: Agent,
+    /// The lease its agent runs under. Every close of the agent goes through
+    /// it, so the lease's end is recorded with the close.
+    lease: LiveLease,
     /// The configured output reservation of the agent this conversation runs
     /// on, read once when it was opened.
     reserved_output_tokens: u32,
@@ -638,6 +648,8 @@ struct Inner {
     /// Who is asked to delete an agent's own record of a provider session.
     provider_sessions: ProviderSessionErasers,
     deletion_budgets: ConversationDeletionBudgets,
+    /// Where agents run; every opening is leased from it.
+    environment: Arc<dyn Environment>,
     clock: Arc<dyn Clock>,
     limits: ConversationLimits,
     conversations: Mutex<HashMap<ConversationId, Arc<Slot>>>,
@@ -810,6 +822,8 @@ pub struct ConversationDependencies {
     pub provider_sessions: ProviderSessionErasers,
     /// How long a delete waits to stop the agent and to lease the history.
     pub deletion_budgets: ConversationDeletionBudgets,
+    /// Where conversations' agents run, under a lease each.
+    pub(crate) environment: Arc<dyn Environment>,
     pub clock: Arc<dyn Clock>,
 }
 /// What a host chose for one of the agent's questions.
@@ -879,6 +893,7 @@ impl ConversationService {
             listing,
             provider_sessions,
             deletion_budgets,
+            environment,
             clock,
         } = dependencies;
         // The input bound is never larger than what the protocol carries of
@@ -910,6 +925,7 @@ impl ConversationService {
                 mode_changes: ConversationLocks::default(),
                 provider_sessions,
                 deletion_budgets,
+                environment,
                 clock,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
@@ -1337,8 +1353,26 @@ impl ConversationService {
                                     holds: false,
                                 }
                             })?;
-                            let agent = Agent::prepare(
+                            // The Agent is given the lease's fence and never
+                            // the binding's provider itself: nothing reaches
+                            // the agent except under this lease.
+                            let identity = configured.provider.identity();
+                            let work = AgentWork::new(agent.name(), identity.model_id())
+                                .map_err(|_| OpeningFailure {
+                                    cause: ConversationError::InvalidInput,
+                                    holds: false,
+                                })?;
+                            let opening = open_lease(
+                                service.inner.environment.as_ref(),
+                                LeaseRequest {
+                                    work,
+                                    sandbox: SandboxProfile::HarnessDefault,
+                                    binding: configured.sandbox,
+                                },
                                 configured.provider.clone(),
+                            );
+                            let agent = Agent::prepare(
+                                opening.fence.clone(),
                                 manager,
                                 configured.execution_audit.clone(),
                             )
@@ -1349,6 +1383,37 @@ impl ConversationService {
                                     holds: error.needs_cleanup(),
                                 }
                             })?;
+                            let issued = issue(
+                                agent.session_manager(),
+                                service.inner.environment.as_ref(),
+                                &opening,
+                                &actor,
+                            )
+                            .await;
+                            let refused = match (issued, opening.refusal) {
+                                (Ok(()), None) => None,
+                                (Ok(()), Some(refusal)) => {
+                                    Some(ConversationError::LeaseRefused(refusal))
+                                }
+                                (Err(error), _) => {
+                                    tracing::error!(conversation_id = %id, %error, "a lease could not be recorded");
+                                    Some(ConversationError::Storage(match error {
+                                        LeaseRecordError::Refused(error)
+                                        | LeaseRecordError::Storage(error) => error,
+                                        LeaseRecordError::NotLoaded
+                                        | LeaseRecordError::Unreadable => StorageError::Corrupt(
+                                            "lease record".into(),
+                                        ),
+                                    }))
+                                }
+                            };
+                            if let Some(cause) = refused {
+                                // Nothing was attached; the Agent holds only
+                                // the history, which its close lets go of.
+                                let holds = agent.close(actor.clone()).await.is_err();
+                                return Err(OpeningFailure { cause, holds });
+                            }
+                            let lease = LiveLease::new(&opening);
                             let authorization = agent
                                 .authorize_attachment(AttachmentRequest::CallerRequested(actor))
                                 .map_err(|error| OpeningFailure {
@@ -1421,6 +1486,7 @@ impl ConversationService {
                             });
                             let live = Arc::new(LiveConversation {
                                 agent,
+                                lease,
                                 reserved_output_tokens: configured.reserved_output_tokens,
                                 projection: Mutex::new(projection),
                                 watched: Mutex::new(HashSet::new()),
@@ -2899,7 +2965,9 @@ impl ConversationService {
                 let (closed, may_release) = match service.resolve(&id, &caller).await {
                     Ok(live) => {
                         service.end_apps(&id, &live, &initiator_of(&actor));
-                        let result = live.agent.close(actor).await;
+                        let result = service
+                            .close_leased(&live, LeaseEndCause::Closed, actor)
+                            .await;
                         if result.is_ok() {
                             let _ = live.join_attachment_owner().await;
                             service.release_live_slot(&id, &live).await;
@@ -3393,7 +3461,7 @@ impl ConversationService {
             // awaits anything, so retirement winning loses none of them
             // (`c15_a_delete_cut_short_by_retirement_records_each_drop_once`).
             let stopped = tokio::select! {
-                stopped = self.stop_slot(&id, slot, &actor, deleted_by) => stopped,
+                stopped = self.stop_slot(&id, slot, &actor, deleted_by, LeaseEndCause::Closed) => stopped,
                 () = self.retired() => Err(StopFailure::Failed(AgentError::Closed)),
             };
             if let Err(stop) = stopped {
@@ -3924,8 +3992,14 @@ impl ConversationService {
         let attempts = slots.into_iter().map(|(id, slot)| async move {
             let stopped = match submissions {
                 Submissions::Drained => {
-                    self.stop_slot(&id, slot, actor, &McpAppInitiator::System)
-                        .await
+                    self.stop_slot(
+                        &id,
+                        slot,
+                        actor,
+                        &McpAppInitiator::System,
+                        LeaseEndCause::Stopped,
+                    )
+                    .await
                 }
                 Submissions::Admitted => {
                     // Not held through the wait: an agent that a command ahead
@@ -3974,10 +4048,21 @@ impl ConversationService {
         slot: Arc<Slot>,
         actor: &ActionContext,
         ended_by: &McpAppInitiator,
+        cause: LeaseEndCause,
     ) -> Result<(), StopFailure> {
         match tokio::time::timeout(
             self.inner.deletion_budgets.stop,
-            self.stopping(id, slot, None, actor, ended_by, ConfirmedClose::ReleaseSlot),
+            self.stopping(
+                id,
+                slot,
+                None,
+                StopBy {
+                    actor,
+                    ended_by,
+                    cause,
+                },
+                ConfirmedClose::ReleaseSlot,
+            ),
         )
         .await
         {
@@ -4022,8 +4107,11 @@ impl ConversationService {
                     &id,
                     slot,
                     Some(submissions),
-                    &actor,
-                    &McpAppInitiator::System,
+                    StopBy {
+                        actor: &actor,
+                        ended_by: &McpAppInitiator::System,
+                        cause: LeaseEndCause::Stopped,
+                    },
                     ConfirmedClose::ReleaseSlot,
                 )
                 .await
@@ -4056,8 +4144,11 @@ impl ConversationService {
                     &id,
                     slot,
                     None,
-                    &actor,
-                    &ended_by,
+                    StopBy {
+                        actor: &actor,
+                        ended_by: &ended_by,
+                        cause: LeaseEndCause::Stopped,
+                    },
                     ConfirmedClose::ReleaseSlot,
                 )
                 .await
@@ -4106,8 +4197,11 @@ impl ConversationService {
                     &stop_id,
                     slot,
                     None,
-                    &stop_actor,
-                    &ended_by,
+                    StopBy {
+                        actor: &stop_actor,
+                        ended_by: &ended_by,
+                        cause: LeaseEndCause::Closed,
+                    },
                     ConfirmedClose::HoldSlot,
                 )
                 .await;
@@ -4202,10 +4296,14 @@ impl ConversationService {
         id: &ConversationId,
         slot: Arc<Slot>,
         submissions: Option<OwnedMutexGuard<()>>,
-        actor: &ActionContext,
-        ended_by: &McpAppInitiator,
+        by: StopBy<'_>,
         on_confirm: ConfirmedClose,
     ) -> Result<(), AgentError> {
+        let StopBy {
+            actor,
+            ended_by,
+            cause,
+        } = by;
         slot.stopping.store(true, Ordering::SeqCst);
         let mut submissions = submissions;
         loop {
@@ -4221,7 +4319,7 @@ impl ConversationService {
                         // ended, and is M10
                         // (`m10_a_message_after_a_desktop_stops_mark_is_refused_and_opens_nothing`).
                         drop(submissions.take());
-                        match live.agent.close(actor.clone()).await {
+                        match self.close_leased(live, cause, actor.clone()).await {
                             Ok(_) => {
                                 let _ = live.join_attachment_owner().await;
                                 if on_confirm == ConfirmedClose::ReleaseSlot {
@@ -4240,6 +4338,25 @@ impl ConversationService {
             }
             ready.await;
         }
+    }
+
+    /// Close `live`'s agent under its lease for `cause`, on a task of its
+    /// own: a caller that stops waiting — a budget, a dropped request — does
+    /// not stop the lease's end from being recorded, the close from being
+    /// confirmed, or an interrupted lease from being accounted for later.
+    /// The cleanup deadline is the stop budget, the one bound this gateway
+    /// already gives a stop.
+    async fn close_leased(
+        &self,
+        live: &Arc<LiveConversation>,
+        cause: LeaseEndCause,
+        actor: ActionContext,
+    ) -> Result<CloseOutcome, AgentError> {
+        let live = live.clone();
+        let deadline = self.inner.deletion_budgets.stop;
+        tokio::spawn(async move { live.lease.close(&live.agent, cause, actor, deadline).await })
+            .await
+            .unwrap_or(Err(AgentError::CleanupUncertain))
     }
 
     async fn release_live_slot(&self, id: &ConversationId, live: &Arc<LiveConversation>) {
@@ -4286,6 +4403,15 @@ enum PendingClose {
     /// The close did not confirm within the budget, or it failed. Over budget,
     /// the carry-on lets the uploads go and then releases the slot.
     Stopped(StopFailure),
+}
+
+/// Who stops an owner, by whom its apps are ended, and the cause its lease's
+/// end records.
+#[derive(Clone, Copy)]
+struct StopBy<'a> {
+    actor: &'a ActionContext,
+    ended_by: &'a McpAppInitiator,
+    cause: LeaseEndCause,
 }
 
 /// Whether a confirmed close releases its slot here.

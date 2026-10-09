@@ -22,7 +22,10 @@ use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::view::ConversationMessageStatus;
 use nessa_protocol::{agents::AgentId, conversation::domain::ConversationId};
-use nessa_sdk::application::agent_execution::sessions::SessionStorage;
+use nessa_sdk::application::agent_execution::sessions::{
+    CurrentLease, LeaseRecord, SessionStorage,
+};
+use nessa_sdk::domain::agent_execution::leases::{LeaseCleanup, LeaseEndCause, LeaseRevision};
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
 use std::{
@@ -73,6 +76,9 @@ struct Evidence {
     audit: String,
     /// The cleanup the agent was asked for and what it reported.
     cleanup: String,
+    /// The lease records `#698` adds, kept out of the golden text and
+    /// asserted on their own.
+    lease: Option<CurrentLease>,
 }
 
 async fn run_local_conversation(root: &Path) -> Evidence {
@@ -88,6 +94,8 @@ async fn run_local_conversation(root: &Path) -> Evidence {
                 ),
                 reserved_output_tokens: 4096,
                 readiness: None,
+                sandbox:
+                    nessa_sdk::domain::agent_execution::leases::SandboxProfiles::HARNESS_DEFAULT,
             },
         )]),
         AgentId::Claude,
@@ -124,6 +132,7 @@ async fn run_local_conversation(root: &Path) -> Evidence {
             deletion_budgets: DELETION_BUDGETS,
             message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock,
+            environment: crate::conversation::infrastructure::in_process_environment(),
         },
         ConversationLimits::default(),
         None,
@@ -222,6 +231,7 @@ async fn run_local_conversation(root: &Path) -> Evidence {
         records,
         audit,
         cleanup,
+        lease: snapshot.lease.clone(),
     }
 }
 
@@ -284,4 +294,29 @@ async fn a_local_conversation_leaves_the_golden_records_audit_and_cleanup_eviden
     }
     let golden = std::fs::read_to_string(GOLDEN).expect("the golden evidence is checked in");
     assert_eq!(evidence, golden);
+}
+
+/// Apart from the golden evidence, the run left exactly one lease: issued
+/// for the run, ended by the person's close, with the close's confirmation.
+#[tokio::test]
+async fn a_local_conversation_leaves_one_lease_for_its_run_ended_by_its_close() {
+    let root = tempfile::tempdir().unwrap();
+    let lease = run_local_conversation(root.path())
+        .await
+        .lease
+        .expect("the run was leased");
+    let held = lease.held().expect("the lease was issued");
+    assert_eq!(held.revision(), LeaseRevision::FIRST);
+    let [LeaseRecord::Issued { .. }, LeaseRecord::Ending {
+        cause: LeaseEndCause::Closed,
+        actor: Some(actor),
+        ..
+    }, LeaseRecord::Ended {
+        cleanup: LeaseCleanup::Confirmed { forced: false },
+        ..
+    }] = lease.records()
+    else {
+        panic!("one issued, closed and ended lease: {:?}", lease.records());
+    };
+    assert_eq!(actor.request_id(), "close");
 }

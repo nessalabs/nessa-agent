@@ -47,8 +47,13 @@
 //! `audit_context_drops` is the one recorder of every held MCP App context
 //! dropped unsent: the conversations' apps report each drop to it, through a
 //! channel, as they make it, and it writes the record on a task of its own.
+//! `InProcessEnvironment` is the one `Environment`: agents run as children of
+//! this gateway, and a lease it is asked about after a restart has no process
+//! here.
 mod change_watch;
 pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
+mod environment;
+pub(crate) use environment::in_process as in_process_environment;
 mod catalogue_changes;
 mod receiver_authority;
 mod store;

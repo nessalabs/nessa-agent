@@ -109,6 +109,7 @@ pub use catalogue_watch::{
     CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, WatchCatalogue,
 };
 mod catalogue_read;
+mod environment;
 mod error;
 mod error_code;
 mod locks;
@@ -129,6 +130,7 @@ pub use catalogue_read::{
     CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadResponse,
     CatalogueReadSource, CatalogueReadValue, ReadCatalogue,
 };
+pub(crate) use environment::{Environment, EnvironmentDeclaration, EnvironmentFuture};
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use error_code::error_code;
 pub use mcp_apps::{
@@ -194,3 +196,7 @@ mod listing_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/local_golden.rs"]
 mod local_golden_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/leases.rs"]
+mod lease_tests;

@@ -609,6 +609,8 @@ pub struct ConversationView {
     pub transcript_state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<ConversationRuntime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease: Option<ConversationLease>,
     #[serde(deserialize_with = "Option::deserialize")]
     pub title: Option<String>,
     pub questions: Vec<ConversationQuestion>,
@@ -904,6 +906,24 @@ impl ConversationReorderOutcome {
 pub struct ConversationReorderResult {
     pub request_id: String,
     pub outcome: ConversationReorderOutcome,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationLease {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
+    pub dropped_events: u64,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
