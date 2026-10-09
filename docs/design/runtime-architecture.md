@@ -575,7 +575,7 @@ Take a MacBook, a dev desktop and a phone, all paired:
 
 | From → To | What the MacBook sees of the dev desktop | What the dev desktop sees of the MacBook | What the phone sees |
 | --- | --- | --- | --- |
-| Grant (owner's choice) | Each of the dev desktop's conversations, one grant per id (a bulk action in the UI makes them in one go); a new conversation needs a new grant | Nothing | The MacBook's and the dev desktop's, Read; Drive when #267 lands |
+| Grant (owner's choice) | Each of the dev desktop's conversations, one grant per id (a bulk action in the UI makes them in one go); a new conversation needs a new grant | Nothing | The MacBook's and the dev desktop's, Read; prompt and exact-turn Stop when #267 lands; full Drive with #707 |
 | Follow (follower's choice) | Only the `nessa-agent` channel; keep two weeks | Not applicable | Everything granted; keep 200 MB |
 | Replica on the follower | Those conversations' records, folded locally, kept to the follow rule | None | A cache bounded by the follow rule |
 
@@ -706,7 +706,7 @@ the desktop today:
 | --- | --- | --- | --- |
 | Person (owner) | Local bootstrap, OS-protected | Everything on their organization | Setup; recovered offline |
 | Bundled surface (panel, desktop window) | Private surface credential served by the host once the gateway is ready | Product methods for that surface | Provisioning (`--provision-local`) |
-| Linked device | Key-bound credential from pairing | `conversation.read` first; command grants with #267 | The owner, in Settings › Linked devices |
+| Linked device | Key-bound credential from pairing | `conversation.read` first; prompt and exact-turn Stop with #267; Drive with #707 | The owner, in Settings › Linked devices |
 | SSH host | None of Nessa's; SSH's own | Environment only, for leases this gateway issues | The owner, by naming the host |
 | Peer gateway | Key-bound credential from pairing | Environment grants (admit leases, report events, request effects) and/or surface grants, each narrowed by the grantor's policy. Never both authorities over one conversation | The owner of each gateway, for the other |
 | Hosted worker | Key-bound credential from pairing | Environment grants only, for one organization. No reads outside its leases | The organization |
