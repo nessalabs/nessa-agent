@@ -148,6 +148,27 @@ and cache, on the follower's side; this gateway only stops serving it.
   Cedar bundle changes the policy digest that pairing's receiver epochs are
   keyed on, so it is not done here.
 
+## Known limits
+
+- **The catalogue head is the owner's.** A device's head and catalogue watch
+  move on every catalogue change, granted or not, so a device can count its
+  owner's activity (shares to other devices included) without learning any
+  row. A head over granted rows only is left for when devices are more than
+  the owner's own phones.
+- **Unpairing is `credential.revoke`, which leaves the binding active.** Reads
+  stop because the credential no longer authenticates, but `conversation.share`
+  still accepts that credential and writes a grant no one can use.
+- **A receiver moved to a new credential keeps its grants.** Nothing in
+  production moves one yet (`ReceiverAuthority::change`); when something does,
+  its grants must end with the move, or `unshare` by the new credential finds
+  nothing to revoke.
+- **Rows G12 and G13 are defence in depth.** Pairing mints only
+  `conversation.read`, so Cedar already refuses a real device the socket's
+  `conversation.*` reads, lists and subscriptions; their tests give the device
+  `conversation.write` to reach the grant check behind Cedar.
+- **Existing paired devices see nothing after upgrade** until their owner
+  shares conversations with them, which needs the Share control above.
+
 ## State and order table
 
 Each row has at least one test. Store tests are in
@@ -168,7 +189,7 @@ otherwise.
 | G8 | Share on a conversation not the caller's, a deleted one, or naming a credential that is not an active paired device of the owner; ownership and deletion are checked in the transaction that writes the grant | `conversation_not_found`, `conversation_deleted`, `share_target_not_paired`; nothing written | `share_refuses_what_the_owner_cannot_grant` |
 | G9 | Share twice; unshare what is not granted | `applied: false`; no journal row, no revision | `a_repeated_share_or_unshare_changes_nothing` |
 | G10 | A grant and a revoke that change something | One journal row each: before, after, initiator, surface, request, revision | `every_grant_change_is_journaled_with_its_initiator` |
-| G11 | The owner's own surface (no receiver binding), or a gateway that pairs nothing | Reads, lists and subscribes as before | the existing subscription and conversation suites, which compose no receiver binding; `an_owner_surface_reads_everything_it_owns` |
+| G11 | The owner's own surface (no receiver binding), or a gateway that pairs nothing | Reads, lists and subscribes as before; a receiver lookup that cannot be verified is retried as a read slot is, so it does not end a subscription | the existing subscription and conversation suites, which compose no receiver binding; `an_owner_surface_reads_everything_it_owns`; `an_owner_subscription_outlasts_one_failed_receiver_lookup` |
 | G12 | A socket session with a receiver binding | `conversation.read` and a view subscribe of an ungranted id answer `conversation_not_found`, a granted one is read; `conversation.list`, `.observe`, `.subscribeList` and the share commands answer `forbidden` | `a_paired_device_on_the_socket_sees_only_what_it_was_granted` |
 | G13 | A device's view subscription; the grant is revoked between batches | Ended `refused` with `conversation_not_found` before the next read | `a_revoke_ends_a_device_subscription_before_its_next_batch` |
 | G14 | A device unpaired (its binding inactive), whatever it was granted | Socket reads refused `unauthorized`; passive reads as before | `an_unpaired_device_reads_nothing_whatever_it_was_granted` |

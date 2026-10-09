@@ -1853,6 +1853,59 @@ async fn a_revoke_ends_a_device_subscription_before_its_next_batch() {
     client.close().await;
 }
 
+/// Receiver bindings that cannot be read for the next `failures` lookups,
+/// then show no device: an owner's surface on a gateway whose receiver
+/// store missed a beat.
+struct FlakyReceivers(std::sync::atomic::AtomicU32);
+impl ReceiverAuthority for FlakyReceivers {
+    fn resolve<'a>(
+        &'a self,
+        _credential: &'a CredentialId,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<ReceiverBinding>, ReadRefusal>> + Send + 'a>>
+    {
+        use std::sync::atomic::Ordering;
+        let failed = self
+            .0
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(1))
+            .is_ok();
+        Box::pin(async move {
+            if failed {
+                Err(ReadRefusal::Unverifiable)
+            } else {
+                Ok(None)
+            }
+        })
+    }
+}
+
+/// Row G11: one receiver lookup that cannot be verified is retried as a
+/// read slot is, so it does not end an owner's subscription.
+#[tokio::test]
+async fn an_owner_subscription_outlasts_one_failed_receiver_lookup() {
+    let receivers = Arc::new(FlakyReceivers(std::sync::atomic::AtomicU32::new(0)));
+    let mut fixture = SubscriptionFixture::new().await;
+    let metadata = fixture.metadata.clone();
+    fixture.state = fixture
+        .state
+        .clone()
+        .with_passive_read(receivers.clone(), metadata.clone(), metadata);
+    let mut client = fixture.connect();
+    let id = client.subscribe("subscribe", &fixture.id).await;
+    client.next().await;
+    receivers.0.store(1, std::sync::atomic::Ordering::SeqCst);
+    fixture.turn("after-a-miss").await;
+    let frames = client
+        .until(&id, |frame| {
+            frame["event"] == "conversation.view"
+                || frame["event"] == "conversation.subscriptionEnded"
+        })
+        .await;
+    let last = frames.last().unwrap();
+    assert_eq!(last["event"], "conversation.view", "{last}");
+    assert_eq!(receivers.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    client.close().await;
+}
+
 /// Row G14: an unpaired device reads nothing, whatever it was granted.
 #[tokio::test]
 async fn an_unpaired_device_reads_nothing_whatever_it_was_granted() {

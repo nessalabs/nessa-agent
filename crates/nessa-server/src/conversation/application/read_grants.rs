@@ -58,7 +58,8 @@ impl Reader {
 /// The reader `context`'s credential is, read from the receiver authority
 /// now. A paired device whose binding is no longer active is refused
 /// `Unauthorized`, as a passive read refuses it; a binding that names another
-/// credential or organization is `Unverifiable`.
+/// credential or organization is `Unverifiable`, and one of another owner
+/// `WrongOwner`.
 pub async fn reader_of(
     receivers: &dyn ReceiverAuthority,
     context: &AuthContext,
@@ -70,9 +71,13 @@ pub async fn reader_of(
         }
         if binding.credential_id != *context.credential_id()
             || binding.organization_id != *context.organization_id()
-            || binding.owner_id != *context.principal_id()
         {
             return Err(ReadRefusal::Unverifiable);
+        }
+        // Answered as a passive read answers it: a lasting state, not one to
+        // retry.
+        if binding.owner_id != *context.principal_id() {
+            return Err(ReadRefusal::WrongOwner);
         }
     }
     Ok(Reader::of(binding.as_ref()))

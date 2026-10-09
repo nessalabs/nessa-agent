@@ -31,6 +31,7 @@ use nessa_protocol::product::generated::{
     ConversationViewed, MAX_PAYLOAD_BYTES, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
 use nessa_protocol::product::passive_read::decimal_u64;
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{EventFrame, OutgoingMessage};
 use nessa_sdk::application::agent_execution::sessions::{
     ChangeWatchError, ChangeWatchState, CommittedChangeWatch, StorageError,
@@ -312,6 +313,11 @@ fn retry_after(error: &ConversationError, attempt: u32) -> Option<Duration> {
         error,
         ConversationError::Storage(StorageError::ReadCapacity | StorageError::Busy)
     );
+    backoff(transient, attempt)
+}
+
+/// The wait before attempt `attempt + 1` of something `transient`, or `None`.
+fn backoff(transient: bool, attempt: u32) -> Option<Duration> {
     if !transient || attempt >= TRANSIENT_RETRIES {
         return None;
     }
@@ -345,7 +351,24 @@ async fn read_batch(
         // request. Admitted before waiting for capacity, a grant revoked
         // during the wait would let one read through (row S30).
         let permit = state.requests.clone().acquire_owned().await;
-        let current = authorize_batch(state, session, target).await?;
+        let current = match authorize_batch(state, session, target).await {
+            Ok(current) => current,
+            // A batch's admission that could not be verified now (the
+            // receiver lookup, row G11) is retried as a read slot is, so one
+            // transient miss does not end an owner's subscription.
+            Err(code) => match backoff(
+                code == ConversationErrorCode::TemporarilyUnavailable.as_str(),
+                attempt,
+            ) {
+                Some(wait) => {
+                    drop(permit);
+                    attempt += 1;
+                    tokio::time::sleep(wait).await;
+                    continue;
+                }
+                None => return Err(code.to_owned()),
+            },
+        };
         let read = match target {
             Target::View { conversation, .. } => {
                 // A follower opens nothing (row S26).
