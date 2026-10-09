@@ -1397,14 +1397,20 @@ impl ConversationService {
                                 }
                                 (Err(error), _) => {
                                     tracing::error!(conversation_id = %id, %error, "a lease could not be recorded");
-                                    Some(ConversationError::Storage(match error {
+                                    Some(match error {
                                         LeaseRecordError::Refused(error)
-                                        | LeaseRecordError::Storage(error) => error,
+                                        | LeaseRecordError::Storage(error) => {
+                                            ConversationError::Storage(error)
+                                        }
+                                        // Neither is what the history holds: the
+                                        // Agent prepared has loaded it, and only
+                                        // known records are written. Nothing ran,
+                                        // so the opening is only unavailable.
                                         LeaseRecordError::NotLoaded
-                                        | LeaseRecordError::Unreadable => StorageError::Corrupt(
-                                            "lease record".into(),
-                                        ),
-                                    }))
+                                        | LeaseRecordError::Unreadable => {
+                                            ConversationError::Unavailable
+                                        }
+                                    })
                                 }
                             };
                             if let Some(cause) = refused {

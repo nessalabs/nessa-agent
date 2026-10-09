@@ -730,7 +730,7 @@ pub enum ConversationLeaseCause {
 pub enum ConversationLeaseCleanup {
     Confirmed,
     Forced,
-    NoProcess,
+    NotHeld,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

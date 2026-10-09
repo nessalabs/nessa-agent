@@ -1,3 +1,4 @@
+import { conversationLeaseStatus } from "@nessa/client"
 import type { RefObject } from "react"
 import type { TranscriptLease } from "../../model/transcript"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
@@ -9,46 +10,11 @@ import { useListedChannel, useWorkspaceFrame } from "../workspace-frame"
 import { tooltip } from "../../../ui/tooltip"
 
 /**
- * Where the agent runs, or why it does not, in a few words; nothing for a
- * lease the gateway cannot read.
+ * Where the agent's lease stands, in the client's words; nothing for a lease
+ * the gateway cannot read, since the heading has nothing true to say of it.
  */
 export function leaseNote(lease: TranscriptLease): string | undefined {
-  switch (lease.state) {
-    case "live":
-      return lease.environment === "here" ? "On this computer" : undefined
-    case "ending":
-      return "Stopping"
-    case "ended":
-      switch (lease.cause) {
-        case "closed":
-          return "Closed"
-        case "revoked":
-          return "Access withdrawn"
-        case "expired":
-          return "Timed out"
-        case "lost":
-          return "Ended when Nessa restarted"
-        case "stopped":
-        case undefined:
-          return "Stopped"
-        default: {
-          const exhaustive: never = lease.cause
-          return exhaustive
-        }
-      }
-    case "interrupted":
-      return "Cleanup not confirmed"
-    case "refused":
-      return lease.refusal === "sandbox_unavailable"
-        ? "Couldn't start: sandbox not available"
-        : "Couldn't start"
-    case "unreadable":
-      return undefined
-    default: {
-      const exhaustive: never = lease.state
-      return exhaustive
-    }
-  }
+  return lease.state === "unreadable" ? undefined : conversationLeaseStatus(lease)
 }
 
 /**

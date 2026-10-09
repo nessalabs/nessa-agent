@@ -154,7 +154,7 @@ enum Cause {
 #[serde(deny_unknown_fields)]
 enum Cleanup {
     Confirmed { forced: bool },
-    NoProcess,
+    NotHeld,
 }
 #[derive(Serialize, Deserialize)]
 enum Refusal {
@@ -236,7 +236,7 @@ impl From<LeaseCleanup> for Cleanup {
     fn from(value: LeaseCleanup) -> Self {
         match value {
             LeaseCleanup::Confirmed { forced } => Self::Confirmed { forced },
-            LeaseCleanup::NoProcess => Self::NoProcess,
+            LeaseCleanup::NotHeld => Self::NotHeld,
         }
     }
 }
@@ -244,7 +244,7 @@ impl From<Cleanup> for LeaseCleanup {
     fn from(value: Cleanup) -> Self {
         match value {
             Cleanup::Confirmed { forced } => Self::Confirmed { forced },
-            Cleanup::NoProcess => Self::NoProcess,
+            Cleanup::NotHeld => Self::NotHeld,
         }
     }
 }
@@ -497,7 +497,7 @@ mod tests {
             },
             LeaseRecord::CleanupReported {
                 lease: lease.clone(),
-                cleanup: LeaseCleanup::NoProcess,
+                cleanup: LeaseCleanup::NotHeld,
             },
             LeaseRecord::EventDropped {
                 lease: lease.clone(),
@@ -571,10 +571,7 @@ mod tests {
                 "ending",
                 r#"{\"lease\":\"bad id\",\"cause\":\"Stopped\",\"actor\":null}"#,
             ),
-            (
-                "ended",
-                r#"{\"lease\":\"bad id\",\"cleanup\":\"NoProcess\"}"#,
-            ),
+            ("ended", r#"{\"lease\":\"bad id\",\"cleanup\":\"NotHeld\"}"#),
             ("interrupted", r#"{\"lease\":\"\"}"#),
             (
                 "event_dropped",

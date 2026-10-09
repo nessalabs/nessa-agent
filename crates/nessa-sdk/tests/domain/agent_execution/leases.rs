@@ -205,14 +205,14 @@ fn l8_a_passed_cleanup_deadline_interrupts_and_later_evidence_accounts_once() {
     assert!(lease.phase().is_final());
     assert_eq!(lease.interrupt(), Err(LeaseError::Final));
     assert_eq!(
-        lease.report_cleanup(LeaseCleanup::NoProcess),
+        lease.report_cleanup(LeaseCleanup::NotHeld),
         Ok(CleanupDecision::Accounted)
     );
     assert_eq!(
         lease.phase(),
         LeasePhase::Interrupted {
             cause: LeaseEndCause::Stopped,
-            late_cleanup: Some(LeaseCleanup::NoProcess)
+            late_cleanup: Some(LeaseCleanup::NotHeld)
         }
     );
     assert_eq!(
@@ -257,14 +257,14 @@ fn l10_a_lost_lease_ends_as_lost_and_reports_cleanup_against_the_ended_lease() {
 }
 
 #[test]
-fn l12_an_environment_with_no_process_for_the_lease_ends_it_lost_with_that_evidence() {
+fn l12_an_environment_with_not_held_for_the_lease_ends_it_lost_with_that_evidence() {
     let mut lease = ending(LeaseEndCause::Lost);
-    lease.report_cleanup(LeaseCleanup::NoProcess).unwrap();
+    lease.report_cleanup(LeaseCleanup::NotHeld).unwrap();
     assert_eq!(
         lease.phase(),
         LeasePhase::Ended {
             cause: LeaseEndCause::Lost,
-            cleanup: LeaseCleanup::NoProcess
+            cleanup: LeaseCleanup::NotHeld
         }
     );
 }

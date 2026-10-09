@@ -141,14 +141,7 @@
           "description": "Surface kind and instance. Descriptive only; the credential decides the principal."
         }
       },
-      "required": [
-        "minVersion",
-        "maxVersion",
-        "nonce",
-        "credential",
-        "client",
-        "surface"
-      ],
+      "required": ["minVersion", "maxVersion", "nonce", "credential", "client", "surface"],
       "description": "Wire request for session.authenticate. NessaClient.connect builds this after validating the server challenge; a successful response is ProductSessionReady."
     },
     "ProductSessionReady": {
@@ -2263,12 +2256,12 @@
         "cause": {
           "type": "string",
           "enum": ["stopped", "closed", "revoked", "expired", "lost"],
-          "description": "Why the lease is ending or ended: the first cause recorded. lost: the environment no longer had a process for it, for example because the gateway started again."
+          "description": "Why the lease is ending or ended: the first cause recorded. lost: the environment no longer held it, for example because the gateway started again."
         },
         "cleanup": {
           "type": "string",
-          "enum": ["confirmed", "forced", "no_process"],
-          "description": "What the environment reported releasing, once it has: confirmed, released cooperatively; forced, released by forced termination; no_process, nothing was left to release. On an interrupted lease this is the evidence that arrived after its deadline."
+          "enum": ["confirmed", "forced", "not_held"],
+          "description": "What the environment reported releasing, once it has: confirmed, released cooperatively; forced, released by forced termination; not_held, the environment holds nothing for the lease, though whether something started under it before the environment last started outlived it is not known. On an interrupted lease this is the evidence that arrived after its deadline."
         },
         "refusal": {
           "type": "string",

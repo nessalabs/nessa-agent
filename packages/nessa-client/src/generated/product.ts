@@ -912,10 +912,10 @@ export interface ConversationLease {
   environment?: "here"
   /** The sandbox granted, or for a refused lease the one asked for. harness_default: whatever the agent's harness encloses by default, configured by nothing Nessa sets, and nothing more. */
   sandbox?: "harness_default"
-  /** Why the lease is ending or ended: the first cause recorded. lost: the environment no longer had a process for it, for example because the gateway started again. */
+  /** Why the lease is ending or ended: the first cause recorded. lost: the environment no longer held it, for example because the gateway started again. */
   cause?: "stopped" | "closed" | "revoked" | "expired" | "lost"
-  /** What the environment reported releasing, once it has: confirmed, released cooperatively; forced, released by forced termination; no_process, nothing was left to release. On an interrupted lease this is the evidence that arrived after its deadline. */
-  cleanup?: "confirmed" | "forced" | "no_process"
+  /** What the environment reported releasing, once it has: confirmed, released cooperatively; forced, released by forced termination; not_held, the environment holds nothing for the lease, though whether something started under it before the environment last started outlived it is not known. On an interrupted lease this is the evidence that arrived after its deadline. */
+  cleanup?: "confirmed" | "forced" | "not_held"
   /** Why the lease was refused. sandbox_unavailable: the sandbox asked for is not one both the agent's binding and the environment can enforce. */
   refusal?: "sandbox_unavailable"
   /** Events that arrived after the lease ended and were dropped rather than applied. */

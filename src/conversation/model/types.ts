@@ -57,7 +57,7 @@ export type ConversationLease = {
   sandbox?: "harness_default"
   /** Why it is ending or ended: the first cause recorded. */
   cause?: "stopped" | "closed" | "revoked" | "expired" | "lost"
-  cleanup?: "confirmed" | "forced" | "no_process"
+  cleanup?: "confirmed" | "forced" | "not_held"
   refusal?: "sandbox_unavailable"
   droppedEvents: number
 }

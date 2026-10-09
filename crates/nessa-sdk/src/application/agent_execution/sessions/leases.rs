@@ -84,7 +84,8 @@ pub enum LeaseRecord {
     },
     /// An event arrived after the lease stopped accepting events and was
     /// dropped (row L9). `turn` is the turn it named; `cursor` is its place
-    /// among the events the lease's environment reported.
+    /// among every event the environment reported under the lease, over all
+    /// the sessions opened under it.
     EventDropped {
         /// The lease it named.
         lease: LeaseId,

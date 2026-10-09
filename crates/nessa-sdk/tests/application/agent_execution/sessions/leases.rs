@@ -109,7 +109,7 @@ fn an_interrupted_lease_takes_late_evidence_once_and_dropped_events_after_it() {
         },
         LeaseRecord::CleanupReported {
             lease: id("a"),
-            cleanup: LeaseCleanup::NoProcess,
+            cleanup: LeaseCleanup::NotHeld,
         },
     ])
     .unwrap();
@@ -120,7 +120,7 @@ fn an_interrupted_lease_takes_late_evidence_once_and_dropped_events_after_it() {
         lease.phase(),
         LeasePhase::Interrupted {
             cause: LeaseEndCause::Stopped,
-            late_cleanup: Some(LeaseCleanup::NoProcess),
+            late_cleanup: Some(LeaseCleanup::NotHeld),
         }
     );
 }
@@ -153,7 +153,7 @@ fn records_the_lease_rules_refuse_are_corrupt() {
             ending("a", LeaseEndCause::Stopped),
             LeaseRecord::CleanupReported {
                 lease: id("a"),
-                cleanup: LeaseCleanup::NoProcess,
+                cleanup: LeaseCleanup::NotHeld,
             },
         ],
         // A drop while events are still accepted.

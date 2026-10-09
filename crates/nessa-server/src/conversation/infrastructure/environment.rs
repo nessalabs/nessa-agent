@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! open(grant, binding) ──▶ binding, unchanged (the gateway fences it)
-//! account(lease)       ──▶ NoProcess (this process never ran that lease)
+//! account(lease)       ──▶ NotHeld (nothing this process runs was started under it)
 //! ```
 //!
 //! Arrows are what each call answers. It enforces no sandbox of its own, so
@@ -37,11 +37,13 @@ impl Environment for InProcessEnvironment {
         Ok(binding)
     }
 
-    /// A lease this environment is asked about was issued before this
-    /// process started — every lease it opens is ended by this process — so
-    /// nothing here runs for it.
+    /// The service asks only about a lease an earlier run of the gateway left
+    /// unfinished (see `issue`), so nothing this process runs was started
+    /// under it. Whether a harness that run started outlived it is not known
+    /// here — a child is killed when its handle drops, which a crash skips —
+    /// and `NotHeld` claims no more than that.
     fn account<'a>(&'a self, _lease: &'a LeaseId) -> EnvironmentFuture<'a, LeaseCleanup> {
-        Box::pin(async { LeaseCleanup::NoProcess })
+        Box::pin(async { LeaseCleanup::NotHeld })
     }
 }
 

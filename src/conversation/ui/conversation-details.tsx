@@ -1,4 +1,5 @@
 import { useId, useState, type ReactElement, type ReactNode } from "react"
+import { conversationLeaseStatus } from "@nessa/client"
 import { Info, Pencil } from "lucide-react"
 import {
   ContextMenu,
@@ -45,51 +46,6 @@ function support(value: FeatureSupport) {
       return "Supported"
     default: {
       const exhaustive: never = value
-      return exhaustive
-    }
-  }
-}
-
-/** Where a lease stands, in a word or two. */
-function leaseStatus(lease: ConversationLease) {
-  switch (lease.state) {
-    case "live":
-      return "Running"
-    case "ending":
-      return "Stopping"
-    case "ended":
-      return leaseEnd(lease.cause)
-    case "interrupted":
-      return "Cleanup not confirmed"
-    case "refused":
-      return lease.refusal === "sandbox_unavailable"
-        ? "Couldn't start: sandbox not available"
-        : "Couldn't start"
-    case "unreadable":
-      return "Not known"
-    default: {
-      const exhaustive: never = lease.state
-      return exhaustive
-    }
-  }
-}
-
-/** Why a lease ended. */
-function leaseEnd(cause: ConversationLease["cause"]) {
-  switch (cause) {
-    case "closed":
-      return "Closed"
-    case "revoked":
-      return "Access withdrawn"
-    case "expired":
-      return "Timed out"
-    case "lost":
-      return "Ended when Nessa restarted"
-    case "stopped":
-    case undefined:
-      return "Stopped"
-    default: {
-      const exhaustive: never = cause
       return exhaustive
     }
   }
@@ -218,7 +174,7 @@ function LeaseFacts({ lease }: { lease: ConversationLease }) {
         label="Sandbox"
         value={lease.sandbox === "harness_default" ? "The agent's own" : "Not known"}
       />
-      <Fact label="Status" value={leaseStatus(lease)} />
+      <Fact label="Status" value={conversationLeaseStatus(lease)} />
     </FactGroup>
   )
 }

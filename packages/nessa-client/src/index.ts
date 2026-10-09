@@ -302,6 +302,8 @@ export type {
 } from "./generated/product.js"
 export { ConversationErrorCode } from "./generated/product.js"
 export { conversationErrorCode } from "./application/conversation-error-code.js"
+export type { ConversationLease } from "./generated/product.js"
+export { conversationLeaseStatus } from "./application/conversation-lease.js"
 export {
   NessaConversationMutationError,
   NessaConversationControlError,

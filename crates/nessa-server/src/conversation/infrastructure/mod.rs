@@ -48,8 +48,8 @@
 //! dropped unsent: the conversations' apps report each drop to it, through a
 //! channel, as they make it, and it writes the record on a task of its own.
 //! `InProcessEnvironment` is the one `Environment`: agents run as children of
-//! this gateway, and a lease it is asked about after a restart has no process
-//! here.
+//! this gateway, and of a lease it is asked about after a restart it can say
+//! only that it holds nothing for it.
 mod change_watch;
 pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
 mod environment;

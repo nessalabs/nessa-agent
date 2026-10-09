@@ -39,7 +39,6 @@ fn events(fence: &LeaseFence, turns: &[&str]) -> FencedEvents {
     FencedEvents {
         inner: Box::new(Script(turns.iter().map(|turn| event(turn)).collect())),
         state: fence.state.clone(),
-        cursor: 0,
     }
 }
 
@@ -107,22 +106,76 @@ async fn l9_events_settle_while_ending_and_are_dropped_with_evidence_once_closed
 }
 
 #[tokio::test]
-async fn l9_drops_past_the_kept_bound_are_counted_and_not_kept() {
+async fn l9_a_cursor_counts_every_event_under_the_lease_across_its_sessions() {
     let opening = open_lease(
         in_process_environment().as_ref(),
         request(SandboxProfiles::HARNESS_DEFAULT),
         binding(),
     );
-    opening.fence.close();
-    let turns: Vec<String> = (0..MAX_PENDING_DROPS + 3)
-        .map(|index| format!("t{index}"))
-        .collect();
-    let turns: Vec<&str> = turns.iter().map(String::as_str).collect();
-    let mut stream = events(&opening.fence, &turns);
-    assert!(stream.next().await.unwrap().is_none());
-    assert_eq!(opening.fence.state().uncounted, 3);
-    assert_eq!(opening.fence.take_drops().len(), MAX_PENDING_DROPS);
-    assert_eq!(opening.fence.state().uncounted, 0);
+    let fence = &opening.fence;
+    let mut first = events(fence, &["t1", "t2"]);
+    assert!(first.next().await.unwrap().is_some());
+    assert!(first.next().await.unwrap().is_some());
+    fence.close();
+    // A second session under the same lease does not start counting again,
+    // so no two drops of one lease share a place.
+    let mut second = events(fence, &["t1"]);
+    assert!(second.next().await.unwrap().is_none());
+    assert_eq!(
+        fence.take_drops(),
+        [LeaseRecord::EventDropped {
+            lease: opening.lease.clone(),
+            turn: ExecutionId::new("t1").unwrap(),
+            cursor: 3,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn l9_drops_past_the_kept_bound_are_counted_and_not_kept_over_the_whole_lease() {
+    let opening = open_lease(
+        in_process_environment().as_ref(),
+        request(SandboxProfiles::HARNESS_DEFAULT),
+        binding(),
+    );
+    let fence = &opening.fence;
+    fence.close();
+    let turns =
+        |count: u64| -> Vec<String> { (0..count).map(|index| format!("t{index}")).collect() };
+    // Dropped in two batches, as on a close past its deadline: once when the
+    // lease is interrupted and again when its late cleanup is recorded.
+    let early = turns(MAX_KEPT_DROPS - 1);
+    let early: Vec<&str> = early.iter().map(String::as_str).collect();
+    assert!(events(fence, &early).next().await.unwrap().is_none());
+    let first = fence.take_drops();
+    let late = turns(4);
+    let late: Vec<&str> = late.iter().map(String::as_str).collect();
+    assert!(events(fence, &late).next().await.unwrap().is_none());
+    assert_eq!(fence.state().uncounted, 3);
+    let second = fence.take_drops();
+    assert_eq!(fence.state().uncounted, 0);
+    assert_eq!(second.len(), 1);
+
+    // The lease that takes the most other records still has room for every
+    // drop kept: none of them is refused when it is recorded.
+    let id = || opening.lease.clone();
+    let mut records = vec![
+        issued(id().as_str(), 1),
+        LeaseRecord::Ending {
+            lease: id(),
+            cause: LeaseEndCause::Closed,
+            actor: None,
+        },
+        LeaseRecord::Interrupted { lease: id() },
+    ];
+    records.extend(first);
+    records.push(LeaseRecord::CleanupReported {
+        lease: id(),
+        cleanup: LeaseCleanup::Confirmed { forced: false },
+    });
+    records.extend(second);
+    assert_eq!(records.len(), CurrentLease::MAX_RECORDS);
+    held(&records);
 }
 
 fn held(records: &[LeaseRecord]) -> CurrentLease {
@@ -159,7 +212,7 @@ fn l11_l12_l16_a_lease_an_earlier_run_left_is_accounted_for_from_where_it_stood(
     let interrupted = LeaseRecord::Interrupted { lease: id() };
     let ended = LeaseRecord::Ended {
         lease: id(),
-        cleanup: LeaseCleanup::NoProcess,
+        cleanup: LeaseCleanup::NotHeld,
     };
     let cases = [
         // Live: ended as lost, with what the environment says it holds.
@@ -176,7 +229,7 @@ fn l11_l12_l16_a_lease_an_earlier_run_left_is_accounted_for_from_where_it_stood(
         let current = held(&records);
         let lease = current.held().unwrap();
         assert!(needs_accounting(lease));
-        let accounting = account_earlier(lease, LeaseCleanup::NoProcess);
+        let accounting = account_earlier(lease, LeaseCleanup::NotHeld);
         assert_eq!(accounting.len(), added);
         let mut folded = Some(current.clone());
         for record in &accounting {
@@ -190,7 +243,7 @@ fn l11_l12_l16_a_lease_an_earlier_run_left_is_accounted_for_from_where_it_stood(
     }
     let live = held(&[issued("old", 1)]);
     assert_eq!(
-        account_earlier(live.held().unwrap(), LeaseCleanup::NoProcess)[0],
+        account_earlier(live.held().unwrap(), LeaseCleanup::NotHeld)[0],
         LeaseRecord::Ending {
             lease: id(),
             cause: LeaseEndCause::Lost,
@@ -206,13 +259,13 @@ fn l11_l12_l16_a_lease_an_earlier_run_left_is_accounted_for_from_where_it_stood(
             interrupted,
             LeaseRecord::CleanupReported {
                 lease: id(),
-                cleanup: LeaseCleanup::NoProcess,
+                cleanup: LeaseCleanup::NotHeld,
             },
         ],
     ] {
         let current = held(&records);
         assert!(!needs_accounting(current.held().unwrap()));
-        assert!(account_earlier(current.held().unwrap(), LeaseCleanup::NoProcess).is_empty());
+        assert!(account_earlier(current.held().unwrap(), LeaseCleanup::NotHeld).is_empty());
         assert_eq!(next_revision(Some(&current), &[]).get(), 2);
     }
     assert_eq!(next_revision(None, &[]), LeaseRevision::FIRST);

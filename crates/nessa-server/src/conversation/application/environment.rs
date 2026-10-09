@@ -161,15 +161,25 @@ enum FencePhase {
     Closed,
 }
 
-/// Most dropped events a fence keeps for recording between two lease
-/// records; more are counted in the log, not kept.
-const MAX_PENDING_DROPS: usize = 32;
+/// Most dropped events one lease keeps as records: the room
+/// [`CurrentLease::MAX_RECORDS`] leaves after the most records a lease
+/// otherwise takes (issued, ending, interrupted, cleanup reported). More are
+/// counted in the log, not kept, so recording them can never be refused for
+/// want of room.
+const MAX_KEPT_DROPS: u64 = CurrentLease::MAX_RECORDS as u64 - 4;
 
 #[derive(Debug)]
 struct FenceState {
     phase: FencePhase,
+    /// Drops not yet taken to be recorded.
     drops: Vec<(ExecutionId, u64)>,
+    /// Drops kept over the lease's life, taken or not.
+    kept: u64,
+    /// Drops past [`MAX_KEPT_DROPS`] not yet logged.
     uncounted: u64,
+    /// How many events the environment has reported under the lease, over
+    /// every session opened under it.
+    cursor: u64,
 }
 
 /// The one provider the gateway gives an Agent: the environment's, tied to
@@ -191,7 +201,9 @@ impl LeaseFence {
             state: Arc::new(Mutex::new(FenceState {
                 phase,
                 drops: Vec::new(),
+                kept: 0,
                 uncounted: 0,
+                cursor: 0,
             })),
         })
     }
@@ -259,7 +271,6 @@ impl AgentProvider for LeaseFence {
                     events: Box::new(FencedEvents {
                         inner: opened.events,
                         state,
-                        cursor: 0,
                     }),
                 })
             })
@@ -271,8 +282,6 @@ impl AgentProvider for LeaseFence {
 struct FencedEvents {
     inner: Box<dyn ExecutionEventStream>,
     state: Arc<Mutex<FenceState>>,
-    /// How many events the environment has reported on this session.
-    cursor: u64,
 }
 impl ExecutionEventStream for FencedEvents {
     fn next(&mut self) -> ProviderObservationFuture<'_> {
@@ -283,18 +292,18 @@ impl ExecutionEventStream for FencedEvents {
                 let Some(event) = self.inner.next().await? else {
                     return Ok(None);
                 };
-                self.cursor = self.cursor.saturating_add(1);
                 let mut state = self
                     .state
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.cursor = state.cursor.saturating_add(1);
                 if state.phase != FencePhase::Closed {
                     return Ok(Some(event));
                 }
-                if state.drops.len() < MAX_PENDING_DROPS {
-                    state
-                        .drops
-                        .push((event.execution_id().clone(), self.cursor));
+                if state.kept < MAX_KEPT_DROPS {
+                    state.kept += 1;
+                    let cursor = state.cursor;
+                    state.drops.push((event.execution_id().clone(), cursor));
                 } else {
                     state.uncounted = state.uncounted.saturating_add(1);
                 }
@@ -308,9 +317,12 @@ impl ExecutionEventStream for FencedEvents {
 /// gateway's environment no longer runs — the gateway started again — is
 /// accounted for first: ended as lost with what the environment says it holds
 /// for it (rows L11, L12), so a lease is never left silently Live and the new
-/// one takes the next revision (row L16). Only one opening per conversation is
-/// ever in flight, so a previous lease still Live here is never this
-/// process's.
+/// one takes the next revision (row L16). A previous lease not yet final here
+/// is never one this process still runs: its stream has one writer at a time
+/// (the SDK's history lease, which an Agent holds until its close finishes),
+/// and a conversation's slot opens once and is never reused (`Slot`), so an
+/// opening cannot begin beside a run of the same conversation
+/// (`l13_concurrent_commands_open_one_lease_and_one_agent`).
 pub(crate) async fn issue(
     manager: &SessionManager,
     environment: &dyn Environment,

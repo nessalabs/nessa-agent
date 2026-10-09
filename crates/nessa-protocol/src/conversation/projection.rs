@@ -103,7 +103,7 @@ pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
             view.cleanup = cleanup.map(|cleanup| match cleanup {
                 LeaseCleanup::Confirmed { forced: false } => ConversationLeaseCleanup::Confirmed,
                 LeaseCleanup::Confirmed { forced: true } => ConversationLeaseCleanup::Forced,
-                LeaseCleanup::NoProcess => ConversationLeaseCleanup::NoProcess,
+                LeaseCleanup::NotHeld => ConversationLeaseCleanup::NotHeld,
             });
             Some(lease.terms())
         }

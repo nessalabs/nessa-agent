@@ -312,8 +312,8 @@ The states, the events that move them, and what happens when events
 arrive together. Slice A derives its regression table from these rows;
 a row without a test is not implemented.
 
-States: **Requested** (recorded, not yet admitted), **Live** (admitted,
-possibly narrowed; work may run), **Ending** (end requested, cleanup
+States: **Requested** (recorded, not yet admitted), **Refused** (never
+admitted; no work ran), **Live** (admitted, possibly narrowed; work may run), **Ending** (end requested, cleanup
 evidence awaited), **Ended** with a cause (completed, stopped, revoked,
 expired, closed, lost), **Interrupted** (ended without cleanup evidence
 within the deadline; the environment is unavailable for new leases until
@@ -329,7 +329,7 @@ it.
 | Row | Input or order | Decision and durable meaning |
 | --- | --- | --- |
 | L1 | Request admitted, possibly narrowed | Commit Live with what was granted, never what was asked; events accepted from this cursor on |
-| L2 | Request refused, or no admission by its deadline | Commit Ended(refused or expired) with the refusal; no work ran; the surface says why |
+| L2 | Request refused, or no admission by its deadline | Commit Refused with the refusal, or Ended(expired) past the deadline; no work ran; the surface says why |
 | L3 | Renewal before the deadline | Extend the deadline in place; revision unchanged; the environment learns the new deadline before the old one passes |
 | L4 | Deadline passes with work running | Ending; the environment must stop and report within the cleanup deadline; a terminal result already committed stays as the turn's outcome |
 | L5 | Stop, conversation close, grant revoked, or policy stop while Live | Ending with that cause recorded first; the same cleanup contract as 0008; a late terminal result is recorded as evidence, never as a second outcome |
@@ -354,12 +354,13 @@ recorded stream's (`crates/nessa-sdk/tests/application/agent_execution/sessions/
 and "in process" drives a real conversation through the port with the
 in-process adapter or a substitute
 (`crates/nessa-server/tests/conversation/leases.rs` and
-`environment.rs` beside it). Each test is named for its row.
+`environment.rs` beside it). The domain and in-process tests are named for
+their rows; the fold's are named for what they show.
 
 | Row | Domain | Fold | In process |
 | --- | --- | --- | --- |
 | L1 | yes | yes | yes: the lease is Live with the harness default before the first turn |
-| L2 | yes | yes | yes: a profile the environment cannot hold is refused, nothing runs |
+| L2 | yes | yes | yes: a profile the environment cannot hold is refused, nothing runs; the deadline half is not reachable, as L3 |
 | L3 | yes | | not reachable: in-process leases carry no deadline |
 | L4 | yes | | not reachable, as L3 |
 | L5 | yes | | yes: a person's close and a desktop stop each record their cause first |
@@ -368,8 +369,8 @@ in-process adapter or a substitute
 | L8 | yes | yes | yes: a close past its deadline, and a close that fails, interrupt; late confirmation accounts once |
 | L9 | yes | yes | yes: events settle while Ending and are dropped with lease, turn and cursor once closed |
 | L10 | yes | | not reachable: in process there is no control channel to lose |
-| L11 | | | yes: a lease an earlier run left Live is accounted for before the next is issued |
-| L12 | yes | | yes, as L11: the in-process environment reports no process |
+| L11 | | | yes, at the next opening: a lease an earlier run left is accounted for before the next is issued (see below) |
+| L12 | yes | | yes, as L11: the in-process environment reports it holds nothing (`not_held`) |
 | L13 | yes | yes | yes: concurrent commands open one lease and one agent |
 | L14 | | | not in slice A: no command leases until C (#700) |
 | L15 | | | not in slice A, as L14 |
@@ -379,6 +380,19 @@ in-process adapter or a substitute
 | L19 | | | not in slice A: low-disk pause is an environment limit from B |
 
 A row marked "not in slice A" is not implemented, under the rule above.
+
+How slice A meets L11 and L12 in process. There is no recovery pass at
+start: a lease an earlier run left unfinished is accounted for when its
+conversation next opens. Every command, and every read but one answered
+while a mode change awaits recovery, opens the conversation first, so they
+do not show that lease as Live. The in-process environment
+answers at once, so the lease ends as Ended(lost) and is never Interrupted
+for want of an answer. Its evidence is `not_held`: this process holds
+nothing for the lease. That is all it can truthfully say, because a harness
+an earlier run started is killed when its handle drops, which a crash skips,
+so whether one outlived the gateway is not known. A passive reader of the
+committed records sees the last lease recorded until the conversation next
+opens.
 
 ## Three transports, one contract
 

@@ -100,7 +100,7 @@ impl Environment for Substitute {
     }
     fn account<'a>(&'a self, lease: &'a LeaseId) -> EnvironmentFuture<'a, LeaseCleanup> {
         self.accounted.lock().unwrap().push(lease.clone());
-        Box::pin(async { LeaseCleanup::NoProcess })
+        Box::pin(async { LeaseCleanup::NotHeld })
     }
 }
 

@@ -211,8 +211,8 @@ pub enum LeaseEndCause {
     Revoked,
     /// Its deadline passed without renewal.
     Expired,
-    /// The environment no longer has a process for it: the connection to it
-    /// was lost, or it or the gateway started again.
+    /// The environment no longer holds it: the connection to it was lost, or
+    /// it or the gateway started again.
     Lost,
 }
 
@@ -225,9 +225,11 @@ pub enum LeaseCleanup {
         /// Whether cleanup needed forced termination.
         forced: bool,
     },
-    /// There was no process left to release: the environment started again
-    /// since the lease was issued.
-    NoProcess,
+    /// The environment holds nothing for the lease: none of what it is
+    /// running was started under it. Asked about a lease issued before it
+    /// last started, that is all it can say; whether something started then
+    /// outlived it is not known.
+    NotHeld,
 }
 
 /// Why a lease was not issued.
