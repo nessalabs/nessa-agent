@@ -52,7 +52,11 @@
 //! only that it holds nothing for it.
 mod change_watch;
 pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
+// Composed only by the Unix gateway (`composition/local_auth.rs`), as
+// `LaunchedDeletions` below is; the conversation tests build it on every host.
+#[cfg(any(unix, test))]
 mod environment;
+#[cfg(any(unix, test))]
 pub(crate) use environment::in_process as in_process_environment;
 mod catalogue_changes;
 mod receiver_authority;

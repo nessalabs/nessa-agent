@@ -6,6 +6,15 @@
 //!
 //! The golden file is the evidence. It is rewritten only by running this test
 //! with `NESSA_UPDATE_GOLDEN=1`, which a reviewer sees as a diff to it.
+//!
+//! One ordering is fixed by the test, not left to the scheduler. Creating a
+//! conversation returns while its agent's attachment still runs on a task of
+//! its own, so the attachment's `context_published` audit row and the first
+//! send's `queue_admitted` row race for the audit's next sequence number. They
+//! did before the port too (the pre-port code at c83b45f wrote
+//! `queue_admitted` first in 6 of 200 runs under load). The send therefore
+//! waits until the attachment's row is written, so every row is still
+//! compared, in the one order the golden was captured in.
 use super::{
     ConversationAgent, ConversationAgents, ConversationCaller, ConversationDependencies,
     ConversationLimits, ConversationService, RequestedConversation, SubmissionMode, SubmittedFile,
@@ -65,6 +74,19 @@ fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
         }
     }
     found
+}
+
+/// Whether an execution audit row records the attachment's context as
+/// published. The writer is still at work, so a file listed may be gone (a
+/// temporary one renamed) by the time it is read; that one is skipped.
+fn published(root: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        std::fs::read(entry.path())
+            .is_ok_and(|bytes| String::from_utf8_lossy(&bytes).contains("\"context_published\""))
+    })
 }
 
 /// What one local conversation leaves behind, rendered as text.
@@ -147,6 +169,16 @@ async fn run_local_conversation(root: &Path) -> Evidence {
         )
         .await
         .unwrap();
+    // The attachment publishes its context on its own task; wait for its row
+    // before the send writes one (see the module doc).
+    let audit_root = root.join("audit");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !published(&audit_root) {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the attachment publishes its context");
     service
         .submit(
             id.clone(),
@@ -200,7 +232,6 @@ async fn run_local_conversation(root: &Path) -> Evidence {
         snapshot.invocations,
         snapshot.queue_history,
     );
-    let audit_root = root.join("audit");
     // Execution audit rows are named by a random record identity, so they are
     // put in the order their writer gave them; every other row by its path.
     let mut rows: Vec<(String, String)> = files(&audit_root)

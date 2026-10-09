@@ -150,6 +150,8 @@ pub use catalogue_read::{
     CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadResponse,
     CatalogueReadSource, CatalogueReadValue, ReadCatalogue,
 };
+// For the adapter, which only the Unix gateway composes (`infrastructure`).
+#[cfg(any(unix, test))]
 pub(crate) use environment::{Environment, EnvironmentDeclaration, EnvironmentFuture};
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use error_code::error_code;
