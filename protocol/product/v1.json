@@ -2145,7 +2145,7 @@
     "ConversationShareParams": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Grant (conversation.share) or revoke (conversation.unshare) one paired device Read on one of the caller's conversations. Nothing is granted by default or by list: a paired device sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and not watchable. A grant is refused share_target_not_paired unless the credential is an active paired device of the conversation's owner, and conversation_deleted on a deleted conversation; a revoke needs only ownership. Revoking ends the device's next read; a read already admitted may finish. applied is false when nothing changed: granting a grant already held, or revoking one not held.",
+      "description": "Grant (conversation.share) or revoke (conversation.unshare) one paired device Read on one of the caller's conversations. Nothing is granted by default or by list: a paired device sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and not watchable. A grant is refused share_target_not_paired unless the credential is an active paired device of the conversation's owner, and conversation_deleted on a deleted conversation; a revoke needs only ownership. Revoking ends the device's next read; a read already admitted may finish. applied is false when nothing changed: granting a grant already held, or revoking one not held. A conversation holds at most 64 grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, so a share retried after a later unshare grants nothing; the same requestId naming another device or the other change is refused invalid_request.",
       "properties": {
         "conversationId": {
           "type": "string",
@@ -2218,7 +2218,8 @@
         "items": {
           "type": "array",
           "items": { "$ref": "#/$defs/ConversationShare" },
-          "description": "Every grant on the conversation."
+          "maxItems": 64,
+          "description": "Every grant on the conversation; a conversation holds at most 64."
         }
       },
       "required": ["items"]

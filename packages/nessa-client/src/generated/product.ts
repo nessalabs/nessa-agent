@@ -863,7 +863,7 @@ export interface ConversationDeleteParams {
   /** Stable action identifier retained for retries of one logical command. */
   requestId: string
 }
-/** Grant (conversation.share) or revoke (conversation.unshare) one paired device Read on one of the caller's conversations. Nothing is granted by default or by list: a paired device sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and not watchable. A grant is refused share_target_not_paired unless the credential is an active paired device of the conversation's owner, and conversation_deleted on a deleted conversation; a revoke needs only ownership. Revoking ends the device's next read; a read already admitted may finish. applied is false when nothing changed: granting a grant already held, or revoking one not held. */
+/** Grant (conversation.share) or revoke (conversation.unshare) one paired device Read on one of the caller's conversations. Nothing is granted by default or by list: a paired device sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and not watchable. A grant is refused share_target_not_paired unless the credential is an active paired device of the conversation's owner, and conversation_deleted on a deleted conversation; a revoke needs only ownership. Revoking ends the device's next read; a read already admitted may finish. applied is false when nothing changed: granting a grant already held, or revoking one not held. A conversation holds at most 64 grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, so a share retried after a later unshare grants nothing; the same requestId naming another device or the other change is refused invalid_request. */
 export interface ConversationShareParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
@@ -888,7 +888,7 @@ export interface ConversationShare {
 }
 /** Result of conversation.shares: the conversation's grants, oldest first. */
 export interface ConversationSharesResult {
-  /** Every grant on the conversation. */
+  /** Every grant on the conversation; a conversation holds at most 64. */
   items: ConversationShare[]
 }
 /** Stable acknowledgement of one submitted input. */

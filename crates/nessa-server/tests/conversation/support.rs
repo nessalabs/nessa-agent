@@ -1554,7 +1554,7 @@ pub(crate) async fn grant_read(
                 organization_id: conversation.organization().clone(),
                 principal_id: conversation.owner().clone(),
                 surface_id: "test".into(),
-                action_id: "share".into(),
+                action_id: uuid::Uuid::new_v4().to_string(),
             },
             at_ms: 1,
         },

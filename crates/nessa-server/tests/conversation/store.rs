@@ -2416,7 +2416,7 @@ async fn grant(store: &LocalConversationStore, id: &ConversationId, receiver: &s
             id,
             Some(receiver),
             &format!("{receiver}-credential"),
-            "share",
+            &uuid::Uuid::new_v4().to_string(),
         ))
         .await
         .unwrap()
@@ -2429,7 +2429,7 @@ async fn revoke(store: &LocalConversationStore, id: &ConversationId, receiver: &
             id,
             None,
             &format!("{receiver}-credential"),
-            "unshare",
+            &uuid::Uuid::new_v4().to_string(),
         ))
         .await
         .unwrap()
@@ -2579,6 +2579,88 @@ async fn a_repeated_share_or_unshare_changes_nothing() {
     assert_eq!(journaled, 1);
 }
 
+/// Row G16: a retried request answers what it answered the first time. A
+/// share whose reply was lost, retried after a later unshare, does not grant
+/// again; the same request naming another device or change is refused.
+#[tokio::test]
+async fn a_retried_share_replays_its_answer_and_never_undoes_a_later_unshare() {
+    use crate::conversation::application::{ConversationError, ReadGrantTransition, ReadGrants};
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    let share = || {
+        grant_change(
+            ReadGrantTransition::Grant,
+            &id,
+            Some("phone"),
+            "phone-credential",
+            "share-1",
+        )
+    };
+    assert!(opened.store.change(share()).await.unwrap());
+    assert!(revoke(&opened.store, &id, "phone").await);
+    assert!(opened.store.change(share()).await.unwrap());
+    assert!(!opened.store.is_granted(&id, "phone").await.unwrap());
+    for (transition, credential) in [
+        (ReadGrantTransition::Revoke, "phone-credential"),
+        (ReadGrantTransition::Grant, "tablet-credential"),
+    ] {
+        let refused = opened
+            .store
+            .change(grant_change(
+                transition,
+                &id,
+                Some("tablet"),
+                credential,
+                "share-1",
+            ))
+            .await;
+        assert!(
+            matches!(refused, Err(ConversationError::InvalidInput)),
+            "{:?}",
+            refused.map_err(|error| error.to_string())
+        );
+    }
+    let journaled: i64 = raw(&opened.path)
+        .query_row("SELECT COUNT(*) FROM read_grant_changes", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(journaled, 2);
+}
+
+/// Row G17: a conversation holds at most
+/// `MAX_READ_GRANTS_PER_CONVERSATION` grants, so its shares answer fits one
+/// frame; one more is refused and writes nothing.
+#[tokio::test]
+async fn a_conversation_holds_a_bounded_number_of_grants() {
+    use crate::conversation::application::{
+        ConversationError, ReadGrantTransition, ReadGrants, MAX_READ_GRANTS_PER_CONVERSATION,
+    };
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    for device in 0..MAX_READ_GRANTS_PER_CONVERSATION {
+        assert!(grant(&opened.store, &id, &format!("device-{device}")).await);
+    }
+    let refused = opened
+        .store
+        .change(grant_change(
+            ReadGrantTransition::Grant,
+            &id,
+            Some("one-more"),
+            "one-more-credential",
+            "one-more",
+        ))
+        .await;
+    assert!(matches!(refused, Err(ConversationError::InvalidInput)));
+    assert!(!opened.store.is_granted(&id, "one-more").await.unwrap());
+    assert_eq!(
+        opened.store.grants(&id).await.unwrap().len() as i64,
+        MAX_READ_GRANTS_PER_CONVERSATION
+    );
+}
+
 /// Row G8, in the store: a grant or revoke on another owner's conversation
 /// is refused as not found inside the transaction that would write it, and
 /// writes nothing.
@@ -2639,8 +2721,25 @@ async fn every_grant_change_is_journaled_with_its_initiator() {
     let opened = opened();
     let id = new_id();
     opened.store.create(owned(&id)).await.unwrap();
-    grant(&opened.store, &id, "phone").await;
-    revoke(&opened.store, &id, "phone").await;
+    {
+        use crate::conversation::application::{ReadGrantTransition, ReadGrants};
+        for (transition, receiver, request) in [
+            (ReadGrantTransition::Grant, Some("phone"), "share"),
+            (ReadGrantTransition::Revoke, None, "unshare"),
+        ] {
+            assert!(opened
+                .store
+                .change(grant_change(
+                    transition,
+                    &id,
+                    receiver,
+                    "phone-credential",
+                    request
+                ))
+                .await
+                .unwrap());
+        }
+    }
     let head = opened.store.head(&org(), &alice()).await.unwrap().revision;
     let connection = raw(&opened.path);
     let mut statement = connection

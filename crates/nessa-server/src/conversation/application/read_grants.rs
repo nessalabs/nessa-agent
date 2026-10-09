@@ -128,6 +128,11 @@ impl ReadGrantTransition {
     }
 }
 
+/// The most grants one conversation holds, so its `conversation.shares`
+/// answer always fits one socket frame. A grant past it is refused
+/// `InvalidInput` (`docs/limits.md`).
+pub const MAX_READ_GRANTS_PER_CONVERSATION: i64 = 64;
+
 /// One owner decision about one device and one conversation, with who made
 /// it. The store writes the grant, its journal row and the catalogue
 /// revision in one transaction.

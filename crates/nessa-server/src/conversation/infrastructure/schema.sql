@@ -116,4 +116,8 @@ CREATE TABLE read_grant_changes (
     revision INTEGER NOT NULL
 ) STRICT;
 
+-- One journal row per request: a retried request is answered from it.
+CREATE UNIQUE INDEX read_grant_changes_request
+    ON read_grant_changes (conversation_id, initiator, surface, request);
+
 PRAGMA user_version = 4;

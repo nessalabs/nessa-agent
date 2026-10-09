@@ -1240,7 +1240,7 @@ impl GrantFixture {
                     organization_id: OrganizationId::new("org").unwrap(),
                     principal_id: PrincipalId::new("owner").unwrap(),
                     surface_id: "desktop".into(),
-                    action_id: "share".into(),
+                    action_id: uuid::Uuid::new_v4().to_string(),
                 },
                 at_ms: 1,
             })

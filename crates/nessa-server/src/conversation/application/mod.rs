@@ -188,7 +188,7 @@ pub use provider_sessions::{
 };
 pub use read_grants::{
     admit_read, reader_of, ReadGrant, ReadGrantChange, ReadGrantTransition, ReadGrants, Reader,
-    ShareConversation,
+    ShareConversation, MAX_READ_GRANTS_PER_CONVERSATION,
 };
 pub use record_read::{
     ReadRecords, RecordHead, RecordReadError, RecordReadFuture, RecordReadLease,

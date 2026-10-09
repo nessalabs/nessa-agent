@@ -1716,7 +1716,7 @@ impl SubscriptionFixture {
                 conversation_id: self.id.clone(),
                 receiver_id: Some("receiver".into()),
                 credential_id: CredentialId::new("credential").unwrap(),
-                initiator: caller(&self.session, "share".into()),
+                initiator: caller(&self.session, uuid::Uuid::new_v4().to_string()),
                 at_ms: 1,
             })
             .await
@@ -1995,11 +1995,9 @@ async fn share_refuses_what_the_owner_cannot_grant() {
         .call("conversation.share", share(fixture.id.to_string(), "phone"))
         .await;
     assert_eq!(answer["error"]["code"], "conversation_deleted", "{answer}");
-    let answer = fixture
-        .call(
-            "conversation.unshare",
-            share(fixture.id.to_string(), "phone"),
-        )
-        .await;
+    // A new request: the share's own request id would replay the share.
+    let mut unshare = share(fixture.id.to_string(), "phone");
+    unshare["requestId"] = json!("unshare-phone");
+    let answer = fixture.call("conversation.unshare", unshare).await;
     assert_eq!(answer["payload"]["applied"], true, "{answer}");
 }

@@ -10,7 +10,7 @@ use super::{
 };
 use crate::conversation::application::{
     ConversationError, ConversationFuture, ReadGrant, ReadGrantChange, ReadGrantTransition,
-    ReadGrants,
+    ReadGrants, MAX_READ_GRANTS_PER_CONVERSATION,
 };
 use nessa_auth::domain::{CredentialId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{params, OptionalExtension, TransactionBehavior};
@@ -71,6 +71,37 @@ impl ReadGrants for LocalConversationStore {
                 }
                 ReadGrantTransition::Revoke => {}
             }
+            // A retried request answers what it answered the first time, so
+            // a share whose reply was lost cannot, retried after a later
+            // unshare, grant again (row G16). The same request naming another
+            // device or the other change is refused. A request that changed
+            // nothing wrote no journal row, and a retry of it is decided anew.
+            let replayed: Option<(String, String)> = transaction
+                .query_row(
+                    "SELECT credential_id, after FROM read_grant_changes
+                     WHERE conversation_id = ?1 AND initiator = ?2 AND surface = ?3
+                       AND request = ?4",
+                    params![
+                        id,
+                        principal.as_str(),
+                        change.initiator.surface_id,
+                        change.initiator.action_id
+                    ],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(failed)?;
+            if let Some((credential, after)) = replayed {
+                let target = match change.transition {
+                    ReadGrantTransition::Grant => "read",
+                    ReadGrantTransition::Revoke => "none",
+                };
+                return if credential == change.credential_id.as_str() && after == target {
+                    Ok(true)
+                } else {
+                    Err(ConversationError::InvalidInput)
+                };
+            }
             let existing: Option<(String, String)> = transaction
                 .query_row(
                     "SELECT receiver_id, credential_id FROM read_grants
@@ -90,6 +121,16 @@ impl ReadGrants for LocalConversationStore {
                 }
                 (ReadGrantTransition::Grant, None) => {
                     let receiver = change.receiver_id.clone().ok_or(ConversationError::InvalidInput)?;
+                    let held: i64 = transaction
+                        .query_row(
+                            "SELECT COUNT(*) FROM read_grants WHERE conversation_id = ?1",
+                            params![id],
+                            |row| row.get(0),
+                        )
+                        .map_err(failed)?;
+                    if held >= MAX_READ_GRANTS_PER_CONVERSATION {
+                        return Err(ConversationError::InvalidInput);
+                    }
                     transaction
                         .execute(
                             "INSERT INTO read_grants
