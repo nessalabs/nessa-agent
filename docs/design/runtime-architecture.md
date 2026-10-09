@@ -207,14 +207,14 @@ sequenceDiagram
     M->>M: harness runs cargo build, xcodebuild, simulator
     M-->>G: events (text, tool calls) tagged lease + turn
     M-->>G: artifact by digest over the artifact channel (screenshot.png)
-    G->>G: commit records; record hold
+    G->>G: commit records, record hold
     G-->>L: transcript shows the screenshot
     M-->>G: artifact by digest (Nessa.dmg)
-    M-->>G: turn complete; cleanup evidence; lease ends
+    M-->>G: turn complete, cleanup evidence, lease ends
     L->>G: download Nessa.dmg
     G-->>L: bytes by digest, verified
     L->>G: "install and run it" (run here)
-    G->>G: lease to the local environment; agent opens the artifact after approval
+    G->>G: lease to the local environment, agent opens the artifact after approval
 ```
 
 **7. Share one conversation with a friend.** You want Priya to see one
