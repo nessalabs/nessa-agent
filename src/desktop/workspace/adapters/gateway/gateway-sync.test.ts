@@ -106,6 +106,8 @@ function syncGateway(
     closed: boolean
   }[] = []
   let catalogueWatch: string | undefined
+  let updatedAt = 1_000
+  let rowRunning = true
   const open = (): GatewayClient => {
     const bucket = {
       changed: new Set<(payload: { watchId: string }) => void>(),
@@ -134,7 +136,7 @@ function syncGateway(
           return {
             conversations: options?.archived
               ? []
-              : ids.map((id, index) => row(id, 1_000 + index, true)),
+              : ids.map((id, index) => row(id, updatedAt + index, rowRunning)),
             complete: true,
           }
         },
@@ -187,6 +189,11 @@ function syncGateway(
       for (const socket of sockets)
         for (const handler of [...socket.changed]) handler({ watchId: catalogueWatch })
     },
+    /** The next list says this chat moved. `running` is the list row's flag. */
+    move(at: number, running = true) {
+      updatedAt = at
+      rowRunning = running
+    },
     emitRecord(id: string) {
       for (const socket of sockets)
         for (const handler of [...socket.changed]) handler({ watchId: `watch-${id}` })
@@ -228,6 +235,31 @@ it("does not list on the timer once the list watch is held", async () => {
   gateway.emitCatalogue()
   await settle()
   expect(gateway.lists.length).toBeGreaterThan(seeded)
+  source.dispose?.()
+})
+
+it("reads a settled open chat when the list ping says its row moved", async () => {
+  const gateway = syncGateway(["chat-a"], "attached", "completed")
+  gateway.move(1_000, false)
+  const time = clock()
+  const source = gatewaySource({
+    connect: async () => gateway.open(),
+    clock: time,
+    timing,
+  })
+  source.subscribe(() => {})
+  await time.advance(200)
+  await settle()
+  await source.transcript("chat-a")
+  await settle()
+  expect(gateway.recordWatches).toEqual([])
+  const before = gateway.reads.filter((id) => id === "chat-a").length
+  await time.advance(timing.activePollMs + timing.pollMs)
+  expect(gateway.reads.filter((id) => id === "chat-a").length).toBe(before)
+  gateway.move(2_000, false)
+  gateway.emitCatalogue()
+  await settle()
+  expect(gateway.reads.filter((id) => id === "chat-a").length).toBeGreaterThan(before)
   source.dispose?.()
 })
 

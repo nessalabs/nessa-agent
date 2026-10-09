@@ -9,7 +9,9 @@
  *   or one chat changed. This source still lists and reads: the same turn
  *   chain, the taken-out check, and the deadlines. The list watch sits on a
  *   connection of its own, not the one commands use, and replaces only the
- *   one-second list timer. One record watch, on that same connection, replaces
+ *   one-second list timer. That ping also reads an open chat whose row moved,
+ *   which is what the list round used to do. One record watch, on that same
+ *   connection, replaces
  *   the 250 ms poll for that one chat, and only while nothing unsaved is
  *   pending (an app review, the provider still starting, or a turn still
  *   running or queued). Every other open chat keeps its poll. The list watch
@@ -954,7 +956,19 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         openConnection: async () => opened,
         recordTargets: recordTarget,
         onListChanged: () => {
-          if (currentFollow()) void list("poller")
+          if (!currentFollow()) return
+          // The list timer's round also reads an open chat whose row moved.
+          // A settled chat does not hold the record slot, so this ping is
+          // the read that used to wait for that round.
+          void list("poller").then(
+            () => {
+              if (!currentFollow()) return
+              for (const sessionId of watched) {
+                if (stale(sessionId)) pollRead(sessionId)
+              }
+            },
+            () => undefined,
+          )
         },
         onConversationChanged: (id) => {
           if (!currentFollow()) return

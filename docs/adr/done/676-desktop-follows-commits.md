@@ -55,7 +55,7 @@ It signals two things:
 
 - the list changed, and the window runs its existing list (`list()` /
   `listConversations`, including `conversation.observe` when the list is
-  incomplete);
+  incomplete), then reads each open chat whose row moved;
 - chat X changed, and the window runs its existing read (`read(X, "held")`
   / `refreshConversation`), including the taken-out check, sequenced reads,
   and timeouts.
@@ -71,7 +71,7 @@ round tries the watch again. It does not sign the session out.
 
 | Now | What the window does |
 | --- | --- |
-| Catalogue ping | One existing list |
+| Catalogue ping | One existing list, then a read of each open chat whose row moved |
 | Record ping for the watched chat | One existing read of that chat |
 | Chat has no record watch | Its 250 ms poll stays |
 | App review, provider still starting, or a turn still running or queued | That chat's poll stays, and it does not take the record slot |
@@ -130,7 +130,8 @@ the cap is eight watches for the whole principal, shared with any phone, and
 these windows do not fill it by themselves.
 
 A catalogue ping costs one `conversation.list` (and `conversation.observe`
-when that list is incomplete). A record ping costs one `conversation.read`
+when that list is incomplete) and one `conversation.read` for each open chat
+whose row moved. A record ping costs one `conversation.read`
 through the path the window already uses. Neither number is a
 commit-to-screen latency. Owner-session watches do not admit `recordsPage`
 or catalogue payloads.
