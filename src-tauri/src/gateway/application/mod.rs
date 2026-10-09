@@ -8,7 +8,7 @@ pub use crate::gateway::domain::value_objects::ReconciliationHistoryFact;
 pub(crate) use ports::testing;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub use ports::GatewayLifecycleRecovery;
-#[cfg(any(target_os = "linux", all(test, unix)))]
+#[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
 pub use ports::GatewayStopProofToken;
 pub use ports::{
     ClaudeConfigurationChangeError, ClaudeDirectoryReplacement, ClaudeDirectorySettings,
