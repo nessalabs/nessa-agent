@@ -472,6 +472,26 @@ pub enum GatewayPhysicalResult {
     Failed(Box<GatewayError>),
 }
 
+/// Durable Claude directory publication, serialized by the gateway publication owner.
+pub trait ClaudeDirectorySettings: Send + Sync {
+    /// Publish the requested directory and return the durable value it replaced.
+    fn publish(&self, directory: Option<PathBuf>) -> Result<Option<PathBuf>, String>;
+    /// Restore the prior value only while this publication still owns the setting.
+    fn restore(&self, expected: &Option<PathBuf>, previous: Option<PathBuf>) -> Result<(), String>;
+}
+
+/// A directory change retains settings and native failures independently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaudeConfigurationChangeError {
+    Settings(String),
+    Gateway(GatewayError),
+    Rollback {
+        failure: Box<ClaudeConfigurationChangeError>,
+        settings: Option<String>,
+        gateway: Option<GatewayError>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GatewayError {
     Registration(String),

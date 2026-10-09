@@ -164,12 +164,40 @@ pub fn create_private_directory_path(path: &Path) -> io::Result<()> {
     create_private_directory_path_with(path, open_child_locator_directory, File::sync_all)
 }
 
+/// Create a service directory or accept its existing owned, non-writable-by-others leaf.
+/// Newly created directories are mode 0700. Existing read/search permissions remain unchanged.
+pub fn create_shared_directory_path(path: &Path) -> io::Result<()> {
+    create_private_directory_path_transaction_with(
+        path,
+        open_child_locator_directory,
+        File::sync_all,
+        verify_shared_directory_file,
+        || Ok(()),
+    )
+}
+
+/// Verify a retained service-directory handle: current owner, directory type,
+/// and no group/other write permissions. Read/search bits remain permitted.
+pub fn verify_shared_directory_file(directory: &File) -> io::Result<()> {
+    verify_locator_directory_file(directory)?;
+    if directory.metadata()?.uid() != unsafe { libc::geteuid() } {
+        return Err(unsafe_file());
+    }
+    Ok(())
+}
+
 fn create_private_directory_path_with(
     path: &Path,
     mut open_child: impl FnMut(&File, &CString) -> io::Result<File>,
     mut sync: impl FnMut(&File) -> io::Result<()>,
 ) -> io::Result<()> {
-    create_private_directory_path_transaction_with(path, &mut open_child, &mut sync, || Ok(()))
+    create_private_directory_path_transaction_with(
+        path,
+        &mut open_child,
+        &mut sync,
+        verify_directory_file,
+        || Ok(()),
+    )
 }
 
 pub(crate) fn create_private_directory_path_and_then<T>(
@@ -180,6 +208,7 @@ pub(crate) fn create_private_directory_path_and_then<T>(
         path,
         open_child_locator_directory,
         File::sync_all,
+        verify_directory_file,
         finish,
     )
 }
@@ -188,6 +217,7 @@ fn create_private_directory_path_transaction_with<T>(
     path: &Path,
     mut open_child: impl FnMut(&File, &CString) -> io::Result<File>,
     mut sync: impl FnMut(&File) -> io::Result<()>,
+    verify_leaf: impl Fn(&File) -> io::Result<()>,
     finish: impl FnOnce() -> io::Result<T>,
 ) -> io::Result<T> {
     if !path.is_absolute() {
@@ -245,7 +275,7 @@ fn create_private_directory_path_transaction_with<T>(
                 sync(&parent)?;
             }
             if last {
-                verify_directory_file(&child)?;
+                verify_leaf(&child)?;
             }
             parent = child;
         }

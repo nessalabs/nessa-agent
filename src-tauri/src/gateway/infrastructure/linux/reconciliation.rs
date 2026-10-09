@@ -7,13 +7,14 @@ use super::{
         LinuxSignalAuthority, NativeLinuxProcessFactory,
     },
     staging::{
-        bytes_match, create_owned_directory_transaction, definition_transaction,
-        discard_wants_link_temporary, owned_directory_transaction_present, owned_file_bytes,
-        publish_bytes, publish_runtime, publish_wants_link, remove_staging_runtime,
-        replace_owned_bytes, runtime_fingerprint, settle_definition_transaction,
-        settle_owned_directory_transaction, settle_recovered_owned_directory_transaction,
-        settle_wants_link_transaction, staging_runtime_present, validate_runtime,
-        wants_link_matches, wants_link_temporary_present,
+        bytes_match, create_owned_directory_transaction, create_shared_directory_transaction,
+        definition_transaction, discard_wants_link_temporary, owned_directory_transaction_present,
+        owned_file_bytes, publish_bytes, publish_runtime, publish_wants_link,
+        remove_staging_runtime, replace_owned_bytes, runtime_fingerprint,
+        settle_definition_transaction, settle_owned_directory_transaction,
+        settle_recovered_owned_directory_transaction, settle_wants_link_transaction,
+        staging_runtime_present, validate_runtime, wants_link_matches,
+        wants_link_temporary_present,
     },
     unit::{
         installed_claude_config_directory, render, rendered_declaration, unit_name, RenderedUnit,
@@ -48,7 +49,7 @@ use std::{
     ffi::OsString,
     fs,
     io::{ErrorKind, Read, Write},
-    os::unix::fs::{MetadataExt, PermissionsExt},
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -506,33 +507,25 @@ impl GatewayHost for SystemdGateway {
             (Some(snapshot), Some(prior)) => {
                 native_from_snapshot(snapshot, prior.target(), &unit, true)
                     .map_err(pre_admission)?;
-                let prior_path = snapshot
-                    .exec_start_ex
-                    .first()
-                    .and_then(|entry| environment_value(&entry.1, "NESSA_AGENT_PATH"))
-                    .ok_or_else(|| {
-                        pre_admission("The running systemd gateway has no retained agent path")
-                    })
-                    .and_then(|path| {
-                        SearchPath::parse(path).map_err(|error| {
-                            pre_admission(format!(
-                                "The running systemd gateway agent path is invalid: {error}"
-                            ))
-                        })
-                    })?;
-                let prior_rendered = render(UnitDefinition {
-                    unit: &unit,
-                    runtime: &paths
-                        .runtime_root
-                        .join(prior.target().runtime_fingerprint()),
-                    configuration: &configuration,
-                    working_directory: &data,
-                    home: &self.home,
-                    agent_path: &prior_path,
-                    fingerprint: prior.target().runtime_fingerprint(),
-                    generation: prior.target().service_generation(),
-                })
+                let bytes = owned_file_bytes(&paths.unit_file)
+                    .map_err(pre_admission)?
+                    .ok_or_else(|| pre_admission("The running systemd definition is missing"))?;
+                let (declared, prior_rendered) = owned_render(
+                    &bytes,
+                    &paths,
+                    &unit,
+                    DefinitionAuthority {
+                        configuration: &configuration,
+                        data: &data,
+                        home: &self.home,
+                    },
+                )
                 .map_err(pre_admission)?;
+                if declared != *prior.target() {
+                    return Err(pre_admission(
+                        "The running systemd definition identifies another target",
+                    ));
+                }
                 if !snapshot_matches(snapshot, manager.as_ref(), &paths, &unit, &prior_rendered)
                     .map_err(pre_admission)?
                     || manager
@@ -600,24 +593,33 @@ impl GatewayHost for SystemdGateway {
         let staged_runtime = paths.runtime_root.join(&fingerprint);
         let path = chosen_agent_path(agent_path, installed.as_ref(), &staged_runtime)
             .map_err(pre_admission)?;
-        let generation = reusable_generation(installed.as_ref(), &fingerprint)
+        let render_generation = |generation: &str| {
+            render(UnitDefinition {
+                unit: &unit,
+                runtime: &staged_runtime,
+                configuration: &configuration,
+                working_directory: &data,
+                home: &self.home,
+                agent_path: &path,
+                fingerprint: &fingerprint,
+                generation,
+            })
+            .map_err(pre_admission)
+        };
+        let candidate_generation = installed
+            .as_ref()
+            .and_then(|snapshot| snapshot.exec_start_ex.first())
+            .and_then(|entry| environment_value(&entry.1, "NESSA_SERVICE_GENERATION"))
+            .filter(|value| digest(value));
+        let candidate = candidate_generation.map(render_generation).transpose()?;
+        let generation = reusable_generation(installed.as_ref(), candidate.as_ref())
             .unwrap_or(random_digest().map_err(pre_admission)?);
+        let rendered = render_generation(&generation)?;
         let target = ReconciliationTarget::new(
             unit.as_str().to_owned(),
             fingerprint.clone(),
             generation.clone(),
         )
-        .map_err(pre_admission)?;
-        let rendered = render(UnitDefinition {
-            unit: &unit,
-            runtime: &staged_runtime,
-            configuration: &configuration,
-            working_directory: &data,
-            home: &self.home,
-            agent_path: &path,
-            fingerprint: &fingerprint,
-            generation: &generation,
-        })
         .map_err(pre_admission)?;
         let rendered_digest = definition_digest(&rendered.bytes);
 
@@ -1250,25 +1252,25 @@ impl GatewayHost for SystemdGateway {
                 "The current systemd endpoint is not the intended gateway incarnation".into(),
             ));
         }
-        let retained_path = snapshot
-            .exec_start_ex
-            .first()
-            .and_then(|entry| environment_value(&entry.1, "NESSA_AGENT_PATH"))
-            .ok_or_else(|| GatewayError::Stop("The intended unit has no agent path".into()))
-            .and_then(|path| {
-                SearchPath::parse(path).map_err(|error| GatewayError::Stop(error.to_string()))
-            })?;
-        let rendered = render(UnitDefinition {
-            unit: &unit,
-            runtime: &paths.runtime_root.join(target.runtime_fingerprint()),
-            configuration: &configuration,
-            working_directory: &data,
-            home: &self.home,
-            agent_path: &retained_path,
-            fingerprint: target.runtime_fingerprint(),
-            generation: target.service_generation(),
-        })
+        let bytes = owned_file_bytes(&paths.unit_file)
+            .map_err(GatewayError::Stop)?
+            .ok_or_else(|| GatewayError::Stop("The intended definition is missing".into()))?;
+        let (declared, rendered) = owned_render(
+            &bytes,
+            &paths,
+            &unit,
+            DefinitionAuthority {
+                configuration: &configuration,
+                data: &data,
+                home: &self.home,
+            },
+        )
         .map_err(GatewayError::Stop)?;
+        if declared != target {
+            return Err(GatewayError::Stop(
+                "The intended definition identifies another target".into(),
+            ));
+        }
         if !snapshot_matches(&snapshot, manager.as_ref(), &paths, &unit, &rendered)
             .map_err(|error| GatewayError::Stop(error.to_string()))?
             || manager
@@ -1530,6 +1532,7 @@ fn planned_directory(
     generation: &str,
     authorize: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), GatewayError> {
+    let shared = matches!(primary, LifecycleEffect::CreateSystemdWantsDirectory { .. });
     let transaction = Mutex::new(None);
     planned_physical_with_cleanup(
         progress,
@@ -1538,14 +1541,18 @@ fn planned_directory(
         PhysicalActionsWithCleanup {
             authorize,
             run: || {
-                let outcome = create_owned_directory_transaction(path, generation);
+                let outcome = if shared {
+                    create_shared_directory_transaction(path, generation)
+                } else {
+                    create_owned_directory_transaction(path, generation)
+                };
                 *transaction
                     .lock()
                     .map_err(|_| "Gateway directory transaction lock was poisoned".to_string())? =
                     outcome.transaction;
                 outcome.result
             },
-            present: || owned_directory_present(path),
+            present: || directory_present(path, !shared),
             cleanup_run: |retain| {
                 let transaction = transaction
                     .lock()
@@ -1790,7 +1797,7 @@ fn recovery_artifact_present(
             owned_directory_transaction_present(authority.data, generation)
         }
         LifecycleEffect::CreateSystemdWantsDirectory { .. } => {
-            owned_directory_present(&paths.wants_directory)
+            directory_present(&paths.wants_directory, false)
         }
         LifecycleEffect::SettleSystemdWantsDirectoryTransaction { generation, .. } => {
             owned_directory_transaction_present(&paths.wants_directory, generation)
@@ -1873,9 +1880,13 @@ fn runtime_artifact_present(path: &Path, fingerprint: &str) -> Result<bool, Stri
 }
 
 fn owned_directory_present(path: &Path) -> Result<bool, String> {
+    directory_present(path, true)
+}
+
+fn directory_present(path: &Path, private: bool) -> Result<bool, String> {
     match fs::symlink_metadata(path) {
         Ok(_) => {
-            verify_owned_path_if_present(path, true)?;
+            verify_owned_path_if_present(path, private)?;
             Ok(true)
         }
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
@@ -1965,10 +1976,16 @@ fn owned_render(
         declaration.generation,
     )
     .map_err(|error| error.to_string())?;
+    let installed_directory = declaration.claude_config_directory;
+    let configuration = authority
+        .configuration
+        .replacing_claude_config_directory(installed_directory)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_else(|| authority.configuration.clone());
     let rendered = render(UnitDefinition {
         unit,
         runtime: &paths.runtime_root.join(target.runtime_fingerprint()),
-        configuration: authority.configuration,
+        configuration: &configuration,
         working_directory: authority.data,
         home: authority.home,
         agent_path: &declaration.agent_path,
@@ -2694,9 +2711,13 @@ fn chosen_agent_path(
     })
 }
 
-fn reusable_generation(snapshot: Option<&UnitSnapshot>, fingerprint: &str) -> Option<String> {
-    let arguments = snapshot?.exec_start_ex.first().map(|entry| &entry.1)?;
-    (environment_value(arguments, "NESSA_RUNTIME_FINGERPRINT") == Some(fingerprint))
+fn reusable_generation(
+    snapshot: Option<&UnitSnapshot>,
+    desired: Option<&RenderedUnit>,
+) -> Option<String> {
+    let arguments = &snapshot?.exec_start_ex.first()?.1;
+    let desired = desired?;
+    (arguments == &desired.arguments)
         .then(|| environment_value(arguments, "NESSA_SERVICE_GENERATION"))
         .flatten()
         .filter(|value| digest(value))
@@ -2781,8 +2802,8 @@ fn verify_unit_authority(
             }
         }
     }
-    verify_owned_path_if_present(&paths.unit_root, true)?;
-    verify_owned_path_if_present(&paths.wants_directory, true)?;
+    verify_owned_path_if_present(&paths.unit_root, false)?;
+    verify_owned_path_if_present(&paths.wants_directory, false)?;
     if let Ok(metadata) = fs::symlink_metadata(&paths.unit_file) {
         if !metadata.is_file()
             || metadata.file_type().is_symlink()
@@ -2828,6 +2849,15 @@ fn verify_owned_path_if_present(path: &Path, private: bool) -> Result<(), String
             "The gateway directory has unsafe ownership, type, or mode: {}",
             path.display()
         ));
+    }
+    if !private {
+        let directory = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
+            .open(path)
+            .map_err(|error| error.to_string())?;
+        nessa_local_storage::verify_shared_directory_file(&directory)
+            .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -2958,28 +2988,25 @@ fn retire_prior(
         .observe_endpoint_health(authority.data)
         .map_err(GatewayError::Registration)?;
     let advertisement = health.as_ref().map(LinuxEndpointHealth::advertisement);
-    let retained_path = snapshot
-        .exec_start_ex
-        .first()
-        .and_then(|entry| environment_value(&entry.1, "NESSA_AGENT_PATH"))
-        .ok_or_else(|| GatewayError::Registration("The retiring unit has no agent path".into()))
-        .and_then(|path| {
-            SearchPath::parse(path).map_err(|error| GatewayError::Registration(error.to_string()))
-        })?;
-    let prior_rendered = render(UnitDefinition {
+    let bytes = owned_file_bytes(&authority.paths.unit_file)
+        .map_err(GatewayError::Registration)?
+        .ok_or_else(|| GatewayError::Registration("The retiring definition is missing".into()))?;
+    let (declared, prior_rendered) = owned_render(
+        &bytes,
+        authority.paths,
         unit,
-        runtime: &authority
-            .paths
-            .runtime_root
-            .join(prior.target().runtime_fingerprint()),
-        configuration: authority.configuration,
-        working_directory: authority.data,
-        home: authority.home,
-        agent_path: &retained_path,
-        fingerprint: prior.target().runtime_fingerprint(),
-        generation: prior.target().service_generation(),
-    })
+        DefinitionAuthority {
+            configuration: authority.configuration,
+            data: authority.data,
+            home: authority.home,
+        },
+    )
     .map_err(GatewayError::Registration)?;
+    if declared != *prior.target() {
+        return Err(GatewayError::Registration(
+            "The retiring definition identifies another target".into(),
+        ));
+    }
     if !snapshot_matches(
         &snapshot,
         runtime.manager,
@@ -5117,8 +5144,9 @@ mod tests {
         fn unit_file_state(&self, _: &SystemdUnitName) -> Result<String, String> {
             Ok("enabled".into())
         }
-        fn get_unit_by_pid(&self, _: u32) -> Result<String, String> {
-            unreachable!("an inactive admission has no process to identify")
+        fn get_unit_by_pid(&self, pid: u32) -> Result<String, String> {
+            assert_eq!(pid, self.0.running.main_process_id);
+            Ok(self.0.running.object_path.clone())
         }
         fn snapshot(&self, _: &SystemdUnitName) -> Result<Option<UnitSnapshot>, String> {
             Ok(Some(if self.0.is_running() {
@@ -5288,6 +5316,280 @@ mod tests {
         }
     }
 
+    struct CaptureIntent(Mutex<Option<GatewayReconciliationIntent>>);
+    impl GatewayReconciliationProgress for CaptureIntent {
+        fn readiness_invalidated(&self) {
+            unreachable!("intent rejection precedes readiness changes")
+        }
+        fn intent_admitted(&self, intent: GatewayReconciliationIntent) -> Result<(), GatewayError> {
+            *self.0.lock().unwrap() = Some(intent);
+            Err(GatewayError::Audit {
+                audit: "intent not acknowledged".into(),
+                physical: None,
+            })
+        }
+        fn history_observed(&self, _: ReconciliationHistoryFact) {
+            unreachable!()
+        }
+        fn effect_planned(
+            &self,
+            _: &str,
+            _: &LifecyclePlanStep,
+            _: &[LifecyclePlanStep],
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            unreachable!()
+        }
+        fn effect_completed(
+            &self,
+            _: &str,
+            _: &str,
+            _: &LifecycleCommandResult,
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            unreachable!()
+        }
+        fn physical_observed(
+            &self,
+            _: &LifecycleObservationSource,
+            _: Option<ReconciliationIncarnation>,
+            _: bool,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn a_running_owned_unit_admits_path_and_directory_replacements_as_new_targets_before_effects() {
+        for directory_change in [false, true] {
+            let installed = Installed::new();
+            let script = Script::new(&installed);
+            script.started_elsewhere.store(true, Ordering::SeqCst);
+            let gateway = installed.gateway(
+                Arc::new(ScriptedFactory(script.clone())),
+                Arc::new(installed.context(Some(installed.advertisement()))),
+            );
+            if directory_change {
+                gateway
+                    .replace_claude_config_directory(Some(PathBuf::from("/work/claude-new")))
+                    .unwrap();
+            }
+            let path = SearchPath::parse(if directory_change {
+                "/usr/bin"
+            } else {
+                "/usr/bin:/opt/new-tools"
+            })
+            .unwrap();
+            let progress = CaptureIntent(Mutex::new(None));
+            assert!(matches!(
+                gateway.register(
+                    &installed.runtime,
+                    "prod",
+                    Some(&path),
+                    &installed.attempt(),
+                    &progress
+                ),
+                Err(GatewayError::Audit { .. })
+            ));
+            let intent = progress.0.lock().unwrap();
+            let intent = intent
+                .as_ref()
+                .expect("exact prior configuration validates before admission");
+            assert_eq!(intent.before().unwrap().target(), &installed.target);
+            assert_ne!(
+                intent.target().service_generation(),
+                installed.target.service_generation()
+            );
+            assert_eq!(
+                intent.target().runtime_fingerprint(),
+                installed.target.runtime_fingerprint()
+            );
+            assert_eq!(script.reloads.load(Ordering::SeqCst), 0);
+            assert_eq!(script.starts.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                fs::read(&installed.paths.unit_file).unwrap(),
+                installed.bytes
+            );
+        }
+    }
+
+    #[test]
+    fn generation_reuse_requires_the_complete_desired_command() {
+        let installed = Installed::new();
+        let (_, original) = owned_render(
+            &installed.bytes,
+            &installed.paths,
+            &installed.unit,
+            installed.authority(),
+        )
+        .unwrap();
+        assert_eq!(
+            reusable_generation(Some(&installed.snapshot), Some(&original)),
+            Some(installed.target.service_generation().to_owned())
+        );
+        for (path, directory) in [
+            ("/usr/bin:/opt/new-tools", None),
+            ("/usr/bin", Some(PathBuf::from("/work/new-claude"))),
+        ] {
+            let configuration = installed
+                .configuration
+                .replacing_claude_config_directory(directory)
+                .unwrap()
+                .unwrap_or_else(|| installed.configuration.clone());
+            let desired = render(UnitDefinition {
+                unit: &installed.unit,
+                runtime: &installed
+                    .paths
+                    .runtime_root
+                    .join(installed.target.runtime_fingerprint()),
+                configuration: &configuration,
+                working_directory: &installed.data,
+                home: &installed.home,
+                agent_path: &SearchPath::parse(path).unwrap(),
+                fingerprint: installed.target.runtime_fingerprint(),
+                generation: installed.target.service_generation(),
+            })
+            .unwrap();
+            assert_eq!(
+                reusable_generation(Some(&installed.snapshot), Some(&desired)),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn prior_directory_is_validated_from_installed_bytes_for_inactive_and_recovery_paths() {
+        let installed = Installed::new();
+        let desired = installed
+            .configuration
+            .replacing_claude_config_directory(Some(PathBuf::from("/work/new-claude")))
+            .unwrap()
+            .unwrap();
+        let authority = DefinitionAuthority {
+            configuration: &desired,
+            data: &installed.data,
+            home: &installed.home,
+        };
+        let (prior, _) = owned_render(
+            &installed.bytes,
+            &installed.paths,
+            &installed.unit,
+            authority,
+        )
+        .unwrap();
+        assert_eq!(prior, installed.target);
+        let manager = installed.manager(Some(installed.snapshot.clone()));
+        assert_eq!(
+            inactive_definition(
+                &installed.snapshot,
+                &manager,
+                &installed.paths,
+                &installed.unit,
+                authority
+            )
+            .unwrap(),
+            Some(installed.bytes.clone())
+        );
+        let forged = String::from_utf8(installed.bytes.clone())
+            .unwrap()
+            .replace("Restart=on-failure", "Restart=always");
+        assert!(owned_render(
+            forged.as_bytes(),
+            &installed.paths,
+            &installed.unit,
+            authority
+        )
+        .is_err());
+        let original = installed
+            .configuration
+            .replacing_claude_config_directory(Some(PathBuf::from("/work/old-claude")))
+            .unwrap()
+            .unwrap();
+        let bytes = render(UnitDefinition {
+            unit: &installed.unit,
+            runtime: &installed
+                .paths
+                .runtime_root
+                .join(installed.target.runtime_fingerprint()),
+            configuration: &original,
+            working_directory: &installed.data,
+            home: &installed.home,
+            agent_path: &SearchPath::parse("/usr/bin").unwrap(),
+            fingerprint: installed.target.runtime_fingerprint(),
+            generation: installed.target.service_generation(),
+        })
+        .unwrap()
+        .bytes;
+        assert!(owned_render(&bytes, &installed.paths, &installed.unit, authority).is_ok());
+    }
+
+    #[test]
+    fn shared_0755_systemd_directories_allow_private_definition_publication_without_chmod() {
+        let installed = Installed::new();
+        for directory in [&installed.paths.unit_root, &installed.paths.wants_directory] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        verify_unit_authority(
+            &installed.snapshot.unit_path,
+            &installed.paths,
+            &installed.unit,
+        )
+        .unwrap();
+        let transaction =
+            create_shared_directory_transaction(&installed.paths.wants_directory, &"c".repeat(64));
+        transaction.result.unwrap();
+        settle_owned_directory_transaction(transaction.transaction.as_ref(), true).unwrap();
+        let new_target = ReconciliationTarget::new(
+            installed.unit.as_str().into(),
+            installed.target.runtime_fingerprint().into(),
+            "c".repeat(64),
+        )
+        .unwrap();
+        let new_bytes = installed.render_for(&new_target, "/usr/bin:/opt/new-tools");
+        #[cfg(target_os = "linux")]
+        replace_owned_bytes(
+            &installed.paths.unit_file,
+            &installed.bytes,
+            &new_bytes,
+            new_target.service_generation(),
+        )
+        .unwrap();
+        #[cfg(not(target_os = "linux"))]
+        {
+            // Atomic exchange is a Linux-only effect; this host exercises first publication.
+            fs::remove_file(&installed.paths.unit_file).unwrap();
+            publish_bytes(
+                &installed.paths.unit_file,
+                &new_bytes,
+                0o600,
+                new_target.service_generation(),
+            )
+            .unwrap();
+        }
+        publish_wants_link(
+            &installed.paths.wants_directory,
+            &installed.paths.wants_link,
+            &installed.paths.unit_file,
+            new_target.service_generation(),
+        )
+        .unwrap();
+        assert_eq!(fs::read(&installed.paths.unit_file).unwrap(), new_bytes);
+        for directory in [&installed.paths.unit_root, &installed.paths.wants_directory] {
+            assert_eq!(fs::metadata(directory).unwrap().mode() & 0o777, 0o755);
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o775)).unwrap();
+            assert!(verify_unit_authority(
+                &installed.snapshot.unit_path,
+                &installed.paths,
+                &installed.unit
+            )
+            .is_err());
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(
+            fs::metadata(&installed.paths.unit_file).unwrap().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[cfg(target_os = "linux")]
     #[test]
     fn registration_starts_an_inactive_owned_unit_again() {
         let installed = Installed::new();
@@ -5315,6 +5617,7 @@ mod tests {
         assert_eq!(script.starts.load(Ordering::SeqCst), 0);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_unit_started_after_admission_is_refused_before_its_definition_changes() {
         let installed = Installed::new();

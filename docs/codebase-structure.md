@@ -882,6 +882,12 @@ independently of whether that turn contains text.
 
 ### Packaged gateway lifecycle
 
+The shared LaunchAgents/systemd service directories retain their existing safe
+read/search modes while Nessa definition files remain private ([ADR 688](adr/688-shared-service-directory-permissions.md)).
+Claude directory saves share the gateway's serialized publication owner, including
+durable rollback, and Linux replacement validates the actual prior configuration
+and reuses a generation only for the complete desired command ([ADR 689](adr/689-linux-service-definition-replacement.md)).
+
 - `scripts/desktop/native-window-smoke.mjs` owns the Linux WebKitGTK end-to-end
   boundary. Its adjacent `native-smoke-*` modules isolate executable discovery,
   process cleanup, WebDriver request lifecycles, failure evidence, and the

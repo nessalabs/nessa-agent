@@ -1,8 +1,8 @@
 //! Tauri entry points and event adapter for managed gateway startup.
 
 use super::super::application::{
-    Gateway, GatewayStartup as ApplicationStartup, GatewayStartupEvents, GatewayStartupPhase,
-    StartupStep,
+    ClaudeConfigurationChangeError, ClaudeDirectorySettings, Gateway,
+    GatewayStartup as ApplicationStartup, GatewayStartupEvents, GatewayStartupPhase, StartupStep,
 };
 use crate::gateway::domain::value_objects::claude_config_directory_is_durable;
 use crate::settings::SettingsStore;
@@ -180,6 +180,12 @@ pub enum ClaudeConfigurationError {
     Settings { message: String },
     /// The packaged gateway did not accept the new directory.
     Gateway { message: String },
+    /// The original failure and a failed durable rollback are both retained.
+    Rollback {
+        failure: Box<ClaudeConfigurationError>,
+        settings: Option<String>,
+        gateway: Option<String>,
+    },
 }
 
 /// Write the Claude configuration directory and re-register when it changed.
@@ -196,22 +202,62 @@ pub(crate) async fn apply_claude_configuration_directory(
     directory: Option<String>,
 ) -> Result<(), ClaudeConfigurationError> {
     let directory = durable_directory(directory)?;
-    settings
-        .update(&mut |chosen| {
-            chosen.service.claude.configuration_directory = directory.clone();
-        })
-        .map_err(|error| ClaudeConfigurationError::Settings {
-            message: error.to_string(),
-        })?;
+    let saved = ClaudeSettings(settings);
     if let Some(gateway) = gateway {
         gateway
-            .change_claude_configuration(surface, directory)
+            .change_claude_configuration(surface, directory, &saved)
             .await
-            .map_err(|error| ClaudeConfigurationError::Gateway {
-                message: error.to_string(),
-            })?;
+            .map_err(configuration_change_error)?;
+    } else {
+        saved
+            .publish(directory)
+            .map_err(|message| ClaudeConfigurationError::Settings { message })?;
     }
     Ok(())
+}
+
+struct ClaudeSettings<'a>(&'a dyn SettingsStore);
+impl ClaudeDirectorySettings for ClaudeSettings<'_> {
+    fn publish(&self, directory: Option<PathBuf>) -> Result<Option<PathBuf>, String> {
+        let mut previous = None;
+        self.0
+            .update(&mut |chosen| {
+                previous = chosen.service.claude.configuration_directory.clone();
+                chosen.service.claude.configuration_directory = directory.clone();
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(previous)
+    }
+    fn restore(&self, expected: &Option<PathBuf>, previous: Option<PathBuf>) -> Result<(), String> {
+        self.0
+            .update(&mut |chosen| {
+                if &chosen.service.claude.configuration_directory == expected {
+                    chosen.service.claude.configuration_directory = previous.clone();
+                }
+            })
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+}
+
+fn configuration_change_error(error: ClaudeConfigurationChangeError) -> ClaudeConfigurationError {
+    match error {
+        ClaudeConfigurationChangeError::Settings(message) => {
+            ClaudeConfigurationError::Settings { message }
+        }
+        ClaudeConfigurationChangeError::Gateway(error) => ClaudeConfigurationError::Gateway {
+            message: error.to_string(),
+        },
+        ClaudeConfigurationChangeError::Rollback {
+            failure,
+            settings,
+            gateway,
+        } => ClaudeConfigurationError::Rollback {
+            failure: Box::new(configuration_change_error(*failure)),
+            settings,
+            gateway: gateway.map(|error| error.to_string()),
+        },
+    }
 }
 
 fn durable_directory(
@@ -349,6 +395,7 @@ mod configuration_directory {
     struct DirectoryHost {
         directory: Mutex<Option<PathBuf>>,
         causes: Mutex<Vec<ReconciliationCause>>,
+        fail: bool,
     }
 
     impl GatewayHost for DirectoryHost {
@@ -390,6 +437,11 @@ mod configuration_directory {
                 .lock()
                 .unwrap()
                 .push(attempt.origin().evidence().cause());
+            if self.fail {
+                return Err(GatewayError::Registration(
+                    "definition was not published".into(),
+                ));
+            }
             let service = "claude-directory";
             let gateway = ReconciledGateway::new(
                 service.into(),
@@ -450,6 +502,7 @@ mod configuration_directory {
         let host = Arc::new(DirectoryHost {
             directory: Mutex::new(None),
             causes: Mutex::new(Vec::new()),
+            fail: false,
         });
         let gateway = gateway(host.clone());
         let directory = absolute_claude_directory(".claude-work");
@@ -519,6 +572,7 @@ mod configuration_directory {
         let host = Arc::new(DirectoryHost {
             directory: Mutex::new(None),
             causes: Mutex::new(Vec::new()),
+            fail: false,
         });
         let gateway = gateway(host.clone());
 
@@ -542,6 +596,7 @@ mod configuration_directory {
         let host = Arc::new(DirectoryHost {
             directory: Mutex::new(None),
             causes: Mutex::new(Vec::new()),
+            fail: false,
         });
         let gateway = gateway(host.clone());
 
@@ -556,5 +611,41 @@ mod configuration_directory {
         ));
         assert_eq!(saved.storage.get(&saved.path).unwrap(), b"{");
         assert!(host.causes.lock().unwrap().is_empty());
+    }
+    #[test]
+    fn a_failed_native_change_restores_the_real_settings_store_and_live_directory() {
+        let saved = in_memory();
+        let old = PathBuf::from(absolute_claude_directory(".claude-old"));
+        saved
+            .store
+            .update(&mut |settings| {
+                settings.service.claude.configuration_directory = Some(old.clone())
+            })
+            .unwrap();
+        let host = Arc::new(DirectoryHost {
+            directory: Mutex::new(Some(old.clone())),
+            causes: Mutex::new(Vec::new()),
+            fail: true,
+        });
+        let gateway = gateway(host.clone());
+        assert!(matches!(
+            tauri::async_runtime::block_on(apply_claude_configuration_directory(
+                &saved.store,
+                Some(&gateway),
+                BundledSurface::Setup,
+                Some(absolute_claude_directory(".claude-new")),
+            )),
+            Err(ClaudeConfigurationError::Gateway { .. })
+        ));
+        assert_eq!(
+            saved
+                .store
+                .load_service()
+                .unwrap()
+                .claude
+                .configuration_directory,
+            Some(old.clone())
+        );
+        assert_eq!(*host.directory.lock().unwrap(), Some(old));
     }
 }
