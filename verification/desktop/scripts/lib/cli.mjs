@@ -128,6 +128,7 @@ export const DEV_SERVER_ONLY = "not run: dev server only"
  */
 export const devServerOnlyChecks = [
   "committed-transcript",
+  "lease-details",
   "app-review",
   "gateway-states",
   // The sandbox proxy is provided by the dev server, not vite preview.

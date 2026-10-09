@@ -2,17 +2,26 @@ use super::domain::ConversationId;
 use super::tool_uis::{McpToolUis, NoMcpToolUis};
 use super::view::{
     ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationAsked,
-    ConversationCapabilities, ConversationLifecycle, ConversationLifecyclePhase,
-    ConversationMcpTool, ConversationMessage, ConversationMessageApp, ConversationMessageStatus,
-    ConversationPart, ConversationPending, ConversationPendingMode, ConversationPermission,
-    ConversationPermissionAsk, ConversationPermissionOption, ConversationPermissionOptionEffect,
-    ConversationPermissionOrigin, ConversationQuestion, ConversationTool,
-    ConversationTranscriptState, ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationCapabilities, ConversationLeaseCause, ConversationLeaseCleanup,
+    ConversationLeaseEnvironment, ConversationLeaseRefusal, ConversationLeaseSandbox,
+    ConversationLeaseState, ConversationLeaseView, ConversationLifecycle,
+    ConversationLifecyclePhase, ConversationMcpTool, ConversationMessage, ConversationMessageApp,
+    ConversationMessageStatus, ConversationPart, ConversationPending, ConversationPendingMode,
+    ConversationPermission, ConversationPermissionAsk, ConversationPermissionOption,
+    ConversationPermissionOptionEffect, ConversationPermissionOrigin, ConversationQuestion,
+    ConversationTool, ConversationTranscriptState, ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     executions::{ExecutionEvent, ExecutionUpdate, SubmissionMode},
-    sessions::{CommittedSession, CommittedStatus, InvocationRecord, SessionSnapshot},
+    sessions::{
+        CommittedSession, CommittedStatus, CurrentLease, CurrentLeaseState, InvocationRecord,
+        LeaseRecord, SessionSnapshot,
+    },
+};
+use nessa_sdk::domain::agent_execution::leases::{
+    EnvironmentRef, LeaseCleanup, LeaseEndCause, LeasePhase, LeaseRefusal, LeaseRevision,
+    SandboxProfile,
 };
 use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::domain::agent_execution::{
@@ -39,6 +48,79 @@ pub const MAX_VIEW_BYTES: usize = 60_000;
 const MAX_REVIEW_BYTES: usize = 16_000;
 const REQUIRED_WORK_FAILURE: &str = "The turn could not complete all required work.";
 const PROVIDER_FAILURE_PREFIX: &str = "The agent provider reported an error: ";
+
+/// The conversation's latest lease as the view shows it: what the records
+/// fold into, never more. An unreadable lease claims nothing, not even the
+/// revision before it, which the fold keeps for itself.
+pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
+    let mut view = ConversationLeaseView {
+        state: ConversationLeaseState::Unreadable,
+        // Only a lease this build can read says which revision it is; the
+        // fold keeps the one before an unreadable lease for itself.
+        revision: None,
+        environment: None,
+        sandbox: None,
+        cause: None,
+        cleanup: None,
+        refusal: None,
+        dropped_events: 0,
+    };
+    let terms = match current.state() {
+        CurrentLeaseState::Unreadable { .. } => return view,
+        CurrentLeaseState::Refused { refusal, .. } => {
+            view.state = ConversationLeaseState::Refused;
+            view.refusal = Some(match refusal {
+                LeaseRefusal::SandboxUnavailable => ConversationLeaseRefusal::SandboxUnavailable,
+            });
+            current.records().first().and_then(|record| match record {
+                LeaseRecord::Refused { terms, .. } => Some(terms),
+                _ => None,
+            })
+        }
+        CurrentLeaseState::Held(lease) => {
+            view.dropped_events = lease.dropped_events();
+            let (state, cause, cleanup) = match lease.phase() {
+                LeasePhase::Live => (ConversationLeaseState::Live, None, None),
+                LeasePhase::Ending { cause } => (ConversationLeaseState::Ending, Some(cause), None),
+                LeasePhase::Ended { cause, cleanup } => {
+                    (ConversationLeaseState::Ended, Some(cause), Some(cleanup))
+                }
+                LeasePhase::Interrupted {
+                    cause,
+                    late_cleanup,
+                } => (
+                    ConversationLeaseState::Interrupted,
+                    Some(cause),
+                    late_cleanup,
+                ),
+            };
+            view.state = state;
+            view.cause = cause.map(|cause| match cause {
+                LeaseEndCause::Stopped => ConversationLeaseCause::Stopped,
+                LeaseEndCause::Closed => ConversationLeaseCause::Closed,
+                LeaseEndCause::Revoked => ConversationLeaseCause::Revoked,
+                LeaseEndCause::Expired => ConversationLeaseCause::Expired,
+                LeaseEndCause::Lost => ConversationLeaseCause::Lost,
+            });
+            view.cleanup = cleanup.map(|cleanup| match cleanup {
+                LeaseCleanup::Confirmed { forced: false } => ConversationLeaseCleanup::Confirmed,
+                LeaseCleanup::Confirmed { forced: true } => ConversationLeaseCleanup::Forced,
+                LeaseCleanup::NotHeld => ConversationLeaseCleanup::NotHeld,
+            });
+            Some(lease.terms())
+        }
+    };
+    view.revision = current.revision().map(LeaseRevision::get);
+    if let Some(terms) = terms {
+        view.environment = Some(match terms.environment {
+            EnvironmentRef::Here => ConversationLeaseEnvironment::Here,
+        });
+        view.sandbox = Some(match terms.sandbox {
+            SandboxProfile::HarnessDefault => ConversationLeaseSandbox::HarnessDefault,
+        });
+    }
+    view
+}
 
 /// `restarted` is an execution that was already unfinished when this
 /// projection first accepted history, and that this process has not run.
@@ -324,6 +406,9 @@ impl Projection {
                 interaction_view_error: None,
                 // Not the projection's: the service fills it from the summary.
                 title: None,
+                lease: snapshot
+                    .and_then(|snapshot| snapshot.lease.as_ref())
+                    .map(lease_view),
             },
         };
         if let Some(snapshot) = snapshot {

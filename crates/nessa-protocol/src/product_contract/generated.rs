@@ -69,6 +69,7 @@ impl SessionCloseReason {
 pub enum ConversationErrorCode {
     AgentNotConfigured,
     AgentUnsupported,
+    SandboxUnavailable,
     ModelUnavailable,
     ApprovalModeUnavailable,
     ApprovalModeNotApplied,
@@ -120,6 +121,7 @@ impl ConversationErrorCode {
         match self {
             Self::AgentNotConfigured => "agent_not_configured",
             Self::AgentUnsupported => "agent_unsupported",
+            Self::SandboxUnavailable => "sandbox_unavailable",
             Self::ModelUnavailable => "model_unavailable",
             Self::ApprovalModeUnavailable => "approval_mode_unavailable",
             Self::ApprovalModeNotApplied => "approval_mode_not_applied",

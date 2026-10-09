@@ -342,6 +342,7 @@ async fn finalized_provider_and_local_recipes_survive_storage_reload_exactly() {
                 local_outcome: None,
                 result: Some(report.clone().into_result()),
             }],
+            lease: None,
         };
         let storage = InMemoryStorage::new();
         let lease = storage.open(session_id.clone()).await.unwrap();

@@ -1,5 +1,10 @@
 # Committed conversation controls
 
+`lease-fixture.html?case=<state>` mounts the production details sheet over one
+published lease, decoded by the actual client validator; run
+`node verification/desktop/scripts/lease-details.mjs`. Like the fixture below,
+it is served by the development server only.
+
 `fixture.html` mounts the production `ConversationControls` and `applyView` with
 current published gateway views. Every case passes the actual client decoder
 before `applyView`; its review has a correlated running message and offered mode. Server projection tests own exact live execution

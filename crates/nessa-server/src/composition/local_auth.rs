@@ -1078,6 +1078,7 @@ async fn conversations(
             nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
         ),
         clock,
+        environment: crate::conversation::infrastructure::in_process_environment(),
     };
     let workspace = Some(agents.workspace.to_string_lossy().into_owned());
     // With MCP servers, an app's calls go through the conversation's own

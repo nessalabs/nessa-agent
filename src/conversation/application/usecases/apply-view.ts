@@ -151,6 +151,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
     remote: {
       latestInputId: [...seen].at(-1),
       runtime: view.runtime,
+      lease: view.lease,
       approvalMode: view.approvalMode,
       approvalModes: view.approvalModes,
       approvalModeChange: view.approvalModeChange,

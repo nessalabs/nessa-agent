@@ -1,0 +1,59 @@
+{
+  "conversationId": "00000000-0000-4000-8000-000000000010",
+  "revision": "00000000-0000-4000-8000-000000000000:1",
+  "messages": [],
+  "pending": [],
+  "permissions": [],
+  "tools": [],
+  "capabilities": {
+    "queue": true,
+    "steer": true,
+    "resume": false,
+    "permissions": true,
+    "imageInput": false,
+    "agentFeatures": {
+      "permissionDenial": "unknown",
+      "nativeHookSuppression": "unknown",
+      "compactionReporting": "unsupported_not_implemented",
+      "modelSwitchReporting": "unsupported_not_implemented",
+      "permissionDeferral": "unsupported_not_implemented",
+      "elicitationForwarding": "unknown",
+      "preToolPolicy": "unsupported_not_implemented",
+      "policyEndTurn": "unsupported_not_implemented",
+      "policyCloseSession": "unsupported_not_implemented",
+      "incomingElicitation": "unsupported"
+    }
+  },
+  "lifecycle": {
+    "phase": "attached"
+  },
+  "truncated": false,
+  "queueComplete": true,
+  "transcriptState": "complete",
+  "runtime": {
+    "model": "test",
+    "provider": "gateway-test",
+    "workspace": "/workspace",
+    "agent": "claude",
+    "modelName": "Test model",
+    "contextWindowTokens": 100000,
+    "reasoning": false
+  },
+  "lease": {
+    "state": "live",
+    "revision": 1,
+    "environment": "here",
+    "sandbox": "harness_default",
+    "droppedEvents": 0
+  },
+  "title": null,
+  "questions": [],
+  "approvalMode": "ask",
+  "approvalModes": [
+    {
+      "id": "ask",
+      "name": "Provider asks",
+      "description": "The provider requests approval where required."
+    }
+  ]
+}

@@ -44,6 +44,8 @@ const REFUSALS: Partial<Record<ConversationErrorCode, string>> = {
   // in this code. Retry is still the right next step, and normally succeeds.
   agent_startup_deadline:
     "The agent was still starting and ran out of time, so nothing was sent. Starting it is slowest the first time after an install or update, while the operating system scans the runtime. Retry normally succeeds once the runtime is warm.",
+  sandbox_unavailable:
+    "The gateway could not give this conversation's agent the sandbox it runs in, so the agent did not start and nothing was sent.",
 }
 
 /**
@@ -109,6 +111,11 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.ApprovalModeUnavailable:
     case ConversationErrorCode.ApprovalRequestConflict:
     case ConversationErrorCode.TurnRunning:
+      return true
+    // No lease was granted for the agent's run, so the gateway never opened a
+    // provider: the refusal comes from the same startup that ends before
+    // anything reaches one.
+    case ConversationErrorCode.SandboxUnavailable:
       return true
     // The gateway could not read what it saved for this conversation. It caches
     // that and answers every later command from it without opening an agent, so

@@ -13,6 +13,7 @@ export {
   type CommandFailure,
   type Conversation,
   type ConversationCapabilities,
+  type ConversationLease,
   type ConversationRuntime,
   type ConversationTranscriptState,
   type IdleConversation,

@@ -27,6 +27,9 @@ export const css = {
   committedNotice: '[data-committed-controls] [role="status"]',
   committedActions: "[data-committed-controls] button",
 
+  // The details sheet's lease fixture: one published lease per page
+  leaseFixture: "[data-lease-fixture]",
+
   // The window
   ambientGrain: ".desktop-grain", // class: the tiled, baked noise over the ambient light
   surface: "[data-surface]",
@@ -635,6 +638,11 @@ export const committedRoles = {
     { name: `tabs:${state}${truncated ? ":truncated" : ""}`, exact: true },
   ],
   closeHistory: ["button", { name: "Close history tab", exact: true }],
+}
+
+/** Role and accessible-name selectors for the details sheet's lease fixture. */
+export const leaseRoles = {
+  whereItRuns: ["region", { name: "Where it runs", exact: true }],
 }
 
 /** Console noise that is known to be harmless (see CHECKLIST.md, "Console errors"). */

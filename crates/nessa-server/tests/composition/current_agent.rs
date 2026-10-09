@@ -235,6 +235,7 @@ fn fixed_agent() -> ConversationAgent {
         execution_audit: Arc::new(AcceptingAudit),
         reserved_output_tokens: 4096,
         readiness: None,
+        sandbox: nessa_sdk::domain::agent_execution::leases::SandboxProfiles::HARNESS_DEFAULT,
     }
 }
 
@@ -1078,6 +1079,7 @@ fn service(root: &Path, resolver: Arc<CurrentAgentResolver>) -> ConversationServ
                 nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
             ),
             clock: Arc::new(TestClock),
+            environment: crate::conversation::infrastructure::in_process_environment(),
         },
         ConversationLimits::default(),
         Some(root.join("workspace").to_string_lossy().into_owned()),

@@ -126,7 +126,11 @@ export const Transcript = memo(function Transcript({
       data-split-scroll
     >
       <div className="workspace-transcript-inner">
-        <TranscriptHeading sessionId={sessionId} titleRef={titleRef} />
+        <TranscriptHeading
+          sessionId={sessionId}
+          titleRef={titleRef}
+          lease={transcript?.lease}
+        />
         {failure && !loaded ? (
           <div className="workspace-transcript-note" role="status">
             <p>{readFailureCopy(failure, "conversation")}</p>

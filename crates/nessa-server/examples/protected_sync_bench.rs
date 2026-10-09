@@ -1073,6 +1073,7 @@ fn seed(
             provider_context: context.clone(),
             invocations: Vec::new(),
             queue_history: Vec::new(),
+            lease: None,
         };
         let mut binding = lease.load().await.unwrap().binding().clone();
         let mut units = vec![SessionSaveUnit::new(vec![SessionChange::Opened {

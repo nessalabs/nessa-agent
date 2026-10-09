@@ -1519,6 +1519,7 @@ function reasonFor(
     case ConversationErrorCode.AuditUnavailable:
     case ConversationErrorCode.SubmissionUnresolved:
     case ConversationErrorCode.AgentStartupDeadline:
+    case ConversationErrorCode.SandboxUnavailable:
     case ConversationErrorCode.AgentOperationFailed:
     case ConversationErrorCode.AttachmentNotFound:
     case ConversationErrorCode.AttachmentUnavailable:

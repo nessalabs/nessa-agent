@@ -3,6 +3,7 @@ import type {
   ConversationObserveResult,
   ConversationSummary,
   ConversationView,
+  ConversationLease,
   ConversationReceipt,
   ConversationMutationResult,
   ConversationReorderResult,
@@ -188,6 +189,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     "queueComplete",
     "transcriptState",
     "runtime",
+    "lease",
     "title",
     "approvalMode",
     "approvalModes",
@@ -570,6 +572,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Invalid conversation model context window")
     flag(runtime, "reasoning")
   }
+  if (item.lease !== undefined) lease(item.lease)
   const capabilities = record(item.capabilities)
   const capabilityKeys = [
     "queue",
@@ -642,6 +645,136 @@ export function conversationView(value: unknown, expected: string): Conversation
   )
     throw new Error("Conversation lifecycle evidence has an invalid cause")
   return item as unknown as ConversationView
+}
+
+// Each set is checked against the generated type both ways: a value the schema
+// gains or loses fails to compile here rather than being refused on the wire.
+const leaseValues = {
+  state: {
+    live: true,
+    ending: true,
+    ended: true,
+    interrupted: true,
+    refused: true,
+    unreadable: true,
+  } satisfies Record<ConversationLease["state"], true>,
+  environment: { here: true } satisfies Record<
+    NonNullable<ConversationLease["environment"]>,
+    true
+  >,
+  sandbox: { harness_default: true } satisfies Record<
+    NonNullable<ConversationLease["sandbox"]>,
+    true
+  >,
+  cause: {
+    stopped: true,
+    closed: true,
+    revoked: true,
+    expired: true,
+    lost: true,
+  } satisfies Record<NonNullable<ConversationLease["cause"]>, true>,
+  cleanup: { confirmed: true, forced: true, not_held: true } satisfies Record<
+    NonNullable<ConversationLease["cleanup"]>,
+    true
+  >,
+  refusal: { sandbox_unavailable: true } satisfies Record<
+    NonNullable<ConversationLease["refusal"]>,
+    true
+  >,
+}
+
+type LeaseField = "required" | "optional" | "absent"
+type LeaseShape = Record<
+  "revision" | "environment" | "sandbox" | "cause" | "cleanup" | "refusal",
+  LeaseField
+> & {
+  /** Whether events can have been dropped: only once it stopped accepting them. */
+  dropped: boolean
+}
+
+const issued = {
+  revision: "required",
+  environment: "required",
+  sandbox: "required",
+  refusal: "absent",
+} as const
+
+/** Which fields each state carries: exactly what the gateway's `lease_view`
+ * can produce. A lease is issued with its terms and revision; a cause once it
+ * is ending, a cleanup once that is reported (late, for an interrupted one);
+ * events are dropped only after it stopped accepting them. A refused lease
+ * has its terms and refusal and nothing after; an unreadable one claims
+ * nothing at all. */
+const leaseShapes = {
+  live: { ...issued, cause: "absent", cleanup: "absent", dropped: false },
+  ending: { ...issued, cause: "required", cleanup: "absent", dropped: false },
+  ended: { ...issued, cause: "required", cleanup: "required", dropped: true },
+  interrupted: {
+    ...issued,
+    cause: "required",
+    cleanup: "optional",
+    dropped: true,
+  },
+  refused: {
+    ...issued,
+    refusal: "required",
+    cause: "absent",
+    cleanup: "absent",
+    dropped: false,
+  },
+  unreadable: {
+    revision: "absent",
+    environment: "absent",
+    sandbox: "absent",
+    cause: "absent",
+    cleanup: "absent",
+    refusal: "absent",
+    dropped: false,
+  },
+} satisfies Record<ConversationLease["state"], LeaseShape>
+
+/** The view's lease: the published shape, and only the fields its state
+ * carries, so a lease that contradicts itself is refused rather than shown. */
+function lease(value: unknown) {
+  const item = record(value)
+  exact(item, [
+    "state",
+    "revision",
+    "environment",
+    "sandbox",
+    "cause",
+    "cleanup",
+    "refusal",
+    "droppedEvents",
+  ])
+  for (const [key, values] of Object.entries(leaseValues)) {
+    const field = item[key]
+    if (key !== "state" && field === undefined) continue
+    if (typeof field !== "string" || !Object.hasOwn(values, field))
+      throw new Error(`Invalid conversation lease ${key}`)
+  }
+  const count = (key: string, min: number) => {
+    const field = item[key]
+    if (!Number.isSafeInteger(field) || (field as number) < min)
+      throw new Error(`Invalid conversation lease ${key}`)
+  }
+  if (item.revision !== undefined) count("revision", 1)
+  count("droppedEvents", 0)
+  const shape: LeaseShape = leaseShapes[item.state as ConversationLease["state"]]
+  for (const key of [
+    "revision",
+    "environment",
+    "sandbox",
+    "cause",
+    "cleanup",
+    "refusal",
+  ] as const) {
+    const present = item[key] !== undefined
+    if ((shape[key] === "required" && !present) || (shape[key] === "absent" && present))
+      throw new Error(`Invalid conversation lease ${key}`)
+  }
+  if (!shape.dropped && item.droppedEvents !== 0)
+    throw new Error("Invalid conversation lease droppedEvents")
 }
 
 export function conversationReorder(

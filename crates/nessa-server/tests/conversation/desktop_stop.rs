@@ -85,6 +85,7 @@ impl Fixture {
                     stop,
                     ..DELETION_BUDGETS
                 },
+                environment: crate::conversation::infrastructure::in_process_environment(),
                 message_commit_clock: Arc::new(
                     nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
                 ),

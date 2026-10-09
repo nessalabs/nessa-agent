@@ -90,6 +90,7 @@ pub(super) fn snapshot(invocations: Vec<InvocationRecord>) -> SessionSnapshot {
         provider_context: ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap()),
         invocations,
         queue_history: Vec::new(),
+        lease: None,
     }
 }
 /// The changes a record log keeps for `snapshot`, in its order.

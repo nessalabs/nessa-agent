@@ -4,6 +4,7 @@
 use super::{
     cancellation::Cancellation,
     errors::{Outcome, SavedError},
+    leases::WireLease,
     queue_order::QueueEvent,
     records::{Acknowledgement, Event, Metadata, Provider},
     scheduling::SchedulingEvent,
@@ -64,6 +65,7 @@ enum WireChange<E = Event> {
         before: Option<String>,
         after: Option<String>,
     },
+    Lease(WireLease),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -167,6 +169,7 @@ impl<'a> From<&'a SessionChange> for WireChange<Event<&'a str>> {
                 before: encode_context(before),
                 after: encode_context(after),
             },
+            SessionChange::Lease(record) => Self::Lease(record.into()),
         }
     }
 }
@@ -247,6 +250,7 @@ impl TryFrom<WireChange> for SessionChange {
                 before: decode_context(before)?,
                 after: decode_context(after)?,
             },
+            WireChange::Lease(record) => Self::Lease(record.decode()?),
         })
     }
 }

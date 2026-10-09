@@ -1,0 +1,188 @@
+### records
+id: SessionId("0b7d3c1e-5a4f-4e2b-9c8d-7f6a5b4c3d2e")
+provider: ProviderIdentity {
+    name: "gateway-test",
+    model_id: "test",
+    context: "test",
+}
+provider_context: Recorded(
+    ExecutionSessionId(
+        "<uuid-0>",
+    ),
+)
+invocations: [
+    InvocationRecord {
+        target_event_offset: None,
+        submission: Queued,
+        request: ExecutionRequest {
+            execution_id: ExecutionId(
+                "turn-1",
+            ),
+            user_message: UserMessage {
+                text: Some(
+                    PromptText(
+                        "read this",
+                    ),
+                ),
+                images: [],
+                files: [
+                    LinkedFile {
+                        path: "/tmp/notes.txt",
+                    },
+                ],
+                sender: Person,
+                app_model_context: [],
+            },
+            estimated_input_tokens: 95904,
+            reserved_output_tokens: 4096,
+        },
+        actor: ActionContext {
+            principal_id: "person",
+            surface_id: "desktop",
+            request_id: "send-1",
+        },
+        acknowledgement: Acknowledged,
+        events: [
+            ExecutionEvent {
+                execution_id: ExecutionId(
+                    "turn-1",
+                ),
+                update: Message(
+                    MessageChunk {
+                        kind: Text,
+                        message_id: None,
+                        text: "Response: read this",
+                    },
+                ),
+            },
+            ExecutionEvent {
+                execution_id: ExecutionId(
+                    "turn-1",
+                ),
+                update: Finished(
+                    Completed,
+                ),
+            },
+        ],
+        scheduling: [
+            InvocationSchedulingEvent {
+                kind: Queued,
+                target: None,
+                before: None,
+                stage: Queued,
+                cause: Submitted,
+                actor: Some(
+                    ActionContext {
+                        principal_id: "person",
+                        surface_id: "desktop",
+                        request_id: "send-1",
+                    },
+                ),
+            },
+            InvocationSchedulingEvent {
+                kind: Queued,
+                target: None,
+                before: Some(
+                    Queued,
+                ),
+                stage: Running,
+                cause: Dispatched,
+                actor: None,
+            },
+            InvocationSchedulingEvent {
+                kind: Queued,
+                target: None,
+                before: Some(
+                    Running,
+                ),
+                stage: Settled,
+                cause: ExecutionSettled,
+                actor: None,
+            },
+        ],
+        cancellation: None,
+        provider_report: Some(
+            ExecutionReport {
+                state: Independent {
+                    provider_result: Some(
+                        Ok(
+                            Completed,
+                        ),
+                    ),
+                    source: Provider,
+                    failure: None,
+                    session_state: Usable,
+                },
+            },
+        ),
+        local_cancellation: None,
+        local_outcome: Some(
+            Completed,
+        ),
+        result: Some(
+            Ok(
+                Completed,
+            ),
+        ),
+    },
+]
+queue_history: [
+    QueueHistoryRecord {
+        mutation: Admitted {
+            id: ExecutionId(
+                "turn-1",
+            ),
+            kind: Queued,
+        },
+        actor: Some(
+            ActionContext {
+                principal_id: "person",
+                surface_id: "desktop",
+                request_id: "send-1",
+            },
+        ),
+        scheduling_length: Some(
+            1,
+        ),
+    },
+    QueueHistoryRecord {
+        mutation: Selected {
+            id: ExecutionId(
+                "turn-1",
+            ),
+        },
+        actor: None,
+        scheduling_length: Some(
+            1,
+        ),
+    },
+]
+
+### audit
+== creation/conversation-created-0b7d3c1e-5a4f-4e2b-9c8d-7f6a5b4c3d2e.json
+{"recordId":"conversation-created-0b7d3c1e-5a4f-4e2b-9c8d-7f6a5b4c3d2e","kind":"conversation_creation_acknowledged","target":{"conversationId":"0b7d3c1e-5a4f-4e2b-9c8d-7f6a5b4c3d2e","organizationId":"org","ownerId":"person"},"transition":{"before":"absent","after":"owned"},"cause":"caller_requested","initiator":{"principalId":"person","surfaceId":"desktop"},"correlationId":"create","requestedAtMs":1700000000123,"observedAtMs":1700000000123}
+
+== execution/00000000
+{"recordId":"<uuid-1>","writerId":"<uuid-2>","sequence":0,"observedAtMs":1700000000123,"record":{"kind":"attachment_transition","sessionId":"0b7d3c1e-5a4f-4e2b-9c8d-7f6a5b4c3d2e","generation":0,"before":"waiting","after":"starting","cause":{"kind":"started","attachmentCause":"initial"},"actor":{"principalId":"person","surfaceId":"desktop","requestId":"create"}}}
+
+== execution/00000001
+{"recordId":"<uuid-3>","writerId":"<uuid-2>","sequence":1,"observedAtMs":1700000000123,"record":{"kind":"attachment_transition","sessionId":"0b7d3c1e-5a4f-4e2b-9c8d-7f6a5b4c3d2e","generation":0,"before":"starting","after":"context_published","cause":{"kind":"published"},"actor":{"principalId":"person","surfaceId":"desktop","requestId":"create"}}}
+
+== execution/00000002
+{"recordId":"<uuid-4>","writerId":"<uuid-2>","sequence":2,"observedAtMs":1700000000123,"record":{"kind":"queue_admitted","sessionId":"0b7d3c1e-5a4f-4e2b-9c8d-7f6a5b4c3d2e","executionId":"turn-1","mode":"queued","approvalMode":"ask","effortLevel":null,"admissionGeneration":"<uuid-5>:1","before":"unowned","after":"owned","cause":"submitted","actor":{"principalId":"person","surfaceId":"desktop","requestId":"send-1"}}}
+
+== file-links/conversation-files-0b7d3c1e-5a4f-4e2b-9c8d-7f6a5b4c3d2e-974cad2dd603827b06e9e6affa3de03db5af2c12c045db679a7b1bef42b41a1c.json
+{"recordId":"conversation-files-0b7d3c1e-5a4f-4e2b-9c8d-7f6a5b4c3d2e-974cad2dd603827b06e9e6affa3de03db5af2c12c045db679a7b1bef42b41a1c","kind":"conversation_files_named","target":{"conversationId":"0b7d3c1e-5a4f-4e2b-9c8d-7f6a5b4c3d2e","organizationId":"org","executionId":"turn-1","paths":["/tmp/notes.txt"]},"transition":{"before":"not_named","after":"named"},"cause":"caller_submitted","initiator":{"principalId":"person","surfaceId":"desktop"},"observedAtMs":1700000000123}
+
+
+### cleanup
+close_calls: 1
+close_requests: [
+    Explicit(
+        ActionContext {
+            principal_id: "person",
+            surface_id: "desktop",
+            request_id: "close",
+        },
+    ),
+]

@@ -1,4 +1,5 @@
 import { useId, useState, type ReactElement, type ReactNode } from "react"
+import { conversationLeaseStatus } from "@nessa/client"
 import { Info, Pencil } from "lucide-react"
 import {
   ContextMenu,
@@ -20,7 +21,7 @@ import {
 // carries the setup gate and with it the host.
 import { AGENT_CHOICES } from "../../onboarding/model/onboarding"
 import { AgentMark } from "../../onboarding/ui/agent-mark"
-import type { AgentFeatures, Conversation } from "../model"
+import type { AgentFeatures, Conversation, ConversationLease } from "../model"
 
 type FeatureSupport = AgentFeatures[keyof AgentFeatures]
 
@@ -78,11 +79,14 @@ function FactGroup({ title, children }: { title: string; children: ReactNode }) 
   )
 }
 
+/** A label and its value. A long value wraps rather than being cut short: a
+ * fact read only in part is not read (a refused lease's reason, at the
+ * panel's narrowest). */
 function Fact({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-4 py-2.5">
       <span className="shrink-0 nessa-text-4 text-foreground">{label}</span>
-      <span className="min-w-0 truncate text-end nessa-text-4 text-muted-foreground">
+      <span className="min-w-0 break-words text-end nessa-text-4 text-muted-foreground">
         {value}
       </span>
     </div>
@@ -149,6 +153,7 @@ function ConversationFacts({ conversation }: { conversation: Conversation }) {
           )}
         </FactGroup>
       ) : null}
+      {remote?.lease ? <LeaseFacts lease={remote.lease} /> : null}
       {runtime ? (
         <FactGroup title="Workspace">
           <div className="py-2.5 nessa-text-4 break-all text-foreground">
@@ -157,6 +162,29 @@ function ConversationFacts({ conversation }: { conversation: Conversation }) {
         </FactGroup>
       ) : null}
     </div>
+  )
+}
+
+/** Where the agent runs and the sandbox around it, from its latest lease. */
+function LeaseFacts({ lease }: { lease: ConversationLease }) {
+  // A refused lease names what was asked for, not where anything runs.
+  const granted = lease.state !== "refused"
+  return (
+    <FactGroup title="Where it runs">
+      {granted ? (
+        <>
+          <Fact
+            label="Computer"
+            value={lease.environment === "here" ? "This computer" : "Not known"}
+          />
+          <Fact
+            label="Sandbox"
+            value={lease.sandbox === "harness_default" ? "The agent's own" : "Not known"}
+          />
+        </>
+      ) : null}
+      <Fact label="Status" value={conversationLeaseStatus(lease)} />
+    </FactGroup>
   )
 }
 

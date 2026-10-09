@@ -14,6 +14,7 @@ import {
 import { overlayPlacementViolations } from "./architecture/overlay-placement.mjs"
 import { setupGatePlacementViolations } from "./architecture/setup-gate-placement.mjs"
 import { standDownPlacementViolations } from "./architecture/stand-down-placement.mjs"
+import { environmentPortViolations } from "./architecture/environment-port.mjs"
 import { composerBudgetViolations } from "./architecture/composer-budget.mjs"
 import { wholeWorkspaceViolations } from "./architecture/whole-workspace.mjs"
 import { importedPaths } from "./architecture/imported-paths.mjs"
@@ -460,6 +461,19 @@ for (const boundary of portableRuntimeBoundaries) {
       file,
       "runtime incarnation identity is portable health evidence; do not hide it behind a target cfg",
     )
+  }
+}
+
+// The Environment port's one adapter, and who may name the port (ADR 252).
+for (const crate of readdirSync(join(root, "crates"))) {
+  const source = join(root, "crates", crate, "src")
+  if (!existsSync(source)) continue
+  for (const file of rustFiles(source)) {
+    for (const violation of environmentPortViolations(
+      rel(file),
+      readFileSync(file, "utf8"),
+    ))
+      fail(file, violation)
   }
 }
 

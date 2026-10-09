@@ -79,6 +79,7 @@ async fn prepared_empty_history_is_complete_before_provider_attachment_in_both_s
                 deletion_budgets: DELETION_BUDGETS,
                 message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
                 clock: Arc::new(TestClock),
+                environment: crate::conversation::infrastructure::in_process_environment(),
             },
             ConversationLimits::default(),
             None,
@@ -160,6 +161,7 @@ async fn gateway_record_view_waits_for_message_commit() {
             deletion_budgets: DELETION_BUDGETS,
             message_commit_clock: Arc::new(HeldClock),
             clock: Arc::new(TestClock),
+            environment: crate::conversation::infrastructure::in_process_environment(),
         },
         ConversationLimits::default(),
         None,
@@ -313,6 +315,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
             local_outcome: None,
             result: None,
         }],
+        lease: None,
     }
 }
 
@@ -466,6 +469,7 @@ async fn assert_terminal_failure_round_trip(
             deletion_budgets: DELETION_BUDGETS,
             message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock: Arc::new(TestClock),
+            environment: crate::conversation::infrastructure::in_process_environment(),
         },
         ConversationLimits::default(),
         None,
@@ -713,6 +717,7 @@ fn service_with_cached_tool_uis(
             deletion_budgets: DELETION_BUDGETS,
             message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock: Arc::new(TestClock),
+            environment: crate::conversation::infrastructure::in_process_environment(),
         },
         ConversationLimits::default(),
         None,

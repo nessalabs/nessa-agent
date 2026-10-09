@@ -116,6 +116,7 @@ async fn record_fixture(root: &Path, separate_open: bool, count: usize) -> (Scop
                     provider_context: context.clone(),
                     invocations: vec![],
                     queue_history: vec![],
+                    lease: None,
                 },
                 vec![SessionSaveUnit::new(std::mem::take(&mut changes)).unwrap()],
             )
@@ -142,6 +143,7 @@ async fn record_fixture(root: &Path, separate_open: bool, count: usize) -> (Scop
                 provider_context: context,
                 invocations: vec![],
                 queue_history: vec![],
+                lease: None,
             },
             vec![SessionSaveUnit::new(changes).unwrap()],
         )

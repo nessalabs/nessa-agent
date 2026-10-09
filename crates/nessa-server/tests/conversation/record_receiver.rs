@@ -120,6 +120,7 @@ async fn gateway_child() {
             provider_context: ProviderContext::Absent,
             invocations: vec![],
             queue_history: vec![],
+            lease: None,
         };
         writer
             .save_changes(

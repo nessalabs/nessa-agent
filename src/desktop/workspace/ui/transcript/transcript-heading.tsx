@@ -1,4 +1,6 @@
+import { conversationLeaseStatus } from "@nessa/client"
 import type { RefObject } from "react"
+import type { TranscriptLease } from "../../model/transcript"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectChannel, selectSession } from "../../adapters/store/selectors"
 import { revealSession } from "../../adapters/store/commands"
@@ -6,6 +8,14 @@ import { useNow } from "../../adapters/dom/clock"
 import { startedLabel } from "../../model/time-labels"
 import { useListedChannel, useWorkspaceFrame } from "../workspace-frame"
 import { tooltip } from "../../../ui/tooltip"
+
+/**
+ * Where the agent's lease stands, in the client's words; nothing for a lease
+ * the gateway cannot read, since the heading has nothing true to say of it.
+ */
+export function leaseNote(lease: TranscriptLease): string | undefined {
+  return lease.state === "unreadable" ? undefined : conversationLeaseStatus(lease)
+}
 
 /**
  * A conversation's heading: its title, and where and when it began, set
@@ -16,9 +26,11 @@ import { tooltip } from "../../../ui/tooltip"
 export function TranscriptHeading({
   sessionId,
   titleRef,
+  lease,
 }: {
   sessionId: string
   titleRef: RefObject<HTMLHeadingElement | null>
+  lease?: TranscriptLease
 }) {
   const dispatch = useWorkspaceDispatch()
   const frame = useWorkspaceFrame()
@@ -30,6 +42,7 @@ export function TranscriptHeading({
   const now = useNow(60_000)
   if (!session) return null
   const showChannel = channel !== undefined && channel.id !== listed
+  const note = lease && leaseNote(lease)
   return (
     <div className="workspace-heading">
       <h2 ref={titleRef}>{session.title}</h2>
@@ -51,6 +64,12 @@ export function TranscriptHeading({
           </>
         ) : null}
         {startedLabel(session.startedAt, now)}
+        {note ? (
+          <>
+            <span aria-hidden="true"> · </span>
+            <span>{note}</span>
+          </>
+        ) : null}
       </p>
     </div>
   )

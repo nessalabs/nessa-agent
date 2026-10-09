@@ -7,6 +7,7 @@
 //!    |-----> permissions --> tools + executions
 //!    `-----> questions --> executions
 //! prompts (independent instruction values)
+//! leases (independent: where and under what limits an agent runs)
 //! subagents --> sessions + executions + tools
 //! ```
 //!
@@ -15,6 +16,7 @@
 //! Application coordination and infrastructure effects remain outside this context.
 mod error;
 pub mod executions;
+pub mod leases;
 pub mod permissions;
 pub mod prompts;
 pub mod questions;

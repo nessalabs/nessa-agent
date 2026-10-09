@@ -638,6 +638,7 @@ async fn restored_scheduling_from_a_custom_store_is_validated_before_provider_op
             scheduling: history,
             result: Some(Ok(ExecutionOutcome::Completed)),
         }],
+        lease: None,
     });
     assert!(matches!(
         attached_agent(provider.clone(), storage.manager().await).await,

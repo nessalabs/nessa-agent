@@ -1,7 +1,7 @@
 //! Typed session snapshot persistence and exclusive access contracts.
 #![deny(missing_docs)]
 
-use super::{CommittedStatus, CommittedViewState};
+use super::{CommittedStatus, CommittedViewState, CurrentLease, LeaseRecord};
 use crate::application::agent_execution::agents::{AgentError, DiagnosticTreeLimits};
 use crate::application::agent_execution::executions::{
     ExecutionEvent, ExecutionRequest, SubmissionMode,
@@ -278,6 +278,10 @@ pub struct SessionSnapshot {
     /// Append-only global queue membership/order facts. Local selection precedes
     /// provider dispatch; restoration clears pending membership without replay.
     pub queue_history: Vec<QueueHistoryRecord>,
+    /// The conversation's latest lease and its records, or `None` before any
+    /// lease was recorded. Earlier leases stay in the stream; only the latest
+    /// is folded here.
+    pub lease: Option<CurrentLease>,
 }
 
 /// One SDK decision retained for an atomic semantic-record save.
@@ -352,6 +356,9 @@ pub enum SessionChange {
         /// Newly saved context.
         after: ProviderContext,
     },
+    /// One fact about the conversation's lease, validated by the lease rules
+    /// before it is committed and again when it is read back.
+    Lease(LeaseRecord),
 }
 impl SessionSnapshot {
     pub(crate) fn retained_bytes(&self) -> usize {
@@ -952,6 +959,7 @@ mod committed_tests {
                 local_outcome: None,
             }],
             queue_history: Vec::new(),
+            lease: None,
         };
         let before = super::super::retained::snapshot(&snapshot);
         snapshot.invocations[0].acknowledgement = SubmissionAcknowledgement::Failed {
