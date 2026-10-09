@@ -4,7 +4,7 @@ use nessa_local_database::rusqlite::{
 };
 use nessa_sdk::application::agent_execution::sessions::CommittedTranscript;
 use nessa_sdk::infrastructure::session_storage::{
-    TranscriptCheckpoint, MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES,
+    TranscriptCheckpoint, TranscriptError, MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES,
 };
 use nessa_sync::replication::domain::{Id, Scope, MAX_ID_BYTES};
 #[cfg(test)]
@@ -139,11 +139,21 @@ pub(super) fn progress_target(
         .transpose()
 }
 
+/// A checkpoint row read. Structural cache failures stay [`CacheError`].
+/// A body this build cannot use is the transcript error, so the caller can
+/// drop a missing or other `schemaVersion` and rebuild.
+pub(super) enum CheckpointBody {
+    /// The chunks passed admission.
+    Read(TranscriptCheckpoint),
+    /// `from_chunks` refused the bytes.
+    Unreadable(TranscriptError),
+}
+
 pub(super) fn checkpoint(
     connection: &Connection,
     scope: &Scope,
     policy: CachePolicy,
-) -> Result<TranscriptCheckpoint, CacheError> {
+) -> Result<CheckpointBody, CacheError> {
     let maximum_chunks = policy
         .checkpoint_bytes()
         .div_ceil(MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES);
@@ -209,7 +219,10 @@ pub(super) fn checkpoint(
             .map_err(database_error)?;
         chunks.push(bytes);
     }
-    TranscriptCheckpoint::from_chunks(chunks).map_err(super::records::transcript_error)
+    Ok(match TranscriptCheckpoint::from_chunks(chunks) {
+        Ok(checkpoint) => CheckpointBody::Read(checkpoint),
+        Err(error) => CheckpointBody::Unreadable(error),
+    })
 }
 
 pub(super) fn save_progress(

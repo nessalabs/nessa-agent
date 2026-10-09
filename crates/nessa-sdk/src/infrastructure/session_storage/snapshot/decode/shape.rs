@@ -285,7 +285,11 @@ impl Shape {
             FailedAcknowledgement => matches!(key, "audit" | "storage"),
             StorageError => matches!(
                 key,
-                "Io" | "Corrupt" | "ChangesRequired" | "Unresolved" | "ShutdownFailures"
+                "Io" | "Corrupt"
+                    | "AnotherVersion"
+                    | "ChangesRequired"
+                    | "Unresolved"
+                    | "ShutdownFailures"
             ),
             StorageChildren => matches!(key, "read" | "runtime"),
             _ => true,

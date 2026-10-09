@@ -53,6 +53,7 @@ fn storage_failure(error: &StorageError) -> Value {
         StorageError::Busy => "busy",
         StorageError::Io(_) => "io",
         StorageError::Corrupt(_) => "corrupt",
+        StorageError::AnotherVersion { .. } => "anotherVersion",
         StorageError::IdentityMismatch => "identityMismatch",
         StorageError::ChangesRequired => "changesRequired",
         StorageError::Unresolved => "unresolved",

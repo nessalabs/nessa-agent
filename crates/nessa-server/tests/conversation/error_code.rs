@@ -263,6 +263,21 @@ fn state_this_gateway_cannot_read_is_permanent_and_says_so_on_the_wire() {
         );
     }
 
+    for unreadable in [
+        StorageError::Corrupt("a saved record is not this shape".into()),
+        StorageError::AnotherVersion { found: None },
+        StorageError::AnotherVersion { found: Some(2) },
+    ] {
+        assert_eq!(
+            error_code(&ConversationError::Storage(unreadable.clone())),
+            ConversationErrorCode::ConversationStateUnreadable
+        );
+        assert_eq!(
+            error_code(&ConversationError::Agent(AgentError::Storage(unreadable))),
+            ConversationErrorCode::ConversationStateUnreadable
+        );
+    }
+
     // An identity mismatch is not this: it means the configuration changed,
     // which is answered as that and already tells somebody to start a new
     // conversation. Two permanent things, told apart by which one happened.
@@ -281,8 +296,14 @@ fn state_this_gateway_cannot_read_is_permanent_and_says_so_on_the_wire() {
         StorageError::Io("the disk is full".into()),
     ] {
         assert_eq!(
-            error_code(&ConversationError::Agent(AgentError::Storage(transient))),
+            error_code(&ConversationError::Agent(AgentError::Storage(
+                transient.clone()
+            ))),
             ConversationErrorCode::AgentOperationFailed
+        );
+        assert_eq!(
+            error_code(&ConversationError::Storage(transient)),
+            ConversationErrorCode::ConversationStorageUnavailable
         );
     }
 }
