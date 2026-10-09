@@ -253,6 +253,8 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   submission_unresolved: "unavailable",
   temporarily_unavailable: "unavailable",
   unknown_method: "unavailable",
+  // A share is never a read; a read that met it would be no answer it knows.
+  share_target_not_paired: "unavailable",
   model_unavailable: "unavailable",
   approval_mode_unavailable: "unavailable",
   approval_mode_not_applied: "unavailable",
