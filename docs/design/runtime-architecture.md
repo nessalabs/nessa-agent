@@ -460,7 +460,7 @@ sequenceDiagram
     S->>G: message
     G->>A: open(lease, terms, binding)
     A->>H: ssh -T devbox nessa env serve, then the hello
-    H-->>A: Hello build and workspace
+    H-->>A: Hello build, lease protocol and workspace
     A->>H: Grant lease and agent
     H-->>A: Granted
     G->>A: binding starts its harness (Start lease and channel)
@@ -510,7 +510,7 @@ never run somewhere else.
 | Frames | four-byte length then JSON, at most 256 KiB; harness bytes at most 64 KiB a frame, base64; a launch whose variables do not fit is refused to its binding, and the connection other leases share goes on | the pairing frame reader, bounded before allocation |
 | Harness output queued for a binding | 64 KiB pipe, then 128 frames; past that the harness is stopped and the overflow audited | a binding that stops reading never grows the gateway's memory |
 | Harness input queued on the host | past its queue the harness's input is ended, never cut in the middle | |
-| Version | the host's build must equal the gateway's | a typed refusal (`environment_version_mismatch`), and nothing is sent |
+| Version | the host's lease protocol must equal the gateway's. The protocol is a fingerprint of the sources that define the frames and how both ends read them (the frames, their framing, the host's `serve` and the gateway's `HostLink`), taken when they compile, so it changes with any of them and nothing needs bumping; a test fails if a source that names a frame is left out. The package version is only reported: every revision shares it | a typed refusal (`environment_version_mismatch`), and nothing is sent |
 | Lost connection | the lease ends as lost at once (no reconnect budget yet); its end is asked of a new connection with `Account` | the host ends every lease of a lost connection and records what that took |
 
 **Orderings the SSH adapter meets** (gate 15). Each row has its test, in
@@ -521,8 +521,8 @@ binary over pipes) and `tests/conversation/leases.rs` (service).
 | Row | Input or order | Decision | Test |
 | --- | --- | --- | --- |
 | S1 | Grant answered Granted | Live; the binding starts its harness through the lease | adapter `a_lease_runs_its_harness_on_the_host_and_ends_with_the_hosts_evidence`, binary `a_lease_runs_its_harness_on_the_host_and_ends_with_evidence_in_the_ledger` |
-| S2 | Hello names another build | Refused `environment_version_mismatch`; nothing sent; audited | adapter `another_build_is_refused_and_sent_nothing` |
-| S3 | Host serving another connection, or not configured | Hello, then Unavailable; refused `environment_unavailable` | adapter `a_host_serving_another_gateway_is_busy`, host `a_host_that_cannot_serve_says_its_build_then_why`, binary `a_host_with_no_agents_configured_says_so_after_its_hello` |
+| S2 | Hello names another lease protocol, none, or is no hello, even from the same package version | Refused `environment_version_mismatch`; nothing sent; audited with the build and protocol it named | adapter `another_protocol_is_refused_and_sent_nothing`, `the_same_package_speaking_another_lease_protocol_is_refused`, host `every_source_speaking_lease_frames_names_the_protocol`, protocol `a_protocols_fingerprint_follows_every_byte_of_its_sources_but_line_endings` |
+| S3 | Host serving another connection, or not configured | Hello, then Unavailable; refused `environment_unavailable` | adapter `a_host_serving_another_gateway_is_busy`, host `a_host_that_cannot_serve_says_its_protocol_then_why`, binary `a_host_with_no_agents_configured_says_so_after_its_hello` |
 | S4 | Agent the host or the binding cannot run, or a grant of a lease id the host already granted, on this connection or an earlier one | Refused with its reason; nothing ran | adapter `an_agent_the_host_or_its_binding_cannot_run_is_refused`, host `grants_are_refused_with_their_reason`, binary (duplicate) |
 | S5 | Host unreachable, or no answer in time | Refused `environment_unreachable` at opening, and a grant answered late is ended on the host; at an end, Unanswered, so Interrupted | adapter `with_the_host_unreachable_a_lost_lease_has_no_evidence`, `a_grant_not_answered_in_time_is_ended_on_the_host` |
 | S6 | Stop, close or delete while Live | Stop and End frames; Ended with the host's cleanup. A stop asked again, or while the first is still stopping, is answered with that stop's cleanup, and its channel is never started again | adapter S1 test, host `a_stop_is_answered_with_the_harness_cleanup`, `a_stop_asked_twice_while_stopping_answers_the_same_cleanup`, service `b_a_conversation_created_on_a_host_runs_there_and_its_lease_names_the_host` |
@@ -540,6 +540,7 @@ binary over pipes) and `tests/conversation/leases.rs` (service).
 | S18 | A stop's answer when the host takes every step it may | The gateway waits through all of them | adapter `a_stop_is_waited_for_through_every_step_the_host_takes` |
 | S19 | A creation retried, or its receipt read, naming another environment | A conflict: the environment is part of the creation's fingerprint, and `conversation.receipt` repeats it; a reopen never moves a placed conversation | `creation_commands::a_creation_identity_refuses_a_changed_environment`, service `b_a_reopen_keeps_the_host_the_conversation_was_created_on` |
 | S21 | The gateway's audit cannot record an output overflow or a lost connection | The harness is still stopped and the lease still ended, but neither settles as confirmed: the harness's stop answers uncertain and the lease's end has no evidence, so it is Interrupted. A dropped frame's record failing is only logged, as no lease transition depends on it | adapter `an_overflow_whose_audit_fails_is_not_settled_as_confirmed`, `a_loss_whose_audit_fails_leaves_the_lease_unanswered` |
+| S22 | A close that failed while the host confirmed the lease's end | The host's confirmation answers only the close's doubt about what it still held; a failed audit, a failed save or any other failure of the close stays in its answer | service `b_a_hosts_confirmed_release_answers_only_cleanup_uncertainty` |
 | S20 | A draft names a host the catalog no longer offers | The panel drops it from the draft, which then runs here as "Run on" shows | panel `use-agent-choices.test.ts` |
 
 Slice B's lease rows, beside slice A's above:

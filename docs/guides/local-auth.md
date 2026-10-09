@@ -304,7 +304,7 @@ port or jump host in `~/.ssh/config`), at most 16. The composer then offers
 whole life. The host needs this same build of `nessa` on its `PATH` and its own
 `config.json` with an `agents` section; the gateway runs
 `ssh -T -o BatchMode=yes <host> nessa env serve` with your own keys and config,
-and refuses a host running another build:
+and refuses a host whose build speaks another lease protocol:
 
 ```json
 {

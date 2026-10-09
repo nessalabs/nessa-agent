@@ -14,7 +14,7 @@
 use super::{agent::launch_environment, runtime_config::RuntimeConfig};
 use crate::{
     core::RunError,
-    env::{Environment, VERSION},
+    env::{Environment, LEASE_PROTOCOL, VERSION},
     env_serve::{
         application::{refuse, serve, ServeTimings},
         infrastructure::{ConfiguredLauncher, FileLedger, LaunchSpec, ServeLock, ServeLockError},
@@ -37,6 +37,7 @@ const LOCK_WAIT: Duration = Duration::from_secs(15);
 pub(super) async fn execute() -> Result<(), RunError> {
     let unconfigured = Hello {
         build: VERSION.into(),
+        protocol: LEASE_PROTOCOL.into(),
         workspace: String::new(),
     };
     let composed = match compose().await {
@@ -56,6 +57,7 @@ pub(super) async fn execute() -> Result<(), RunError> {
         tokio::io::stdin(),
         tokio::io::stdout(),
         VERSION,
+        LEASE_PROTOCOL,
         launcher,
         ledger,
         ServeTimings::default(),

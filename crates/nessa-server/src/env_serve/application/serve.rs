@@ -171,6 +171,7 @@ pub(crate) async fn refuse<W: AsyncWrite + Unpin>(
         &mut output,
         &FromEnvironment::Hello {
             build: hello.build,
+            protocol: hello.protocol,
             workspace: hello.workspace,
         },
     )
@@ -185,6 +186,7 @@ pub(crate) async fn serve<R, W>(
     input: R,
     output: W,
     build: &str,
+    protocol: &str,
     launcher: Arc<dyn HarnessLauncher>,
     ledger: Arc<dyn LeaseLedger>,
     timings: ServeTimings,
@@ -196,6 +198,7 @@ pub(crate) async fn serve<R, W>(
     let _ = frames
         .send(FromEnvironment::Hello {
             build: build.into(),
+            protocol: protocol.into(),
             workspace: launcher.workspace().into(),
         })
         .await;

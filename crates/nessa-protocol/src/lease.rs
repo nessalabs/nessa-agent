@@ -4,7 +4,7 @@
 //! "Three transports, one contract").
 //!
 //! ```text
-//! environment ── Hello{build, workspace} ──▶ gateway   (first frame, always)
+//! environment ── Hello{build, protocol, workspace} ──▶ gateway   (first frame, always)
 //! gateway ── Grant{lease, agent} ──▶ environment ── Granted | Refused ──▶ gateway
 //! gateway ── Start{lease, channel, environment} ──▶ harness process on the host
 //!   gateway ── Input / InputClosed ──▶ harness stdin
@@ -34,9 +34,13 @@
 //! big-endian length and a JSON body of at most [`MAX_FRAME_BYTES`]. A
 //! harness's bytes travel base64-encoded, at most [`MAX_DATA_BYTES`] a frame.
 //!
-//! The hello is read by [`read_hello`], which looks only at its `type` and
-//! `build`: an environment of another build is recognised as such whatever
-//! else its frames carry, and is refused before anything is sent to it.
+//! The hello is read by [`read_hello`], which looks only at its `type`,
+//! `build` and `protocol`: an environment speaking another protocol is
+//! recognised as such whatever else its frames carry, and is refused before
+//! anything is sent to it. The protocol is a [`fingerprint`] of the sources
+//! that write, read and give meaning to these frames, taken when they are
+//! compiled, so it changes whenever they do, with nothing to remember to
+//! bump. The package version does not: it stays the same across revisions.
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::BTreeMap, time::Duration};
@@ -149,9 +153,13 @@ pub enum StartFailure {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Hello {
-    /// The environment's build, `CARGO_PKG_VERSION`; a gateway speaks only to
-    /// its own build.
+    /// The environment's package version, `CARGO_PKG_VERSION`: for people
+    /// and records only. Revisions that speak differently share it.
     pub build: String,
+    /// The lease protocol the environment speaks, its [`fingerprint`]; a
+    /// gateway speaks only to its own. Empty from an environment that sends
+    /// none, which is another protocol.
+    pub protocol: String,
     /// The absolute directory on the host its harnesses work in.
     pub workspace: String,
 }
@@ -239,6 +247,8 @@ pub enum FromEnvironment {
     Hello {
         /// See [`Hello::build`].
         build: String,
+        /// See [`Hello::protocol`].
+        protocol: String,
         /// See [`Hello::workspace`].
         workspace: String,
     },
@@ -372,9 +382,10 @@ pub fn decode<'a, T: Deserialize<'a>>(body: &'a [u8]) -> Result<T, FrameRefused>
     serde_json::from_slice(body).map_err(|error| FrameRefused(error.to_string()))
 }
 
-/// The hello a first frame carries, read by its `type` and `build` alone so
-/// another build's hello is recognised whatever else it holds. `None` is a
-/// first frame that is not a hello at all, which is another build too.
+/// The hello a first frame carries, read by its `type`, `build` and
+/// `protocol` alone so another protocol's hello is recognised whatever else
+/// it holds. `None` is a first frame that is not a hello at all, which is
+/// another protocol too.
 pub fn read_hello(body: &[u8]) -> Option<Hello> {
     #[derive(Deserialize)]
     struct Loose {
@@ -382,13 +393,61 @@ pub fn read_hello(body: &[u8]) -> Option<Hello> {
         kind: String,
         build: String,
         #[serde(default)]
+        protocol: String,
+        #[serde(default)]
         workspace: String,
     }
     let loose: Loose = serde_json::from_slice(body).ok()?;
     (loose.kind == "hello").then_some(Hello {
         build: loose.build,
+        protocol: loose.protocol,
         workspace: loose.workspace,
     })
+}
+
+/// The lease protocol named by `sources`, the files that write, read and
+/// give meaning to its frames: 16 hex digits of their FNV-1a hash, in order,
+/// each file's length first so moving bytes between files changes it too.
+/// Carriage returns are skipped, so a checkout with Windows line endings
+/// names the same protocol. A `const fn`, to be taken over `include_bytes!`
+/// when the sources are compiled.
+pub const fn fingerprint(sources: &[&[u8]]) -> [u8; 16] {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0100_0000_01b3;
+    let mut hash = OFFSET;
+    let mut file = 0;
+    while file < sources.len() {
+        let source = sources[file];
+        let mut length = 0u64;
+        let mut at = 0;
+        while at < source.len() {
+            if source[at] != b'\r' {
+                length += 1;
+            }
+            at += 1;
+        }
+        let mut shift = 0;
+        while shift < 64 {
+            hash = (hash ^ ((length >> shift) & 0xff)).wrapping_mul(PRIME);
+            shift += 8;
+        }
+        at = 0;
+        while at < source.len() {
+            if source[at] != b'\r' {
+                hash = (hash ^ source[at] as u64).wrapping_mul(PRIME);
+            }
+            at += 1;
+        }
+        file += 1;
+    }
+    let digits = b"0123456789abcdef";
+    let mut text = [0u8; 16];
+    let mut place = 0;
+    while place < 16 {
+        text[place] = digits[((hash >> (60 - 4 * place)) & 0xf) as usize];
+        place += 1;
+    }
+    text
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 //! Lease frames: their wire shape, the hello another build is recognised by,
 //! and the bounds on a frame and the bytes it carries.
 use super::{
-    decode, encode, read_hello, Cleanup, Data, FromEnvironment, Hello, ToEnvironment,
+    decode, encode, fingerprint, read_hello, Cleanup, Data, FromEnvironment, Hello, ToEnvironment,
     MAX_DATA_BYTES, MAX_FRAME_BYTES,
 };
 use crate::pairing::FrameReader;
@@ -114,17 +114,26 @@ fn the_wire_names_are_camel_case() {
     );
 }
 
-/// Gate 4: another build's hello is recognised by its type and build alone,
-/// whatever else it carries; a first frame that is not a hello is no hello.
+/// Gate 4: another protocol's hello is recognised by its type, build and
+/// protocol alone, whatever else it carries; one naming no protocol names
+/// none any gateway speaks; a first frame that is not a hello is no hello.
 #[test]
-fn a_hello_is_read_by_its_build_whatever_else_it_carries() {
-    let hello = read_hello(br#"{"type":"hello","build":"9.9.9","workspace":"/w","extra":[1]}"#);
+fn a_hello_is_read_by_its_protocol_whatever_else_it_carries() {
+    let hello = read_hello(
+        br#"{"type":"hello","build":"9.9.9","protocol":"p","workspace":"/w","extra":[1]}"#,
+    );
     assert_eq!(
         hello,
         Some(Hello {
             build: "9.9.9".into(),
+            protocol: "p".into(),
             workspace: "/w".into(),
         })
+    );
+    let before_protocols = read_hello(br#"{"type":"hello","build":"0.1.0","workspace":"/w"}"#);
+    assert_eq!(
+        before_protocols.map(|hello| hello.protocol),
+        Some(String::new())
     );
     assert_eq!(read_hello(br#"{"type":"granted","lease":"l"}"#), None);
     assert_eq!(read_hello(b"SSH-2.0-OpenSSH"), None);
@@ -160,4 +169,18 @@ fn data_and_frames_are_bounded() {
         agent: "claude".into(),
     };
     assert!(encode(&oversized).is_err());
+}
+
+/// The lease protocol is a fingerprint of the sources that define it: any
+/// byte of them, or where one file ends and the next begins, changes it;
+/// Windows line endings do not.
+#[test]
+fn a_protocols_fingerprint_follows_every_byte_of_its_sources_but_line_endings() {
+    let named = fingerprint(&[b"frames", b"meaning"]);
+    assert!(named.iter().all(u8::is_ascii_hexdigit));
+    assert_eq!(fingerprint(&[b"frames", b"meaning"]), named);
+    assert_ne!(fingerprint(&[b"frames", b"meaninG"]), named);
+    assert_ne!(fingerprint(&[b"frame", b"smeaning"]), named);
+    assert_ne!(fingerprint(&[b"frames"]), fingerprint(&[b"frames", b""]));
+    assert_eq!(fingerprint(&[b"a\r\nb\r\n"]), fingerprint(&[b"a\nb\n"]));
 }

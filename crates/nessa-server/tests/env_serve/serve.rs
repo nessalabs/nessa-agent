@@ -141,6 +141,7 @@ impl Gateway {
             environment_in,
             environment_out,
             "1.2.3",
+            "protocol",
             launcher.clone(),
             ledger.clone(),
             ServeTimings {
@@ -190,6 +191,7 @@ const LEASE: &str = "0b7d3a1e-0000-4000-8000-000000000001";
 fn hello() -> FromEnvironment {
     FromEnvironment::Hello {
         build: "1.2.3".into(),
+        protocol: "protocol".into(),
         workspace: "/work".into(),
     }
 }
@@ -641,12 +643,13 @@ async fn a_stop_asked_twice_while_stopping_answers_the_same_cleanup() {
 }
 
 #[tokio::test]
-async fn a_host_that_cannot_serve_says_its_build_then_why() {
+async fn a_host_that_cannot_serve_says_its_protocol_then_why() {
     let (gateway, environment) = duplex(4096);
     refuse(
         environment,
         Hello {
             build: "1.2.3".into(),
+            protocol: "protocol".into(),
             workspace: String::new(),
         },
         Unavailability::Busy,
@@ -656,6 +659,7 @@ async fn a_host_that_cannot_serve_says_its_build_then_why() {
     let mut frames = FrameStream::new(gateway);
     let hello = read_hello(&frames.next().await.unwrap().unwrap()).unwrap();
     assert_eq!(hello.build, "1.2.3");
+    assert_eq!(hello.protocol, "protocol");
     assert_eq!(
         decode::<FromEnvironment>(&frames.next().await.unwrap().unwrap()).unwrap(),
         FromEnvironment::Unavailable {
@@ -797,3 +801,38 @@ async fn an_account_asked_while_the_lease_is_ending_answers_that_end() {
 }
 
 use nessa_protocol::lease::read_hello;
+
+/// The lease protocol names every source that writes or reads its frames,
+/// so a change to how either end speaks them changes the protocol.
+#[test]
+fn every_source_speaking_lease_frames_names_the_protocol() {
+    fn speakers(directory: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                speakers(&path, found);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                if text.contains("ToEnvironment") || text.contains("FromEnvironment") {
+                    found.push(path.canonicalize().unwrap());
+                }
+            }
+        }
+    }
+    let crate_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let config = crate_root.join("src").join("env");
+    let named: Vec<_> = crate::env::LEASE_PROTOCOL_SOURCES
+        .iter()
+        .map(|source| config.join(source).canonicalize().unwrap())
+        .collect();
+    let mut found = Vec::new();
+    speakers(&crate_root.join("src"), &mut found);
+    speakers(&crate_root.join("../nessa-protocol/src"), &mut found);
+    assert!(found.len() >= 3, "{found:?}");
+    for speaker in found {
+        assert!(
+            named.contains(&speaker),
+            "{speaker:?} is not in the lease protocol"
+        );
+    }
+}

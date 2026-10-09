@@ -8,7 +8,7 @@ use super::{
     environment::{SshEnvironment, SshTimings},
 };
 use crate::conversation::application::{Environment, LeaseRelease};
-use crate::env::VERSION;
+use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::FrameStream;
 use crate::env_serve::application::{
     serve, HarnessLauncher, LeaseLedger, LedgerEntry, ServeTimings,
@@ -217,6 +217,7 @@ impl LeaseConnector for Connector {
                     host_in,
                     host_out,
                     VERSION,
+                    LEASE_PROTOCOL,
                     self.launcher.clone(),
                     self.ledger.clone(),
                     ServeTimings {
@@ -235,6 +236,7 @@ impl LeaseConnector for Connector {
                         .write_all(
                             &encode(&FromEnvironment::Hello {
                                 build: VERSION.into(),
+                                protocol: LEASE_PROTOCOL.into(),
                                 workspace: "/srv/work".into(),
                             })
                             .unwrap(),
@@ -406,9 +408,10 @@ async fn read_some(output: &mut (dyn tokio::io::AsyncRead + Send + Unpin)) -> Ve
     buffer[..read].to_vec()
 }
 
-fn hello_body(build: &str) -> Vec<u8> {
+fn hello_body(protocol: &str) -> Vec<u8> {
     serde_json::to_vec(&FromEnvironment::Hello {
-        build: build.into(),
+        build: VERSION.into(),
+        protocol: protocol.into(),
         workspace: "/srv/work".into(),
     })
     .unwrap()
@@ -487,11 +490,11 @@ async fn a_lease_runs_its_harness_on_the_host_and_ends_with_the_hosts_evidence()
     .expect("an ended lease's watch resolves");
 }
 
-/// Gate 4: another build's hello is a typed refusal, recorded, and nothing
-/// is sent to that host.
+/// Gate 4: another lease protocol's hello is a typed refusal, recorded, and
+/// nothing is sent to that host.
 #[tokio::test]
-async fn another_build_is_refused_and_sent_nothing() {
-    let connector = Connector::new(Reach::Scripted(vec![hello_body("0.0.0-other")]));
+async fn another_protocol_is_refused_and_sent_nothing() {
+    let connector = Connector::new(Reach::Scripted(vec![hello_body("another")]));
     let audit = Arc::new(Audit::default());
     let environment = environment(connector.clone(), audit.clone());
     let (binding, host) = binding(true);
@@ -504,13 +507,14 @@ async fn another_build_is_refused_and_sent_nothing() {
         audit.events(),
         [EnvironmentEvent::VersionRefused {
             host: "devbox".into(),
-            build: Some("0.0.0-other".into()),
+            build: Some(VERSION.into()),
+            protocol: Some("another".into()),
         }]
     );
     assert!(host.lock().unwrap().is_none());
     tokio::task::yield_now().await;
     assert!(connector.received.lock().unwrap().is_empty());
-    // A first frame that is no hello at all is another build too.
+    // A first frame that is no hello at all is another protocol too.
     let connector = Connector::new(Reach::Scripted(vec![b"{\"type\":\"granted\"}".to_vec()]));
     let environment = environment_with(connector, Arc::new(Audit::default()));
     assert_eq!(
@@ -520,6 +524,31 @@ async fn another_build_is_refused_and_sent_nothing() {
             .err(),
         Some(LeaseRefusal::EnvironmentVersionMismatch)
     );
+}
+
+/// The hello compares the lease protocol, not the package version: a host
+/// of the same package version whose frames or their meaning differ is
+/// another protocol, refused before anything is sent to it.
+#[tokio::test]
+async fn the_same_package_speaking_another_lease_protocol_is_refused() {
+    let body = serde_json::json!({
+        "type": "hello",
+        "build": VERSION,
+        "protocol": "another",
+        "workspace": "/srv/work",
+    });
+    let connector = Connector::new(Reach::Scripted(vec![body.to_string().into_bytes()]));
+    let audit = Arc::new(Audit::default());
+    let environment = environment(connector.clone(), audit.clone());
+    let refused = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await;
+    assert_eq!(
+        refused.err(),
+        Some(LeaseRefusal::EnvironmentVersionMismatch)
+    );
+    tokio::task::yield_now().await;
+    assert!(connector.received.lock().unwrap().is_empty());
 }
 
 fn environment_with(connector: Arc<Connector>, audit: Arc<Audit>) -> SshEnvironment {
@@ -536,7 +565,7 @@ async fn a_host_serving_another_gateway_is_busy() {
         reason: nessa_protocol::lease::Unavailability::Busy,
     })
     .unwrap();
-    let mut empty_hello = hello_body(VERSION);
+    let mut empty_hello = hello_body(LEASE_PROTOCOL);
     empty_hello = String::from_utf8(empty_hello)
         .unwrap()
         .replace("/srv/work", "")
@@ -680,7 +709,7 @@ async fn frames_naming_nothing_held_are_dropped_with_evidence() {
     })
     .unwrap();
     let connector = Connector::new(Reach::Scripted(vec![
-        hello_body(VERSION),
+        hello_body(LEASE_PROTOCOL),
         output,
         b"not json".to_vec(),
         granted,
@@ -773,7 +802,7 @@ async fn output_a_binding_does_not_read_is_bounded_and_stops_the_harness() {
 /// the host never keeps a lease nobody holds.
 #[tokio::test]
 async fn a_grant_not_answered_in_time_is_ended_on_the_host() {
-    let connector = Connector::new(Reach::Scripted(vec![hello_body(VERSION)]));
+    let connector = Connector::new(Reach::Scripted(vec![hello_body(LEASE_PROTOCOL)]));
     let environment = SshEnvironment::new(
         devbox(),
         connector.clone(),
@@ -1154,7 +1183,7 @@ async fn a_stop_is_waited_for_through_every_step_the_host_takes() {
 /// the host's silence bound counts on.
 #[tokio::test]
 async fn an_idle_connection_sends_keepalives() {
-    let connector = Connector::new(Reach::Scripted(vec![hello_body(VERSION)]));
+    let connector = Connector::new(Reach::Scripted(vec![hello_body(LEASE_PROTOCOL)]));
     let environment = SshEnvironment::new(
         devbox(),
         connector.clone(),

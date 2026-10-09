@@ -14,10 +14,15 @@ use std::io;
     rename_all_fields = "camelCase"
 )]
 pub(crate) enum EnvironmentEvent {
-    /// A host answered with this build's hello.
+    /// A host answered with this lease protocol's hello.
     Connected { host: String, workspace: String },
-    /// A host answered with another build's hello, or none: refused.
-    VersionRefused { host: String, build: Option<String> },
+    /// A host answered with another lease protocol's hello, or none: refused.
+    /// `build` and `protocol` are what its hello said, if it was one.
+    VersionRefused {
+        host: String,
+        build: Option<String>,
+        protocol: Option<String>,
+    },
     /// A host is serving another connection.
     Busy { host: String },
     /// A host could not serve leases at all: its configuration.

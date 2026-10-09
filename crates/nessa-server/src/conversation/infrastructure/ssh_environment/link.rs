@@ -2,7 +2,7 @@
 //! gateway holds there, and the routing of its frames to them.
 //!
 //! ```text
-//! open: connect ──▶ first frame ──▶ read_hello ──▶ build == this build?
+//! open: connect ──▶ first frame ──▶ read_hello ──▶ protocol == LEASE_PROTOCOL?
 //!          no ──▶ VersionRefused, nothing sent ──▶ EnvironmentVersionMismatch
 //!          empty workspace ──▶ Unavailable{busy | notConfigured} ──▶ refused
 //!          yes ──▶ writer task (frames out), demux task (frames in)
@@ -39,7 +39,7 @@
 //! record failing is logged only: it records no transition of any lease.
 use super::audit::{EnvironmentAudit, EnvironmentEvent};
 use super::connector::LeaseConnector;
-use crate::env::VERSION;
+use crate::env::LEASE_PROTOCOL;
 use crate::env_serve::application::FrameStream;
 use futures_util::FutureExt;
 use nessa_protocol::lease::{
@@ -193,16 +193,21 @@ impl HostLink {
             }
         };
         let hello = match read_hello(&first) {
-            Some(hello) if hello.build == VERSION => hello,
+            Some(hello) if hello.protocol == LEASE_PROTOCOL => hello,
             other => {
+                let (build, protocol) = other.map(|hello| (hello.build, hello.protocol)).unzip();
                 let event = EnvironmentEvent::VersionRefused {
                     host: host.as_str().into(),
-                    build: other.map(|hello| hello.build),
+                    build,
+                    protocol,
                 };
                 if let Err(error) = audit.record(&event) {
                     tracing::error!(%error, "an environment's version refusal could not be recorded");
                 }
-                tracing::warn!(host = host.as_str(), "the host runs another build of nessa");
+                tracing::warn!(
+                    host = host.as_str(),
+                    "the host speaks another lease protocol"
+                );
                 return Err(LeaseRefusal::EnvironmentVersionMismatch);
             }
         };

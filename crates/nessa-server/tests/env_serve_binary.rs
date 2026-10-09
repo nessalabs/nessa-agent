@@ -1,5 +1,5 @@
 //! The real `nessa env serve` binary over pipes, as `ssh` would run it: a
-//! hello naming this build, a lease admitted, a harness started from the
+//! hello naming this build's lease protocol, a lease admitted, a harness started from the
 //! host's own configuration, its bytes carried both ways, stopped and ended
 //! with cleanup evidence, and every step in the host's ledger.
 #![cfg(unix)]
@@ -147,8 +147,13 @@ fn a_lease_runs_its_harness_on_the_host_and_ends_with_evidence_in_the_ledger() {
     host(root.path(), "/bin/cat");
     let mut serving = serve(root.path());
     match serving.next() {
-        FromEnvironment::Hello { build, workspace } => {
+        FromEnvironment::Hello {
+            build,
+            protocol,
+            workspace,
+        } => {
             assert_eq!(build, env!("CARGO_PKG_VERSION"));
+            assert_eq!(protocol, nessa_server::env::LEASE_PROTOCOL);
             assert_eq!(
                 Path::new(&workspace),
                 root.path().join("workspace").as_path()
@@ -287,7 +292,7 @@ fn a_host_with_no_agents_configured_says_so_after_its_hello() {
     let serving = serve(root.path());
     assert!(matches!(
         serving.next(),
-        FromEnvironment::Hello { build, .. } if build == env!("CARGO_PKG_VERSION")
+        FromEnvironment::Hello { protocol, .. } if protocol == nessa_server::env::LEASE_PROTOCOL
     ));
     assert_eq!(
         serving.next(),
