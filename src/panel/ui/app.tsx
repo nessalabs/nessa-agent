@@ -169,6 +169,7 @@ export function App({
     serverConversationId: chat.active.serverConversationId,
     agent: selectedAgent?.agent,
     model: selectedModel?.modelId,
+    environments: choices?.catalog.environments,
     setSelection: chat.setSelection,
   })
   const selection = chat.active.selection
