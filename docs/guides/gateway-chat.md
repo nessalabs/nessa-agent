@@ -511,8 +511,10 @@ the gateway sends a view again whenever its committed records or its live facts
 change, and each frame carries a cursor (the history's incarnation and committed
 position). After a lost connection, or a subscription ended as `lagging`
 because the window did not take a frame in time, the panel and the workspace
-subscribe again from the last cursor they applied, and nothing behind that
-cursor is sent.
+subscribe again from the last cursor they applied. Within the same
+incarnation nothing behind that cursor is sent; a cursor from another
+incarnation means the store was reset, and the current view is sent as a
+replacement.
 
 Each read keeps local intent the gateway has not acknowledged yet, so a view
 racing an admitted send never resends or loses it, and local failures stay
