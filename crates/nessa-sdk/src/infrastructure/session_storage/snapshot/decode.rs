@@ -296,11 +296,6 @@ pub(super) fn preflight_semantic_batch(reader: impl Read) -> Result<(), StorageE
     preflight_record(reader, Shape::SemanticBatch)
 }
 
-#[cfg(test)]
-fn preflight_shape(reader: impl Read, shape: Shape) -> Result<(), StorageError> {
-    preflight_record(reader, shape)
-}
-
 fn preflight_record(reader: impl Read, shape: Shape) -> Result<(), StorageError> {
     let limit = Rc::new(Cell::new(KEY_BYTES));
     let reader = TokenReader::new(reader, limit.clone());
@@ -488,28 +483,15 @@ mod storage_tree_tests {
                 // This non-retaining bound uses the maximum possible invocation
                 // count. The full validator still owns the exact relative bound.
                 assert_eq!(
-                    preflight_shape(text.as_bytes(), Shape::Snapshot).is_ok(),
+                    preflight_record(text.as_bytes(), Shape::Snapshot).is_ok(),
                     count == maximum
                 );
             }
         }
     }
 
-    #[test]
-    fn another_version_is_a_saved_storage_error_shape() {
-        assert_eq!(
-            decode(r#"{"AnotherVersion":{"found":null}}"#).unwrap(),
-            StorageError::AnotherVersion { found: None }
-        );
-        assert_eq!(
-            decode(r#"{"AnotherVersion":{"found":2}}"#).unwrap(),
-            StorageError::AnotherVersion { found: Some(2) }
-        );
-        assert!(decode(r#"{"AnotherVersion":{"found":null,"extra":true}}"#).is_err());
-    }
-
     fn decode(text: &str) -> Result<StorageError, StorageError> {
-        preflight_shape(text.as_bytes(), Shape::StorageError)?;
+        preflight_record(text.as_bytes(), Shape::StorageError)?;
         let saved: StorageFailure =
             serde_json::from_str(text).map_err(|error| StorageError::Corrupt(error.to_string()))?;
         saved.try_into()
@@ -518,7 +500,7 @@ mod storage_tree_tests {
     fn storage_diagnostic_budget_follows_its_retained_role() {
         let diagnostic = "x".repeat(StorageError::DIAGNOSTIC_BYTES + 904);
         let plain = serde_json::json!({"Storage": {"Io": diagnostic}}).to_string();
-        preflight_shape(plain.as_bytes(), Shape::Error).unwrap();
+        preflight_record(plain.as_bytes(), Shape::Error).unwrap();
         let saved: SavedError = serde_json::from_str(&plain).unwrap();
         let restored: AgentError = saved.try_into().unwrap();
         restored.validate_retained_size().unwrap();
@@ -527,20 +509,20 @@ mod storage_tree_tests {
         );
         let exact_ack =
             serde_json::json!({"Io": "x".repeat(StorageError::DIAGNOSTIC_BYTES)}).to_string();
-        preflight_shape(exact_ack.as_bytes(), Shape::StorageError).unwrap();
+        preflight_record(exact_ack.as_bytes(), Shape::StorageError).unwrap();
         let ack = serde_json::json!({"Io": diagnostic}).to_string();
-        assert!(preflight_shape(ack.as_bytes(), Shape::StorageError).is_err());
+        assert!(preflight_record(ack.as_bytes(), Shape::StorageError).is_err());
         let aggregate = serde_json::json!({"Storage": {"ShutdownFailures": {
             "read": {"Io": diagnostic}, "runtime": "Unresolved"
         }}})
         .to_string();
-        assert!(preflight_shape(aggregate.as_bytes(), Shape::Error).is_err());
+        assert!(preflight_record(aggregate.as_bytes(), Shape::Error).is_err());
         let nested = serde_json::json!({"Storage": {"ShutdownFailures": {
             "read": {"Io": "x".repeat(StorageError::DIAGNOSTIC_BYTES)},
             "runtime": {"ShutdownFailures": {"read": {"Io": "y"}, "runtime": "Unresolved"}}
         }}})
         .to_string();
-        assert!(preflight_shape(nested.as_bytes(), Shape::Error).is_err());
+        assert!(preflight_record(nested.as_bytes(), Shape::Error).is_err());
     }
     #[test]
     fn typed_shutdown_codec_refuses_hostile_trees_before_allocation() {
@@ -564,7 +546,7 @@ mod storage_tree_tests {
             r#"{{"ShutdownFailures":{{"read":{{"Io":"{}"}},"runtime":{{"Corrupt":"y"}}}}}}"#,
             "x".repeat(StorageError::DIAGNOSTIC_BYTES)
         );
-        assert!(preflight_shape(over.as_bytes(), Shape::StorageError).is_err());
+        assert!(preflight_record(over.as_bytes(), Shape::StorageError).is_err());
         assert!(decode(&over).is_err());
         fn binary(level: usize) -> String {
             if level == 0 {
@@ -578,26 +560,26 @@ mod storage_tree_tests {
         let exact_agent = format!(
             r#"{{"ExecutionObservation":{{"error":{{"Storage":{tree}}},"execution_result":null}}}}"#
         );
-        assert!(preflight_shape(exact_agent.as_bytes(), Shape::Error).is_ok());
+        assert!(preflight_record(exact_agent.as_bytes(), Shape::Error).is_ok());
         let over_agent = format!(
             r#"{{"ExecutionObservation":{{"error":{exact_agent},"execution_result":null}}}}"#
         );
-        assert!(preflight_shape(over_agent.as_bytes(), Shape::Error).is_err());
+        assert!(preflight_record(over_agent.as_bytes(), Shape::Error).is_err());
         let over_storage =
             format!(r#"{{"ShutdownFailures":{{"read":{tree},"runtime":"Closed"}}}}"#);
-        assert!(preflight_shape(over_storage.as_bytes(), Shape::StorageError).is_err());
+        assert!(preflight_record(over_storage.as_bytes(), Shape::StorageError).is_err());
         let mut deep = "\"Closed\"".to_owned();
         for _ in 1..DiagnosticTreeLimits::DEPTH {
             deep = format!(r#"{{"ShutdownFailures":{{"read":{deep},"runtime":"Unresolved"}}}}"#);
         }
         assert!(decode(&deep).is_ok());
         deep = format!(r#"{{"ShutdownFailures":{{"read":{deep},"runtime":"Unresolved"}}}}"#);
-        assert!(preflight_shape(deep.as_bytes(), Shape::StorageError).is_err());
+        assert!(preflight_record(deep.as_bytes(), Shape::StorageError).is_err());
         assert!(decode(&deep).is_err());
         for _ in 0..10_000 {
             deep = format!(r#"{{"ShutdownFailures":{{"read":{deep},"runtime":"Unresolved"}}}}"#);
         }
-        assert!(preflight_shape(deep.as_bytes(), Shape::StorageError).is_err());
+        assert!(preflight_record(deep.as_bytes(), Shape::StorageError).is_err());
         assert!(decode(&deep).is_err());
     }
 }

@@ -19,9 +19,10 @@
 //! integration tests; inherited private codec/allocation fixtures remain limited
 //! implementation observations, not public acceptance.
 //! TranscriptFold validates unit checkpoints through the one SDK session fold. A
-//! semantic unit this build cannot read is skipped and noted; the fold continues
-//! with the records it can read. A committed read cache advances from a fixed
-//! head and remains separate from the writer's observed state.
+//! record this build cannot read, or that contradicts the prefix already folded,
+//! ends the fold there. The chat opens from that prefix. Later bytes stay on
+//! disk and are not folded. A committed read cache advances from a fixed head
+//! and remains separate from the writer's observed state.
 //!
 //! ```text
 //! SessionStorage::open -> SessionStorageLease <- SessionManager
@@ -53,7 +54,6 @@ mod record_lifecycle;
 mod record_source;
 mod record_writer;
 mod save_group;
-mod skipped;
 mod snapshot;
 mod stream_fact;
 mod terminal_discovery;
@@ -67,8 +67,43 @@ pub use record_source::{
 };
 pub use terminal_discovery::RecordReadStatus;
 mod transcript;
-pub use skipped::{SkipReason, SkippedRecord};
 pub use transcript::{
     TranscriptCheckpoint, TranscriptError, TranscriptFold, TranscriptTransaction,
     MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES,
 };
+
+use crate::application::agent_execution::sessions::StorageError;
+
+/// A saved record that cannot join the prefix already folded.
+///
+/// Unmarked bytes, another format version, a corrupt body, and a unit that
+/// contradicts the prefix stop the fold. The chat stays open on that prefix.
+pub(super) fn truncates_history(error: &StorageError) -> bool {
+    matches!(
+        error,
+        StorageError::AnotherVersion { .. }
+            | StorageError::Corrupt(_)
+            | StorageError::IdentityMismatch
+            | StorageError::TooLarge
+    )
+}
+
+/// One warning for a fold that stopped early. The diagnostic text of a corrupt
+/// body stays out of the log. No protocol field carries this to the app.
+pub(super) fn warn_truncated(session: &str, position: u64, error: &StorageError) {
+    let found = match error {
+        StorageError::AnotherVersion { found } => *found,
+        _ => None,
+    };
+    let reason = match error {
+        StorageError::AnotherVersion { .. } => "another_version",
+        _ => "unreadable",
+    };
+    tracing::warn!(
+        session,
+        position,
+        reason,
+        found,
+        "session history truncated at the first unreadable record"
+    );
+}

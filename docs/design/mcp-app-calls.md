@@ -379,9 +379,9 @@ was.
 | P2 | a saved part the domain refuses (a name, an identity, structure, a bound) | `Corrupt` |
 | P3 | a saved context with an empty text, or with either part's key missing | `Corrupt`, not read as none |
 | P4 | more than 4 saved contexts | `Corrupt`, before a fifth is built |
-| P5 | a version-1 saved message without `user_app` or `user_app_model_context` | skipped as corrupt; the conversation opens on the records that remain; another opens; the stored rows stay |
-| P5a | a message saved before #467: no `schemaVersion`, and without those fields | skipped as `AnotherVersion { found: None }`; the conversation opens on the records that remain; another opens; the stored rows stay |
-| P5b | today's saved message with no `schemaVersion` | skipped as `AnotherVersion { found: None }`; the conversation opens on the records that remain; another opens; the stored rows stay |
+| P5 | a version-1 saved message without `user_app` or `user_app_model_context` | corrupt; the conversation opens on the consistent prefix before that record; nothing after it is folded; another opens; the stored rows stay |
+| P5a | a message saved before #467: no `schemaVersion`, and without those fields | `AnotherVersion { found: None }`; the conversation opens on the consistent prefix before that record; nothing after it is folded; another opens; the stored rows stay |
+| P5b | today's saved message with no `schemaVersion` | `AnotherVersion { found: None }`; the conversation opens on the consistent prefix before that record; nothing after it is folded; another opens; the stored rows stay |
 | P6 | an `UnknownApp` failure saved and read back | the same variant |
 | P7 | a message's writer and contexts | counted in the session's retained bytes, every byte |
 | B1 | a message carrying contexts, sent | one leading text block: the preamble, then the JSON array in order; then the message |
@@ -1195,8 +1195,9 @@ Each row above has a test, named after it:
   `no_durable_history_holds_one_call_as_two_mcp_tools`; V1–V7 in
   `crates/nessa-sdk/tests/domain/agent_execution/user_messages.rs`; P1–P4,
   P5a and P5b in `snapshot/semantic.rs` (the codec still refuses them);
-  P5, P5a and P5b are skipped on read, and the other conversation still
-  opens, in the tests of
+  P5, P5a and P5b stop the read at that record: the conversation opens on
+  the prefix before it, nothing after it is folded, and the other conversation
+  still opens, in the tests of
   `crates/nessa-sdk/src/infrastructure/session_storage/record.rs`
   (it frames a save group by hand); P6 in
   `snapshot/errors.rs`, P7 in `session_storage/transcript.rs`; B1–B5 in

@@ -3509,7 +3509,15 @@ mod tests {
             let result = reading.await.unwrap();
             assert!(page_charge > initial_charge);
             if reject {
-                assert!(matches!(result, Err(StorageError::Corrupt(_))));
+                // The second open contradicts the prefix. The read stops there
+                // and keeps the opening. It does not fail the chat.
+                assert!(result
+                    .unwrap()
+                    .unwrap()
+                    .snapshot()
+                    .unwrap()
+                    .invocations
+                    .is_empty());
             } else {
                 assert_eq!(
                     result
@@ -3525,7 +3533,11 @@ mod tests {
             {
                 let receiver = entry.receiver.lock().unwrap();
                 assert_eq!(receiver.fold.applied(), if reject { 2 } else { 4 });
-                assert_eq!(receiver.fold.downloaded(), if reject { 2 } else { 4 });
+                if reject {
+                    assert!(receiver.fold.downloaded() > receiver.fold.applied());
+                } else {
+                    assert_eq!(receiver.fold.downloaded(), 4);
+                }
                 // Check cached semantic totals against current allocation owners first.
                 receiver.fold.assert_retained_accounting();
                 // Sum the entry's actual layouts and separate scope/StreamKey copies,
@@ -3552,10 +3564,16 @@ mod tests {
                     assert!(!entry.lifetime.is_pinned());
                 }
             }
-            // A repeated failed read reuses warm spare; the valid path remains publishable.
+            // A repeated read of the truncated prefix reuses the warm receiver.
             let retry = storage.read_committed(session).await;
             if reject {
-                assert!(matches!(retry, Err(StorageError::Corrupt(_))));
+                assert!(retry
+                    .unwrap()
+                    .unwrap()
+                    .snapshot()
+                    .unwrap()
+                    .invocations
+                    .is_empty());
             } else {
                 assert_eq!(
                     retry

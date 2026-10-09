@@ -34,6 +34,37 @@ pub(crate) struct CommittedTransactionState {
     evidence: records::ProviderEvidence,
     context_witness: Option<(usize, usize)>,
 }
+
+/// Last save completion inside one receiver transaction.
+///
+/// `undo_len` is how much of that transaction's undo belongs to the completion.
+/// A later record that cannot be folded rolls the undo after this point back,
+/// which drops the open group and keeps the completion.
+#[derive(Clone, Copy)]
+pub(crate) struct PublicationMark {
+    undo_len: usize,
+    applied: u64,
+    facts: u64,
+    evidence: records::ProviderEvidence,
+    context_witness: Option<(usize, usize)>,
+}
+impl PublicationMark {
+    /// No save has completed. The next transaction's undo starts at zero.
+    pub(crate) fn origin() -> Self {
+        Self {
+            undo_len: 0,
+            applied: 0,
+            facts: 0,
+            evidence: records::ProviderEvidence::default(),
+            context_witness: None,
+        }
+    }
+
+    /// A new transaction's undo starts empty. The completed snapshot stays.
+    pub(crate) fn restart_undo(&mut self) {
+        self.undo_len = 0;
+    }
+}
 impl CommittedTranscript {
     /// Validate the numeric relationship between a physical applied position and
     /// its committed logical fact count. Each fact advances the position; an
@@ -126,6 +157,65 @@ impl CommittedTranscript {
     }
     pub(crate) fn restore_transaction(&mut self, state: CommittedTransactionState) {
         self.continuation.rollback(state.undo);
+        self.continuation.evidence = state.evidence;
+        self.continuation.context_witness = state.context_witness;
+        self.applied = state.applied;
+        self.facts = state.facts;
+    }
+
+    /// Capture the completion the current transaction undo has reached.
+    pub(crate) fn publication_mark_from(
+        &self,
+        state: &CommittedTransactionState,
+    ) -> PublicationMark {
+        self.publication_mark(state.undo.len())
+    }
+
+    /// Completion coordinates with an explicit undo length. Zero starts a transaction.
+    pub(crate) fn publication_mark(&self, undo_len: usize) -> PublicationMark {
+        PublicationMark {
+            undo_len,
+            applied: self.applied,
+            facts: self.facts,
+            evidence: self.continuation.evidence,
+            context_witness: self.continuation.context_witness,
+        }
+    }
+
+    /// Drop every staged unit after `mark` and return the continuation to it.
+    pub(crate) fn rollback_to_mark(
+        &mut self,
+        state: &mut CommittedTransactionState,
+        mark: PublicationMark,
+    ) {
+        if mark.undo_len < state.undo.len() {
+            let suffix = state.undo.split_off(mark.undo_len);
+            self.continuation.rollback(suffix);
+        }
+        self.continuation.evidence = mark.evidence;
+        self.continuation.context_witness = mark.context_witness;
+        self.applied = mark.applied;
+        self.facts = mark.facts;
+    }
+
+    /// Drop the open group and report the completion's applied position and fact count.
+    pub(crate) fn seal_open_group(
+        &mut self,
+        state: &mut CommittedTransactionState,
+        mark: PublicationMark,
+    ) -> (u64, u64) {
+        if mark.undo_len == 0 {
+            self.rollback_transaction(state);
+        } else {
+            self.rollback_to_mark(state, mark);
+        }
+        (mark.applied, mark.facts)
+    }
+
+    /// Drop this transaction's staged units and return to its entry state.
+    pub(crate) fn rollback_transaction(&mut self, state: &mut CommittedTransactionState) {
+        let undo = std::mem::take(&mut state.undo);
+        self.continuation.rollback(undo);
         self.continuation.evidence = state.evidence;
         self.continuation.context_witness = state.context_witness;
         self.applied = state.applied;

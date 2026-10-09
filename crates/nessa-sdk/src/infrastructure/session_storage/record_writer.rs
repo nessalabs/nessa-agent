@@ -4,7 +4,6 @@ use super::{
     record_changes::RecordChanges,
     save_batch::SaveCommits,
     save_group::{GroupProgress, Header, SaveIdentity, EMPTY_CHAIN, HEADER_BYTES},
-    skipped::{self, SkipReason},
     snapshot,
     stream_fact::{self, FactCommitError, FactRead, FramedFact},
 };
@@ -33,6 +32,13 @@ pub(super) struct RecordWriter {
     next: SessionSaveGeneration,
     pending: Option<FramedFact>,
     unfinished: bool,
+    /// Bytes after `cursor`'s logical prefix could not be folded. New writes
+    /// append at the physical tail and continue from [`Self::next`].
+    truncated: bool,
+    /// Physical offset where bytes after the gap begin. Zero when the stream
+    /// has no gap. A confirmation scan starts here so it does not re-read the
+    /// gap, including after a continuation unit has already been folded.
+    resume_from: u64,
     blocked: bool,
     receipt: Option<SessionSaveReceipt>,
     changes: Option<RecordChanges>,
@@ -60,6 +66,8 @@ impl RecordWriter {
             next,
             pending: None,
             unfinished: false,
+            truncated: false,
+            resume_from: 0,
             blocked: false,
             receipt: None,
             changes: None,
@@ -78,6 +86,11 @@ impl RecordWriter {
                         .map_err(fact_error)?;
                 }
                 FactRead::Aborted { cursor, key, .. } => {
+                    if writer.truncated {
+                        writer.resume_from = cursor.offset;
+                        writer.cursor = cursor;
+                        continue;
+                    }
                     if writer.binding.is_none() || (!writer.unfinished && key.ordinal() == 0) {
                         writer.binding = Some(writer.next.clone());
                         writer.baseline = writer.committed.clone();
@@ -130,6 +143,42 @@ impl RecordWriter {
         &self.stream
     }
     fn accept(&mut self, fact: FramedFact, cursor: Cursor) -> Result<(), StorageError> {
+        if self.truncated && !self.is_continuation(&fact) {
+            self.resume_from = cursor.offset;
+            self.cursor = cursor;
+            return Ok(());
+        }
+        let resuming = self.truncated;
+        self.truncated = false;
+        match self.fold_fact(fact, cursor.clone()) {
+            Ok(()) => Ok(()),
+            Err(error) if super::truncates_history(&error) => {
+                self.seal(cursor.offset, &error)?;
+                self.cursor = cursor;
+                Ok(())
+            }
+            Err(error) => {
+                self.truncated = resuming;
+                Err(error)
+            }
+        }
+    }
+
+    /// A save written after the gap. Its identity continues the readable prefix
+    /// and it is the first unit of that save. Older tail bytes use another base.
+    fn is_continuation(&self, fact: &FramedFact) -> bool {
+        if fact.key.kind() != FactKind::SaveUnit || fact.key.ordinal() != 0 {
+            return false;
+        }
+        let Ok(header) = Header::decode(&fact.body) else {
+            return false;
+        };
+        header.ordinal == 0
+            && header.identity.base == self.next.base()
+            && header.identity.generation == self.next.generation()
+    }
+
+    fn fold_fact(&mut self, fact: FramedFact, cursor: Cursor) -> Result<(), StorageError> {
         let header = Header::decode(&fact.body)?;
         let original = binding(
             &self.stream,
@@ -155,21 +204,18 @@ impl RecordWriter {
                     .map_or(ProviderContext::Absent, |state| {
                         state.provider_context.clone()
                     });
-                match snapshot::decode_semantic_batch(&fact.body[HEADER_BYTES..], &context) {
-                    Ok(changes) => {
-                        self.staged.apply_unit(&changes)?;
-                        if self
-                            .staged
-                            .snapshot
-                            .as_ref()
-                            .is_some_and(|state| state.id != self.id)
-                        {
-                            return Err(StorageError::IdentityMismatch);
-                        }
-                        self.unfinished = true;
-                    }
-                    Err(error) => self.note_unreadable(cursor.offset, error)?,
+                let changes =
+                    snapshot::decode_semantic_batch(&fact.body[HEADER_BYTES..], &context)?;
+                self.staged.apply_unit(&changes)?;
+                if self
+                    .staged
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|state| state.id != self.id)
+                {
+                    return Err(StorageError::IdentityMismatch);
                 }
+                self.unfinished = true;
             }
             FactKind::SaveComplete => {
                 self.committed = self.staged.snapshot.clone();
@@ -198,16 +244,21 @@ impl RecordWriter {
         Ok(())
     }
 
-    /// Consume one unit whose body cannot be decoded. The save stays published
-    /// when every new unit in the open group was skipped, so opening the
-    /// conversation does not turn into an unfinished recovery. A decoded unit
-    /// is applied or refuses the replay. Any other storage error still refuses
-    /// the replay.
-    fn note_unreadable(&mut self, position: u64, error: StorageError) -> Result<(), StorageError> {
-        let Some(reason) = SkipReason::classify(&error) else {
-            return Err(error);
-        };
-        skipped::warn_skipped(self.id.as_str(), position, reason);
+    /// Open from the last completed save and ignore the open group that held
+    /// the unreadable record. The physical cursor stays at the tail so a later
+    /// save appends after those bytes instead of colliding with them.
+    fn seal(&mut self, position: u64, error: &StorageError) -> Result<(), StorageError> {
+        self.staged = Continuation::restore(self.committed.clone())?;
+        self.baseline = self.committed.clone();
+        self.binding = None;
+        self.unfinished = false;
+        self.pending = None;
+        self.progress = GroupProgress::after(self.next.base());
+        self.resume_from = position;
+        if !self.truncated {
+            super::warn_truncated(self.id.as_str(), position, error);
+        }
+        self.truncated = true;
         Ok(())
     }
 
@@ -260,7 +311,16 @@ impl RecordWriter {
         let terminal = completion_for_prefix(&identity, &headers, chain, units.len())?;
         // Compare original committed bytes in one sequential bounded read, not
         // a retained copy of every earlier unit or digest-only equivalence.
-        let mut through = Cursor::new(self.stream.clone(), original.base());
+        // A truncated history's logical base sits before the physical tail.
+        // The gap is not this save. Scan from the first byte after it, which
+        // stays put once a continuation unit has been folded.
+        debug_assert!(self.resume_from <= self.cursor.offset);
+        let scan_from = if self.resume_from > original.base() {
+            self.resume_from
+        } else {
+            original.base()
+        };
+        let mut through = Cursor::new(self.stream.clone(), scan_from);
         let mut confirmed = 0usize;
         while through.offset < self.cursor.offset {
             match stream_fact::read_next_fact(runtime, &self.stream, &through)

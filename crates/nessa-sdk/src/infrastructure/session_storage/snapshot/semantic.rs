@@ -303,18 +303,11 @@ pub(crate) fn decode_batch(
     // An absent marker and any other unsigned integer fail here, before the
     // body is mapped into this build's types.
     super::decode::preflight_semantic_batch(bytes)?;
-    decode_current_batch(bytes, context)
-}
-
-fn decode_current_batch(
-    bytes: &[u8],
-    context: &ProviderContext,
-) -> Result<Vec<SessionChange>, StorageError> {
     let batch: WireBatch = serde_json::from_slice(bytes).map_err(corrupt)?;
-    // Preflight already required this build's marker.
-    if batch.schema_version != StorageError::SCHEMA_VERSION {
-        return Err(corrupt("schemaVersion disagreed with the record preflight"));
-    }
+    // Preflight already required this build's marker. Read the field so it is
+    // not dead, and do not decide the version a second time.
+    let _ = batch.schema_version;
+    debug_assert_eq!(batch.schema_version, StorageError::SCHEMA_VERSION);
     let mut context = context.clone();
     let changes = batch
         .changes

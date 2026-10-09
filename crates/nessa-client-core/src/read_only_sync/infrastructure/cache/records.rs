@@ -15,7 +15,7 @@ use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::projection::retained_view;
 use nessa_sdk::application::agent_execution::sessions::{CommittedStatus, StorageError};
 use nessa_sdk::infrastructure::session_storage::{
-    SkipReason, TranscriptError, TranscriptFold, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+    TranscriptError, TranscriptFold, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
 };
 use nessa_sync::replication::{
     application::{ReplicaStore, StoreError},
@@ -337,12 +337,15 @@ impl ReadOnlyCache {
     ) -> Result<TranscriptFold, CachedCheckpoint> {
         let checkpoint = match rows::checkpoint(transaction, scope, policy) {
             Ok(checkpoint) => checkpoint,
-            Err(CacheError::Transcript(cause)) if SkipReason::classify(&cause).is_some() => {
-                return Err(CachedCheckpoint::Disposable(TranscriptError::Decision(
-                    cause,
-                )));
+            Err(rows::CheckpointReadError::Body(error)) if disposable_checkpoint(&error) => {
+                return Err(CachedCheckpoint::Disposable(error));
             }
-            Err(error) => return Err(CachedCheckpoint::Refusal(error)),
+            Err(rows::CheckpointReadError::Body(error)) => {
+                return Err(CachedCheckpoint::Refusal(transcript_error(error)));
+            }
+            Err(rows::CheckpointReadError::Cache(error)) => {
+                return Err(CachedCheckpoint::Refusal(error));
+            }
         };
         let mut fold = match TranscriptFold::restore(scope.clone(), progress.applied, &checkpoint) {
             Ok(fold) => fold,
@@ -515,20 +518,6 @@ impl TranscriptCache for ReadOnlyCache {
     }
 }
 
-/// A checkpoint body this build cannot read stays a transcript cause so the
-/// cache can drop it. Structural row damage never reaches this function.
-pub(super) fn checkpoint_body_error(error: TranscriptError) -> CacheError {
-    match error {
-        TranscriptError::Decision(cause) if SkipReason::classify(&cause).is_some() => {
-            CacheError::Transcript(cause)
-        }
-        TranscriptError::Checkpoint => CacheError::Transcript(StorageError::Corrupt(
-            "cached checkpoint cannot be read".into(),
-        )),
-        other => transcript_error(other),
-    }
-}
-
 pub(super) fn transcript_error(error: TranscriptError) -> CacheError {
     match error {
         TranscriptError::CheckpointTooLarge => CacheError::Quota,
@@ -553,40 +542,32 @@ enum CachedCheckpoint {
 /// not this function's input: those rows stay.
 fn disposable_checkpoint(error: &TranscriptError) -> bool {
     match error {
-        TranscriptError::Decision(cause) => SkipReason::classify(cause).is_some(),
+        TranscriptError::Decision(
+            StorageError::AnotherVersion { .. } | StorageError::Corrupt(_),
+        ) => true,
         TranscriptError::Checkpoint | TranscriptError::Scope => true,
-        TranscriptError::CheckpointTooLarge
+        TranscriptError::Decision(_)
+        | TranscriptError::CheckpointTooLarge
         | TranscriptError::Position
         | TranscriptError::Frame => false,
     }
 }
 
 fn warn_skipped_checkpoint(scope: &Scope, error: &TranscriptError) {
-    let session = scope.stream().as_str();
-    match error {
-        TranscriptError::Decision(StorageError::AnotherVersion { found: Some(found) }) => {
-            tracing::warn!(
-                session,
-                reason = "another_version",
-                found,
-                "skipped a cached checkpoint this build cannot read"
-            );
-        }
-        TranscriptError::Decision(StorageError::AnotherVersion { found: None }) => {
-            tracing::warn!(
-                session,
-                reason = "another_version",
-                "skipped a cached checkpoint this build cannot read"
-            );
-        }
-        _ => {
-            tracing::warn!(
-                session,
-                reason = "corrupt",
-                "skipped a cached checkpoint this build cannot read"
-            );
-        }
-    }
+    let found = match error {
+        TranscriptError::Decision(StorageError::AnotherVersion { found }) => *found,
+        _ => None,
+    };
+    let reason = match error {
+        TranscriptError::Decision(StorageError::AnotherVersion { .. }) => "another_version",
+        _ => "unreadable",
+    };
+    tracing::warn!(
+        session = scope.stream().as_str(),
+        reason,
+        found,
+        "dropped a cached checkpoint this build cannot read"
+    );
 }
 
 fn open_error(error: OpenError) -> CacheError {

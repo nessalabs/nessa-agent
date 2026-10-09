@@ -49,42 +49,6 @@ fn online_failure_output_keeps_captured_check_and_independent_causes() {
     assert_eq!(value["recheck"]["enrollment"]["phase"], "terminal");
 }
 #[test]
-fn another_version_is_not_reported_as_corrupt() {
-    let attempt: GatewayAttempt<Result<RecordRun, RecordDriverError>> = GatewayAttempt {
-        result: None,
-        outcome: GatewayOutcome {
-            operation: 1,
-            failure: None,
-        },
-    };
-    let mut output = vec![];
-    assert!(matches!(
-        write_records(
-            &attempt,
-            Err(CacheError::Transcript(StorageError::AnotherVersion {
-                found: None
-            })),
-            None,
-            Value::Null,
-            &mut output
-        ),
-        Err(CommandError::OnlineRefused)
-    ));
-    let value: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(
-        value["durable"]["failure"],
-        json!({
-            "code": "transcript",
-            "cause": {
-                "code": "anotherVersion",
-                "found": null,
-                "expected": StorageError::SCHEMA_VERSION
-            }
-        })
-    );
-}
-
-#[test]
 fn refused_open_product_is_reported_as_product_refused() {
     // The example client reads this code to tell a refused `openProduct`
     // from a malformed frame, and re-asks status only for the former.

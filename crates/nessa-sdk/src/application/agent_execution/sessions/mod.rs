@@ -75,6 +75,7 @@ mod test_support;
 mod queue_validation;
 pub mod storage;
 mod transcript;
+pub(crate) use transcript::PublicationMark;
 pub use transcript::{
     CommittedCompleteness, CommittedFreshness, CommittedStatus, CommittedTranscript,
     CommittedViewState,

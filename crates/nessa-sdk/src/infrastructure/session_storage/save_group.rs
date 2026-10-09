@@ -242,6 +242,15 @@ impl GroupProgress {
     pub(super) fn published(&self) -> u64 {
         self.published
     }
+    /// Generation of the next save after the published prefix. `Some(0)` when
+    /// nothing has been published. `None` when the published generation cannot
+    /// advance.
+    pub(super) fn next_generation(&self) -> Option<u64> {
+        match &self.checkpoint {
+            Some(group) => group.identity.generation.checked_add(1),
+            None => Some(0),
+        }
+    }
     pub(super) fn reset_frame(&mut self) {
         self.prefix.clear();
         self.hash = Sha256::new();

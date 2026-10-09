@@ -116,8 +116,9 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
             // could offers a retry that can only ever return this. A corrupt
             // body and another format version are the same permanence when
             // they still surface as this error. The session-record reader
-            // skips those records and does not return this for them. This
-            // arm keeps a leaked one off the retry screen.
+            // stops at the first one and opens the prefix, so a truncated
+            // chat does not return this. This arm keeps a leaked one off
+            // the retry screen.
             // `IdentityMismatch` is answered above as a changed configuration,
             // which is what it means and already says "start a new one".
             AgentError::Storage(StorageError::Corrupt(_) | StorageError::AnotherVersion { .. }) => {

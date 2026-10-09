@@ -62,11 +62,11 @@ pub enum StorageError {
     ///
     /// `found` is the record's `schemaVersion` when that integer is not
     /// [`Self::SCHEMA_VERSION`]. `None` means the field is absent. The reader
-    /// skips the record and continues with the ones it can read. Alpha does
-    /// not interpret an unmarked record. The stored bytes are left unchanged.
-    /// A record at this build's version whose body cannot be parsed is
-    /// [`Self::Corrupt`], and that record is skipped the same way. A marker
-    /// that is not an unsigned integer is [`Self::Corrupt`].
+    /// stops at this record and opens the chat from the prefix folded before
+    /// it. Alpha does not interpret an unmarked record. The stored bytes are
+    /// left unchanged. A record at this build's version whose body cannot be
+    /// parsed is [`Self::Corrupt`], and that record ends the prefix the same
+    /// way. A marker that is not an unsigned integer is [`Self::Corrupt`].
     AnotherVersion {
         /// The `schemaVersion` integer in the record, if it has one.
         found: Option<u64>,

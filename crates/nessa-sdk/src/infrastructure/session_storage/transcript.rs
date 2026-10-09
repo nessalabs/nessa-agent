@@ -4,16 +4,15 @@
 
 use super::{
     physical_record_schema,
-    save_group::{GroupCheckpoint, GroupProgress, HEADER_BYTES},
-    skipped::{self, SkipReason, SkippedRecord},
+    save_group::{GroupCheckpoint, GroupProgress, Header, HEADER_BYTES},
     snapshot,
     stream_fact::{self, FrameStep, FrameValidator},
 };
 use crate::{
     application::agent_execution::sessions::{
-        records::FactKind, CommittedFreshness, CommittedSession, CommittedStatus,
-        CommittedTransactionState, CommittedTranscript, CommittedViewState, SessionSnapshot,
-        StorageError,
+        records::{FactKey, FactKind},
+        CommittedFreshness, CommittedSession, CommittedStatus, CommittedTransactionState,
+        CommittedTranscript, CommittedViewState, PublicationMark, SessionSnapshot, StorageError,
     },
     domain::agent_execution::sessions::{ProviderContext, SessionId},
 };
@@ -65,12 +64,11 @@ struct SavedFold<S = snapshot::checkpoint::Snapshot> {
 }
 
 /// One source-scoped, effect-free semantic transcript receiver. `apply` stages
-/// an entire input batch. A semantic unit this build cannot read is skipped:
-/// its frame is consumed, its changes are not applied, and [`Self::skipped`]
-/// records why. Every other frame and decision still has to validate before
-/// the batch is published. A caller persists `checkpoint` and its own
-/// acknowledgement in one local transaction; this type performs no I/O or
-/// provider action.
+/// an entire input batch. Reading stops at the first record that is unmarked,
+/// from another format version, corrupt, or in contradiction with the prefix
+/// already folded. That prefix stays. Nothing after the gap is folded. A caller
+/// persists `checkpoint` and its own acknowledgement in one local transaction;
+/// this type performs no I/O or provider action.
 ///
 /// Cloning copies and revalidates the complete retained semantic history. Use
 /// [`Self::transaction`] to stage receiver work without that full-history copy;
@@ -82,13 +80,21 @@ pub struct TranscriptFold {
     published: Option<Arc<SessionSnapshot>>,
     published_facts: u64,
     groups: GroupProgress,
+    groups_at_publication: GroupProgress,
+    publication: PublicationMark,
     pending: PendingBody,
     frames: FrameValidator,
     #[cfg(test)]
     semantic_decodes: usize,
     loaded: bool,
     freshness: CommittedFreshness,
-    skipped: Vec<SkippedRecord>,
+    /// A record ended the fold. Later bytes are consumed and not applied,
+    /// except a save that continues from the published prefix.
+    truncated: bool,
+    /// Transaction-start continuation, kept only when sealing discards an open
+    /// group that an earlier commit had already staged. A hard refusal of this
+    /// batch restores it. `None` outside that window.
+    deep_restore: Option<CommittedTranscript>,
 }
 
 impl TranscriptFold {
@@ -107,13 +113,16 @@ impl TranscriptFold {
             published: None,
             published_facts: 0,
             groups: GroupProgress::after(0),
+            groups_at_publication: GroupProgress::after(0),
+            publication: PublicationMark::origin(),
             pending: PendingBody::default(),
             frames: FrameValidator::after(0),
             #[cfg(test)]
             semantic_decodes: 0,
             loaded: false,
             freshness: CommittedFreshness::Current,
-            skipped: Vec::new(),
+            truncated: false,
+            deep_restore: None,
         })
     }
 
@@ -130,6 +139,8 @@ impl TranscriptFold {
         fold.published_facts = applied;
         fold.committed = CommittedTranscript::restore(Some(snapshot), applied, applied).unwrap();
         fold.groups = GroupProgress::after(applied);
+        fold.groups_at_publication = GroupProgress::after(applied);
+        fold.publication = fold.committed.publication_mark(0);
         fold.frames = FrameValidator::after(applied);
         fold.loaded = true;
         fold
@@ -199,18 +210,15 @@ impl TranscriptFold {
     /// Complete units update only the private canonical continuation. The outer
     /// save completion advances `applied` and its public snapshot together.
     /// A physical abort publishes no semantic progress.
-    /// An unmarked unit, a unit from another format version, or a unit whose
-    /// body cannot be decoded is skipped. Its physical position is consumed,
-    /// its changes are not applied, and [`Self::skipped`] gains one notice.
-    /// Later records in the batch still apply. A decoded unit that contradicts
-    /// the session lifecycle still refuses the batch. The stored bytes are not
-    /// rewritten.
+    /// An unmarked unit, a unit from another format version, a corrupt body, or
+    /// a unit that contradicts the prefix stops the fold. The prefix stays, and
+    /// nothing after that record is folded. The stored bytes are not rewritten.
     /// Accepted nonempty input invalidates Current to Unknown; Stale and Unknown
     /// remain unconfirmed until an explicit authenticated source-head observation.
     ///
     /// # Errors
-    /// Returns the typed scope, position, frame or SDK decision refusal. A
-    /// skipped record is not a refusal.
+    /// Returns the typed scope, position, or frame refusal. A record this build
+    /// cannot fold is not a refusal: the prefix stays and `apply` returns `Ok`.
     pub fn apply(&mut self, batch: &[Record]) -> Result<(), TranscriptError> {
         let mut transaction = self.transaction();
         transaction.apply(batch)?;
@@ -246,16 +254,20 @@ impl TranscriptFold {
     /// # }
     /// ```
     pub fn transaction(&mut self) -> TranscriptTransaction<'_> {
+        self.publication.restart_undo();
+        self.deep_restore = None;
         let backup = ReceiverBackup {
             semantic: Some(self.committed.begin_transaction()),
             frames: self.frames.clone(),
             published: self.published.clone(),
             published_facts: self.published_facts,
             groups: self.groups.clone(),
+            groups_at_publication: self.groups_at_publication.clone(),
+            publication: self.publication,
             pending: self.pending.clone(),
             loaded: self.loaded,
             freshness: self.freshness,
-            skipped: self.skipped.clone(),
+            truncated: self.truncated,
             #[cfg(test)]
             semantic_decodes: self.semantic_decodes,
         };
@@ -319,52 +331,20 @@ impl TranscriptFold {
                         &assembled
                     }
                 };
-                self.groups.piece(body).map_err(TranscriptError::Decision)?;
-                let header = self
-                    .groups
-                    .complete(&physical_key, record.position)
-                    .map_err(TranscriptError::Decision)?;
-                if !header.identity.matches_scope(
-                    self.scope.stream().as_str(),
-                    self.scope.incarnation().as_str(),
-                ) {
-                    return Err(TranscriptError::Scope);
-                }
-                match physical_key.kind() {
-                    FactKind::SaveUnit => {
-                        let context = self
-                            .committed
-                            .snapshot()
-                            .map_or(ProviderContext::Absent, |state| {
-                                state.provider_context.clone()
-                            });
-                        #[cfg(test)]
-                        {
-                            self.semantic_decodes += 1;
+                if self.truncated && !self.continuation_unit(&physical_key, body) {
+                    self.pending.clear();
+                } else {
+                    self.truncated = false;
+                    if let Err(error) = self.accept_fact(record, &physical_key, body, semantic) {
+                        let TranscriptError::Decision(cause) = &error else {
+                            return Err(error);
+                        };
+                        if !super::truncates_history(cause) {
+                            return Err(error);
                         }
-                        match snapshot::decode_semantic_batch(&body[HEADER_BYTES..], &context) {
-                            Ok(changes) => {
-                                self.committed
-                                    .stage_apply(record.position, &changes, semantic)
-                                    .map_err(TranscriptError::Decision)?;
-                                if self.committed.snapshot().is_some_and(|state| {
-                                    state.id.as_str() != self.scope.stream().as_str()
-                                }) {
-                                    return Err(TranscriptError::Scope);
-                                }
-                            }
-                            Err(error) => self.note_unreadable(record.position, error)?,
-                        }
-                    }
-                    FactKind::SaveComplete => {
-                        // One immutable publication per outer save. Units mutate
-                        // only the private canonical continuation with touched undo.
-                        self.published = self.committed.snapshot_handle();
-                        self.published_facts = self.committed.fact_count();
-                        self.committed.abort(record.position);
+                        self.seal(semantic, record.position, cause)?;
                     }
                 }
-                self.pending.clear();
             }
         }
         self.loaded = true;
@@ -374,19 +354,109 @@ impl TranscriptFold {
         Ok(())
     }
 
-    /// Consume one unit whose body cannot be decoded. A decoded unit's
-    /// lifecycle refusal is not passed here. Any other storage error still
-    /// refuses the batch.
-    fn note_unreadable(
-        &mut self,
-        position: u64,
-        error: StorageError,
-    ) -> Result<(), TranscriptError> {
-        let Some(reason) = SkipReason::classify(&error) else {
-            return Err(TranscriptError::Decision(error));
+    /// The next save after the published prefix: first unit, same base, next
+    /// generation. Records from the broken tail use another base or ordinal.
+    fn continuation_unit(&self, key: &FactKey, body: &[u8]) -> bool {
+        if key.kind() != FactKind::SaveUnit || key.ordinal() != 0 {
+            return false;
+        }
+        let Ok(header) = Header::decode(body) else {
+            return false;
         };
-        skipped::warn_skipped(self.scope.stream().as_str(), position, reason);
-        self.skipped.push(SkippedRecord::new(position, reason));
+        let Some(generation) = self.groups_at_publication.next_generation() else {
+            return false;
+        };
+        header.ordinal == 0
+            && header.identity.base == self.groups_at_publication.published()
+            && header.identity.generation == generation
+            && header.identity.matches_scope(
+                self.scope.stream().as_str(),
+                self.scope.incarnation().as_str(),
+            )
+    }
+
+    fn accept_fact(
+        &mut self,
+        record: &Record,
+        physical_key: &FactKey,
+        body: &[u8],
+        semantic: &mut CommittedTransactionState,
+    ) -> Result<(), TranscriptError> {
+        self.groups.piece(body).map_err(TranscriptError::Decision)?;
+        let header = self
+            .groups
+            .complete(physical_key, record.position)
+            .map_err(TranscriptError::Decision)?;
+        if !header.identity.matches_scope(
+            self.scope.stream().as_str(),
+            self.scope.incarnation().as_str(),
+        ) {
+            return Err(TranscriptError::Scope);
+        }
+        match physical_key.kind() {
+            FactKind::SaveUnit => {
+                let context = self
+                    .committed
+                    .snapshot()
+                    .map_or(ProviderContext::Absent, |state| {
+                        state.provider_context.clone()
+                    });
+                #[cfg(test)]
+                {
+                    self.semantic_decodes += 1;
+                }
+                let changes = snapshot::decode_semantic_batch(&body[HEADER_BYTES..], &context)
+                    .map_err(TranscriptError::Decision)?;
+                self.committed
+                    .stage_apply(record.position, &changes, semantic)
+                    .map_err(TranscriptError::Decision)?;
+                if self
+                    .committed
+                    .snapshot()
+                    .is_some_and(|state| state.id.as_str() != self.scope.stream().as_str())
+                {
+                    return Err(TranscriptError::Scope);
+                }
+            }
+            FactKind::SaveComplete => {
+                // One immutable publication per outer save. Units mutate
+                // only the private canonical continuation with touched undo.
+                self.published = self.committed.snapshot_handle();
+                self.published_facts = self.committed.fact_count();
+                self.committed.abort(record.position);
+                self.groups_at_publication = self.groups.clone();
+                self.publication = self.committed.publication_mark_from(semantic);
+            }
+        }
+        self.pending.clear();
+        Ok(())
+    }
+
+    /// Drop the open group that contains the unreadable record. The downloaded
+    /// prefix stays, including this record's frames, so a later page is not a
+    /// hole. The published snapshot does not move past the gap.
+    fn seal(
+        &mut self,
+        semantic: &mut CommittedTransactionState,
+        position: u64,
+        error: &StorageError,
+    ) -> Result<(), TranscriptError> {
+        let (applied, facts) = self.committed.seal_open_group(semantic, self.publication);
+        if self.committed.snapshot() != self.published.as_deref() {
+            self.deep_restore = Some(self.committed.clone());
+            self.committed = CommittedTranscript::restore(
+                self.published.as_ref().map(|snapshot| (**snapshot).clone()),
+                applied,
+                facts,
+            )
+            .map_err(|_| TranscriptError::Checkpoint)?;
+        }
+        self.groups = self.groups_at_publication.clone();
+        self.pending.clear();
+        if !self.truncated {
+            super::warn_truncated(self.scope.stream().as_str(), position, error);
+        }
+        self.truncated = true;
         Ok(())
     }
 
@@ -439,11 +509,7 @@ impl TranscriptFold {
             .saturating_add(self.pending.retained_bytes())
             .saturating_add(self.frames.allocation_bytes())
             .saturating_add(self.groups.allocation_bytes())
-            .saturating_add(
-                self.skipped
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<SkippedRecord>()),
-            )
+            .saturating_add(self.groups_at_publication.allocation_bytes())
     }
 
     /// Exact receiver/source identity used for this fold.
@@ -469,12 +535,6 @@ impl TranscriptFold {
     /// Complete SDK semantic state. Display limits must be applied separately.
     pub fn snapshot(&self) -> Option<&SessionSnapshot> {
         self.published.as_deref()
-    }
-
-    /// Records this receiver skipped. Each one was consumed and not applied.
-    /// A refusal of the batch rolls these notices back with the batch.
-    pub fn skipped(&self) -> &[SkippedRecord] {
-        &self.skipped
     }
 
     /// Current read status. A partial fact leaves the prior committed snapshot
@@ -588,10 +648,10 @@ impl TranscriptFold {
         // walk the bytes again.
         let saved: SavedFold = serde_json::from_reader(checkpoint.reader())
             .map_err(|_| TranscriptError::Checkpoint)?;
-        // `from_chunks` already required this build's marker.
-        if saved.schema_version != StorageError::SCHEMA_VERSION {
-            return Err(TranscriptError::Checkpoint);
-        }
+        // `from_chunks` already required this build's marker. The field stays
+        // so the checkpoint still decodes; it is not a second version decision.
+        let _ = saved.schema_version;
+        debug_assert_eq!(saved.schema_version, StorageError::SCHEMA_VERSION);
         if saved.applied != expected_applied {
             return Err(TranscriptError::Checkpoint);
         }
@@ -634,8 +694,10 @@ impl TranscriptFold {
             saved.facts,
         )
         .map_err(|_| TranscriptError::Checkpoint)?;
+        fold.groups_at_publication = fold.groups.clone();
         fold.committed = CommittedTranscript::restore(snapshot, saved.applied, saved.facts)
             .map_err(|_| TranscriptError::Checkpoint)?;
+        fold.publication = fold.committed.publication_mark(0);
         // Pending downloaded frames belong to the receiver journal. Resume at
         // A, then drain that journal through D before requesting a new page.
         fold.frames = FrameValidator::after(saved.applied);
@@ -651,10 +713,12 @@ struct ReceiverBackup {
     published: Option<Arc<SessionSnapshot>>,
     published_facts: u64,
     groups: GroupProgress,
+    groups_at_publication: GroupProgress,
+    publication: PublicationMark,
     pending: PendingBody,
     loaded: bool,
     freshness: CommittedFreshness,
-    skipped: Vec<SkippedRecord>,
+    truncated: bool,
     #[cfg(test)]
     semantic_decodes: usize,
 }
@@ -677,18 +741,25 @@ impl Deref for TranscriptTransaction<'_> {
 }
 impl TranscriptTransaction<'_> {
     fn rollback(&mut self) {
+        let deep = self.fold.deep_restore.take();
         if let Some(backup) = self.backup.take() {
-            self.fold
-                .committed
-                .restore_transaction(backup.semantic.expect("transaction semantic backup"));
+            if let Some(saved) = deep {
+                self.fold.committed = saved;
+            } else {
+                self.fold
+                    .committed
+                    .restore_transaction(backup.semantic.expect("transaction semantic backup"));
+            }
             self.fold.frames = backup.frames;
             self.fold.published = backup.published;
             self.fold.published_facts = backup.published_facts;
             self.fold.groups = backup.groups;
+            self.fold.groups_at_publication = backup.groups_at_publication;
+            self.fold.publication = backup.publication;
             self.fold.pending = backup.pending;
             self.fold.loaded = backup.loaded;
             self.fold.freshness = backup.freshness;
-            self.fold.skipped = backup.skipped;
+            self.fold.truncated = backup.truncated;
             #[cfg(test)]
             {
                 self.fold.semantic_decodes = backup.semantic_decodes;
@@ -766,6 +837,7 @@ impl TranscriptTransaction<'_> {
         if self.failed {
             return Err(TranscriptError::Position);
         }
+        self.fold.deep_restore = None;
         self.backup = None;
         Ok(())
     }
@@ -881,6 +953,18 @@ mod tests {
         base: u64,
         generation: u64,
     ) -> Vec<NewEvent> {
+        save_group_at(scope, payload, base, generation, base)
+    }
+
+    /// `physical_base` is where the frames sit. `base` is the save's logical
+    /// prefix. They differ when a new save is appended after an unreadable tail.
+    fn save_group_at(
+        scope: &Scope,
+        payload: &[u8],
+        base: u64,
+        generation: u64,
+        physical_base: u64,
+    ) -> Vec<NewEvent> {
         let binding = SessionSaveGeneration::new(
             SessionSaveBackend::Record {
                 stream: scope.stream().clone(),
@@ -898,7 +982,7 @@ mod tests {
                 key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
                 body: unit.encode(payload),
             },
-            base + 1,
+            physical_base + 1,
         )
         .unwrap();
         let terminal = Header::unit(identity, 1, unit.chain(payload.len() as u64), &[]);
@@ -908,7 +992,7 @@ mod tests {
                     key: FactKey::new(FactKind::SaveComplete, None, 1).unwrap(),
                     body: terminal.encode(&[]),
                 },
-                base + frames.len() as u64 + 1,
+                physical_base + frames.len() as u64 + 1,
             )
             .unwrap(),
         );
@@ -1049,17 +1133,9 @@ mod tests {
         assert_eq!(fold.checkpoint().unwrap(), before);
         let mut late_invalid = suffix.clone();
         late_invalid.extend(records(&scope, 5, &save_frames(opened(), 4, 2)));
-        assert!(fold.apply(&late_invalid).is_err());
-        assert_eq!(fold.checkpoint().unwrap(), before);
-        assert_eq!(fold.status(), status);
-        fold.committed.assert_retained_accounting();
-        assert_eq!(published.invocations.len(), 0);
-        {
-            let mut staged = fold.transaction();
-            staged.apply(&suffix).unwrap();
-            staged.observe_source_head(&scope, 4).unwrap();
-            staged.commit().unwrap();
-        }
+        // The input completes before the contradictory open. The prefix stays
+        // and the open is not folded.
+        fold.apply(&late_invalid).unwrap();
         assert_eq!(fold.applied(), 4);
         assert_eq!(fold.snapshot().unwrap().invocations.len(), 1);
         fold.committed.assert_retained_accounting();
@@ -1249,7 +1325,7 @@ mod tests {
         MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
         VALIDATION_CALLS.with(|counter| counter.set((0, 0)));
         SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.set(0));
-        assert!(fold.apply(&rejected).is_err());
+        fold.apply(&rejected).unwrap();
         assert_eq!(
             MESSAGE_CLONES.with(|counter| counter.get()),
             (64, 64 * 4096)
@@ -1378,14 +1454,10 @@ mod tests {
             4,
             true,
         );
-        assert!(matches!(
-            fold.apply(&both),
-            Err(TranscriptError::Decision(_))
-        ));
-        assert_eq!(
-            (fold.applied(), fold.downloaded(), fold.fact_count()),
-            (applied, downloaded, facts)
-        );
+        fold.apply(&both).unwrap();
+        assert_eq!(fold.applied(), applied);
+        assert!(fold.downloaded() > downloaded);
+        assert_eq!(fold.fact_count(), facts);
         assert_eq!(fold.snapshot().unwrap().invocations[0].events.len(), 2);
         fold.committed.assert_retained_accounting();
         let accepted_later = group_suffix(
@@ -1402,10 +1474,7 @@ mod tests {
             5,
             true,
         );
-        assert!(matches!(
-            fold.apply(&rejected_earlier),
-            Err(TranscriptError::Decision(_))
-        ));
+        fold.apply(&rejected_earlier).unwrap();
         assert_eq!(fold.applied(), after_later);
         assert_eq!(fold.snapshot().unwrap().invocations[0].events.len(), 3);
         fold.committed.assert_retained_accounting();
@@ -1482,11 +1551,10 @@ mod tests {
             let mut value: Value = serde_json::from_slice(&body).unwrap();
             value["changes"][0]["ReceiptUpdated"]["after"]["Failed"]["storage"]
                 ["ShutdownFailures"]["read"] = invalid;
-            let base = fold.applied();
             let frames = save_payload_frames(
                 &scope,
                 &serde_json::to_vec(&value).unwrap(),
-                base,
+                fold.downloaded(),
                 generation,
             );
             fold.apply(&records(&scope, fold.downloaded() + 1, &frames))
@@ -1500,11 +1568,10 @@ mod tests {
         let mut oversized_ack: Value = serde_json::from_slice(&body).unwrap();
         oversized_ack["changes"][0]["ReceiptUpdated"]["after"]["Failed"]["storage"] =
             serde_json::json!({"Io": diagnostic});
-        let base = fold.applied();
         let frames = save_payload_frames(
             &scope,
             &serde_json::to_vec(&oversized_ack).unwrap(),
-            base,
+            fold.downloaded(),
             generation,
         );
         fold.apply(&records(&scope, fold.downloaded() + 1, &frames))
@@ -1514,18 +1581,29 @@ mod tests {
             fold.snapshot().unwrap().invocations[0].acknowledgement,
             SubmissionAcknowledgement::Pending
         ));
-        assert_eq!(
-            fold.skipped()
-                .iter()
-                .map(|notice| notice.reason())
-                .collect::<Vec<_>>(),
-            vec![
-                SkipReason::Corrupt,
-                SkipReason::Corrupt,
-                SkipReason::Corrupt
-            ]
+        // A later generation is past the gap, so it is not folded.
+        let skipped = save_payload_frames(
+            &scope,
+            &snapshot::encode_semantic_batch(std::slice::from_ref(&change)).unwrap(),
+            fold.downloaded(),
+            generation,
         );
-        let valid = save_frames(change, fold.applied(), generation);
+        let facts = fold.fact_count();
+        fold.apply(&records(&scope, fold.downloaded() + 1, &skipped))
+            .unwrap();
+        assert_eq!(fold.fact_count(), facts);
+        assert!(matches!(
+            fold.snapshot().unwrap().invocations[0].acknowledgement,
+            SubmissionAcknowledgement::Pending
+        ));
+        // The next save continues from the prefix and is appended after the gap.
+        let valid = save_group_at(
+            &scope,
+            &snapshot::encode_semantic_batch(std::slice::from_ref(&change)).unwrap(),
+            fold.applied(),
+            2,
+            fold.downloaded(),
+        );
         fold.apply(&records(&scope, fold.downloaded() + 1, &valid))
             .unwrap();
         assert!(
@@ -1654,15 +1732,6 @@ mod tests {
         zero.position = 0;
         assert_eq!(fold.apply(&[zero]), Err(TranscriptError::Position));
 
-        let second = records(&scope, 3, &save_frames(opened(), 2, 1));
-        assert!(matches!(
-            fold.apply(&second),
-            Err(TranscriptError::Decision(_))
-        ));
-        assert_eq!(fold.downloaded(), 2);
-        assert_eq!(fold.applied(), 2);
-        assert_eq!(fold.snapshot().unwrap().invocations.len(), 0);
-
         let mut foreign_scope = first[0].clone();
         foreign_scope.position = 3;
         foreign_scope.scope = Scope::new(
@@ -1679,6 +1748,12 @@ mod tests {
         unknown_schema.payload[0] = 99;
         assert_eq!(fold.apply(&[unknown_schema]), Err(TranscriptError::Frame));
         assert_eq!(fold.downloaded(), 2);
+
+        let second = records(&scope, 3, &save_frames(opened(), 2, 1));
+        fold.apply(&second).unwrap();
+        assert!(fold.downloaded() > 2);
+        assert_eq!(fold.applied(), 2);
+        assert_eq!(fold.snapshot().unwrap().invocations.len(), 0);
     }
 
     #[test]
@@ -1976,27 +2051,28 @@ mod tests {
         ));
     }
 
-    fn retitled(payload: &[u8], edit: impl FnOnce(&mut Value)) -> Vec<u8> {
+    fn edited_payload(payload: &[u8], edit: impl FnOnce(&mut Value)) -> Vec<u8> {
         let mut saved: Value = serde_json::from_slice(payload).unwrap();
         edit(&mut saved);
         serde_json::to_vec(&saved).unwrap()
     }
 
     #[test]
-    fn an_unreadable_record_is_skipped_and_later_records_still_apply() {
+    fn an_unreadable_record_ends_the_prefix_and_a_later_record_is_not_folded() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
         fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
             .unwrap();
+        let opening = fold.snapshot().unwrap().clone();
         let found = StorageError::SCHEMA_VERSION + 1;
         let encoded = snapshot::encode_semantic_batch(&[opened()]).unwrap();
-        let future = retitled(&encoded, |saved| {
+        let future = edited_payload(&encoded, |saved| {
             saved["schemaVersion"] = serde_json::json!(found);
         });
-        let unmarked = retitled(&encoded, |saved| {
+        let unmarked = edited_payload(&encoded, |saved| {
             saved.as_object_mut().unwrap().remove("schemaVersion");
         });
-        let corrupt = retitled(&encoded, |saved| {
+        let corrupt = edited_payload(&encoded, |saved| {
             saved["changes"] = serde_json::json!("not changes");
         });
         let input = SessionChange::InputAccepted(Box::new(
@@ -2004,35 +2080,26 @@ mod tests {
                 .invocations
                 .remove(0),
         ));
+        // The first unreadable record ends the fold. The other two sit past it.
         let mut generation = 1u64;
         for payload in [&future, &unmarked, &corrupt] {
-            let base = fold.applied();
-            let frames = save_payload_frames(&scope, payload, base, generation);
+            let frames = save_payload_frames(&scope, payload, fold.downloaded(), generation);
             fold.apply(&records(&scope, fold.downloaded() + 1, &frames))
                 .unwrap();
             generation += 1;
+            assert_eq!(fold.snapshot(), Some(&opening));
+            assert_eq!(fold.fact_count(), 1);
         }
-        let valid = save_frames(input, fold.applied(), generation);
-        fold.apply(&records(&scope, fold.downloaded() + 1, &valid))
-            .unwrap();
-        assert_eq!(fold.fact_count(), 2);
-        assert_eq!(fold.snapshot().unwrap().invocations.len(), 1);
-        assert_eq!(
-            fold.skipped()
-                .iter()
-                .map(|notice| notice.reason())
-                .collect::<Vec<_>>(),
-            vec![
-                SkipReason::AnotherVersion { found: Some(found) },
-                SkipReason::AnotherVersion { found: None },
-                SkipReason::Corrupt,
-            ]
+        let past_the_gap = save_payload_frames(
+            &scope,
+            &snapshot::encode_semantic_batch(std::slice::from_ref(&input)).unwrap(),
+            fold.downloaded(),
+            generation,
         );
-        let mut previous = 0u64;
-        for notice in fold.skipped() {
-            assert!(notice.position() > previous);
-            previous = notice.position();
-        }
+        fold.apply(&records(&scope, fold.downloaded() + 1, &past_the_gap))
+            .unwrap();
+        assert_eq!(fold.snapshot(), Some(&opening));
+        assert_eq!(fold.fact_count(), 1);
         let other_scope = Scope::new(
             id("receiver"),
             id("origin"),
@@ -2054,7 +2121,6 @@ mod tests {
                 &save_frames_in(&other_scope, other_open, 0, 0),
             ))
             .unwrap();
-        assert!(other.skipped().is_empty());
         assert_eq!(other.fact_count(), 1);
         assert_eq!(
             other.snapshot().map(|state| state.id.as_str()),
@@ -2070,7 +2136,7 @@ mod tests {
             .unwrap();
         let before = (fold.applied(), fold.downloaded(), fold.fact_count());
         let found = StorageError::SCHEMA_VERSION + 1;
-        let payload = retitled(
+        let payload = edited_payload(
             &snapshot::encode_semantic_batch(&[opened()]).unwrap(),
             |saved| {
                 saved["schemaVersion"] = serde_json::json!(found);
@@ -2086,7 +2152,6 @@ mod tests {
             payload: vec![0xff, 1, 2, 3],
         });
         assert!(matches!(fold.apply(&batch), Err(TranscriptError::Frame)));
-        assert!(fold.skipped().is_empty());
         assert_eq!(
             (fold.applied(), fold.downloaded(), fold.fact_count()),
             before
@@ -2514,24 +2579,19 @@ mod tests {
         fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
             .unwrap();
         let checkpoint = fold.checkpoint().unwrap();
-        let suffix = accepted_suffix(&fold, 4, 1);
-        let mut invalid = suffix.clone();
+        let mut invalid = accepted_suffix(&fold, 4, 1);
         invalid.extend(records(
             &scope,
             8,
             &save_frames(accepted_input("input-0"), 7, 2),
         ));
-        assert!(matches!(
-            fold.apply(&invalid),
-            Err(TranscriptError::Decision(StorageError::Corrupt(_)))
-        ));
-        assert_eq!(fold.checkpoint().unwrap(), checkpoint);
-        assert_eq!(
-            (fold.applied(), fold.downloaded(), fold.fact_count()),
-            (2, 2, 1)
-        );
-        fold.committed.assert_retained_accounting();
-        fold.apply(&suffix).unwrap();
+        // The four inputs complete before the contradictory replay, so they
+        // stay. The replay is not folded.
+        fold.apply(&invalid).unwrap();
+        assert_eq!(fold.fact_count(), 5);
+        assert_eq!(fold.snapshot().unwrap().invocations.len(), 4);
+        assert_ne!(fold.checkpoint().unwrap(), checkpoint);
+        assert!(fold.downloaded() > fold.applied());
         fold.committed.assert_retained_accounting();
     }
 
@@ -2834,13 +2894,24 @@ mod tests {
                             invalid.push(unpublished.last().unwrap().clone());
                             assert_eq!(fold.apply(&invalid), Err(TranscriptError::Position));
                         } else {
-                            assert!(matches!(
-                                fold.apply(&semantic_refusal),
-                                Err(TranscriptError::Decision(StorageError::Corrupt(_)))
-                            ));
+                            let mut probed = fold.clone();
+                            MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
+                            VALIDATION_CALLS.with(|counter| counter.set((0, 0)));
+                            SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.set(0));
+                            probed.apply(&semantic_refusal).unwrap();
+                            assert_eq!(probed.snapshot(), Some(published.as_ref()));
+                            assert_eq!(probed.applied(), progress.0);
+                            assert_eq!(probed.fact_count(), progress.2);
+                            // The stop rolls the open group back. It does not
+                            // rescan the published snapshot. The accounting
+                            // check below does, so it runs after this count.
+                            assert_eq!(SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.get()), 0);
+                            probed.committed.assert_retained_accounting();
                         }
                         assert_eq!(VALIDATION_CALLS.with(|counter| counter.get()).0, 0);
-                        assert_eq!(SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.get()), 0);
+                        if refusal != 2 {
+                            assert_eq!(SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.get()), 0);
+                        }
                         assert_eq!(
                             MESSAGE_CLONES.with(|counter| counter.get()),
                             if tools { (0, 0) } else { (count, count * 1024) }

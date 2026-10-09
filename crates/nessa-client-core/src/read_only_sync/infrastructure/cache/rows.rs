@@ -4,7 +4,7 @@ use nessa_local_database::rusqlite::{
 };
 use nessa_sdk::application::agent_execution::sessions::CommittedTranscript;
 use nessa_sdk::infrastructure::session_storage::{
-    TranscriptCheckpoint, MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES,
+    TranscriptCheckpoint, TranscriptError, MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES,
 };
 use nessa_sync::replication::domain::{Id, Scope, MAX_ID_BYTES};
 #[cfg(test)]
@@ -139,11 +139,22 @@ pub(super) fn progress_target(
         .transpose()
 }
 
+/// A checkpoint row failed as cache damage, or its body failed as a transcript.
+pub(super) enum CheckpointReadError {
+    Cache(CacheError),
+    Body(TranscriptError),
+}
+impl From<CacheError> for CheckpointReadError {
+    fn from(error: CacheError) -> Self {
+        Self::Cache(error)
+    }
+}
+
 pub(super) fn checkpoint(
     connection: &Connection,
     scope: &Scope,
     policy: CachePolicy,
-) -> Result<TranscriptCheckpoint, CacheError> {
+) -> Result<TranscriptCheckpoint, CheckpointReadError> {
     let maximum_chunks = policy
         .checkpoint_bytes()
         .div_ceil(MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES);
@@ -170,10 +181,10 @@ pub(super) fn checkpoint(
         .collect::<Result<Vec<_>, _>>()
         .map_err(database_error)?;
     if metadata.is_empty() {
-        return Err(CacheError::Corrupt);
+        return Err(CacheError::Corrupt.into());
     }
     if metadata.len() > maximum_chunks {
-        return Err(CacheError::Quota);
+        return Err(CacheError::Quota.into());
     }
     let mut total = 0usize;
     for (index, &(ordinal, length)) in metadata.iter().enumerate() {
@@ -183,11 +194,11 @@ pub(super) fn checkpoint(
             || length > MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES
             || (index + 1 != metadata.len() && length != MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES)
         {
-            return Err(CacheError::Corrupt);
+            return Err(CacheError::Corrupt.into());
         }
         total = total.checked_add(length).ok_or(CacheError::Quota)?;
         if total > policy.checkpoint_bytes() {
-            return Err(CacheError::Quota);
+            return Err(CacheError::Quota.into());
         }
     }
     let mut chunks = Vec::with_capacity(metadata.len());
@@ -209,7 +220,7 @@ pub(super) fn checkpoint(
             .map_err(database_error)?;
         chunks.push(bytes);
     }
-    TranscriptCheckpoint::from_chunks(chunks).map_err(super::records::checkpoint_body_error)
+    TranscriptCheckpoint::from_chunks(chunks).map_err(CheckpointReadError::Body)
 }
 
 pub(super) fn save_progress(

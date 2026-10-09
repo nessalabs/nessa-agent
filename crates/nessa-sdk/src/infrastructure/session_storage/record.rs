@@ -3187,10 +3187,10 @@ mod tests {
 
     /// P5 of "The values, saved and sent" (`docs/design/mcp-app-calls.md`).
     /// A version-1 input without `user_app` or `user_app_model_context` is
-    /// corrupt and is skipped. A record with no `schemaVersion` is another
-    /// version and is skipped, including today's shape with only the marker
-    /// removed. The conversation opens on the records that remain. Siblings
-    /// in the same store open, and the stored rows stay unchanged.
+    /// corrupt. A record with no `schemaVersion` is another version, including
+    /// today's shape with only the marker removed. The conversation opens on
+    /// the prefix before that record. Siblings in the same store open, and the
+    /// stored rows stay unchanged.
     #[tokio::test]
     async fn an_unreadable_input_is_skipped_and_the_conversation_still_opens() {
         let directory = tempfile::tempdir().unwrap();
@@ -3346,6 +3346,179 @@ mod tests {
         reopened.shutdown().await.unwrap();
         drop(reopened);
         assert_eq!(record_rows(&root), before);
+    }
+
+    fn framed_group(
+        binding: &SessionSaveGeneration,
+        payload: &[u8],
+        with_complete: bool,
+    ) -> Vec<NewEvent> {
+        let identity = SaveIdentity::binding(binding).unwrap();
+        let unit = Header::unit(identity.clone(), 0, EMPTY_CHAIN, payload);
+        let mut frames = stream_fact::frame_fact(
+            &FramedFact {
+                key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
+                body: unit.encode(payload),
+            },
+            binding.base() + 1,
+        )
+        .unwrap();
+        if with_complete {
+            let complete = Header::unit(identity, 1, unit.chain(payload.len() as u64), &[]);
+            frames.extend(
+                stream_fact::frame_fact(
+                    &FramedFact {
+                        key: FactKey::new(FactKind::SaveComplete, None, 1).unwrap(),
+                        body: complete.encode(&[]),
+                    },
+                    binding.base() + frames.len() as u64 + 1,
+                )
+                .unwrap(),
+            );
+        }
+        frames
+    }
+
+    async fn append_frames(storage: &RecordStorage, id: &SessionId, frames: Vec<NewEvent>) {
+        let runtime = storage.runtime().await.unwrap();
+        let stream = runtime
+            .find_stream(&StreamId::new(id.as_str()).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        for frame in frames {
+            runtime.append(&stream, frame).await.unwrap();
+        }
+    }
+
+    fn without_marker(change: &SessionChange) -> Vec<u8> {
+        let mut saved: serde_json::Value = serde_json::from_slice(
+            &snapshot::encode_semantic_batch(std::slice::from_ref(change)).unwrap(),
+        )
+        .unwrap();
+        saved.as_object_mut().unwrap().remove("schemaVersion");
+        serde_json::to_vec(&saved).unwrap()
+    }
+
+    /// Every record unmarked opens empty. A bad record in the middle keeps the
+    /// prefix and drops what follows. A send after an unreadable tail appends
+    /// from that prefix and is still there after reopen.
+    #[tokio::test]
+    async fn unreadable_history_opens_on_the_prefix_and_a_later_send_appends() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let input = accepted_input(
+            ExecutionId::new("accepted").unwrap(),
+            SubmissionMode::Immediate,
+            vec![],
+        );
+
+        let unmarked_id = SessionId::new("all-unmarked").unwrap();
+        let unmarked_lease = storage.open(unmarked_id.clone()).await.unwrap();
+        let unmarked_binding = unmarked_lease.load().await.unwrap().binding().clone();
+        drop(unmarked_lease);
+        let (opened, _) = opening(&unmarked_id);
+        append_frames(
+            &storage,
+            &unmarked_id,
+            framed_group(&unmarked_binding, &without_marker(&opened), true),
+        )
+        .await;
+
+        let middle_id = SessionId::new("bad-middle").unwrap();
+        let middle_lease = storage.open(middle_id.clone()).await.unwrap();
+        let (middle_open, middle_snapshot) = opening(&middle_id);
+        middle_lease
+            .save_changes(
+                middle_lease.load().await.unwrap().binding().clone(),
+                middle_snapshot.clone(),
+                vec![SessionSaveUnit::new(vec![middle_open]).unwrap()],
+            )
+            .await
+            .unwrap();
+        let middle_binding = middle_lease.load().await.unwrap().binding().clone();
+        drop(middle_lease);
+        let bad_middle = framed_group(&middle_binding, &without_marker(&input), true);
+        let after_bad = middle_binding.base() + bad_middle.len() as u64;
+        append_frames(&storage, &middle_id, bad_middle).await;
+        let later = SessionSaveGeneration::new(middle_binding.backend().clone(), after_bad, 2);
+        let later_payload = snapshot::encode_semantic_batch(std::slice::from_ref(&input)).unwrap();
+        append_frames(
+            &storage,
+            &middle_id,
+            framed_group(&later, &later_payload, true),
+        )
+        .await;
+
+        let tail_id = SessionId::new("bad-tail").unwrap();
+        let tail_lease = storage.open(tail_id.clone()).await.unwrap();
+        let (tail_open, tail_snapshot) = opening(&tail_id);
+        tail_lease
+            .save_changes(
+                tail_lease.load().await.unwrap().binding().clone(),
+                tail_snapshot.clone(),
+                vec![SessionSaveUnit::new(vec![tail_open]).unwrap()],
+            )
+            .await
+            .unwrap();
+        let tail_binding = tail_lease.load().await.unwrap().binding().clone();
+        drop(tail_lease);
+        append_frames(
+            &storage,
+            &tail_id,
+            framed_group(&tail_binding, &without_marker(&input), false),
+        )
+        .await;
+
+        storage.shutdown().await.unwrap();
+        drop(storage);
+        let before = record_rows(&root);
+
+        let reopened = RecordStorage::new(&root).unwrap();
+        let unmarked = reopened.open_existing(unmarked_id).await.unwrap().unwrap();
+        let unmarked_load = unmarked.load().await.unwrap();
+        assert_eq!(unmarked_load.state(), SessionLoadState::Published);
+        assert!(unmarked_load.snapshot().is_none());
+        drop(unmarked);
+
+        let middle = reopened.open_existing(middle_id).await.unwrap().unwrap();
+        let middle_load = middle.load().await.unwrap();
+        assert_eq!(middle_load.state(), SessionLoadState::Published);
+        assert_eq!(middle_load.snapshot(), Some(&middle_snapshot));
+        assert!(middle_load.snapshot().unwrap().invocations.is_empty());
+        drop(middle);
+        assert_eq!(record_rows(&root), before);
+
+        let tail = reopened
+            .open_existing(tail_id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        let tail_load = tail.load().await.unwrap();
+        assert_eq!(tail_load.state(), SessionLoadState::Published);
+        assert_eq!(tail_load.snapshot(), Some(&tail_snapshot));
+        let sent =
+            records::fold_changes(Some(&tail_snapshot), std::slice::from_ref(&input)).unwrap();
+        tail.save_changes(
+            tail_load.binding().clone(),
+            sent.clone(),
+            vec![SessionSaveUnit::new(vec![input]).unwrap()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(tail.load().await.unwrap().snapshot(), Some(&sent));
+        drop(tail);
+
+        reopened.shutdown().await.unwrap();
+        drop(reopened);
+        let restored = RecordStorage::new(&root).unwrap();
+        let tail = restored.open_existing(tail_id).await.unwrap().unwrap();
+        let restored_load = tail.load().await.unwrap();
+        assert_eq!(restored_load.state(), SessionLoadState::Published);
+        assert_eq!(restored_load.snapshot(), Some(&sent));
+        drop(tail);
+        restored.shutdown().await.unwrap();
     }
 
     #[ignore = "child process probe"]
