@@ -54,6 +54,10 @@ pub enum ConversationError {
     /// environment can hold (row L2). Nothing ran, and the refusal is in the
     /// conversation's records.
     LeaseRefused(nessa_sdk::domain::agent_execution::leases::LeaseRefusal),
+    /// The conversation's latest lease is one this build cannot read, so its
+    /// agent is not opened under a new one (row L21): it may be a later
+    /// build's lease still running, and this build will never read it.
+    LeaseUnreadable,
     /// A v1 ownership row has not yet been assigned a model from verified
     /// saved-session evidence or a recorded prospective default.
     /// The selected or saved model cannot be run by this agent on this gateway.

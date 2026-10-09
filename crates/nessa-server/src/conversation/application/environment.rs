@@ -36,7 +36,9 @@ use nessa_sdk::application::agent_execution::{
         ProviderIdentity, ProviderObservationFuture, ProviderOpenError, ProviderOpenFuture,
         ProviderOpenRequest,
     },
-    sessions::{CurrentLease, LeaseCommit, LeaseRecord, LeaseRecordError, SessionManager},
+    sessions::{
+        CurrentLease, CurrentLeaseState, LeaseCommit, LeaseRecord, LeaseRecordError, SessionManager,
+    },
 };
 use nessa_sdk::domain::{
     agent_execution::{
@@ -342,12 +344,17 @@ impl ExecutionEventStream for FencedEvents {
 /// dropped events are committed (`release_live_slot`), so an opening cannot
 /// begin beside a run of the same conversation or its close
 /// (`l13_concurrent_commands_open_one_lease_and_one_agent`).
+///
+/// A latest lease this build cannot read is never issued over (row L21): it
+/// may be a later build's lease still Live, and a lease issued over it would
+/// make that build refuse the whole history. The opening is refused and
+/// nothing is written.
 pub(crate) async fn issue(
     manager: &SessionManager,
     environment: &dyn Environment,
     opening: &LeaseOpening,
     actor: &ActionContext,
-) -> Result<(), LeaseRecordError> {
+) -> Result<(), LeaseIssueError> {
     let earlier = manager
         .snapshot()
         .await
@@ -359,6 +366,11 @@ pub(crate) async fn issue(
     };
     let commit = manager
         .record_lease(|current| {
+            if current.is_some_and(|current| {
+                matches!(current.state(), CurrentLeaseState::Unreadable { .. })
+            }) {
+                return (Vec::new(), Err(LeaseIssueError::OverUnreadable));
+            }
             let mut records = Vec::new();
             if let (Some(lease), Some(cleanup)) = (current.and_then(CurrentLease::held), accounted)
             {
@@ -380,10 +392,33 @@ pub(crate) async fn issue(
                     actor: actor.clone(),
                 },
             });
-            (records, ())
+            (records, Ok(()))
         })
-        .await?;
-    commit.saved
+        .await
+        .map_err(LeaseIssueError::Record)?;
+    commit.decided?;
+    commit.saved.map_err(LeaseIssueError::Record)
+}
+
+/// Why an opening's lease was not recorded.
+#[derive(Debug)]
+pub(crate) enum LeaseIssueError {
+    /// The record could not be retained or saved.
+    Record(LeaseRecordError),
+    /// The conversation's latest lease is one this build cannot read, so no
+    /// lease is issued over it and nothing was written (row L21).
+    OverUnreadable,
+}
+
+impl std::fmt::Display for LeaseIssueError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Record(error) => error.fmt(formatter),
+            Self::OverUnreadable => {
+                formatter.write_str("the latest lease is one this build cannot read")
+            }
+        }
+    }
 }
 
 fn needs_accounting(lease: &Lease) -> bool {

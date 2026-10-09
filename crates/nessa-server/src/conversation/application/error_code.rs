@@ -40,6 +40,9 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::LeaseRefused(LeaseRefusal::SandboxUnavailable) => {
             ConversationErrorCode::SandboxUnavailable
         }
+        // Saved state this build cannot read and never will: the same answer
+        // as an unreadable history, which no retry changes.
+        ConversationError::LeaseUnreadable => ConversationErrorCode::ConversationStateUnreadable,
         ConversationError::ModelUnavailable => ConversationErrorCode::ModelUnavailable,
         ConversationError::ApprovalModeUnavailable => {
             ConversationErrorCode::ApprovalModeUnavailable

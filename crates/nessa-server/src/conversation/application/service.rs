@@ -3,7 +3,7 @@ mod mutation;
 use super::session_key::conversation_session;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
-    environment::{issue, open_lease, Environment, LeaseRequest, LiveLease},
+    environment::{issue, open_lease, Environment, LeaseIssueError, LeaseRequest, LiveLease},
     locks::ConversationLocks,
     mcp_apps::{McpAppError, McpAppInitiator, McpAppPorts, McpAppRef},
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
@@ -1395,7 +1395,10 @@ impl ConversationService {
                             // with that close, so the stream never keeps a Live
                             // lease nothing runs under.
                             let retained = opening.refusal.is_none()
-                                && matches!(issued, Err(LeaseRecordError::Storage(_)));
+                                && matches!(
+                                    issued,
+                                    Err(LeaseIssueError::Record(LeaseRecordError::Storage(_)))
+                                );
                             let refused = match (issued, opening.refusal) {
                                 (Ok(()), None) => None,
                                 // Nothing ran and the refusal is the cause,
@@ -1403,24 +1406,41 @@ impl ConversationService {
                                 (issued, Some(refusal)) => {
                                     if let Err(error) = issued {
                                         tracing::error!(conversation_id = %id, %error, "a refused lease could not be recorded");
+                                        // A refused opening is never attached, so
+                                        // its close saves nothing: what the failed
+                                        // write left retained is written here, so
+                                        // the refusal is in the records
+                                        // (`l2_a_refusal_whose_record_failed_to_save_is_still_the_refusal`).
+                                        if let Err(error) = agent
+                                            .session_manager()
+                                            .save_retained_lease_records()
+                                            .await
+                                        {
+                                            tracing::error!(conversation_id = %id, %error, "a refused lease could not be saved");
+                                        }
                                     }
                                     Some(ConversationError::LeaseRefused(refusal))
                                 }
                                 (Err(error), _) => {
                                     tracing::error!(conversation_id = %id, %error, "a lease could not be recorded");
                                     Some(match error {
-                                        LeaseRecordError::Refused(error)
-                                        | LeaseRecordError::Storage(error) => {
+                                        LeaseIssueError::OverUnreadable => {
+                                            ConversationError::LeaseUnreadable
+                                        }
+                                        LeaseIssueError::Record(
+                                            LeaseRecordError::Refused(error)
+                                            | LeaseRecordError::Storage(error),
+                                        ) => {
                                             ConversationError::Storage(error)
                                         }
                                         // Neither is what the history holds: the
                                         // Agent prepared has loaded it, and only
                                         // known records are written. Nothing ran,
                                         // so the opening is only unavailable.
-                                        LeaseRecordError::NotLoaded
-                                        | LeaseRecordError::Unreadable => {
-                                            ConversationError::Unavailable
-                                        }
+                                        LeaseIssueError::Record(
+                                            LeaseRecordError::NotLoaded
+                                            | LeaseRecordError::Unreadable,
+                                        ) => ConversationError::Unavailable,
                                     })
                                 }
                             };

@@ -347,6 +347,7 @@ it.
 | L18 | Prompt arrives while sleeping | The environment resumes the harness natively; on success Live and the turn proceeds; on failure `process_lost` is recorded, the turn is `interrupted`, and a new lease is needed |
 | L19 | Environment paused for low disk while leases are Live | Workloads frozen and the pause recorded on each lease; deadlines do not advance while paused; Stop still ends a lease; new leases refused with `environment_paused` until space returns |
 | L20 | The harness exits on its own while Live | The turn's failure is the Agent's to report; the lease stays Live until something ends it, so a surface shows it as allowed to run, never as running |
+| L21 | Opening while the latest lease is of a kind this build cannot read | Refuse the opening and write nothing: it may be a later build's lease still Live, and issuing over it would make that build refuse the history; the surface says the conversation's state cannot be read here |
 | L16 | Replacement lease requested after Ended or Interrupted | Admitted as a new lease with a new revision; the harness starts fresh with Nessa's transcript as context; native session resume is unknown per binding and recorded as such |
 
 Slice A's regressions, by row. "Domain" is the lease aggregate's rule
@@ -380,6 +381,7 @@ their rows; the fold's are named for what they show.
 | L18 | | | not in slice A, as L17 |
 | L19 | | | not in slice A: low-disk pause is an environment limit from B |
 | L20 | | | not in slice A: the lease does not watch the harness; the client words Live as "Allowed to run" |
+| L21 | | yes: the fold keeps it Unreadable and accepts a later revision after it | yes: the opening is refused as `conversation_state_unreadable` and nothing is written |
 
 A row marked "not in slice A" is not implemented, under the rule above.
 

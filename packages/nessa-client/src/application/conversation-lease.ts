@@ -30,8 +30,10 @@ export function conversationLeaseStatus(
         case "lost":
           return "Ended when Nessa restarted"
         case "stopped":
-        case undefined:
           return "Stopped"
+        // No cause recorded: ended, and nothing more is claimed.
+        case undefined:
+          return "Ended"
         default: {
           const exhaustive: never = lease.cause
           return exhaustive

@@ -1067,6 +1067,14 @@ impl SessionManager {
             saved: saved.map_err(LeaseRecordError::Storage),
         })
     }
+    /// Write the lease records, and any other evidence, that an earlier
+    /// [`Self::record_lease`] retained but could not save
+    /// ([`LeaseCommit::saved`]). Nothing retained is nothing to write. A
+    /// caller that will not close the Agent through an attachment uses this so
+    /// a retained record is not left unsaved.
+    pub async fn save_retained_lease_records(&self) -> Result<(), StorageError> {
+        self.flush_observed().await
+    }
     /// Write observed evidence retained by an earlier transition. An unchanged
     /// retry flushes evidence an earlier failed write left observed.
     pub(crate) async fn flush_observed(&self) -> Result<(), StorageError> {

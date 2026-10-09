@@ -723,6 +723,72 @@ async fn l8_a_turn_running_past_the_cleanup_deadline_settles_and_the_lease_is_ac
     );
 }
 
+#[tokio::test]
+async fn l21_a_latest_lease_this_build_cannot_read_is_never_issued_over() {
+    let root = tempfile::tempdir().unwrap();
+    let harness = in_process(root.path(), DELETION_BUDGETS.stop);
+    harness.create().await;
+    harness.turn("turn-1").await;
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    // As a later build leaves it: a lease of a kind this build cannot read,
+    // which may still be Live there.
+    let session = SessionId::new(harness.id.to_string()).unwrap();
+    let later = LeaseRecord::Unreadable {
+        kind: "issued_v2".into(),
+        body: r#"{"lease":"later","revision":2}"#.into(),
+    };
+    {
+        let lease = harness.storage.open(session.clone()).await.unwrap();
+        let load = lease.load().await.unwrap();
+        let mut snapshot = load.snapshot().cloned().unwrap();
+        snapshot.lease = Some(CurrentLease::apply(snapshot.lease.as_ref(), &later).unwrap());
+        lease
+            .save_changes(
+                load.binding().clone(),
+                snapshot,
+                vec![SessionSaveUnit::new(vec![SessionChange::Lease(later.clone())]).unwrap()],
+            )
+            .await
+            .unwrap();
+    }
+    let provider = harness.provider.clone();
+    harness.service.shutdown().await.unwrap();
+    drop(harness);
+    let substitute = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    let restarted = harness_on(root.path(), substitute.clone(), provider.clone());
+    let opened = provider.open_calls.load(Ordering::SeqCst);
+    let refused = restarted
+        .service
+        .submit(
+            restarted.id.clone(),
+            caller("turn-2"),
+            "turn-2".into(),
+            SubmittedMessage {
+                text: "hello".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(refused, ConversationError::LeaseUnreadable));
+    assert_eq!(
+        crate::conversation::application::error_code(&refused),
+        ConversationErrorCode::ConversationStateUnreadable
+    );
+    // Nothing ran, nothing was accounted for, and nothing was written over it.
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), opened);
+    assert!(substitute.accounted.lock().unwrap().is_empty());
+    let lease = restarted.lease().await;
+    assert_eq!(kinds(&lease), ["unreadable"]);
+    assert_eq!(lease.records()[0], later);
+}
+
 /// A second service on the same stores, as after a restart.
 fn harness_on(
     root: &Path,
@@ -831,6 +897,14 @@ async fn l2_a_refusal_whose_record_failed_to_save_is_still_the_refusal() {
         ConversationError::LeaseRefused(LeaseRefusal::SandboxUnavailable)
     ));
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+    // The record stayed retained, and the opening's close saved it: the
+    // refusal is in the records.
+    let lease = harness.lease().await;
+    assert_eq!(kinds(&lease), ["refused"]);
+    let LeaseRecord::Refused { refusal, .. } = &lease.records()[0] else {
+        unreachable!()
+    };
+    assert_eq!(*refusal, LeaseRefusal::SandboxUnavailable);
 }
 
 #[tokio::test]
