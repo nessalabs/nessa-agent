@@ -266,8 +266,8 @@ asks of the client does not offer them.
 | D14 | `transcript`, `appCall` and the retry clock at once | One subscription |
 | D15 | A subscription that could not open | A gap, opened again on the retry clock; the next list frame resyncs |
 | D16 | Ended `source_closed` | Opened again on the retry clock from its cursor |
-| D17 | The retry clock | Runs only while someone listens and something is not subscribed; stops when the last listener leaves |
-| D18 | An incomplete frame, whatever conversations it names; frames that come while a walk is on its way | Walked, so a row it left out that went is taken out (L5 sends one for that); of the frames queued behind a walk only the newest is applied, and walks once |
+| D17 | The retry clock | Runs only while someone listens and something is not subscribed or a list walk is owed (D18); stops when the last listener leaves |
+| D18 | An incomplete frame, whatever conversations it names; frames that come while a walk is on its way | Walked, so a row it left out that went is taken out (L5 sends one for that); of the frames queued behind a walk only the newest is applied, and walks once; a walk that fails leaves the list unapplied and a gap, and the frame is walked again on the retry clock, or at once by the next index, unless a newer frame walks first |
 | D19 | `after` refused `cursor_ahead` | Opened once more without `after` |
 | D20 | `transcript` of a conversation followed | The view held; no second subscription |
 | D21 | An answer in a conversation let go past the limit | Followed again before the answer is sent |

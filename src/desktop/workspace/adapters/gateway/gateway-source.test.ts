@@ -321,6 +321,50 @@ describe("the index and the list subscription", () => {
     ])
   })
 
+  it("D18: a walk that fails leaves the list unapplied, a gap, and walks again on the retry clock", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    for (const id of ["a", "b", "c", "d"])
+      gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
+    gateway.listLimit = 2
+    gateway.observePageSize = 10
+    gateway.once("observe", () => Promise.reject(rpcCode("unavailable")))
+    follow()
+    await expect(source.index()).rejects.toMatchObject({ reason: "unavailable" })
+    expect(gateway.count("observe")).toBe(1)
+    updates.length = 0
+    await advance(timing.retryMs - 1)
+    expect(gateway.count("observe")).toBe(1)
+    await advance(1)
+    // The same subscription; its frame walked again, and the gap resynced.
+    expect(gateway.count("subscribeList")).toBe(1)
+    expect(gateway.count("observe")).toBe(2)
+    expect(updates).toContainEqual({ kind: "resync" })
+    expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+    ])
+  })
+
+  it("D18: an index asked after a walk failed walks again at once", async () => {
+    const { gateway, source } = started()
+    for (const id of ["a", "b", "c", "d"])
+      gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
+    gateway.listLimit = 2
+    gateway.observePageSize = 10
+    gateway.once("observe", () => Promise.reject(rpcCode("unavailable")))
+    await expect(source.index()).rejects.toMatchObject({ reason: "unavailable" })
+    expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+    ])
+    expect(gateway.count("subscribeList")).toBe(1)
+    expect(gateway.count("observe")).toBe(2)
+  })
+
   it("a listener who leaves during an observe walk is asked no further page", async () => {
     const { gateway, source, follow } = started()
     gateway.rows.set("a", row("a", { updatedAtMs: 1 }))

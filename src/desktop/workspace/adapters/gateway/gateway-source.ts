@@ -587,6 +587,15 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   // way: the gateway counts one against the limit until it is answered and
   // closed, so the next open waits for them (D25).
   let evicted: Promise<void> | undefined
+  // The last incomplete frame whose walk failed, walked again on the retry
+  // clock unless a newer frame walks first (D18).
+  let unwalked: (() => void) | undefined
+  /** Walks again the list frame whose walk failed, if one is owed and its subscription is open. */
+  const walkOwed = () => {
+    const walk = unwalked
+    unwalked = undefined
+    if (walk && list.handle) walk()
+  }
   // How many list frames have come: only the newest queued is applied (D18).
   let listFrames = 0
 
@@ -683,6 +692,15 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       // A frame is a replacement: one queued behind a walk gives way to the
       // newest, so frames that come during a walk cost one more walk (D18).
       if (!current() || mine !== listFrames) return
+      // This frame walks now: a walk owed by an earlier one is no longer owed.
+      unwalked = undefined
+      const apply = (applied: ConversationListResult) =>
+        applyList({
+          ...applied,
+          conversations: applied.conversations.filter(
+            (row) => !(crossed.has(row.conversationId) && takenOut(row.conversationId)),
+          ),
+        })
       let applied = result
       if (!result.complete) {
         try {
@@ -690,19 +708,22 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
             (live) => observedCatalogue(connected, result, live, current),
             { subject: "index" },
           )
-        } catch {
-          // The rows the frame named still apply; the rest waits for the next frame.
+        } catch (error) {
           if (!current()) return
+          // The rows the frame named still apply. The rest is not known, and
+          // an unchanged list sends no frame to walk again: the list stays
+          // unapplied, a gap, and the walk is owed to the retry clock, as an
+          // open that failed is (D18, D17).
+          apply(result)
+          unwalked = () => listFrame(connected, result, current)
           gap = true
+          settle(list, { error })
+          scheduleRetry()
+          return
         }
       }
       if (!current()) return
-      applyList({
-        ...applied,
-        conversations: applied.conversations.filter(
-          (row) => !(crossed.has(row.conversationId) && takenOut(row.conversationId)),
-        ),
-      })
+      apply(applied)
       list.applied = true
       if (gap) resync()
       settle(list, { value: undefined })
@@ -805,6 +826,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     )
     // An open that fails rejects both; the open's rejection is the one answered.
     ready.catch(noop)
+    // A walk that failed is asked again now, not left to the retry clock.
+    walkOwed()
     await openList(who)
     await ready
   }
@@ -1057,9 +1080,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       restore()
     })
   }
-  /** Opens every subscription this source keeps that is not open: the list, and each conversation followed. */
+  /** Opens every subscription this source keeps that is not open: the list, and each conversation followed; and walks again a list frame whose walk failed. */
   const restore = () => {
     if (disposed || listeners.size === 0) return
+    walkOwed()
     void openList("stream").catch(noop)
     for (const [sessionId, follow] of views) open(sessionId, follow, "stream")
   }
