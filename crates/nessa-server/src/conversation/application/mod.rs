@@ -95,6 +95,26 @@
 //! context they drop as they drop it. An app's message is a submission like the person's
 //! (`service.rs`, `submit_as`), which decides under the submission lock
 //! whether it may go and which held contexts it carries.
+//!
+//! Every run of a conversation's agent is under an execution lease (ADR 252),
+//! recorded in its SDK stream; not the history lease above, which only
+//! serializes who writes the stream. `environment.rs` is the one port below
+//! the Agent, at the provider seam, and the infrastructure's in-process
+//! adapter its only implementation. Opening a slot asks for the lease,
+//! prepares the Agent behind the lease's fence, and records the lease before
+//! the first turn; a refusal closes the Agent and fails the opening. Ending
+//! the run records why first, closes the fence's events, and records how
+//! cleanup went or that it was interrupted:
+//!
+//! ```text
+//!   start_slot ─▶ open_lease ─▶ Environment::open ─▶ LeaseFence ─▶ Agent::prepare
+//!                                                                     │
+//!   issue: account for an earlier lease ─▶ record Issued or Refused ◀─┘
+//!   close/stop ─▶ LiveLease::close ─▶ Ending ─▶ Agent::close ─▶ Ended | Interrupted
+//! ```
+//!
+//! No surface, product method or view names the port; only composition picks
+//! the adapter.
 mod app_reviews;
 mod audit_records;
 mod change_watch;

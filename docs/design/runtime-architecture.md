@@ -321,6 +321,11 @@ accounted for). Final states never reopen. A replacement agent lease for
 the same conversation is issued only after the previous one is Ended or
 Interrupted and that record is committed.
 
+Requested is recorded only by a transport that can defer admission. The
+in-process environment admits or refuses inside the call that asks, so its
+first record is already Live or the refusal; no Requested record precedes
+it.
+
 | Row | Input or order | Decision and durable meaning |
 | --- | --- | --- |
 | L1 | Request admitted, possibly narrowed | Commit Live with what was granted, never what was asked; events accepted from this cursor on |
@@ -342,6 +347,38 @@ Interrupted and that record is committed.
 | L18 | Prompt arrives while sleeping | The environment resumes the harness natively; on success Live and the turn proceeds; on failure `process_lost` is recorded, the turn is `interrupted`, and a new lease is needed |
 | L19 | Environment paused for low disk while leases are Live | Workloads frozen and the pause recorded on each lease; deadlines do not advance while paused; Stop still ends a lease; new leases refused with `environment_paused` until space returns |
 | L16 | Replacement lease requested after Ended or Interrupted | Admitted as a new lease with a new revision; the harness starts fresh with Nessa's transcript as context; native session resume is unknown per binding and recorded as such |
+
+Slice A's regressions, by row. "Domain" is the lease aggregate's rule
+(`crates/nessa-sdk/tests/domain/agent_execution/leases.rs`), "fold" is the
+recorded stream's (`crates/nessa-sdk/tests/application/agent_execution/sessions/leases.rs`),
+and "in process" drives a real conversation through the port with the
+in-process adapter or a substitute
+(`crates/nessa-server/tests/conversation/leases.rs` and
+`environment.rs` beside it). Each test is named for its row.
+
+| Row | Domain | Fold | In process |
+| --- | --- | --- | --- |
+| L1 | yes | yes | yes: the lease is Live with the harness default before the first turn |
+| L2 | yes | yes | yes: a profile the environment cannot hold is refused, nothing runs |
+| L3 | yes | | not reachable: in-process leases carry no deadline |
+| L4 | yes | | not reachable, as L3 |
+| L5 | yes | | yes: a person's close and a desktop stop each record their cause first |
+| L6 | yes | | yes: a stop during a close joins the close's cause |
+| L7 | yes | yes | yes |
+| L8 | yes | yes | yes: a close past its deadline, and a close that fails, interrupt; late confirmation accounts once |
+| L9 | yes | yes | yes: events settle while Ending and are dropped with lease, turn and cursor once closed |
+| L10 | yes | | not reachable: in process there is no control channel to lose |
+| L11 | | | yes: a lease an earlier run left Live is accounted for before the next is issued |
+| L12 | yes | | yes, as L11: the in-process environment reports no process |
+| L13 | yes | yes | yes: concurrent commands open one lease and one agent |
+| L14 | | | not in slice A: no command leases until C (#700) |
+| L15 | | | not in slice A, as L14 |
+| L16 | yes | yes | yes, as L11: the replacement takes the next revision |
+| L17 | | | not in slice A: idle sleep is an environment limit from B (#699) |
+| L18 | | | not in slice A, as L17 |
+| L19 | | | not in slice A: low-disk pause is an environment limit from B |
+
+A row marked "not in slice A" is not implemented, under the rule above.
 
 ## Three transports, one contract
 
@@ -997,8 +1034,18 @@ Sources: [How Tailscale works](https://tailscale.com/blog/how-tailscale-works),
 
 Named so they are not mistaken for settled:
 
-- **Lease frame format.** The fields above are the contract; the frames,
-  their bounds and their place in `nessa-protocol` are A's design ([#698](https://github.com/nessalabs/nessa-agent/issues/698)).
+- **Lease frame format.** Slice A ([#698](https://github.com/nessalabs/nessa-agent/issues/698))
+  put the lease in the conversation's stream as typed SDK records and
+  defined its control vocabulary as types (`LeaseTerms`, `LeaseEndCause`,
+  `LeaseCleanup`, `LeaseRefusal`). The frames themselves are B's: a
+  serialization of the SDK provider contract (requests, events, permission
+  answers, cleanup reports) with the existing record codec, plus lease
+  control frames for grant, end and cleanup. The Environment port is new
+  vocabulary only where the lease adds meaning; where it would restate the
+  provider contract, it references it, because a second statement of that
+  contract would be a second contract. Open for B: a permission authority
+  does not serialize, so a remote environment answers permissions through
+  the lease's control channel and the gateway's fence mints the authority.
 - **First-use install over SSH.** What `nessa env serve` needs on the host
   (Rust binary per platform, the harness itself, its credential), and how
   version skew between gateway and environment is refused.
@@ -1014,7 +1061,8 @@ Named so they are not mistaken for settled:
   enough to sleep at all; a binding without it does not sleep.
 - **Sandbox profiles.** Which profiles each pinned binding can set up and
   how an environment proves what it enforces; today's answer for every
-  binding is "harness default".
+  binding is "harness default", declared beside each binding and admitted
+  as the profile both the binding and the environment hold.
 - **Peer policy vocabulary.** What an environment may narrow in a lease and
   how that is written in Cedar.
 - **Local discovery.** Whether to announce at all by default, and what the
