@@ -879,26 +879,13 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     )
   }
   /**
-   * A chat whose settled work a record ping can see. An app review, the
-   * starting phase, and a turn still running are not commits, so they keep
-   * the poll and do not take the one record slot.
+   * The one chat a record ping refreshes. A chat with no view yet, an app
+   * review, a permission or a question, a provider still starting, or a turn
+   * still running or queued keeps the poll and does not take the slot. Among
+   * settled chats, the most recently updated one holds it.
    */
-  const committedLive = (sessionId: string): boolean => {
-    const last = reads.get(sessionId)
-    return Boolean(
-      refresh.has(sessionId) ||
-      rows.get(sessionId)?.running ||
-      last?.view.messages.some(
-        (turn) => turn.status === "running" || turn.status === "queued",
-      ) ||
-      last?.transcript.approval ||
-      last?.transcript.activity,
-    )
-  }
   const recordTarget = (): string[] => {
-    const ranked = [...watched].filter(
-      (sessionId) => committedLive(sessionId) && !needsLivePoll(sessionId),
-    )
+    const ranked = [...watched].filter((sessionId) => !needsLivePoll(sessionId))
     ranked.sort((left, right) => {
       const updated =
         (rows.get(right)?.updatedAtMs ?? 0) - (rows.get(left)?.updatedAtMs ?? 0)
@@ -968,13 +955,13 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         onListChanged: () => {
           if (!currentFollow()) return
           // The list timer's round also reads an open chat whose row moved.
-          // A settled chat does not hold the record slot, so this ping is
-          // the read that used to wait for that round.
+          // That read does not wait out the poll cooldown, and one already
+          // running is followed by another: a commit that crossed it is kept.
           void list("poller").then(
             () => {
               if (!currentFollow()) return
               for (const sessionId of watched) {
-                if (stale(sessionId)) pollRead(sessionId)
+                if (stale(sessionId)) followRead(sessionId)
               }
             },
             () => undefined,

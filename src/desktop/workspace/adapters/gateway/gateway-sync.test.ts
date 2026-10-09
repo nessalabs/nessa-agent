@@ -268,7 +268,7 @@ it("reads a settled open chat when the list ping says its row moved", async () =
   await settle()
   await source.transcript("chat-a")
   await settle()
-  expect(gateway.recordWatches).toEqual([])
+  expect(gateway.recordWatches).toEqual(["chat-a"])
   const before = gateway.reads.filter((id) => id === "chat-a").length
   await time.advance(timing.activePollMs + timing.pollMs)
   expect(gateway.reads.filter((id) => id === "chat-a").length).toBe(before)
@@ -276,6 +276,13 @@ it("reads a settled open chat when the list ping says its row moved", async () =
   gateway.emitCatalogue()
   await settle()
   expect(gateway.reads.filter((id) => id === "chat-a").length).toBeGreaterThan(before)
+  const duringCooldown = gateway.reads.filter((id) => id === "chat-a").length
+  gateway.move(3_000, false)
+  gateway.emitCatalogue()
+  await settle()
+  expect(gateway.reads.filter((id) => id === "chat-a").length).toBeGreaterThan(
+    duringCooldown,
+  )
   source.dispose?.()
 })
 
