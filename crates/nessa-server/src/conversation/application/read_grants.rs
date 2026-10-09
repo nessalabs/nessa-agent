@@ -159,7 +159,11 @@ pub trait ReadGrants: Send + Sync {
         receiver_id: &'a str,
     ) -> ConversationFuture<'a, bool>;
     /// Apply one change. `false` when it changed nothing (granting a grant
-    /// already held, revoking one not held); nothing is journaled then.
+    /// already held, revoking one not held). Every admitted request is
+    /// journaled under its request id, a no-op too (before equal to after),
+    /// and a retry of the same request answers from that row and changes
+    /// nothing (rows G9, G16). A retry is admitted like a new request first:
+    /// ownership for both, and not deleted for a grant.
     fn change(&self, change: ReadGrantChange) -> ConversationFuture<'_, bool>;
     /// The grants on one conversation, oldest first.
     fn grants<'a>(&'a self, id: &'a ConversationId) -> ConversationFuture<'a, Vec<ReadGrant>>;

@@ -37,11 +37,14 @@ The owner manages grants with three socket methods, each admitted by Cedar for
   conversation or an unpaired device.
 - `conversation.shares {conversationId}` lists the grants on one conversation.
 
-Each grant and revoke that changes something is journaled
-(`read_grant_changes`) in the same transaction as the grant itself: before and
-after, the owner's principal as initiator, the surface and request it came
-from, the time, and the catalogue revision it took (row G10). A repeat changes
-nothing and writes nothing (row G9).
+Each grant and revoke is journaled (`read_grant_changes`) in the same
+transaction as the grant itself: before and after, the owner's principal as
+initiator, the surface and request it came from, the time, and the catalogue
+revision it took (row G10). A repeat changes nothing and moves no revision,
+but is journaled with before equal to after (row G9), so a retry of any
+request answers what it answered the first time (row G16). A retried share is
+still checked like a new one first: once the conversation is deleted or the
+device unpaired it is refused, and changes nothing.
 
 ## One authority
 
@@ -194,5 +197,5 @@ otherwise.
 | G13 | A device's view subscription; the grant is revoked between batches | Ended `refused` with `conversation_not_found` before the next read | `a_revoke_ends_a_device_subscription_before_its_next_batch` |
 | G14 | A device unpaired (its binding inactive), whatever it was granted | Socket reads refused `unauthorized`; passive reads as before | `an_unpaired_device_reads_nothing_whatever_it_was_granted` |
 | G15 | A records watch installed while granted; the grant revoked; a record committed | No `conversation.changed` is delivered; the next notice is admitted again, refused, and the connection closes `authorization_lost` | `a_revoke_ends_an_installed_records_watch_at_its_next_notice` (`tests/product/socket/watches.rs`) |
-| G16 | A share or unshare retried with the same request id, after a later change | Answers what it answered the first time and changes nothing; the same request naming another device or the other change is refused `InvalidInput`. This holds for a request that changed nothing, which replays `applied: false` | `a_retried_share_replays_its_answer_and_never_undoes_a_later_unshare`, `a_retried_share_that_changed_nothing_never_undoes_a_later_unshare` |
+| G16 | A share or unshare retried with the same request id, after a later change | Answers what it answered the first time and changes nothing; the same request naming another device or the other change is refused `InvalidInput`. This holds for a request that changed nothing, which replays `applied: false`. A retried share is admitted like a new one first, so after a delete or an unpairing it is refused and changes nothing | `a_retried_share_replays_its_answer_and_never_undoes_a_later_unshare`, `a_retried_share_that_changed_nothing_never_undoes_a_later_unshare` |
 | G17 | A share past `MAX_READ_GRANTS_PER_CONVERSATION` (64) grants on one conversation | Refused `InvalidInput`, nothing written, so a `conversation.shares` answer fits one frame | `a_conversation_holds_a_bounded_number_of_grants` |
