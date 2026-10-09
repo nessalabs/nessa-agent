@@ -56,8 +56,8 @@ use nessa_sdk::application::agent_execution::{
     },
     providers::{AgentProvider, ApprovalMode as ProviderApprovalMode, OperationCapabilities},
     sessions::{
-        MessageCommitClock, SessionManager, SessionSnapshot, SessionStorage, SessionStorageLease,
-        StorageError,
+        CommittedSession, MessageCommitClock, SessionManager, SessionSnapshot, SessionStorage,
+        SessionStorageLease, StorageError,
     },
 };
 use nessa_sdk::domain::agent_execution::{
@@ -404,6 +404,18 @@ impl ConversationAgents {
         }
         Ok(configured)
     }
+}
+/// Whether a read opens a conversation that has no agent live.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadOpening {
+    /// Open it, as `conversation.read` does: the view then says what the
+    /// agent can do.
+    Open,
+    /// Read only what is live: a conversation nothing has open is folded
+    /// from its committed records, read-only, its lifecycle `absent`. A view
+    /// subscription reads this way, so following a conversation never
+    /// starts its agent again after a close or a stop (row S26).
+    LiveOnly,
 }
 /// Why a command did not get going: the gateway retiring, which refuses
 /// every command, or anything else, by its error. Answered
@@ -1788,7 +1800,9 @@ impl ConversationService {
         id: ConversationId,
         caller: ConversationCaller,
     ) -> Result<ConversationView, ConversationError> {
-        self.read_at(id, caller).await.map(|(view, _)| view)
+        self.read_at(id, caller, ReadOpening::Open)
+            .await
+            .map(|(view, _)| view)
     }
 
     /// Follow `id`'s live facts: subscribe before [`Self::read_at`], and a
@@ -1799,21 +1813,41 @@ impl ConversationService {
 
     /// [`Self::read`], with where in the committed history the view was
     /// folded through: the projection's accepted position, so the cursor
-    /// never runs ahead of, or behind, what the view shows.
+    /// never runs ahead of, or behind, what the view shows. `opening` says
+    /// whether a conversation with no agent live is opened to be read
+    /// ([`ReadOpening`]).
     pub async fn read_at(
         &self,
         id: ConversationId,
         caller: ConversationCaller,
+        opening: ReadOpening,
     ) -> Result<(ConversationView, Option<CommittedCursor>), ConversationError> {
         let _admission = self.admit().await?;
         let _mode = self.inner.mode_changes.lock(&id).await;
-        if let Err(error) = self.recover_mode_change(&id, &caller).await {
-            if let Some(read) = self.read_pending_mode_change(&id, &caller).await? {
-                return Ok(read);
+        match opening {
+            ReadOpening::Open => {
+                if let Err(error) = self.recover_mode_change(&id, &caller).await {
+                    if let Some(read) = self.read_pending_mode_change(&id, &caller).await? {
+                        return Ok(read);
+                    }
+                    return Err(error);
+                }
             }
-            return Err(error);
+            // Recovery stops and starts the agent; a follower only shows a
+            // pending change, and leaves recovery to a read or a send.
+            ReadOpening::LiveOnly => {
+                if let Some(read) = self.read_pending_mode_change(&id, &caller).await? {
+                    return Ok(read);
+                }
+            }
         }
-        let live = self.resolve(&id, &caller).await?;
+        let live = match opening {
+            ReadOpening::Open => self.resolve(&id, &caller).await?,
+            ReadOpening::LiveOnly => match self.live_now(&id, &caller).await? {
+                Some(live) => live,
+                None => return self.read_unopened(&id, &caller).await,
+            },
+        };
         let session_id = conversation_session(&id);
         let committed = self
             .inner
@@ -1870,6 +1904,102 @@ impl ConversationService {
         self.check_view_access(&id, &caller).await?;
         Ok((view, cursor))
     }
+    /// The agent of `id` if one is live or opening (waited for), after the
+    /// caller's access is checked; `None` when nothing has it open. Opens
+    /// nothing.
+    async fn live_now(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<Option<Arc<LiveConversation>>, ConversationError> {
+        self.check_view_access(id, caller).await?;
+        let slot = self.inner.conversations.lock().await.get(id).cloned();
+        match slot {
+            Some(slot) => self.wait_for_slot(id, slot).await.map(Some),
+            None => Ok(None),
+        }
+    }
+    /// A conversation nothing has open, as its committed records fold with
+    /// no agent: read-only, lifecycle absent, nothing awaiting an answer.
+    async fn read_unopened(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<(ConversationView, Option<CommittedCursor>), ConversationError> {
+        let record = self
+            .inner
+            .metadata
+            .load(id)
+            .await?
+            .ok_or(ConversationError::NotFound)?;
+        record.check_access(&caller.organization_id, &caller.principal_id)?;
+        let (committed, order) = self.committed_with_order(id).await?;
+        let projection = self.detached(id, &committed, &order);
+        let read = (projection.read(), projection.committed_cursor());
+        self.read_only(read, &record, id, caller).await
+    }
+    /// The committed history of `id`, and its pending order.
+    async fn committed_with_order(
+        &self,
+        id: &ConversationId,
+    ) -> Result<(CommittedSession, Vec<ExecutionId>), ConversationError> {
+        let session_id = conversation_session(id);
+        let committed = self
+            .inner
+            .storage
+            .read_committed(session_id.clone())
+            .await?
+            .ok_or(ConversationError::NotFound)?;
+        if committed.id() != &session_id {
+            return Err(ConversationError::Storage(StorageError::IdentityMismatch));
+        }
+        let order = committed
+            .snapshot()
+            .map(SessionSnapshot::pending_order)
+            .transpose()?
+            .unwrap_or_default();
+        Ok((committed, order))
+    }
+    /// The one fold of committed records with no agent: a fresh read-only
+    /// projection, no execution active.
+    fn detached(
+        &self,
+        id: &ConversationId,
+        committed: &CommittedSession,
+        order: &[ExecutionId],
+    ) -> Projection {
+        let mut projection =
+            Projection::new(id.to_string(), ConversationCapabilities::read_only(), None)
+                .with_tool_uis(self.inner.tool_uis.clone());
+        projection.replace_committed(committed, order, None);
+        projection.transcript_state(committed.state().into());
+        projection
+    }
+    /// A view nothing can act on through: the selection from the record,
+    /// every capability off, nothing awaiting an answer, bounded.
+    async fn read_only(
+        &self,
+        (mut view, cursor): (ConversationView, Option<CommittedCursor>),
+        record: &Conversation,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<(ConversationView, Option<CommittedCursor>), ConversationError> {
+        view.selection = Some(ConversationSelectionView {
+            agent: record.agent().ok_or(ConversationError::AgentUnsupported)?,
+            model: record.model().as_str().into(),
+            approval_mode: record.approval_mode(),
+        });
+        view.capabilities.queue = false;
+        view.capabilities.steer = false;
+        view.capabilities.resume = false;
+        view.capabilities.permissions = false;
+        view.capabilities.image_input = false;
+        view.permissions.clear();
+        view.questions.clear();
+        view.title = self.title(id).await;
+        self.check_view_access(id, caller).await?;
+        Ok((bound_view(view), cursor))
+    }
     async fn read_pending_mode_change(
         &self,
         id: &ConversationId,
@@ -1900,22 +2030,8 @@ impl ConversationService {
             .and_then(|slot| slot.value.get())
             .and_then(|result| result.as_ref().ok())
             .cloned();
-        let session_id = conversation_session(id);
-        let committed = self
-            .inner
-            .storage
-            .read_committed(session_id.clone())
-            .await?
-            .ok_or(ConversationError::NotFound)?;
-        if committed.id() != &session_id {
-            return Err(ConversationError::Storage(StorageError::IdentityMismatch));
-        }
-        let order = committed
-            .snapshot()
-            .map(SessionSnapshot::pending_order)
-            .transpose()?
-            .unwrap_or_default();
-        let (mut view, cursor) = if let Some(live) = live {
+        let (committed, order) = self.committed_with_order(id).await?;
+        let read = if let Some(live) = live {
             let active = live.agent.active_execution_id();
             let mut projection = live.projection.lock().await;
             let accepted = projection.replace_committed(&committed, &order, active.as_ref());
@@ -1927,31 +2043,13 @@ impl ConversationService {
                 projection.committed_cursor(),
             )
         } else {
-            let mut projection =
-                Projection::new(id.to_string(), ConversationCapabilities::read_only(), None)
-                    .with_tool_uis(self.inner.tool_uis.clone());
-            projection.replace_committed(&committed, &order, None);
-            projection.transcript_state(committed.state().into());
+            let projection = self.detached(id, &committed, &order);
             (
                 projection.read_with_mode_change(Some(change)),
                 projection.committed_cursor(),
             )
         };
-        view.selection = Some(ConversationSelectionView {
-            agent: record.agent().ok_or(ConversationError::AgentUnsupported)?,
-            model: record.model().as_str().into(),
-            approval_mode: record.approval_mode(),
-        });
-        view.capabilities.queue = false;
-        view.capabilities.steer = false;
-        view.capabilities.resume = false;
-        view.capabilities.permissions = false;
-        view.capabilities.image_input = false;
-        view.permissions.clear();
-        view.questions.clear();
-        view.title = self.title(id).await;
-        self.check_view_access(id, caller).await?;
-        Ok(Some((bound_view(view), cursor)))
+        self.read_only(read, &record, id, caller).await.map(Some)
     }
     async fn check_view_access(
         &self,

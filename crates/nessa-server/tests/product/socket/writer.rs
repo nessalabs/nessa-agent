@@ -330,8 +330,10 @@ async fn nonexpired_pending_record_preserves_physical_priority_and_releases_leas
         .await
         .unwrap();
     let deliveries = Arc::new(WatchDeliveries::new());
-    // Close the same delivery interest as the production connection owner.
+    let subscriptions = Arc::new(SubscriptionDeliveries::new(Default::default()));
+    // Close the same delivery interests as the production connection owner.
     deliveries.close();
+    subscriptions.close();
     drop((control_send, refusal_send, ordinary_send, record_send));
     let writer = tokio::spawn(write_authenticated(
         sink,
@@ -341,7 +343,7 @@ async fn nonexpired_pending_record_preserves_physical_priority_and_releases_leas
         records,
         Duration::from_secs(5),
         deliveries.clone(),
-        Arc::new(SubscriptionDeliveries::new(Default::default())),
+        subscriptions.clone(),
     ));
     for expected in ["control", "refusal", "ordinary", "record"] {
         let Message::Text(text) = peer.message().await else {
@@ -1544,6 +1546,7 @@ async fn unwatch_before_writer_selection_sends_no_hint_after_the_acknowledgement
         _mount: None,
     };
     ordinary_send.send(response("ordinary")).await.unwrap();
+    let subscriptions = Arc::new(SubscriptionDeliveries::new(Default::default()));
     let writer = tokio::spawn(write_authenticated(
         sink,
         controls,
@@ -1552,7 +1555,7 @@ async fn unwatch_before_writer_selection_sends_no_hint_after_the_acknowledgement
         records,
         Duration::from_secs(60),
         deliveries.clone(),
-        Arc::new(SubscriptionDeliveries::new(Default::default())),
+        subscriptions.clone(),
     ));
     peer.writing.recv().await.unwrap(); // The ordinary frame is mid-flush.
     // What `ConnectionWatches::begin` does for an unwatch: retire, then queue
@@ -1578,6 +1581,7 @@ async fn unwatch_before_writer_selection_sends_no_hint_after_the_acknowledgement
     );
     assert!(!writer.is_finished());
     deliveries.close();
+    subscriptions.close();
     timeout(Duration::from_secs(1), writer)
         .await
         .unwrap()

@@ -6,7 +6,8 @@
 //! says when it is written (`SubscriptionFrame::written`). An offer the writer
 //! has not taken can be withdrawn (`withdraw`, row S10) or retired with its
 //! subscription (`retire`, row S16): a frame the writer took first is written
-//! first; none is taken after.
+//! first (`the_oldest_offer_is_taken_first_and_one_at_a_time_per_subscription`);
+//! none is taken after (`a_retired_subscription_offers_nothing_more`).
 //!
 //! Only a terminal frame carries a deadline the writer keeps: missing it
 //! closes the socket, as a watch's terminal notice does. A view frame's

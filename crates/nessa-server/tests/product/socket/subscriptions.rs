@@ -4,7 +4,8 @@
 
 use super::*;
 use crate::conversation::application::{
-    ConversationDependencies, ConversationLimits, ConversationService, SubmissionMode,
+    ConversationDependencies, ConversationLimits, ConversationModeRequest,
+    ConversationModeRequestState, ConversationRepository, ConversationService, SubmissionMode,
     SubmittedMessage,
 };
 use crate::conversation::infrastructure::NessaRecordWatches;
@@ -1120,6 +1121,99 @@ async fn an_overlay_change_without_a_commit_is_delivered() {
         frames.last().unwrap()["payload"]["cursor"],
         first["payload"]["cursor"],
         "no record was written"
+    );
+    client.close().await;
+}
+
+/// Row S26: following a conversation never opens its agent. A close lets
+/// it go; the view says so once, with the same history, and the agent stays
+/// closed until a send opens it.
+#[tokio::test]
+async fn a_closed_conversation_is_shown_let_go_and_not_opened_again() {
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("e1").await;
+    let mut client = fixture.connect();
+    let id = client.subscribe("subscribe", &fixture.id).await;
+    let open = client
+        .until(&id, |frame| {
+            settled(frame, 1) && view(frame)["lifecycle"]["phase"] == "attached"
+        })
+        .await
+        .pop()
+        .unwrap();
+    let closed = fixture
+        .call(
+            "conversation.close",
+            json!({"conversationId": fixture.id.to_string(), "requestId": "close"}),
+        )
+        .await;
+    assert_eq!(closed["ok"], true, "{closed}");
+    let let_go = client
+        .until(&id, |frame| view(frame)["lifecycle"]["phase"] == "absent")
+        .await
+        .pop()
+        .unwrap();
+    assert!(position(&let_go) >= position(&open));
+    assert_eq!(view(&let_go)["messages"], view(&open)["messages"]);
+    assert_eq!(view(&let_go)["capabilities"]["queue"], false);
+    // Not opened again: nothing more of it, and the list says it is not running.
+    client.quiet(&id).await;
+    let listed = fixture.call("conversation.list", json!({})).await;
+    let row = listed["payload"]["conversations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["conversationId"] == fixture.id.to_string())
+        .cloned()
+        .unwrap();
+    assert_eq!(row["running"], false, "{row}");
+    // A send opens it, and the view follows it again.
+    fixture.turn("e2").await;
+    client
+        .until(&id, |frame| {
+            settled(frame, 2) && view(frame)["lifecycle"]["phase"] == "attached"
+        })
+        .await;
+    client.close().await;
+}
+
+/// Row S27: a follower shows a pending approval-mode change and leaves its
+/// recovery, which stops and starts the agent, to a read or a send.
+#[tokio::test]
+async fn a_pending_mode_change_is_shown_not_recovered_by_a_follower() {
+    let fixture = SubscriptionFixture::new().await;
+    let conversation = fixture.seeded(1).await;
+    fixture
+        .metadata
+        .begin_mode_change(ConversationModeRequest {
+            conversation_id: conversation.clone(),
+            organization_id: OrganizationId::new("organization").unwrap(),
+            request_id: "pending-mode".into(),
+            initiator_principal_id: PrincipalId::new("principal").unwrap(),
+            initiator_surface_id: "panel".into(),
+            prior: ConversationApprovalMode::Ask,
+            requested: ConversationApprovalMode::Auto,
+            state: ConversationModeRequestState::Pending,
+            application: None,
+            requested_at_ms: 1_700_000_000_000,
+        })
+        .await
+        .unwrap();
+    let opens = fixture.provider.open_calls.load(Ordering::SeqCst);
+    let mut client = fixture.connect();
+    let id = client.subscribe("subscribe", &conversation).await;
+    let first = client.next().await;
+    assert_eq!(
+        view(&first)["approvalModeChange"]["requestId"],
+        "pending-mode",
+        "{first}"
+    );
+    assert_eq!(view(&first)["lifecycle"]["phase"], "absent", "{first}");
+    client.quiet(&id).await;
+    assert_eq!(
+        fixture.provider.open_calls.load(Ordering::SeqCst),
+        opens,
+        "no agent opened"
     );
     client.close().await;
 }

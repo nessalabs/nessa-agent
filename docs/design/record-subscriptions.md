@@ -25,9 +25,11 @@ of records. Every frame is the same bounded replacement a one-shot read
 returns, built by the same fold:
 
 - `conversation.subscribe {conversationId, after?}` sends `conversation.view`
-  frames: `{subscriptionId, cursor, view}`. `view` is exactly what
-  `conversation.read` returns. `cursor` is `{incarnation, position}`, the
-  committed position the fold had reached when the view was read.
+  frames: `{subscriptionId, cursor, view}`. `view` is what
+  `conversation.read` returns, read through the same function, except that
+  following a conversation never opens its agent (below). `cursor` is
+  `{incarnation, position}`, the committed position the fold had reached when
+  the view was read.
 - `conversation.subscribeList {archived?}` sends `conversation.listed` frames:
   `{subscriptionId, list}`, where `list` is exactly what `conversation.list`
   returns.
@@ -72,9 +74,25 @@ One task per subscription, owned by the connection
 
 Because registration comes before the read, a commit that lands during or
 after the read leaves the watch dirty, and the next wait returns at once. That
-is the whole no-gap argument (ADR 0009, "notification rule"). Commits that land
-while a frame waits to be written collapse into one dirty bit, so a busy
-conversation is never queued up behind a slow client.
+is the whole no-gap argument (ADR 0009, "notification rule"; rows S7, S8).
+Commits that land while a frame waits to be written collapse into one dirty
+bit, so a busy conversation is never queued up behind a slow client (rows S8,
+S12).
+
+### A follower opens nothing
+
+`conversation.read` opens a conversation whose agent is not live, so its view
+can say what the agent can do. A subscription reads with
+`ReadOpening::LiveOnly` instead: when no agent is live or opening, the view is
+the committed records folded with no agent (`read_unopened`), read-only, its
+lifecycle `absent`, nothing awaiting an answer. Otherwise a close or a desktop
+stop, which publishes the slot let go, would wake every follower into a read
+that starts the agent again at once (row S26). A send opens the agent, and its
+publish wakes the view. A fresh fold numbers its revision anew, so the
+comparison that keeps an unchanged view from being sent leaves the revision
+out (row S9). Nor does a follower recover an unfinished approval-mode change,
+which stops and starts the agent: it shows the change pending and leaves
+recovery to `conversation.read` or a send (row S27).
 
 ### Live overlay
 
@@ -106,7 +124,10 @@ overlay may have changed even if no record did.
 The task offers its frame to the connection's writer and waits. If the writer
 has not taken it within `deliveryTimeoutMs` (published in
 `x-subscriptionLimits`), the task withdraws it and ends the subscription with
-`lagging` and `lastDelivered`; the socket stays open. A write that has started
+`lagging` and `lastDelivered`; the socket stays open. The writer takes the
+connection's own replies and notices before subscription frames, so a socket
+kept busy with its own traffic for the whole timeout can end a subscription
+`lagging` too; the client resumes it the same way. A write that has started
 and stalls past the socket's write timeout closes the socket, as every other
 frame does. The terminal frame itself must be written by its deadline or the
 socket closes, as a watch's terminal notice does.
@@ -148,7 +169,7 @@ otherwise.
 | S6 | A commit after the first frame | One new frame | `a_commit_after_subscribe_is_delivered` |
 | S7 | Commits racing the subscription's reads | The last frame shows the last commit; cursors only move forward | `replay_then_live_misses_no_commit_under_concurrent_writes` |
 | S8 | Many commits while a frame waits for the writer | One next frame, with the latest state | `commits_while_a_frame_waits_collapse_into_one_frame` |
-| S9 | A wake that changes nothing the client sees | No frame | `a_wake_that_changes_nothing_sends_nothing` |
+| S9 | A wake that changes nothing the client sees (the revision alone may differ) | No frame | `a_wake_that_changes_nothing_sends_nothing`; `views_that_differ_only_in_revision_have_one_key` (unit) |
 | S10 | A frame not taken by the writer within `deliveryTimeoutMs` | Ended `lagging` with `lastDelivered`; the socket stays | `a_frame_not_taken_in_time_ends_the_subscription_as_lagging` |
 | S11 | Resubscribe after `lagging` from `lastDelivered` | Frames continue; the last equals a cold read | `a_lagging_subscriber_resumes_from_its_cursor` |
 | S12 | One socket's writer stalled | Commits finish and another socket's frames arrive | `one_stalled_socket_delays_no_commit_and_no_other_subscriber` |
@@ -163,6 +184,10 @@ otherwise.
 | S21 | The socket closes | Every task ends and every registration is dropped | `closing_the_socket_drops_every_subscription` |
 | S22 | A frame larger than the frame bound | Ended `too_large` | `an_oversized_view_ends_the_subscription_as_too_large` (unit, `product/subscription/target.rs`) |
 | S23 | A read refused for want of a storage read slot | Tried again with a doubling wait, then refused | `a_read_without_a_storage_slot_is_tried_again_then_refused` (unit, `product/subscription/target.rs`) |
+| S24 | The writer took a frame and is still writing it when its delivery deadline passes | Written; not ended `lagging` | `a_frame_taken_as_its_deadline_passes_is_written_and_ends_nothing` (unit, `product/subscription/target.rs`) |
+| S25 | The first read has not finished by the subscribe request's reply deadline | Refused `unavailable`; its wake sources go with it | `a_first_read_past_the_reply_deadline_is_refused_unavailable` (unit, `product/subscription/target.rs`) |
+| S26 | A followed conversation is closed or stopped (its agent let go) | One frame: the same history, read-only, lifecycle `absent`; the agent is not opened again until a send opens it | `a_closed_conversation_is_shown_let_go_and_not_opened_again` |
+| S27 | A followed conversation has an unfinished approval-mode change | The view shows the change pending; recovery is not run and the agent is not opened | `a_pending_mode_change_is_shown_not_recovered_by_a_follower` |
 | L1 | List subscription; a catalogue change | A new list frame | `a_list_subscription_follows_the_catalogue` |
 | L2 | A turn starts or ends without a summary change | A new list frame with `running` changed | `a_turn_without_a_summary_change_updates_the_list` |
 | L3 | A list larger than one frame | Cut newest first, `complete: false` | `a_list_too_large_for_one_frame_is_cut_and_marked_incomplete` (unit) |

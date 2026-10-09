@@ -13,7 +13,7 @@
 use super::delivery::{Outgoing, SubscriptionDeliveries};
 use crate::conversation::application::{
     error_code, CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, ConversationError,
-    ConversationService,
+    ConversationService, ReadOpening,
 };
 use crate::product::{
     conversation::{caller, read_list, read_view},
@@ -30,6 +30,7 @@ use nessa_protocol::product::generated::{
     ConversationViewed, MAX_PAYLOAD_BYTES, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
 use nessa_protocol::product::passive_read::decimal_u64;
+use nessa_protocol::protocol::{EventFrame, OutgoingMessage};
 use nessa_sdk::application::agent_execution::sessions::{
     ChangeWatchError, ChangeWatchState, CommittedChangeWatch, StorageError,
 };
@@ -45,9 +46,32 @@ use tokio::{
 pub(super) const DELIVERY_TIMEOUT: Duration =
     Duration::from_millis(SUBSCRIPTION_DELIVERY_TIMEOUT_MS);
 
-/// Room an event's envelope takes beside its payload: type, name, sequence
-/// and state version, with a twenty-digit sequence.
-const ENVELOPE_BYTES: usize = 256;
+/// Room an event's envelope takes beside its payload, measured on the
+/// largest the writer frames: the longer of the two frame names, and the
+/// largest sequence and state version. The frame bound the writer checks
+/// (`ordinary_text` in `socket.rs`) is on the whole text, so a payload
+/// `fits` admits is never refused there (row S22).
+fn envelope_bytes() -> usize {
+    static BYTES: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *BYTES.get_or_init(|| {
+        [
+            product_event::CONVERSATION_VIEW,
+            product_event::CONVERSATION_LISTED,
+        ]
+        .into_iter()
+        .map(|name| {
+            let frame = EventFrame::push(name, &Value::Null, u64::MAX, u64::MAX)
+                .expect("a JSON value serializes");
+            OutgoingMessage::Event(frame)
+                .to_wire_text()
+                .expect("an event frame serializes")
+                .len()
+                - "null".len()
+        })
+        .max()
+        .expect("two names")
+    })
+}
 
 /// After a wake, a list waits this long before it reads, so a stream of
 /// commits (a reply being saved every 100 ms) costs a few list reads a
@@ -237,7 +261,8 @@ pub(super) async fn authorize_batch(
 /// One read's result: a view and where it was folded through, or a list.
 enum Batch {
     View {
-        view: ConversationView,
+        /// Boxed: a view is far larger than a list's result.
+        view: Box<ConversationView>,
         cursor: Cursor,
         /// The history's head as that read observed it.
         head: u64,
@@ -264,6 +289,18 @@ fn retry_after(error: &ConversationError, attempt: u32) -> Option<Duration> {
     Some((TRANSIENT_BACKOFF * 2u32.saturating_pow(attempt)).min(TRANSIENT_BACKOFF_CAP))
 }
 
+/// The subscription's first read, refused `unavailable` when it has not
+/// finished by the subscribe request's reply deadline (row S25): the reply
+/// waits on it, and a reply is owed by then.
+async fn by_reply<T>(
+    reply_by: Instant,
+    read: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    timeout_at(reply_by, read)
+        .await
+        .unwrap_or_else(|_| Err(code_of(&ConversationError::Unavailable)))
+}
+
 async fn read_batch(
     state: &ProductRouteState,
     service: &ConversationService,
@@ -278,9 +315,18 @@ async fn read_batch(
         let permit = state.requests.clone().acquire_owned().await;
         let read = match target {
             Target::View { conversation, .. } => {
-                match read_view(state, service, &current, conversation, request_id).await {
+                // A follower opens nothing (row S26).
+                let read = read_view(
+                    state,
+                    service,
+                    &current,
+                    conversation,
+                    request_id,
+                    ReadOpening::LiveOnly,
+                );
+                match read.await {
                     Ok((view, Some(cursor))) => Ok(Batch::View {
-                        view,
+                        view: Box::new(view),
                         head: cursor.observed_head,
                         cursor: cursor_of(cursor),
                     }),
@@ -330,6 +376,8 @@ pub(super) struct Run {
 }
 
 impl Run {
+    // One per thing a subscription task owns; a struct would only rename them.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         state: ProductRouteState,
         service: Arc<ConversationService>,
@@ -455,10 +503,10 @@ impl Sent {
                 let payload = serde_json::to_value(ConversationViewed {
                     subscription_id: self.id.clone(),
                     cursor: cursor.wire(),
-                    view,
+                    view: *view,
                 })
                 .expect("generated payload serializes");
-                let key = payload["view"].clone();
+                let key = view_key(&payload["view"]);
                 Framed::Frame(Frame {
                     payload,
                     cursor: Some(cursor),
@@ -521,10 +569,22 @@ struct Frame {
     more: bool,
 }
 
+/// What a client would see of a view: all of it but its revision, which a
+/// fresh projection numbers anew though nothing in it changed (a
+/// conversation read with no agent, row S26), so an equal view is not sent
+/// again (row S9).
+fn view_key(view: &Value) -> Value {
+    let mut key = view.clone();
+    if let Some(fields) = key.as_object_mut() {
+        fields.remove("revision");
+    }
+    key
+}
+
 /// Whether an event with `payload` fits the socket's frame bound.
 fn fits(payload: &Value) -> bool {
     serde_json::to_string(payload)
-        .map(|text| text.len() + ENVELOPE_BYTES <= MAX_PAYLOAD_BYTES as usize)
+        .map(|text| text.len() + envelope_bytes() <= MAX_PAYLOAD_BYTES as usize)
         .unwrap_or(false)
 }
 
@@ -542,7 +602,7 @@ fn fitted(mut list: ConversationListResult, id: &str) -> ConversationListResult 
     })
     .expect("generated payload serializes")
     .len();
-    let budget = (MAX_PAYLOAD_BYTES as usize).saturating_sub(ENVELOPE_BYTES);
+    let budget = (MAX_PAYLOAD_BYTES as usize).saturating_sub(envelope_bytes());
     let mut size = empty;
     let mut keep = 0;
     for (index, row) in list.conversations.iter().enumerate() {
@@ -602,12 +662,11 @@ pub(super) async fn run(run: Run) {
     let mut reply = Some(slot);
     loop {
         let batch = if reply.is_some() {
-            timeout_at(
+            by_reply(
                 reply_by,
                 read_batch(&state, &service, &session, &target, &request),
             )
             .await
-            .unwrap_or_else(|_| Err(code_of(&ConversationError::Unavailable)))
         } else {
             read_batch(&state, &service, &session, &target, &request).await
         };
@@ -671,7 +730,6 @@ mod tests {
     use super::*;
     use crate::product::event_sequence::EventSequence;
     use nessa_protocol::product::generated::ConversationSummary;
-    use nessa_protocol::protocol::OutgoingMessage;
 
     fn row(n: usize, preview: usize) -> ConversationSummary {
         ConversationSummary {
@@ -753,6 +811,24 @@ mod tests {
         assert_eq!(ended(&deliveries)["reason"], "too_large");
     }
 
+    /// Row S22 at the boundary: the largest payload `fits` admits, framed
+    /// with the largest sequence, is within the bound the writer checks.
+    #[test]
+    fn the_largest_payload_that_fits_is_within_the_writers_frame_bound() {
+        let room = MAX_PAYLOAD_BYTES as usize - envelope_bytes() - "\"\"".len();
+        let largest = Value::from("x".repeat(room));
+        assert!(fits(&largest));
+        assert!(!fits(&Value::from("x".repeat(room + 1))));
+        for name in [
+            product_event::CONVERSATION_VIEW,
+            product_event::CONVERSATION_LISTED,
+        ] {
+            let frame = EventFrame::push(name, &largest, u64::MAX, u64::MAX).unwrap();
+            let text = OutgoingMessage::Event(frame).to_wire_text().unwrap();
+            assert!(text.len() <= MAX_PAYLOAD_BYTES as usize, "{name}");
+        }
+    }
+
     /// Row S10 at the delivery level: an offer nobody takes is withdrawn
     /// and the subscription ends lagging with its last written cursor.
     #[tokio::test(start_paused = true)]
@@ -778,6 +854,65 @@ mod tests {
         let payload = ended(&deliveries);
         assert_eq!(payload["reason"], "lagging");
         assert_eq!(payload["lastDelivered"]["position"], "7");
+    }
+
+    /// Row S24: the writer took the frame and is still writing it when its
+    /// delivery deadline passes. It is written, and nothing ends.
+    #[tokio::test(start_paused = true)]
+    async fn a_frame_taken_as_its_deadline_passes_is_written_and_ends_nothing() {
+        let deliveries = Arc::new(SubscriptionDeliveries::new(Arc::new(
+            EventSequence::default(),
+        )));
+        assert!(deliveries.reserve("1"));
+        let mut sent = sent(&deliveries);
+        {
+            let offered = sent.offer(
+                Value::from(1),
+                Some(Cursor {
+                    incarnation: "i".into(),
+                    position: 9,
+                }),
+                Value::from(1),
+            );
+            tokio::pin!(offered);
+            assert!(tokio::time::timeout(Duration::ZERO, &mut offered)
+                .await
+                .is_err());
+            let frame = deliveries.take().expect("the offer");
+            tokio::time::advance(DELIVERY_TIMEOUT * 2).await;
+            assert!(
+                tokio::time::timeout(Duration::ZERO, &mut offered)
+                    .await
+                    .is_err(),
+                "still waiting on the write it cannot withdraw"
+            );
+            frame.written.told();
+            deliveries.sent("1", false);
+            assert!(offered.await, "written");
+        }
+        assert!(deliveries.take().is_none(), "no lagging end offered");
+        assert_eq!(sent.floor.map(|cursor| cursor.position), Some(9));
+    }
+
+    /// Row S25.
+    #[tokio::test(start_paused = true)]
+    async fn a_first_read_past_the_reply_deadline_is_refused_unavailable() {
+        let reply_by = Instant::now() + Duration::from_secs(1);
+        let read = by_reply::<()>(reply_by, std::future::pending());
+        assert_eq!(read.await, Err(code_of(&ConversationError::Unavailable)),);
+        let quick = by_reply(reply_by + Duration::from_secs(1), async { Ok(1) });
+        assert_eq!(quick.await, Ok(1));
+    }
+
+    /// Row S9: two reads that differ only in their revision are the same
+    /// view to the client.
+    #[test]
+    fn views_that_differ_only_in_revision_have_one_key() {
+        let first = serde_json::json!({"revision": "a:1", "messages": [1]});
+        let renumbered = serde_json::json!({"revision": "b:1", "messages": [1]});
+        let changed = serde_json::json!({"revision": "a:1", "messages": [2]});
+        assert_eq!(view_key(&first), view_key(&renumbered));
+        assert_ne!(view_key(&first), view_key(&changed));
     }
 
     /// Row S23.

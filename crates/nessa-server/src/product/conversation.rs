@@ -6,8 +6,8 @@ use super::{
 };
 use crate::conversation::application::{
     error_code, ConversationCaller, ConversationError, ConversationService, QuestionChoiceInput,
-    RequestedAgent, RequestedConversation, SubmissionMode, SubmittedFile, SubmittedImage,
-    SubmittedMessage,
+    ReadOpening, RequestedAgent, RequestedConversation, SubmissionMode, SubmittedFile,
+    SubmittedImage, SubmittedMessage,
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::conversation::projection::CommittedCursor;
@@ -96,7 +96,8 @@ pub(super) async fn dispatch(
             "conversation.read" => {
                 let params = params!(ConversationReadParams);
                 let id = conversation_id(&params.conversation_id)?;
-                let (view, _) = read_view(state, service, session, &id, &frame.id).await?;
+                let (view, _) =
+                    read_view(state, service, session, &id, &frame.id, ReadOpening::Open).await?;
                 Ok(success(&frame.id, &view))
             }
             "conversation.setApprovalMode" => {
@@ -434,9 +435,10 @@ pub(super) async fn read_view(
     session: &AuthenticatedSession,
     id: &ConversationId,
     request_id: &str,
+    opening: ReadOpening,
 ) -> Result<(WireConversationView, Option<CommittedCursor>), ConversationError> {
     let read = service
-        .read_at(id.clone(), caller(session, request_id.to_owned()))
+        .read_at(id.clone(), caller(session, request_id.to_owned()), opening)
         .await;
     // After the service answers, so a refusal keeps the error it returned.
     // The subscriber is the gateway log; nothing here changes the frame the

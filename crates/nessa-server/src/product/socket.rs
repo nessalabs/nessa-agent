@@ -655,6 +655,8 @@ enum WriterResponse {
     Subscription(Box<SubscriptionFrame>),
 }
 
+// One argument per lane the writer chooses between.
+#[allow(clippy::too_many_arguments)]
 async fn write_authenticated<S>(
     mut sink: SplitSink<S, Message>,
     mut controls: Receiver<ControlOutput>,
@@ -4446,6 +4448,7 @@ mod tests {
             .await
             .unwrap();
         let deliveries = Arc::new(WatchDeliveries::new());
+        let subscriptions = Arc::new(SubscriptionDeliveries::new(Default::default()));
         let writer = tokio::spawn(write_authenticated(
             sink,
             controls,
@@ -4454,7 +4457,7 @@ mod tests {
             records,
             Duration::from_secs(1),
             deliveries.clone(),
-            Arc::new(SubscriptionDeliveries::new(Default::default())),
+            subscriptions.clone(),
         ));
         peer.writing.recv().await.unwrap();
         assert_eq!(slots.available_permits(), 2, "in-flight send owns its slot");
@@ -4482,6 +4485,7 @@ mod tests {
         }
         // Close the same delivery interest as the production connection owner.
         deliveries.close();
+        subscriptions.close();
         drop(controls_send);
         drop(ordinary_send);
         drop(refusals_send);
@@ -4534,6 +4538,7 @@ mod tests {
         let control_slots = Arc::new(Semaphore::new(1));
         let record_capacity = Arc::new(Semaphore::new(1));
         let deliveries = Arc::new(WatchDeliveries::new());
+        let subscriptions = Arc::new(SubscriptionDeliveries::new(Default::default()));
         let writer = tokio::spawn(write_authenticated(
             sink,
             controls,
@@ -4542,7 +4547,7 @@ mod tests {
             records,
             Duration::from_secs(1),
             deliveries.clone(),
-            Arc::new(SubscriptionDeliveries::new(Default::default())),
+            subscriptions.clone(),
         ));
         record_send
             .send(QueuedRecordResponse::new(QueuedResponse {
@@ -4604,6 +4609,7 @@ mod tests {
         assert_eq!(third.as_str(), "{}");
         // Close the same delivery interest as the production connection owner.
         deliveries.close();
+        subscriptions.close();
         drop(control_send);
         drop(refusal_send);
         drop(ordinary_send);
