@@ -249,10 +249,12 @@ impl LeaseConnector for Connector {
                         }
                     }
                     let _ = gate.wait_for(|open| *open).await;
+                    // Slowly, so the gateway's queue frees one place at a time.
                     while let Ok(Some(body)) = stream.next().await {
                         if let Ok(frame) = decode::<ToEnvironment>(&body) {
                             frames.lock().unwrap().push(frame);
                         }
+                        tokio::time::sleep(Duration::from_millis(1)).await;
                     }
                     drop(host_out);
                 });
@@ -291,9 +293,12 @@ impl LeaseConnector for Connector {
 }
 
 #[derive(Default)]
-struct Audit(Mutex<Vec<EnvironmentEvent>>);
+struct Audit(Mutex<Vec<EnvironmentEvent>>, AtomicBool);
 impl EnvironmentAudit for Audit {
     fn record(&self, event: &EnvironmentEvent) -> io::Result<()> {
+        if self.1.load(Ordering::SeqCst) {
+            return Err(io::Error::other("audit disk full"));
+        }
         self.0.lock().unwrap().push(event.clone());
         Ok(())
     }
@@ -1026,6 +1031,9 @@ async fn a_stop_or_end_asked_while_the_queue_is_full_still_reaches_the_host() {
         }
         last = now;
     }
+    // The harness let go of while its input waits for room: its Stop is
+    // asked of its pump, which is blocked sending input.
+    drop(control);
     // The lease's end, given up on before the queue had room for it.
     assert!(
         tokio::time::timeout(
@@ -1036,34 +1044,44 @@ async fn a_stop_or_end_asked_while_the_queue_is_full_still_reaches_the_host() {
         .is_err(),
         "the full queue holds the end back"
     );
-    drop(control);
     drop(opened);
     open_gate.send_replace(true);
-    let input_after_stop = tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            {
-                let frames = connector.frames.lock().unwrap();
-                let ended = frames.iter().any(
+    let (input_after_stop, stop_before_end) =
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                {
+                    let frames = connector.frames.lock().unwrap();
+                    let ended = frames.iter().any(
                     |frame| matches!(frame, ToEnvironment::End { lease } if lease == id.as_str()),
                 );
-                let stop = frames
-                    .iter()
-                    .position(|frame| matches!(frame, ToEnvironment::Stop { .. }));
-                if let (true, Some(stop)) = (ended, stop) {
-                    break frames[stop..]
+                    let stop = frames
                         .iter()
-                        .any(|frame| matches!(frame, ToEnvironment::Input { .. }));
+                        .position(|frame| matches!(frame, ToEnvironment::Stop { .. }));
+                    let end = frames.iter().position(
+                    |frame| matches!(frame, ToEnvironment::End { lease } if lease == id.as_str()),
+                );
+                    if let (true, Some(stop), Some(end)) = (ended, stop, end) {
+                        break (
+                            frames[stop..]
+                                .iter()
+                                .any(|frame| matches!(frame, ToEnvironment::Input { .. })),
+                            stop < end,
+                        );
+                    }
                 }
+                tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("the stop and the end reach the host");
+        })
+        .await
+        .expect("the stop and the end reach the host");
     writer.abort();
     assert!(
         !input_after_stop,
         "nothing of the harness's input follows its stop"
+    );
+    assert!(
+        stop_before_end,
+        "the lease's End follows the Stop already asked of its harness"
     );
 }
 
@@ -1173,4 +1191,69 @@ async fn an_idle_connection_sends_keepalives() {
     .await
     .expect("keepalives while idle");
     opening.abort();
+}
+
+/// An output overflow whose audit record cannot be written still stops the
+/// harness, but is no success: the binding's stop is uncertain and the
+/// lease ends without evidence, so it is Interrupted, never Ended unaudited.
+#[tokio::test]
+async fn an_overflow_whose_audit_fails_is_not_settled_as_confirmed() {
+    let connector = Connector::new(Reach::Serving);
+    let audit = Arc::new(Audit::default());
+    let environment = environment(connector.clone(), audit.clone());
+    let (binding, host) = binding(true);
+    let opened = environment
+        .open(&lease(), &terms("claude"), binding)
+        .await
+        .unwrap_or_else(|_| panic!("granted"));
+    let host = host.lock().unwrap().clone().unwrap();
+    let HarnessProcess {
+        mut input,
+        output: _unread,
+        mut control,
+    } = host.start(HarnessLaunch::default()).unwrap();
+    audit.1.store(true, Ordering::SeqCst);
+    input.write_all(b"flood").await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while connector.stopped.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the harness is still stopped");
+    assert!(matches!(
+        control
+            .cleanup(Duration::from_millis(10), Duration::from_millis(100))
+            .await,
+        Err(AgentError::CleanupUncertain)
+    ));
+    assert_eq!(
+        opened.hold.end(LeaseEndCause::Closed).await,
+        LeaseRelease::Unanswered
+    );
+}
+
+/// A lost connection whose audit record cannot be written leaves its lease
+/// without evidence: what a new connection says of it does not settle it.
+#[tokio::test]
+async fn a_loss_whose_audit_fails_leaves_the_lease_unanswered() {
+    let connector = Connector::new(Reach::Serving);
+    let audit = Arc::new(Audit::default());
+    let environment = environment(connector.clone(), audit.clone());
+    let opened = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await
+        .unwrap_or_else(|_| panic!("granted"));
+    let lost = opened.hold.lost().unwrap();
+    audit.1.store(true, Ordering::SeqCst);
+    connector.cut();
+    tokio::time::timeout(Duration::from_secs(5), lost)
+        .await
+        .expect("the loss is seen");
+    // A new connection can be recorded again.
+    audit.1.store(false, Ordering::SeqCst);
+    assert_eq!(
+        opened.hold.end(LeaseEndCause::Lost).await,
+        LeaseRelease::Unanswered
+    );
 }

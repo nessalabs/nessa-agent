@@ -218,6 +218,20 @@ impl LeaseHold for SshHold {
                 // and recorded what that took, which a new connection asks.
                 None => self.inner.account(&self.lease).await,
             };
+            if !self.link.is_open() {
+                // Its routes are let go only once the loss was recorded, or
+                // known unrecorded.
+                let mut gone = self.gone.clone();
+                while gone.changed().await.is_ok() {}
+            }
+            // A transition of it that went unrecorded settles nothing.
+            if self.link.unaudited(&self.lease) {
+                tracing::warn!(
+                    lease = self.lease,
+                    "a transition of this lease went unrecorded; its end has no evidence"
+                );
+                return LeaseRelease::Unanswered;
+            }
             match evidence {
                 Some(cleanup) => LeaseRelease::Released(cleanup),
                 None => LeaseRelease::Unanswered,
@@ -231,6 +245,7 @@ impl Drop for SshHold {
     /// no longer held there.
     fn drop(&mut self) {
         self.link.abandon_lease(&self.lease);
+        self.link.forget(&self.lease);
     }
 }
 
