@@ -713,30 +713,37 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
             lease,
             channel,
             data: Data(bytes),
-        } => match channel_route(routes, &lease, channel) {
-            Some(route) => match &route.output {
-                Some(output) => match output.try_send(bytes) {
-                    Ok(()) => Routed::Done,
-                    // The binding let go of its output: nothing reads it.
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        route.output = None;
-                        Routed::Done
-                    }
-                    // A harness whose output is no longer read is stopped,
-                    // never left running: its pump sends the Stop.
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        route.output = None;
-                        if let Some(stop) = route.stop.take() {
-                            route.asked = Some(StopRequest::ABANDONED);
-                            let _ = stop.send(StopRequest::ABANDONED);
+        } => {
+            // Once its lease's End is queued, that End stops the harness.
+            let end_sent = routes
+                .leases
+                .get(&lease)
+                .is_some_and(|route| route.end_sent);
+            match channel_route(routes, &lease, channel) {
+                Some(route) => match &route.output {
+                    Some(output) => match output.try_send(bytes) {
+                        Ok(()) => Routed::Done,
+                        // The binding let go of its output: nothing reads it.
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                            route.output = None;
+                            Routed::Done
                         }
-                        Routed::Overflow { lease, channel }
-                    }
+                        // A harness whose output is no longer read is stopped,
+                        // never left running: its pump sends the Stop.
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            route.output = None;
+                            if let Some(stop) = route.stop.take().filter(|_| !end_sent) {
+                                route.asked = Some(StopRequest::ABANDONED);
+                                let _ = stop.send(StopRequest::ABANDONED);
+                            }
+                            Routed::Overflow { lease, channel }
+                        }
+                    },
+                    None => Routed::Dropped,
                 },
                 None => Routed::Dropped,
-            },
-            None => Routed::Dropped,
-        },
+            }
+        }
         FromEnvironment::OutputClosed { lease, channel } => {
             match channel_route(routes, &lease, channel) {
                 Some(route) => {
