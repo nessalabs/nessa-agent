@@ -1,6 +1,9 @@
+import { Button } from "@nessa-ui/react/button"
 import { EmptyState } from "@nessa-ui/react/empty-state"
 import { loadWorkspace } from "../../adapters/store/commands"
 import { useWorkspaceDispatch } from "../../adapters/store/hooks"
+import "../../../ui/pill-ink.css"
+import "./empty-state.css"
 import type { StageMismatch, WorkspaceFailureReason } from "../../model/failure"
 import { readFailureCopy } from "../failure-copy"
 import { startupFailureCode } from "../startup-failure"
@@ -27,17 +30,19 @@ export function EmptyWorkspace({
   return (
     <EmptyState
       variant="compact"
-      className="workspace-empty"
+      className="workspace-empty desktop-pill-ink"
       role="status"
       title={readFailureCopy(failure, "index", stages)}
       action={
-        <button
-          type="button"
-          className="workspace-button"
+        <Button
+          variant="tinted"
+          size="28"
+          shape="pill"
+          press="scale"
           onClick={() => void dispatch(loadWorkspace())}
         >
           Try Again
-        </button>
+        </Button>
       }
     />
   )

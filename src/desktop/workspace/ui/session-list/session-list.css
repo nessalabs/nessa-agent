@@ -83,50 +83,37 @@
   opacity: 0;
 }
 
+/*
+ * The kit's SearchField, in the window's inks. The field owns the box; these
+ * are the values the list used before the swap (32px, 12px corner, 13px type,
+ * 5% rest, 8.5% hover). The inset line is the list's own.
+ */
 .workspace-search {
-  display: flex;
-  height: 32px;
+  --nessa-search-radius: var(--desktop-radius-md);
+  --nessa-search-padding-x: 12px;
+  --nessa-search-padding-y: 0px;
+  --nessa-search-rest-fill: var(--desktop-hover);
+  --nessa-search-hover-fill: var(--desktop-selected);
+  --nessa-search-ink: var(--foreground);
+  --nessa-search-muted-ink: var(--desktop-faint);
+  --nessa-search-font-size: var(--desktop-text-body);
+  /* `w-full` ignores the 4px side margins and overflows the column. */
+  width: auto;
+  padding-inline-end: 8px;
   flex: none;
-  align-items: center;
-  gap: 8px;
   margin: 0 4px 8px;
-  padding: 0 8px 0 12px;
-  border-radius: var(--desktop-radius-md);
-  background: var(--desktop-hover);
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 4%, transparent);
-  color: var(--desktop-faint);
-  transition: background-color var(--desktop-fast) ease;
-}
-
-.workspace-search:hover,
-.workspace-search:focus-within {
-  background: var(--desktop-selected);
 }
 
 .workspace-search svg {
   width: 14px;
   height: 14px;
-  flex: none;
   stroke-width: 1.75;
 }
 
-.workspace-search input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: var(--foreground);
-  font: inherit;
-  font-size: var(--desktop-text-body);
-}
-
-.workspace-search input::placeholder {
-  color: var(--desktop-faint);
-}
-
-.workspace-search input::-webkit-search-cancel-button {
-  display: none;
+/* The kit's shortcut sits 6px in from the end; the list's cap did not. */
+.workspace-search [data-slot="search-field-shortcut"] {
+  margin-inline-end: 0;
 }
 
 .workspace-list-scroll {
@@ -140,15 +127,22 @@
   mask-image: linear-gradient(to bottom, transparent, black 8px);
 }
 
+/* A folded column does not paint its rows, so the fold's layout does not walk
+ * them. The header above this scroller still fades with the column. */
+.workspace[data-list="closed"] .workspace-list-scroll {
+  content-visibility: hidden;
+}
+
+/*
+ * The kit's dense GroupHeader, held to the list's caption: 11px/600 at 40%
+ * ink, 16.5px tall. The count stays at 500, as the hand-rolled label did.
+ */
 .workspace-group-label {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
+  --nessa-group-header-ink: var(--desktop-faint);
+  --nessa-group-header-count-ink: var(--desktop-faint);
+  --nessa-group-header-height: 16.5px;
   margin: 12px 0 4px;
   padding: 0 12px;
-  color: var(--desktop-faint);
-  font-size: var(--desktop-text-caption);
-  font-weight: 600;
   letter-spacing: 0.01em;
   -webkit-user-select: none;
   user-select: none;
@@ -158,7 +152,7 @@
   margin-top: 4px;
 }
 
-.workspace-group-label span {
+.workspace-list [data-slot="group-header-count"] {
   font-weight: 500;
   opacity: 0.7;
   font-variant-numeric: tabular-nums;
