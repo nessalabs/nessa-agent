@@ -1235,9 +1235,22 @@ where
             continue;
         }
         if ConnectionSubscriptions::method(&frame.method) {
-            if let Some(reply) =
-                subscriptions.begin(&state, &session, frame, slot.clone(), received_at)
-            {
+            // Admitted as any request is (row S29): an unsubscribe here,
+            // before it changes anything; a subscribe in its own task,
+            // before it registers anything.
+            let refused = if ConnectionSubscriptions::stops(&frame.method) {
+                admit_now(&state, &session, &frame.method)
+                    .await
+                    .err()
+                    .map(|code| failure(&frame.id, code))
+            } else {
+                None
+            };
+            let reply = match refused {
+                Some(refused) => Some(refused),
+                None => subscriptions.begin(&state, &session, frame, slot.clone(), received_at),
+            };
+            if let Some(reply) = reply {
                 let queued = QueuedResponse {
                     message: WireResponse::ordinary(reply),
                     _slot: slot,
@@ -1470,6 +1483,18 @@ pub(super) async fn admit_action(
         Ok(Decision::Deny) => Err("forbidden"),
         Err(_) => Err("unauthorized"),
     }
+}
+
+/// A request's admission outside `dispatch`: the session as it stands now,
+/// then [`admit_action`] for `method`. The session found current.
+pub(super) async fn admit_now(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    method: &str,
+) -> Result<AuthenticatedSession, &'static str> {
+    let current = current_session_now(state, session).await?;
+    admit_action(state, &current, method).await?;
+    Ok(current)
 }
 
 /// The session as it stands now, as a request finds it before it is

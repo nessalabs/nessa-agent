@@ -4,6 +4,7 @@ import { createDependencies } from "../../../composition/dependencies"
 import { scenarioEffects } from "../scenario/effects"
 import { textContent } from "../../model"
 import type { ConversationView } from "../../application/view"
+import type { ConversationFollower } from "../../application/ports"
 import {
   renameConversation,
   closeConversation,
@@ -14,7 +15,8 @@ import {
   setSelection,
   stopGenerating,
   controlConversation,
-  refreshConversation,
+  followConversation,
+  unfollowConversation,
   bindConversation,
   restoreConversations,
 } from "./slice"
@@ -22,6 +24,7 @@ import {
   conversationTabSnapshot,
   parseConversationTabSnapshot,
 } from "../../application/saved-tabs"
+import { followByReading } from "../../testing"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -269,7 +272,7 @@ describe("gateway conversation projection", () => {
           send: async () => {
             throw new Error("connection lost")
           },
-          read: async (id) => ({
+          follow: followByReading(async (id) => ({
             ...view(id, "B"),
             messages: [
               {
@@ -282,7 +285,7 @@ describe("gateway conversation projection", () => {
                 authenticationRequired: true,
               },
             ],
-          }),
+          })),
         },
       }),
     )
@@ -291,7 +294,7 @@ describe("gateway conversation projection", () => {
     if (!turn || turn.from !== "user" || !turn.executionId)
       throw new Error("missing uncertain submission")
     expect(turn.observedInput).toBeNull()
-    await store.dispatch(refreshConversation("c0"))
+    await store.dispatch(followConversation("c0"))
     await store.dispatch(
       controlConversation({
         id: "c0",
@@ -388,12 +391,17 @@ describe("gateway conversation projection", () => {
     ]
     const store = makeStore(
       createDependencies({
-        conversation: { ...effects, stop, close, read: async () => seen },
+        conversation: {
+          ...effects,
+          stop,
+          close,
+          follow: followByReading(async () => seen),
+        },
       }),
     )
     const id = store.getState().conversation.activeId
     store.dispatch(bindConversation({ id, serverId: serverId(1) }))
-    await store.dispatch(refreshConversation(id))
+    await store.dispatch(followConversation(id))
     await store.dispatch(stopGenerating({ conversationId: id }))
     expect(stop).toHaveBeenCalledWith(serverId(1), "active")
     expect(close).not.toHaveBeenCalled()
@@ -407,44 +415,144 @@ describe("gateway conversation projection", () => {
       createDependencies({
         conversation: {
           ...effects,
-          read: async (id) => (++calls === 1 ? first.promise : view(id, "new")),
+          follow: followByReading(async (id) =>
+            ++calls === 1 ? first.promise : view(id, "new"),
+          ),
         },
       }),
     )
     store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
-    const oldRead = store.dispatch(refreshConversation("c0"))
-    await store.dispatch(refreshConversation("c0"))
+    const oldRead = store.dispatch(followConversation("c0"))
+    await store.dispatch(followConversation("c0"))
     first.resolve(view("server", "old"))
     await oldRead
     expect(store.getState().conversation.conversations[0]!.revision).toBe("new")
     store.dispatch(closeConversation("c0"))
-    await store.dispatch(refreshConversation("c0"))
+    await store.dispatch(followConversation("c0"))
     expect(store.getState().conversation.conversations[0]!.id).toBe("c1")
   })
 
-  it("settles read ownership and preserves projection references for an unchanged revision", async () => {
+  it("P6: keeps a follow the tab's through its views and failures, preserving projection references for an unchanged view", async () => {
     const effects = scenarioEffects("echo")
-    const read = vi
-      .fn()
-      .mockResolvedValueOnce(view("server", "same"))
-      .mockResolvedValueOnce(view("server", "same"))
-      .mockRejectedValueOnce(new Error("offline"))
-    const store = makeStore(createDependencies({ conversation: { ...effects, read } }))
+    let follower: ConversationFollower | undefined
+    const store = makeStore(
+      createDependencies({
+        conversation: {
+          ...effects,
+          follow: (_id, told) => {
+            follower = told
+            return () => {
+              follower = undefined
+            }
+          },
+        },
+      }),
+    )
     store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
-    await store.dispatch(refreshConversation("c0"))
+    const following = store.dispatch(followConversation("c0"))
+    follower!.view(view("server", "same"))
+    await following
     const first = store.getState().conversation.conversations[0]!
-    expect(first.readRequest).toBeUndefined()
-    await store.dispatch(refreshConversation("c0"))
+    expect(first.readRequest).toBe(following.requestId)
+    follower!.view(view("server", "same"))
     const unchanged = store.getState().conversation.conversations[0]!
     expect(unchanged.turns).toBe(first.turns)
     expect(unchanged.remote).toBe(first.remote)
-    expect(unchanged.readRequest).toBeUndefined()
-    await store.dispatch(refreshConversation("c0"))
+    expect(unchanged.readRequest).toBe(following.requestId)
+    follower!.failed("unavailable")
     const failed = store.getState().conversation.conversations[0]!
-    expect(failed.readRequest).toBeUndefined()
+    // The follow goes on: its next view applies and clears the word.
+    expect(failed.readRequest).toBe(following.requestId)
+    expect(failed.readError).toBe("unavailable")
+    follower!.view(view("server", "next"))
+    const recovered = store.getState().conversation.conversations[0]!
+    expect(recovered.revision).toBe("next")
+    expect(recovered.readError).toBeUndefined()
+  })
+
+  it("names a plain read failure in the panel's own word", async () => {
+    const effects = scenarioEffects("echo")
+    const read = vi.fn().mockRejectedValueOnce(new Error("offline"))
+    const store = makeStore(
+      createDependencies({ conversation: { ...effects, follow: followByReading(read) } }),
+    )
+    store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
+    await store.dispatch(followConversation("c0"))
     // The panel's own word for a read it could not make sense of, not the
     // error's text: the scenario substitute rejects with a plain `Error`.
-    expect(failed.readError).toBe("unavailable")
+    expect(store.getState().conversation.conversations[0]!.readError).toBe("unavailable")
+  })
+
+  it("P4, P7: drops a replaced follow's views, and stops the follow when the tab is unfollowed", async () => {
+    const effects = scenarioEffects("echo")
+    const followers: ConversationFollower[] = []
+    const stops: Array<ReturnType<typeof vi.fn>> = []
+    const store = makeStore(
+      createDependencies({
+        conversation: {
+          ...effects,
+          follow: (_id, told) => {
+            followers.push(told)
+            const stop = vi.fn()
+            stops.push(stop)
+            return stop
+          },
+        },
+      }),
+    )
+    store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
+    void store.dispatch(followConversation("c0"))
+    void store.dispatch(followConversation("c0"))
+    // Following again stops the follow it replaces.
+    expect(stops[0]).toHaveBeenCalledTimes(1)
+    followers[1]!.view(view("server", "new"))
+    followers[0]!.view(view("server", "old"))
+    expect(store.getState().conversation.conversations[0]!.revision).toBe("new")
+    await store.dispatch(unfollowConversation("c0"))
+    expect(stops[1]).toHaveBeenCalledTimes(1)
+    followers[1]!.view(view("server", "later"))
+    expect(store.getState().conversation.conversations[0]!.revision).toBe("new")
+  })
+
+  it("P5: after a command, follows a followed tab again and reads an unfollowed one once", async () => {
+    const effects = scenarioEffects("echo")
+    const stops: Array<ReturnType<typeof vi.fn>> = []
+    const store = makeStore(
+      createDependencies({
+        conversation: {
+          ...effects,
+          follow: (id, told) => {
+            const stop = vi.fn()
+            stops.push(stop)
+            queueMicrotask(() => told.view(view(id, `r${stops.length}`)))
+            return stop
+          },
+        },
+      }),
+    )
+    store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
+    // Not on screen: the command's result is read once, and nothing is left following.
+    await store.dispatch(
+      controlConversation({
+        id: "c0",
+        control: { kind: "setApprovalMode", mode: "ask" },
+      }),
+    )
+    expect(stops).toHaveLength(1)
+    expect(stops[0]).toHaveBeenCalledTimes(1)
+    // On screen: followed again, and the new follow goes on.
+    await store.dispatch(followConversation("c0"))
+    await store.dispatch(
+      controlConversation({
+        id: "c0",
+        control: { kind: "setApprovalMode", mode: "ask" },
+      }),
+    )
+    expect(stops).toHaveLength(3)
+    expect(stops[1]).toHaveBeenCalledTimes(1)
+    expect(stops[2]).not.toHaveBeenCalled()
+    await store.dispatch(unfollowConversation("c0"))
+    expect(stops[2]).toHaveBeenCalledTimes(1)
   })
 
   it("applies a revised capability snapshot without requiring message changes", async () => {
@@ -454,10 +562,12 @@ describe("gateway conversation projection", () => {
     revised.capabilities.agentFeatures.permissionDenial =
       "supported_for_offered_permission_reviews"
     const read = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(revised)
-    const store = makeStore(createDependencies({ conversation: { ...effects, read } }))
+    const store = makeStore(
+      createDependencies({ conversation: { ...effects, follow: followByReading(read) } }),
+    )
     store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
-    await store.dispatch(refreshConversation("c0"))
-    await store.dispatch(refreshConversation("c0"))
+    await store.dispatch(followConversation("c0"))
+    await store.dispatch(followConversation("c0"))
     const current = store.getState().conversation.conversations[0]!
     expect(current.revision).toBe("capabilities:2")
     expect(current.remote?.capabilities.agentFeatures.permissionDenial).toBe(
@@ -556,7 +666,7 @@ it("shows cancelling until close acknowledgement and does not claim cancellation
             await gate.promise
             if (!succeeds) throw new Error("Close failed")
           },
-          read: async () => view("server"),
+          follow: followByReading(async () => view("server")),
         },
       }),
     )

@@ -14,6 +14,8 @@ import {
   NessaRpcError,
   type NessaClient,
   type ConversationView,
+  type ConversationViewCursor,
+  type ViewSubscriptionHandlers,
 } from "@nessa/client"
 import { expect, it, vi } from "vitest"
 import {
@@ -21,6 +23,7 @@ import {
   ControlFailedError,
   ConversationReadFailedError,
   SubmissionRefusedError,
+  type ConversationFollower,
 } from "../../application/ports"
 import {
   linkablePath,
@@ -32,7 +35,7 @@ import {
   STORED_IMAGE_TYPES,
 } from "../../model"
 import { deletedAnyway } from "../../application/usecases"
-import { BUSY_RETRY_DELAYS_MS, gatewayEffects } from "./effects"
+import { BUSY_RETRY_DELAYS_MS, FOLLOW_RETRY_MS, gatewayEffects } from "./effects"
 
 function gatewayView(): ConversationView {
   return {
@@ -142,18 +145,173 @@ it("creates a draft with its exact selected agent, model and approval mode", asy
     approvalMode: "auto",
   })
 })
-it("serializes opaque-revision reads, including overlapping manual refreshes", async () => {
-  const first = deferred<ConversationView>()
-  const read = vi.fn(() => first.promise)
-  const effects = effectsOf(() => ({ conversation: { read } }) as unknown as NessaClient)
-  const pending = effects.read("server")
-  const following = effects.read("server")
-  await Promise.resolve()
-  await Promise.resolve()
-  expect(read).toHaveBeenCalledOnce()
-  first.resolve(gatewayView())
-  await Promise.all([pending, following])
-  expect(read).toHaveBeenCalledTimes(2)
+/** One open of a view subscription, as the fake gateway saw it. */
+type Opened = {
+  conversationId: string
+  handlers: ViewSubscriptionHandlers
+  after?: ConversationViewCursor
+  close: ReturnType<typeof vi.fn>
+}
+
+/**
+ * A gateway's view subscriptions: each open is recorded, and answered by the
+ * next of `answers` (an error refuses it), or opened when there are none.
+ */
+function subscribing(answers: Array<Error | Promise<void>> = []) {
+  const opens: Opened[] = []
+  const view = vi.fn(
+    async (
+      conversationId: string,
+      handlers: ViewSubscriptionHandlers,
+      options: { after?: ConversationViewCursor } = {},
+    ) => {
+      const answer = answers.shift()
+      if (answer instanceof Error) throw answer
+      await answer
+      const close = vi.fn(async () => {})
+      opens.push({ conversationId, handlers, after: options.after, close })
+      return { id: `s${opens.length}`, close }
+    },
+  )
+  const client = { subscriptions: { view } } as unknown as NessaClient
+  return { client, opens, view }
+}
+
+const cursor = (position: string): ConversationViewCursor => ({
+  incarnation: "i",
+  position,
+})
+
+/** Lets every promise already settled run its callbacks. */
+const settle = () => new Promise<void>((done) => setTimeout(done, 0))
+
+/** What a follower is told, in order. */
+function told() {
+  const said: Array<{ view: unknown } | { failed: string; cause: unknown }> = []
+  return {
+    said,
+    follower: {
+      view: (view: unknown) => said.push({ view }),
+      failed: (reason: string, cause?: unknown) => said.push({ failed: reason, cause }),
+    } as ConversationFollower,
+  }
+}
+
+it("P1: tells the follower each frame, and after lagging follows on at once from the last one", async () => {
+  const gateway = subscribing()
+  const effects = effectsOf(() => gateway.client)
+  const { said, follower } = told()
+  const stop = effects.follow("server", follower)
+  await settle()
+  expect(gateway.opens).toHaveLength(1)
+  expect(gateway.opens[0]!.after).toBeUndefined()
+  gateway.opens[0]!.handlers.view({ cursor: cursor("3"), view: gatewayView() })
+  expect(said).toEqual([{ view: expect.objectContaining({ conversationId: "server" }) }])
+  gateway.opens[0]!.handlers.ended({ reason: "lagging" })
+  await settle()
+  // Too slow is not a failure: nothing is said, and no time is waited.
+  expect(said).toHaveLength(1)
+  expect(gateway.opens).toHaveLength(2)
+  expect(gateway.opens[1]!.after).toEqual(cursor("3"))
+  stop()
+  expect(gateway.opens[1]!.close).toHaveBeenCalledOnce()
+  // Nothing of a stopped follow is told.
+  gateway.opens[1]!.handlers.view({ cursor: cursor("4"), view: gatewayView() })
+  expect(said).toHaveLength(1)
+})
+
+it("P2: follows from the start when the gateway holds no history that far", async () => {
+  const gateway = subscribing()
+  const effects = effectsOf(() => gateway.client)
+  const { follower } = told()
+  const stop = effects.follow("server", follower)
+  await settle()
+  gateway.opens[0]!.handlers.view({ cursor: cursor("9"), view: gatewayView() })
+  gateway.opens[0]!.handlers.ended({ reason: "lagging" })
+  // The history was replaced behind the cursor: resuming from it is refused.
+  gateway.view.mockImplementationOnce(() =>
+    Promise.reject(new NessaRpcError("cursor_ahead", "after is ahead")),
+  )
+  await settle()
+  expect(gateway.view).toHaveBeenCalledTimes(3)
+  expect(gateway.view.mock.calls[1]![2]).toEqual({ after: cursor("9") })
+  expect(gateway.view.mock.calls[2]![2]).toEqual({})
+  expect(gateway.opens).toHaveLength(2)
+  stop()
+})
+
+it("P3: says why it could not follow, and tries again after a wait", async () => {
+  const waited = deferred<void>()
+  const wait = vi.fn(() => waited.promise)
+  const gateway = subscribing([
+    new NessaRpcError("conversation_configuration_changed", "setup changed"),
+  ])
+  const effects = gatewayEffects(() => gateway.client, wait)
+  const { said, follower } = told()
+  const stop = effects.follow("server", follower)
+  await settle()
+  expect(said).toEqual([{ failed: "configuration-changed", cause: expect.anything() }])
+  expect(wait).toHaveBeenCalledExactlyOnceWith(FOLLOW_RETRY_MS)
+  expect(gateway.opens).toHaveLength(0)
+  waited.resolve()
+  await settle()
+  expect(gateway.opens).toHaveLength(1)
+  gateway.opens[0]!.handlers.view({ cursor: cursor("1"), view: gatewayView() })
+  expect(said.at(-1)).toEqual({
+    view: expect.objectContaining({ conversationId: "server" }),
+  })
+  // A subscription the gateway ends is a failure too: said, and tried again.
+  gateway.opens[0]!.handlers.ended({
+    reason: "refused",
+    code: "conversation_state_unreadable",
+  })
+  expect(said.at(-1)).toMatchObject({ failed: "state-unreadable" })
+  expect(wait).toHaveBeenCalledTimes(2)
+  stop()
+})
+
+it("P3: stops trying for a conversation somebody deleted", async () => {
+  const wait = vi.fn(() => Promise.resolve())
+  const gateway = subscribing([new NessaRpcError("conversation_deleted", "deleted")])
+  const effects = gatewayEffects(() => gateway.client, wait)
+  const { said, follower } = told()
+  effects.follow("server", follower)
+  await settle()
+  expect(said).toEqual([{ failed: "deleted", cause: expect.anything() }])
+  expect(wait).not.toHaveBeenCalled()
+})
+
+it("P4: closes a subscription answered after its follow was stopped, and tells nothing of it", async () => {
+  const answered = deferred<void>()
+  const gateway = subscribing([answered.promise])
+  const effects = effectsOf(() => gateway.client)
+  const { said, follower } = told()
+  const stop = effects.follow("server", follower)
+  await settle()
+  stop()
+  answered.resolve()
+  await settle()
+  expect(gateway.opens).toHaveLength(1)
+  expect(gateway.opens[0]!.close).toHaveBeenCalledOnce()
+  gateway.opens[0]!.handlers.view({ cursor: cursor("1"), view: gatewayView() })
+  expect(said).toEqual([])
+})
+
+it("P4: follows a conversation once: following it again stops the earlier follow", async () => {
+  const gateway = subscribing()
+  const effects = effectsOf(() => gateway.client)
+  const first = told()
+  const second = told()
+  effects.follow("server", first.follower)
+  await settle()
+  const stop = effects.follow("server", second.follower)
+  await settle()
+  expect(gateway.opens[0]!.close).toHaveBeenCalledOnce()
+  gateway.opens[0]!.handlers.view({ cursor: cursor("1"), view: gatewayView() })
+  gateway.opens[1]!.handlers.view({ cursor: cursor("1"), view: gatewayView() })
+  expect(first.said).toEqual([])
+  expect(second.said).toHaveLength(1)
+  stop()
 })
 
 it("asks the host again after a failed answer instead of keeping the failure", async () => {
@@ -202,13 +360,22 @@ it("sends the creation over the session of the moment, not the one checked first
   expect(live).toHaveBeenCalledOnce()
 })
 
-const reading = (error: unknown) =>
-  effectsOf(
-    () =>
-      ({ conversation: { read: () => Promise.reject(error) } }) as unknown as NessaClient,
-  )
-    .read("server")
-    .catch((error: unknown) => error)
+/**
+ * What a follow refused with `error` says it was translated from: the
+ * panel's word and its cause. Stopped once told, so it tries nothing again.
+ */
+const reading = async (error: unknown, client = subscribing([error as Error]).client) => {
+  const effects = effectsOf(() => client)
+  return new Promise<unknown>((done) => {
+    const stop = effects.follow("server", {
+      view: () => done(new Error("a view was told")),
+      failed: (_reason, cause) => {
+        stop()
+        done(cause)
+      },
+    })
+  })
+}
 
 it.each([
   // The gateway lost the configuration this conversation was created against:
@@ -225,7 +392,7 @@ it.each([
   ["audit_unavailable", "unavailable"],
   ["invalid_request", "unavailable"],
 ] as const)(
-  "turns the gateway's failed read %s into the panel's own word",
+  "turns the gateway's refused follow %s into the panel's own word",
   async (code, reason) => {
     // The gateway sends the code as the message too, which is exactly the
     // coincidence nothing may depend on: the message here names another code
@@ -283,36 +450,9 @@ it("gives a read with no wire answer at all the same honest word", async () => {
   ]) {
     expect(await reading(cause)).toMatchObject({ reason: "unavailable", cause })
   }
-  const offline = await effectsOf(() => null)
-    .read("server")
-    .catch((error: unknown) => error)
+  const offline = await reading(undefined, null as unknown as NessaClient)
   expect(offline).toBeInstanceOf(ConversationReadFailedError)
   expect(offline).toMatchObject({ reason: "unavailable" })
-})
-
-it("keeps a failed read from settling the next one, and translates each on its own", async () => {
-  // Reads are serialized through one chain. A rejection must not travel down it
-  // and answer for a request that was never made.
-  const read = vi
-    .fn()
-    .mockRejectedValueOnce(
-      new NessaRpcError("conversation_configuration_changed", "setup changed"),
-    )
-    .mockResolvedValueOnce(gatewayView())
-  const effects = effectsOf(() => ({ conversation: { read } }) as unknown as NessaClient)
-  const failed = effects.read("server").catch((error: unknown) => error)
-  const following = effects.read("server")
-  expect(await failed).toMatchObject({ reason: "configuration-changed" })
-  expect(await following).toMatchObject({
-    conversationId: "server",
-    capabilities: {
-      agentFeatures: {
-        permissionDenial: "supported_for_offered_permission_reviews",
-        preToolPolicy: "unsupported_not_implemented",
-      },
-    },
-  })
-  expect(read).toHaveBeenCalledTimes(2)
 })
 
 /** The original bytes, described as they are uploaded. */

@@ -13,7 +13,8 @@ notices this builds on; the [transcript fold](transcript-fold.md) owns the one
 ## The problem
 
 The desktop learned about changes by asking again: `conversation.list` every
-second and `conversation.read` every 250 ms for the conversation on screen. A
+second and `conversation.read` every 250 ms for the conversation on screen, in
+both the workspace and the conversation panel. A
 change waited up to a poll interval, an idle window still asked, and a missed
 change was mended only by the next poll.
 
@@ -37,8 +38,9 @@ returns, built by the same fold:
 - `conversation.subscriptionEnded {subscriptionId, reason, code?, lastDelivered?}`
   is the one terminal frame. `reason` is `lagging`, `refused`, `source_closed`
   or `too_large`; `code` says why a `refused` one was refused;
-  `lastDelivered` is the cursor of the last view frame written, so a lagging
-  subscriber resumes from it.
+  `lastDelivered` is where a view subscription resumes from: the cursor of
+  the last view frame written or, when none was, the `after` it was opened
+  with (absent when neither exists), so a lagging subscriber resumes from it.
 
 Why views and not record batches: the desktop is TypeScript and must not keep
 a second fold (rule "one fold" in the transcript-fold design). Devices that do
@@ -141,7 +143,11 @@ value, and reads happen in the subscription's own task under the server-wide
 ### Where batches are authorized
 
 `product/subscription/target.rs::authorize_batch` is the one place a batch is
-admitted. Slice G (read grants) adds its per-conversation check there; nothing
+admitted. A subscription's task asks it before it registers any wake source,
+so a session that may not follow takes nothing from the shared watch pools,
+and again before every read. An unsubscribe is admitted by the socket before
+it changes anything (row S29). Both use the same admission as `dispatch`
+(`admit_now`). Slice G (read grants) adds its per-conversation check there; nothing
 else decides whether a frame may be read.
 
 ### Limits
@@ -188,6 +194,8 @@ otherwise.
 | S25 | The first read has not finished by the subscribe request's reply deadline | Refused `unavailable`; its wake sources go with it | `a_first_read_past_the_reply_deadline_is_refused_unavailable` (unit, `product/subscription/target.rs`) |
 | S26 | A followed conversation is closed or stopped (its agent let go) | One frame: the same history, read-only, lifecycle `absent`; the agent is not opened again until a send opens it | `a_closed_conversation_is_shown_let_go_and_not_opened_again` |
 | S27 | A followed conversation has an unfinished approval-mode change | The view shows the change pending; recovery is not run and the agent is not opened | `a_pending_mode_change_is_shown_not_recovered_by_a_follower` |
+| S28 | The agent's opening fails while a follower waits on it (or failed and holds its slot) | The follower is shown the committed history, read-only; `conversation.read` and a send report the failure | `a_failed_opening_holding_its_slot_is_read_by_a_follower_as_its_history` (`tests/conversation/desktop_stop.rs`) |
+| S29 | A subscribe or unsubscribe the session may not make (grant, presence, or no longer current) | Refused with the admission's code; a subscribe takes no watch from the shared pools first | `a_forbidden_subscribe_is_refused_before_it_takes_a_watch`, `a_forbidden_unsubscribe_is_refused` |
 | L1 | List subscription; a catalogue change | A new list frame | `a_list_subscription_follows_the_catalogue` |
 | L2 | A turn starts or ends without a summary change | A new list frame with `running` changed | `a_turn_without_a_summary_change_updates_the_list` |
 | L3 | A list larger than one frame | Cut newest first, `complete: false` | `a_list_too_large_for_one_frame_is_cut_and_marked_incomplete` (unit) |
@@ -201,7 +209,7 @@ asks of the client does not offer them.
 | Row | State and input | Result |
 |---|---|---|
 | D1 | First listener | One list subscription; nothing asked on a timer |
-| D2 | A followed conversation's frames | A frame with a new gateway revision is the next transcript; the same revision is the same transcript |
+| D2 | A followed conversation's frames | A frame a person would see differently is the next transcript, whatever its revision (a title, a permission ask, an app's review change without it); one that differs only in its revision is the same transcript |
 | D3 | Ended `lagging` (view or list) | Opened again at once, a view from the last cursor applied; no gap |
 | D4 | Ended `refused` as not found or deleted | The session is taken out; a deletion is also forgotten by the window's MCP Apps |
 | D5 | The connection is lost, then back | Every subscription ends `disconnected` and nothing more; back, one resync and each opened again from its cursor |
@@ -222,6 +230,23 @@ asks of the client does not offer them.
 | D20 | `transcript` of a conversation followed | The view held; no second subscription |
 | D21 | An answer in a conversation let go past the limit | Followed again before the answer is sent |
 | D22 | `dispose` | Every subscription closed; nothing applies after |
+| D23 | A conversation let go past the limit while its open is on its way, then opened again | Subscribed again only once that open has been answered and closed, so the gateway does not refuse it `subscription_duplicate` |
+
+Conversation panel rows (`src/conversation/adapters/gateway/effects.test.ts`
+and `adapters/store/slice.test.ts`; the test names begin with the row id).
+The tab on screen follows its conversation through `ConversationEffects.follow`;
+the panel's poller is gone, and nothing it does asks on a timer while a view
+subscription is open.
+
+| Row | State and input | Result |
+|---|---|---|
+| P1 | Ended `lagging` | Subscribed again at once from the last frame's cursor; nothing said |
+| P2 | `after` refused `cursor_ahead` | Subscribed once more without `after` |
+| P3 | Refused, or ended for any reason but `lagging` | The tab keeps its view and shows the read failure; subscribed again after `FOLLOW_RETRY_MS` (the old idle pace), except for a deleted conversation |
+| P4 | A follow answered or framed after it was stopped or replaced | Closed unused; its frames apply nothing (`readRequest`) |
+| P5 | A command answered (send, control, stop) | A followed tab is followed again, so its next view is read after the answer; a tab not on screen is read once and left unfollowed |
+| P6 | A frame identical to the last one this follow applied | Not applied again, so what is on screen keeps its references; any other frame applies, whatever its revision |
+| P7 | The tab switched, closed or unmounted | Its follow stopped; nothing it says applies after |
 
 The rows of #248 and #419 that do not depend on a timer read keep their ids
 (connection C, writes W, refusals F, connect rules S); the poll-cadence rows

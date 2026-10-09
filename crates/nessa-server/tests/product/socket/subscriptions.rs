@@ -1218,6 +1218,56 @@ async fn a_pending_mode_change_is_shown_not_recovered_by_a_follower() {
     client.close().await;
 }
 
+/// Row S29: a subscribe the session may not make is refused before it takes
+/// a watch: with the SDK's watch pool full, it is refused `forbidden`, not
+/// `subscription_capacity`.
+#[tokio::test]
+async fn a_forbidden_subscribe_is_refused_before_it_takes_a_watch() {
+    let fixture = SubscriptionFixture::new().await;
+    grants(&fixture.authority, &["server.read"]);
+    let mut held = Vec::new();
+    loop {
+        match fixture.storage.watch_any_committed() {
+            Ok(watch) => held.push(watch),
+            Err(ChangeWatchError::Capacity) => break,
+            Err(error) => panic!("{error:?}"),
+        }
+    }
+    let mut client = fixture.connect();
+    client.send(
+        "view",
+        "conversation.subscribe",
+        json!({"conversationId": fixture.id.to_string()}),
+    );
+    let (reply, _) = client.reply("view").await;
+    assert_eq!(reply["error"]["code"], "forbidden", "{reply}");
+    client.send("list", "conversation.subscribeList", json!({}));
+    let (reply, _) = client.reply("list").await;
+    assert_eq!(reply["error"]["code"], "forbidden", "{reply}");
+    drop(held);
+    client.close().await;
+}
+
+/// Row S29: an unsubscribe is admitted like any request; one the session may
+/// no longer make is refused and changes nothing.
+#[tokio::test]
+async fn a_forbidden_unsubscribe_is_refused() {
+    let fixture = SubscriptionFixture::new().await;
+    let mut client = fixture.connect();
+    let id = client.subscribe("subscribe", &fixture.id).await;
+    client.next().await;
+    grants(&fixture.authority, &["server.read"]);
+    client.send(
+        "unsubscribe",
+        "conversation.unsubscribe",
+        json!({"subscriptionId": id}),
+    );
+    let (reply, _) = client.reply("unsubscribe").await;
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert_eq!(reply["error"]["code"], "forbidden", "{reply}");
+    client.close().await;
+}
+
 /// Row S21: every source a subscription registered goes with its socket.
 #[tokio::test]
 async fn closing_the_socket_drops_every_subscription() {

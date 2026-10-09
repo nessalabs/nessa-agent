@@ -1905,8 +1905,10 @@ impl ConversationService {
         Ok((view, cursor))
     }
     /// The agent of `id` if one is live or opening (waited for), after the
-    /// caller's access is checked; `None` when nothing has it open. Opens
-    /// nothing.
+    /// caller's access is checked; `None` when nothing has it open, or its
+    /// opening failed. Opens nothing. A failed opening is not the follower's
+    /// to report: it reads the committed history, and `conversation.read` or
+    /// a send says why the agent did not open (row S28).
     async fn live_now(
         &self,
         id: &ConversationId,
@@ -1915,7 +1917,8 @@ impl ConversationService {
         self.check_view_access(id, caller).await?;
         let slot = self.inner.conversations.lock().await.get(id).cloned();
         match slot {
-            Some(slot) => self.wait_for_slot(id, slot).await.map(Some),
+            // `wait_for_slot` fails only with the slot's own opening failure.
+            Some(slot) => Ok(self.wait_for_slot(id, slot).await.ok()),
             None => Ok(None),
         }
     }

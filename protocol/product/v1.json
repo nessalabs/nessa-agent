@@ -4859,7 +4859,7 @@
         },
         "lastDelivered": {
           "$ref": "#/$defs/ConversationViewCursor",
-          "description": "The cursor of the last view frame written, for a view subscription that sent one."
+          "description": "Where a view subscription resumes from: the cursor of the last view frame written or, when none was, the after it was opened with. Absent for a list, and for a view subscription opened without after that wrote no frame."
         }
       },
       "required": ["subscriptionId", "reason"],

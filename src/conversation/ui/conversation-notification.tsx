@@ -2,7 +2,7 @@ import { AgentNotification } from "@nessa-ui/react/agent-notification"
 import type { Conversation } from "../model"
 import {
   controlConversation,
-  refreshConversation,
+  followConversation,
   sendDraft,
 } from "../adapters/store/slice"
 import { useConversationDispatch } from "../adapters/store/hooks"
@@ -74,7 +74,7 @@ export function ConversationNotification({
                   sendDraft({ id: conversation.id, content: conversation.draft }),
                 )
               } else {
-                void dispatch(refreshConversation(conversation.id))
+                void dispatch(followConversation(conversation.id))
               }
             }
           : undefined

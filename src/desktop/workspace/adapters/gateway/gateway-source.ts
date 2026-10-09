@@ -225,8 +225,21 @@ export interface GatewayViewObserver {
 /** What one conversation's latest frame left: its view, its count, and where it was read. */
 interface Read {
   readonly view: ConversationView
+  /** What a person could see of `view` ([`viewKey`]). */
+  readonly key: string
   readonly transcript: Transcript
   readonly cursor: ConversationViewCursor
+}
+
+/**
+ * What a person could see of a view: all of it but its revision. The
+ * gateway's revision numbers the fold's committed content; a title, a
+ * permission ask, an app's review or the agent's lifecycle change without
+ * it, and a fresh fold numbers the same content anew. The gateway sends a
+ * frame when this changes (`view_key`, row S9), so it is what decides here.
+ */
+function viewKey(view: ConversationView): string {
+  return JSON.stringify({ ...view, revision: undefined })
 }
 
 /** A caller waiting for a subscription's first frame. */
@@ -543,12 +556,24 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const archiving = new Set<string>()
   // The conversations of the last incomplete list frame walked (D6).
   let walkedIds: string | undefined
+  // Opens let go while on their way, by conversation: one subscribed on this
+  // connection is closed when it is answered, and the gateway refuses a
+  // second subscription to the same conversation until then
+  // (`subscription_duplicate`), so following it again waits (D23).
+  const lettingGo = new Map<string, Promise<void>>()
 
   /** Lets a conversation's subscription go: no frame or end of it applies after. */
   const unfollow = (sessionId: string, why: unknown) => {
     const follow = views.get(sessionId)
     if (!follow) return
     views.delete(sessionId)
+    if (follow.opening) {
+      const settled = follow.opening.then(noop, noop)
+      lettingGo.set(sessionId, settled)
+      void settled.then(() => {
+        if (lettingGo.get(sessionId) === settled) lettingGo.delete(sessionId)
+      })
+    }
     follow.token = {}
     void follow.handle?.close()
     follow.handle = undefined
@@ -772,8 +797,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   }
 
   /**
-   * Applies a frame: a changed view is the conversation's next count, and is
-   * said; the same view again is the same transcript (R6).
+   * Applies a frame: a view a person would see differently is the
+   * conversation's next count, and is said; one that differs at most in its
+   * revision is the same transcript (R6, D2).
    */
   const applyRead = (
     sessionId: string,
@@ -781,14 +807,15 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     cursor: ConversationViewCursor,
   ): Transcript => {
     const held = reads.get(sessionId)
-    if (held && held.view.revision === view.revision) {
+    const key = viewKey(view)
+    if (held && held.key === key) {
       reads.set(sessionId, { ...held, cursor })
       return held.transcript
     }
     const revision = (transcriptCounts.get(sessionId) ?? 0) + 1
     transcriptCounts.set(sessionId, revision)
     const transcript = transcriptFrom(view, revision, seenIn(sessionId))
-    reads.set(sessionId, { view, transcript, cursor })
+    reads.set(sessionId, { view, key, transcript, cursor })
     tellApps(() => options.apps?.observe(view))
     emit({ kind: "transcript", transcript })
     // The summary follows what the frame says: an approval waiting, the model it runs on.
@@ -898,6 +925,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       )
     const opening = within(
       async (live) => {
+        // An open of this conversation let go on its way is closed first (D23).
+        await lettingGo.get(sessionId)
+        if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
         const connected = await client(who)
         if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
         let handle: Subscription
@@ -917,7 +947,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           throw error
         }
         if (!live() || !current()) {
-          void handle.close()
+          // Closed before this open settles, so one that follows it again
+          // subscribes after the close (D23).
+          await handle.close().catch(noop)
           throw new WorkspaceSourceError("unavailable")
         }
         follow.handle = handle

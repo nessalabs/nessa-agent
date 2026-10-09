@@ -402,7 +402,7 @@ describe("conversations", () => {
     expect(gateway.count("subscribe")).toBe(1)
   })
 
-  it("R6, D2: each frame of a followed conversation with a new gateway revision is the next transcript; the same revision is the same transcript", async () => {
+  it("R6, D2: a frame a person would see differently is the next transcript, whatever its revision; one that differs only in its revision is the same transcript", async () => {
     const { gateway, source, updates, follow } = started()
     follow()
     gateway.views.set("a", view("a", { revision: "x" }))
@@ -410,7 +410,13 @@ describe("conversations", () => {
     gateway.publish("a")
     await flush()
     expect(transcriptsOf(updates, "a")).toHaveLength(1)
+    // A fresh fold numbers the same content anew: nothing to say.
     gateway.views.set("a", view("a", { revision: "y" }))
+    gateway.publish("a")
+    await flush()
+    expect(transcriptsOf(updates, "a")).toHaveLength(1)
+    // A live fact changes without the fold's revision: said.
+    gateway.views.set("a", view("a", { revision: "y", title: "Renamed" }))
     gateway.publish("a")
     await flush()
     expect(transcriptsOf(updates, "a").map((said) => said.revision)).toEqual([1, 2])
@@ -470,18 +476,18 @@ describe("conversations", () => {
   it("D8: a frame behind the cursor applied in the same history is not applied; one from another history is", async () => {
     const { gateway, source, updates, follow } = started()
     follow()
-    gateway.views.set("a", view("a", { revision: "1" }))
+    gateway.views.set("a", view("a", { revision: "1", title: "1" }))
     await source.transcript("a")
-    gateway.views.set("a", view("a", { revision: "2" }))
+    gateway.views.set("a", view("a", { revision: "2", title: "2" }))
     gateway.publish("a")
     await flush()
     gateway.rewind("a", 0)
-    gateway.views.set("a", view("a", { revision: "behind" }))
+    gateway.views.set("a", view("a", { revision: "behind", title: "behind" }))
     gateway.publish("a")
     await flush()
     expect(transcriptsOf(updates, "a").map((said) => said.revision)).toEqual([1, 2])
     gateway.incarnation = "history-2"
-    gateway.views.set("a", view("a", { revision: "replaced" }))
+    gateway.views.set("a", view("a", { revision: "replaced", title: "replaced" }))
     gateway.publish("a")
     await flush()
     expect(transcriptsOf(updates, "a").map((said) => said.revision)).toEqual([1, 2, 3])
@@ -671,6 +677,32 @@ describe("conversations", () => {
     expect(subscribesOf(gateway, "c0")).toHaveLength(2)
     expect(gateway.live("c1")).toBe(0)
     expect(ids.filter((id) => gateway.live(id) === 1)).toHaveLength(8)
+  })
+
+  it("D23: a conversation let go while its open is on its way is subscribed again only after that open is closed", async () => {
+    const { gateway, source, follow } = started()
+    const ids = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"]
+    for (const id of ids) {
+      gateway.rows.set(id, row(id))
+      gateway.views.set(id, view(id))
+    }
+    follow()
+    await source.index()
+    const held = deferred<void>()
+    gateway.once("subscribe", (normal) => held.promise.then(normal))
+    const first = source.transcript("c0").catch((error: unknown) => error)
+    for (const id of ids.slice(1, 8)) await source.transcript(id)
+    // Past the limit: c0, still opening, is let go; then it is opened again.
+    await source.transcript("c8")
+    expect(await first).toMatchObject({ reason: "unavailable" })
+    const again = source.transcript("c0")
+    await flush()
+    expect(subscribesOf(gateway, "c0")).toHaveLength(1)
+    held.resolve()
+    await again
+    await flush()
+    expect(subscribesOf(gateway, "c0")).toHaveLength(2)
+    expect(gateway.live("c0")).toBe(1)
   })
 
   it("D13: a subscription answered after its session was taken out is closed unused, and its frame applies nothing", async () => {
@@ -2137,11 +2169,11 @@ describe("MCP Apps (#384)", () => {
 
   it("each view applied is told to the apps in the order applied, and the same view is not told twice", async () => {
     const { gateway, source, told } = withApps()
-    gateway.views.set("a", view("a", { revision: "1" }))
+    gateway.views.set("a", view("a", { revision: "1", title: "1" }))
     await source.transcript("a")
     gateway.publish("a")
     await flush()
-    gateway.views.set("a", view("a", { revision: "2" }))
+    gateway.views.set("a", view("a", { revision: "2", title: "2" }))
     gateway.publish("a")
     await flush()
     expect(told).toEqual([
@@ -2310,6 +2342,10 @@ describe("an app's review is shown after its turn ended (#436)", () => {
     const call = source.appCall("a", () => answer.promise)
     await flush()
     expect(gateway.live("a")).toBe(1)
+    gateway.views.set("a", view("a", { revision: "2", messages: [ended] }))
+    gateway.publish("a")
+    await flush()
+    // The review is a live fact of the view: the fold's revision stays.
     gateway.views.set(
       "a",
       view("a", { revision: "2", messages: [ended], permissions: [appReview] }),

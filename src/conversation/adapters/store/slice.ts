@@ -19,6 +19,7 @@ import {
   createAsyncThunk,
   createSlice,
   current as snapshot,
+  type GetThunkAPI,
   type PayloadAction,
 } from "@reduxjs/toolkit"
 import type { LocalTabs } from "../../application/local-tabs"
@@ -40,7 +41,6 @@ import { boundSentPreviews } from "../../application/usecases/release-uploads"
 import {
   AttachmentStagingError,
   ControlFailedError,
-  ConversationReadFailedError,
   ConversationUnavailableError,
   SubmissionRefusedError,
   type ConversationEffects,
@@ -123,13 +123,6 @@ const commandFailure = (error: unknown): CommandFailure | undefined =>
     ? error.reason
     : undefined
 
-// The same for a read, which always has a word: the effects port promises one
-// for every rejected read, and this file's own identity check — a view answering
-// about another conversation — is a view the panel cannot use either. Nothing
-// here reads a wire code or a sentence.
-const readFailure = (error: unknown): ReadFailure =>
-  error instanceof ConversationReadFailedError ? error.reason : "unavailable"
-
 /**
  * Stop asked for a turn whose submit has not returned. The admission keeps
  * going; once it has, the same execution is stopped even if the tab was
@@ -154,7 +147,7 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
     // answer and not eight — the composer's full-pane editor rests on it.
     const decline = declineReason(conv, input, extra.canChoosePaths)
     if (decline) {
-      if (decline.askAgain) void dispatch(refreshConversation(id))
+      if (decline.askAgain) void dispatch(refollowConversation(id))
       if (decline.message) dispatch(showError({ id, message: decline.message }))
       return rejectWithValue({ kind: decline.kind })
     }
@@ -198,7 +191,7 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
       dispatch(submissionAccepted({ id, executionId }))
       if (stopAfterAdmission.delete(executionId))
         await extra.conversation.stop(serverId, executionId)
-      await dispatch(refreshConversation(id))
+      await dispatch(refollowConversation(id))
     } catch (error) {
       dispatch(
         submissionFailed({
@@ -325,30 +318,120 @@ export const closeTab = createAsyncThunk<void, string, ThunkConfig>(
   },
 )
 
-/** Read once. Callers control polling lifetime; reducers reject older in-flight reads. */
-export const refreshConversation = createAsyncThunk<void, string, ThunkConfig>(
-  "conversation/refresh",
-  async (id, { dispatch, getState, extra, requestId }) => {
-    const current = getState().conversation.conversations.find((item) => item.id === id)
-    if (!current?.serverConversationId) return
-    const serverId = current.serverConversationId
-    dispatch(readStarted({ id, requestId }))
-    try {
-      const view = await extra.conversation.read(serverId)
-      if (view.conversationId !== serverId)
-        throw new Error("Gateway returned a different conversation identity.")
-      dispatch(viewReceived({ id, requestId, serverId, view }))
-    } catch (error) {
-      const reason = readFailure(error)
-      // The tab keeps the word; this keeps what it was translated from. Two of
-      // these have no other way out: a code this build has no name for, and the
-      // identity check above — a gateway answering about a different
-      // conversation — which the word alone reports as an ordinary stale view.
-      // Reported every time rather than once, because each poll is a separate
-      // request and the cause behind one word can change between them.
-      console.warn("[nessa] a conversation was not refreshed", reason, error)
-      dispatch(readFailed({ id, requestId, reason }))
+/**
+ * The follow each tab holds, by tab id: what stops it. Outside the state,
+ * which holds only what is serializable; `readRequest` names the follow whose
+ * views apply. One table per store (its thunk dependencies), so two stores
+ * never see each other's follows.
+ */
+const followTables = new WeakMap<ThunkConfig["extra"], Map<string, () => void>>()
+function followsOf(extra: ThunkConfig["extra"]): Map<string, () => void> {
+  let table = followTables.get(extra)
+  if (!table) followTables.set(extra, (table = new Map()))
+  return table
+}
+
+type FollowApi = Pick<
+  GetThunkAPI<ThunkConfig>,
+  "dispatch" | "getState" | "extra" | "requestId"
+>
+
+/**
+ * Follows a tab's conversation under `requestId`: every view the gateway
+ * sends while that is the tab's `readRequest` applies. Settles once the first
+ * view or failure is applied, or the follow is stopped first. A tab's follow
+ * (`once` false) replaces the one it held and goes on until stopped; a single
+ * read (`once` true) is held by nobody and stops itself after its first word.
+ */
+async function followTab(id: string, once: boolean, api: FollowApi): Promise<void> {
+  const { dispatch, getState, extra, requestId } = api
+  const current = getState().conversation.conversations.find((item) => item.id === id)
+  if (!current?.serverConversationId) return
+  const serverId = current.serverConversationId
+  const follows = followsOf(extra)
+  if (!once) follows.get(id)?.()
+  dispatch(readStarted({ id, requestId }))
+  await new Promise<void>((settled) => {
+    let stopping = () => {}
+    // The last view this follow applied, whole: one that says nothing new is
+    // not applied again, so what is on screen keeps its references.
+    let applied: string | undefined
+    const told = () => {
+      settled()
+      if (once) stopping()
     }
+    const stop = extra.conversation.follow(serverId, {
+      view: (view) => {
+        if (view.conversationId !== serverId) {
+          // A gateway answering about a different conversation: a view the
+          // panel cannot use, which the word alone reports as a stale one.
+          console.warn(
+            "[nessa] a conversation was not refreshed",
+            "unavailable",
+            new Error("Gateway returned a different conversation identity."),
+          )
+          dispatch(readFailed({ id, requestId, reason: "unavailable" }))
+          applied = undefined
+        } else {
+          const key = JSON.stringify(view)
+          if (key !== applied) dispatch(viewReceived({ id, requestId, serverId, view }))
+          applied = key
+        }
+        told()
+      },
+      failed: (reason, cause) => {
+        // The tab keeps the word; this keeps what it was translated from.
+        // Reported every time rather than once, because the cause behind one
+        // word can change between attempts.
+        console.warn("[nessa] a conversation was not refreshed", reason, cause)
+        dispatch(readFailed({ id, requestId, reason }))
+        // The word stays until a view applies: the next one does, even unchanged.
+        applied = undefined
+        told()
+      },
+    })
+    let stopped = false
+    stopping = () => {
+      if (stopped) return
+      stopped = true
+      stop()
+      if (follows.get(id) === stopping) follows.delete(id)
+      settled()
+    }
+    if (!once) follows.set(id, stopping)
+  })
+}
+
+/**
+ * Follows a tab's conversation: every view the gateway sends while this
+ * follow is the tab's (`readRequest`) applies. Following again replaces the
+ * tab's follow, and the new one's first view is read after this call, so
+ * after any command answered before it. Settles once the first view or
+ * failure is applied, or the follow is stopped first; the follow goes on.
+ */
+export const followConversation = createAsyncThunk<void, string, ThunkConfig>(
+  "conversation/follow",
+  (id, api) => followTab(id, false, api),
+)
+
+/**
+ * After a command, its result is read: a tab that is followed is followed
+ * again, and one nobody follows (not on screen) is read once. Either way the
+ * view is read after the command was answered, and one read before cannot
+ * apply after it (`readRequest`, which the command let go). Only the tab on
+ * screen is left following.
+ */
+export const refollowConversation = createAsyncThunk<void, string, ThunkConfig>(
+  "conversation/refollow",
+  (id, api) => followTab(id, !followsOf(api.extra).has(id), api),
+)
+
+/** Stops following a tab's conversation: nothing it says applies after. */
+export const unfollowConversation = createAsyncThunk<void, string, ThunkConfig>(
+  "conversation/unfollow",
+  async (id, { dispatch, extra }) => {
+    followsOf(extra).get(id)?.()
+    dispatch(invalidateRead(id))
   },
 )
 
@@ -484,7 +567,7 @@ export const controlConversation = createAsyncThunk<
         break
       }
     }
-    await dispatch(refreshConversation(id))
+    await dispatch(refollowConversation(id))
   } catch (error) {
     if (control.kind === "close") {
       dispatch(cancellationChanged({ id }))
@@ -494,9 +577,9 @@ export const controlConversation = createAsyncThunk<
       // without sending them again.
       dispatch(uploadsReleased(id))
     }
-    // A lost acknowledgement may follow an applied control. Read authority again;
-    // never replay the control or infer that the previous order still holds.
-    await dispatch(refreshConversation(id))
+    // A lost acknowledgement may follow an applied control. Follow authority
+    // again; never replay the control or infer that the previous order still holds.
+    await dispatch(refollowConversation(id))
     // Every control, retry included. A retry does re-send a message, but it
     // does not act on a refusal the way `sendDraft` does — the turn keeps its
     // receipt and the draft is untouched — so a message's sentences, which
@@ -714,10 +797,9 @@ const conversationSlice = createSlice({
       action: PayloadAction<{ id: string; requestId: string; reason: ReadFailure }>,
     ) {
       const current = state.conversations.find((item) => item.id === action.payload.id)
-      if (current?.readRequest === action.payload.requestId) {
+      // The follow goes on: a later view clears the word.
+      if (current?.readRequest === action.payload.requestId)
         current.readError = action.payload.reason
-        current.readRequest = undefined
-      }
     },
     viewReceived(
       state,
@@ -735,14 +817,15 @@ const conversationSlice = createSlice({
         current?.readRequest === requestId &&
         current.serverConversationId === serverId
       ) {
-        if (current.revision === view.revision) {
-          current.readRequest = undefined
-          current.readError = undefined
-        } else {
-          state.conversations[index] = applyView(current, view)
-          // A view can be what first says a turn was taken.
-          releaseOldPreviews(state)
+        // Every view applies: the gateway sends one when what a person sees
+        // changes, which its revision alone does not say (a permission ask,
+        // an app's review, the agent's lifecycle). The follow stays the tab's.
+        state.conversations[index] = {
+          ...applyView(current, view),
+          readRequest: requestId,
         }
+        // A view can be what first says a turn was taken.
+        releaseOldPreviews(state)
       }
     },
     controlStarted(state, action: PayloadAction<string>) {

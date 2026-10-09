@@ -18,7 +18,7 @@ use crate::conversation::application::{
 use crate::product::{
     conversation::{caller, read_list, read_view},
     passive_read::deadlines::RECORD_SEND_TIMEOUT,
-    socket::{admit_action, current_session_now, failure, success},
+    socket::{admit_now, failure, success},
     state::{note_limit, ProductRouteState},
 };
 use nessa_auth::application::session::AuthenticatedSession;
@@ -253,9 +253,7 @@ pub(super) async fn authorize_batch(
     session: &AuthenticatedSession,
     target: &Target,
 ) -> Result<AuthenticatedSession, &'static str> {
-    let current = current_session_now(state, session).await?;
-    admit_action(state, &current, target.method()).await?;
-    Ok(current)
+    admit_now(state, session, target.method()).await
 }
 
 /// One read's result: a view and where it was folded through, or a list.
@@ -644,6 +642,11 @@ pub(super) async fn run(run: Run) {
             Some(slot),
         ));
     };
+    // Admitted before anything is registered: a session that may not follow
+    // takes nothing from the shared watch pools (row S29).
+    if let Err(code) = authorize_batch(&state, &session, &target).await {
+        return refuse(code, slot);
+    }
     let mut sources = match Sources::register(&state, &service, &session, &target) {
         Ok(sources) => sources,
         Err(code) => return refuse(&code, slot),

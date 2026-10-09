@@ -33,9 +33,10 @@ import { createDependencies } from "../../composition/dependencies"
 import {
   attachFiles,
   bindConversation,
-  refreshConversation,
+  followConversation,
   scenarioEffects,
   useConversation,
+  type ConversationFollower,
   type ConversationView,
 } from "../../conversation/testing"
 import { makeStore } from "../../store"
@@ -68,13 +69,15 @@ async function mounted(imageInput: boolean | undefined) {
     conversation: {
       ...echo,
       stageAttachment: stage as never,
-      read: async (id: string) => {
-        const view = (await echo.read(id)) as ConversationView
-        return {
-          ...view,
-          capabilities: { ...view.capabilities, imageInput },
-        } as ConversationView
-      },
+      follow: (id: string, follower: ConversationFollower) =>
+        echo.follow(id, {
+          view: (view: ConversationView) =>
+            follower.view({
+              ...view,
+              capabilities: { ...view.capabilities, imageInput },
+            } as ConversationView),
+          failed: follower.failed,
+        }),
     } as never,
   })
   const store = makeStore(dependencies)
@@ -93,7 +96,7 @@ async function mounted(imageInput: boolean | undefined) {
   await echo.create("c0")
   await React.act(async () => {
     store.dispatch(bindConversation({ id: "c0", serverId: "c0" }))
-    await store.dispatch(refreshConversation("c0"))
+    await store.dispatch(followConversation("c0"))
   })
   const draft = () => store.getState().conversation.conversations[0]!.draft
   return { store, stage, draft, dependencies }

@@ -5,6 +5,7 @@ import {
   ConversationReadFailedError,
   SubmissionRefusedError,
   type ConversationEffects,
+  type ConversationFollower,
 } from "../../application/ports"
 import type { ConversationView, Submission } from "../../application/view"
 import { STORED_IMAGE_TYPES } from "../../model"
@@ -15,6 +16,35 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
   const archived = new Set<string>()
   // Deleted identities are refused for good, as the gateway's tombstones are.
   const deleted = new Set<string>()
+  // Who follows each conversation, told again whenever it changes.
+  const followers = new Map<string, Set<ConversationFollower>>()
+  /** Tells `follower` what `id` says now, a task later, as a socket would. */
+  const tell = (id: string, follower: ConversationFollower) => {
+    void Promise.resolve().then(() => {
+      if (!followers.get(id)?.has(follower)) return
+      // The port promises a typed word for every view it cannot give, and a
+      // substitute that answers with anything else is a substitute the panel
+      // could not have been written against. An offline scenario and a
+      // conversation this one never opened are both "no view, and nothing more
+      // to say about it".
+      if (deleted.has(id)) return follower.failed("deleted")
+      let view: ConversationView
+      try {
+        view = structuredClone(get(id))
+      } catch (error) {
+        // The scenario's own sentence stays the cause, so a developer reading
+        // the console learns which backend refused and why.
+        return follower.failed(
+          "unavailable",
+          new ConversationReadFailedError("unavailable", error),
+        )
+      }
+      follower.view(view)
+    })
+  }
+  const changed = (id: string) => {
+    for (const follower of followers.get(id) ?? []) tell(id, follower)
+  }
   const control = (id: string) => {
     // Offline is a gateway that cannot be reached: the command never leaves.
     if (scenario === "offline") throw new ControlFailedError("not-connected", "refused")
@@ -62,6 +92,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
       })
       view.transcriptState = "complete"
       view.revision = String(Number(view.revision) + 1)
+      changed(input.conversationId)
     }
     return { executionId: input.executionId, disposition: "queued" }
   }
@@ -171,18 +202,15 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
       views.delete(id)
       archived.delete(id)
       deleted.add(id)
+      changed(id)
     },
-    async read(id) {
-      // The port promises a typed reason for every rejected read, and a
-      // substitute that answers with anything else is a substitute the panel
-      // could not have been written against. An offline scenario and a
-      // conversation this one never opened are both "no view, and nothing more
-      // to say about it".
-      if (deleted.has(id)) throw new ConversationReadFailedError("deleted")
-      try {
-        return structuredClone(get(id))
-      } catch (error) {
-        throw new ConversationReadFailedError("unavailable", error)
+    follow(id, follower) {
+      const following = followers.get(id) ?? new Set<ConversationFollower>()
+      followers.set(id, following)
+      following.add(follower)
+      tell(id, follower)
+      return () => {
+        following.delete(follower)
       }
     },
     send,

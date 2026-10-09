@@ -2042,7 +2042,7 @@ export interface ConversationSubscriptionEnded {
   reason: ConversationSubscriptionEndReason
   /** For refused: the conversation error code, or unauthorized or forbidden when access was refused. */
   code?: string
-  /** The cursor of the last view frame written, for a view subscription that sent one. */
+  /** Where a view subscription resumes from: the cursor of the last view frame written or, when none was, the after it was opened with. Absent for a list, and for a view subscription opened without after that wrote no frame. */
   lastDelivered?: ConversationViewCursor
 }
 /** Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit, or the gateway's watch capacity, is full. subscription_duplicate: this connection already follows that target. unknown_subscription: no such live subscription on this connection. cursor_ahead: after names a position past the stored history. */

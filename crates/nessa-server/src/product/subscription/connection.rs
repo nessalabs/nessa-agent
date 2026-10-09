@@ -65,10 +65,18 @@ impl ConnectionSubscriptions {
             .retain(|entry| !entry.task.is_finished() || deliveries.has(&entry.id));
     }
 
+    /// Whether `method` stops a subscription: the socket admits it before
+    /// [`Self::begin`] is asked (row S29).
+    pub fn stops(method: &str) -> bool {
+        method == product_method::CONVERSATION_UNSUBSCRIBE
+    }
+
     /// Begin, or stop, one subscription. The answer for the ordinary lane, or
     /// `None` when the subscription's task answers through its own place,
-    /// after its first read (row S1). Access for the method was admitted with
-    /// the request, as for any request; each later batch is admitted again.
+    /// after its first read (row S1). Nothing here admits the request: the
+    /// socket admitted an unsubscribe before asking, and a subscription's
+    /// task admits it before registering anything and again for each batch
+    /// (`authorize_batch`, row S29).
     pub fn begin(
         &mut self,
         state: &ProductRouteState,
