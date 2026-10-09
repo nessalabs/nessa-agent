@@ -19,7 +19,7 @@ use crate::product::{
     conversation::{caller, read_list, read_view},
     passive_read::deadlines::RECORD_SEND_TIMEOUT,
     socket::{admit_action, current_session_now, failure, success},
-    state::ProductRouteState,
+    state::{note_limit, ProductRouteState},
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::conversation::{domain::ConversationId, projection::CommittedCursor};
@@ -42,7 +42,8 @@ use tokio::{
 
 /// How long a frame may wait for the writer before its subscription is
 /// ended as lagging (row S10).
-pub(super) const DELIVERY_TIMEOUT: Duration = Duration::from_millis(SUBSCRIPTION_DELIVERY_TIMEOUT_MS);
+pub(super) const DELIVERY_TIMEOUT: Duration =
+    Duration::from_millis(SUBSCRIPTION_DELIVERY_TIMEOUT_MS);
 
 /// Room an event's envelope takes beside its payload: type, name, sequence
 /// and state version, with a twenty-digit sequence.
@@ -51,8 +52,8 @@ const ENVELOPE_BYTES: usize = 256;
 /// After a wake, a list waits this long before it reads, so a stream of
 /// commits (a reply being saved every 100 ms) costs a few list reads a
 /// second, not one per commit. Changes during the wait still collapse into
-/// the next read. A view never waits.
-const LIST_REREAD_FLOOR: Duration = Duration::from_millis(250);
+/// the next read. A view never waits (row L4).
+pub(crate) const LIST_REREAD_FLOOR: Duration = Duration::from_millis(250);
 
 /// Reads refused for want of a storage read slot are tried again after a
 /// short wait, this many times, before the subscription is refused: one
@@ -108,9 +109,13 @@ impl Target {
     /// (row S18).
     pub fn same(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::View { conversation, .. }, Self::View { conversation: other, .. }) => {
-                conversation == other
-            }
+            (
+                Self::View { conversation, .. },
+                Self::View {
+                    conversation: other,
+                    ..
+                },
+            ) => conversation == other,
             (Self::List { archived }, Self::List { archived: other }) => archived == other,
             _ => false,
         }
@@ -149,11 +154,9 @@ impl Sources {
             .as_ref()
             .ok_or_else(|| code_of(&unavailable()))?;
         let capacity = |error: ChangeWatchError| match error {
-            ChangeWatchError::Capacity => {
-                ConversationSubscriptionErrorCode::SubscriptionCapacity
-                    .as_str()
-                    .to_owned()
-            }
+            ChangeWatchError::Capacity => ConversationSubscriptionErrorCode::SubscriptionCapacity
+                .as_str()
+                .to_owned(),
             ChangeWatchError::Closed => code_of(&unavailable()),
         };
         Ok(match target {
@@ -246,12 +249,19 @@ fn code_of(error: &ConversationError) -> String {
     error_code(error).as_str().to_owned()
 }
 
-/// Refused for want of a storage read slot: tried again (`TRANSIENT_RETRIES`).
-fn transient(error: &ConversationError) -> bool {
-    matches!(
+/// How long to wait before reading again after `error` on attempt `attempt`
+/// (from 0), or `None` to refuse the batch. Only a read refused for want of
+/// a storage read slot is tried again, `TRANSIENT_RETRIES` times, the wait
+/// doubling from `TRANSIENT_BACKOFF` up to `TRANSIENT_BACKOFF_CAP` (row S23).
+fn retry_after(error: &ConversationError, attempt: u32) -> Option<Duration> {
+    let transient = matches!(
         error,
         ConversationError::Storage(StorageError::ReadCapacity | StorageError::Busy)
-    )
+    );
+    if !transient || attempt >= TRANSIENT_RETRIES {
+        return None;
+    }
+    Some((TRANSIENT_BACKOFF * 2u32.saturating_pow(attempt)).min(TRANSIENT_BACKOFF_CAP))
 }
 
 async fn read_batch(
@@ -261,7 +271,6 @@ async fn read_batch(
     target: &Target,
     request_id: &str,
 ) -> Result<Batch, String> {
-    let mut backoff = TRANSIENT_BACKOFF;
     let mut attempt = 0;
     loop {
         let current = authorize_batch(state, session, target).await?;
@@ -286,12 +295,13 @@ async fn read_batch(
         drop(permit);
         match read {
             Ok(batch) => return Ok(batch),
-            Err(error) if transient(&error) && attempt < TRANSIENT_RETRIES => {
-                attempt += 1;
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(TRANSIENT_BACKOFF_CAP);
-            }
-            Err(error) => return Err(code_of(&error)),
+            Err(error) => match retry_after(&error, attempt) {
+                Some(wait) => {
+                    attempt += 1;
+                    tokio::time::sleep(wait).await;
+                }
+                None => return Err(code_of(&error)),
+            },
         }
     }
 }
@@ -376,6 +386,7 @@ impl Sent {
             result = &mut written => result.is_ok(),
             () = tokio::time::sleep(DELIVERY_TIMEOUT) => {
                 if self.deliveries.withdraw(&self.id) {
+                    note_limit("socket.subscription_delivery_deadline");
                     self.end(ConversationSubscriptionEndReason::Lagging, None);
                     return false;
                 }
@@ -430,11 +441,15 @@ impl Sent {
                 // once, while each read gets further. One that got nowhere
                 // waits for a wake, so a head that cannot be reached now is
                 // not read in a loop.
-                let more = view.transcript_state == "stale"
-                    && self.read_through.as_ref() != Some(&cursor);
+                let more =
+                    view.transcript_state == "stale" && self.read_through.as_ref() != Some(&cursor);
                 self.read_through = Some(cursor.clone());
                 // Never a frame behind what the client has (row S5).
-                if self.floor.as_ref().is_some_and(|floor| cursor.behind(floor)) {
+                if self
+                    .floor
+                    .as_ref()
+                    .is_some_and(|floor| cursor.behind(floor))
+                {
                     return Framed::Behind { more };
                 }
                 let payload = serde_json::to_value(ConversationViewed {
@@ -763,6 +778,21 @@ mod tests {
         let payload = ended(&deliveries);
         assert_eq!(payload["reason"], "lagging");
         assert_eq!(payload["lastDelivered"]["position"], "7");
+    }
+
+    /// Row S23.
+    #[test]
+    fn a_read_without_a_storage_slot_is_tried_again_then_refused() {
+        let busy = ConversationError::Storage(StorageError::Busy);
+        let full = ConversationError::Storage(StorageError::ReadCapacity);
+        assert_eq!(retry_after(&busy, 0), Some(TRANSIENT_BACKOFF));
+        assert_eq!(retry_after(&full, 1), Some(TRANSIENT_BACKOFF * 2));
+        assert_eq!(
+            retry_after(&busy, TRANSIENT_RETRIES - 1),
+            Some(TRANSIENT_BACKOFF_CAP)
+        );
+        assert_eq!(retry_after(&busy, TRANSIENT_RETRIES), None);
+        assert_eq!(retry_after(&ConversationError::Unavailable, 0), None);
     }
 
     /// Row S19 at the source level.

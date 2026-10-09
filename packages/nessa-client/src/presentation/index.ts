@@ -35,3 +35,11 @@ export type { ServerApi } from "./server-api.js"
 export type { CatalogueReadApi } from "./catalogue-read-api.js"
 
 export type { ChangeWatchApi } from "./change-watch-api.js"
+export type {
+  ListSubscriptionHandlers,
+  Subscription,
+  SubscriptionApi,
+  SubscriptionEnd,
+  ViewFrame,
+  ViewSubscriptionHandlers,
+} from "./subscription-api.js"

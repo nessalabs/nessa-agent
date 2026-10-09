@@ -1,71 +1,85 @@
 /**
  * The `WorkspaceSource` over the gateway (#248): the window's sessions are
- * the caller's gateway conversations, read through `@nessa/client`.
+ * the caller's gateway conversations, followed through `@nessa/client`'s
+ * replay-to-live subscriptions (#702, `docs/design/record-subscriptions.md`).
  *
- * The design and its orderings are a table on #248; each row has a test in
+ * The orderings are tables on #248 and in that design; each row has a test in
  * `gateway-source.test.ts`. In short:
  *
- * - **No push stream.** The gateway sends no conversation events, so the
- *   stream is a poller, running while anyone listens: `conversation.list`
- *   for summaries, and `conversation.observe` when that list is not the whole
- *   catalogue; independent `conversation.read` calls for conversations the window
- *   has read (`transcript`) that runs, waits on the person, has an app's
- *   call unanswered (`appCall`, #436), or changed since.
+ * - **Subscriptions, not polling.** While anyone listens, one list
+ *   subscription follows the caller's conversations, and a view subscription
+ *   follows each conversation the window opened (`transcript`), sent to
+ *   (`send`), or an app called in (`appCall`, #436) — at most the gateway's
+ *   published `subscriptionLimits.conversationTargets`, the least recently
+ *   opened let go first (D7). Every frame is the gateway's own bounded
+ *   replacement; nothing here asks again on a timer. When the list is not the
+ *   whole catalogue, a frame whose conversations differ from the last one's
+ *   walks `conversation.observe` (D6).
+ * - **One subscription per conversation** (`follow`): an open on its way is
+ *   joined, never repeated (D14), and the frames and end of any open but the
+ *   current one are let go (D13).
+ * - **How a subscription ends decides what follows** (`ended`): `lagging`
+ *   opens again at once from the last cursor applied (D3); a refusal saying
+ *   the conversation is gone takes the session out (D4); one refused for good
+ *   is let go until asked again (D10); anything else is a gap, opened again
+ *   on the retry clock, never at once; a lost connection waits for the
+ *   connection (D5).
+ * - **The retry clock** runs only while someone listens and something is not
+ *   subscribed: no client, or a subscription that ended for a reason asking
+ *   again may change (D17). It asks the gateway for nothing but the
+ *   subscription itself.
  * - **Revisions are minted here.** The gateway's view revision is opaque and
  *   its list rows carry none, so this adapter counts: one counter per
  *   session's summary, one per conversation, each from 1, moved on when what
- *   it maps changes. A removal is the summary's next count. Opaque revisions
- *   cannot order two answers, so lists run one at a time, and so do reads of
- *   one conversation: an answer applies in the order it was asked, and one
- *   that came after its call timed out is let go.
+ *   it maps changes. A removal is the summary's next count. A view frame
+ *   behind the cursor already applied in the same history is not applied
+ *   (D8).
  * - **Every call settles on its own timer** (`timing.callMs`, from `clock`),
  *   connection included, rejecting `unavailable` when it runs out; and a
  *   call that has settled sends nothing consequential afterwards (`dispatch`).
  * - **Only a first message sends `create`.** The gateway resolves the
- *   conversation itself for each read and message — starting its agent if it
- *   is not running — so this source keeps nothing per connection.
+ *   conversation itself for each subscription and message — starting its
+ *   agent if it is not running — so this source keeps nothing per connection
+ *   but its subscriptions.
  * - **Refusals are typed.** The gateway's codes become `WorkspaceSourceError`
  *   reasons (`refusalOf`); a fault that is no answer at all is passed on as
  *   it is, for `failureReason` to log. A connection that could not be made
  *   is `signed-out`, `not-started`, `not-ready`, `not-listening`,
- *   `wrong-stage`, or `unavailable` by why (`connectFailure`, #419). A read
- *   or the index that is refused is also traced (`noteReadAsked`,
- *   `noteReadRefused`): the session, whether it was the index or a
- *   conversation, the reason, and the gateway or socket hint already on the
- *   error. The ask is a debug line; the refusal is a warning the dev console
- *   already forwards.
+ *   `wrong-stage`, or `unavailable` by why (`connectFailure`, #419). A
+ *   subscription that is refused is also traced (`noteReadAsked`,
+ *   `noteReadRefused`).
  * - **Resync.** `{ kind: "resync" }` goes out when a connection comes back
  *   (the client reconnected, or a new one was made after the last closed —
- *   the close itself does not resync, C3), and on the first list that answers
- *   after a poll (S5), a poll read (F4, active failure), or an index read
+ *   the close itself does not resync, C3), and on the first list frame after
+ *   a gap: a subscription that ended or could not open, or an index that
  *   failed (S9′).
- * - **A failed connect is waited out.** For `timing.reconnectRounds` poll
- *   rounds after it, neither the poller nor an MCP App connects again; a
- *   person's call connects at once (S10–S16 on #419).
+ * - **A failed connect is waited out.** For `timing.retryMs` after it,
+ *   neither the subscriptions nor an MCP App connects again; a person's call
+ *   connects at once (#419).
  * - **What the gateway does not keep**: pins and "always" answers are
  *   refused as `not-supported`, and so is a message asking a conversation
- *   for another model than the one the gateway says it runs (before a read
+ *   for another model than the one the gateway says it runs (before a frame
  *   says, it cannot be told, and the message goes); there is no unread
  *   mark, so `markRead` has nothing to do. Nor does it take an initiator: it
  *   records each answer and archive as this window's authenticated caller,
  *   and cannot tell the person from an agent dispatching the same command —
  *   a gap in the record the in-memory source keeps, said here until the
  *   protocol carries it.
- * - **What it cannot see without reading**: a list row says whether a
+ * - **What it cannot see without following**: a list row says whether a
  *   conversation runs, not whether it waits on the person, so a summary says
- *   `needs-you` only for a conversation the window has read; and a question
+ *   `needs-you` only for a conversation the window follows; and a question
  *   the agent asks (`view.questions`) has no place in the workspace's model
  *   and is not shown; nor is a review the gateway withholds from its view
  *   (`interactionViewError`) — the session shows no approval while it waits.
  * - **For MCP Apps (#384)**: a widget part is named in its conversation
  *   (`gatewayToolWidget`, from `transcriptFrom`); each view applied is handed
- *   to `apps.observe`, in the order read — opaque revisions cannot order them
- *   there — and a read the gateway refuses as `conversation_deleted` to
- *   `apps.forget`. Not a removal: a conversation missing from a complete list
- *   is archived or deleted, which a list cannot tell apart, and a closed one
- *   reopens under its id (the plan is on #248). An app's call goes through
- *   `appCall`, so the review it may wait on is read even after the turn
- *   ended: a review an app opens changes nothing in the list row.
+ *   to `apps.observe`, in the order applied, and a subscription the gateway
+ *   refuses as `conversation_deleted` to `apps.forget`. Not a removal: a
+ *   conversation missing from a complete list is archived or deleted, which
+ *   a list cannot tell apart, and a closed one reopens under its id. An app's
+ *   call follows its conversation (`appCall`), so the review it may wait on
+ *   is shown even after the turn ended: a review an app opens changes nothing
+ *   in the list row.
  *
  * It owns the client it connects (`connect`), and `dispose` closes it; an
  * app's calls go on that client too (`connected`).
@@ -80,12 +94,18 @@ import {
   NessaConversationMutationError,
   NessaRpcError,
   NessaSessionUnavailableError,
+  subscriptionLimits,
   type ConnectionState,
   type ConversationApi,
   type ConversationListResult,
   type ConversationObserveCursor,
   type ConversationSummary,
   type ConversationView,
+  type ConversationViewCursor,
+  type Subscription,
+  type SubscriptionApi,
+  type SubscriptionEnd,
+  type ViewFrame,
 } from "@nessa/client"
 import { HostRefusalError } from "../../../../host/startup-refusals"
 import { isSignedOut } from "../../../../session"
@@ -109,12 +129,13 @@ import {
   transcriptFrom,
 } from "./gateway-views"
 
-/** What the adapter asks of a gateway client: its conversations, and how its connection stands. */
+/** What the adapter asks of a gateway client: its conversations, its subscriptions, and how its connection stands. */
 export interface GatewayClient {
   readonly conversation: Pick<
     ConversationApi,
-    "list" | "observe" | "read" | "create" | "send" | "answer" | "archive"
+    "observe" | "create" | "send" | "answer" | "archive"
   >
+  readonly subscriptions: Pick<SubscriptionApi, "view" | "list">
   readonly connectionState: ConnectionState
   onConnectionStateChange(handler: (state: ConnectionState) => void): () => void
   close(): void
@@ -129,44 +150,36 @@ export interface GatewayClock {
 
 /**
  * Who asks for the gateway's client, which decides whether it may connect
- * when none is held (`client`): a person, the poller's list, an MCP App, or
- * a read that uses only what is held — the poller's reads, and the read that
- * follows an answer.
+ * when none is held (`client`): a person, the subscriptions the source keeps
+ * (`stream`), an MCP App, or work that uses only what is held — the
+ * subscription a message begins.
  */
-type Caller = "person" | "poller" | "app" | "held"
+type Caller = "person" | "stream" | "app" | "held"
 
 /**
  * What each caller may do when no client is held and none is connecting:
- * connect `always`, `unless-waiting` out a failed connect, or `never`; and
- * whether its refusal while waiting counts the wait down a round. Total, so a
- * caller added later does not compile until its rule is chosen (gate 11).
+ * connect `always`, `unless-waiting` out a failed connect, or `never`. Total,
+ * so a caller added later does not compile until its rule is chosen (gate 11).
  */
 const callerRules: Record<
   Caller,
-  {
-    readonly connects: "always" | "unless-waiting" | "never"
-    readonly countsDown: boolean
-  }
+  { readonly connects: "always" | "unless-waiting" | "never" }
 > = {
-  person: { connects: "always", countsDown: false },
-  poller: { connects: "unless-waiting", countsDown: true },
-  app: { connects: "unless-waiting", countsDown: false },
-  held: { connects: "never", countsDown: false },
+  person: { connects: "always" },
+  stream: { connects: "unless-waiting" },
+  app: { connects: "unless-waiting" },
+  held: { connects: "never" },
 }
 
 export interface GatewayTiming {
   /** How long any call may take before it settles as `unavailable`. */
   readonly callMs: number
-  /** How long the summary poller rests between rounds. */
-  readonly pollMs: number
-  /** Minimum time between background reads of an active conversation. */
-  readonly activePollMs: number
   /**
-   * How many poll rounds pass after a failed connect before the poller, or
-   * an MCP App, connects again (S10, #419). Rounds, not a time: the clock
-   * cannot move them.
+   * How long, after a connect failed, the subscriptions and an MCP App wait
+   * before connecting again (#419); and how long a subscription that ended
+   * for a reason asking again may change waits before it is opened again.
    */
-  readonly reconnectRounds: number
+  readonly retryMs: number
 }
 
 /**
@@ -176,9 +189,7 @@ export interface GatewayTiming {
  */
 export const defaultGatewayTiming: GatewayTiming = {
   callMs: 35_000,
-  pollMs: 1_000,
-  activePollMs: 250,
-  reconnectRounds: 5,
+  retryMs: 5_000,
 }
 
 export interface GatewaySource<
@@ -187,37 +198,71 @@ export interface GatewaySource<
   /**
    * The client this source holds, or one connecting, within the call budget:
    * rejects `unavailable` once disposed, when none connects in time, or
-   * while the source waits out a failed connect (S14); and `signed-out` when
-   * the connect it made or joined is refused that way.
+   * while the source waits out a failed connect; and `signed-out` when the
+   * connect it made or joined is refused that way.
    */
   connected(): Promise<C>
   /**
-   * Makes one of an app's calls in conversation `conversationId`, and,
-   * while the window follows that conversation, reads it each round until
-   * the call is answered (a conversation taken out is not read, P9). The call may
-   * wait on a review the gateway opens for it, which changes nothing a list
-   * row says: without this, a conversation whose turn has ended is not read
-   * again, and its review is not drawn (#436). The call settles as `call`
-   * does.
+   * Makes one of an app's calls in conversation `conversationId`, following
+   * that conversation (a conversation taken out is not followed, P9). The
+   * call may wait on a review the gateway opens for it, which changes nothing
+   * a list row says: without the conversation's own subscription its review
+   * is not drawn (#436). The call settles as `call` does.
    */
   appCall<T>(conversationId: string, call: () => Promise<T>): Promise<T>
-  /** Stops polling, refuses every later call, and closes the client it connected. */
+  /** Closes every subscription, refuses every later call, and closes the client it connected. */
   dispose(): void
 }
 
-/** Who is told each conversation view as it is read, and each conversation deleted (#384). */
+/** Who is told each conversation view as it is applied, and each conversation deleted (#384). */
 export interface GatewayViewObserver {
-  /** A view, in the order its conversation's reads were applied. */
+  /** A view, in the order its conversation's frames were applied. */
   observe(view: ConversationView): void
   /** The gateway said the conversation was deleted; its id is never used again. */
   forget(conversationId: string): void
 }
 
-/** What one conversation's latest read left: its view, its count, and the row it was read against. */
+/** What one conversation's latest frame left: its view, its count, and where it was read. */
 interface Read {
   readonly view: ConversationView
   readonly transcript: Transcript
-  readonly against: ConversationSummary | undefined
+  readonly cursor: ConversationViewCursor
+}
+
+/** A caller waiting for a subscription's first frame. */
+interface Waiter<T> {
+  resolve(value: T): void
+  reject(error: unknown): void
+}
+
+/**
+ * One subscription the source keeps: the open on its way or the handle it
+ * gave, and who waits for its first frame. `token` names the current open:
+ * frames and the end of any other are let go (D13).
+ */
+interface Followed<T> {
+  handle: Subscription | undefined
+  /** Whether a frame of the current open has been applied. */
+  applied: boolean
+  opening: Promise<void> | undefined
+  token: object
+  readonly waiters: Set<Waiter<T>>
+}
+
+const followed = <T>(): Followed<T> => ({
+  handle: undefined,
+  applied: false,
+  opening: undefined,
+  token: {},
+  waiters: new Set(),
+})
+
+const settle = <T>(follow: Followed<T>, outcome: { value: T } | { error: unknown }) => {
+  const waiters = [...follow.waiters]
+  follow.waiters.clear()
+  for (const waiter of waiters)
+    if ("value" in outcome) waiter.resolve(outcome.value)
+    else waiter.reject(outcome.error)
 }
 
 export function gatewaySource<C extends GatewayClient = GatewayClient>(options: {
@@ -242,22 +287,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const removedIds = new Set<string>()
   const takenOut = (sessionId: string) => removedIds.has(sessionId)
   const rows = new Map<string, ConversationSummary>()
-  // Each conversation's counter, the opaque revision it was last moved on for, and the read.
+  // Each conversation's counter, and its latest frame.
   const transcriptCounts = new Map<string, number>()
   const reads = new Map<string, Read>()
   // When each message was first seen, per session: the gateway's view has no times.
   const firstSeen = new Map<string, Map<string, number>>()
-  // How often each session was taken out: a read asked before its latest removal is let go (S3c).
-  const removals = new Map<string, number>()
-  // Conversations the window has read, and so wants kept current. Watching
-  // ends in two places only: `remove`, and a read the gateway answers with no
-  // such conversation (S8) or a refusal for good (R11) — until Try Again.
-  const watched = new Set<string>()
-  // Each conversation's app calls not yet answered (`appCall`): while there
-  // is one, the conversation is read each round (#436, P2–P7).
-  const appCalls = new Map<string, number>()
-  // Sends invalidate an idle view before the summary list changes.
-  const refresh = new Set<string>()
 
   // Nothing is said after `dispose`, which lets every listener go and admits no new one.
   const emit = (update: WorkspaceUpdate) => {
@@ -271,7 +305,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     }
   }
 
-  // The apps' fault is theirs: it neither stops the read nor the source.
+  // The apps' fault is theirs: it neither stops the frame nor the source.
   const tellApps = (tell: () => void) => {
     try {
       tell()
@@ -280,8 +314,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     }
   }
 
-  // A failed poll (S5), poll read (F4, active failure), or index read (S9′)
-  // since the last resync: the next list that answers says resync.
+  // A subscription that ended or could not open, or an index that failed,
+  // since the last resync: the next list frame says resync.
   let gap = false
   const resync = () => {
     gap = false
@@ -347,36 +381,41 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   let current: { client: C; off: () => void } | undefined
   let connecting: Promise<C> | undefined
   let connectedBefore = false
-  // After a connect that failed — refused, or out of time (S17) — nothing
-  // in the background connects again for `reconnectRounds` poll rounds (S10,
-  // S14): each connect asks the host for the gateway and its credential,
-  // and the gateway to authenticate, so a window that cannot connect must
-  // not ask every round. A person's call connects at once, and if it fails
-  // the wait starts again (S12); a connect that succeeds ends it. The next
-  // connect after the gateway comes back is so at most `reconnectRounds + 1`
-  // rounds away (S16). Who may connect, and the wait's counting, are
-  // `client`'s alone to decide.
-  let roundsToWait = 0
+  // After a connect that failed — refused, or out of time — nothing in the
+  // background connects again until `waitUntil` (#419): each connect asks
+  // the host for the gateway and its credential, and the gateway to
+  // authenticate, so a window that cannot connect must not ask again at once.
+  // A person's call connects at once, and if it fails the wait starts again;
+  // a connect that succeeds ends it. Who may connect is `client`'s alone to
+  // decide.
+  let waitUntil = 0
   const connectFailed = () => {
-    roundsToWait = timing.reconnectRounds
+    waitUntil = clock.now() + timing.retryMs
   }
   /** Takes a client that connected as the current one. */
   const adopt = (connected: C) => {
     const off = connected.onConnectionStateChange((state) => {
       if (current?.client !== connected) return
-      if (state.status === "connected") resync()
-      else if (state.status === "closed") {
+      if (state.status === "connected") {
+        // Back: every subscription ended `disconnected` with the connection.
+        restore()
+        resync()
+      } else if (state.status === "closed") {
         // Gone for good: the next call connects again. That next client
         // resyncs when one had connected before (C3). The close is not a
-        // gap. A list still in flight is applied and does not resync.
+        // gap. A list frame already applied stays.
         current.off()
         current = undefined
+        scheduleRetry()
       }
     })
     current = { client: connected, off }
-    roundsToWait = 0
+    waitUntil = 0
     // A connection after another is a reconnect: what it missed is read again.
-    if (connectedBefore) resync()
+    if (connectedBefore) {
+      restore()
+      resync()
+    }
     connectedBefore = true
   }
   /**
@@ -385,19 +424,17 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
    * place that is decided (#419).
    *
    * - `person`: a foreground call — the index (Try Again, or the store's
-   *   own re-read on a resync), opening a session, a message, an answer and
-   *   the read of its review, an archive — connects at once.
-   * - `poller`: the poller's list connects unless the source is waiting out
-   *   a failed connect; each list refused while it waits counts the wait
-   *   down a round (S10).
-   * - `app`: an MCP App connects unless the source is waiting, and its
-   *   refusals count nothing (S14).
-   * - `held`: the poller's reads, and the read that follows an answer, use
-   *   the client held and never connect in its place (S15, W3′).
+   *   own re-read on a resync), opening a session, a message, an answer, an
+   *   archive — connects at once.
+   * - `stream`: the subscriptions this source keeps connect unless the
+   *   source is waiting out a failed connect.
+   * - `app`: an MCP App connects unless the source is waiting.
+   * - `held`: the subscription a message begins uses the client held and
+   *   never connects in its place.
    *
-   * Any of them joins a connect already on its way (S6, S18). An attempt has
-   * the call budget too: one that outlasts it is given up — and counts as a
-   * failed connect (S17) — and a client it brings late is closed unused.
+   * Any of them joins a connect already on its way. An attempt has the call
+   * budget too: one that outlasts it is given up — and counts as a failed
+   * connect — and a client it brings late is closed unused.
    */
   const client = (who: Caller): Promise<C> => {
     if (disposed) return Promise.reject(new WorkspaceSourceError("unavailable"))
@@ -406,10 +443,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const rule = callerRules[who]
     if (rule.connects === "never")
       return Promise.reject(new WorkspaceSourceError("unavailable"))
-    if (rule.connects === "unless-waiting" && roundsToWait > 0) {
-      if (rule.countsDown) roundsToWait -= 1
+    if (rule.connects === "unless-waiting" && clock.now() < waitUntil)
       return Promise.reject(new WorkspaceSourceError("unavailable"))
-    }
     const attempt = new Promise<C>((resolve, reject) => {
       let over = false
       const giveUp = (
@@ -468,15 +503,14 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     return request(connected)
   }
 
-  // Lists run one at a time, and so do reads of one conversation.
+  // List frames, their observe walks, and archives run one at a time.
   let listing: Promise<unknown> = Promise.resolve()
-  const reading = new Map<string, Promise<unknown>>()
   const inTurn = <T>(after: Promise<unknown>, work: () => Promise<T>) => {
     const turn = after.then(work, work)
     return { turn, settled: turn.then(noop, noop) }
   }
 
-  /** The model a session is known to run on: the gateway's own word for it, from its last read. */
+  /** The model a session is known to run on: the gateway's own word for it, from its last frame. */
   const knownModel = (sessionId: string) => runningModel(reads.get(sessionId)?.view)
   const modelOf = (sessionId: string) => modelFor(knownModel(sessionId))
 
@@ -501,6 +535,26 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     emit({ kind: "session", session: summary })
   }
 
+  // The conversations followed, least recently opened first (D7).
+  const views = new Map<string, Followed<Transcript>>()
+  const list: Followed<void> = followed()
+  // Sessions whose archive is on its way: a list frame that arrives meanwhile
+  // may have been read before it, and does not list them again (W6).
+  const archiving = new Set<string>()
+  // The conversations of the last incomplete list frame walked (D6).
+  let walkedIds: string | undefined
+
+  /** Lets a conversation's subscription go: no frame or end of it applies after. */
+  const unfollow = (sessionId: string, why: unknown) => {
+    const follow = views.get(sessionId)
+    if (!follow) return
+    views.delete(sessionId)
+    follow.token = {}
+    void follow.handle?.close()
+    follow.handle = undefined
+    settle(follow, { error: why })
+  }
+
   /** Takes a session out, at its summary's next count; one already out stays as it is. */
   const remove = (sessionId: string): void => {
     if (takenOut(sessionId)) return
@@ -509,12 +563,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     // Taken out whether or not a list had named it yet: an archive of a
     // session just begun here is remembered too.
     removedIds.add(sessionId)
-    removals.set(sessionId, (removals.get(sessionId) ?? 0) + 1)
     rows.delete(sessionId)
-    watched.delete(sessionId)
-    refresh.delete(sessionId)
-    nextRead.delete(sessionId)
-    // Its last read goes with it: listed again, nothing it said then speaks for it.
+    unfollow(sessionId, new WorkspaceSourceError("unknown-session"))
+    // Its last frame goes with it: listed again, nothing it said then speaks for it.
     reads.delete(sessionId)
     emit({ kind: "session-removed", sessionId, revision })
   }
@@ -534,7 +585,6 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     if (result.complete)
       for (const sessionId of summaries.keys())
         if (!takenOut(sessionId) && !listed.has(sessionId)) remove(sessionId)
-    scheduleActive()
   }
 
   /**
@@ -570,34 +620,143 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   }
 
   /**
-   * Lists in turn, applying the answer; the list's own failures are the
-   * caller's. When the list is not the whole catalogue, the same call walks
-   * `conversation.observe` until the pass finishes or a page cannot resume.
-   * A finished pass is the membership. An unfinished one is merged and
-   * removes nothing (the order is the table in
-   * `docs/design/ui-workspace-load.md`). One whose caller was answered —
-   * while it waited its turn, while its list was on its way, or before
-   * another observe page — asks nothing more, and applies nothing
-   * (`a listener who leaves during an observe walk is asked no further page`).
+   * One list frame, in the list's turn. A complete one is the membership. An
+   * incomplete one whose conversations differ from the last one walked walks
+   * `conversation.observe` in the same turn, until the pass finishes or a
+   * page cannot resume (`docs/design/ui-workspace-load.md`); one naming the
+   * same conversations applies its rows and removes nothing (D18). A frame of
+   * a subscription no longer current, or one whose walk outlived the
+   * subscription, applies nothing.
    */
-  const list = (who: Caller, caller: () => boolean = always): Promise<void> => {
-    const { turn, settled } = inTurn(listing, async () => {
-      if (!caller()) throw new WorkspaceSourceError("unavailable")
-      const result = await within(
-        async (live) => {
-          const connected = await client(who)
-          const listed = await connected.conversation.list()
-          if (!live()) throw new WorkspaceSourceError("unavailable")
-          if (listed.complete) return listed
-          return observedCatalogue(connected, listed, live, caller)
-        },
-        { subject: "index" },
-      )
-      if (!caller()) throw new WorkspaceSourceError("unavailable")
-      applyList(result)
+  const listFrame = (
+    connected: GatewayClient,
+    result: ConversationListResult,
+    current: () => boolean,
+  ) => {
+    const crossed = new Set(archiving)
+    const { settled } = inTurn(listing, async () => {
+      if (!current()) return
+      let applied = result
+      if (!result.complete) {
+        const ids = result.conversations
+          .map((row) => row.conversationId)
+          .sort()
+          .join("\n")
+        if (ids !== walkedIds) {
+          try {
+            applied = await within(
+              (live) => observedCatalogue(connected, result, live, current),
+              { subject: "index" },
+            )
+            walkedIds = ids
+          } catch {
+            // The rows the frame named still apply; the rest waits for the next frame.
+            if (!current()) return
+            gap = true
+          }
+        }
+      } else walkedIds = undefined
+      if (!current()) return
+      applyList({
+        ...applied,
+        conversations: applied.conversations.filter(
+          (row) => !(crossed.has(row.conversationId) && takenOut(row.conversationId)),
+        ),
+      })
+      list.applied = true
+      if (gap) resync()
+      settle(list, { value: undefined })
     })
     listing = settled
-    return turn
+  }
+
+  /** The source's reason for a subscription's end, as a refusal of the call that waited on it. */
+  const endRefusal = (end: SubscriptionEnd): WorkspaceSourceError => {
+    if (end.reason !== "refused" || end.code === undefined)
+      return new WorkspaceSourceError(
+        end.reason === "too_large" || end.reason === "invalid_frame"
+          ? "not-supported"
+          : "unavailable",
+      )
+    const code = conversationErrorCode(end.code)
+    return new WorkspaceSourceError(
+      code === undefined ? "unavailable" : reasonFor(code, false),
+    )
+  }
+
+  /** Opens the list subscription, unless it is open or opening. */
+  const openList = (who: Caller): Promise<void> => {
+    if (list.handle) return Promise.resolve()
+    if (list.opening) return list.opening
+    const token = {}
+    list.token = token
+    list.applied = false
+    const current = () => list.token === token && !disposed
+    const opening = within(
+      async (live) => {
+        const connected = await client(who)
+        if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
+        const handle = await connected.subscriptions.list({
+          list: (result) => {
+            if (current()) listFrame(connected, result, current)
+          },
+          ended: (end) => {
+            if (current()) listEnded(end)
+          },
+        })
+        if (!live() || !current()) {
+          void handle.close()
+          throw new WorkspaceSourceError("unavailable")
+        }
+        list.handle = handle
+      },
+      { subject: "index" },
+    )
+    list.opening = opening
+    opening.then(
+      () => {
+        if (list.opening === opening) list.opening = undefined
+      },
+      (error: unknown) => {
+        if (list.opening === opening) list.opening = undefined
+        if (list.token !== token) return
+        // Let go: anything it brings later is not this list's.
+        list.token = {}
+        gap = true
+        settle(list, { error })
+        scheduleRetry()
+      },
+    )
+    return opening
+  }
+
+  /** How the list subscription ended decides what follows (D9). */
+  const listEnded = (end: SubscriptionEnd) => {
+    // Ended, even before its open finished: that open is let go.
+    list.handle = undefined
+    list.opening = undefined
+    list.applied = false
+    list.token = {}
+    if (end.reason === "disconnected") return
+    if (end.reason === "lagging") {
+      void openList("stream").catch(noop)
+      return
+    }
+    gap = true
+    settle(list, { error: endRefusal(end) })
+    scheduleRetry()
+  }
+
+  /** The index once a list frame is applied: opening the list subscription as `who`. */
+  const listReady = async (who: Caller): Promise<void> => {
+    if (list.applied) return
+    const ready = new Promise<void>((resolve, reject) =>
+      list.waiters.add({ resolve, reject }),
+    )
+    // An open that fails rejects both; the open's rejection is the one answered.
+    ready.catch(noop)
+    await openList(who)
+    await ready
   }
 
   const seenIn = (sessionId: string) => {
@@ -613,250 +772,244 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   }
 
   /**
-   * Applies a read: a changed view is the conversation's next count, and is
-   * said. It is filed against the row held when it was asked (`against`), not
-   * one a list brought while it was on its way: a change that row says is
-   * then still unread, and the next round reads it (R7).
+   * Applies a frame: a changed view is the conversation's next count, and is
+   * said; the same view again is the same transcript (R6).
    */
   const applyRead = (
     sessionId: string,
     view: ConversationView,
-    against: ConversationSummary | undefined,
+    cursor: ConversationViewCursor,
   ): Transcript => {
     const held = reads.get(sessionId)
     if (held && held.view.revision === view.revision) {
-      reads.set(sessionId, { ...held, against })
-      scheduleActive()
+      reads.set(sessionId, { ...held, cursor })
       return held.transcript
     }
     const revision = (transcriptCounts.get(sessionId) ?? 0) + 1
     transcriptCounts.set(sessionId, revision)
     const transcript = transcriptFrom(view, revision, seenIn(sessionId))
-    reads.set(sessionId, { view, transcript, against })
+    reads.set(sessionId, { view, transcript, cursor })
     tellApps(() => options.apps?.observe(view))
     emit({ kind: "transcript", transcript })
-    // The summary follows what the read says: an approval waiting, the model it runs on.
+    // The summary follows what the frame says: an approval waiting, the model it runs on.
     publish(sessionId)
-    scheduleActive()
     return transcript
+  }
+
+  /** A view frame of the current subscription: applied unless behind the cursor applied (D8). */
+  const viewFrame = (
+    sessionId: string,
+    follow: Followed<Transcript>,
+    frame: ViewFrame,
+  ) => {
+    const held = reads.get(sessionId)
+    if (held && behind(frame.cursor, held.cursor)) return
+    const transcript = applyRead(sessionId, frame.view, frame.cursor)
+    follow.applied = true
+    settle(follow, { value: transcript })
   }
 
   /**
    * The port's rule for a session this source has taken out — archived here
    * or elsewhere, or missing from a complete list: it holds no such session,
-   * reads none and begins none under its id (`failure.ts`, R8).
+   * follows none and begins none under its id (`failure.ts`, R8).
    */
   const held = (sessionId: string) => {
     if (takenOut(sessionId)) throw new WorkspaceSourceError("unknown-session")
   }
 
   /**
-   * Reads one conversation in its turn; an answer after its call timed out
-   * is let go. One that crossed a removal of its session speaks for a
-   * listing no longer held, so it is not applied: a session held again is
-   * asked again, once. One still taken out answers `unknown-session`; one
-   * held but crossed again answers `unavailable` — not done now, try again
-   * (S3c, S8) — let go is not gone, and not forever. One whose caller was
-   * answered — while it waited its turn, or while its read was on its way —
-   * asks nothing more, and applies nothing, not even a gone (R5, R10).
+   * A refusal of a conversation's subscription: gone takes the session out
+   * (and a deletion its apps' calls with it); refused for good lets the
+   * subscription go until asked again (R11, D10); anything else is a gap, and
+   * the subscription is opened again on the retry clock.
    */
-  const read = (
+  const refused = (
     sessionId: string,
-    who: Caller,
-    caller: () => boolean = always,
-    onStarted: () => void = noop,
-  ): Promise<Transcript> => {
-    const { turn, settled } = inTurn(
-      reading.get(sessionId) ?? Promise.resolve(),
-      async () => {
-        for (let asked = 0; asked < 2; asked++) {
-          try {
-            held(sessionId)
-          } catch (error) {
-            noteTraced({ subject: "conversation", sessionId }, error, error)
-            throw error
-          }
-          if (!caller()) {
-            const error = new WorkspaceSourceError("unavailable")
-            noteTraced({ subject: "conversation", sessionId }, error, error)
-            throw error
-          }
-          const against = rows.get(sessionId)
-          const removed = removals.get(sessionId) ?? 0
-          let view: ConversationView
-          // Whether the gateway answered that the conversation was deleted:
-          // `refusalOf` keeps only that it is gone.
-          let deleted = false
-          try {
-            view = await within(
-              async (live) => {
-                const connected = await client(who)
-                if (!live() || !caller()) throw new WorkspaceSourceError("unavailable")
-                // Admission may have waited behind a foreground read (F12).
-                // The read owner names actual dispatch for background pacing.
-                onStarted()
-                return connected.conversation.read(sessionId).catch((error: unknown) => {
-                  deleted = deletedConversation(error)
-                  throw error
-                })
-              },
-              { subject: "conversation", sessionId },
-            )
-          } catch (error) {
-            if (!caller()) throw new WorkspaceSourceError("unavailable")
-            if (!gone(error)) throw error
-            // The gateway's own word that the conversation is gone takes the
-            // session out, even where no complete list would (R9) — unless it
-            // crossed a removal, when it speaks for a listing no longer held:
-            // a session listed again is asked again (S3c).
-            if ((removals.get(sessionId) ?? 0) !== removed) continue
-            remove(sessionId)
-            // Deleted, its apps' calls go with it; not found may be this
-            // caller's alone, and says nothing of what the apps hold.
-            if (deleted) tellApps(() => options.apps?.forget(sessionId))
-            throw error
-          }
-          if (!caller()) throw new WorkspaceSourceError("unavailable")
-          if ((removals.get(sessionId) ?? 0) === removed)
-            return applyRead(sessionId, view, against)
-        }
+    follow: Followed<Transcript>,
+    refusal: unknown,
+    deleted: boolean,
+  ) => {
+    if (gone(refusal)) {
+      remove(sessionId)
+      if (deleted) tellApps(() => options.apps?.forget(sessionId))
+      settle(follow, { error: refusal })
+      return
+    }
+    if (refusedForGood(refusal)) {
+      console.warn("[nessa] conversation subscription let go", { sessionId })
+      unfollow(sessionId, refusal)
+      return
+    }
+    gap = true
+    settle(follow, { error: refusal })
+    scheduleRetry()
+  }
+
+  /** How a conversation's subscription ended decides what follows (D3, D4, D5, D10). */
+  const viewEnded = (
+    sessionId: string,
+    follow: Followed<Transcript>,
+    end: SubscriptionEnd,
+  ) => {
+    // Ended, even before its open finished: that open is let go.
+    follow.handle = undefined
+    follow.opening = undefined
+    follow.applied = false
+    follow.token = {}
+    if (end.reason === "disconnected") return
+    if (end.reason === "lagging") {
+      open(sessionId, follow, "stream")
+      return
+    }
+    refused(
+      sessionId,
+      follow,
+      endRefusal(end),
+      end.reason === "refused" && end.code === ConversationErrorCode.ConversationDeleted,
+    )
+  }
+
+  /**
+   * Opens `sessionId`'s subscription from the cursor last applied, unless one
+   * is open or on its way: the one place it is opened (D14). A cursor ahead
+   * of the history the gateway holds opens once more without it.
+   */
+  const open = (sessionId: string, follow: Followed<Transcript>, who: Caller) => {
+    if (follow.handle || follow.opening) return
+    const token = {}
+    follow.token = token
+    follow.applied = false
+    const current = () =>
+      follow.token === token && views.get(sessionId) === follow && !disposed
+    let deleted = false
+    const subscribe = async (connected: C, after: ConversationViewCursor | undefined) =>
+      connected.subscriptions.view(
+        sessionId,
+        {
+          view: (frame) => {
+            if (current()) viewFrame(sessionId, follow, frame)
+          },
+          ended: (end) => {
+            if (current()) viewEnded(sessionId, follow, end)
+          },
+        },
+        after === undefined ? {} : { after },
+      )
+    const opening = within(
+      async (live) => {
+        const connected = await client(who)
+        if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
+        let handle: Subscription
         try {
-          held(sessionId)
+          handle = await subscribe(connected, reads.get(sessionId)?.cursor).catch(
+            (error: unknown) => {
+              if (!(error instanceof NessaRpcError) || error.code !== "cursor_ahead")
+                throw error
+              // The client is ahead of the history the gateway holds: start over.
+              reads.delete(sessionId)
+              if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
+              return subscribe(connected, undefined)
+            },
+          )
         } catch (error) {
-          noteTraced({ subject: "conversation", sessionId }, error, error)
+          deleted = deletedConversation(error)
           throw error
         }
-        const error = new WorkspaceSourceError("unavailable")
-        noteTraced({ subject: "conversation", sessionId }, error, error)
-        throw error
+        if (!live() || !current()) {
+          void handle.close()
+          throw new WorkspaceSourceError("unavailable")
+        }
+        follow.handle = handle
+      },
+      { subject: "conversation", sessionId },
+    )
+    follow.opening = opening
+    opening.then(
+      () => {
+        if (follow.opening === opening) follow.opening = undefined
+      },
+      (error: unknown) => {
+        if (follow.opening === opening) follow.opening = undefined
+        if (follow.token !== token || views.get(sessionId) !== follow) return
+        // Let go: anything it brings later is not this follow's.
+        follow.token = {}
+        refused(sessionId, follow, error, deleted)
       },
     )
-    reading.set(sessionId, settled)
-    return turn
   }
 
-  const active = (sessionId: string): boolean => {
-    const last = reads.get(sessionId)
-    return Boolean(
-      !last ||
-      refresh.has(sessionId) ||
-      rows.get(sessionId)?.running ||
-      last.view.messages.some(
-        (turn) => turn.status === "running" || turn.status === "queued",
-      ) ||
-      last.transcript.approval ||
-      last.transcript.activity ||
-      appCalls.has(sessionId),
-    )
-  }
-
-  /** Whether a read conversation should be read again this round. */
-  const stale = (sessionId: string): boolean => {
-    const last = reads.get(sessionId)
-    const row = rows.get(sessionId)
-    if (!last) return true
-    const live = active(sessionId)
-    // Not listed — just begun, or past an incomplete list: read while it is live (S7).
-    if (!row) return live
-    if (live) return true
-    return (
-      last.against?.updatedAtMs !== row.updatedAtMs ||
-      last.against.running !== row.running
-    )
-  }
-
-  // Summary rounds retain the connect/reconnect pacing. Background read admission
-  // is shared with the active timer; neither timer waits for a transcript (F2).
-  let cancelPoll: (() => void) | undefined
-  let cancelActive: (() => void) | undefined
-  let polling = false
-  let following = 0
-  const background = new Set<string>()
-  const nextRead = new Map<string, number>()
-  const followingNow = () => {
-    const generation = following
-    return () => !disposed && listeners.size > 0 && following === generation
-  }
-  const pollRead = (sessionId: string) => {
-    if (background.has(sessionId) || clock.now() < (nextRead.get(sessionId) ?? 0)) return
-    const live = followingNow()
-    background.add(sessionId)
-    nextRead.set(sessionId, clock.now() + timing.activePollMs)
-    // Preserve invalidation on failure; a send during this read remains unread.
-    const invalidated = refresh.delete(sessionId)
-    void read(sessionId, "held", live, () => {
-      nextRead.set(sessionId, clock.now() + timing.activePollMs)
-    })
-      .catch((error: unknown) => {
-        if (!live()) {
-          if (invalidated && !takenOut(sessionId)) refresh.add(sessionId)
-          return
-        }
-        if (gone(error) || refusedForGood(error)) watched.delete(sessionId)
-        else {
-          if (invalidated && !takenOut(sessionId)) refresh.add(sessionId)
-          // Any other failure is a gap the next list resyncs (F4, active failure).
-          gap = true
-        }
-      })
-      .finally(() => {
-        background.delete(sessionId)
-        scheduleActive()
-      })
-  }
-  const round = async () => {
-    polling = true
-    const live = followingNow()
-    try {
-      await list("poller", live)
-      if (!live()) return
-      if (gap) resync()
-      for (const sessionId of watched) {
-        if (stale(sessionId)) pollRead(sessionId)
+  /**
+   * Follows `sessionId` as `who`: the least recently opened conversation is
+   * let go past the published limit (D7), and an open already on its way is
+   * joined (D14).
+   */
+  const follow = (sessionId: string, who: Caller): Followed<Transcript> => {
+    let follow = views.get(sessionId)
+    if (follow) views.delete(sessionId)
+    else {
+      follow = followed<Transcript>()
+      while (views.size >= subscriptionLimits.conversationTargets) {
+        const [oldest] = views.keys()
+        unfollow(oldest, new WorkspaceSourceError("unavailable"))
+        // Not followed, it says only what its row says (`needs-you` is a frame's).
+        reads.delete(oldest)
+        publish(oldest)
       }
-      scheduleActive()
-    } catch {
-      if (live()) gap = true
-    } finally {
-      polling = false
-      schedule()
+    }
+    views.set(sessionId, follow)
+    open(sessionId, follow, who)
+    return follow
+  }
+
+  /** The conversation as its subscription last said it, waiting for the first frame when none is held (D20). */
+  const transcriptOf = (sessionId: string, who: Caller): Promise<Transcript> => {
+    held(sessionId)
+    const followedNow = follow(sessionId, who)
+    const last = reads.get(sessionId)
+    if (followedNow.applied && last) return Promise.resolve(last.transcript)
+    return new Promise<Transcript>((resolve, reject) =>
+      followedNow.waiters.add({ resolve, reject }),
+    )
+  }
+
+  // The retry clock: one timer, only while someone listens and something is
+  // not subscribed (D17).
+  let cancelRetry: (() => void) | undefined
+  const scheduleRetry = () => {
+    if (disposed || listeners.size === 0 || cancelRetry) return
+    const wait = Math.max(timing.retryMs, waitUntil - clock.now())
+    cancelRetry = clock.after(wait, () => {
+      cancelRetry = undefined
+      restore()
+    })
+  }
+  /** Opens every subscription this source keeps that is not open: the list, and each conversation followed. */
+  const restore = () => {
+    if (disposed || listeners.size === 0) return
+    void openList("stream").catch(noop)
+    for (const [sessionId, follow] of views) open(sessionId, follow, "stream")
+  }
+  /** Closes every subscription; the conversations followed are opened again from their cursors (`restore`). */
+  const stopStreams = () => {
+    cancelRetry?.()
+    cancelRetry = undefined
+    list.token = {}
+    void list.handle?.close()
+    list.handle = undefined
+    list.applied = false
+    for (const follow of views.values()) {
+      follow.token = {}
+      follow.applied = false
+      void follow.handle?.close()
+      follow.handle = undefined
     }
   }
-  const schedule = () => {
-    if (disposed || listeners.size === 0 || polling || cancelPoll) return
-    cancelPoll = clock.after(timing.pollMs, () => {
-      cancelPoll = undefined
-      void round()
-    })
-  }
-  const scheduleActive = () => {
-    if (disposed || listeners.size === 0 || cancelActive || ![...watched].some(active))
-      return
-    cancelActive = clock.after(timing.activePollMs, () => {
-      cancelActive = undefined
-      for (const sessionId of watched) {
-        if (active(sessionId)) pollRead(sessionId)
-      }
-      scheduleActive()
-    })
-  }
-  const stopPolling = () => {
-    cancelPoll?.()
-    cancelPoll = undefined
-    cancelActive?.()
-    cancelActive = undefined
-    nextRead.clear()
-    following++
-  }
 
-  const waitingReview = async (
-    sessionId: string,
-    approvalId: string,
-    live: () => boolean,
-  ) => {
+  const waitingReview = async (sessionId: string, approvalId: string) => {
     const review = reviewOf(approvalId)
     if (!review) throw new WorkspaceSourceError("not-waiting")
-    await read(sessionId, "person", live)
+    await transcriptOf(sessionId, "person")
     const permission = reads
       .get(sessionId)
       ?.view.permissions.find(
@@ -871,7 +1024,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   /**
    * Answers a review with `optionId` when that option decides `effect`.
    * Another option of the same effect is a different answer. One the review
-   * does not offer, or that decides the other way, is not supported.
+   * does not offer, or that decides the other way, is not supported. The
+   * conversation after the answer follows as a frame (D12).
    */
   const answer = (
     sessionId: string,
@@ -880,7 +1034,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     effect: "allow" | "deny",
   ) =>
     within(async (live) => {
-      const permission = await waitingReview(sessionId, approvalId, live)
+      const permission = await waitingReview(sessionId, approvalId)
       const option = permission.options.find((offered) => offered.id === optionId)
       if (!option || option.effect !== effect)
         throw new WorkspaceSourceError("not-supported")
@@ -892,21 +1046,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           option.id,
         ),
       )
-      // Taken: the call resolves now, and the conversation after the answer
-      // follows as an update (`ports.ts`). Read once more for it, not awaited,
-      // so a slow read cannot report a taken answer failed; if it fails — or
-      // the client has closed, which it does not connect again for (W3′) —
-      // the answer still stands, and the next list resyncs (W3b, W3c) —
-      // unless the session is gone, which is no gap (S5).
-      read(sessionId, "held").catch((error: unknown) => {
-        if (!gone(error)) gap = true
-      })
     })
 
   return {
     index: () =>
-      within(async (live) => {
-        await list("person", live).catch((error: unknown) => {
+      within(async () => {
+        await listReady("person").catch((error: unknown) => {
           gap = true
           throw error
         })
@@ -919,28 +1064,17 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         }
         return index
       }),
-    transcript: (sessionId) =>
-      within(async (live) => {
-        // A read sends no `create`. The session is followed from now on —
-        // a read that fails is mended by the poller's next one — unless it is
-        // gone: one taken out is refused and not followed (R3, R8).
-        if (!takenOut(sessionId)) watched.add(sessionId)
-        scheduleActive()
-        try {
-          return await read(sessionId, "person", live)
-        } catch (error) {
-          if (gone(error) || refusedForGood(error)) watched.delete(sessionId)
-          throw error
-        }
-      }),
+    // A transcript sends no `create`. The session is followed from now on —
+    // a subscription that fails is opened again on the retry clock — unless
+    // it is gone or refused for good (R3, R8, R11).
+    transcript: (sessionId) => within(() => transcriptOf(sessionId, "person")),
     subscribe(listener) {
       if (disposed) return noop
       listeners.add(listener)
-      schedule()
-      scheduleActive()
+      restore()
       return () => {
         listeners.delete(listener)
-        if (listeners.size === 0) stopPolling()
+        if (listeners.size === 0) stopStreams()
       }
     },
     send: (message) =>
@@ -962,7 +1096,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           // The gateway keeps a conversation on the model it was created with:
           // a message asking for another than the one it says it runs is
           // refused rather than sent on the old one, checked here, at the
-          // send (W8). Not read yet, it cannot be told.
+          // send (W8). Not said yet, it cannot be told.
           const known = knownModel(message.sessionId)
           if (
             known &&
@@ -986,11 +1120,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           }
         })
         // Taken out while it was on its way: sent, but not followed (R8).
-        if (!takenOut(message.sessionId)) {
-          watched.add(message.sessionId)
-          refresh.add(message.sessionId)
-          scheduleActive()
-        }
+        if (!takenOut(message.sessionId)) follow(message.sessionId, "held")
         publish(message.sessionId)
       }),
     approve: (sessionId, approvalId, scope, _initiator, optionId) =>
@@ -1006,7 +1136,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     setPinned: () => Promise.reject(new WorkspaceSourceError("not-supported")),
     archive: (sessionId) =>
       within(async (live) => {
-        // In the list's turn, so no list asked before it can list the session again.
+        // In the list's turn, so no list frame before it can list the session
+        // again; and one arriving while it is on its way does not either (W6).
+        archiving.add(sessionId)
         const { turn, settled } = inTurn(listing, async () => {
           // Taken out already, by this window or a list: refused, and asked of nobody (W6b).
           held(sessionId)
@@ -1018,27 +1150,24 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           remove(sessionId)
         })
         listing = settled
+        void settled.then(() => archiving.delete(sessionId))
         await turn
       }),
     // The gateway keeps no unread mark: every summary is read already.
     markRead: () => within(() => Promise.resolve()),
-    // An app calls on its own schedule, not a person's: in the background (S14).
+    // An app calls on its own schedule, not a person's: in the background.
     connected: () => within(() => client("app")),
     appCall(conversationId, call) {
-      appCalls.set(conversationId, (appCalls.get(conversationId) ?? 0) + 1)
-      scheduleActive()
-      // However it settles — answered, refused, or not sent at all — it is no longer asked.
-      return Promise.resolve()
-        .then(call)
-        .finally(() => {
-          const left = (appCalls.get(conversationId) ?? 1) - 1
-          if (left > 0) appCalls.set(conversationId, left)
-          else appCalls.delete(conversationId)
-        })
+      // Followed, so the review the call may open is shown (#436); not one taken out (P9).
+      if (!takenOut(conversationId)) follow(conversationId, "app")
+      return Promise.resolve().then(call)
     },
     dispose() {
       disposed = true
-      stopPolling()
+      stopStreams()
+      settle(list, { error: new WorkspaceSourceError("unavailable") })
+      for (const sessionId of [...views.keys()])
+        unfollow(sessionId, new WorkspaceSourceError("unavailable"))
       listeners.clear()
       current?.off()
       current?.client.close()
@@ -1049,9 +1178,17 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
 
 function noop() {}
 
-/** The caller of a call no one waits on — the poller's own: always open. */
-function always() {
-  return true
+/** Whether `cursor` is behind `applied` in the same stored history (D8). Another history replaces. */
+function behind(
+  cursor: ConversationViewCursor,
+  applied: ConversationViewCursor,
+): boolean {
+  if (cursor.incarnation !== applied.incarnation) return false
+  try {
+    return BigInt(cursor.position) < BigInt(applied.position)
+  } catch {
+    return false
+  }
 }
 
 /** Whether a failure says the session is gone: no such conversation, or one taken out. */
@@ -1108,17 +1245,16 @@ function refusedForGood(error: unknown): boolean {
 }
 
 /**
- * Which read the desktop asked for. `index` starts with `conversation.list`.
- * The trace names that method: every index read asks it, and
- * `gateway-source.test.ts` expects it when the list is refused. An incomplete
- * list continues as `conversation.observe` inside the same read.
+ * Which subscription the desktop opened. `index` is the list subscription,
+ * `conversation.subscribeList`; an incomplete list frame's walk of
+ * `conversation.observe` is traced under it. `conversation` is one
+ * conversation's `conversation.subscribe`.
  */
 type ReadTrace = { subject: "index" | "conversation"; sessionId?: string }
 
 /**
- * The desktop asked to read. A debug line: a watched conversation is read
- * every poll, and the dev console forwards warnings, not this. No trace
- * means this call is not a read.
+ * The desktop opened a subscription. A debug line: the dev console forwards
+ * warnings, not this. No trace means this call opens none.
  */
 function noteReadAsked(trace: ReadTrace | undefined): void {
   if (!trace) return
@@ -1181,7 +1317,7 @@ function cursorAdvances(
 function readTrace(subject: "index" | "conversation", sessionId?: string) {
   return {
     subject,
-    method: subject === "index" ? "conversation.list" : "conversation.read",
+    method: subject === "index" ? "conversation.subscribeList" : "conversation.subscribe",
     ...(sessionId === undefined ? {} : { sessionId }),
   }
 }

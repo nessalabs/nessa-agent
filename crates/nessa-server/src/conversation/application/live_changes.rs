@@ -79,7 +79,10 @@ mod tests {
         let mut receiver = changes.subscribe(&id(1));
         assert!(!receiver.has_changed().unwrap());
         changes.publish(&id(2));
-        assert!(!receiver.has_changed().unwrap(), "another conversation's change");
+        assert!(
+            !receiver.has_changed().unwrap(),
+            "another conversation's change"
+        );
         changes.publish(&id(1));
         changes.publish(&id(1));
         receiver.changed().await.unwrap();

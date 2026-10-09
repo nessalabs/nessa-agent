@@ -25,6 +25,9 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | socket.write_timeout | configured | 5000 | config.json session.writeTimeoutMs | a write that outlasts this closes the socket |
 | socket.record_delivery_deadline | fixed | 30000 | RECORD_SEND_TIMEOUT, the schema's passive delivery budget | a record response still queued at this deadline is noted and dropped |
 | socket.watch_delivery_deadline | fixed | 30000 | RECORD_SEND_TIMEOUT, the same duration as record delivery | a watch frame still queued at this deadline is noted and dropped |
+| socket.subscription_delivery_deadline | fixed | 10000 | protocol/product/v1.json x-subscriptionLimits.deliveryTimeoutMs | a subscription frame the writer has not taken by this ends that subscription as lagging; its end frame unwritten by this closes the socket |
+| socket.conversation_subscriptions | fixed | 8 | protocol/product/v1.json x-subscriptionLimits.conversationTargets | a conversation subscription past this on one socket is refused |
+| socket.list_subscriptions | fixed | 1 | protocol/product/v1.json x-subscriptionLimits.listTargets | a list subscription past this on one socket is refused |
 | record.read_work_budget | configured | 200 | config.json limits.readWorkBudgetMs | a cold read still preparing at this budget answers that it is preparing |
 | record.discovery_steps | fixed | 128 | record read DISCOVERY_STEPS_PER_READ | a cold read that uses every discovery step answers that the source is preparing |
 

@@ -423,6 +423,15 @@ rs += `pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = ${subscripti
 rs += `pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = ${subscriptionLimits.listTargets};\n`
 rs += `pub const SUBSCRIPTION_DELIVERY_TIMEOUT_MS: u64 = ${subscriptionLimits.deliveryTimeoutMs};\n`
 ts += `export const subscriptionLimits = ${JSON.stringify(subscriptionLimits)} as const\n`
+const subscriptionId = schema.$defs.ConversationSubscriptionId
+if (typeof subscriptionId.pattern !== "string")
+  throw new Error("Invalid subscription ID publication")
+// Published so the client checks the identities a frame names.
+ts += `export const conversationSubscriptionIdPattern = ${JSON.stringify(subscriptionId.pattern)} as const\n`
+const incarnation = schema.$defs.ConversationViewCursor.properties.incarnation
+if (!Number.isSafeInteger(incarnation.maxLength))
+  throw new Error("Invalid view cursor publication")
+ts += `export const maxViewCursorIncarnationLength = ${incarnation.maxLength} as const\n`
 const image = schema.$defs.ImageAttachment.properties
 const mcpCall = schema.$defs.McpCallToolParams.properties
 const mcpRead = schema.$defs.McpReadResourceParams.properties

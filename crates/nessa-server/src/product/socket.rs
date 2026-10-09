@@ -859,7 +859,10 @@ fn note_elapsed_delivery(
     if watches.deadline().is_some_and(|deadline| now >= deadline) {
         note_limit("socket.watch_delivery_deadline");
     }
-    if subscriptions.deadline().is_some_and(|deadline| now >= deadline) {
+    if subscriptions
+        .deadline()
+        .is_some_and(|deadline| now >= deadline)
+    {
         note_limit("socket.subscription_delivery_deadline");
     }
 }

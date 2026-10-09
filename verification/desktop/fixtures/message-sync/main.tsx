@@ -1,6 +1,11 @@
-/** Production source/store/window; controlled gateway responses measure delivery only. */
+/**
+ * Production source/store/window over controlled gateway subscriptions, to
+ * measure delivery only: a frame of the fast conversation, sent when the test
+ * publishes, to the text on screen. `hold` holds back the list's and the slow
+ * conversation's frames, as a gateway that cannot send them yet would.
+ */
 import * as React from "react"
-import type { ConversationListResult, ConversationView } from "@nessa/client"
+import type { GatewayClient } from "../../../../src/desktop/workspace/adapters/gateway/gateway-source"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { conversationView } from "../../../../packages/nessa-client/src/protocol/conversation-validate"
@@ -15,7 +20,6 @@ import {
   loadWorkspace,
 } from "../../../../src/desktop/workspace"
 import {
-  deferred,
   fakeGateway,
   row,
   view,
@@ -41,16 +45,15 @@ const fast = "fast",
 const gateway = fakeGateway()
 const approvalModes = view(fast).approvalModes
 let revision = 1,
-  holdList = false,
-  holdRead = false
-let lists = 0,
-  reads = 0,
-  fastReads = 0,
-  slowReads = 0,
+  holding = false
+let subscribes = 0,
+  lists = 0,
+  fastFrames = 0,
+  slowFrames = 0,
   heldLists = 0,
   heldReads = 0
-const listReply = deferred<ConversationListResult>()
-const readReply = deferred<ConversationView>()
+// Frames held back while `holding`, each handed on by `rest`.
+const heldFrames: (() => void)[] = []
 function changed(text: string, running = true) {
   gateway.views.set(
     fast,
@@ -77,43 +80,59 @@ gateway.rows.set(fast, row(fast, { title: "Message synchronization" }))
 gateway.rows.set(slow, row(slow, { title: "Slow conversation", running: true }))
 gateway.views.set(slow, view(slow))
 changed("Initial answer", false)
-let lastFastRequest: { at: number; revision: string; text: string } | null = null
-const client = {
+let lastFastFrame: { at: number; revision: string; text: string } | null = null
+const client: GatewayClient = {
   ...gateway.client,
-  conversation: {
-    ...gateway.client.conversation,
-    list: () => {
-      lists++
-      if (holdList) {
-        heldLists++
-        return listReply.promise
-      }
-      return gateway.client.conversation.list()
+  subscriptions: {
+    view: (id, handlers, options) => {
+      subscribes++
+      return gateway.client.subscriptions.view(
+        id,
+        {
+          view: (frame) => {
+            if (id === fast) {
+              fastFrames++
+              lastFastFrame = {
+                at: performance.now(),
+                revision: frame.view.revision,
+                text: frame.view.messages
+                  .flatMap((message) =>
+                    message.parts
+                      .filter((part) => part.kind === "text")
+                      .map((part) => part.text),
+                  )
+                  .join("\n"),
+              }
+              return handlers.view(frame)
+            }
+            slowFrames++
+            if (!holding) return handlers.view(frame)
+            heldReads++
+            heldFrames.push(() => handlers.view(frame))
+          },
+          ended: handlers.ended,
+        },
+        options,
+      )
     },
-    read: (id: string) => {
-      reads++
-      if (id === fast) fastReads++
-      else slowReads++
-      if (holdRead && id === slow) {
-        heldReads++
-        return readReply.promise
-      }
-      if (id === fast) {
-        const requested = gateway.views.get(id)!
-        lastFastRequest = {
-          at: performance.now(),
-          revision: requested.revision,
-          text: requested.messages
-            .flatMap((message) =>
-              message.parts
-                .filter((part) => part.kind === "text")
-                .map((part) => part.text),
-            )
-            .join("\n"),
-        }
-      }
-      return gateway.client.conversation.read(id)
+    list: (handlers, options) => {
+      subscribes++
+      return gateway.client.subscriptions.list(
+        {
+          list: (list) => {
+            lists++
+            if (!holding) return handlers.list(list)
+            heldLists++
+            heldFrames.push(() => handlers.list(list))
+          },
+          ended: handlers.ended,
+        },
+        options,
+      )
     },
+  },
+  get connectionState() {
+    return gateway.client.connectionState
   },
 }
 const clock: GatewayClock = {
@@ -195,10 +214,12 @@ Object.assign(window, {
           fast,
         ),
       )
+      gateway.publish(fast)
       await source.transcript(fast)
     },
     async start() {
       changed("Initial answer")
+      gateway.publish(fast)
       await source.send({
         sessionId: fast,
         messageId: "turn",
@@ -209,33 +230,43 @@ Object.assign(window, {
     },
     publish(text: string) {
       changed(text)
-      return performance.now()
+      const at = performance.now()
+      gateway.publish(fast)
+      return at
     },
     hold() {
-      holdList = true
-      holdRead = true
+      holding = true
+      gateway.rows.set(
+        slow,
+        row(slow, { title: "Slow conversation", updatedAtMs: 3_000 }),
+      )
+      gateway.publishList()
+      gateway.views.set(slow, view(slow, { revision: "held" }))
+      gateway.publish(slow)
     },
     snapshot() {
       return {
+        subscribes,
         lists,
-        reads,
-        fastReads,
-        slowReads,
+        fastFrames,
+        slowFrames,
         heldLists,
         heldReads,
+        observes: gateway.count("observe"),
         now: performance.now(),
-        lastFastRequest,
+        lastFastFrame,
       }
     },
     rest() {
-      holdList = false
-      holdRead = false
+      holding = false
+      for (const frame of heldFrames.splice(0)) frame()
       gateway.rows.set(fast, row(fast, { title: "Message synchronization" }))
       gateway.rows.set(slow, row(slow, { title: "Slow conversation" }))
       changed("Finished", false)
+      gateway.publish(fast)
       gateway.views.set(slow, view(slow, { revision: "finished" }))
-      listReply.resolve({ conversations: [...gateway.rows.values()], complete: true })
-      readReply.resolve(gateway.views.get(slow)!)
+      gateway.publish(slow)
+      gateway.publishList()
     },
   },
 })

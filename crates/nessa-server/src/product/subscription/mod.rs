@@ -11,3 +11,5 @@ mod target;
 
 pub(super) use connection::ConnectionSubscriptions;
 pub(super) use delivery::{SubscriptionDeliveries, SubscriptionFrame};
+#[cfg(test)]
+pub(crate) use target::LIST_REREAD_FLOOR;

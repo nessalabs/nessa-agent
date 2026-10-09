@@ -1101,13 +1101,15 @@ impl Projection {
     /// position this projection last accepted, never a read it refused as
     /// older (`replace_committed`). `None` before any history was accepted.
     pub fn committed_cursor(&self) -> Option<CommittedCursor> {
-        self.committed_position.as_ref().map(
-            |(incarnation, position, _, observed_head)| CommittedCursor {
-                incarnation: incarnation.clone(),
-                position: *position,
-                observed_head: *observed_head,
-            },
-        )
+        self.committed_position
+            .as_ref()
+            .map(
+                |(incarnation, position, _, observed_head)| CommittedCursor {
+                    incarnation: incarnation.clone(),
+                    position: *position,
+                    observed_head: *observed_head,
+                },
+            )
     }
     pub fn read_with_mode_change(
         &self,

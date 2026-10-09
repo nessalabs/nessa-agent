@@ -674,10 +674,13 @@ forwarded to the surface's own loopback, for the life of the lease.
   Every surface draws from it; nothing keeps a second transcript model.
 - Delivery is replay then live, from the client's last applied cursor, in
   bounded batches, with the subscription closed when the client lags and
-  reopened from its checkpoint (0009, 0011). The desktop's polling (1 s
-  summaries, 250 ms transcript) is the interim and is retired by the same
-  change that gives the phone live reads (#296, #277), so there is one read
-  path to measure and secure.
+  reopened from its checkpoint (0009, 0011). The gateway's
+  `conversation.subscribe` and `conversation.subscribeList` do this for its
+  bounded views, folded by the same read path as `conversation.read`, and the
+  desktop workspace follows them; its polling is gone (#702,
+  [record subscriptions](record-subscriptions.md)). The phone's live reads
+  (#296, #277) use the same subscriptions, so there is one read path to
+  measure and secure.
 - Replicas verify, they do not trust. The phone cache keeps scope,
   generation, deletion fences and reset receipts and refuses a record
   whose identity changed meaning ([read-only sync](read-only-sync-example.md)).
@@ -761,7 +764,7 @@ locally.
 | --- | --- | --- | --- | --- |
 | Admission and policy | Mandatory `/session` auth, Cedar per operation, verified `ActionContext` into the SDK | Unchanged. Peer and worker principals get grant kinds of their own | Gateway `auth` application | 0010 done; #481 |
 | Turn state and receipts | SDK `Agent` per conversation; creation receipts; `requestId` on every mutation | Unchanged. The same receipt path answers the phone outbox and a desktop outbox | SDK scheduling; gateway `conversation` | 0008; #267, #268 |
-| Records | Semantic records on one event-stream SQLite runtime; bounded head/page reads; watch hints | Replay-to-live subscriptions; gateway views from committed records; desktop off polling | SDK `session_storage`; gateway delivery | 0009; E [#702](https://github.com/nessalabs/nessa-agent/issues/702) |
+| Records | Semantic records on one event-stream SQLite runtime; bounded head/page reads; watch hints; replay-to-live view and list subscriptions from the client's cursor, the desktop workspace off polling (#702) | Read grants checked per batch where subscriptions admit one (`authorize_batch`); the conversation panel and the phone on the same subscriptions | SDK `session_storage`; gateway delivery | 0009; E [#702](https://github.com/nessalabs/nessa-agent/issues/702), G |
 | Phone reads | Device client with private cache, finite passes, retained watch; one-use pairing (#264) and authenticated direct reads (#265) done | Live reads through subscriptions (#702) and the optional relay (#266) | `nessa-client-core`; gateway `device_pairing` | #257, #263, #262 |
 | Phone commands | None | Durable intent outbox, receipt lookup before retry, exact-turn Stop | `nessa-client-core`; gateway receipts | #267 |
 | Where agents run | In process only: gateway composes the SDK `Agent` and its ACP binding per conversation; Nessa advertises no ACP client filesystem or terminal | An `Environment` port in the conversation application with the in-process adapter first; a lease recorded for every run | Gateway `conversation` composition | A [#698](https://github.com/nessalabs/nessa-agent/issues/698) |
@@ -843,10 +846,12 @@ needs them:
 
 ## Performance
 
-- **What a person sees** is commit latency plus one socket write once
+- **What a person sees** is commit latency plus one socket write now that
   subscriptions replace polling. Local commit p95 measured 108 ms over 64
-  commits (#299). Measure again after #277 on the longest real
-  conversation.
+  commits (#299). Commit to frame measured p50 27 ms, p95 30 ms on the
+  largest realistic fixture, a 990-turn conversation of 2 KiB answers, in a
+  debug build (#702; ADR 0009's gate table). Measure again on the longest
+  real conversation.
 - **Replay** is linear in history; bounded pages keep each read small;
   checkpoints are built when the recorded trigger fires.
 - **Remote environments** batch events at the SDK's commit cadence (100 ms,

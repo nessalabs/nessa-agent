@@ -5,8 +5,9 @@ use super::{
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    error_code, ConversationCaller, ConversationError, ConversationService, QuestionChoiceInput, RequestedAgent,
-    RequestedConversation, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
+    error_code, ConversationCaller, ConversationError, ConversationService, QuestionChoiceInput,
+    RequestedAgent, RequestedConversation, SubmissionMode, SubmittedFile, SubmittedImage,
+    SubmittedMessage,
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::conversation::projection::CommittedCursor;
@@ -125,7 +126,8 @@ pub(super) async fn dispatch(
             }
             "conversation.list" => {
                 let ConversationListParams { archived } = params!(ConversationListParams);
-                let listed = read_list(service, session, archived.unwrap_or(false), &frame.id).await?;
+                let listed =
+                    read_list(service, session, archived.unwrap_or(false), &frame.id).await?;
                 Ok(success(&frame.id, &listed))
             }
             "conversation.observe" => {

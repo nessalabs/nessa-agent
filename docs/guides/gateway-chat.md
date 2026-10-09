@@ -500,6 +500,15 @@ replaces the prior projection; revision values are transient, not durable replay
 cursors. Views explicitly mark omitted history. Disconnecting and reconnecting
 never resubmits prompts to reconstruct a transcript.
 
+The desktop workspace reads nothing on a timer. It follows the same bounded
+views through `conversation.subscribe` and the list through
+`conversation.subscribeList` ([record subscriptions](../design/record-subscriptions.md)):
+the gateway sends a view again whenever its committed records or its live facts
+change, and each frame carries a cursor (the history's incarnation and committed
+position). After a lost connection, or a subscription ended as `lagging`
+because the window did not take a frame in time, it subscribes again from the
+last cursor it applied, and nothing behind that cursor is sent.
+
 Each read keeps local intent the gateway has not acknowledged yet, so a view
 racing an admitted send never resends or loses it, and local failures stay
 visible. A queued or accepted receipt is the gateway's own answer about its

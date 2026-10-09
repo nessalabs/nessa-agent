@@ -10,7 +10,7 @@ use crate::product::{
     conversation::conversation_id,
     event_sequence::EventSequence,
     socket::{failure, success, valid_product_request},
-    state::ProductRouteState,
+    state::{note_limit, ProductRouteState},
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::product::generated::{
@@ -150,13 +150,14 @@ impl ConnectionSubscriptions {
                 ConversationSubscriptionErrorCode::SubscriptionDuplicate.as_str(),
             ));
         }
-        let (limit, of_kind) = match target {
+        let (limit, of_kind, named) = match target {
             Target::View { .. } => (
                 MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS,
                 self.entries
                     .iter()
                     .filter(|entry| matches!(entry.target, Target::View { .. }))
                     .count(),
+                "socket.conversation_subscriptions",
             ),
             Target::List { .. } => (
                 MAX_CONNECTION_LIST_SUBSCRIPTIONS,
@@ -164,6 +165,7 @@ impl ConnectionSubscriptions {
                     .iter()
                     .filter(|entry| matches!(entry.target, Target::List { .. }))
                     .count(),
+                "socket.list_subscriptions",
             ),
         };
         let capacity = || {
@@ -173,6 +175,7 @@ impl ConnectionSubscriptions {
             )
         };
         if of_kind >= limit {
+            note_limit(named);
             return Some(capacity());
         }
         let Some(minted) = self.minted.checked_add(1) else {

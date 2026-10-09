@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * Opt-in measurement of desktop UI journeys on a seeded in-memory workspace
- * (#595). Not part of run-all. Not a gateway test: the page must not call
- * conversation.list.
+ * (#595). Not part of run-all. Not a gateway test: the page must not ask for
+ * the gateway's conversations (`conversation.list` or
+ * `conversation.subscribeList`).
  *
  * Pass is the rendered count equalling the generated count for that surface,
  * and the journeys completing. A Chromium frame over the 50 ms budget is
@@ -41,6 +42,9 @@ import {
   settled,
   zoneSays,
 } from "./lib/workspace.mjs"
+
+/** A request for the gateway's conversations, one-shot or followed. */
+const listsConversations = /conversation\.(list|subscribeList)\b/
 
 const here = dirname(fileURLToPath(import.meta.url))
 const evidenceDir = join(here, "../evidence/workspace-load")
@@ -225,15 +229,12 @@ await main(meta, async ({ options, rep, url }) => {
           beforeLoad(context) {
             context.on("request", (request) => {
               const body = request.postData() ?? ""
-              if (
-                request.url().includes("conversation.list") ||
-                body.includes("conversation.list")
-              )
+              if (listsConversations.test(request.url()) || listsConversations.test(body))
                 listed.push("request")
             })
             context.on("websocket", (socket) => {
               socket.on("framesent", (frame) => {
-                if (String(frame.payload ?? "").includes("conversation.list"))
+                if (listsConversations.test(String(frame.payload ?? "")))
                   listed.push("websocket")
               })
             })
@@ -255,7 +256,7 @@ await main(meta, async ({ options, rep, url }) => {
           if (!surface.uiRevision) failures.push("no UI revision")
         }
         if (listed.length > 0)
-          failures.push(`conversation.list was called (${listed.length})`)
+          failures.push(`the gateway's conversations were asked for (${listed.length})`)
         for (const error of opened.errors) failures.push(error)
         return {
           failures,

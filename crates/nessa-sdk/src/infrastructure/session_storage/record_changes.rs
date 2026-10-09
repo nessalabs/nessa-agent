@@ -239,7 +239,10 @@ mod tests {
         let _rest = (1..MAX_RECORD_CHANGE_WATCHES)
             .map(|_| producer.watch(target("one")).unwrap())
             .collect::<Vec<_>>();
-        assert!(matches!(producer.watch_any(), Err(ChangeWatchError::Capacity)));
+        assert!(matches!(
+            producer.watch_any(),
+            Err(ChangeWatchError::Capacity)
+        ));
         drop(any);
         assert!(producer.watch_any().is_ok());
     }

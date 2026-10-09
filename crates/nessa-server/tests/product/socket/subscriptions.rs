@@ -171,7 +171,7 @@ impl Client {
 
     /// Frames of subscription `id` until one satisfies `done`; every frame
     /// seen, the last satisfying it.
-    async fn until(&mut self, id: &str, done: impl Fn(&Value) -> bool) -> Vec<Value> {
+    async fn until(&mut self, id: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
         let mut seen = Vec::new();
         loop {
             let message = self.next().await;
@@ -455,6 +455,30 @@ impl SubscriptionFixture {
                     return frame["payload"]["view"].clone();
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+
+    /// A one-shot read until the last message is `execution`, completed:
+    /// for a history longer than one bounded view.
+    async fn turn_settled(&self, execution: &str) {
+        // Generous: a long history makes each read slower.
+        timeout(EXPECTED * 6, async {
+            loop {
+                let view = self
+                    .service
+                    .read(self.id.clone(), caller(&self.session, "read".into()))
+                    .await
+                    .unwrap();
+                if view.messages.last().is_some_and(|last| {
+                    last.execution_id == execution
+                        && serde_json::to_value(last.status).unwrap() == "completed"
+                }) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })
         .await
@@ -1197,4 +1221,140 @@ async fn a_turn_without_a_summary_change_updates_the_list() {
         })
         .await;
     client.close().await;
+}
+
+/// Row L4: a list reads again no sooner than its floor after a wake, so a
+/// turn's stream of commits costs a few list reads, not one per commit.
+#[tokio::test]
+async fn list_frames_come_no_closer_than_the_reread_floor() {
+    use crate::product::subscription::LIST_REREAD_FLOOR;
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("turn-1").await;
+    fixture.settled_read(1).await;
+    let mut client = fixture.connect();
+    client.send("list", "conversation.subscribeList", json!({}));
+    let (reply, _) = client.reply("list").await;
+    let id = reply["payload"]["subscriptionId"].as_str().unwrap().to_owned();
+    client.next().await;
+    let (release, gate) = tokio::sync::oneshot::channel();
+    *fixture.provider.execution_gate.lock().unwrap() = Some(gate);
+    // Read while the turn starts, so each frame is timed as it arrives.
+    let mut arrivals = Vec::new();
+    let started = client.until(&id, |frame| {
+        arrivals.push(Instant::now());
+        frame["payload"]["list"]["conversations"][0]["running"] == true
+    });
+    tokio::join!(fixture.turn("turn-2"), started);
+    release.send(()).unwrap();
+    client
+        .until(&id, |frame| {
+            arrivals.push(Instant::now());
+            frame["payload"]["list"]["conversations"][0]["running"] == false
+        })
+        .await;
+    assert!(arrivals.len() >= 2, "{arrivals:?}");
+    for pair in arrivals.windows(2) {
+        assert!(pair[1] - pair[0] >= LIST_REREAD_FLOOR, "{arrivals:?}");
+    }
+    client.close().await;
+}
+
+/// Not a row: the gate's measurement (ADR 0009, "Expected-workload
+/// performance"). The largest realistic fixture: a conversation as long as a
+/// session may grow, of the two-kilobyte messages
+/// `docs/design/bounded-terminal-discovery.md` calls realistic. Then a
+/// subscriber follows it while `LIVE_TURNS` more turns run, and each turn's
+/// latency is the time from its last commit (seen on a record watch of the
+/// test's own) to the frame that shows it settled. Run with
+/// `cargo test -p nessa-server --lib subscriptions::measure -- --ignored --nocapture`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "a measurement, not a regression: several minutes"]
+async fn measure_commit_to_frame_latency_on_the_largest_realistic_fixture() {
+    use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
+    use nessa_sdk::domain::agent_execution::executions::MessageChunk;
+    // A session holds at most 1,024 turns (`SessionSnapshot::MAX_INVOCATIONS`):
+    // this history and the live turns after it come to 1,020 of them.
+    const HISTORY_TURNS: usize = 990;
+    const LIVE_TURNS: usize = 30;
+    let answer = "an answer of about two kilobytes ".repeat(62);
+    let fixture = SubscriptionFixture::new().await;
+    let reply = |text: &str| {
+        fixture
+            .provider
+            .execution_updates
+            .lock()
+            .unwrap()
+            .push(ExecutionUpdate::Message(MessageChunk::text(text)));
+    };
+    let built = Instant::now();
+    for turn in 1..=HISTORY_TURNS {
+        reply(&answer);
+        fixture.turn(&format!("history-{turn}")).await;
+        // One at a time, as a person would: each turn settles first.
+        fixture.turn_settled(&format!("history-{turn}")).await;
+        if turn % 100 == 0 {
+            eprintln!("history: {turn} turns after {:?}", built.elapsed());
+        }
+    }
+    let built = built.elapsed();
+    let commits = Arc::new(Mutex::new(Vec::<Instant>::new()));
+    let mut watch = fixture
+        .storage
+        .watch_committed(&crate::conversation::application::conversation_session(&fixture.id)).unwrap();
+    let seen = commits.clone();
+    let watching = tokio::spawn(async move {
+        while matches!(
+            watch.changed().await,
+            nessa_sdk::application::agent_execution::sessions::ChangeWatchState::Dirty
+        ) {
+            seen.lock().unwrap().push(Instant::now());
+        }
+    });
+    let mut client = fixture.connect();
+    let subscribed = Instant::now();
+    let id = client.subscribe("subscribe", &fixture.id).await;
+    let first = client.next().await;
+    let first_frame = subscribed.elapsed();
+    let frame_bytes = serde_json::to_string(&first).unwrap().len();
+    let mut latencies = Vec::new();
+    for turn in 1..=LIVE_TURNS {
+        reply(&answer);
+        fixture.turn(&format!("live-{turn}")).await;
+        let frames = client
+            .until(&id, |frame| {
+                frame["event"] == "conversation.view"
+                    && view(frame)["messages"]
+                        .as_array()
+                        .and_then(|all| all.last())
+                        .is_some_and(|last| {
+                            last["executionId"] == format!("live-{turn}")
+                                && last["status"] == "completed"
+                        })
+            })
+            .await;
+        let arrived = Instant::now();
+        assert!(!frames.is_empty());
+        let last_commit = commits
+            .lock()
+            .unwrap()
+            .iter()
+            .copied()
+            .filter(|at| *at <= arrived)
+            .max()
+            .unwrap();
+        latencies.push(arrived - last_commit);
+    }
+    latencies.sort();
+    let at = |q: f64| latencies[((latencies.len() as f64 - 1.0) * q).round() as usize];
+    eprintln!(
+        "fixture: {HISTORY_TURNS} turns ({} messages, ~2 KiB answers), built in {built:?}; \
+         first frame {first_frame:?} ({frame_bytes} bytes); \
+         commit-to-frame over {LIVE_TURNS} live turns: p50 {:?}, p95 {:?}, max {:?}",
+        HISTORY_TURNS * 2,
+        at(0.5),
+        at(0.95),
+        latencies.last().unwrap()
+    );
+    client.close().await;
+    watching.abort();
 }

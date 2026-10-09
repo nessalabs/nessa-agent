@@ -58,9 +58,17 @@ One task per subscription, owned by the connection
 3. Send the frame if what the client would see changed. Wait until the
    connection's writer has written it before reading again: one frame in
    flight per subscription.
-4. If the read left the transcript `partial` (a long history, read
-   `COMMITTED_READ_FRAMES` at a time), read again at once. Otherwise wait for
-   a wake.
+4. If the read left the transcript `stale` (a long history, read
+   `COMMITTED_READ_FRAMES` at a time) and the cursor moved since the last
+   read, read again at once. Otherwise wait for a wake. Not `partial`: that
+   is an unfinished fact at a confirmed head, which reading again does not
+   change, so it would read in a loop.
+5. A read refused for want of a storage read slot (`Busy`, `ReadCapacity`) is
+   tried again a few times with a doubling wait before the subscription is
+   refused (row S23): one commit wakes every subscription at once, and the
+   SDK runs a few reads at a time. A list waits `LIST_REREAD_FLOOR` (250 ms)
+   after a wake before it reads, so a reply saved every 100 ms costs a few
+   list reads a second, not one per commit (row L4). A view never waits.
 
 Because registration comes before the read, a commit that lands during or
 after the read leaves the watch dirty, and the next wait returns at once. That
@@ -73,13 +81,14 @@ conversation is never queued up behind a slow client.
 A view is the committed fold plus live facts that are not records: the
 agent's lifecycle and capabilities, which permission asks the agent still
 waits on, the title (from the summary store), the approval-mode change in
-progress, and MCP App reviews. The conversation service owns one
-`LiveChanges` signal and publishes it where those facts change: an agent
+progress, and MCP App reviews. The conversation service owns
+`LiveChanges`, one signal per conversation somebody follows, and publishes it
+where those facts change: an agent
 opening finished or failed, a slot let go, a summary written, a mode change
 started or finished, and every change to an App's pending reviews. A
 subscription re-reads on it; an unchanged view is not sent (row S9). The
-signal is service-wide rather than per conversation: these changes are rare
-next to commits, so a few extra reads cost less than a keyed registry.
+signal is keyed by conversation, so a change to one wakes only its own
+subscribers; an entry goes once nobody follows it.
 
 ### The cursor
 
@@ -143,29 +152,54 @@ otherwise.
 | S10 | A frame not taken by the writer within `deliveryTimeoutMs` | Ended `lagging` with `lastDelivered`; the socket stays | `a_frame_not_taken_in_time_ends_the_subscription_as_lagging` |
 | S11 | Resubscribe after `lagging` from `lastDelivered` | Frames continue; the last equals a cold read | `a_lagging_subscriber_resumes_from_its_cursor` |
 | S12 | One socket's writer stalled | Commits finish and another socket's frames arrive | `one_stalled_socket_delays_no_commit_and_no_other_subscriber` |
-| S13 | Live frames versus a cold full replay | The same view | `live_frames_and_a_cold_full_replay_build_the_same_view` (service level, `tests/conversation/subscription.rs`) |
+| S13 | Live frames versus a cold full replay | The same view | `live_frames_and_a_cold_full_replay_build_the_same_view` |
 | S14 | The grant is revoked between batches | Ended `refused` with `forbidden` before the next read | `a_revoked_grant_ends_the_subscription_before_the_next_batch` |
 | S15 | The conversation is deleted | Ended `refused` with `conversation_deleted` | `deleting_the_conversation_ends_its_subscription` |
 | S16 | Unsubscribe | No frame of it after the reply | `no_frame_follows_an_unsubscribe_reply` |
 | S17 | Past the per-connection limit | Refused `subscription_capacity` | `subscriptions_past_the_published_limit_are_refused` |
 | S18 | A second subscription to the same target on one connection | Refused `subscription_duplicate` | `a_duplicate_subscription_is_refused` |
 | S19 | The record source closes | Ended `source_closed` | `a_closed_source_ends_the_subscription` (unit, `product/subscription/target.rs`) |
-| S20 | A live overlay change with no commit (a title written) | One new frame | `an_overlay_change_without_a_commit_is_delivered` |
+| S20 | A live overlay change with no commit (the approval mode changed) | One new frame; the cursor does not move | `an_overlay_change_without_a_commit_is_delivered` |
 | S21 | The socket closes | Every task ends and every registration is dropped | `closing_the_socket_drops_every_subscription` |
 | S22 | A frame larger than the frame bound | Ended `too_large` | `an_oversized_view_ends_the_subscription_as_too_large` (unit, `product/subscription/target.rs`) |
+| S23 | A read refused for want of a storage read slot | Tried again with a doubling wait, then refused | `a_read_without_a_storage_slot_is_tried_again_then_refused` (unit, `product/subscription/target.rs`) |
 | L1 | List subscription; a catalogue change | A new list frame | `a_list_subscription_follows_the_catalogue` |
 | L2 | A turn starts or ends without a summary change | A new list frame with `running` changed | `a_turn_without_a_summary_change_updates_the_list` |
 | L3 | A list larger than one frame | Cut newest first, `complete: false` | `a_list_too_large_for_one_frame_is_cut_and_marked_incomplete` (unit) |
+| L4 | A stream of commits under a list subscription | List frames no closer than `LIST_REREAD_FLOOR` | `list_frames_come_no_closer_than_the_reread_floor` |
 
-Desktop rows (`src/desktop/workspace/adapters/gateway/gateway-source.test.ts`):
+Desktop rows (`src/desktop/workspace/adapters/gateway/gateway-source.test.ts`;
+the test names begin with the row id). The adapter subscribes only: it sends
+no `conversation.read` or `conversation.list`, and the `GatewayClient` type it
+asks of the client does not offer them.
 
-| Row | State and input | Result | Test |
-|---|---|---|---|
-| D1 | First listener | One list subscription; no timer reads | `a listener subscribes to the list and nothing is read on a timer` |
-| D2 | `transcript(id)` | One view subscription; each frame is the next transcript | `opening a session subscribes to its view and applies each frame` |
-| D3 | Ended `lagging` | Resubscribed from the last applied cursor | `a lagging end resubscribes from the last applied cursor` |
-| D4 | Ended `refused` with gone codes | The session is taken out | `a subscription refused as deleted takes the session out` |
-| D5 | Reconnect | Every subscription made again, and a resync | `a reconnect subscribes again and resyncs` |
-| D6 | An incomplete list frame | One observe walk for that frame | `an incomplete list frame walks observe once` |
-| D7 | More sessions open than the published limit | The least recently opened is unsubscribed | `opening past the limit lets the oldest subscription go` |
-| D8 | A frame older than the one applied | Not applied | `a frame behind the applied cursor is not applied` |
+| Row | State and input | Result |
+|---|---|---|
+| D1 | First listener | One list subscription; nothing asked on a timer |
+| D2 | A followed conversation's frames | A frame with a new gateway revision is the next transcript; the same revision is the same transcript |
+| D3 | Ended `lagging` (view or list) | Opened again at once, a view from the last cursor applied; no gap |
+| D4 | Ended `refused` as not found or deleted | The session is taken out; a deletion is also forgotten by the window's MCP Apps |
+| D5 | The connection is lost, then back | Every subscription ends `disconnected` and nothing more; back, one resync and each opened again from its cursor |
+| D6 | An incomplete list frame | `conversation.observe` walked in the list's turn until the pass finishes |
+| D7 | Opening past `subscriptionLimits.conversationTargets` | The least recently opened (by `transcript`, `send` or `appCall`; a frame does not count) is let go, its last frame dropped, its summary said from its row; opened again it is followed again |
+| D8 | A frame behind the cursor applied, same incarnation | Not applied; a frame from another incarnation is |
+| D9 | The list subscription ends, not lagging | A gap: opened again on the retry clock, never at once; its first frame resyncs once |
+| D10 | Ended `too_large`, or a frame the client could not read (`invalid_frame`) | Let go with a warning: no retry, no gap; asked again it follows again |
+| D11 | An MCP App's call in a conversation | That conversation followed (not one taken out); it stays followed after the call |
+| D12 | An answer taken | No read is sent; the next frame carries the conversation |
+| D13 | A subscription answered after it was let go (the session taken out, the call out of time) | Closed unused; its frames apply nothing |
+| D14 | `transcript`, `appCall` and the retry clock at once | One subscription |
+| D15 | A subscription that could not open | A gap, opened again on the retry clock; the next list frame resyncs |
+| D16 | Ended `source_closed` | Opened again on the retry clock from its cursor |
+| D17 | The retry clock | Runs only while someone listens and something is not subscribed; stops when the last listener leaves |
+| D18 | An incomplete frame naming the same conversations as the last one walked | No walk; one naming others walks again |
+| D19 | `after` refused `cursor_ahead` | Opened once more without `after` |
+| D20 | `transcript` of a conversation followed | The view held; no second subscription |
+| D21 | An answer in a conversation let go past the limit | Followed again before the answer is sent |
+| D22 | `dispose` | Every subscription closed; nothing applies after |
+
+The rows of #248 and #419 that do not depend on a timer read keep their ids
+(connection C, writes W, refusals F, connect rules S); the poll-cadence rows
+(round counts, read pacing, foreground polling of #532) went with the poller.
+`W6` gained a case: a list frame that arrives while an archive is on its way
+may have been read before it, and does not list the archived session again.
