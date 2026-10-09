@@ -855,6 +855,20 @@ OAuth storage or desktop controls already satisfy these rows.
 | A9 | Audit unavailable, UI gone or response lost; deletion succeeds but outcome audit fails | Required cleanup continues; failed bounded settlement remains RevocationIncomplete; no success without required evidence; caller loss does not abandon owner |
 | A10 | Restart with usable, closing or incomplete token record | Revalidate binding; resume cleanup/fenced state; presence of a token does not grant dispatch |
 
+Issue [#687](https://github.com/nessalabs/nessa-agent/issues/687) specifies the
+successful-refresh token retention cases within A5–A7. The application owner
+publishes the replacement credential; storage does not merge generations. Carry
+the token used by that refresh into publication, rather than reloading a possibly
+replaced secret after the HTTP response. RFC 6749 section 6 permits omission of a
+replacement refresh token.
+
+| Refresh reply / ordering | Required result | Regression in `mcp_authorization::tests` |
+| --- | --- | --- |
+| Expiry refresh succeeds without `refresh_token` | Retain the dispatched token through another expiry and owner restoration | `a_refresh_without_a_new_refresh_token_preserves_the_old_one` |
+| Expiry refresh supplies a new `refresh_token` | Persist the replacement and use it at the next expiry after restoration | `a_refresh_with_a_new_refresh_token_uses_the_rotated_one` |
+| Rejected bearer refresh succeeds without `refresh_token` | Retain the dispatched token for the next expiry | `a_rejected_bearer_refresh_without_a_new_refresh_token_preserves_the_old_one` |
+| Refresh publication is overtaken by revoke | Preserve A7's fence and delete the late candidate | `a_token_published_after_revoke_is_deleted` |
+
 ### Apps and current configuration
 
 | Row | Ordering or input | Required result |
