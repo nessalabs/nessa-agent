@@ -3336,6 +3336,125 @@ mod tests {
         reopened.shutdown().await.unwrap();
     }
 
+    /// One chat whose saved batch is unmarked, another version, or an invalid
+    /// marker does not open. A sibling written by the same store still does.
+    #[tokio::test]
+    async fn a_record_this_build_cannot_read_leaves_the_other_chat_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let readable = SessionId::new("readable").unwrap();
+        let lease = storage.open(readable.clone()).await.unwrap();
+        let (change, snapshot) = opening(&readable);
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                snapshot,
+                vec![SessionSaveUnit::new(vec![change]).unwrap()],
+            )
+            .await
+            .unwrap();
+        drop(lease);
+
+        let append = |name: &'static str, edit: fn(&mut serde_json::Value)| {
+            let storage = &storage;
+            async move {
+                let id = SessionId::new(name).unwrap();
+                let lease = storage.open(id.clone()).await.unwrap();
+                let (change, snapshot) = opening(&id);
+                lease
+                    .save_changes(
+                        lease.load().await.unwrap().binding().clone(),
+                        snapshot,
+                        vec![SessionSaveUnit::new(vec![change.clone()]).unwrap()],
+                    )
+                    .await
+                    .unwrap();
+                let binding = lease.load().await.unwrap().binding().clone();
+                drop(lease);
+                let mut saved: serde_json::Value = serde_json::from_slice(
+                    &snapshot::encode_semantic_batch(std::slice::from_ref(&change)).unwrap(),
+                )
+                .unwrap();
+                edit(&mut saved);
+                let payload = serde_json::to_vec(&saved).unwrap();
+                let identity = SaveIdentity::binding(&binding).unwrap();
+                let unit = Header::unit(identity.clone(), 0, EMPTY_CHAIN, &payload);
+                let mut frames = stream_fact::frame_fact(
+                    &FramedFact {
+                        key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
+                        body: unit.encode(&payload),
+                    },
+                    binding.base() + 1,
+                )
+                .unwrap();
+                let complete = Header::unit(identity, 1, unit.chain(payload.len() as u64), &[]);
+                frames.extend(
+                    stream_fact::frame_fact(
+                        &FramedFact {
+                            key: FactKey::new(FactKind::SaveComplete, None, 1).unwrap(),
+                            body: complete.encode(&[]),
+                        },
+                        binding.base() + frames.len() as u64 + 1,
+                    )
+                    .unwrap(),
+                );
+                let runtime = storage.runtime().await.unwrap();
+                let stream = runtime
+                    .find_stream(&StreamId::new(id.as_str()).unwrap())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                for frame in frames {
+                    runtime.append(&stream, frame).await.unwrap();
+                }
+            }
+        };
+        append("unmarked", |saved| {
+            saved.as_object_mut().unwrap().remove("schemaVersion");
+        })
+        .await;
+        append("other-version", |saved| {
+            saved["schemaVersion"] = serde_json::json!(StorageError::SCHEMA_VERSION + 1);
+        })
+        .await;
+        append("invalid-marker", |saved| {
+            saved["schemaVersion"] = serde_json::json!("no");
+        })
+        .await;
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let reopened = RecordStorage::new(&root).unwrap();
+        assert!(matches!(
+            reopened
+                .open_existing(SessionId::new("unmarked").unwrap())
+                .await,
+            Err(StorageError::AnotherVersion { found: None })
+        ));
+        assert!(matches!(
+            reopened
+                .open_existing(SessionId::new("other-version").unwrap())
+                .await,
+            Err(StorageError::AnotherVersion { found: Some(found) })
+                if found == StorageError::SCHEMA_VERSION + 1
+        ));
+        assert!(matches!(
+            reopened
+                .open_existing(SessionId::new("invalid-marker").unwrap())
+                .await,
+            Err(StorageError::Corrupt(_))
+        ));
+        let lease = reopened
+            .open_existing(readable.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(lease.load().await.unwrap().snapshot().unwrap().id, readable);
+        drop(lease);
+        reopened.shutdown().await.unwrap();
+    }
+
     #[ignore = "child process probe"]
     #[tokio::test]
     async fn child_record_replay_probe() {

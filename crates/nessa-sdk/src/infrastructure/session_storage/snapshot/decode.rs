@@ -17,6 +17,9 @@ use std::{cell::Cell, fmt, io::Read, rc::Rc};
 const CHANGE_BYTES: usize = 160 * 1024 * 1024;
 const FINALIZED_RECIPE_BYTES: usize = 2 * 128 * ERROR_BYTES;
 const FINALIZED_RECIPE_NODES: usize = 2 * 128 * 128;
+/// Longer than `u64::MAX` in decimal. A `schemaVersion` string past this is not
+/// an integer, and the token reader refuses it before the scratch buffer grows.
+const SCHEMA_MARKER_BYTES: usize = 32;
 #[derive(Default)]
 struct Budget {
     bytes: Cell<usize>,
@@ -49,6 +52,9 @@ struct Seed {
     error_depth: usize,
     storage: Option<Rc<Budget>>,
     storage_node: bool,
+    /// Set only on a session-record batch or checkpoint. Nested values leave
+    /// this empty so a `schemaVersion` inside a fact is not the record version.
+    version: Option<Rc<Cell<RecordVersion>>>,
 }
 impl Seed {
     fn child(&self, shape: Shape) -> Self {
@@ -91,6 +97,7 @@ impl Seed {
                 None
             },
             storage_node,
+            version: None,
         }
     }
     fn charge<E: de::Error>(&self, bytes: usize) -> Result<(), E> {
@@ -180,6 +187,13 @@ impl<'de> Visitor<'de> for Seed {
     fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<(), M::Error> {
         self.error_node()?;
         self.charge(0)?;
+        // Only the root object of a batch or checkpoint carries the marker.
+        // A non-object that walks successfully is corrupt, not unmarked.
+        if let Some(version) = &self.version {
+            if matches!(version.get(), RecordVersion::Unseen) {
+                version.set(RecordVersion::Absent);
+            }
+        }
         let mut fields = 0;
         let mut has_provider_diagnostic = false;
         loop {
@@ -205,6 +219,15 @@ impl<'de> Visitor<'de> for Seed {
             fields += 1;
             if fields > 32 {
                 return Err(de::Error::custom("journal object has too many fields"));
+            }
+            if key == "schemaVersion" {
+                if let Some(version) = &self.version {
+                    map.next_value_seed(VersionSeed {
+                        version: version.clone(),
+                        discard: self.child(Shape::Generic),
+                    })?;
+                    continue;
+                }
             }
             map.next_value_seed(self.child(self.shape.field(&key)))?;
         }
@@ -277,7 +300,9 @@ fn preflight_shape(reader: impl Read, shape: Shape) -> Result<(), StorageError> 
     let limit = Rc::new(Cell::new(KEY_BYTES));
     let reader = TokenReader::new(reader, limit.clone());
     let mut deserializer = serde_json::Deserializer::from_reader(reader);
-    Seed {
+    let version = matches!(shape, Shape::Checkpoint | Shape::SemanticBatch)
+        .then(|| Rc::new(Cell::new(RecordVersion::Unseen)));
+    let walked = Seed {
         shape,
         limit,
         change: matches!(shape, Shape::Semantic | Shape::SemanticBatch).then(Rc::default),
@@ -286,12 +311,146 @@ fn preflight_shape(reader: impl Read, shape: Shape) -> Result<(), StorageError> 
         error_depth: usize::from(matches!(shape, Shape::Error | Shape::StorageError)),
         storage: matches!(shape, Shape::StorageError).then(Rc::default),
         storage_node: matches!(shape, Shape::StorageError),
+        version: version.clone(),
     }
     .deserialize(&mut deserializer)
-    .map_err(|error| StorageError::Corrupt(error.to_string()))?;
-    deserializer
-        .end()
-        .map_err(|error| StorageError::Corrupt(error.to_string()))
+    .map_err(|error| StorageError::Corrupt(error.to_string()));
+    let walked = walked.and_then(|()| {
+        deserializer
+            .end()
+            .map_err(|error| StorageError::Corrupt(error.to_string()))
+    });
+    classify_record_version(version.as_deref(), walked)
+}
+
+/// Top-level `schemaVersion` seen while preflight walks a record.
+///
+/// The last duplicate key wins. A value that is not an unsigned integer is
+/// [`RecordVersion::Invalid`]. [`RecordVersion::Absent`] means the root value
+/// was a JSON object and the field was not present. [`RecordVersion::Unseen`]
+/// means the walk never entered that object.
+#[derive(Clone, Copy)]
+enum RecordVersion {
+    Unseen,
+    Absent,
+    Current,
+    Other(u64),
+    Invalid,
+}
+
+fn classify_record_version(
+    version: Option<&Cell<RecordVersion>>,
+    walked: Result<(), StorageError>,
+) -> Result<(), StorageError> {
+    let Some(version) = version else {
+        return walked;
+    };
+    match version.get() {
+        // A marker this build does not read wins over a later bound failure.
+        // The encoder writes `schemaVersion` first, so a record that exceeds
+        // its budget before that field is still [`StorageError::Corrupt`].
+        RecordVersion::Other(found) => Err(StorageError::AnotherVersion { found: Some(found) }),
+        RecordVersion::Invalid => Err(super::tools::corrupt(
+            "schemaVersion is not an unsigned integer",
+        )),
+        // Alpha reads one shape. A finished object with no marker is another
+        // version, and its body is not mapped. A walk that fails first stays
+        // that error.
+        RecordVersion::Absent => match walked {
+            Ok(()) => Err(StorageError::AnotherVersion { found: None }),
+            Err(error) => Err(error),
+        },
+        RecordVersion::Unseen => match walked {
+            Ok(()) => Err(super::tools::corrupt("session record is not a JSON object")),
+            Err(error) => Err(error),
+        },
+        RecordVersion::Current => walked,
+    }
+}
+
+fn record_version(value: u64) -> RecordVersion {
+    if value == StorageError::SCHEMA_VERSION {
+        RecordVersion::Current
+    } else {
+        RecordVersion::Other(value)
+    }
+}
+
+/// Read one top-level `schemaVersion` under the token reader's field limit.
+struct VersionSeed {
+    version: Rc<Cell<RecordVersion>>,
+    discard: Seed,
+}
+
+impl<'de> DeserializeSeed<'de> for VersionSeed {
+    type Value = ();
+
+    fn deserialize<D: de::Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        self.discard.limit.set(SCHEMA_MARKER_BYTES);
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for VersionSeed {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("an unsigned schema version")
+    }
+
+    fn visit_u64<E: de::Error>(self, value: u64) -> Result<(), E> {
+        self.discard.charge(0)?;
+        self.version.set(record_version(value));
+        Ok(())
+    }
+
+    fn visit_i64<E: de::Error>(self, value: i64) -> Result<(), E> {
+        self.discard.charge(0)?;
+        self.version.set(match u64::try_from(value) {
+            Ok(value) => record_version(value),
+            Err(_) => RecordVersion::Invalid,
+        });
+        Ok(())
+    }
+
+    fn visit_str<E: de::Error>(self, text: &str) -> Result<(), E> {
+        self.mark_invalid(text.len())
+    }
+
+    fn visit_bool<E: de::Error>(self, _: bool) -> Result<(), E> {
+        self.mark_invalid(0)
+    }
+
+    fn visit_f64<E: de::Error>(self, _: f64) -> Result<(), E> {
+        self.mark_invalid(0)
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<(), E> {
+        self.mark_invalid(0)
+    }
+
+    fn visit_seq<S: SeqAccess<'de>>(self, sequence: S) -> Result<(), S::Error> {
+        self.discard.visit_seq(sequence)?;
+        self.version.set(RecordVersion::Invalid);
+        Ok(())
+    }
+
+    fn visit_map<M: MapAccess<'de>>(self, map: M) -> Result<(), M::Error> {
+        self.discard.visit_map(map)?;
+        self.version.set(RecordVersion::Invalid);
+        Ok(())
+    }
+}
+
+impl VersionSeed {
+    fn mark_invalid<E: de::Error>(self, bytes: usize) -> Result<(), E> {
+        if bytes > SCHEMA_MARKER_BYTES {
+            return Err(E::custom("schemaVersion is not an unsigned integer"));
+        }
+        self.discard.charge(bytes)?;
+        self.version.set(RecordVersion::Invalid);
+        Ok(())
+    }
 }
 
 #[cfg(test)]

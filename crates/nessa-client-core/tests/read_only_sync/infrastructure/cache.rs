@@ -14,7 +14,7 @@ use nessa_sdk::{
 use nessa_sync::replication::{
     application::{ReplicaStore, StoreError},
     catalogue::CatalogueStore,
-    domain::{Limits, Record, Scope},
+    domain::{Checkpoint, Limits, Record, Scope},
     infrastructure::{MAX_PAGE_PAYLOAD, MAX_PAGE_RECORDS},
 };
 use std::sync::Arc;
@@ -462,6 +462,115 @@ fn changed_scope_requires_explicit_reset() {
         )
         .unwrap();
     assert_eq!(rows, 1);
+}
+
+fn table_rows(cache: &ReadOnlyCache, table: &str) -> i64 {
+    cache
+        .connection
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+}
+
+fn unreadable_checkpoint_rebuilds(name: &str, edit: impl FnOnce(&mut serde_json::Value)) {
+    let root = tempfile::tempdir().unwrap();
+    let path = cache_path(root.path(), &format!("{name}.sqlite3"));
+    let mut first = cache(&path);
+    first.observe_head(&scope(), 0).unwrap();
+    let original: Vec<u8> = first
+        .connection
+        .query_row("SELECT payload FROM transcript_checkpoints", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    edit(&mut value);
+    first
+        .connection
+        .execute(
+            "UPDATE transcript_checkpoints SET payload = ?1",
+            params![serde_json::to_vec(&value).unwrap()],
+        )
+        .unwrap();
+    drop(first);
+    let mut reopened = cache(&path);
+    assert_eq!(reopened.load(&scope()).unwrap(), None, "{name}");
+    assert_eq!(reopened.take_refusal(), None, "{name}");
+    assert_eq!(table_rows(&reopened, "transcript_checkpoints"), 0, "{name}");
+    assert_eq!(table_rows(&reopened, "transcript_progress"), 0, "{name}");
+    reopened.observe_head(&scope(), 0).unwrap();
+    assert_eq!(
+        reopened.load(&scope()).unwrap(),
+        Some(Checkpoint::new(scope(), 0)),
+        "{name}"
+    );
+    let rebuilt: Vec<u8> = reopened
+        .connection
+        .query_row("SELECT payload FROM transcript_checkpoints", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let rebuilt: serde_json::Value = serde_json::from_slice(&rebuilt).unwrap();
+    assert_eq!(
+        rebuilt["schemaVersion"],
+        StorageError::SCHEMA_VERSION,
+        "{name}"
+    );
+}
+
+/// A cached checkpoint with a missing or other marker is dropped. The load
+/// succeeds with no progress, and a later head observation rebuilds it.
+/// Another conversation in the same file is left alone.
+#[test]
+fn an_unreadable_checkpoint_is_dropped_and_rebuilt() {
+    unreadable_checkpoint_rebuilds("future", |value| {
+        value["schemaVersion"] = serde_json::json!(StorageError::SCHEMA_VERSION + 1);
+    });
+    unreadable_checkpoint_rebuilds("unmarked", |value| {
+        value.as_object_mut().unwrap().remove("schemaVersion");
+    });
+
+    let root = tempfile::tempdir().unwrap();
+    let shared = cache_path(root.path(), "shared.sqlite3");
+    let mut first = cache(&shared);
+    let other = Scope::new(
+        id("receiver"),
+        id("origin"),
+        id("00000000-0000-0000-0000-000000000002"),
+        id("incarnation"),
+        physical_record_schema(),
+        id("epoch"),
+    );
+    first.observe_head(&scope(), 0).unwrap();
+    first.observe_head(&other, 0).unwrap();
+    let original: Vec<u8> = first
+        .connection
+        .query_row(
+            "SELECT payload FROM transcript_checkpoints WHERE stream = ?1",
+            params![scope().stream().as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    value["schemaVersion"] = serde_json::json!(0);
+    first
+        .connection
+        .execute(
+            "UPDATE transcript_checkpoints SET payload = ?1 WHERE stream = ?2",
+            params![
+                serde_json::to_vec(&value).unwrap(),
+                scope().stream().as_str()
+            ],
+        )
+        .unwrap();
+    drop(first);
+    let mut reopened = cache(&shared);
+    assert_eq!(reopened.load(&scope()).unwrap(), None);
+    assert_eq!(
+        reopened.load(&other).unwrap(),
+        Some(Checkpoint::new(other.clone(), 0))
+    );
 }
 
 fn replacement(saved: &Scope) -> Scope {
