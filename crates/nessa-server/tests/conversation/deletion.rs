@@ -2970,6 +2970,135 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
         .exists());
 }
 
+/// A chat whose only history is a batch main wrote, with no `schemaVersion`,
+/// cannot be read or attached, and can be deleted. A sibling written by this
+/// build still opens.
+#[tokio::test]
+async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
+    use crate::conversation::application::error_code::error_code;
+    use nessa_protocol::product_contract::generated::ConversationErrorCode;
+    use nessa_sdk::application::agent_execution::sessions::StorageError;
+    use nessa_sdk::infrastructure::session_storage::UNMARKED_SESSION_BATCH;
+
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path();
+    let repository = Arc::new(MemoryRepository::default());
+    let summaries = Arc::new(MemorySummaries::default());
+    let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
+    storage.initialize().await.unwrap();
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: only(Arc::new(Provider::new(
+                Arc::new(ProviderFactory::default()),
+            ))),
+            storage: storage.clone(),
+            metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            deletion_audit: Arc::new(RecordingDeletionAudit::default()),
+            attachments: None,
+            summaries: summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository: repository.clone(),
+                summaries: summaries.clone(),
+            }),
+            provider_sessions: claude_erasers(),
+            deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let sibling = new_id();
+    service
+        .create(
+            sibling.clone(),
+            caller("create-sibling"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    let sibling_view = service.read(sibling.clone(), caller("read-sibling")).await;
+    assert!(sibling_view.is_ok(), "{sibling_view:?}");
+
+    let id = new_id();
+    service
+        .create(
+            id.clone(),
+            caller("create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    // The live agent holds the history. Stop it, drop what this build wrote,
+    // and leave only the batch main writes. The next open cannot read it.
+    service.stop_active_agents().await.unwrap();
+    storage.discard_unreadable(session(&id)).await.unwrap();
+    storage
+        .append_encoded_batch(session(&id), UNMARKED_SESSION_BATCH)
+        .await
+        .unwrap();
+    assert!(matches!(
+        storage.read_committed(session(&id)).await,
+        Err(StorageError::AnotherVersion { found: None })
+    ));
+
+    let read = service.read(id.clone(), caller("read")).await.unwrap_err();
+    assert!(
+        matches!(
+            &read,
+            ConversationError::Storage(StorageError::AnotherVersion { found: None })
+        ),
+        "{read:?}"
+    );
+    assert_eq!(
+        error_code(&read),
+        ConversationErrorCode::ConversationStateUnreadable
+    );
+    let attach = service
+        .create(
+            id.clone(),
+            caller("attach"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            &attach,
+            ConversationError::Storage(StorageError::AnotherVersion { found: None })
+        ),
+        "{attach:?}"
+    );
+    assert_eq!(
+        error_code(&attach),
+        ConversationErrorCode::ConversationStateUnreadable
+    );
+    assert!(service
+        .read(sibling.clone(), caller("read-sibling-again"))
+        .await
+        .is_ok());
+
+    assert!(service.delete(id.clone(), caller("delete")).await.unwrap());
+    assert!(matches!(
+        service.read(id.clone(), caller("read-deleted")).await,
+        Err(ConversationError::Deleted)
+    ));
+    assert!(service
+        .read(sibling.clone(), caller("read-sibling-after"))
+        .await
+        .is_ok());
+    let lease = storage.open_existing(session(&id)).await.unwrap().unwrap();
+    assert!(lease.load().await.unwrap().snapshot().is_none());
+    drop(lease);
+    service.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn a_reply_waiting_to_be_summarized_does_not_keep_a_deleted_history_leased() {
     let fixture = deleting();

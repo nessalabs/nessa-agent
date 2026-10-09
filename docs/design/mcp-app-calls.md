@@ -379,7 +379,7 @@ was.
 | P2 | a saved part the domain refuses (a name, an identity, structure, a bound) | `Corrupt` |
 | P3 | a saved context with an empty text, or with either part's key missing | `Corrupt`, not read as none |
 | P4 | more than 4 saved contexts | `Corrupt`, before a fifth is built |
-| P5 | a saved message without `user_app` or `user_app_model_context`, as one saved before #390 | `Corrupt`, for that conversation only; another opens |
+| P5 | a saved message without `user_app` or `user_app_model_context` | a current record, which has `schemaVersion`, is `Corrupt`, for that conversation only; another opens. A record with no `schemaVersion`, including one saved before #390, is `AnotherVersion` |
 | P6 | an `UnknownApp` failure saved and read back | the same variant |
 | P7 | a message's writer and contexts | counted in the session's retained bytes, every byte |
 | B1 | a message carrying contexts, sent | one leading text block: the preamble, then the JSON array in order; then the message |
@@ -1192,8 +1192,10 @@ Each row above has a test, named after it:
   nothing to disagree on, in
   `no_durable_history_holds_one_call_as_two_mcp_tools`; V1–V7 in
   `crates/nessa-sdk/tests/domain/agent_execution/user_messages.rs`; P1–P5
-  in `snapshot/semantic.rs`, and P5's other conversation opening in the
-  tests of `crates/nessa-sdk/src/infrastructure/session_storage/record.rs`
+  in `snapshot/semantic.rs` (P5's current-record `Corrupt`, and a record
+  main wrote with no `schemaVersion` as `AnotherVersion`), and P5's other
+  conversation opening in the tests of
+  `crates/nessa-sdk/src/infrastructure/session_storage/record.rs`
   (it frames a save group by hand); P6 in
   `snapshot/errors.rs`, P7 in `session_storage/transcript.rs`; B1–B5 in
   `crates/nessa-sdk/tests/infrastructure/acp/executions/prompt_content.rs`;

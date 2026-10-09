@@ -40,6 +40,7 @@
 //! identifies stale JSONL history so the record adapter refuses it unchanged.
 
 mod creation;
+mod fixtures;
 mod memory;
 mod message_commit_clock;
 mod ownership;
@@ -55,6 +56,7 @@ mod save_group;
 mod snapshot;
 mod stream_fact;
 mod terminal_discovery;
+pub use fixtures::{UNMARKED_SESSION_BATCH, UNMARKED_SESSION_CHECKPOINT};
 pub use memory::InMemoryStorage;
 pub use message_commit_clock::RuntimeMessageCommitClock;
 pub use ownership::SqliteOwnershipStore;
