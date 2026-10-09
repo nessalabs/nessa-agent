@@ -19,11 +19,8 @@
 //! forwarding are never used, and the keep-alives bound how long a silent
 //! connection is believed.
 use nessa_sdk::domain::agent_execution::leases::SshDestination;
-use std::{io, process::Stdio};
-use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, AsyncWrite, BufReader},
-    process::{Child, Command},
-};
+use std::io;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 /// An open byte stream to a host's environment.
 pub(crate) struct LeaseConnection {
@@ -44,52 +41,6 @@ pub(crate) trait LeaseConnector: Send + Sync {
     /// Nothing could be started at all.
     fn connect(&self, host: &SshDestination) -> io::Result<LeaseConnection>;
 }
-
-/// The system's OpenSSH client.
-pub(crate) struct OpenSshConnector;
-
-/// Most lines of `ssh`'s own standard error kept in the log per connection.
-const MAX_STDERR_LINES: usize = 32;
-
-impl LeaseConnector for OpenSshConnector {
-    fn connect(&self, host: &SshDestination) -> io::Result<LeaseConnection> {
-        let mut child = Command::new("ssh")
-            .args(ssh_arguments(host))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| io::Error::other("no ssh stdout"))?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| io::Error::other("no ssh stdin"))?;
-        if let Some(stderr) = child.stderr.take() {
-            let host = host.as_str().to_owned();
-            tokio::spawn(async move {
-                let mut lines = BufReader::new(stderr).lines();
-                let mut kept = 0;
-                while let Ok(Some(line)) = lines.next_line().await {
-                    if kept < MAX_STDERR_LINES {
-                        kept += 1;
-                        tracing::warn!(host, line, "ssh");
-                    }
-                }
-            });
-        }
-        Ok(LeaseConnection {
-            from_environment: Box::new(stdout),
-            to_environment: Box::new(stdin),
-            keep: Box::new(KeptChild(child)),
-        })
-    }
-}
-
-struct KeptChild(#[expect(dead_code, reason = "held so the child is killed on drop")] Child);
 
 /// The arguments `ssh` is run with to reach `host`'s environment.
 pub(crate) fn ssh_arguments(host: &SshDestination) -> Vec<&str> {

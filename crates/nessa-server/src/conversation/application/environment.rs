@@ -117,6 +117,10 @@ pub(crate) trait LeaseHold: Send + Sync {
 
 /// What an environment answered when its lease was ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "answered by the Unix gateway's SSH adapter")
+)]
 pub(crate) enum LeaseRelease {
     /// The environment keeps nothing beside the agent: the Agent's own close
     /// is the cleanup evidence, as in process.

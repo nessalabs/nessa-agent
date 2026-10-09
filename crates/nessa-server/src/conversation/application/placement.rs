@@ -23,6 +23,10 @@ use std::{collections::BTreeMap, sync::Arc};
 
 /// Why a placement could not be read or written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "raised by the Unix gateway's store")
+)]
 pub(crate) enum PlacementError {
     /// The placement exists and this build cannot read it.
     Unreadable,
@@ -85,6 +89,7 @@ impl From<Arc<dyn Environment>> for Environments {
 impl Environments {
     /// Here, the configured hosts by the destination they are named by, and
     /// where placements are kept.
+    #[cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
     pub(crate) fn new(
         here: Arc<dyn Environment>,
         hosts: BTreeMap<String, Arc<dyn Environment>>,
