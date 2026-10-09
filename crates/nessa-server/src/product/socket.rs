@@ -1237,7 +1237,11 @@ where
         if ConnectionSubscriptions::method(&frame.method) {
             // Admitted as any request is (row S29): an unsubscribe here,
             // before it changes anything; a subscribe in its own task,
-            // before it registers anything.
+            // before it registers anything. The unsubscribe is admitted
+            // inline on purpose: its stop lands before the next frame is
+            // read, so a subscribe to the same target sent after it is begun
+            // only once the old one is gone. Moved into a task, a client's
+            // close-then-subscribe would race and be refused as a duplicate.
             let refused = if ConnectionSubscriptions::stops(&frame.method) {
                 admit_now(&state, &session, &frame.method)
                     .await

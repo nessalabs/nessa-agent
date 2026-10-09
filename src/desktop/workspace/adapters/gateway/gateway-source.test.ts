@@ -698,7 +698,15 @@ describe("conversations", () => {
     const again = source.transcript("c0")
     await flush()
     expect(subscribesOf(gateway, "c0")).toHaveLength(1)
+    // The first open is answered and closed; its close is held.
+    const closing = deferred<void>()
+    gateway.once("unsubscribe", (normal) => closing.promise.then(normal))
+    const before = gateway.count("unsubscribe")
     held.resolve()
+    await flush()
+    expect(gateway.count("unsubscribe")).toBe(before + 1)
+    expect(subscribesOf(gateway, "c0")).toHaveLength(1)
+    closing.resolve()
     await again
     await flush()
     expect(subscribesOf(gateway, "c0")).toHaveLength(2)

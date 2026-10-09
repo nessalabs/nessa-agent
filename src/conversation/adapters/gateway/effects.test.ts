@@ -12,6 +12,7 @@ import {
   NessaConversationControlError,
   NessaConversationMutationError,
   NessaRpcError,
+  createSubscriptionGate,
   type NessaClient,
   type ConversationView,
   type ConversationViewCursor,
@@ -154,27 +155,51 @@ type Opened = {
 }
 
 /**
- * A gateway's view subscriptions: each open is recorded, and answered by the
- * next of `answers` (an error refuses it), or opened when there are none.
+ * A gateway's view subscriptions behind the client's own gate: each open that
+ * reaches the gateway (`view`) is recorded, and answered by the next of
+ * `answers` (an error refuses it), or opened when there are none. `log` says
+ * in order what reached the gateway: each subscribe, and each close once done.
+ * `closing`, when given, is what each close waits for.
  */
-function subscribing(answers: Array<Error | Promise<void>> = []) {
+function subscribing(
+  answers: Array<Error | Promise<void>> = [],
+  closing: () => Promise<void> = async () => {},
+) {
   const opens: Opened[] = []
+  const log: string[] = []
   const view = vi.fn(
     async (
       conversationId: string,
       handlers: ViewSubscriptionHandlers,
       options: { after?: ConversationViewCursor } = {},
     ) => {
+      log.push(`subscribe ${conversationId}`)
       const answer = answers.shift()
       if (answer instanceof Error) throw answer
       await answer
-      const close = vi.fn(async () => {})
+      const id = `s${opens.length + 1}`
+      const close = vi.fn(async () => {
+        await closing()
+        log.push(`closed ${id}`)
+      })
       opens.push({ conversationId, handlers, after: options.after, close })
-      return { id: `s${opens.length}`, close }
+      return { id, close }
     },
   )
-  const client = { subscriptions: { view } } as unknown as NessaClient
-  return { client, opens, view }
+  const gate = createSubscriptionGate()
+  const client = {
+    subscriptions: {
+      view: (
+        conversationId: string,
+        handlers: ViewSubscriptionHandlers,
+        options: { after?: ConversationViewCursor; signal?: AbortSignal } = {},
+      ) =>
+        gate(`view:${conversationId}`, options.signal, () =>
+          view(conversationId, handlers, options),
+        ),
+    },
+  } as unknown as NessaClient
+  return { client, opens, view, log }
 }
 
 const cursor = (position: string): ConversationViewCursor => ({
@@ -234,8 +259,8 @@ it("P2: follows from the start when the gateway holds no history that far", asyn
   )
   await settle()
   expect(gateway.view).toHaveBeenCalledTimes(3)
-  expect(gateway.view.mock.calls[1]![2]).toEqual({ after: cursor("9") })
-  expect(gateway.view.mock.calls[2]![2]).toEqual({})
+  expect(gateway.view.mock.calls[1]![2]?.after).toEqual(cursor("9"))
+  expect(gateway.view.mock.calls[2]![2]?.after).toBeUndefined()
   expect(gateway.opens).toHaveLength(2)
   stop()
 })
@@ -295,6 +320,35 @@ it("P4: closes a subscription answered after its follow was stopped, and tells n
   expect(gateway.opens[0]!.close).toHaveBeenCalledOnce()
   gateway.opens[0]!.handlers.view({ cursor: cursor("1"), view: gatewayView() })
   expect(said).toEqual([])
+})
+
+it("P4: a follow stopped before its open is answered is closed before the next follow subscribes", async () => {
+  // The first send of a new tab follows, then follows again after the send:
+  // the second subscribe must not reach the gateway while the first is live,
+  // or it is refused as a duplicate (subscription_duplicate).
+  const answered = deferred<void>()
+  const closed = deferred<void>()
+  const gateway = subscribing([answered.promise], () => closed.promise)
+  const effects = effectsOf(() => gateway.client)
+  const first = told()
+  const second = told()
+  effects.follow("server", first.follower)
+  await settle()
+  const stop = effects.follow("server", second.follower)
+  await settle()
+  expect(gateway.log).toEqual(["subscribe server"])
+  answered.resolve()
+  await settle()
+  // Answered, and being closed: still only the one subscribe.
+  expect(gateway.opens[0]!.close).toHaveBeenCalledOnce()
+  expect(gateway.log).toEqual(["subscribe server"])
+  closed.resolve()
+  await settle()
+  expect(gateway.log).toEqual(["subscribe server", "closed s1", "subscribe server"])
+  gateway.opens[1]!.handlers.view({ cursor: cursor("1"), view: gatewayView() })
+  expect(second.said).toHaveLength(1)
+  expect(first.said).toEqual([])
+  stop()
 })
 
 it("P4: follows a conversation once: following it again stops the earlier follow", async () => {

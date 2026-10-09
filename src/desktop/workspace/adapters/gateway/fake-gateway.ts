@@ -6,17 +6,21 @@
  * the reply, then a first frame; a frame whenever the test says the stored
  * conversation changed (`publish`, `publishList`); an end when the test says
  * (`end`); and every subscription ended `disconnected` when the connection is
- * lost, as `@nessa/client` does. For tests, and the browser fixtures of an
+ * lost, as `@nessa/client` does. An open given up on its way (its `signal`)
+ * is closed once answered, and the next open of its target waits for that
+ * close: the client's own gate (`createSubscriptionGate`), not a copy. For tests, and the browser fixtures of an
  * app's review and of message sync (`verification/desktop/fixtures/`).
  */
 import {
   NessaRpcError,
+  createSubscriptionGate,
   type ConnectionState,
   type ConversationListResult,
   type ConversationSummary,
   type ConversationView,
   type ConversationViewCursor,
   type ListSubscriptionHandlers,
+  type Subscription,
   type SubscriptionEnd,
   type ViewSubscriptionHandlers,
 } from "@nessa/client"
@@ -178,6 +182,7 @@ export function fakeGateway(): FakeGateway {
   const observers = new Set<(state: ConnectionState) => void>()
   const positions = new Map<string, number>()
   const subscriptions = new Map<string, Live>()
+  const gated = createSubscriptionGate()
   let state: ConnectionState = { status: "connected" }
   let closed = false
   let ids = 0
@@ -317,26 +322,36 @@ export function fakeGateway(): FakeGateway {
         }) as never,
     },
     subscriptions: {
-      view: (conversationId, handlers, options = {}) =>
-        answer("subscribe", [conversationId, options], () => {
-          if (!views.has(conversationId)) notFound()
-          const after = options.after
-          if (
-            after &&
-            after.incarnation === fake.incarnation &&
-            BigInt(after.position) > BigInt(cursor(conversationId).position)
-          )
-            throw new NessaRpcError("cursor_ahead", "after names a later position")
-          const handle = opened({ target: conversationId, kind: "view", handlers })
-          sendView(handle.id)
-          return handle
-        }) as never,
-      list: (handlers, options = {}) =>
-        answer("subscribeList", [options], () => {
-          const handle = opened({ target: "list", kind: "list", handlers })
-          sendList(handle.id)
-          return handle
-        }) as never,
+      view: (conversationId, handlers, { signal, ...options } = {}) =>
+        gated(
+          `view:${conversationId}`,
+          signal,
+          () =>
+            answer("subscribe", [conversationId, options], () => {
+              if (!views.has(conversationId)) notFound()
+              const after = options.after
+              if (
+                after &&
+                after.incarnation === fake.incarnation &&
+                BigInt(after.position) > BigInt(cursor(conversationId).position)
+              )
+                throw new NessaRpcError("cursor_ahead", "after names a later position")
+              const handle = opened({ target: conversationId, kind: "view", handlers })
+              sendView(handle.id)
+              return handle
+            }) as Promise<Subscription>,
+        ) as never,
+      list: (handlers, { signal, ...options } = {}) =>
+        gated(
+          `list:${options.archived ?? false}`,
+          signal,
+          () =>
+            answer("subscribeList", [options], () => {
+              const handle = opened({ target: "list", kind: "list", handlers })
+              sendList(handle.id)
+              return handle
+            }) as Promise<Subscription>,
+        ) as never,
     },
     get connectionState() {
       return state

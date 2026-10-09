@@ -121,6 +121,20 @@ ahead of the history the store holds is refused with `cursor_ahead` (row S3).
 Every subscription sends at least one frame at or past `after`, because the
 overlay may have changed even if no record did.
 
+### One open per target, even when given up
+
+The gateway allows one live subscription per target on a connection and
+refuses a second (`subscription_duplicate`). A follower that stops before its
+open is answered has no handle to close, so following again could reach the
+gateway while the first is still live. The rule that prevents it lives once,
+in the client (`packages/nessa-client/src/presentation/subscription-gate.ts`,
+used by `subscriptions.view` and `.list`): an open whose `signal` is aborted
+before its answer is closed once answered, and the next open of that target
+is sent only after the close. The desktop source (D23) and the conversation
+panel (P4) only abort; the desktop's test gateway uses the same gate. The
+gateway admits an unsubscribe inline, so a close sent before a subscribe
+lands before it.
+
 ### Lagging and slow clients
 
 The task offers its frame to the connection's writer and waits. If the writer
@@ -230,7 +244,7 @@ asks of the client does not offer them.
 | D20 | `transcript` of a conversation followed | The view held; no second subscription |
 | D21 | An answer in a conversation let go past the limit | Followed again before the answer is sent |
 | D22 | `dispose` | Every subscription closed; nothing applies after |
-| D23 | A conversation let go past the limit while its open is on its way, then opened again | Subscribed again only once that open has been answered and closed, so the gateway does not refuse it `subscription_duplicate` |
+| D23 | A conversation let go past the limit while its open is on its way, then opened again | The open is given up (its `signal`); subscribed again only once it has been answered and its close finished, so the gateway does not refuse it `subscription_duplicate` |
 
 Conversation panel rows (`src/conversation/adapters/gateway/effects.test.ts`
 and `adapters/store/slice.test.ts`; the test names begin with the row id).
@@ -243,7 +257,7 @@ subscription is open.
 | P1 | Ended `lagging` | Subscribed again at once from the last frame's cursor; nothing said |
 | P2 | `after` refused `cursor_ahead` | Subscribed once more without `after` |
 | P3 | Refused, or ended for any reason but `lagging` | The tab keeps its view and shows the read failure; subscribed again after `FOLLOW_RETRY_MS` (the old idle pace), except for a deleted conversation |
-| P4 | A follow answered or framed after it was stopped or replaced | Closed unused; its frames apply nothing (`readRequest`) |
+| P4 | A follow answered or framed after it was stopped or replaced; followed again while its open is on its way | Closed unused; its frames apply nothing (`readRequest`); the next follow subscribes only after that close |
 | P5 | A command answered (send, control, stop) | A followed tab is followed again, so its next view is read after the answer; a tab not on screen is read once and left unfollowed |
 | P6 | A frame identical to the last one this follow applied | Not applied again, so what is on screen keeps its references; any other frame applies, whatever its revision |
 | P7 | The tab switched, closed or unmounted | Its follow stopped; nothing it says applies after |

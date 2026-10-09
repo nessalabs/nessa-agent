@@ -16,6 +16,8 @@
  */
 export {
   NessaClient,
+  createSubscriptionGate,
+  type SubscriptionGate,
   type AuthApi,
   type CredentialApi,
   type CredentialGrant,

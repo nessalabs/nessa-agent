@@ -12,7 +12,6 @@ import {
   type ConversationView as GatewayConversationView,
   type ConversationViewCursor,
   type NessaClient,
-  type Subscription,
   type StoredAttachment,
 } from "@nessa/client"
 import type { ConversationView } from "../../application/view"
@@ -494,7 +493,10 @@ export function gatewayEffects(
       let stopped = false
       // The open whose frames apply: anything an earlier open brings is dropped.
       let token = {}
-      let handle: Subscription | undefined
+      // Gives the current open up: closed now, or once answered. The client
+      // sends the next subscribe to this conversation only after that close,
+      // so following again is never refused as a duplicate of this follow.
+      let giveUp: AbortController | undefined
       let cursor: ConversationViewCursor | undefined
       const failed = (error: unknown) => {
         if (stopped) return
@@ -512,6 +514,8 @@ export function gatewayEffects(
         if (stopped) return
         const mine = {}
         token = mine
+        giveUp?.abort()
+        const { signal } = (giveUp = new AbortController())
         const current = () => !stopped && token === mine
         const subscribe = (after: ConversationViewCursor | undefined) =>
           Promise.resolve().then(() =>
@@ -525,7 +529,6 @@ export function gatewayEffects(
                 },
                 ended: (end) => {
                   if (!current()) return
-                  handle = undefined
                   // Too slow to take a frame: on at once, from the last one taken.
                   if (end.reason === "lagging") return open()
                   failed(
@@ -535,7 +538,7 @@ export function gatewayEffects(
                   )
                 },
               },
-              after === undefined ? {} : { after },
+              after === undefined ? { signal } : { after, signal },
             ),
           )
         subscribe(cursor)
@@ -548,8 +551,7 @@ export function gatewayEffects(
           })
           .then(
             (opened) => {
-              if (current()) handle = opened
-              else void opened.close().catch(() => undefined)
+              if (!current()) void opened.close().catch(() => undefined)
             },
             (error: unknown) => {
               if (current()) failed(error)
@@ -560,8 +562,7 @@ export function gatewayEffects(
         if (stopped) return
         stopped = true
         if (follows.get(conversationId) === stop) follows.delete(conversationId)
-        void handle?.close().catch(() => undefined)
-        handle = undefined
+        giveUp?.abort()
       }
       follows.set(conversationId, stop)
       open()

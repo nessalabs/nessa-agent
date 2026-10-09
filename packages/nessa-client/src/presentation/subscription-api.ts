@@ -16,6 +16,7 @@ import {
   validViewCursor,
   viewedFrame,
 } from "../protocol/subscription-validate.js"
+import { createSubscriptionGate } from "./subscription-gate.js"
 
 /** Why a subscription ended. The gateway's reasons, and two of this client's:
  * `disconnected` when the connection it lived on was lost (its identity goes
@@ -54,18 +55,24 @@ export interface Subscription {
 
 /** Replay-to-live views and lists. Each lives on the connection it was made on;
  * when that connection is lost it ends `disconnected`, and the caller subscribes
- * again — a view from the last cursor it applied. */
+ * again — a view from the last cursor it applied.
+ *
+ * `signal` gives an open up: aborted before the answer, the open rejects with
+ * the signal's reason and the subscription is closed once answered; aborted
+ * after, it is closed. Either way the next open of the same target is sent
+ * only after that close (`subscription-gate.ts`), so a follower that stops and
+ * follows again is never refused as its own duplicate. */
 export interface SubscriptionApi {
   /** Follow one conversation's view. With `after`, nothing behind that cursor is sent. */
   view(
     conversationId: string,
     handlers: ViewSubscriptionHandlers,
-    options?: { after?: ConversationViewCursor },
+    options?: { after?: ConversationViewCursor; signal?: AbortSignal },
   ): Promise<Subscription>
   /** Follow the caller's conversation list. */
   list(
     handlers: ListSubscriptionHandlers,
-    options?: { archived?: boolean },
+    options?: { archived?: boolean; signal?: AbortSignal },
   ): Promise<Subscription>
 }
 
@@ -86,6 +93,7 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
   // The first read can take the passive delivery budget before the reply.
   const deadline = { atLeastMs: passiveReadTiming.minRequestTimeoutMs }
   const live = new Map<string, Live>()
+  const gated = createSubscriptionGate()
   // Changes whenever the connection is lost: an identity from before means nothing after.
   let connection = 0
 
@@ -169,34 +177,38 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
         return Promise.reject(new TypeError("Invalid conversation ID"))
       if (options.after !== undefined && !validViewCursor(options.after))
         return Promise.reject(new TypeError("Invalid view cursor"))
-      return open(
-        ProductMethod.ConversationSubscribe,
-        options.after === undefined
-          ? { conversationId }
-          : { conversationId, after: options.after },
-        {
-          event: ProductEvent.ConversationView,
-          check: (payload) => {
-            const frame = viewedFrame(payload, conversationId)
-            return () => handlers.view(frame)
+      return gated(`view:${conversationId}`, options.signal, () =>
+        open(
+          ProductMethod.ConversationSubscribe,
+          options.after === undefined
+            ? { conversationId }
+            : { conversationId, after: options.after },
+          {
+            event: ProductEvent.ConversationView,
+            check: (payload) => {
+              const frame = viewedFrame(payload, conversationId)
+              return () => handlers.view(frame)
+            },
+            ended: (end) => handlers.ended(end),
           },
-          ended: (end) => handlers.ended(end),
-        },
+        ),
       )
     },
     list: (handlers, options = {}) => {
       const archived = options.archived ?? false
-      return open(
-        ProductMethod.ConversationSubscribeList,
-        options.archived === undefined ? {} : { archived },
-        {
-          event: ProductEvent.ConversationListed,
-          check: (payload) => {
-            const list = listedFrame(payload, archived)
-            return () => handlers.list(list)
+      return gated(`list:${archived}`, options.signal, () =>
+        open(
+          ProductMethod.ConversationSubscribeList,
+          options.archived === undefined ? {} : { archived },
+          {
+            event: ProductEvent.ConversationListed,
+            check: (payload) => {
+              const list = listedFrame(payload, archived)
+              return () => handlers.list(list)
+            },
+            ended: (end) => handlers.ended(end),
           },
-          ended: (end) => handlers.ended(end),
-        },
+        ),
       )
     },
   }

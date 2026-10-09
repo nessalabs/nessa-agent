@@ -224,4 +224,64 @@ describe("subscription API", () => {
     })
     expect(handlers.ended).toHaveBeenCalledExactlyOnceWith({ reason: "invalid_frame" })
   })
+
+  it("closes an open given up on its way once answered, and sends the next open of that conversation only after", async () => {
+    // The gateway refuses a second live subscription to one conversation, so a
+    // follower that stops and follows again must not race its own first open.
+    const replies: Array<{ method: string; done: (value: unknown) => void }> = []
+    const wire = port(
+      (method) =>
+        new Promise((done) => {
+          replies.push({ method, done })
+        }),
+    )
+    const api = createSubscriptionApi(wire.session)
+    const stopped = new AbortController()
+    const first = api
+      .view(conversationId, viewHandlers(), { signal: stopped.signal })
+      .catch((error: unknown) => error)
+    // Sent, and given up on before the gateway answers.
+    await vi.waitFor(() => expect(replies).toHaveLength(1))
+    stopped.abort()
+    const second = api.view(conversationId, viewHandlers())
+    // Another conversation does not wait on this one.
+    const other = api.view("00000000-0000-4000-8000-000000000002", viewHandlers())
+    await Promise.resolve()
+    await Promise.resolve()
+    const methods = () => replies.map((reply) => reply.method)
+    expect(methods()).toEqual([
+      ProductMethod.ConversationSubscribe,
+      ProductMethod.ConversationSubscribe,
+    ])
+    replies[1]!.done({ subscriptionId: "3" })
+    expect(await other).toMatchObject({ id: "3" })
+    replies[0]!.done({ subscriptionId: "1" })
+    await vi.waitFor(() => expect(replies).toHaveLength(3))
+    expect(methods()[2]).toBe(ProductMethod.ConversationUnsubscribe)
+    expect(wire.request.mock.calls[2]![1]).toEqual({ subscriptionId: "1" })
+    // Still closing: the second open waits.
+    await Promise.resolve()
+    expect(replies).toHaveLength(3)
+    replies[2]!.done({})
+    await vi.waitFor(() => expect(replies).toHaveLength(4))
+    expect(methods()[3]).toBe(ProductMethod.ConversationSubscribe)
+    replies[3]!.done({ subscriptionId: "2" })
+    expect(await second).toMatchObject({ id: "2" })
+    expect(await first).toMatchObject({ name: "AbortError" })
+  })
+
+  it("closes a subscription when its signal is aborted after the answer", async () => {
+    const wire = port()
+    const stopped = new AbortController()
+    const handlers = viewHandlers()
+    await createSubscriptionApi(wire.session).view(conversationId, handlers, {
+      signal: stopped.signal,
+    })
+    stopped.abort()
+    expect(wire.request).toHaveBeenLastCalledWith(ProductMethod.ConversationUnsubscribe, {
+      subscriptionId: "1",
+    })
+    wire.emit(ProductEvent.ConversationView, { subscriptionId: "1", cursor, view })
+    expect(handlers.view).not.toHaveBeenCalled()
+  })
 })

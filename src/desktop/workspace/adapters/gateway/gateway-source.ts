@@ -255,6 +255,11 @@ interface Waiter<T> {
  */
 interface Followed<T> {
   handle: Subscription | undefined
+  /**
+   * Gives the current open up: closed now, or once answered. The client sends
+   * the next subscribe to this target only after that close (D23).
+   */
+  giveUp: AbortController | undefined
   /** Whether a frame of the current open has been applied. */
   applied: boolean
   opening: Promise<void> | undefined
@@ -264,6 +269,7 @@ interface Followed<T> {
 
 const followed = <T>(): Followed<T> => ({
   handle: undefined,
+  giveUp: undefined,
   applied: false,
   opening: undefined,
   token: {},
@@ -556,26 +562,17 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const archiving = new Set<string>()
   // The conversations of the last incomplete list frame walked (D6).
   let walkedIds: string | undefined
-  // Opens let go while on their way, by conversation: one subscribed on this
-  // connection is closed when it is answered, and the gateway refuses a
-  // second subscription to the same conversation until then
-  // (`subscription_duplicate`), so following it again waits (D23).
-  const lettingGo = new Map<string, Promise<void>>()
 
   /** Lets a conversation's subscription go: no frame or end of it applies after. */
   const unfollow = (sessionId: string, why: unknown) => {
     const follow = views.get(sessionId)
     if (!follow) return
     views.delete(sessionId)
-    if (follow.opening) {
-      const settled = follow.opening.then(noop, noop)
-      lettingGo.set(sessionId, settled)
-      void settled.then(() => {
-        if (lettingGo.get(sessionId) === settled) lettingGo.delete(sessionId)
-      })
-    }
     follow.token = {}
-    void follow.handle?.close()
+    // An open still on its way is closed once answered, before this
+    // conversation is subscribed again (D23).
+    follow.giveUp?.abort()
+    follow.giveUp = undefined
     follow.handle = undefined
     settle(follow, { error: why })
   }
@@ -907,6 +904,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const token = {}
     follow.token = token
     follow.applied = false
+    const { signal } = (follow.giveUp = new AbortController())
     const current = () =>
       follow.token === token && views.get(sessionId) === follow && !disposed
     let deleted = false
@@ -921,13 +919,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
             if (current()) viewEnded(sessionId, follow, end)
           },
         },
-        after === undefined ? {} : { after },
+        after === undefined ? { signal } : { after, signal },
       )
     const opening = within(
       async (live) => {
-        // An open of this conversation let go on its way is closed first (D23).
-        await lettingGo.get(sessionId)
-        if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
         const connected = await client(who)
         if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
         let handle: Subscription
@@ -947,9 +942,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           throw error
         }
         if (!live() || !current()) {
-          // Closed before this open settles, so one that follows it again
-          // subscribes after the close (D23).
-          await handle.close().catch(noop)
+          void handle.close().catch(noop)
           throw new WorkspaceSourceError("unavailable")
         }
         follow.handle = handle
