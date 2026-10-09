@@ -763,8 +763,8 @@ function measureAdopted(root) {
     const box = group.getBoundingClientRect()
     if (Math.abs(box.height - 16.5) > 1)
       failures.push(`caption ${box.height}px tall, not 16.5`)
-    if (style && (style.fontSize !== "11px" || style.fontWeight !== "600"))
-      failures.push(`caption type ${style.fontSize} ${style.fontWeight}, not 11px 600`)
+    if (!style || style.fontSize !== "11px" || style.fontWeight !== "600")
+      failures.push(`caption type ${style?.fontSize} ${style?.fontWeight}, not 11px 600`)
   }
   const rows = [...(scope?.querySelectorAll("[data-session-row]") ?? [])]
   if (rows.length === 0) failures.push("no session row")
