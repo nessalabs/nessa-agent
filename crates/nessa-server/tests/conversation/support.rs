@@ -1501,3 +1501,55 @@ pub(crate) fn capabilities(image_input: bool) -> EffectiveCapabilities {
     )
     .unwrap()
 }
+
+/// Read grants for tests about something else: every paired device holds a
+/// grant on every conversation it asks about. It lists no set and takes no
+/// change; a test of read grants uses the store's own table.
+pub(crate) struct EveryConversationGranted;
+impl crate::conversation::application::ReadGrants for EveryConversationGranted {
+    fn is_granted<'a>(&'a self, _: &'a ConversationId, _: &'a str) -> ConversationFuture<'a, bool> {
+        Box::pin(async { Ok(true) })
+    }
+    fn granted<'a>(&'a self, _: &'a str) -> ConversationFuture<'a, HashSet<ConversationId>> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn change(
+        &self,
+        _: crate::conversation::application::ReadGrantChange,
+    ) -> ConversationFuture<'_, bool> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn grants<'a>(
+        &'a self,
+        _: &'a ConversationId,
+    ) -> ConversationFuture<'a, Vec<crate::conversation::application::ReadGrant>> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+}
+
+/// Grant `receiver` Read on `id` in a real grant table, as the owner's
+/// `conversation.share` would, for tests whose subject is a paired device's
+/// reads rather than sharing.
+pub(crate) async fn grant_read(
+    grants: &dyn crate::conversation::application::ReadGrants,
+    id: &ConversationId,
+    receiver: &str,
+) {
+    grants
+        .change(crate::conversation::application::ReadGrantChange {
+            transition: crate::conversation::application::ReadGrantTransition::Grant,
+            conversation_id: id.clone(),
+            receiver_id: Some(receiver.to_owned()),
+            credential_id: nessa_auth::domain::CredentialId::new(format!("{receiver}-credential"))
+                .unwrap(),
+            initiator: crate::conversation::application::ConversationCaller {
+                organization_id: OrganizationId::new("owner-organization").unwrap(),
+                principal_id: PrincipalId::new("owner").unwrap(),
+                surface_id: "test".into(),
+                action_id: "share".into(),
+            },
+            at_ms: 1,
+        })
+        .await
+        .unwrap();
+}

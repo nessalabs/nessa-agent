@@ -33,6 +33,7 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::CloseIncomplete { agent, .. } => error_code(agent),
         ConversationError::NotFound => ConversationErrorCode::ConversationNotFound,
         ConversationError::Deleted => ConversationErrorCode::ConversationDeleted,
+        ConversationError::ShareTargetNotPaired => ConversationErrorCode::ShareTargetNotPaired,
         ConversationError::DeletionIncomplete(failures) => deletion_incomplete(failures),
         ConversationError::AgentNotConfigured => ConversationErrorCode::AgentNotConfigured,
         ConversationError::AgentUnsupported => ConversationErrorCode::AgentUnsupported,

@@ -113,6 +113,7 @@ pub enum ConversationErrorCode {
     McpUnauthorized,
     McpUnreachable,
     McpInsufficientScope,
+    ShareTargetNotPaired,
 }
 impl ConversationErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -163,6 +164,7 @@ impl ConversationErrorCode {
             Self::McpUnauthorized => "mcp_unauthorized",
             Self::McpUnreachable => "mcp_unreachable",
             Self::McpInsufficientScope => "mcp_insufficient_scope",
+            Self::ShareTargetNotPaired => "share_target_not_paired",
         }
     }
 }

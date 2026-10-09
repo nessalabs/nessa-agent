@@ -18,6 +18,7 @@ use crate::conversation::application::{
 use crate::product::{
     conversation::{caller, read_list, read_view},
     passive_read::deadlines::RECORD_SEND_TIMEOUT,
+    read_access,
     socket::{admit_now, failure, success},
     state::{note_limit, ProductRouteState},
 };
@@ -266,14 +267,21 @@ impl Sources {
 /// The one admission of a subscription batch: the session is still current,
 /// the method's grant still holds under current policy, and the browser
 /// session is still present. Asked before every read, so access lost between
-/// two batches ends the subscription before the next (row S14). Slice G's
-/// per-conversation read grant is checked here and nowhere else.
+/// two batches ends the subscription before the next (row S14). A view also
+/// asks the read grant for its conversation here (`read_access`, rows G12 and
+/// G13), so a paired device's subscribe to an ungranted id takes no watch and
+/// a revoke ends the subscription before its next read; a list asks it in
+/// `read_list`, which every list batch reads through.
 pub(super) async fn authorize_batch(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     target: &Target,
 ) -> Result<AuthenticatedSession, &'static str> {
-    admit_now(state, session, target.method()).await
+    let current = admit_now(state, session, target.method()).await?;
+    if let Target::View { conversation, .. } = target {
+        read_access::admit_conversation(state, &current, conversation).await?;
+    }
+    Ok(current)
 }
 
 /// One read's result: a view and where it was folded through, or a list.
@@ -355,9 +363,12 @@ async fn read_batch(
                     Err(error) => Err(error),
                 }
             }
-            Target::List { archived } => read_list(service, &current, *archived, request_id)
-                .await
-                .map(Batch::List),
+            Target::List { archived } => {
+                match read_list(state, service, &current, *archived, request_id).await {
+                    Ok(listed) => listed.map(Batch::List),
+                    Err(code) => return Err(code.to_owned()),
+                }
+            }
         };
         drop(permit);
         match read {

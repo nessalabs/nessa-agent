@@ -120,6 +120,10 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     // anything, so nothing was taken and nothing applied.
     case ConversationErrorCode.ConversationDeleted:
       return true
+    // A share naming a credential that is not one of the owner's paired
+    // devices is refused before the grant table is written.
+    case ConversationErrorCode.ShareTargetNotPaired:
+      return true
     // `temporarily_unavailable` is the one worth naming: a supervising task
     // also reports it when work it had already admitted was lost, so it is not
     // a refusal at all. The rest are either certainly after dispatch, or not

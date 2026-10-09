@@ -96,6 +96,10 @@ pub(super) async fn dispatch(
             "conversation.read" => {
                 let params = params!(ConversationReadParams);
                 let id = conversation_id(&params.conversation_id)?;
+                if let Err(code) = super::read_access::admit_conversation(state, session, &id).await
+                {
+                    return Ok(failure(&frame.id, code));
+                }
                 let (view, _) =
                     read_view(state, service, session, &id, &frame.id, ReadOpening::Open).await?;
                 Ok(success(&frame.id, &view))
@@ -127,8 +131,18 @@ pub(super) async fn dispatch(
             }
             "conversation.list" => {
                 let ConversationListParams { archived } = params!(ConversationListParams);
-                let listed =
-                    read_list(service, session, archived.unwrap_or(false), &frame.id).await?;
+                let listed = match read_list(
+                    state,
+                    service,
+                    session,
+                    archived.unwrap_or(false),
+                    &frame.id,
+                )
+                .await
+                {
+                    Ok(listed) => listed?,
+                    Err(code) => return Ok(failure(&frame.id, code)),
+                };
                 Ok(success(&frame.id, &listed))
             }
             "conversation.observe" => {
@@ -145,7 +159,14 @@ pub(super) async fn dispatch(
                     )
                     .await;
                 trace_conversation_observe(observed.as_ref().err());
-                Ok(success(&frame.id, &observe_result(observed?)))
+                let mut result = observe_result(observed?);
+                match super::read_access::visible(state, session).await {
+                    Ok(visible) => {
+                        super::read_access::retain_visible(&visible, &mut result.conversations)
+                    }
+                    Err(code) => return Ok(failure(&frame.id, code)),
+                }
+                Ok(success(&frame.id, &result))
             }
             "conversation.send" | "conversation.steer" => {
                 let params = params!(ConversationSendParams);
@@ -450,19 +471,28 @@ pub(super) async fn read_view(
 
 /// The list `conversation.list` answers; a list subscription's frame is this
 /// same read.
+///
+/// The outer error is the read grant refusing the session as a reader
+/// (`read_access::visible`); the inner one is the list's own.
 pub(super) async fn read_list(
+    state: &ProductRouteState,
     service: &ConversationService,
     session: &AuthenticatedSession,
     archived: bool,
     request_id: &str,
-) -> Result<ConversationListResult, ConversationError> {
+) -> Result<Result<ConversationListResult, ConversationError>, &'static str> {
+    let visible = super::read_access::visible(state, session).await?;
     let listed = service
         .list(caller(session, request_id.to_owned()), archived)
         .await;
     // The desktop's index asks this list first. An incomplete list continues
     // as conversation.observe. The subject tells a list from a read.
     trace_conversation_index(listed.as_ref().err());
-    Ok(list_result(listed?))
+    Ok(listed.map(|listed| {
+        let mut result = list_result(listed);
+        super::read_access::retain_visible(&visible, &mut result.conversations);
+        result
+    }))
 }
 
 pub(super) fn caller(session: &AuthenticatedSession, request_id: String) -> ConversationCaller {

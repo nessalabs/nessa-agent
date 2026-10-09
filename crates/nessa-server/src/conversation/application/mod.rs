@@ -122,6 +122,7 @@ mod mcp_apps;
 mod passive_read;
 mod ports;
 mod provider_sessions;
+mod read_grants;
 mod record_read;
 mod retries;
 mod service;
@@ -160,6 +161,10 @@ pub use ports::{
 };
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
+};
+pub use read_grants::{
+    admit_read, reader_of, visible_to, ReadGrant, ReadGrantChange, ReadGrantTransition, ReadGrants,
+    Reader, ShareConversation, Visible,
 };
 pub use record_read::{
     ReadRecords, RecordHead, RecordReadError, RecordReadFuture, RecordReadLease,

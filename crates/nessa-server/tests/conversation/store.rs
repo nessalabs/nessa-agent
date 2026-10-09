@@ -9,7 +9,7 @@ use crate::conversation::{
         CatalogueWatchState, ConversationCatalogue, ConversationCreationDisposition,
         ConversationError, ConversationListing, ConversationModeApplication,
         ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
-        ConversationSummaries, WatchCatalogue,
+        ConversationSummaries, Reader, WatchCatalogue,
     },
     domain::{Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink},
 };
@@ -203,7 +203,7 @@ fn an_alpha_v1_database_is_refused_without_migrating_its_rows() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 1,
-            expected: 3
+            expected: 4
         })
     ));
     let old_row: String = raw(&path)
@@ -230,7 +230,7 @@ fn an_alpha_v2_database_is_refused_without_erasing_ownership() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 2,
-            expected: 3
+            expected: 4
         })
     ));
     let retained: String = raw(&path)
@@ -290,6 +290,7 @@ fn catalogue_request(
     CataloguePageRequest {
         organization: org(),
         owner,
+        reader: Reader::Owner,
         manifest,
     }
 }
@@ -1063,7 +1064,13 @@ async fn oversized_text_costs_its_list_one_row_and_remains_refused_by_exact_read
             matches!(
                 opened
                     .store
-                    .resolve(&org(), &alice(), &head.incarnation, &damaged)
+                    .resolve(
+                        &org(),
+                        &alice(),
+                        &Reader::Owner,
+                        &head.incarnation,
+                        &damaged
+                    )
                     .await,
                 Err(ConversationError::Metadata)
             ),
@@ -1259,7 +1266,7 @@ async fn catalogue_revisions_follow_owner_visible_changes_and_survive_restart() 
     opened.store.create(owned(&id)).await.unwrap();
     let first = opened
         .store
-        .resolve(&org(), &alice(), &incarnation, &id)
+        .resolve(&org(), &alice(), &Reader::Owner, &incarnation, &id)
         .await
         .unwrap()
         .unwrap();
@@ -1270,14 +1277,14 @@ async fn catalogue_revisions_follow_owner_visible_changes_and_survive_restart() 
     assert!(first.summary.is_none());
     assert!(opened
         .store
-        .resolve(&org(), &bob, &incarnation, &id)
+        .resolve(&org(), &bob, &Reader::Owner, &incarnation, &id)
         .await
         .unwrap()
         .is_none());
     opened.store.record(&id, said("hello", 2)).await.unwrap();
     let second = opened
         .store
-        .resolve(&org(), &alice(), &incarnation, &id)
+        .resolve(&org(), &alice(), &Reader::Owner, &incarnation, &id)
         .await
         .unwrap()
         .unwrap();
@@ -1293,7 +1300,7 @@ async fn catalogue_revisions_follow_owner_visible_changes_and_survive_restart() 
         .unwrap();
     let archived = opened
         .store
-        .resolve(&org(), &alice(), &incarnation, &id)
+        .resolve(&org(), &alice(), &Reader::Owner, &incarnation, &id)
         .await
         .unwrap()
         .unwrap();
@@ -1306,7 +1313,7 @@ async fn catalogue_revisions_follow_owner_visible_changes_and_survive_restart() 
         .unwrap();
     let deleted = opened
         .store
-        .resolve(&org(), &alice(), &incarnation, &id)
+        .resolve(&org(), &alice(), &Reader::Owner, &incarnation, &id)
         .await
         .unwrap()
         .unwrap();
@@ -1338,7 +1345,7 @@ async fn catalogue_revisions_follow_owner_visible_changes_and_survive_restart() 
     );
     assert!(
         reopened
-            .resolve(&org(), &alice(), &incarnation, &id)
+            .resolve(&org(), &alice(), &Reader::Owner, &incarnation, &id)
             .await
             .unwrap()
             .unwrap()
@@ -1526,7 +1533,7 @@ async fn catalogue_resolves_a_deletion_that_raced_its_manifest_descriptor() {
         .unwrap();
     let current = opened
         .store
-        .resolve(&org(), &alice(), &incarnation, &id)
+        .resolve(&org(), &alice(), &Reader::Owner, &incarnation, &id)
         .await
         .unwrap()
         .unwrap();
@@ -1550,7 +1557,7 @@ async fn catalogue_resolves_a_deletion_that_raced_its_manifest_descriptor() {
     let other = PrincipalId::new("bob").unwrap();
     assert!(opened
         .store
-        .resolve(&org(), &other, &incarnation, &id)
+        .resolve(&org(), &other, &Reader::Owner, &incarnation, &id)
         .await
         .unwrap()
         .is_none());
@@ -1579,7 +1586,7 @@ async fn a_failed_visible_write_rolls_back_its_owner_revision() {
     );
     assert!(opened
         .store
-        .resolve(&org(), &alice(), &incarnation, &id)
+        .resolve(&org(), &alice(), &Reader::Owner, &incarnation, &id)
         .await
         .unwrap()
         .unwrap()
@@ -1603,7 +1610,7 @@ async fn a_failed_visible_write_rolls_back_its_owner_revision() {
     assert!(
         !opened
             .store
-            .resolve(&org(), &alice(), &incarnation, &id)
+            .resolve(&org(), &alice(), &Reader::Owner, &incarnation, &id)
             .await
             .unwrap()
             .unwrap()
@@ -1644,7 +1651,7 @@ async fn a_failed_creation_does_not_publish_an_owner_or_spend_a_revision() {
     );
     assert!(opened
         .store
-        .resolve(&org(), &alice(), &incarnation, &id)
+        .resolve(&org(), &alice(), &Reader::Owner, &incarnation, &id)
         .await
         .unwrap()
         .is_none());
@@ -1652,7 +1659,7 @@ async fn a_failed_creation_does_not_publish_an_owner_or_spend_a_revision() {
     opened.store.create(owned(&id)).await.unwrap();
     let current = opened
         .store
-        .resolve(&org(), &alice(), &incarnation, &id)
+        .resolve(&org(), &alice(), &Reader::Owner, &incarnation, &id)
         .await
         .unwrap()
         .unwrap();
@@ -1707,7 +1714,7 @@ async fn a_missing_owner_head_cannot_publish_empty_or_reuse_a_revision() {
     assert!(matches!(
         opened
             .store
-            .resolve(&org(), &alice(), &incarnation, &live)
+            .resolve(&org(), &alice(), &Reader::Owner, &incarnation, &live)
             .await,
         Err(ConversationError::Metadata)
     ));
@@ -1734,7 +1741,7 @@ async fn a_missing_owner_head_cannot_publish_empty_or_reuse_a_revision() {
     assert_eq!(opened.store.head(&org(), &bob).await.unwrap().revision, 1);
     assert!(opened
         .store
-        .resolve(&org(), &bob, &incarnation, &foreign)
+        .resolve(&org(), &bob, &Reader::Owner, &incarnation, &foreign)
         .await
         .unwrap()
         .is_some());
@@ -1862,7 +1869,7 @@ async fn catalogue_acquisition_refuses_corruption_atomically_and_preserves_unkno
     );
     let value = opened
         .store
-        .resolve(&org(), &alice(), &head.incarnation, &second)
+        .resolve(&org(), &alice(), &Reader::Owner, &head.incarnation, &second)
         .await
         .unwrap()
         .unwrap();
@@ -1890,7 +1897,7 @@ async fn catalogue_acquisition_refuses_corruption_atomically_and_preserves_unkno
         assert!(opened.store.page(request.clone()).await.is_err());
         assert!(opened
             .store
-            .resolve(&org(), &alice(), &head.incarnation, &second)
+            .resolve(&org(), &alice(), &Reader::Owner, &head.incarnation, &second)
             .await
             .is_err());
         let retained: i64 = connection
@@ -1920,7 +1927,7 @@ async fn catalogue_acquisition_refuses_corruption_atomically_and_preserves_unkno
         .unwrap();
     assert!(opened
         .store
-        .resolve(&org(), &alice(), &head.incarnation, &second)
+        .resolve(&org(), &alice(), &Reader::Owner, &head.incarnation, &second)
         .await
         .unwrap()
         .unwrap()
@@ -1934,7 +1941,7 @@ async fn catalogue_acquisition_refuses_corruption_atomically_and_preserves_unkno
         .unwrap();
     assert!(opened
         .store
-        .resolve(&org(), &alice(), &head.incarnation, &second)
+        .resolve(&org(), &alice(), &Reader::Owner, &head.incarnation, &second)
         .await
         .is_err());
     connection
@@ -1947,7 +1954,7 @@ async fn catalogue_acquisition_refuses_corruption_atomically_and_preserves_unkno
     assert!(opened.store.page(request).await.is_err());
     assert!(opened
         .store
-        .resolve(&org(), &alice(), &head.incarnation, &first)
+        .resolve(&org(), &alice(), &Reader::Owner, &head.incarnation, &first)
         .await
         .is_err());
     assert_eq!(
@@ -1997,7 +2004,13 @@ async fn catalogue_acquisition_accepts_full_supported_multibyte_fields() {
     assert_eq!(opened.store.page(request).await.unwrap().entries.len(), 1);
     let value = opened
         .store
-        .resolve(&organization, &owner, &head.incarnation, &id)
+        .resolve(
+            &organization,
+            &owner,
+            &Reader::Owner,
+            &head.incarnation,
+            &id,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -2009,7 +2022,13 @@ async fn catalogue_acquisition_accepts_full_supported_multibyte_fields() {
     assert!(matches!(
         opened
             .store
-            .resolve(&organization, &owner, &"x".repeat(1_000_000), &id)
+            .resolve(
+                &organization,
+                &owner,
+                &Reader::Owner,
+                &"x".repeat(1_000_000),
+                &id
+            )
             .await,
         Err(ConversationError::CatalogueInvalidRequest)
     ));
@@ -2048,7 +2067,7 @@ async fn catalogue_resolve_acquires_bounded_deletion_and_preserves_supported_pro
         let head = opened.store.head(&org(), &alice()).await.unwrap();
         let value = opened
             .store
-            .resolve(&org(), &alice(), &head.incarnation, &id)
+            .resolve(&org(), &alice(), &Reader::Owner, &head.incarnation, &id)
             .await
             .unwrap()
             .unwrap();
@@ -2087,7 +2106,7 @@ async fn catalogue_resolve_acquires_bounded_deletion_and_preserves_supported_pro
         assert!(
             opened
                 .store
-                .resolve(&org(), &alice(), &head.incarnation, &id)
+                .resolve(&org(), &alice(), &Reader::Owner, &head.incarnation, &id)
                 .await
                 .is_err(),
             "{column}"
@@ -2112,7 +2131,7 @@ async fn catalogue_resolve_acquires_bounded_deletion_and_preserves_supported_pro
             .unwrap();
         assert!(opened
             .store
-            .resolve(&org(), &alice(), &head.incarnation, &id)
+            .resolve(&org(), &alice(), &Reader::Owner, &head.incarnation, &id)
             .await
             .is_ok());
     }
@@ -2362,5 +2381,273 @@ async fn catalogue_watch_callback_panic_cannot_replace_a_durable_create_result()
     assert_eq!(
         catalogue_watch_ready(&mut faulty),
         CatalogueWatchState::NotificationFailed
+    );
+}
+
+// Read grants (issue 704): rows G2, G5, G6, G7, G9 and G10 of
+// docs/design/read-grants.md.
+
+fn grant_change(
+    transition: crate::conversation::application::ReadGrantTransition,
+    id: &ConversationId,
+    receiver: Option<&str>,
+    credential: &str,
+    request: &str,
+) -> crate::conversation::application::ReadGrantChange {
+    crate::conversation::application::ReadGrantChange {
+        transition,
+        conversation_id: id.clone(),
+        receiver_id: receiver.map(str::to_owned),
+        credential_id: nessa_auth::domain::CredentialId::new(credential).unwrap(),
+        initiator: crate::conversation::application::ConversationCaller {
+            organization_id: org(),
+            principal_id: alice(),
+            surface_id: "desktop".into(),
+            action_id: request.into(),
+        },
+        at_ms: 7,
+    }
+}
+async fn grant(store: &LocalConversationStore, id: &ConversationId, receiver: &str) -> bool {
+    use crate::conversation::application::{ReadGrantTransition, ReadGrants};
+    store
+        .change(grant_change(
+            ReadGrantTransition::Grant,
+            id,
+            Some(receiver),
+            &format!("{receiver}-credential"),
+            "share",
+        ))
+        .await
+        .unwrap()
+}
+async fn revoke(store: &LocalConversationStore, id: &ConversationId, receiver: &str) -> bool {
+    use crate::conversation::application::{ReadGrantTransition, ReadGrants};
+    store
+        .change(grant_change(
+            ReadGrantTransition::Revoke,
+            id,
+            None,
+            &format!("{receiver}-credential"),
+            "unshare",
+        ))
+        .await
+        .unwrap()
+}
+fn device(receiver: &str) -> Reader {
+    Reader::PairedDevice {
+        receiver_id: receiver.into(),
+    }
+}
+/// The ids a reader's full pass from `completed` sends, in catalogue order.
+async fn device_pass(
+    store: &LocalConversationStore,
+    reader: Reader,
+    completed: u64,
+) -> Vec<(ConversationId, u64)> {
+    let head = store.head(&org(), &alice()).await.unwrap();
+    let mut request = catalogue_request(
+        alice(),
+        &head.incarnation,
+        completed,
+        head.revision,
+        None,
+        MAX_CATALOGUE_ENTRIES,
+    );
+    request.reader = reader;
+    store
+        .page(request)
+        .await
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|entry| (entry.key.id, entry.revision))
+        .collect()
+}
+
+/// Row G2.
+#[tokio::test]
+async fn a_device_pages_only_the_conversations_granted_to_it() {
+    let opened = opened();
+    let (shared, private) = (new_id(), new_id());
+    opened.store.create(owned(&shared)).await.unwrap();
+    opened.store.create(owned(&private)).await.unwrap();
+    assert!(grant(&opened.store, &shared, "phone").await);
+    let ids: Vec<_> = device_pass(&opened.store, device("phone"), 0)
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(ids, vec![shared.clone()]);
+    let owner: Vec<_> = device_pass(&opened.store, Reader::Owner, 0).await;
+    assert_eq!(owner.len(), 2, "the owner still pages everything");
+    let head = opened.store.head(&org(), &alice()).await.unwrap();
+    for (id, found) in [(&shared, true), (&private, false)] {
+        let resolved = opened
+            .store
+            .resolve(&org(), &alice(), &device("phone"), &head.incarnation, id)
+            .await
+            .unwrap();
+        assert_eq!(resolved.is_some(), found);
+    }
+    assert!(device_pass(&opened.store, device("tablet"), 0)
+        .await
+        .is_empty());
+}
+
+/// Row G5.
+#[tokio::test]
+async fn a_grant_moves_the_row_past_what_a_device_completed() {
+    let opened = opened();
+    let (old, other) = (new_id(), new_id());
+    opened.store.create(owned(&old)).await.unwrap();
+    opened.store.create(owned(&other)).await.unwrap();
+    let completed = opened.store.head(&org(), &alice()).await.unwrap().revision;
+    assert!(grant(&opened.store, &old, "phone").await);
+    let head = opened.store.head(&org(), &alice()).await.unwrap().revision;
+    assert_eq!(head, completed + 1);
+    assert_eq!(
+        device_pass(&opened.store, device("phone"), completed).await,
+        vec![(old, head)]
+    );
+}
+
+/// Row G6.
+#[tokio::test]
+async fn a_revoke_takes_the_row_out_of_the_devices_catalogue() {
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    grant(&opened.store, &id, "phone").await;
+    let before = opened.store.head(&org(), &alice()).await.unwrap().revision;
+    assert!(revoke(&opened.store, &id, "phone").await);
+    let head = opened.store.head(&org(), &alice()).await.unwrap();
+    assert_eq!(head.revision, before + 1, "a revoke moves the head");
+    assert!(device_pass(&opened.store, device("phone"), 0)
+        .await
+        .is_empty());
+    assert!(opened
+        .store
+        .resolve(&org(), &alice(), &device("phone"), &head.incarnation, &id)
+        .await
+        .unwrap()
+        .is_none());
+    use crate::conversation::application::ReadGrants;
+    assert!(!opened.store.is_granted(&id, "phone").await.unwrap());
+}
+
+/// Row G7.
+#[tokio::test]
+async fn a_grant_names_one_conversation_and_nothing_else() {
+    use crate::conversation::application::ReadGrants;
+    let opened = opened();
+    let (shared, existing) = (new_id(), new_id());
+    opened.store.create(owned(&shared)).await.unwrap();
+    opened.store.create(owned(&existing)).await.unwrap();
+    grant(&opened.store, &shared, "phone").await;
+    let later = new_id();
+    opened
+        .store
+        .create(owned_by(&later, "org", "alice", 9))
+        .await
+        .unwrap();
+    assert_eq!(
+        opened.store.granted("phone").await.unwrap(),
+        std::collections::HashSet::from([shared.clone()])
+    );
+    for id in [&existing, &later] {
+        assert!(!opened.store.is_granted(id, "phone").await.unwrap());
+    }
+    assert!(opened.store.is_granted(&shared, "phone").await.unwrap());
+}
+
+/// Row G9.
+#[tokio::test]
+async fn a_repeated_share_or_unshare_changes_nothing() {
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    assert!(!revoke(&opened.store, &id, "phone").await);
+    assert!(grant(&opened.store, &id, "phone").await);
+    let head = opened.store.head(&org(), &alice()).await.unwrap().revision;
+    assert!(!grant(&opened.store, &id, "phone").await);
+    assert_eq!(
+        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        head
+    );
+    let journaled: i64 = raw(&opened.path)
+        .query_row("SELECT COUNT(*) FROM read_grant_changes", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(journaled, 1);
+}
+
+/// Row G10.
+#[tokio::test]
+async fn every_grant_change_is_journaled_with_its_initiator() {
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    grant(&opened.store, &id, "phone").await;
+    revoke(&opened.store, &id, "phone").await;
+    let head = opened.store.head(&org(), &alice()).await.unwrap().revision;
+    let connection = raw(&opened.path);
+    let mut statement = connection
+        .prepare(
+            "SELECT conversation_id, receiver_id, credential_id, before, after, initiator,
+                    surface, request, changed_at_ms, revision
+             FROM read_grant_changes ORDER BY sequence",
+        )
+        .unwrap();
+    let rows: Vec<(
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        i64,
+        i64,
+    )> = statement
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let row = |before: &str, after: &str, request: &str, revision: u64| {
+        (
+            id.to_string(),
+            "phone".to_owned(),
+            "phone-credential".to_owned(),
+            before.to_owned(),
+            after.to_owned(),
+            "alice".to_owned(),
+            "desktop".to_owned(),
+            request.to_owned(),
+            7,
+            i64::try_from(revision).unwrap(),
+        )
+    };
+    assert_eq!(
+        rows,
+        vec![
+            row("none", "read", "share", head - 1),
+            row("read", "none", "unshare", head),
+        ]
     );
 }

@@ -517,7 +517,7 @@ async fn successful_read_during_held_authority(input: HeldAuthorityInput, stalle
     );
     let effects = Arc::new(HealthEffects(AtomicUsize::new(0)));
     let mut state = state
-        .with_passive_read(Arc::new(RecordBinding), repository)
+        .with_passive_read(Arc::new(RecordBinding), repository, Arc::new(crate::conversation_test_support::EveryConversationGranted))
         .with_record_source(source.clone());
     state.access = held.clone();
     state.uptime_clock = effects.clone();
@@ -997,7 +997,7 @@ async fn held_physical_session() -> (
         joins: Mutex::new(Vec::new()),
     });
     let mut state = state
-        .with_passive_read(Arc::new(RecordBinding), repository)
+        .with_passive_read(Arc::new(RecordBinding), repository, Arc::new(crate::conversation_test_support::EveryConversationGranted))
         .with_record_source(source.clone())
         .with_catalogue_source(source.clone());
     state.settings = SessionSettings::new(

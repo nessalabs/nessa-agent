@@ -5,7 +5,7 @@
 
 use crate::conversation::application::{
     CatalogueDescriptor, CataloguePageRequest, CatalogueValue, ConversationCaller,
-    ConversationCatalogue, ConversationError,
+    ConversationCatalogue, ConversationError, Reader,
 };
 use nessa_protocol::conversation::catalogue_metadata::CatalogueMetadata;
 use nessa_protocol::conversation::catalogue_payload;
@@ -373,6 +373,14 @@ fn map_error(error: ConversationError) -> CatalogueSourceError {
     }
 }
 
+/// A sync scope is a paired device's: its receiver reads only the rows
+/// granted to it (`read_grants`).
+fn device(scope: &Scope) -> Reader {
+    Reader::PairedDevice {
+        receiver_id: scope.receiver().as_str().to_owned(),
+    }
+}
+
 async fn read_head(
     catalogue: &dyn ConversationCatalogue,
     caller: &ConversationCaller,
@@ -407,6 +415,7 @@ async fn read_manifest(
         .page(CataloguePageRequest {
             organization: caller.organization_id.clone(),
             owner: caller.principal_id.clone(),
+            reader: device(expected),
             manifest: request.clone(),
         })
         .await
@@ -438,6 +447,7 @@ async fn read_resolved(
         .resolve(
             &caller.organization_id,
             &caller.principal_id,
+            &device(expected),
             expected.incarnation().as_str(),
             &id,
         )

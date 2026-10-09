@@ -135,6 +135,7 @@ async fn record_use_case_admits_before_metadata_and_rechecks_each_request() {
             receivers: &bindings,
             conversations: &conversations,
             grants: &CONVERSATION_READ_GRANT,
+            read_grants: &crate::conversation_test_support::EveryConversationGranted,
         },
         source: &source,
     };
@@ -340,6 +341,7 @@ async fn passive_admission_preserves_unverifiable_authority_failures() {
             receivers: &bindings,
             conversations: &conversations,
             grants: &CONVERSATION_READ_GRANT,
+            read_grants: &crate::conversation_test_support::EveryConversationGranted,
         };
         let calls = AtomicUsize::new(0);
         assert_eq!(
@@ -488,6 +490,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
         receivers: &bindings,
         conversations: &conversations,
         grants: &CONVERSATION_READ_GRANT,
+        read_grants: &crate::conversation_test_support::EveryConversationGranted,
     };
     let calls = AtomicUsize::new(0);
     let source = |_: ReceiverReadScope| {
@@ -813,6 +816,7 @@ async fn catalogue_use_case_correlates_admitted_selector_and_operation_before_re
             receivers: &bindings,
             conversations: &conversations,
             grants: &CONVERSATION_READ_GRANT,
+            read_grants: &crate::conversation_test_support::EveryConversationGranted,
         },
         source: &source,
     };
@@ -1028,6 +1032,7 @@ async fn each_operation_asks_for_its_own_grant() {
         receivers: &bindings,
         conversations: &conversations,
         grants: &OPERATION_GRANTS,
+        read_grants: &crate::conversation_test_support::EveryConversationGranted,
     };
     let records = RecordSpy::default();
     let read = ReadRecords {
@@ -1088,6 +1093,7 @@ async fn each_operation_asks_for_its_own_grant() {
         receivers: &bindings,
         conversations: &conversations,
         grants: &OPERATION_GRANTS,
+        read_grants: &crate::conversation_test_support::EveryConversationGranted,
     };
     let catalogue = ReadCatalogue {
         admission,
@@ -1180,4 +1186,188 @@ impl PolicyEvaluator for AskedActions {
         self.0.lock().unwrap().push(grant);
         Ok(Decision::Deny)
     }
+}
+
+// Read grants (issue 704): rows G1, G3 and G4 of docs/design/read-grants.md.
+// The store is both the ownership repository and the grant table, as
+// composition wires it.
+
+struct GrantFixture {
+    _directory: tempfile::TempDir,
+    store: LocalConversationStore,
+    id: ConversationId,
+}
+impl GrantFixture {
+    async fn new() -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("conversations");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let store = LocalConversationStore::open(&private.join("metadata.sqlite3")).unwrap();
+        let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+        store
+            .create(
+                Conversation::new(
+                    id.clone(),
+                    OrganizationId::new("org").unwrap(),
+                    PrincipalId::new("owner").unwrap(),
+                    "panel".into(),
+                    "create".into(),
+                    1,
+                    AgentId::Claude,
+                    ConversationModelId::new("model").unwrap(),
+                    ConversationApprovalMode::Ask,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        Self {
+            _directory: directory,
+            store,
+            id,
+        }
+    }
+    async fn change(&self, transition: crate::conversation::application::ReadGrantTransition) {
+        use crate::conversation::application::ReadGrants;
+        assert!(self
+            .store
+            .change(crate::conversation::application::ReadGrantChange {
+                transition,
+                conversation_id: self.id.clone(),
+                receiver_id: Some("receiver".into()),
+                credential_id: CredentialId::new("credential").unwrap(),
+                initiator: crate::conversation::application::ConversationCaller {
+                    organization_id: OrganizationId::new("org").unwrap(),
+                    principal_id: PrincipalId::new("owner").unwrap(),
+                    surface_id: "desktop".into(),
+                    action_id: "share".into(),
+                },
+                at_ms: 1,
+            })
+            .await
+            .unwrap());
+    }
+}
+
+async fn device_session() -> nessa_auth::application::session::AuthenticatedSession {
+    let access = access();
+    AuthenticateSession {
+        verifier: &access,
+        access: &access,
+        clock: &FixedClock,
+    }
+    .execute(
+        &CredentialEvidence::new(b"secret".to_vec()).unwrap(),
+        &AudienceId::new("gateway").unwrap(),
+    )
+    .await
+    .unwrap()
+}
+
+/// Rows G1 (refused before its source, for every record read and the head a
+/// records watch is admitted as) and G3 (granted, then admitted).
+#[tokio::test]
+async fn an_ungranted_conversation_is_refused_before_its_source() {
+    let fixture = GrantFixture::new().await;
+    let access = access();
+    let policy = CedarPolicyEvaluator::new().unwrap();
+    let gateway = Resource::new(
+        OrganizationId::new("org").unwrap(),
+        ResourceId::new("gateway").unwrap(),
+    );
+    let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
+    let admit = AdmitPassiveRead {
+        authorization: AuthorizeAction {
+            access: &access,
+            clock: &FixedClock,
+            policy: &policy,
+        },
+        gateway: &gateway,
+        receivers: &bindings,
+        conversations: &fixture.store,
+        grants: &CONVERSATION_READ_GRANT,
+        read_grants: &fixture.store,
+    };
+    let session = device_session().await;
+    let calls = AtomicUsize::new(0);
+    for read in [PassiveRead::RecordHead, PassiveRead::RecordPage] {
+        let source = |_: ReceiverReadScope| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            async { Ok::<(), ()>(()) }
+        };
+        assert_eq!(
+            admit
+                .read_with(&session, &fixture.id, "receiver", 7, read, source)
+                .await,
+            Err(ReadRefusal::WrongOwner)
+        );
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "no source was touched");
+    fixture
+        .change(crate::conversation::application::ReadGrantTransition::Grant)
+        .await;
+    for read in [PassiveRead::RecordHead, PassiveRead::RecordPage] {
+        assert!(admit
+            .execute(&session, &fixture.id, "receiver", 7, read)
+            .await
+            .is_ok());
+    }
+}
+
+/// Row G4: revocation ends the next read; a read already admitted finishes.
+#[tokio::test]
+async fn a_revoke_ends_the_next_read_and_lets_an_admitted_one_finish() {
+    let fixture = GrantFixture::new().await;
+    fixture
+        .change(crate::conversation::application::ReadGrantTransition::Grant)
+        .await;
+    let access = access();
+    let policy = CedarPolicyEvaluator::new().unwrap();
+    let gateway = Resource::new(
+        OrganizationId::new("org").unwrap(),
+        ResourceId::new("gateway").unwrap(),
+    );
+    let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
+    let admit = AdmitPassiveRead {
+        authorization: AuthorizeAction {
+            access: &access,
+            clock: &FixedClock,
+            policy: &policy,
+        },
+        gateway: &gateway,
+        receivers: &bindings,
+        conversations: &fixture.store,
+        grants: &CONVERSATION_READ_GRANT,
+        read_grants: &fixture.store,
+    };
+    let session = device_session().await;
+    let finished = admit
+        .read_with(
+            &session,
+            &fixture.id,
+            "receiver",
+            7,
+            PassiveRead::RecordPage,
+            |_: ReceiverReadScope| async {
+                // The owner revokes while this admitted read is running.
+                fixture
+                    .change(crate::conversation::application::ReadGrantTransition::Revoke)
+                    .await;
+                Ok::<_, ()>("page")
+            },
+        )
+        .await;
+    assert_eq!(finished, Ok("page"));
+    assert_eq!(
+        admit
+            .execute(
+                &session,
+                &fixture.id,
+                "receiver",
+                7,
+                PassiveRead::RecordPage
+            )
+            .await,
+        Err(ReadRefusal::WrongOwner)
+    );
 }

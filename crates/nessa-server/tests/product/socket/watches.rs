@@ -101,6 +101,8 @@ impl WatchFixture {
             )
             .await
             .unwrap();
+        // The watching device is granted the conversation (read grants).
+        crate::conversation_test_support::grant_read(metadata.as_ref(), &id, "receiver").await;
         let storage = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
         storage.initialize().await.unwrap();
         let records = Arc::new(CountingRecords {
@@ -140,7 +142,7 @@ impl WatchFixture {
             .unwrap();
         }
         let state = state
-            .with_passive_read(receiver.clone(), metadata.clone())
+            .with_passive_read(receiver.clone(), metadata.clone(), metadata.clone())
             .with_change_watches(records.clone(), metadata)
             .with_record_source(reads.clone());
         let session = authenticate(&state).await;
@@ -421,6 +423,7 @@ async fn watch_admission_worker_loss_retains_original_owner_while_other_read_and
     });
     let _release = ReleaseHeld(work.clone());
     let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
+    let grants = fixture.state.passive_read.as_ref().unwrap().2.clone();
     fixture.state = fixture.state.clone().with_passive_read(
         Arc::new(HoldFirstReceiver {
             actual: RecordBinding,
@@ -432,6 +435,7 @@ async fn watch_admission_worker_loss_retains_original_owner_while_other_read_and
             during_hold: AtomicU64::new(0),
         }),
         metadata,
+        grants,
     );
     let reader = Arc::new(NessaRecordReadSource::new(
         fixture.storage.clone(),
@@ -758,6 +762,7 @@ async fn lost_socket_observer_cannot_erase_fault_after_original_authority_worker
     });
     let _release = ReleaseHeld(work.clone());
     let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
+    let grants = fixture.state.passive_read.as_ref().unwrap().2.clone();
     fixture.state = fixture.state.clone().with_passive_read(
         Arc::new(PanicAfterReceiver(HoldFirstReceiver {
             actual: RecordBinding,
@@ -769,6 +774,7 @@ async fn lost_socket_observer_cannot_erase_fault_after_original_authority_worker
             during_hold: AtomicU64::new(0),
         })),
         metadata,
+        grants,
     );
     let (socket, peer) = test_socket(None);
     let socket = tokio::spawn(run_authenticated(
@@ -818,10 +824,11 @@ async fn unwatch_ack_retains_original_authority_target_until_actual_join() {
         during_hold: AtomicU64::new(0),
     });
     let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
+    let grants = fixture.state.passive_read.as_ref().unwrap().2.clone();
     fixture.state = fixture
         .state
         .clone()
-        .with_passive_read(authority.clone(), metadata);
+        .with_passive_read(authority.clone(), metadata, grants);
     let (socket, mut peer) = test_socket(None);
     let socket = tokio::spawn(run_authenticated(
         socket,
@@ -1317,10 +1324,11 @@ async fn actual_actor_replaces_unsent_dirty_after_observing_source_terminal_befo
         during_hold: AtomicU64::new(0),
     });
     let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
+    let grants = fixture.state.passive_read.as_ref().unwrap().2.clone();
     fixture.state = fixture
         .state
         .clone()
-        .with_passive_read(authority.clone(), metadata);
+        .with_passive_read(authority.clone(), metadata, grants);
     let mut watches = ConnectionWatches::new(&fixture.state);
     let slot = Arc::new(Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap());
     let request = RequestFrame::new("actor-registration", "conversation.watchRecords", &json!({"conversationId": fixture.id.to_string(), "receiverId": "receiver", "accessEpoch": "3"})).unwrap();
@@ -1570,10 +1578,11 @@ async fn held_receiver_fixture(
         during_hold: AtomicU64::new(0),
     });
     let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
+    let grants = fixture.state.passive_read.as_ref().unwrap().2.clone();
     fixture.state = fixture
         .state
         .clone()
-        .with_passive_read(authority.clone(), metadata)
+        .with_passive_read(authority.clone(), metadata, grants)
         .with_settings(checked_every(interval));
     (fixture, work, authority)
 }
@@ -2186,7 +2195,8 @@ impl HostWatchFixture {
             Arc::new(receiver)
         };
         let metadata = inner.state.passive_read.as_ref().unwrap().1.clone();
-        inner.state = inner.state.clone().with_passive_read(receiver, metadata);
+        let grants = inner.state.passive_read.as_ref().unwrap().2.clone();
+        inner.state = inner.state.clone().with_passive_read(receiver, metadata, grants);
         let (socket, peer) = test_socket(None);
         let socket = tokio::spawn(run_authenticated(
             socket,

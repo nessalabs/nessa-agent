@@ -166,7 +166,7 @@ impl ConversationCaller {
     /// split a log line whichever command wrote it. The conversation entity
     /// still asks the same question of its own fields, through the same
     /// function, so there is one rule and not two that have to agree.
-    fn actor(&self) -> Result<ActionContext, ConversationError> {
+    pub(super) fn actor(&self) -> Result<ActionContext, ConversationError> {
         Conversation::check_creator_context(&self.surface_id, &self.action_id)
             .map_err(|_| ConversationError::InvalidInput)?;
         ActionContext::new(

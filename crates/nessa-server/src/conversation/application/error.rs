@@ -34,6 +34,9 @@ pub enum ConversationError {
     /// for good, a creation of its identity included
     /// (`a_deleted_conversation_refuses_every_command_on_it`).
     Deleted,
+    /// A share named a credential that is not an active paired device of
+    /// the conversation's owner.
+    ShareTargetNotPaired,
     /// A delete that happened — the conversation is tombstoned, left out of
     /// every list, and refused — and did not finish. Repeating the delete
     /// finishes it.

@@ -37,8 +37,8 @@ use crate::{
     browser_session::adapters::PersistentSessions,
     conversation::{
         application::{
-            ConversationRepository, ConversationService, McpAppAudit, ReceiverAuthority,
-            WatchCatalogue, WatchRecords,
+            ConversationRepository, ConversationService, McpAppAudit, ReadGrants,
+            ReceiverAuthority, WatchCatalogue, WatchRecords,
         },
         infrastructure::{LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource},
     },
@@ -273,6 +273,7 @@ pub(super) async fn product_state(
                     built.agents_catalog,
                     built.receivers,
                     built.metadata,
+                    built.read_grants,
                     built.record_reader,
                     built.catalogue_reader,
                     built.resource_route,
@@ -346,6 +347,7 @@ pub(super) async fn product_state(
         agents_catalog,
         receivers,
         metadata,
+        read_grants,
         reader,
         catalogue,
         resource_route,
@@ -359,7 +361,7 @@ pub(super) async fn product_state(
         catalogue_reader = Some(catalogue.clone());
         product = product
             .with_conversations(Arc::new(service))
-            .with_passive_read(receivers, metadata)
+            .with_passive_read(receivers, metadata, read_grants)
             .with_change_watches(record_watches, catalogue_watches)
             .with_record_source(reader)
             .with_catalogue_source(catalogue)
@@ -441,6 +443,7 @@ struct BuiltConversations {
     catalogue_watches: Arc<dyn WatchCatalogue>,
     receivers: Arc<dyn ReceiverAuthority>,
     metadata: Arc<dyn ConversationRepository>,
+    read_grants: Arc<dyn ReadGrants>,
     attachments: AttachmentService,
     agents_catalog: AgentsListResult,
     /// Which configured agents this run cannot start even though they are
@@ -1112,6 +1115,7 @@ async fn conversations(
     Ok(BuiltConversations {
         service,
         receivers,
+        read_grants: metadata.clone(),
         metadata,
         attachments: attachments.service,
         agents_catalog,

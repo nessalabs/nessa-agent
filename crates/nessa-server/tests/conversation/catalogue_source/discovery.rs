@@ -66,6 +66,7 @@ impl ConversationCatalogue for Metadata {
         &self,
         _: &OrganizationId,
         _: &PrincipalId,
+        _: &crate::conversation::application::Reader,
         _: &str,
         _: &ConversationId,
     ) -> ConversationFuture<'_, Option<CatalogueValue>> {

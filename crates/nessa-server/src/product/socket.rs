@@ -1549,6 +1549,9 @@ async fn dispatch_authorized(
         "agents.installOptions" | "agents.install" => {
             super::agent_install::dispatch(state, session, frame).await
         }
+        "conversation.share" | "conversation.unshare" | "conversation.shares" => {
+            super::read_access::dispatch_share(state, session, frame).await
+        }
         method if method.starts_with("conversation.") => {
             super::conversation::dispatch(state, session, frame).await
         }
@@ -2324,6 +2327,7 @@ mod tests {
                 .with_passive_read(
                     Arc::new(RecordBinding),
                     Arc::new(MemoryRepository::default()),
+                    Arc::new(crate::conversation_test_support::EveryConversationGranted),
                 )
                 .with_record_source(Arc::new(UnreachableRecordSource))
                 .with_catalogue_source(Arc::new(UnreachableCatalogueSource));
@@ -2817,7 +2821,11 @@ mod tests {
             Handle::current(),
         ));
         let state = state
-            .with_passive_read(Arc::new(RecordBinding), conversations)
+            .with_passive_read(
+                Arc::new(RecordBinding),
+                conversations,
+                Arc::new(crate::conversation_test_support::EveryConversationGranted),
+            )
             .with_record_source(source.clone());
         let session = authenticate(&state).await;
         let mut head_frame = request("head", "conversation.recordsHead");
@@ -4099,7 +4107,11 @@ mod tests {
             );
             let source = Arc::new(RecordAdmissionSpy(AtomicU64::new(0)));
             let mut state = state
-                .with_passive_read(Arc::new(RecordBinding), repository)
+                .with_passive_read(
+                    Arc::new(RecordBinding),
+                    repository,
+                    Arc::new(crate::conversation_test_support::EveryConversationGranted),
+                )
                 .with_record_source(source.clone());
             state.access = authority;
             let permits = Arc::new(Semaphore::new(1));
