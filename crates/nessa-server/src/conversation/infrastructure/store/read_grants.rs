@@ -73,12 +73,13 @@ impl ReadGrants for LocalConversationStore {
             }
             // A retried request answers what it answered the first time, so
             // a share whose reply was lost cannot, retried after a later
-            // unshare, grant again (row G16). The same request naming another
-            // device or the other change is refused. A request that changed
-            // nothing wrote no journal row, and a retry of it is decided anew.
-            let replayed: Option<(String, String)> = transaction
+            // unshare, grant again (row G16). That holds for a request that
+            // changed nothing too: it is journaled with before equal to after.
+            // The same request naming another device or the other change is
+            // refused.
+            let replayed: Option<(String, String, String)> = transaction
                 .query_row(
-                    "SELECT credential_id, after FROM read_grant_changes
+                    "SELECT credential_id, before, after FROM read_grant_changes
                      WHERE conversation_id = ?1 AND initiator = ?2 AND surface = ?3
                        AND request = ?4",
                     params![
@@ -87,17 +88,17 @@ impl ReadGrants for LocalConversationStore {
                         change.initiator.surface_id,
                         change.initiator.action_id
                     ],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
                 .optional()
                 .map_err(failed)?;
-            if let Some((credential, after)) = replayed {
+            if let Some((credential, before, after)) = replayed {
                 let target = match change.transition {
                     ReadGrantTransition::Grant => "read",
                     ReadGrantTransition::Revoke => "none",
                 };
                 return if credential == change.credential_id.as_str() && after == target {
-                    Ok(true)
+                    Ok(before != after)
                 } else {
                     Err(ConversationError::InvalidInput)
                 };
@@ -116,8 +117,9 @@ impl ReadGrants for LocalConversationStore {
                 .optional()
                 .map_err(failed)?;
             let (receiver, before, after) = match (change.transition, existing) {
-                (ReadGrantTransition::Grant, Some(_)) | (ReadGrantTransition::Revoke, None) => {
-                    return Ok(false);
+                (ReadGrantTransition::Grant, Some((receiver, _))) => (receiver, "read", "read"),
+                (ReadGrantTransition::Revoke, None) => {
+                    (change.receiver_id.clone().unwrap_or_default(), "none", "none")
                 }
                 (ReadGrantTransition::Grant, None) => {
                     let receiver = change.receiver_id.clone().ok_or(ConversationError::InvalidInput)?;
@@ -156,16 +158,29 @@ impl ReadGrants for LocalConversationStore {
                     (receiver, "read", "none")
                 }
             };
+            let applied = before != after;
             // A grant change is a catalogue change: the device's next pass
             // starts past what it completed, so a newly granted row must
-            // carry a revision past it (row G5).
-            let revision = next_revision(&transaction, &conversation, false)?;
-            transaction
-                .execute(
-                    "UPDATE conversations SET change_revision = ?1 WHERE id = ?2",
-                    params![revision, id],
-                )
-                .map_err(failed)?;
+            // carry a revision past it (row G5). A request that changed
+            // nothing keeps the revision it found (row G9).
+            let revision = if applied {
+                let revision = next_revision(&transaction, &conversation, false)?;
+                transaction
+                    .execute(
+                        "UPDATE conversations SET change_revision = ?1 WHERE id = ?2",
+                        params![revision, id],
+                    )
+                    .map_err(failed)?;
+                revision
+            } else {
+                transaction
+                    .query_row(
+                        "SELECT change_revision FROM conversations WHERE id = ?1",
+                        params![id],
+                        |row| row.get(0),
+                    )
+                    .map_err(failed)?
+            };
             transaction
                 .execute(
                     "INSERT INTO read_grant_changes
@@ -187,6 +202,9 @@ impl ReadGrants for LocalConversationStore {
                 )
                 .map_err(failed)?;
             transaction.commit().map_err(failed)?;
+            if !applied {
+                return Ok(false);
+            }
             tracing::info!(
                 conversation_id = %change.conversation_id,
                 credential_id = change.credential_id.as_str(),

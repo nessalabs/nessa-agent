@@ -99,8 +99,13 @@ CREATE TABLE read_grants (
     UNIQUE (credential_id, conversation_id)
 ) STRICT;
 
+-- A conversation's grants, for its shares list, count and revoke.
+CREATE INDEX read_grants_conversation ON read_grants (conversation_id);
+
 -- Every grant and revoke as the owner made it: before and after, who, from
--- which surface, under which request, and the catalogue revision it took.
+-- which surface, under which request, and the catalogue revision it took. A
+-- request that changed nothing is kept too, with before equal to after, so a
+-- retry of it replays that answer.
 -- Never changed or removed.
 CREATE TABLE read_grant_changes (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,

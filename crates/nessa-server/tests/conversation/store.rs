@@ -2571,12 +2571,44 @@ async fn a_repeated_share_or_unshare_changes_nothing() {
         opened.store.head(&org(), &alice()).await.unwrap().revision,
         head
     );
-    let journaled: i64 = raw(&opened.path)
-        .query_row("SELECT COUNT(*) FROM read_grant_changes", [], |row| {
-            row.get(0)
-        })
+    let unchanged: i64 = raw(&opened.path)
+        .query_row(
+            "SELECT COUNT(*) FROM read_grant_changes WHERE before = after",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
-    assert_eq!(journaled, 1);
+    assert_eq!(unchanged, 2);
+}
+
+/// Row G16, for a request that changed nothing: a share of a conversation
+/// already shared, its reply lost and retried after an unshare, still answers
+/// `applied: false` and does not grant again.
+#[tokio::test]
+async fn a_retried_share_that_changed_nothing_never_undoes_a_later_unshare() {
+    use crate::conversation::application::{ReadGrantTransition, ReadGrants};
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    assert!(grant(&opened.store, &id, "phone").await);
+    let share = || {
+        grant_change(
+            ReadGrantTransition::Grant,
+            &id,
+            Some("phone"),
+            "phone-credential",
+            "share-again",
+        )
+    };
+    assert!(!opened.store.change(share()).await.unwrap());
+    assert!(revoke(&opened.store, &id, "phone").await);
+    let head = opened.store.head(&org(), &alice()).await.unwrap().revision;
+    assert!(!opened.store.change(share()).await.unwrap());
+    assert!(!opened.store.is_granted(&id, "phone").await.unwrap());
+    assert_eq!(
+        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        head
+    );
 }
 
 /// Row G16: a retried request answers what it answered the first time. A
