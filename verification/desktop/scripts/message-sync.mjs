@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Ready gateway text to production desktop DOM plus two frame opportunities (#532). */
+/** A gateway frame's text to production desktop DOM plus two frame opportunities (#532, #702). */
 import { resolve } from "node:path"
 import { mkdirSync } from "node:fs"
 import { target, startPreview, repoRoot } from "./lib/server.mjs"
@@ -25,14 +25,14 @@ import {
 } from "./lib/perf.mjs"
 const meta = {
   name: "message-sync",
-  summary: "active delivery, held list/read independence and idle cost",
+  summary: "active delivery, held list/conversation independence and idle cost",
   defaults: { engine: "chromium,webkit", mode: "prod" },
   options: {
     only: { type: "string" },
     runs: { type: "string", default: "3" },
     throttle: { type: "string", default: "4" },
   },
-  help: "--only retained-app|delivery. retained-app requires the dev sandbox and preserves the exact app frame across text changes. Three fresh-page runs per engine/layout; calibrated 4x Chromium, unthrottled WebKit. Ten active replacements and five with a held summary/list. Asserts 600 ms delivery and idle request pacing; controlled transport, no provider startup.",
+  help: "--only retained-app|delivery. retained-app requires the dev sandbox and preserves the exact app frame across text changes. Three fresh-page runs per engine/layout; calibrated 4x Chromium, unthrottled WebKit. Ten active replacements and five while the list's and another conversation's frames are held. Asserts 600 ms delivery, that delivery opens no subscription, and that a window at rest asks nothing; controlled transport, no provider startup.",
 }
 const stats = (samples) => ({
   samples: samples.length,
@@ -42,7 +42,7 @@ const stats = (samples) => ({
 async function measure(page, prefix, count) {
   const samples = []
   for (let i = 0; i < count; i++) {
-    // Vary publication phase reproducibly instead of publishing only just after a poll.
+    // Vary publication phase reproducibly.
     await page.waitForTimeout((i * 73) % 251)
     samples.push(
       await page.evaluate(
@@ -305,31 +305,24 @@ await main(
                 }
               await page.evaluate(() => window.__messageSync.rest())
               await page.locator(css.message, { hasText: "Finished" }).waitFor()
-              // The final list changes the row read-against; let that idle refresh settle.
-              await page.waitForFunction(
-                (lists) => window.__messageSync.snapshot().lists >= lists + 2,
-                stalled.lists,
-                { timeout: 5_000 },
-              )
               const idle = await page.evaluate(() => window.__messageSync.snapshot())
-              await page.waitForFunction(
-                (lists) => window.__messageSync.snapshot().lists >= lists + 2,
-                idle.lists,
-                { timeout: 4_000 },
-              )
+              // At rest nothing changes, so nothing is asked: no timer reads again.
+              await page.waitForTimeout(3_000)
               const rested = await page.evaluate(() => window.__messageSync.snapshot())
-              if (stalled.heldReads !== 1)
+              if (stalled.subscribes !== before.subscribes)
                 failures.push(
-                  `held conversation admitted ${stalled.heldReads} reads, expected one`,
+                  `held frames opened ${stalled.subscribes - before.subscribes} subscriptions`,
                 )
-              const elapsed = after.now - before.now
-              if (after.lists - before.lists > Math.ceil(elapsed / 1_000) + 1)
-                failures.push("summary request rate increased")
-              if (after.fastReads - before.fastReads > Math.ceil(elapsed / 250) + 1)
-                failures.push("active request rate exceeded four per second")
-              if (rested.reads !== idle.reads)
+              if (after.subscribes !== before.subscribes)
                 failures.push(
-                  `idle transcripts read ${rested.reads - idle.reads} more times`,
+                  `active delivery opened ${after.subscribes - before.subscribes} subscriptions`,
+                )
+              if (
+                rested.subscribes !== idle.subscribes ||
+                rested.observes !== idle.observes
+              )
+                failures.push(
+                  `a window at rest asked again: ${JSON.stringify({ idle, rested })}`,
                 )
               const frames = interactionBudget([activeFrames, heldFrames])
               if (engine === "chromium" && frames.exceeded)

@@ -169,7 +169,7 @@ export type CommandFailure =
  * of the ones a command does. Folding the two together would make every switch
  * over a command's reasons answer for a read's, and the other way round.
  *
- * Two words, because the panel keeps polling and keeps showing the last view
+ * Two words, because the panel keeps following and keeps showing the last view
  * whatever went wrong, so a word earns its place only by changing what is said
  * or whether a retry is offered:
  *
@@ -289,10 +289,11 @@ type ConversationState = {
    * Why the last read of this conversation failed, in the panel's own words.
    * Set only while the view on screen is older than the gateway's: any view
    * that arrives clears it, and it says nothing about `error`, which belongs to
-   * a command somebody asked for rather than to the panel's own polling.
+   * a command somebody asked for rather than to the panel's own follow.
    */
   readError?: ReadFailure
   revision?: string
+  /** The follow or read whose views apply to this tab; any other's are dropped. */
   readRequest?: string
   cancellationStatus?: "cancelling" | "cancelled"
   controlPending?: boolean

@@ -24,11 +24,12 @@ import type {
   ImageReference,
 } from "../../model"
 import { scenarioEffects } from "../scenario/effects"
+import { followByReading } from "../../testing"
 import {
   attachFiles,
   closeTab,
   controlConversation,
-  refreshConversation,
+  followConversation,
   removeFile,
   sendDraft,
   stageAttachment,
@@ -78,14 +79,41 @@ const described = (file: FileAttachment) => ({
  * picker that can say where a file is. It defaults to the app's answer, which
  * is what every test here but one is about.
  */
-function storeWith(overrides: Partial<ConversationEffects> = {}, canChoosePaths = true) {
-  const echo = scenarioEffects("echo")
+/** What a gateway that never changes answers each time the conversation is followed. */
+type Read = (conversationId: string) => Promise<ConversationView>
+/** What the scenario's own views say instead, as it changes. */
+type Shape = (view: ConversationView) => ConversationView
+
+function storeWith(
+  {
+    read,
+    shape,
+    scenario: echo = scenarioEffects("echo"),
+    ...overrides
+  }: Partial<ConversationEffects> & {
+    read?: Read
+    shape?: Shape
+    /** The substitute gateway the rest stands in front of. */
+    scenario?: ConversationEffects
+  } = {},
+  canChoosePaths = true,
+) {
+  const follow: ConversationEffects["follow"] | undefined = read
+    ? followByReading(read)
+    : shape
+      ? (id, follower) =>
+          echo.follow(id, {
+            view: (view) => follower.view(shape(view)),
+            failed: follower.failed,
+          })
+      : undefined
   const effects = {
     ...echo,
     send: vi.fn(echo.send),
     steer: vi.fn(echo.steer),
     // The gateway's answer, whatever was uploaded: a normalized reference.
     stageAttachment: vi.fn<ConversationEffects["stageAttachment"]>(async () => stored),
+    ...(follow ? { follow } : {}),
     ...overrides,
   }
   const store = makeStore(createDependencies({ conversation: effects, canChoosePaths }))
@@ -178,7 +206,7 @@ it("sends files far over the message total when what the gateway stored fits", a
   const context = storeWith({ read: viewSaying(true) })
   for (let index = 0; index < 2; index++)
     await attachStored(context.store, image(`big${index}`, { size: 18 * 1024 * 1024 }))
-  await context.store.dispatch(refreshConversation("c0"))
+  await context.store.dispatch(followConversation("c0"))
   const sent = await context.store.dispatch(sendDraft({ content: [], id: "c0" }))
   expect(sent.meta.requestStatus).toBe("fulfilled")
   expect(context.effects.send).toHaveBeenCalledExactlyOnceWith(
@@ -194,7 +222,7 @@ it("refuses a file part the draft does not hold rather than dropping it", async 
   ])
 })
 
-function viewSaying(imageInput: boolean): ConversationEffects["read"] {
+function viewSaying(imageInput: boolean): Read {
   return async (conversationId): Promise<ConversationView> => ({
     conversationId,
     approvalMode: "ask",
@@ -237,13 +265,13 @@ function viewSaying(imageInput: boolean): ConversationEffects["read"] {
 it("refuses images for an agent that does not take them", async () => {
   const context = storeWith({ read: viewSaying(false) })
   await attachStored(context.store, image("a"))
-  await context.store.dispatch(refreshConversation("c0"))
+  await context.store.dispatch(followConversation("c0"))
   await expectRefused(context, "image-input-unsupported", /does not take images/)
 })
 
 it("does not guess before the gateway has said whether the agent takes images", async () => {
   const gate = deferred<ConversationView>()
-  const read = vi.fn<ConversationEffects["read"]>(() => gate.promise)
+  const read = vi.fn<Read>(() => gate.promise)
   const context = storeWith({ read })
   await attachStored(context.store, image("a"))
   expect(context.current().remote).toBeUndefined()
@@ -267,10 +295,15 @@ it("still refuses a draft with nothing in it, silently", async () => {
   expect(context.current().error).toBeUndefined()
 })
 
-async function readyToSend(overrides: Partial<ConversationEffects> = {}) {
-  const context = storeWith({ read: viewSaying(true), ...overrides })
+/** The scenario's views, saying whether the agent takes images. */
+const saying =
+  (imageInput: boolean): Shape =>
+  (view) => ({ ...view, capabilities: { ...view.capabilities, imageInput } })
+
+async function readyToSend(overrides: Parameters<typeof storeWith>[0] = {}) {
+  const context = storeWith({ shape: saying(true), ...overrides })
   await attachStored(context.store, image("finder"))
-  await context.store.dispatch(refreshConversation("c0"))
+  await context.store.dispatch(followConversation("c0"))
   return context
 }
 
@@ -315,7 +348,7 @@ it("retries an uncertain send with the identical images and identities", async (
     .fn<ConversationEffects["send"]>()
     .mockRejectedValueOnce(new Error("connection lost"))
     .mockImplementation(echo.send)
-  const context = await readyToSend({ create: echo.create, send })
+  const context = await readyToSend({ scenario: echo, send })
   await context.store
     .dispatch(sendDraft({ content: [{ type: "text", text: "look" }], id: "c0" }))
     .unwrap()
@@ -354,7 +387,7 @@ it.each([
       .fn<ConversationEffects["send"]>()
       .mockImplementationOnce(refusing(reason))
       .mockImplementation(echo.send)
-    const context = await readyToSend({ create: echo.create, send })
+    const context = await readyToSend({ scenario: echo, send })
     const before = context.draft()
     await context.store
       .dispatch(sendDraft({ content: [{ type: "text", text: "look" }], id: "c0" }))
@@ -377,7 +410,7 @@ it.each(["attachment-not-found", "attachment-unavailable"] as const)(
   async (reason) => {
     const echo = scenarioEffects("echo")
     const context = await readyToSend({
-      create: echo.create,
+      scenario: echo,
       send: vi.fn(refusing(reason)),
     })
     const file = context.draft()[0]!
@@ -420,7 +453,19 @@ it("keeps a draft's stored images when Stop names the running turn", async () =>
   // finished while the turn ran stays stored.
   const stop = vi.fn(async () => {})
   const close = vi.fn(async () => {})
-  const context = await readyToSend({ stop, close })
+  // A gateway whose turns are still waiting their turn, with nothing said yet.
+  const context = await readyToSend({
+    stop,
+    close,
+    shape: (view) => ({
+      ...saying(true)(view),
+      messages: view.messages.map((message) => ({
+        ...message,
+        status: "queued",
+        parts: [],
+      })),
+    }),
+  })
   await context.store.dispatch(
     sendDraft({ content: [{ type: "text", text: "look" }], id: "c0" }),
   )
@@ -503,10 +548,9 @@ it.each<ConversationTranscriptState>([
   "keeps %s history saved and closes its tab without closing shared work",
   async (state) => {
     const close = vi.fn(async () => {})
-    const read = viewSaying(true)
     const context = await readyToSend({
       close,
-      read: async (id) => ({ ...(await read(id)), transcriptState: state }),
+      shape: (view) => ({ ...saying(true)(view), transcriptState: state }),
     })
     const serverId = context.current().serverConversationId
     context.store.dispatch(removeFile("finder"))
@@ -555,10 +599,9 @@ it("detaches a stale prepared-empty complete view after shared work starts", asy
 
 it("retains a truncated confirmed-empty view and closes only its tab", async () => {
   const close = vi.fn(async () => {})
-  const read = viewSaying(true)
   const context = await readyToSend({
     close,
-    read: async (id) => ({ ...(await read(id)), truncated: true }),
+    shape: (view) => ({ ...saying(true)(view), truncated: true }),
   })
   context.store.dispatch(removeFile("finder"))
   expect(

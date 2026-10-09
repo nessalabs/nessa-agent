@@ -5,7 +5,7 @@ import { createDependencies } from "../../../composition/dependencies"
 import type { ConversationView } from "../../application/view"
 import { conversationNotice } from "../../ui/notification"
 import { gatewayEffects } from "../gateway/effects"
-import { bindConversation, controlConversation, refreshConversation } from "./slice"
+import { bindConversation, controlConversation, followConversation } from "./slice"
 
 /**
  * What a failed read becomes on the tab, and what the panel then says.
@@ -54,15 +54,30 @@ const view = (conversationId: string): ConversationView => ({
   transcriptState: "complete",
 })
 
+/**
+ * A client's view subscriptions, each answering what `read` does: a refusal,
+ * or one frame. Nothing comes after it, as from a conversation nobody changes.
+ */
+function subscribing(read: () => Promise<ConversationView>) {
+  return {
+    view: async (
+      _conversationId: string,
+      handlers: { view(frame: { cursor: string; view: ConversationView }): void },
+    ) => {
+      const view = await read()
+      queueMicrotask(() => handlers.view({ cursor: view.revision, view }))
+      return { close: async () => {} }
+    },
+  }
+}
+
+/** A follow tries again after a failure; here, never within the test. */
+const never = () => new Promise<void>(() => {})
+
 function reading(read: () => Promise<ConversationView>) {
-  const client = { conversation: { read } } as unknown as NessaClient
+  const client = { subscriptions: subscribing(read) } as unknown as NessaClient
   const store = makeStore(
-    createDependencies({
-      conversation: gatewayEffects(
-        () => client,
-        () => Promise.reject(new Error("no wait expected")),
-      ),
-    }),
+    createDependencies({ conversation: gatewayEffects(() => client, never) }),
   )
   store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
   return store
@@ -70,7 +85,7 @@ function reading(read: () => Promise<ConversationView>) {
 
 async function refreshed(cause: unknown) {
   const store = reading(() => Promise.reject(cause))
-  await store.dispatch(refreshConversation("c0"))
+  await store.dispatch(followConversation("c0"))
   return store.getState().conversation.conversations[0]!
 }
 
@@ -149,9 +164,9 @@ it("lets the next view clear the read failure, notice and all", async () => {
     )
     .mockResolvedValueOnce(view("server"))
   const store = reading(read as () => Promise<ConversationView>)
-  await store.dispatch(refreshConversation("c0"))
+  await store.dispatch(followConversation("c0"))
   expect(store.getState().conversation.conversations[0]!.readError).toBe("unavailable")
-  await store.dispatch(refreshConversation("c0"))
+  await store.dispatch(followConversation("c0"))
   const tab = store.getState().conversation.conversations[0]!
   expect(tab.readError).toBeUndefined()
   expect(conversationNotice(tab)).toBeNull()
@@ -163,16 +178,11 @@ function closedWithFailingRead(readCause: unknown) {
     conversation: {
       create: async () => ({ conversationId: "server" }),
       close: () => Promise.reject(new Error("acknowledgement lost")),
-      read: () => Promise.reject(readCause),
     },
+    subscriptions: subscribing(() => Promise.reject(readCause)),
   } as unknown as NessaClient
   const store = makeStore(
-    createDependencies({
-      conversation: gatewayEffects(
-        () => client,
-        () => Promise.reject(new Error("no wait expected")),
-      ),
-    }),
+    createDependencies({ conversation: gatewayEffects(() => client, never) }),
   )
   store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
   return store
@@ -232,7 +242,7 @@ it("reports what a read failure was translated from, including a code it could n
     // The gateway serving another conversation's data: not an adapter failure
     // at all, so the word is all the tab has and the sentence lives only here.
     const store = reading(async () => view("somebody-else"))
-    await store.dispatch(refreshConversation("c0"))
+    await store.dispatch(followConversation("c0"))
     expect(store.getState().conversation.conversations[0]!.readError).toBe("unavailable")
     expect(warn).toHaveBeenLastCalledWith(
       "[nessa] a conversation was not refreshed",

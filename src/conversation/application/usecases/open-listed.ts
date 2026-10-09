@@ -8,7 +8,7 @@ import { UNTITLED } from "../queries/roster"
  * shown, so choosing a row twice never opens a second tab onto one
  * conversation. Otherwise it is reopened as a new tab bound to the gateway's
  * identity and marked ready, exactly as a tab restored after a reload is: the
- * active tab's polling then reads its history.
+ * active tab's follow then reads its history.
  *
  * The listed title names the tab — the list's name for an untitled one, so the
  * row and the tab it opens agree — and the view that arrives keeps it current

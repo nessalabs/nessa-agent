@@ -3,7 +3,7 @@
  * The desktop app's window over a real gateway (#419): it connects as the
  * desktop app does, lists the gateway's conversations, opens one and draws
  * its turn, and draws a turn made elsewhere without a reload, once the
- * gateway holds it (the gateway source's poller). Design rows W1–W5 (#419,
+ * gateway holds it (the gateway source's subscriptions). Design rows W1–W5 (#419,
  * comment 5972894657, and the revisions after it).
  *
  * The page runs as the desktop app does: the fake host (`lib/fake-host.mjs`)

@@ -13,7 +13,7 @@ import type {
   McpServersApi,
   PairingApi,
 } from "@nessa/client"
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
 import { createDesktopDependencies } from "./dependencies"
 import { subagentsPluginId } from "./subagents"
 import {
@@ -157,94 +157,75 @@ describe("the window's widget plugins", () => {
         },
       ],
     ])
-    // One connection: the app was asked on the client its conversation was read on.
+    // One connection: the app was asked on the client its conversation is followed on.
     expect(drawn.connects()).toBe(1)
   })
 
-  it("make an app's tool call through the source, which reads its conversation until the call is answered (#436)", async () => {
-    vi.useFakeTimers()
-    try {
-      const drawn = gatewayWithApp()
-      const { workspace, widgets } = createDesktopDependencies({
-        gateway: drawn.connect,
-        apps: { sandbox: undefined, platform: "web" },
-      })
-      await workspace.transcript(conversation)
-      const stop = workspace.subscribe(() => {})
-      const plugin = widgets.plugin(appPluginId("mcptest"))
-      if (plugin?.kind !== "app") throw new Error("no app plugin")
-      const app = { executionId: "run", toolId: "call-1", instanceId: "mount" }
-      // At rest, the conversation is not read again.
-      await vi.advanceTimersByTimeAsync(3_000)
-      expect(drawn.reads()).toBe(1)
-      const call = plugin.ports.server.callTool(
-        { sessionId: conversation, server: "mcptest", app },
-        "app_delete_row",
-        {},
-      )
-      await vi.advanceTimersByTimeAsync(3_000)
-      const whileAsked = drawn.reads()
-      expect(whileAsked).toBeGreaterThan(1)
-      drawn.called.resolve({ resultJson: '{"content":[]}' })
-      await call
-      await vi.advanceTimersByTimeAsync(3_000)
-      expect(drawn.reads()).toBe(whileAsked)
-      stop()
-    } finally {
-      vi.useRealTimers()
-    }
+  it("make an app's tool call through the source, which follows its conversation again for the call (#436)", async () => {
+    const drawn = gatewayWithApp()
+    const { workspace, widgets } = createDesktopDependencies({
+      gateway: drawn.connect,
+      apps: { sandbox: undefined, platform: "web" },
+    })
+    await workspace.transcript(conversation)
+    const stop = workspace.subscribe(() => {})
+    const plugin = widgets.plugin(appPluginId("mcptest"))
+    if (plugin?.kind !== "app") throw new Error("no app plugin")
+    const app = { executionId: "run", toolId: "call-1", instanceId: "mount" }
+    // Let go (a frame too large to send): only the app's call follows it again.
+    drawn.letGo()
+    expect(drawn.subscribes()).toBe(1)
+    const call = plugin.ports.server.callTool(
+      { sessionId: conversation, server: "mcptest", app },
+      "app_delete_row",
+      {},
+    )
+    await settled()
+    expect(drawn.subscribes()).toBe(2)
+    drawn.called.resolve({ resultJson: '{"content":[]}' })
+    await call
+    stop()
   })
 
-  it("D18 (#390): send an app's message through the source, which reads its conversation until it is answered; a context starts no read", async () => {
-    vi.useFakeTimers()
-    try {
-      const drawn = gatewayWithApp()
-      const { workspace, widgets } = createDesktopDependencies({
-        gateway: drawn.connect,
-        apps: { sandbox: undefined, platform: "web" },
-      })
-      await workspace.transcript(conversation)
-      const stop = workspace.subscribe(() => {})
-      const plugin = widgets.plugin(appPluginId("mcptest"))
-      if (plugin?.kind !== "app") throw new Error("no app plugin")
-      const port = plugin.ports.conversation
-      if (!port) throw new Error("no conversation port")
-      const address = {
-        sessionId: conversation,
-        server: "mcptest",
-        app: { executionId: "run", toolId: "call-1", instanceId: "mount" },
-      }
-      // A context waits on nobody: while the gateway has not answered it, as
-      // after, no read is started for it, however long it takes.
-      await vi.advanceTimersByTimeAsync(3_000)
-      const atRest = drawn.reads()
-      const given = port.updateModelContext(
-        address,
-        { content: [{ type: "text", text: "Showing April" }] },
-        new AbortController().signal,
-      )
-      await vi.advanceTimersByTimeAsync(10_000)
-      expect(drawn.contexts).toEqual([
-        [conversation, address.app, "mcptest", { text: "Showing April" }],
-      ])
-      expect(drawn.reads()).toBe(atRest)
-      drawn.contexted.resolve({ requestId: "request", applied: true })
-      expect(await given).toEqual({ kind: "ok", result: {} })
-      await vi.advanceTimersByTimeAsync(3_000)
-      expect(drawn.reads()).toBe(atRest)
-      // A message waits on the person's review there: read each round until answered.
-      const sent = port.sendMessage(address, [{ type: "text", text: "Plot May" }])
-      await vi.advanceTimersByTimeAsync(3_000)
-      const whileAsked = drawn.reads()
-      expect(whileAsked).toBeGreaterThan(atRest)
-      drawn.messaged.resolve({ executionId: "turn" })
-      expect(await sent).toEqual({ kind: "ok", result: {} })
-      await vi.advanceTimersByTimeAsync(3_000)
-      expect(drawn.reads()).toBe(whileAsked)
-      stop()
-    } finally {
-      vi.useRealTimers()
+  it("D18 (#390): send an app's message through the source, which follows its conversation; a context follows nothing", async () => {
+    const drawn = gatewayWithApp()
+    const { workspace, widgets } = createDesktopDependencies({
+      gateway: drawn.connect,
+      apps: { sandbox: undefined, platform: "web" },
+    })
+    await workspace.transcript(conversation)
+    const stop = workspace.subscribe(() => {})
+    const plugin = widgets.plugin(appPluginId("mcptest"))
+    if (plugin?.kind !== "app") throw new Error("no app plugin")
+    const port = plugin.ports.conversation
+    if (!port) throw new Error("no conversation port")
+    const address = {
+      sessionId: conversation,
+      server: "mcptest",
+      app: { executionId: "run", toolId: "call-1", instanceId: "mount" },
     }
+    drawn.letGo()
+    // A context waits on nobody: while the gateway has not answered it, as
+    // after, it follows nothing.
+    const given = port.updateModelContext(
+      address,
+      { content: [{ type: "text", text: "Showing April" }] },
+      new AbortController().signal,
+    )
+    await settled()
+    expect(drawn.contexts).toEqual([
+      [conversation, address.app, "mcptest", { text: "Showing April" }],
+    ])
+    drawn.contexted.resolve({ requestId: "request", applied: true })
+    expect(await given).toEqual({ kind: "ok", result: {} })
+    expect(drawn.subscribes()).toBe(1)
+    // A message waits on the person's review there: its conversation is followed again.
+    const sent = port.sendMessage(address, [{ type: "text", text: "Plot May" }])
+    await settled()
+    expect(drawn.subscribes()).toBe(2)
+    drawn.messaged.resolve({ executionId: "turn" })
+    expect(await sent).toEqual({ kind: "ok", result: {} })
+    stop()
   })
 
   it("D-J (#390): give the fixture app a conversation beside the sample workspace, where its message lands written by it", async () => {
@@ -295,6 +276,11 @@ describe("the window's widget plugins", () => {
 })
 
 const conversation = "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d"
+
+/** Lets the promises already on their way settle. */
+const settled = async () => {
+  for (let i = 0; i < 20; i++) await Promise.resolve()
+}
 
 /**
  * A gateway holding one conversation whose view names an MCP App's call, its
@@ -349,12 +335,15 @@ function gatewayWithApp() {
     called,
     messaged,
     contexted,
-    reads: () => gateway.count("read"),
+    subscribes: () => gateway.count("subscribe"),
+    /** The gateway ends the conversation's subscription for good: the window lets it go. */
+    letGo: () => gateway.end(conversation, { reason: "too_large" }),
     connects: () => connects,
     connect: () => {
       connects++
       return Promise.resolve({
         conversation: client.conversation,
+        subscriptions: client.subscriptions,
         get connectionState() {
           return client.connectionState
         },
@@ -386,7 +375,7 @@ describe("the window's workspace", () => {
     expect(connects).toBe(0)
     await workspace.index()
     expect(connects).toBe(1)
-    expect(gateway.count("list")).toBe(1)
+    expect(gateway.count("subscribeList")).toBe(1)
   })
 
   it("gives Settings the gateway source's own client for its MCP servers, and none without one", async () => {

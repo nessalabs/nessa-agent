@@ -14,6 +14,10 @@ pub trait WatchRecords: Send + Sync {
         &self,
         conversation: &ConversationId,
     ) -> Result<CommittedChangeWatch, ChangeWatchError>;
+
+    /// Install interest in a commit of any conversation: for a reader of
+    /// something drawn from many, such as a list's `running` flags.
+    fn watch_any(&self) -> Result<CommittedChangeWatch, ChangeWatchError>;
 }
 
 /// Connection namespace minting, injected separately from authority and source IO.

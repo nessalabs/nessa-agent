@@ -14,9 +14,9 @@
  * call goes through that composition (`dependencies.ts`) and the source's
  * `appCall` to the fake's `mcp.callTool`. Like the gateway, which opens a
  * review only once the call is admitted and on record (`app_calls.rs`), the
- * fake opens it later: after the window has read the conversation twice
- * since the call, so a window that reads once when the call begins never
- * sees it. Nothing in the list row moves. The person's answer is held to the
+ * fake opens it later, and sends it as a frame of the conversation's
+ * subscription: a window that does not follow the conversation never sees
+ * it. Nothing in the list row moves. The person's answer is held to the
  * review: Allow on it answers the call with the server's result, Deny
  * refuses the call, and an answer to anything else leaves the review open
  * and the call waiting. The fake models one call at a time and refuses a
@@ -27,7 +27,7 @@
  * through the conversation port composition gives the app
  * (`app-messages.ts`) and the source's `appCall`, and the gateway opens its
  * review — what it asks is a message (`ask: "message"`), its command the
- * app's own tool and the message's words — the same rounds later. Allowed,
+ * app's own tool and the message's words — the same moment later. Allowed,
  * the message is in the answer's own view as the person's turn written by
  * the app (`app` set), and the app's request is answered with its turn;
  * denied, it is refused as the gateway refuses it (`mcp_approval_denied`). A
@@ -196,6 +196,8 @@ let revision = 1
 let reviews = 0
 let waiting = false
 let contexts = 0
+// How long after a call the fake opens its review: admitted and on record.
+const openingMs = 300
 
 /**
  * Answers the app's call once the person answers its review, as the gateway
@@ -222,6 +224,7 @@ function onAnswer(
     landing(chosen.effect === "allow")
     gateway.views.set(conversation, viewWith(++revision))
     const answered = await normal()
+    gateway.publish(conversation)
     done(chosen.effect === "allow")
     return answered
   })
@@ -234,17 +237,15 @@ const mcpApps = {
     waiting = true
     return new Promise((resolve, reject) => {
       const review = reviewOf(`app-review-${++reviews}`, tool)
-      const readsAtCall = gateway.count("read")
-      const opening = window.setInterval(() => {
-        if (gateway.count("read") < readsAtCall + 2) return
-        window.clearInterval(opening)
+      window.setTimeout(() => {
         gateway.views.set(conversation, viewWith(++revision, review))
+        gateway.publish(conversation)
         onAnswer(review, (allowed) => {
           waiting = false
           if (allowed) resolve({ resultJson: '{"content":[]}' })
           else reject(new Error("The person denied this app's call"))
         })
-      }, 20)
+      }, openingMs)
     })
   },
   sendMessage: (_conversation: string, _app: unknown, _server: string, text: string) => {
@@ -254,11 +255,9 @@ const mcpApps = {
     return new Promise((resolve, reject) => {
       const review = messageReviewOf(`app-review-${++reviews}`, text)
       const turn = `app-turn-${reviews}`
-      const readsAtCall = gateway.count("read")
-      const opening = window.setInterval(() => {
-        if (gateway.count("read") < readsAtCall + 2) return
-        window.clearInterval(opening)
+      window.setTimeout(() => {
         gateway.views.set(conversation, viewWith(++revision, review))
+        gateway.publish(conversation)
         onAnswer(
           review,
           (allowed) => {
@@ -292,7 +291,7 @@ const mcpApps = {
             })
           },
         )
-      }, 20)
+      }, openingMs)
     })
   },
   updateModelContext: () => {
@@ -361,7 +360,8 @@ Object.assign(window, {
       const open = gateway.views.get(conversation)?.permissions[0]
       return {
         settled,
-        reads: gateway.count("read"),
+        // Every subscription the window opened: none at rest.
+        asks: gateway.count("subscribe") + gateway.count("subscribeList"),
         // Every answer the gateway was sent, whichever review it named.
         answers: gateway.calls
           .filter((call) => call.method === "answer")

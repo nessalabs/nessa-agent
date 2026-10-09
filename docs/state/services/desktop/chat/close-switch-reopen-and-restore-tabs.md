@@ -36,7 +36,7 @@ The browser can restore a limited list of conversation IDs and local titles afte
 stateDiagram-v2
     state "Open local tab" as Open {
         [*] --> Selected
-        state "Selected and polling when ready" as Selected
+        state "Selected and followed when ready" as Selected
         state "Background tab" as Background
         Selected --> Background: Select another tab / invalidate old read
         Background --> Selected: Select this tab / read current conversation

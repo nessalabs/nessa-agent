@@ -52,7 +52,8 @@ const sessionReady = {
   methods: [
     "server.health",
     "auth.session",
-    "conversation.list",
+    "conversation.subscribeList",
+    "conversation.unsubscribe",
     "credential.list",
     "credential.revoke",
     "pairing.pending",
@@ -103,10 +104,12 @@ const same = (a, b) =>
 function scriptedGateway(scenario) {
   const invitations = [...(scenario.invitations ?? [])]
   let devices = [...(scenario.devices ?? [])]
+  let subscriptions = 0
   const unexpected = []
   const known = new Set([
     "server.health",
-    "conversation.list",
+    "conversation.subscribeList",
+    "conversation.unsubscribe",
     "auth.session",
     "credential.list",
     "credential.revoke",
@@ -128,8 +131,12 @@ function scriptedGateway(scenario) {
         ok: true,
         payload: { ok: true, runtimeStatus: "ready", uptimeMs: 1 },
       }
-    if (method === "conversation.list")
-      return { ok: true, payload: { conversations: [], complete: true } }
+    // The workspace follows the (empty) list; its frame is sent by `route`.
+    if (method === "conversation.subscribeList") {
+      subscriptions += 1
+      return { ok: true, payload: { subscriptionId: String(subscriptions) } }
+    }
+    if (method === "conversation.unsubscribe") return { ok: true, payload: {} }
     if (method === "auth.session") return { ok: true, payload: sessionReady }
     if (method === "credential.list")
       return { ok: true, payload: { credentials: devices } }
@@ -183,6 +190,8 @@ function scriptedGateway(scenario) {
 
   function route(socket) {
     const nonce = `linked-${Math.random().toString(16).slice(2)}`
+    // Events continue the socket's one sequence, after the challenge's.
+    let seq = 1
     socket.send(
       JSON.stringify({
         type: "event",
@@ -218,6 +227,21 @@ function scriptedGateway(scenario) {
       }
       const result = reply(frame.method, frame.params)
       socket.send(JSON.stringify({ type: "res", id: frame.id, ...result }))
+      if (frame.method === "conversation.subscribeList" && result.ok) {
+        seq += 1
+        socket.send(
+          JSON.stringify({
+            type: "event",
+            event: "conversation.listed",
+            seq,
+            stateVersion: 0,
+            payload: {
+              subscriptionId: result.payload.subscriptionId,
+              list: { conversations: [], complete: true },
+            },
+          }),
+        )
+      }
     })
   }
 

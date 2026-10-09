@@ -3,8 +3,11 @@
 > Current implementation: [gateway chat](../../guides/gateway-chat.md) uses the existing SDK Agent,
 > leased SQLite record sessions, independent durable audit, and bounded replacement views.
 > NessaClient and the panel use authenticated conversation commands; retired spike
-> methods are absent. The exact durable cursor/event-store and broader collaboration design
-> below remains a proposal, not a prerequisite or description of the current chat API.
+> methods are absent. The gateway serves replay-to-live subscriptions of those views
+> from a client's last applied cursor ([record subscriptions](../../design/record-subscriptions.md),
+> #702), which the desktop workspace follows. The record-level cursor/event-store and
+> broader collaboration design below remains a proposal, not a prerequisite or
+> description of the current chat API.
 
 
 ## Purpose
@@ -24,7 +27,12 @@ collaboration messages using the same runtime and saved records.
 
 The authenticated gateway and NessaClient expose server-owned conversation creation,
 replacement-view reads, input submission, queue controls, permission controls, and
-close. Durable cursor subscriptions and inbox operations are not implemented. Update
+close. `conversation.subscribe` and `conversation.subscribeList` deliver those
+replacement views replay then live from a view cursor (an incarnation and a
+committed position), end a lagging subscriber with a typed `lagging` and its last
+delivered cursor, and are authorized per batch in one place
+(`product/subscription/target.rs::authorize_batch`). Record-level subscriptions,
+where a client folds records itself, and inbox operations are not implemented. Update
 the current wire schemas, generated types, and callers together. This work needs no
 new session protocol, compatibility layer, or additional transport.
 

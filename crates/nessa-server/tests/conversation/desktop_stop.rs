@@ -885,3 +885,43 @@ async fn a_send_during_a_desktop_stop_in_another_mode_is_refused_as_closed() {
     stopping.await.unwrap().unwrap();
     fixture.service.shutdown().await.unwrap();
 }
+
+/// Record subscriptions row S28 (`docs/design/record-subscriptions.md`): an
+/// opening that failed and still holds its slot is read by a follower as the
+/// committed history, read-only, so resubscribing does not refuse in a loop;
+/// `conversation.read` still reports the failure.
+#[tokio::test]
+async fn a_failed_opening_holding_its_slot_is_read_by_a_follower_as_its_history() {
+    let fixture = Fixture::new(DELETION_BUDGETS.stop).await;
+    fixture.live().await;
+    fixture.stop().await.unwrap().unwrap();
+    fixture.wait_until_slot_released().await;
+    fixture.service.inner.conversations.lock().await.insert(
+        fixture.id.clone(),
+        Arc::new(Slot {
+            value: OnceCell::new_with(Some(Err(OpeningFailure {
+                cause: ConversationError::Unavailable,
+                holds: true,
+            }))),
+            ready: Notify::new(),
+            started: AtomicBool::new(true),
+            stopping: AtomicBool::new(false),
+        }),
+    );
+    let (view, cursor) = fixture
+        .service
+        .read_at(fixture.id.clone(), caller("follow"), ReadOpening::LiveOnly)
+        .await
+        .expect("a follower reads the history");
+    assert_eq!(view.lifecycle.phase, ConversationLifecyclePhase::Absent);
+    assert!(!view.capabilities.queue);
+    assert!(cursor.is_some());
+    assert!(
+        fixture
+            .service
+            .read_at(fixture.id.clone(), caller("read"), ReadOpening::Open)
+            .await
+            .is_err(),
+        "a read reports the failed opening"
+    );
+}

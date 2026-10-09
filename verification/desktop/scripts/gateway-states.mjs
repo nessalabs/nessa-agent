@@ -18,7 +18,7 @@
  *
  * Try Again is checked on a clock the script holds (C0–C4, #419 comment
  * 5977020094). Playwright's clock is installed before the page's scripts, so
- * the poller's rounds and a connect's retry backoff run on its timers; it
+ * the source's retry clock and a connect's retry backoff run on its timers; it
  * runs in real time until the script pauses it for the click. While it is
  * paused no timer fires, so a host ask after the click is Try Again's own
  * connect, with no timing number to say so. That rests on a premise: Try
@@ -27,7 +27,7 @@
  * clock holds Try Again's own connect, and a correct product fails C2; a
  * broken one never passes.
  *
- * The poller's numbers are the gateway source's own (`defaultGatewayTiming`),
+ * The retry clock's number is the gateway source's own (`defaultGatewayTiming`),
  * read in the page from the dev server's module; a production build has none
  * to read, so each scenario there is "could not run" — the script needs
  * --mode dev (the default).
@@ -99,56 +99,52 @@ function positive(source, numbers) {
 }
 
 /**
- * The poller's numbers, from the gateway source's own `defaultGatewayTiming`
- * (`pollMs`, `reconnectRounds`), never copies of them:
+ * The retry clock's numbers, from the gateway source's own
+ * `defaultGatewayTiming` (`retryMs`), never copies of it:
  *
- * - `pollerWaitMs`, `pollMs × reconnectRounds`: after a failed connect the
- *   poller refuses `reconnectRounds` rounds, `pollMs` apart at least, counted
- *   from the failure, which comes after its ask. So no poller ask comes
- *   sooner than this after the last one.
- * - `quietMs`, a round short of that wait: nothing asks the host within it.
- *   It also bounds the pause (C5, #419 comment 5978179804): refusals come
- *   at least `pollMs` apart, so under `quietMs` after the last ask at least
- *   one refused round is still owed, and the poller still waits. Past it,
- *   the wait may have run out, and a Try Again that connects only when the
- *   poller would could pass. So `unaskedMs` and `pauseLeadMs` must fit under
- *   it, or the check could not run (C5a), and the pause must come under it,
- *   or it fails (C5b).
- * - `recoveredMs`, the wait and three rounds more: the poller's next connect
- *   is at most `reconnectRounds + 1` rounds after the failure (S16), and two
- *   rounds are left for the rounds' own time. It has asked exactly once by
- *   then, as the ask after it is a whole wait later still.
- * - `unaskedMs`, two rounds, the unasked spell: how long the host goes
- *   unasked before the clock pauses (C1), so the last connect's attempts
+ * - `retryMs`: after a failed connect the subscriptions wait this long,
+ *   counted from the failure, which comes after its ask, before the retry
+ *   clock connects again. So no unprompted ask comes sooner than this after
+ *   the last one.
+ * - `quietMs`, a fifth short of that wait: nothing asks the host within it.
+ *   It also bounds the pause (C5, #419 comment 5978179804): under `quietMs`
+ *   after the last ask the retry clock still waits. Past it, the wait may
+ *   have run out, and a Try Again that connects only when the clock would
+ *   could pass. So `unaskedMs` and `pauseLeadMs` must fit under it, or the
+ *   check could not run (C5a), and the pause must come under it, or it
+ *   fails (C5b).
+ * - `recoveredMs`, the wait and half of it again: the clock's connect comes
+ *   one wait after the failure (S16), and the rest is left for the connect's
+ *   own time. It has asked exactly once by then, as the ask after it is a
+ *   whole wait later still.
+ * - `unaskedMs`, a fifth of the wait, the unasked spell: how long the host
+ *   goes unasked before the clock pauses (C1), so the last connect's attempts
  *   have ended. That holds while the client's largest retry backoff plus one
- *   attempt stays under two rounds (`resolveConnectRetry`'s defaults, 500 ms
- *   today); if it stops holding, the result is a spurious C2 failure, not a
- *   pass. A connect still in flight would stop on its paused backoff, and
- *   Try Again would join it (S6) and not ask: a correct product failing C2,
- *   not a broken one passing.
- * - `pauseLeadMs`, a tenth of a round: `pauseAt` takes a time no earlier
+ *   attempt stays under it (`resolveConnectRetry`'s defaults, 500 ms today);
+ *   if it stops holding, the result is a spurious C2 failure, not a pass. A
+ *   connect still in flight would stop on its paused backoff, and Try Again
+ *   would join it (S6) and not ask: a correct product failing C2, not a
+ *   broken one passing.
+ * - `pauseLeadMs`, a fiftieth of the wait: `pauseAt` takes a time no earlier
  *   than the clock's own, which moves on between the script reading it and
  *   the pause. The timers due in that lead fire as the clock pauses, before
  *   the click; an ask they make is caught by the check at the pause.
  */
-function cadenceOf({ pollMs, reconnectRounds }) {
-  positive("defaultGatewayTiming", { pollMs, reconnectRounds })
-  const pollerWaitMs = pollMs * reconnectRounds
-  const quietMs = pollerWaitMs - pollMs
-  const unaskedMs = 2 * pollMs
-  const pauseLeadMs = pollMs / 10
+function cadenceOf({ retryMs }) {
+  positive("defaultGatewayTiming", { retryMs })
+  const quietMs = retryMs - retryMs / 5
+  const unaskedMs = retryMs / 5
+  const pauseLeadMs = retryMs / 50
   // C5a: the unasked spell and the lead before the pause would use up the
   // quiet the pause is meant to land in.
   if (quietMs <= unaskedMs + pauseLeadMs)
     throw new CannotRun(
-      `the poller's quiet of ${quietMs}ms, a round short of its wait, is not over the ${unaskedMs}ms unasked spell plus the ${pauseLeadMs}ms lead before the pause: the pause could not land while the poller still waits`,
+      `the retry clock's quiet of ${quietMs}ms is not over the ${unaskedMs}ms unasked spell plus the ${pauseLeadMs}ms lead before the pause: the pause could not land while the clock still waits`,
     )
   return {
-    pollMs,
-    reconnectRounds,
-    pollerWaitMs,
+    retryMs,
     quietMs,
-    recoveredMs: pollerWaitMs + 3 * pollMs,
+    recoveredMs: retryMs + retryMs / 2,
     unaskedMs,
     pauseLeadMs,
   }
@@ -160,7 +156,7 @@ const scenarios = [
     endpoint: fakeGateway,
     credential: "fixture-only",
     says: signedOut,
-    // And the poller's cadence while it stays so (S10).
+    // And the retry clock's cadence while it stays so (S10).
     cadence: true,
   },
   {
@@ -391,7 +387,7 @@ await main(
       "the desktop app's window says why it cannot read the gateway, never the sample",
     defaults: { engine: "chromium,webkit" },
     help: `
-It reads the poller's wait from the gateway source in the page, so it needs
+It reads the retry clock's wait from the gateway source in the page, so it needs
 --mode dev (the default); under --mode prod each scenario could not run.
 Signed out, Try Again is the kit's tinted pill: 28px, fully round, the
 window's tint, and a press that scales to 0.97.`,
@@ -440,12 +436,12 @@ window's tint, and a press that scales to 0.97.`,
                 )
             }
             if (scenario.calm) {
-              // Restart restarts the app. The poller, under the screen, is
-              // what asks again. Cadence below still runs when the scenario
+              // Restart restarts the app. The retry clock, under the screen,
+              // is what asks again. Cadence below still runs when the scenario
               // asks for it; there is no Try Again to click.
             } else if (!first.button) return { failures, measured: { timing, first } }
-            // The poller waits out a failed connect (S10): for `quietMs` after
-            // the last ask — a round short of the poller's wait — nothing asks
+            // The retry clock waits out a failed connect (S10): for `quietMs`
+            // after the last ask — short of the clock's wait — nothing asks
             // the host. The page's `performance.now()` is the clock's, which
             // runs in real time until the pause below.
             let asksInQuiet
@@ -478,8 +474,8 @@ window's tint, and a press that scales to 0.97.`,
               }
             }
             // Try Again reads the index again — the status goes while it reads,
-            // which no poll does — and connects at once though the poller
-            // waits (S12). Then it says the same while nothing changed.
+            // which the retry clock does not do — and connects at once though
+            // the clock waits (S12). Then it says the same while nothing changed.
             await page.evaluate((empty) => {
               window.__statusLeft = false
               new MutationObserver(() => {
@@ -531,11 +527,11 @@ window's tint, and a press that scales to 0.97.`,
               failures.push(
                 `the host was asked ${Math.round(atPause.unaskedMs)}ms before the clock paused, under ${unaskedMs}ms: Try Again may join that connect`,
               )
-            // C5b: under `quietMs`, a refused round is still owed, so the
-            // poller still waits when Try Again is clicked.
+            // C5b: under `quietMs`, the retry clock still waits when Try
+            // Again is clicked.
             else if (!(atPause.unaskedMs < quietMs))
               failures.push(
-                `the clock paused ${Math.round(atPause.unaskedMs)}ms after the last ask, not under ${quietMs}ms: the poller's wait may have ended, so Try Again's connect is not shown to beat it`,
+                `the clock paused ${Math.round(atPause.unaskedMs)}ms after the last ask, not under ${quietMs}ms: the retry clock's wait may have ended, so Try Again's connect is not shown to beat it`,
               )
             // A real click, so Playwright's own checks (visible, stable, not
             // painted over) come first.

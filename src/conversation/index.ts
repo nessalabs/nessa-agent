@@ -5,7 +5,7 @@
  *   queries/roster -> the Messages list joined to the open tabs
  * adapters/store -> supervised UI commands and stale-read fences; the gateway's
  *                   conversation list, archive and delete (history.ts)
- * adapters/gateway -> injected NessaClient operations, attachment staging, and bounded polling
+ * adapters/gateway -> injected NessaClient operations, attachment staging, and conversation follows
  * ui -> transcript with sent-image tiles, exact permission choices, queue/stop/retry controls;
  *       the Messages list of every conversation written in
  *

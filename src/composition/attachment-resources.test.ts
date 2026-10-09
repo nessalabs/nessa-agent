@@ -6,7 +6,7 @@ import {
   attachFiles,
   closeConversation,
   openConversation,
-  refreshConversation,
+  followConversation,
   removeFile,
   scenarioEffects,
   sendDraft,
@@ -59,7 +59,7 @@ it("keeps a sent image's preview for its turn, and releases it with the conversa
       bytes: dependencies.attachments.bytes(image!.id)!,
     }),
   )
-  await store.dispatch(refreshConversation("c0"))
+  await store.dispatch(followConversation("c0"))
   const sent = await store.dispatch(sendDraft({ content: [], id: "c0" }))
   expect(sent.meta.requestStatus).toBe("fulfilled")
   // The draft is empty, the gateway has echoed the turn back by reference, and
@@ -101,7 +101,7 @@ it("does not let sent messages use up what attaching needs", async () => {
         bytes: new Blob(["png"]),
       }),
     )
-    await store.dispatch(refreshConversation("c0"))
+    await store.dispatch(followConversation("c0"))
     const sent = await store.dispatch(sendDraft({ content: [], id: "c0" }))
     expect(sent.meta.requestStatus).toBe("fulfilled")
   }

@@ -33,6 +33,11 @@
     "recordTargets": 1,
     "catalogueTargets": 1
   },
+  "x-subscriptionLimits": {
+    "conversationTargets": 8,
+    "listTargets": 1,
+    "deliveryTimeoutMs": 10000
+  },
   "x-frameBytes": { "maxPayloadBytes": 65536 },
   "$defs": {
     "SessionChallenge": {
@@ -141,7 +146,14 @@
           "description": "Surface kind and instance. Descriptive only; the credential decides the principal."
         }
       },
-      "required": ["minVersion", "maxVersion", "nonce", "credential", "client", "surface"],
+      "required": [
+        "minVersion",
+        "maxVersion",
+        "nonce",
+        "credential",
+        "client",
+        "surface"
+      ],
       "description": "Wire request for session.authenticate. NessaClient.connect builds this after validating the server challenge; a successful response is ProductSessionReady."
     },
     "ProductSessionReady": {
@@ -204,7 +216,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 52,
+          "maxItems": 55,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -4779,6 +4791,144 @@
         "invalid_watch"
       ],
       "description": "Typed watch admission/refusal. Watch state never changes downloaded/applied progress."
+    },
+    "ConversationSubscriptionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20,
+      "pattern": "^[1-9][0-9]{0,19}$",
+      "description": "Opaque identity of one subscription on this connection. It grants nothing and is discarded with the connection."
+    },
+    "ConversationViewCursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "incarnation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "The stored history's incarnation. A different one means the history was replaced, and the frame is a replacement for everything held."
+        },
+        "position": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "maxLength": 20,
+          "description": "Decimal committed position the view was folded through, within this incarnation."
+        }
+      },
+      "required": ["incarnation", "position"],
+      "description": "Where in the committed history a view was read. Compare positions only within one incarnation."
+    },
+    "ConversationSubscribeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "after": {
+          "$ref": "#/$defs/ConversationViewCursor",
+          "description": "The cursor of the last view this client applied. No frame behind it in the same incarnation is sent; at least one frame at or past it is."
+        }
+      },
+      "required": ["conversationId"],
+      "description": "Follow one conversation's view: the reply comes after the first read, then a conversation.view frame whenever what the view shows changes, until conversation.subscriptionEnded or conversation.unsubscribe."
+    },
+    "ConversationSubscribeListParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "archived": {
+          "type": "boolean",
+          "description": "Follow only archived conversations when true; only unarchived ones when false or absent."
+        }
+      },
+      "required": [],
+      "description": "Follow the caller's conversation list: the reply comes after the first list, then a conversation.listed frame whenever the list changes."
+    },
+    "ConversationSubscribeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subscriptionId": { "$ref": "#/$defs/ConversationSubscriptionId" }
+      },
+      "required": ["subscriptionId"],
+      "description": "The subscription is live. Its first frame follows this reply."
+    },
+    "ConversationUnsubscribeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subscriptionId": { "$ref": "#/$defs/ConversationSubscriptionId" }
+      },
+      "required": ["subscriptionId"],
+      "description": "Stop one subscription of this connection. A frame already being written may arrive before the reply; none arrives after it."
+    },
+    "ConversationViewed": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subscriptionId": { "$ref": "#/$defs/ConversationSubscriptionId" },
+        "cursor": { "$ref": "#/$defs/ConversationViewCursor" },
+        "view": {
+          "$ref": "#/$defs/ConversationView",
+          "description": "The same bounded replacement conversation.read returns."
+        }
+      },
+      "required": ["subscriptionId", "cursor", "view"],
+      "description": "The conversation's current view, read after a committed or live change. Replace what was held with it."
+    },
+    "ConversationListed": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subscriptionId": { "$ref": "#/$defs/ConversationSubscriptionId" },
+        "list": {
+          "$ref": "#/$defs/ConversationListResult",
+          "description": "The same list conversation.list returns, cut newest first and marked incomplete when it would not fit one frame."
+        }
+      },
+      "required": ["subscriptionId", "list"],
+      "description": "The caller's current conversation list, read after a change. Replace what was held with it."
+    },
+    "ConversationSubscriptionEndReason": {
+      "type": "string",
+      "enum": ["lagging", "refused", "source_closed", "too_large"],
+      "description": "Why a subscription ended. lagging: a frame waited longer than x-subscriptionLimits.deliveryTimeoutMs to be written; subscribe again from lastDelivered. refused: a read or its access check was refused, with code. source_closed: the change source closed; subscribe again. too_large: a frame would not fit the frame bound."
+    },
+    "ConversationSubscriptionEnded": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subscriptionId": { "$ref": "#/$defs/ConversationSubscriptionId" },
+        "reason": { "$ref": "#/$defs/ConversationSubscriptionEndReason" },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "For refused: the conversation error code, or unauthorized or forbidden when access was refused."
+        },
+        "lastDelivered": {
+          "$ref": "#/$defs/ConversationViewCursor",
+          "description": "Where a view subscription resumes from: the cursor of the last view frame written or, when none was, the after it was opened with. Absent for a list, and for a view subscription opened without after that wrote no frame."
+        }
+      },
+      "required": ["subscriptionId", "reason"],
+      "description": "The subscription's one terminal frame. Nothing of it follows."
+    },
+    "ConversationSubscriptionErrorCode": {
+      "type": "string",
+      "enum": [
+        "subscription_capacity",
+        "subscription_duplicate",
+        "unknown_subscription",
+        "cursor_ahead"
+      ],
+      "description": "Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit, or the gateway's watch capacity, is full. subscription_duplicate: this connection already follows that target. unknown_subscription: no such live subscription on this connection. cursor_ahead: after names a position past the stored history."
     }
   }
 }

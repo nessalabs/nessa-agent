@@ -1,10 +1,11 @@
 # 0009. Integrate the standalone event-stream library
 
 > Current implementation: SDK conversations save semantic records on one SQLite
-> `event-stream` runtime, and committed records have bounded pull reads. Replay/live
-> subscriptions and gateway views served from committed records are not
-> implemented; [gateway chat](../../guides/gateway-chat.md) still uses bounded
-> replacement views. See [Current state](#current-state).
+> `event-stream` runtime, and committed records have bounded pull reads. The
+> gateway serves replay-to-live subscriptions of its bounded replacement views,
+> folded from committed records ([record subscriptions](../../design/record-subscriptions.md),
+> #702), and the desktop workspace follows them instead of polling. See
+> [Current state](#current-state).
 
 
 ## Purpose
@@ -14,7 +15,7 @@ also records which commands were accepted, so a lost reply does not cause work t
 run twice. Connect the existing stream library through a small adapter.
 ADR 0008 owns conversation behavior; ADR 0011 owns delivery to clients.
 
-- **Date:** 2026-09-04; revised 2026-09-07, 2026-09-30
+- **Date:** 2026-09-04; revised 2026-09-07, 2026-09-30, 2026-10-09
 - **Status:** proposed
 - **Library:** [nessalabs/event-stream](https://github.com/nessalabs/event-stream)
 - **Related:** [0008 — runtime](0008-agent-client-api.md),
@@ -49,10 +50,16 @@ Merged integration:
   bounded terminal discovery keyed by exact stream incarnation
   ([terminal_discovery.rs](../../../crates/nessa-sdk/src/infrastructure/session_storage/terminal_discovery.rs)).
 
-Nessa uses no `event-stream` subscription yet, and the gateway does not serve
-views from committed records ([#277](https://github.com/nessalabs/nessa-agent/issues/277),
-[#296](https://github.com/nessalabs/nessa-agent/issues/296)). Bounded pull reads
-do not complete ADR 0011's delivery. The
+[#702](https://github.com/nessalabs/nessa-agent/issues/702) adds
+`conversation.subscribe` and `conversation.subscribeList`: replay then live from
+the client's last applied cursor, in bounded frames, with a typed `lagging` end
+and resume, folded by the one conversation read path
+([record subscriptions](../../design/record-subscriptions.md)). They are built on
+the SDK's committed-change watches, registered before each read, and on bounded
+committed reads, not on `event-stream`'s own subscription API. The desktop
+workspace and the conversation panel follow them; only the phone still reads on
+its own schedule ([#277](https://github.com/nessalabs/nessa-agent/issues/277),
+[#296](https://github.com/nessalabs/nessa-agent/issues/296)). The
 [semantic record writer design](../../design/semantic-record-writer.md) gives the
 commit boundaries and ordering table.
 
@@ -186,8 +193,9 @@ the tested platform/storage guarantees and limits.
    shutdown, and independent application/store isolation on supported platforms.
    Measure performance with Nessa's expected workload and record the limits.
 
-Status of each gate on 2026-09-30 (tests are in the session storage files named
-above unless stated):
+Status of each gate on 2026-10-09 (tests are in the session storage files named
+above unless stated; the subscription tests are in
+`crates/nessa-server/tests/product/socket/subscriptions.rs`):
 
 | Gate | Evidence or remaining gap |
 | --- | --- |
@@ -195,15 +203,15 @@ above unless stated):
 | Whole acceptance record | Evidenced: `input_receipt_report_and_settlement_round_trip_as_semantic_facts`, `child_process_replays_saved_record_history` (#290) |
 | Control and primary stream recovery | Gap: conversation streams recover after restart (`child_process_*`, `unknown_reset_is_reconciled_before_load`), but creation acceptance is in a separate durable creation audit, not a control stream; pending/empty creation recovery through records is untested |
 | Identical append retries | Evidenced: `sqlite_store_reconciles_lost_append_reply_without_a_second_record`, `completed_generation_retries_and_extends_without_duplicate_rows`, changed bytes in `a_large_fact_is_invisible_until_its_seal_and_detects_changed_bytes` |
-| Cursor errors | Partly: read sources type stale incarnation, reset/delete, pruned prefix, foreign scope and unknown target (`foreign_scope_and_physical_schema_are_refused`, `cached_old_incarnation_and_pruned_prefix_are_typed_refusals`, `partial_tail_preserves_hash_until_seal_and_unknown_target_stays_invalid`). Gap: lagging-subscriber error, since no subscription exists |
-| Replay/live changeover | Gap: no live subscription. Pull reads hold a captured head under concurrent writes (`captured_head_and_historical_page_do_not_follow_a_later_suffix`, `discovery_finishes_captured_tail_under_new_writes_then_discovers_later_head`); that is not the changeover |
+| Cursor errors | Evidenced: read sources type stale incarnation, reset/delete, pruned prefix, foreign scope and unknown target (`foreign_scope_and_physical_schema_are_refused`, `cached_old_incarnation_and_pruned_prefix_are_typed_refusals`, `partial_tail_preserves_hash_until_seal_and_unknown_target_stays_invalid`). A subscription refuses a cursor past the history (`a_cursor_ahead_of_history_is_refused`), replaces on another incarnation (`a_cursor_from_another_incarnation_gets_the_current_view`), and ends a lagging subscriber with a typed `lagging` and its last delivered cursor, from which it resumes (`a_frame_not_taken_in_time_ends_the_subscription_as_lagging`, `a_lagging_subscriber_resumes_from_its_cursor`) |
+| Replay/live changeover | Evidenced: wake sources are registered before the first read, so a commit during or after it wakes the next one (`replay_then_live_misses_no_commit_under_concurrent_writes`); a long history replays in bounded frames never behind the cursor (`a_long_history_replays_in_bounded_frames_and_never_behind_the_cursor`); live frames end at the view a cold full replay builds (`live_frames_and_a_cold_full_replay_build_the_same_view`). Pull reads hold a captured head under concurrent writes (`captured_head_and_historical_page_do_not_follow_a_later_suffix`, `discovery_finishes_captured_tail_under_new_writes_then_discovers_later_head`) |
 | Exclusive store ownership | Evidenced: same and child-process `StorageError::Busy` in `initialize_exposes_single_sqlite_owner_and_shutdown_is_repeatable` |
 | Lost acknowledgements | Evidenced: `lost_abort_acknowledgement_reopens_with_one_terminal_marker`, `durable_receiver_restarts_mid_fact_and_after_lost_apply_reply`, #299 lost-acknowledgement regressions |
 | Storage failures | Evidenced for writes: `rejected_write_keeps_prior_state_until_retry_after_reopen`, `physical_conflict_fences_live_load_and_later_saves`, #299 stalled-save and Stop regressions. Gap: no evidence classifies a failure as one stream or the whole store |
-| Slow subscribers | Gap: only source admission is bounded (`busy_source_refuses_excess_reads_and_full_queue_does_not_hold_shutdown`); closing a lagging subscription and socket isolation are #296 |
+| Slow subscribers | Evidenced: one frame in flight per subscription, commits while it waits collapse into one (`commits_while_a_frame_waits_collapse_into_one_frame`); a frame not taken within the published delivery timeout ends the subscription `lagging` (`an_untaken_frame_ends_lagging_with_the_last_written_cursor` in `product/subscription/target.rs`); a stalled socket delays no commit and no other subscriber (`one_stalled_socket_delays_no_commit_and_no_other_subscriber`); source admission is bounded (`busy_source_refuses_excess_reads_and_full_queue_does_not_hold_shutdown`) |
 | Restart and shutdown | Evidenced: `child_process_*`, `restarted_process_revalidates_durable_stream_in_bounded_steps`, `storage_shutdown_waits_for_source_join_after_caller_cancellation`, server shutdown-report tests in `composition/root.rs`. Process restart only; power loss is not claimed |
 | Application/store isolation | Gap: composition gives each instance its own store root; no test runs two instances side by side |
-| Expected-workload performance | Partly: #299 measured local commit latency (p95 108 ms over 64 commits), #293 counted receiver bytes, #319 bounds discovery work. Gap: limits for long histories and many conversations are not recorded, and remote delivery is #262 |
+| Expected-workload performance | Partly: #299 measured local commit latency (p95 108 ms over 64 commits), #293 counted receiver bytes, #319 bounds discovery work. #702 measured commit-to-frame latency on the largest realistic fixture, not a real conversation: 990 turns (1,980 messages, answers of about 2 KiB; the SDK caps a session at 1,024 turns), then 30 live turns followed by one subscriber over a real socket. First frame 17.7 ms (57,054 bytes); commit to frame p50 26.7 ms, p95 30.4 ms, max 31.4 ms; debug build, one machine (`measure_commit_to_frame_latency_on_the_largest_realistic_fixture`, ignored, run by hand). Gap: many conversations at once are not measured, and remote delivery is #262 |
 
 This ADR can finish with a small test producer and subscriber in Nessa. A live
 Claude binding, collaboration inbox, and MCP package are not required. The library

@@ -1,20 +1,21 @@
 #!/usr/bin/env node
 /**
  * An MCP App's review (#436), in the window over a fake gateway
- * (`fixtures/app-review/`), whose conversation's turn has ended: at rest it
- * is not read again; when the app calls a destructive tool, the review the
- * gateway opens for it a few rounds later — which moves nothing in the list
- * row — is read and drawn, naming the app and the tool, not the agent;
+ * (`fixtures/app-review/`), whose conversation's turn has ended: at rest
+ * the window asks nothing; when the app calls a destructive tool, the review
+ * the gateway opens for it a moment later — which moves nothing in the list
+ * row — arrives on the conversation's subscription and is drawn, naming the
+ * app and the tool, not the agent;
  * allowed, it goes, the gateway is told Allow for that review, and the
  * app's call is answered. The card's head stays inside the card at five
  * widths from 280 to 900 px, with the tool's name short and as long as the
  * gateway allows; the Agents overview's row is named for the app too.
  *
- * An app's message (#390) is read and drawn the same way: its card says the
+ * An app's message (#390) arrives and is drawn the same way: its card says the
  * app wants to send a message as the person — not a tool to run — and shows
  * the message whole; allowed, the message lands labelled with the app that
  * wrote it; denied, the app's request is refused and nothing lands. A
- * context asks nobody and starts no read. With a message as long as the
+ * context asks nobody and opens no subscription. With a message as long as the
  * gateway takes, of words or of one unbroken word, the card's head stays
  * inside the card at the same five widths, the card does not overflow, and
  * its answers stay reachable.
@@ -32,32 +33,33 @@ import { join } from "node:path"
 
 const meta = {
   name: "app-review",
-  summary: "an MCP App's review: read while its call waits, drawn as the app's, answered",
+  summary:
+    "an MCP App's review: followed while its call waits, drawn as the app's, answered",
   defaults: { engine: "chromium,webkit" },
   options: { only: { type: "string" } },
   help: `
 Usage: node verification/desktop/scripts/app-review.mjs [options] [--shots <dir>]
 
 Checks, per engine and layout (--only <names> to pick):
-  review     at rest the conversation is not read again; after the app's
-             call it is read each round — the fake opens the review only once
-             it has been read twice since the call — and the review is drawn
+  review     at rest the window asks nothing; after the app's call the fake
+             opens the review a moment later and sends it on the
+             conversation's subscription, and the review is drawn
              within 8 s, its head "The mcptest app wants to run <tool>" and
              data-origin app; the review's Allow sends one answer, Allow
              for that review, the card offers only the review's options
              (no Always Allow), the card goes, the app's call is answered
-             ok, and the reads stop
+             ok, and nothing more is asked
   card       at 280/340/420/600/900 px, with the tool's name short and as one
              word as long as the gateway allows, the head stays inside the
              card and the card does not overflow
   overview   the overview row's accessible name names the app and its call
-  message    (#390) a context is taken at once and starts no read; the app's
-             message is read each round until its review is drawn, its head
+  message    (#390) a context is taken at once and opens no subscription;
+             the app's message's review arrives and is drawn, its head
              "The mcptest app wants to send a message as you", data-ask
              message, its command the app's tool and the message; the review's
              Allow answers that review, the app's request is answered ok, and the
              message lands labelled "Sent by show_rows, from mcptest" over its
-             bubble's right edge; the reads stop; a second message denied is
+             bubble's right edge; nothing more is asked; a second message denied is
              refused and lands nothing
   message-card
              (#390) with a message as long as the gateway takes — words, then
@@ -94,10 +96,9 @@ const card = {
   command: css.approvalCommand,
 }
 
-// The source polls each second (`defaultGatewayTiming.pollMs`): two and a
-// half rounds would show a read that should not happen.
+// Long enough for a subscription opened that should not be to show.
 const roundsMs = 2_500
-// Two rounds before the fake opens the review, one to read it, and room.
+// The fake's delay before it opens the review, the frame, and room.
 const drawnWithinMs = 8_000
 
 const snapshot = (page) => page.evaluate(() => window.__appReview.snapshot())
@@ -324,15 +325,15 @@ const checks = {
     const { page } = opened
     try {
       const failures = []
-      // P1: at rest, nothing waits and the conversation is not read again.
+      // P1: at rest, nothing waits and nothing is asked.
       if (await page.locator(css.approvalCard).count())
         failures.push("a card is drawn before the app asked for anything")
       const rest = await snapshot(page)
       await page.waitForTimeout(roundsMs)
       const rested = await snapshot(page)
-      if (rested.reads !== rest.reads)
-        failures.push(`read ${rested.reads - rest.reads} times at rest`)
-      // P2, P3: the app's call; its review is read and drawn as the app's.
+      if (rested.asks !== rest.asks)
+        failures.push(`asked ${rested.asks - rest.asks} times at rest`)
+      // P2, P3: the app's call; its review arrives and is drawn as the app's.
       const askedAt = Date.now()
       const drawn = await asked(page, appReview.tool)
       const drawnMs = Date.now() - askedAt
@@ -377,22 +378,22 @@ const checks = {
         if (answered.settled !== "ok")
           failures.push(`the app's call came back ${answered.settled}, not ok`)
       }
-      // P5: answered, and read without the review, the reads stop.
+      // P5: answered, nothing more is asked.
       const after = await snapshot(page)
       await page.waitForTimeout(roundsMs)
       const later = await snapshot(page)
-      if (later.reads !== after.reads)
+      if (later.asks !== after.asks)
         failures.push(
-          `read ${later.reads - after.reads} times after the call was answered`,
+          `asked ${later.asks - after.asks} times after the call was answered`,
         )
       if (later.answers.length !== after.answers.length)
         failures.push("the gateway was answered again after the card went")
       return {
         measured: {
           drawnMs: drawn ? drawnMs : null,
-          readsAtRest: rested.reads - rest.reads,
-          readsUntilDrawn: waiting.reads - rested.reads,
-          readsAfter: later.reads - after.reads,
+          asksAtRest: rested.asks - rest.asks,
+          asksUntilDrawn: waiting.asks - rested.asks,
+          asksAfter: later.asks - after.asks,
           answers: answered.answers,
           settled: answered.settled,
           ...said,
@@ -544,7 +545,7 @@ Object.assign(checks, {
       const failures = []
       const authors = page.locator(css.messageAuthor)
       if (await authors.count()) failures.push("a label before the app wrote anything")
-      // D18: a context is taken at once, asks nobody, and starts no read.
+      // D18: a context is taken at once, asks nobody, and opens no subscription.
       const rest = await snapshot(page)
       await page.evaluate(() => window.__appReview.context("Showing April"))
       const context = await settledAs(page)
@@ -553,11 +554,11 @@ Object.assign(checks, {
       const rested = await snapshot(page)
       if (rested.contexts !== 1)
         failures.push(`the gateway was given ${rested.contexts} contexts, not 1`)
-      if (rested.reads !== rest.reads)
-        failures.push(`read ${rested.reads - rest.reads} times for a context`)
+      if (rested.asks !== rest.asks)
+        failures.push(`asked ${rested.asks - rest.asks} times for a context`)
       if (await page.locator(css.approvalCard).count())
         failures.push("a card is drawn for a context")
-      // D9, D19: the message's review is read and drawn as the app's message.
+      // D9, D19: the message's review arrives and is drawn as the app's message.
       const askedAt = Date.now()
       const drawn = await messaged(page, appReview.message)
       const drawnMs = Date.now() - askedAt
@@ -629,13 +630,13 @@ Object.assign(checks, {
             failures.push(`the label is ${edge}px off the bubble's right edge`)
         }
       }
-      // The reads stop once it is answered.
+      // Nothing more is asked once it is answered.
       const after = await snapshot(page)
       await page.waitForTimeout(roundsMs)
       const later = await snapshot(page)
-      if (later.reads !== after.reads)
+      if (later.asks !== after.asks)
         failures.push(
-          `read ${later.reads - after.reads} times after the message was answered`,
+          `asked ${later.asks - after.asks} times after the message was answered`,
         )
       // D9: denied, the app's request is refused and nothing lands.
       let denied = null
@@ -649,10 +650,10 @@ Object.assign(checks, {
       } else failures.push(`second message: ${notDrawn}`)
       return {
         measured: {
-          contextReads: rested.reads - rest.reads,
+          contextReads: rested.asks - rest.asks,
           drawnMs: drawn ? drawnMs : null,
-          readsUntilDrawn: waiting.reads - rested.reads,
-          readsAfter: later.reads - after.reads,
+          asksUntilDrawn: waiting.asks - rested.asks,
+          asksAfter: later.asks - after.asks,
           answers: answered.answers,
           denied,
           ...said,

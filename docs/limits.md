@@ -25,6 +25,11 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | socket.write_timeout | configured | 5000 | config.json session.writeTimeoutMs | a write that outlasts this closes the socket |
 | socket.record_delivery_deadline | fixed | 30000 | RECORD_SEND_TIMEOUT, the schema's passive delivery budget | a record response still queued at this deadline is noted and dropped |
 | socket.watch_delivery_deadline | fixed | 30000 | RECORD_SEND_TIMEOUT, the same duration as record delivery | a watch frame still queued at this deadline is noted and dropped |
+| socket.subscription_delivery_deadline | fixed | 10000 | protocol/product/v1.json x-subscriptionLimits.deliveryTimeoutMs | a subscription frame the writer has not taken by this ends that subscription as lagging; its end frame unwritten by this closes the socket |
+| socket.conversation_subscriptions | fixed | 8 | protocol/product/v1.json x-subscriptionLimits.conversationTargets | a conversation subscription past this on one socket is refused |
+| socket.list_subscriptions | fixed | 1 | protocol/product/v1.json x-subscriptionLimits.listTargets | a list subscription past this on one socket is refused |
+| record.change_watches | fixed | 64 | MAX_RECORD_CHANGE_WATCHES in crates/nessa-sdk/src/infrastructure/session_storage/record_changes.rs | the record watches every socket shares, devices' and subscriptions' alike; past this a watch or subscription is refused subscription_capacity. A view subscription holds one and a list subscription one (any commit), so a desktop window following its limit (8 views and the list) holds 9, and about 7 such windows fill it |
+| conversation.catalogue_watches | fixed | 64 | MAX_CATALOGUE_CHANGE_WATCHES in crates/nessa-server/src/conversation/infrastructure/catalogue_changes.rs | the catalogue watches every socket shares; a list subscription holds one beside its record watch, as a device's catalogue watch does; past this one is refused subscription_capacity |
 | record.read_work_budget | configured | 200 | config.json limits.readWorkBudgetMs | a cold read still preparing at this budget answers that it is preparing |
 | record.discovery_steps | fixed | 128 | record read DISCOVERY_STEPS_PER_READ | a cold read that uses every discovery step answers that the source is preparing |
 
