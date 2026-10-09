@@ -4,7 +4,5 @@
 //! and for the gateway's SSH adapter alike.
 mod serve;
 mod wire;
-#[cfg(unix)]
-pub(crate) use serve::refuse;
-pub(crate) use serve::{serve, HarnessLauncher, LeaseLedger, LedgerEntry, ServeTimings};
+pub(crate) use serve::{refuse, serve, HarnessLauncher, LeaseLedger, LedgerEntry, ServeTimings};
 pub(crate) use wire::FrameStream;

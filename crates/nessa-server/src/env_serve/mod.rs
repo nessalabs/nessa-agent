@@ -11,9 +11,7 @@
 //!
 //! Arrows are construction and the call that runs it. Unix only, as
 //! launching a harness is.
-// The gateway's SSH adapter shares the frame stream, so its tests build this
-// on every host.
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 pub mod application;
 #[cfg(unix)]
 pub mod infrastructure;

@@ -3,23 +3,18 @@
 //! routing of lease frames to each lease, `connector.rs` the one effect that
 //! leaves this process (running `ssh`, in `open_ssh.rs`), and `audit.rs` the
 //! gateway's own evidence about its hosts (kept by `durable_audit.rs`).
+//! Unix only, as its composition (`composition/local_auth.rs`) and the
+//! `nessa env serve` it speaks to are.
 //!
 //! [`Environment`]: crate::conversation::application::Environment
 mod audit;
 mod connector;
-#[cfg(unix)]
 mod durable_audit;
 mod environment;
 mod link;
-#[cfg(unix)]
 mod open_ssh;
-// What the Unix gateway composes (`composition/local_auth.rs`); the tests
-// build the adapter with substitutes on every host.
-#[cfg(unix)]
 pub(crate) use durable_audit::DurableEnvironmentAudit;
-#[cfg(unix)]
 pub(crate) use environment::{SshEnvironment, SshTimings};
-#[cfg(unix)]
 pub(crate) use open_ssh::OpenSshConnector;
 
 #[cfg(test)]

@@ -68,7 +68,9 @@ mod placements;
 pub(crate) use placements::FilePlacements;
 mod catalogue_changes;
 mod receiver_authority;
-#[cfg(any(unix, test))]
+// Only the Unix gateway composes it, and only a Unix host serves it: it is
+// built, tests included, where both ends exist.
+#[cfg(unix)]
 pub(crate) mod ssh_environment;
 mod store;
 pub use catalogue_changes::MAX_CATALOGUE_CHANGE_WATCHES;
