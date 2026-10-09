@@ -138,8 +138,9 @@ unsubscribe function. Read `connectionState` for the current snapshot.
 terminal failure, or retry exhaustion. Late close subscribers receive the final
 error immediately. Observer exceptions cannot prevent cleanup.
 
-Push events use the subscribers present when delivery starts. The transport
-owns delivery; subscriber exceptions are isolated as they are for close observers.
+Push events use the subscription registrations present when delivery starts.
+The transport owns delivery; subscriber exceptions are isolated as they are for
+close observers.
 `wire-session-lifecycle.test.ts` checks these orderings:
 
 | During event delivery | Result |
@@ -147,6 +148,10 @@ owns delivery; subscriber exceptions are isolated as they are for close observer
 | A subscriber throws | Later subscribed callbacks still receive the event. |
 | A callback subscribes another callback | The new callback starts with the next event. |
 | A callback unsubscribes a later callback | The removed callback is skipped. |
+| A callback removes and re-adds the same later function | The old registration is skipped; its replacement starts with the next event. |
+| An old unsubscribe handle runs after replacement | The replacement remains subscribed. |
+| The same function is subscribed twice while still active | It receives one delivery; either handle removes that active registration. |
+| A callback replaces a registration, then dispatches another event reentrantly | The replacement receives the nested event, but not the interrupted outer event. |
 | A callback closes the session | Remaining callbacks and later events are skipped. |
 
 Network interruption, restart, overload, handshake timeout, and temporary gateway

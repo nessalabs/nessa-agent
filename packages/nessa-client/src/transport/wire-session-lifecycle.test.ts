@@ -77,6 +77,108 @@ it("an event subscriber removed before its turn does not receive the event", () 
   session.close()
 })
 
+it("a removed and re-added event callback starts with the next event in registration order", () => {
+  const { session } = fixture()
+  const received: string[] = []
+  const later = () => received.push("later")
+  let replace = true
+  session.onEvent("conversation.changed", () => {
+    received.push("first")
+    if (!replace) return
+    replace = false
+    off()
+    session.onEvent("conversation.changed", later)
+  })
+  const off = session.onEvent("conversation.changed", later)
+  session.onEvent("conversation.changed", () => received.push("last"))
+  const frame = {
+    type: "event" as const,
+    event: "conversation.changed",
+    payload: {},
+    seq: 1,
+    stateVersion: 0,
+  }
+  session.dispatchFrame(frame)
+  expect(received).toEqual(["first", "last"])
+  received.length = 0
+  session.dispatchFrame(frame)
+  expect(received).toEqual(["first", "last", "later"])
+  session.close()
+})
+
+it("an old unsubscribe handle cannot remove a replacement registration of the same function", () => {
+  const { session } = fixture()
+  const received = vi.fn()
+  const oldOff = session.onEvent("conversation.changed", received)
+  oldOff()
+  const newOff = session.onEvent("conversation.changed", received)
+  oldOff()
+  const frame = {
+    type: "event" as const,
+    event: "conversation.changed",
+    payload: {},
+    seq: 1,
+    stateVersion: 0,
+  }
+  session.dispatchFrame(frame)
+  expect(received).toHaveBeenCalledOnce()
+  newOff()
+  session.dispatchFrame(frame)
+  expect(received).toHaveBeenCalledOnce()
+  session.close()
+})
+
+it("duplicate active subscriptions of one function keep one delivery and share removal", () => {
+  const { session } = fixture()
+  const received = vi.fn()
+  const firstOff = session.onEvent("conversation.changed", received)
+  const secondOff = session.onEvent("conversation.changed", received)
+  const frame = {
+    type: "event" as const,
+    event: "conversation.changed",
+    payload: {},
+    seq: 1,
+    stateVersion: 0,
+  }
+  session.dispatchFrame(frame)
+  expect(received).toHaveBeenCalledOnce()
+  secondOff()
+  const replacementOff = session.onEvent("conversation.changed", received)
+  firstOff()
+  secondOff()
+  session.dispatchFrame(frame)
+  expect(received).toHaveBeenCalledTimes(2)
+  replacementOff()
+  session.dispatchFrame(frame)
+  expect(received).toHaveBeenCalledTimes(2)
+  session.close()
+})
+
+it("a replacement registration receives a nested event but not its interrupted outer event", () => {
+  const { session } = fixture()
+  const received = vi.fn()
+  const outer = {
+    type: "event" as const,
+    event: "conversation.changed",
+    payload: { name: "outer" },
+    seq: 1,
+    stateVersion: 0,
+  }
+  const nested = { ...outer, payload: { name: "nested" }, seq: 2 }
+  let replace = true
+  session.onEvent("conversation.changed", () => {
+    if (!replace) return
+    replace = false
+    off()
+    session.onEvent("conversation.changed", received)
+    session.dispatchFrame(nested)
+  })
+  const off = session.onEvent("conversation.changed", received)
+  session.dispatchFrame(outer)
+  expect(received.mock.calls).toEqual([[{ name: "nested" }]])
+  session.close()
+})
+
 it.each(["client", "transport"] as const)(
   "%s closure during an event stops remaining and later event delivery",
   (closure) => {
