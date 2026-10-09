@@ -52,10 +52,13 @@ export function useConversation() {
   useEffect(() => {
     if (!active.serverReady || !gatewayAvailable) return
     // This chat's poll stops only while its record watch is held and nothing
-    // unsaved is pending. A starting provider, a permission, or a question
-    // is not a commit. Every other chat keeps its timer.
+    // unsaved is pending. A starting provider, a turn still thinking or
+    // streaming, a permission, or a question is not a commit. Every other
+    // chat keeps its timer.
     const unsaved =
       active.phase === "starting" ||
+      active.phase === "thinking" ||
+      active.phase === "streaming" ||
       active.remote?.lifecycle.phase === "starting" ||
       (active.remote?.permissions.length ?? 0) > 0 ||
       (active.remote?.questions.length ?? 0) > 0

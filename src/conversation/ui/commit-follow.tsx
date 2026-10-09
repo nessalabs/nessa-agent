@@ -12,14 +12,14 @@ import { refreshConversation } from "../adapters/store/slice"
 import { useConversationDispatch, useConversationSelector } from "../adapters/store/hooks"
 
 /**
- * The open chat, when its poll can stop. A starting chat, or one waiting on
- * a person, keeps the timer: that state is not a commit, and this window
- * has one record slot.
+ * The open chat, when its poll can stop. Only a settled idle chat can take
+ * the one record slot. A turn still starting, thinking, or streaming is the
+ * live view, and a commit ping does not carry that text.
  */
 function recordTarget(tabs: ConversationTabs): string[] {
   const active = tabs.conversations.find((item) => item.id === tabs.activeId)
   if (!active?.serverConversationId) return []
-  if (active.phase === "idle" || active.phase === "starting") return []
+  if (active.phase !== "idle") return []
   if ((active.remote?.permissions.length ?? 0) > 0) return []
   if ((active.remote?.questions.length ?? 0) > 0) return []
   if (active.remote?.lifecycle.phase === "starting") return []

@@ -11,8 +11,9 @@
  *   connection of its own, not the one commands use, and replaces only the
  *   one-second list timer. One record watch, on that same connection, replaces
  *   the 250 ms poll for that one chat, and only while nothing unsaved is
- *   pending (an app review, or the provider still starting). Every other open
- *   chat keeps its poll. The list watch ending, or never registering, resumes
+ *   pending (an app review, the provider still starting, or a turn still
+ *   running or queued). Every other open chat keeps its poll. The list watch
+ *   ending, or never registering, resumes
  *   the list timer, and the next round tries the watch again.
  * - **Revisions are minted here.** The gateway's view revision is opaque and
  *   its list rows carry none, so this adapter counts: one counter per
@@ -858,12 +859,17 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const last = reads.get(sessionId)
     // No view yet: the phase is unknown, and starting is not a commit.
     if (!last) return true
-    return appCalls.has(sessionId) || last.view.lifecycle.phase === "starting"
+    // A running turn's text is the live view. It is not a commit ping, so
+    // the fast poll stays and this chat does not take the record slot.
+    const inTurn = last.view.messages.some(
+      (turn) => turn.status === "running" || turn.status === "queued",
+    )
+    return appCalls.has(sessionId) || last.view.lifecycle.phase === "starting" || inTurn
   }
   /**
-   * A chat whose committed work a record ping can see. An app review and the
-   * starting phase are not commits, so they keep the poll and do not take
-   * the one record slot.
+   * A chat whose settled work a record ping can see. An app review, the
+   * starting phase, and a turn still running are not commits, so they keep
+   * the poll and do not take the one record slot.
    */
   const committedLive = (sessionId: string): boolean => {
     const last = reads.get(sessionId)

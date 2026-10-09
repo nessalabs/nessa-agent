@@ -62,8 +62,10 @@ It signals two things:
 
 The catalogue watch replaces only the list timer. A record watch replaces
 only that chat's fast poll, and only when nothing unsaved is pending: an
-app review, or a provider still starting, or a chat this window has not
-read yet, keeps the 250 ms poll. Every other chat keeps it too. A watch
+app review, a provider still starting, a turn still running or queued, or
+a chat this window has not read yet, keeps the 250 ms poll. A running
+turn's text is the live view, and a commit ping does not carry it. Every
+other chat keeps the poll too. A watch
 refusal or the follow connection closing resumes the timers. The next poll
 round tries the watch again. It does not sign the session out.
 
@@ -72,7 +74,7 @@ round tries the watch again. It does not sign the session out.
 | Catalogue ping | One existing list |
 | Record ping for the watched chat | One existing read of that chat |
 | Chat has no record watch | Its 250 ms poll stays |
-| App review, or provider still starting | That chat's poll stays, and it does not take the record slot |
+| App review, provider still starting, or a turn still running or queued | That chat's poll stays, and it does not take the record slot |
 | Catalogue watch ended, or never registered | The list timer returns. The next round tries the watch again |
 | Record watch ended or refused for capacity | That chat polls. The catalogue watch stays |
 | Access refused on the follow connection | Both timers return. The next round tries again |
@@ -121,10 +123,11 @@ old one-second timer.
 ## Consequences
 
 An idle window does not list on a timer while the catalogue watch is held.
-Two idle windows hold two catalogue watches. A window following one running
-chat holds one more record watch. That is not "two windows sit on the cap
-of eight": the cap is eight watches for the whole principal, shared with
-any phone, and these windows do not fill it by themselves.
+Two idle windows hold two catalogue watches. A window following one settled
+chat holds one more record watch. A turn that is still running or queued
+does not take that slot. That is not "two windows sit on the cap of eight":
+the cap is eight watches for the whole principal, shared with any phone, and
+these windows do not fill it by themselves.
 
 A catalogue ping costs one `conversation.list` (and `conversation.observe`
 when that list is incomplete). A record ping costs one `conversation.read`
@@ -132,9 +135,10 @@ through the path the window already uses. Neither number is a
 commit-to-screen latency. Owner-session watches do not admit `recordsPage`
 or catalogue payloads.
 
-Chats past the one record slot, and chats whose provider is starting or
-that have an app review open, keep the fast poll, so streaming text and
-those reviews still move.
+Chats past the one record slot, chats whose provider is still starting,
+chats with an app review open, and chats whose turn is still running or
+queued keep the fast poll. Streaming text moves on that poll, because a
+commit ping does not carry it.
 
 Follow-ups, not this decision: a server-side catalogue delta; one follower
 shared by both windows, or one owner-wide watch; more than one record

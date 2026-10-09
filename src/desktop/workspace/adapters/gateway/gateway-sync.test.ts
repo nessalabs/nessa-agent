@@ -91,7 +91,11 @@ function row(id: string, updatedAtMs: number, running = false) {
 }
 
 /** Each connect is its own socket. Watches are owner-session watches. */
-function syncGateway(ids: string[], phase: "attached" | "starting" = "attached") {
+function syncGateway(
+  ids: string[],
+  phase: "attached" | "starting" = "attached",
+  status: "running" | "completed" = "running",
+) {
   const lists: string[] = []
   const reads: string[] = []
   const recordWatches: string[] = []
@@ -144,7 +148,7 @@ function syncGateway(ids: string[], phase: "attached" | "starting" = "attached")
               userText: "hi",
               attachments: [],
               files: [],
-              status: "running",
+              status,
               parts: [],
             },
           ]
@@ -227,7 +231,7 @@ it("does not list on the timer once the list watch is held", async () => {
   source.dispose?.()
 })
 
-it("polls a chat that does not hold the one record watch", async () => {
+it("keeps polling a running turn and does not give it the record slot", async () => {
   const gateway = syncGateway(["chat-a", "chat-b", "chat-c", "chat-d"])
   const time = clock()
   const source = gatewaySource({
@@ -240,18 +244,16 @@ it("polls a chat that does not hold the one record watch", async () => {
   await settle()
   for (const id of ["chat-a", "chat-b", "chat-c", "chat-d"]) await source.transcript(id)
   await settle()
-  expect(gateway.recordWatches.at(-1)).toBe("chat-d")
+  expect(gateway.recordWatches).toEqual([])
   const before = gateway.reads.filter((id) => id === "chat-a").length
-  const watched = gateway.reads.filter((id) => id === "chat-d").length
   await time.advance(timing.activePollMs + 20)
   await settle()
   expect(gateway.reads.filter((id) => id === "chat-a").length).toBeGreaterThan(before)
-  expect(gateway.reads.filter((id) => id === "chat-d").length).toBe(watched)
   source.dispose?.()
 })
 
 it("reads the watched chat when its record ping arrives", async () => {
-  const gateway = syncGateway(["chat-a"])
+  const gateway = syncGateway(["chat-a"], "attached", "completed")
   const time = clock()
   const source = gatewaySource({
     connect: async () => gateway.open(),
