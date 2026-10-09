@@ -1995,7 +1995,8 @@ async fn share_refuses_what_the_owner_cannot_grant() {
         .call("conversation.share", share(fixture.id.to_string(), "phone"))
         .await;
     assert_eq!(answer["error"]["code"], "conversation_deleted", "{answer}");
-    // A new request: the share's own request id would replay the share.
+    // A new request: the share's own request id names the other change, so
+    // reusing it for the unshare is refused invalid_request (row G16).
     let mut unshare = share(fixture.id.to_string(), "phone");
     unshare["requestId"] = json!("unshare-phone");
     let answer = fixture.call("conversation.unshare", unshare).await;
