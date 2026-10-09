@@ -85,6 +85,11 @@
 //! serialized per conversation (`ConversationLocks`), and a delete that waits
 //! behind another attempt answers from its tombstone without one of its own.
 //!
+//! A view subscription (`docs/design/record-subscriptions.md`) reads through
+//! `ConversationService::read_at`, the same fold as a one-shot read, and is
+//! woken by the SDK's committed-change watch and by `LiveChanges`, which the
+//! service publishes wherever a live fact of the view changes.
+//!
 //! An MCP App's calls (#348), and its messages and model context (#390), are
 //! the service's too (`service/app_calls.rs`, `docs/design/mcp-app-calls.md`):
 //! each conversation's apps — their reviews, the contexts they give the
@@ -111,6 +116,7 @@ pub use catalogue_watch::{
 mod catalogue_read;
 mod error;
 mod error_code;
+mod live_changes;
 mod locks;
 mod mcp_apps;
 mod passive_read;
@@ -131,6 +137,7 @@ pub use catalogue_read::{
 };
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use error_code::error_code;
+pub use live_changes::{LiveChangePublisher, LiveChanges};
 pub use mcp_apps::{
     ContextDrop, DroppedContexts, HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase,
     McpAppAuditRecord, McpAppError, McpAppFailure, McpAppFuture, McpAppInitiator, McpAppOutcome,

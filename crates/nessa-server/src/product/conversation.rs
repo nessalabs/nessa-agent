@@ -5,10 +5,11 @@ use super::{
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    error_code, ConversationCaller, ConversationError, QuestionChoiceInput, RequestedAgent,
+    error_code, ConversationCaller, ConversationError, ConversationService, QuestionChoiceInput, RequestedAgent,
     RequestedConversation, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
 };
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_protocol::conversation::projection::CommittedCursor;
 use nessa_protocol::conversation::view::{
     ConversationList, ConversationObservation, ConversationObservationCursor,
     ConversationView as ApplicationConversationView,
@@ -94,12 +95,8 @@ pub(super) async fn dispatch(
             "conversation.read" => {
                 let params = params!(ConversationReadParams);
                 let id = conversation_id(&params.conversation_id)?;
-                let read = service.read(id.clone(), caller(frame.id.clone())).await;
-                // After the service answers, so a refusal keeps the error it
-                // returned. The subscriber is the gateway log; nothing here
-                // changes the frame the caller is sent.
-                trace_conversation_read(&id, read.as_ref().err());
-                Ok(success(&frame.id, &wire_view(state, read?)?))
+                let (view, _) = read_view(state, service, session, &id, &frame.id).await?;
+                Ok(success(&frame.id, &view))
             }
             "conversation.setApprovalMode" => {
                 let params = params!(ConversationSetApprovalModeParams);
@@ -128,14 +125,8 @@ pub(super) async fn dispatch(
             }
             "conversation.list" => {
                 let ConversationListParams { archived } = params!(ConversationListParams);
-                let listed = service
-                    .list(caller(frame.id.clone()), archived.unwrap_or(false))
-                    .await;
-                // The desktop's index asks this list first. An incomplete list
-                // continues as conversation.observe. The subject tells a list
-                // from a read.
-                trace_conversation_index(listed.as_ref().err());
-                Ok(success(&frame.id, &list_result(listed?)))
+                let listed = read_list(service, session, archived.unwrap_or(false), &frame.id).await?;
+                Ok(success(&frame.id, &listed))
             }
             "conversation.observe" => {
                 let params = params!(ConversationObserveParams);
@@ -432,6 +423,44 @@ pub(super) async fn dispatch(
 /// Who sends a conversation command: the credential's verified identity.
 /// The caller's optional client metadata is deliberately not used to
 /// attribute SDK commands.
+/// The view `conversation.read` answers, with where in the committed history
+/// it was folded through. A subscription's frame is this same read
+/// (`docs/design/record-subscriptions.md`), so there is one read path.
+pub(super) async fn read_view(
+    state: &ProductRouteState,
+    service: &ConversationService,
+    session: &AuthenticatedSession,
+    id: &ConversationId,
+    request_id: &str,
+) -> Result<(WireConversationView, Option<CommittedCursor>), ConversationError> {
+    let read = service
+        .read_at(id.clone(), caller(session, request_id.to_owned()))
+        .await;
+    // After the service answers, so a refusal keeps the error it returned.
+    // The subscriber is the gateway log; nothing here changes the frame the
+    // caller is sent.
+    trace_conversation_read(id, read.as_ref().err());
+    let (view, cursor) = read?;
+    Ok((wire_view(state, view)?, cursor))
+}
+
+/// The list `conversation.list` answers; a list subscription's frame is this
+/// same read.
+pub(super) async fn read_list(
+    service: &ConversationService,
+    session: &AuthenticatedSession,
+    archived: bool,
+    request_id: &str,
+) -> Result<ConversationListResult, ConversationError> {
+    let listed = service
+        .list(caller(session, request_id.to_owned()), archived)
+        .await;
+    // The desktop's index asks this list first. An incomplete list continues
+    // as conversation.observe. The subject tells a list from a read.
+    trace_conversation_index(listed.as_ref().err());
+    Ok(list_result(listed?))
+}
+
 pub(super) fn caller(session: &AuthenticatedSession, request_id: String) -> ConversationCaller {
     let context = session.context();
     ConversationCaller {

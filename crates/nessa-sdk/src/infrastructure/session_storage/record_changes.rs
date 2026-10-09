@@ -28,7 +28,8 @@ struct State {
     entries: Vec<Entry>,
 }
 struct Entry {
-    target: SessionId,
+    // `None` is interest in every session's commits.
+    target: Option<SessionId>,
     signal: Arc<CommittedChangeSignal>,
 }
 struct Registration {
@@ -38,6 +39,16 @@ struct Registration {
 
 impl RecordChanges {
     pub fn watch(&self, target: SessionId) -> Result<CommittedChangeWatch, ChangeWatchError> {
+        self.register(Some(target))
+    }
+    /// Interest in every session's commits, under the same producer bound.
+    pub fn watch_any(&self) -> Result<CommittedChangeWatch, ChangeWatchError> {
+        self.register(None)
+    }
+    fn register(
+        &self,
+        target: Option<SessionId>,
+    ) -> Result<CommittedChangeWatch, ChangeWatchError> {
         let mut state = self
             .inner
             .state
@@ -72,7 +83,7 @@ impl RecordChanges {
             state
                 .entries
                 .iter()
-                .filter(|entry| &entry.target == target)
+                .filter(|entry| entry.target.as_ref().is_none_or(|own| own == target))
                 .map(|entry| entry.signal.clone())
                 .collect::<Vec<_>>()
         };
@@ -210,6 +221,27 @@ mod tests {
             "last publisher wakes the enabled waiter"
         );
         assert_eq!(wait.await, ChangeWatchState::Closed);
+    }
+
+    /// Interest in every session wakes for each one's commit, shares the one
+    /// producer bound, and coalesces like any other registration.
+    #[tokio::test]
+    async fn interest_in_every_session_wakes_for_each_and_shares_the_bound() {
+        let producer = RecordChanges::default();
+        let mut any = producer.watch_any().unwrap();
+        pending(&mut any);
+        producer.publish(&target("one"));
+        producer.publish(&target("two"));
+        assert_eq!(ready(&mut any), ChangeWatchState::Dirty);
+        pending(&mut any);
+        producer.publish(&target("three"));
+        assert_eq!(ready(&mut any), ChangeWatchState::Dirty);
+        let _rest = (1..MAX_RECORD_CHANGE_WATCHES)
+            .map(|_| producer.watch(target("one")).unwrap())
+            .collect::<Vec<_>>();
+        assert!(matches!(producer.watch_any(), Err(ChangeWatchError::Capacity)));
+        drop(any);
+        assert!(producer.watch_any().is_ok());
     }
 
     #[tokio::test]

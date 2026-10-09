@@ -4,6 +4,7 @@ use super::change_watch::{
 use super::passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT};
 use super::record_read::refusal_code;
 use super::state::{note_limit, ProductRouteState};
+use super::subscription::{ConnectionSubscriptions, SubscriptionDeliveries, SubscriptionFrame};
 use super::wire::ready_frame;
 use crate::browser_session::application::{
     invalidation_reason, BrowserSessionVerifier, ReadBrowserSession,
@@ -651,6 +652,7 @@ enum WriterResponse {
     Queued(Box<QueuedResponse>),
     Refusal(Box<OutgoingMessage>),
     Watch(Box<WatchFrame>),
+    Subscription(Box<SubscriptionFrame>),
 }
 
 async fn write_authenticated<S>(
@@ -661,6 +663,7 @@ async fn write_authenticated<S>(
     mut records: Receiver<QueuedRecordResponse>,
     write_timeout: Duration,
     watches: Arc<WatchDeliveries>,
+    subscriptions: Arc<SubscriptionDeliveries>,
 ) where
     S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin,
 {
@@ -669,11 +672,11 @@ async fn write_authenticated<S>(
     // docs/design/authorized-record-reads.md, R62.
     let mut pending_record: Option<QueuedRecordResponse> = None;
     loop {
-        let deadline = retained_delivery_deadline(&pending_record, &watches);
+        let deadline = retained_delivery_deadline(&pending_record, &watches, &subscriptions);
         let next = tokio::select! {
             biased;
             () = wait_for_record_deadline(deadline), if deadline.is_some() => {
-                note_elapsed_delivery(&pending_record, &watches);
+                note_elapsed_delivery(&pending_record, &watches, &subscriptions);
                 break;
             },
             Some(response) = records.recv(), if pending_record.is_none() => {
@@ -693,6 +696,11 @@ async fn write_authenticated<S>(
             Some(frame) = async { watches.take() }, if !watches.is_closed() =>
                 Some(Ok(WriterResponse::Watch(Box::new(frame)))),
             () = watches.changed(), if !watches.is_closed() => continue,
+            // Last: a subscription frame is a replacement that waits its turn;
+            // the oldest offer goes first, so no subscription starves another.
+            Some(frame) = async { subscriptions.take() }, if !subscriptions.is_closed() =>
+                Some(Ok(WriterResponse::Subscription(Box::new(frame)))),
+            () = subscriptions.changed(), if !subscriptions.is_closed() => continue,
             else => None,
         };
         let writing = async {
@@ -728,6 +736,27 @@ async fn write_authenticated<S>(
                         false
                     }
                 }
+                Some(Ok(WriterResponse::Subscription(frame))) => {
+                    let SubscriptionFrame {
+                        id,
+                        message,
+                        terminal,
+                        written,
+                    } = *frame;
+                    let result = match terminal {
+                        Some(deadline) => {
+                            within_deadline(deadline, send(write_timeout, &mut sink, message)).await
+                        }
+                        None => Some(send(write_timeout, &mut sink, message).await),
+                    };
+                    if matches!(result, Some(Ok(()))) {
+                        subscriptions.sent(&id, terminal.is_some());
+                        written.told();
+                        true
+                    } else {
+                        false
+                    }
+                }
                 Some(Ok(WriterResponse::Refusal(message))) => {
                     send(write_timeout, &mut sink, *message).await.is_ok()
                 }
@@ -740,18 +769,19 @@ async fn write_authenticated<S>(
         };
         tokio::pin!(writing);
         loop {
-            let deadline = retained_delivery_deadline(&pending_record, &watches);
+            let deadline = retained_delivery_deadline(&pending_record, &watches, &subscriptions);
             tokio::select! {
                 biased;
                 // Abandon this sink; a second frame must not follow a cancelled
                 // physical write. Also observe a record arriving during it.
                 () = wait_for_record_deadline(deadline), if deadline.is_some() => {
-                    note_elapsed_delivery(&pending_record, &watches);
+                    note_elapsed_delivery(&pending_record, &watches, &subscriptions);
                     return;
                 },
                 Some(response) = records.recv(), if pending_record.is_none() =>
                     pending_record = Some(response),
                 () = watches.changed(), if !watches.is_closed() => {},
+                () = subscriptions.changed(), if !subscriptions.is_closed() => {},
                 succeeded = &mut writing => {
                     if !succeeded { return; }
                     break;
@@ -769,11 +799,16 @@ pub(super) const CHALLENGE_EVENT_SEQUENCE: u64 = 1;
 fn retained_delivery_deadline(
     record: &Option<QueuedRecordResponse>,
     watches: &WatchDeliveries,
+    subscriptions: &SubscriptionDeliveries,
 ) -> Option<Instant> {
-    [queued_record_deadline(record), watches.deadline()]
-        .into_iter()
-        .flatten()
-        .min()
+    [
+        queued_record_deadline(record),
+        watches.deadline(),
+        subscriptions.deadline(),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
 }
 
 fn queued_record_deadline(response: &Option<QueuedRecordResponse>) -> Option<Instant> {
@@ -812,13 +847,20 @@ fn missed_record_deadline<T>(value: Option<T>) -> Option<T> {
     value
 }
 
-fn note_elapsed_delivery(record: &Option<QueuedRecordResponse>, watches: &WatchDeliveries) {
+fn note_elapsed_delivery(
+    record: &Option<QueuedRecordResponse>,
+    watches: &WatchDeliveries,
+    subscriptions: &SubscriptionDeliveries,
+) {
     let now = Instant::now();
     if queued_record_deadline(record).is_some_and(|deadline| now >= deadline) {
         note_limit("socket.record_delivery_deadline");
     }
     if watches.deadline().is_some_and(|deadline| now >= deadline) {
         note_limit("socket.watch_delivery_deadline");
+    }
+    if subscriptions.deadline().is_some_and(|deadline| now >= deadline) {
+        note_limit("socket.subscription_delivery_deadline");
     }
 }
 
@@ -851,6 +893,7 @@ where
 {
     let (sink, mut incoming) = socket.split();
     let mut watches = ConnectionWatches::new(&state);
+    let mut subscriptions = ConnectionSubscriptions::new(watches.deliveries.sequence());
     let limits = state.limits;
     let (control_send, control_receive) = mpsc::channel(limits.control_lane());
     let (refusal_send, refusal_receive) = mpsc::channel(REFUSAL_LANE);
@@ -866,6 +909,7 @@ where
         record_receive,
         state.settings.write_timeout(),
         watches.deliveries.clone(),
+        subscriptions.deliveries.clone(),
     ));
     let control_slots = Arc::new(Semaphore::new(limits.control_slots()));
     let ordinary_slots = Arc::new(Semaphore::new(limits.ordinary_slots()));
@@ -1185,6 +1229,22 @@ where
             }
             continue;
         }
+        if ConnectionSubscriptions::method(&frame.method) {
+            if let Some(reply) =
+                subscriptions.begin(&state, &session, frame, slot.clone(), received_at)
+            {
+                let queued = QueuedResponse {
+                    message: WireResponse::ordinary(reply),
+                    _slot: slot,
+                    _record_work: None,
+                    _mount: None,
+                };
+                if rejected_lane("socket.ordinary_lane", ordinary_send.try_send(queued)) {
+                    break;
+                }
+            }
+            continue;
+        }
         // An app call's capacity across sockets is the conversation
         // service's, held by the call's own task until it ends: a permit held
         // here would be let go when the socket went, while the call ran on.
@@ -1269,6 +1329,7 @@ where
         call.abort();
     }
     drop(watches);
+    drop(subscriptions);
     drop(control_send);
     drop(refusal_send);
     drop(ordinary_send);
@@ -1381,25 +1442,41 @@ async fn dispatch(
         }
         return success(&frame.id, &session_ready(state, &session, &snapshot));
     }
-    let action_name = match action_for_method(&frame.method) {
-        Some(action) => action,
-        _ => return failure(&frame.id, "unknown_method"),
-    };
-    let authorization = authorize(state, &session, action_name).await;
-    match authorization {
-        Ok(Decision::Allow) => {
-            if ensure_browser_session_present(state, &session)
-                .await
-                .is_err()
-            {
-                failure(&frame.id, "unauthorized")
-            } else {
-                dispatch_authorized(state, &session, frame).await
-            }
-        }
-        Ok(Decision::Deny) => failure(&frame.id, "forbidden"),
-        Err(_) => failure(&frame.id, "unauthorized"),
+    match admit_action(state, &session, &frame.method).await {
+        Ok(()) => dispatch_authorized(state, &session, frame).await,
+        Err(code) => failure(&frame.id, code),
     }
+}
+
+/// The one admission of an authenticated action, for a session whose
+/// identity was just found current: the method's grant under current policy,
+/// then browser presence. A request asks it once; a subscription asks it
+/// before every batch it reads (`subscription::authorize_batch`).
+pub(super) async fn admit_action(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    method: &str,
+) -> Result<(), &'static str> {
+    let action_name = action_for_method(method).ok_or("unknown_method")?;
+    match authorize(state, session, action_name).await {
+        Ok(Decision::Allow) => ensure_browser_session_present(state, session)
+            .await
+            .map_err(|_| "unauthorized"),
+        Ok(Decision::Deny) => Err("forbidden"),
+        Err(_) => Err("unauthorized"),
+    }
+}
+
+/// The session as it stands now, as a request finds it before it is
+/// dispatched: refused `unauthorized` when it is no longer current.
+pub(super) async fn current_session_now(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<AuthenticatedSession, &'static str> {
+    current_identity(state, session)
+        .await
+        .map(|(current, _)| current)
+        .map_err(|_| "unauthorized")
 }
 
 async fn authorize(
@@ -2114,6 +2191,9 @@ mod tests {
     }
     pub(super) mod watches {
         include!("../../tests/product/socket/watches.rs");
+    }
+    mod subscriptions {
+        include!("../../tests/product/socket/subscriptions.rs");
     }
     mod browser_sessions {
         include!(concat!(
@@ -4371,6 +4451,7 @@ mod tests {
             records,
             Duration::from_secs(1),
             deliveries.clone(),
+            Arc::new(SubscriptionDeliveries::new(Default::default())),
         ));
         peer.writing.recv().await.unwrap();
         assert_eq!(slots.available_permits(), 2, "in-flight send owns its slot");
@@ -4458,6 +4539,7 @@ mod tests {
             records,
             Duration::from_secs(1),
             deliveries.clone(),
+            Arc::new(SubscriptionDeliveries::new(Default::default())),
         ));
         record_send
             .send(QueuedRecordResponse::new(QueuedResponse {
@@ -4759,6 +4841,7 @@ mod tests {
             records,
             Duration::from_secs(5),
             Arc::new(WatchDeliveries::new()),
+            Arc::new(SubscriptionDeliveries::new(Default::default())),
         ));
         record_send
             .send(QueuedRecordResponse::new(QueuedResponse {

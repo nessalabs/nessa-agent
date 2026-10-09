@@ -127,6 +127,36 @@ impl RecordStorage {
         self.changes.watch(id.clone())
     }
 
+    /// Register one payloadless interest in a commit of any session.
+    ///
+    /// The same notice, producer bound, shutdown and cancellation rules as
+    /// [`Self::watch_committed`]; it wakes for every session's whole-save
+    /// commit and reset. A host that follows something drawn from many
+    /// sessions, such as a list of them, registers this before its final read.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use nessa_sdk::{
+    ///     application::agent_execution::sessions::ChangeWatchState,
+    ///     infrastructure::session_storage::RecordStorage,
+    /// };
+    /// # async fn example(storage: &RecordStorage) {
+    /// let mut watch = storage.watch_any_committed().expect("watch capacity");
+    /// // Read what follows from the sessions, then wait for the next commit.
+    /// if watch.changed().await == ChangeWatchState::Dirty {
+    ///     // Read it again.
+    /// }
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    /// Returns [`ChangeWatchError::Capacity`] for a full producer and
+    /// [`ChangeWatchError::Closed`] after watch admission closes.
+    pub fn watch_any_committed(&self) -> Result<CommittedChangeWatch, ChangeWatchError> {
+        self.changes.watch_any()
+    }
+
     /// Opens and verifies the one SQLite runtime before the server listens.
     pub async fn initialize(&self) -> Result<(), StorageError> {
         self.runtime().await.map(|_| ())

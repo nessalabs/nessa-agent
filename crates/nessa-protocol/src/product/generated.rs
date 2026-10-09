@@ -1906,6 +1906,95 @@ pub struct ConversationWatchEnded {
     pub watch_id: ChangeWatchId,
     pub reason: ChangeWatchEndReason,
 }
+pub type ConversationSubscriptionId = String;
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationViewCursor {
+    pub incarnation: String,
+    pub position: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSubscribeParams {
+    pub conversation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<ConversationViewCursor>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSubscribeListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSubscribeResult {
+    pub subscription_id: ConversationSubscriptionId,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationUnsubscribeParams {
+    pub subscription_id: ConversationSubscriptionId,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationViewed {
+    pub subscription_id: ConversationSubscriptionId,
+    pub cursor: ConversationViewCursor,
+    pub view: ConversationView,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationListed {
+    pub subscription_id: ConversationSubscriptionId,
+    pub list: ConversationListResult,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationSubscriptionEndReason {
+    Lagging,
+    Refused,
+    SourceClosed,
+    TooLarge,
+}
+impl ConversationSubscriptionEndReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Lagging => "lagging",
+            Self::Refused => "refused",
+            Self::SourceClosed => "source_closed",
+            Self::TooLarge => "too_large",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSubscriptionEnded {
+    pub subscription_id: ConversationSubscriptionId,
+    pub reason: ConversationSubscriptionEndReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_delivered: Option<ConversationViewCursor>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationSubscriptionErrorCode {
+    SubscriptionCapacity,
+    SubscriptionDuplicate,
+    UnknownSubscription,
+    CursorAhead,
+}
+impl ConversationSubscriptionErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SubscriptionCapacity => "subscription_capacity",
+            Self::SubscriptionDuplicate => "subscription_duplicate",
+            Self::UnknownSubscription => "unknown_subscription",
+            Self::CursorAhead => "cursor_ahead",
+        }
+    }
+}
 pub const MAX_CHANGE_WATCH_ID_BYTES: usize = 57;
 pub const CHANGE_WATCH_ID_PATTERN: &str =
     "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$";
@@ -1914,6 +2003,9 @@ pub const MAX_PRINCIPAL_CHANGE_WATCHES: usize = 8;
 pub const MAX_CONNECTION_RECORD_WATCHES: usize = 1;
 pub const MAX_CONNECTION_CATALOGUE_WATCHES: usize = 1;
 pub const MAX_CONNECTION_CHANGE_WATCHES: usize = 2;
+pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = 8;
+pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = 1;
+pub const SUBSCRIPTION_DELIVERY_TIMEOUT_MS: u64 = 10000;
 /// Published bound from the product schema.
 pub const MAX_AUTH_CREDENTIAL_CHARACTERS: usize = 16384;
 /// Published bound from the product schema.
@@ -2000,11 +2092,17 @@ pub mod product_method {
     pub const CONVERSATION_WATCH_RECORDS: &str = "conversation.watchRecords";
     pub const CONVERSATION_WATCH_CATALOGUE: &str = "conversation.watchCatalogue";
     pub const CONVERSATION_UNWATCH: &str = "conversation.unwatch";
+    pub const CONVERSATION_SUBSCRIBE: &str = "conversation.subscribe";
+    pub const CONVERSATION_SUBSCRIBE_LIST: &str = "conversation.subscribeList";
+    pub const CONVERSATION_UNSUBSCRIBE: &str = "conversation.unsubscribe";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
     pub const CONVERSATION_CHANGED: &str = "conversation.changed";
     pub const CONVERSATION_WATCH_ENDED: &str = "conversation.watchEnded";
+    pub const CONVERSATION_VIEW: &str = "conversation.view";
+    pub const CONVERSATION_LISTED: &str = "conversation.listed";
+    pub const CONVERSATION_SUBSCRIPTION_ENDED: &str = "conversation.subscriptionEnded";
 }
 pub fn wire_shape_session_challenge(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
@@ -2185,7 +2283,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 52
+                items.len() <= 55
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -2262,6 +2360,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.watchRecords",
     "conversation.watchCatalogue",
     "conversation.unwatch",
+    "conversation.subscribe",
+    "conversation.subscribeList",
+    "conversation.unsubscribe",
 ];
 /// The grant Cedar is asked for before this method is dispatched.
 ///
@@ -2315,7 +2416,10 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "mcp.readResource"
         | "mcp.releaseApp"
         | "mcp.sendMessage"
-        | "mcp.updateModelContext" => Some("conversation.write"),
+        | "mcp.updateModelContext"
+        | "conversation.subscribe"
+        | "conversation.subscribeList"
+        | "conversation.unsubscribe" => Some("conversation.write"),
         "conversation.recordsHead"
         | "conversation.recordsPage"
         | "conversation.catalogueHead"

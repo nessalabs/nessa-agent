@@ -32,6 +32,7 @@
 //! messages in flight, by the turn each becomes, so one request is asked
 //! about once at a time (`docs/design/mcp-app-calls.md`, "An app in its
 //! conversation: the gateway").
+use super::live_changes::LiveChangePublisher;
 use super::mcp_apps::{
     ContextDrop, DroppedContexts, McpAppAuditPhase, McpAppAuditRecord, McpAppInitiator, McpAppRef,
     McpAppWithdrawal,
@@ -171,6 +172,9 @@ pub struct AppReviews {
     updates: tokio::sync::Mutex<()>,
     /// Where each context dropped unsent is reported, as it is dropped.
     dropped: Arc<dyn DroppedContexts>,
+    /// Told after every change to the open reviews, which a view shows:
+    /// a review opened, answered, withdrawn or ended with its opening.
+    changed: LiveChangePublisher,
 }
 #[derive(Default)]
 struct Reviews {
@@ -257,12 +261,14 @@ pub struct Waiting {
 
 impl AppReviews {
     /// A conversation's apps, none of them released, no opening begun; each
-    /// context they drop is reported to `dropped`.
-    pub fn new(dropped: Arc<dyn DroppedContexts>) -> Self {
+    /// context they drop is reported to `dropped`, and each change to the
+    /// reviews open is told to `changed`.
+    pub fn new(dropped: Arc<dyn DroppedContexts>, changed: LiveChangePublisher) -> Self {
         Self {
             state: Mutex::default(),
             updates: tokio::sync::Mutex::default(),
             dropped,
+            changed,
         }
     }
 
@@ -294,6 +300,7 @@ impl AppReviews {
             state.pending.clear();
             (state.epoch, updates(std::mem::take(&mut state.contexts)))
         };
+        (self.changed)();
         self.report_dropped(
             dropped,
             ContextDrop::ConversationEnded,
@@ -323,6 +330,7 @@ impl AppReviews {
                 updates(std::mem::take(&mut state.contexts)),
             )
         };
+        (self.changed)();
         self.report_dropped(dropped, ContextDrop::ConversationEnded, by);
         withdraw_ended(ended, by);
     }
@@ -474,6 +482,8 @@ impl AppReviews {
                 end,
             },
         );
+        drop(state);
+        (self.changed)();
         Ok(Waiting {
             reviews: self.clone(),
             permission_id,
@@ -527,6 +537,8 @@ impl AppReviews {
             None => return ReviewAnswer::Stale,
         };
         let open = state.remove(key).expect("present");
+        drop(state);
+        (self.changed)();
         let _ = open.end.send(end);
         ReviewAnswer::Ended
     }
@@ -554,6 +566,7 @@ impl AppReviews {
             state.key(permission).and_then(|key| state.remove(key))
         };
         if let Some(open) = open {
+            (self.changed)();
             let _ = open.end.send(end);
         }
     }
@@ -589,6 +602,9 @@ impl AppReviews {
                 updates(dropped),
             )
         };
+        if !ended.is_empty() {
+            (self.changed)();
+        }
         self.report_dropped(dropped, ContextDrop::Released, by);
         for open in ended {
             let _ = open.end.send(ReviewEnd::Withdrawn {
@@ -619,6 +635,7 @@ impl AppReviews {
                 updates(std::mem::take(&mut state.contexts)),
             )
         };
+        (self.changed)();
         self.report_dropped(dropped, ContextDrop::ConversationEnded, by);
         withdraw_ended(ended, by);
     }

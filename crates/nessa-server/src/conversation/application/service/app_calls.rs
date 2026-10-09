@@ -277,7 +277,10 @@ impl ConversationService {
                     || Arc::new(NoAppsToDrop) as _,
                     |ports| ports.dropped.clone(),
                 );
-                Arc::new(AppReviews::new(dropped))
+                Arc::new(AppReviews::new(
+                    dropped,
+                    self.inner.live_changes.publisher(id),
+                ))
             })
             .clone()
     }

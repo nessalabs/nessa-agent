@@ -32,6 +32,11 @@ impl WatchRecords for CountingRecords {
         self.installed.fetch_add(1, Ordering::SeqCst);
         self.actual.watch(conversation)
     }
+
+    fn watch_any(&self) -> Result<CommittedChangeWatch, ChangeWatchError> {
+        self.installed.fetch_add(1, Ordering::SeqCst);
+        self.actual.watch_any()
+    }
 }
 
 struct CountingReceiver {

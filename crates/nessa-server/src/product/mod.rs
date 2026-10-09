@@ -27,11 +27,13 @@
 mod attachment;
 pub(crate) mod catalogue_read;
 mod change_watch;
+mod event_sequence;
 mod operational_limits;
 pub(crate) mod passive_read;
 pub(crate) mod record_read;
 mod socket;
 mod state;
+mod subscription;
 pub(crate) mod wire;
 
 pub(crate) use operational_limits::ConfiguredLimits;

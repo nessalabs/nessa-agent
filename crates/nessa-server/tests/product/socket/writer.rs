@@ -146,6 +146,7 @@ async fn continuously_ready_lane_releases_all_record_leases(
             records,
             Duration::from_secs(60),
             Arc::new(WatchDeliveries::new()),
+            Arc::new(SubscriptionDeliveries::new(Default::default())),
         )));
         ready.notified().await;
         assert!(writes.load(Ordering::SeqCst) >= 64);
@@ -239,6 +240,7 @@ async fn arriving_record_interrupts_stalled_priority(close: bool, refusal: Optio
         records,
         Duration::from_secs(60),
         Arc::new(WatchDeliveries::new()),
+        Arc::new(SubscriptionDeliveries::new(Default::default())),
     ));
     peer.writing.recv().await.unwrap();
     record_send
@@ -339,6 +341,7 @@ async fn nonexpired_pending_record_preserves_physical_priority_and_releases_leas
         records,
         Duration::from_secs(5),
         deliveries.clone(),
+        Arc::new(SubscriptionDeliveries::new(Default::default())),
     ));
     for expected in ["control", "refusal", "ordinary", "record"] {
         let Message::Text(text) = peer.message().await else {
@@ -1348,6 +1351,7 @@ async fn slotless_record_refusal_expires_under_continuously_ready_controls() {
         records,
         Duration::from_secs(60),
         Arc::new(WatchDeliveries::new()),
+        Arc::new(SubscriptionDeliveries::new(Default::default())),
     ));
     ready.notified().await;
     assert!(writes.load(Ordering::SeqCst) >= 64);
@@ -1408,6 +1412,7 @@ async fn original_pending_watch_deadline_expires_during_another_physical_frame()
         records,
         Duration::from_secs(60),
         deliveries.clone(),
+        Arc::new(SubscriptionDeliveries::new(Default::default())),
     ));
     peer.writing.recv().await.unwrap(); // Ordinary physical flush has a later own budget.
     assert!(peer.output.try_recv().is_err());
@@ -1487,6 +1492,7 @@ async fn pending_watch_deadline_survives_a_continuously_ready_lane(ordinary_lane
         records,
         Duration::from_secs(60),
         deliveries.clone(),
+        Arc::new(SubscriptionDeliveries::new(Default::default())),
     ));
     ready.notified().await;
     assert!(writes.load(Ordering::SeqCst) >= 64); // Traffic genuinely remains ready.
@@ -1546,6 +1552,7 @@ async fn unwatch_before_writer_selection_sends_no_hint_after_the_acknowledgement
         records,
         Duration::from_secs(60),
         deliveries.clone(),
+        Arc::new(SubscriptionDeliveries::new(Default::default())),
     ));
     peer.writing.recv().await.unwrap(); // The ordinary frame is mid-flush.
     // What `ConnectionWatches::begin` does for an unwatch: retire, then queue

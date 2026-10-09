@@ -74,7 +74,51 @@ impl Reported {
 /// A conversation's apps, no opening begun, and what they report dropped.
 fn unopened() -> (Arc<AppReviews>, Arc<Reported>) {
     let reported = Arc::new(Reported::default());
-    (Arc::new(AppReviews::new(reported.clone())), reported)
+    (
+        Arc::new(AppReviews::new(reported.clone(), Arc::new(|| {}))),
+        reported,
+    )
+}
+
+/// Every change to the open reviews is told, so a view subscription reads
+/// again; a call that changes none of them tells nothing
+/// (`docs/design/record-subscriptions.md`, "Live overlay").
+#[tokio::test]
+async fn each_change_to_the_open_reviews_is_told_and_nothing_else() {
+    let told = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = told.clone();
+    let reviews = Arc::new(AppReviews::new(
+        Arc::new(Reported::default()),
+        Arc::new(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }),
+    ));
+    let count = || told.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(reviews.begin(), EPOCH);
+    assert_eq!(count(), 1, "an opening begun");
+    let answered = open(&reviews, "i1").unwrap();
+    assert_eq!(count(), 2, "a review opened");
+    let id = answered.permission_id.clone();
+    assert_eq!(
+        reviews.answer("e1", &id, ALLOW, person()),
+        ReviewAnswer::Ended
+    );
+    assert_eq!(count(), 3, "a review answered");
+    assert_eq!(
+        reviews.answer("e1", &id, ALLOW, person()),
+        ReviewAnswer::NotAnAppReview
+    );
+    reviews.withdraw("not-a-review");
+    assert_eq!(count(), 3, "nothing changed, nothing told");
+    let withdrawn = open(&reviews, "i1").unwrap();
+    reviews.withdraw(&withdrawn.permission_id);
+    assert_eq!(count(), 5, "opened, then withdrawn");
+    let _released = open(&reviews, "i2").unwrap();
+    reviews.release_app(&app("i2"), &McpAppInitiator::System, || {});
+    assert_eq!(count(), 7, "opened, then its app released");
+    let _ended = open(&reviews, "i1").unwrap();
+    reviews.end(EPOCH, &McpAppInitiator::System, || {});
+    assert_eq!(count(), 9, "opened, then its opening ended");
 }
 
 /// A conversation's apps, in its first opening, and what they report

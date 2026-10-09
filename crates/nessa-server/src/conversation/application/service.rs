@@ -3,6 +3,7 @@ mod mutation;
 use super::session_key::conversation_session;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
+    live_changes::LiveChanges,
     locks::ConversationLocks,
     mcp_apps::{McpAppError, McpAppInitiator, McpAppPorts, McpAppRef},
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
@@ -28,7 +29,7 @@ use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary,
 };
 use nessa_protocol::conversation::{
-    projection::{bound_view, clipped, Projection, MAX_TEXT},
+    projection::{bound_view, clipped, CommittedCursor, Projection, MAX_TEXT},
     tool_uis::{McpToolUis, NoMcpToolUis},
     view::{
         ConversationApprovalModeChangeStatus, ConversationApprovalModeChangeView,
@@ -670,6 +671,9 @@ struct Inner {
     /// its live agent: a release is kept across openings and before one.
     /// Let go of when the conversation is deleted.
     apps: std::sync::Mutex<HashMap<ConversationId, Arc<AppReviews>>>,
+    /// Wakes view subscriptions when a live fact of a view changes; committed
+    /// records wake them through the SDK's own watch.
+    live_changes: Arc<LiveChanges>,
     /// MCP App calls running, across every caller: each holds one of these
     /// on its own task until that task ends, so a caller that goes and comes
     /// back cannot leave calls running past the bound.
@@ -923,6 +927,7 @@ impl ConversationService {
                 tool_uis,
                 mcp_apps,
                 apps: std::sync::Mutex::default(),
+                live_changes: Arc::default(),
                 app_calls: Arc::new(Semaphore::new(app_calls::MAX_APP_CALLS)),
                 commands: Arc::new(OnceLock::new()),
             }),
@@ -1418,6 +1423,12 @@ impl ConversationService {
                                     Err(AgentError::Closed) => {}
                                     Err(error) => report_opening_failure(&attachment_id, &error),
                                 }
+                                // Attached or failed: the view's lifecycle
+                                // and capabilities follow the agent's.
+                                attachment_service
+                                    .inner
+                                    .live_changes
+                                    .publish(&attachment_id);
                             });
                             let live = Arc::new(LiveConversation {
                                 agent,
@@ -1452,6 +1463,8 @@ impl ConversationService {
                         owners.remove(&id);
                     }
                 }
+                // Opened or not, a view's lifecycle says so now.
+                service.inner.live_changes.publish(&id);
             });
         }
     }
@@ -1575,7 +1588,9 @@ impl ConversationService {
         mode: ConversationApprovalMode,
     ) -> Result<ConversationApprovalMode, ConversationError> {
         let service = self.clone();
+        let changed = (self.inner.live_changes.clone(), id.clone());
         supervised(async move {
+            let result = async move {
             let _admission = service.admit().await?;
             let _mode = service.inner.mode_changes.lock(&id).await;
             let _actor = caller.actor()?;
@@ -1757,6 +1772,12 @@ impl ConversationService {
                 }
             }
             Ok(terminal.requested)
+            }
+            .await;
+            // However it ended — applied, refused, left pending — a view
+            // shows the mode and any change still in progress.
+            changed.0.publish(&changed.1);
+            result
         })
         .await
     }
@@ -1767,11 +1788,28 @@ impl ConversationService {
         id: ConversationId,
         caller: ConversationCaller,
     ) -> Result<ConversationView, ConversationError> {
+        self.read_at(id, caller).await.map(|(view, _)| view)
+    }
+
+    /// Follow `id`'s live facts: subscribe before [`Self::read_at`], and a
+    /// change during or after that read is not missed.
+    pub fn live_changes(&self, id: &ConversationId) -> tokio::sync::watch::Receiver<u64> {
+        self.inner.live_changes.subscribe(id)
+    }
+
+    /// [`Self::read`], with where in the committed history the view was
+    /// folded through: the projection's accepted position, so the cursor
+    /// never runs ahead of, or behind, what the view shows.
+    pub async fn read_at(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+    ) -> Result<(ConversationView, Option<CommittedCursor>), ConversationError> {
         let _admission = self.admit().await?;
         let _mode = self.inner.mode_changes.lock(&id).await;
         if let Err(error) = self.recover_mode_change(&id, &caller).await {
-            if let Some(view) = self.read_pending_mode_change(&id, &caller).await? {
-                return Ok(view);
+            if let Some(read) = self.read_pending_mode_change(&id, &caller).await? {
+                return Ok(read);
             }
             return Err(error);
         }
@@ -1813,6 +1851,7 @@ impl ConversationService {
         });
         projection.lifecycle(lifecycle_view(&live.agent));
         let mut view = projection.read();
+        let cursor = projection.committed_cursor();
         drop(projection);
         view.permissions.retain(|review| {
             let execution = ExecutionId::new(&review.execution_id);
@@ -1829,13 +1868,13 @@ impl ConversationService {
         // Bounded there, before its app reviews are added beside it.
         let view = app_calls::with_app_reviews(view, live.app_reviews.reviews());
         self.check_view_access(&id, &caller).await?;
-        Ok(view)
+        Ok((view, cursor))
     }
     async fn read_pending_mode_change(
         &self,
         id: &ConversationId,
         caller: &ConversationCaller,
-    ) -> Result<Option<ConversationView>, ConversationError> {
+    ) -> Result<Option<(ConversationView, Option<CommittedCursor>)>, ConversationError> {
         let record = self
             .inner
             .metadata
@@ -1876,21 +1915,27 @@ impl ConversationService {
             .map(SessionSnapshot::pending_order)
             .transpose()?
             .unwrap_or_default();
-        let mut view = if let Some(live) = live {
+        let (mut view, cursor) = if let Some(live) = live {
             let active = live.agent.active_execution_id();
             let mut projection = live.projection.lock().await;
             let accepted = projection.replace_committed(&committed, &order, active.as_ref());
             if accepted {
                 projection.transcript_state(committed.state().into());
             }
-            projection.read_with_mode_change(Some(change.clone()))
+            (
+                projection.read_with_mode_change(Some(change.clone())),
+                projection.committed_cursor(),
+            )
         } else {
             let mut projection =
                 Projection::new(id.to_string(), ConversationCapabilities::read_only(), None)
                     .with_tool_uis(self.inner.tool_uis.clone());
             projection.replace_committed(&committed, &order, None);
             projection.transcript_state(committed.state().into());
-            projection.read_with_mode_change(Some(change))
+            (
+                projection.read_with_mode_change(Some(change)),
+                projection.committed_cursor(),
+            )
         };
         view.selection = Some(ConversationSelectionView {
             agent: record.agent().ok_or(ConversationError::AgentUnsupported)?,
@@ -1906,7 +1951,7 @@ impl ConversationService {
         view.questions.clear();
         view.title = self.title(id).await;
         self.check_view_access(id, caller).await?;
-        Ok(Some(bound_view(view)))
+        Ok(Some((bound_view(view), cursor)))
     }
     async fn check_view_access(
         &self,
@@ -2659,7 +2704,10 @@ impl ConversationService {
                 %error,
                 "conversation summary could not be written; the list shows the last one"
             );
+            return;
         }
+        // A view shows the summary's title.
+        self.inner.live_changes.publish(id);
     }
     /// Reorder the complete pending queue without changing message identities or priority.
     /// Dispatch/removal races return QueueChanged; failed writes may have applied the move.
@@ -4266,6 +4314,7 @@ impl ConversationService {
             owned
         };
         if released {
+            self.inner.live_changes.publish(id);
             // Ended, however it ended: its apps too. Every stop ends them
             // first, by whoever stopped it; this is for any other way out,
             // and does nothing to apps already ended.
