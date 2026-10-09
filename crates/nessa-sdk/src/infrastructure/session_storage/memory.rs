@@ -238,3 +238,21 @@ impl Drop for MemoryStore {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn memory_storage_refuses_to_discard_unreadable_history() {
+        let storage = InMemoryStorage::new();
+        let error = storage
+            .discard_unreadable(SessionId::new("unused").unwrap())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            StorageError::Corrupt(detail) if detail == "this storage does not discard unreadable history"
+        ));
+    }
+}

@@ -2983,11 +2983,10 @@ fn base32hex_nopad(bytes: &[u8]) -> String {
     out.to_ascii_lowercase()
 }
 
-/// A legacy JSONL history cannot be opened. Delete does not pretend the
-/// history is gone: the file stays, and the failure is the permanent
-/// unreadable state rather than a retry.
+/// A legacy JSONL history cannot be opened. Delete still finishes, and the
+/// file is gone. The answer is not the retryable storage failure.
 #[tokio::test]
-async fn deleting_a_legacy_jsonl_chat_leaves_it() {
+async fn deleting_a_legacy_jsonl_chat_removes_it() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path();
     nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
@@ -3047,19 +3046,16 @@ async fn deleting_a_legacy_jsonl_chat_leaves_it() {
         base32hex_nopad(id.to_string().as_bytes())
     ));
     std::fs::write(&journal, b"legacy\n").unwrap();
-    let error = service
+    assert!(service
         .delete(id.clone(), caller("delete-legacy"))
         .await
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        ConversationError::DeletionIncomplete(failures)
-            if matches!(
-                failures.history,
-                Some(ConversationError::Storage(StorageError::Corrupt(_)))
-            )
-    ));
-    assert!(journal.exists());
+        .unwrap());
+    assert!(!journal.exists());
+    assert!(storage
+        .open_existing(SessionId::new(id.to_string()).unwrap())
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]

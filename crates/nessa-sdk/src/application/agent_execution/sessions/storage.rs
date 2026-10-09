@@ -633,6 +633,30 @@ pub trait SessionStorage: Send + Sync {
     ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
         Box::pin(async move { self.open(id).await.map(Some) })
     }
+
+    /// Remove history this build cannot open, without folding it.
+    ///
+    /// Legacy JSONL and a stream whose replay refuses are not a prefix a
+    /// reader can open. Deleting that chat finishes only when the adapter
+    /// drops the JSONL file and resets the stream without reading its bytes.
+    /// The default refuses. An adapter that can hold unreadable history must
+    /// override this, or the delete stays incomplete and the file stays.
+    /// [`RecordStorage`] removes both.
+    ///
+    /// # Errors
+    /// The default returns [`StorageError::Corrupt`]. [`StorageError::Busy`]
+    /// when another owner holds the session. A backend error when the file
+    /// or the reset cannot be acknowledged.
+    ///
+    /// [`RecordStorage`]: crate::infrastructure::session_storage::RecordStorage
+    fn discard_unreadable(&self, id: SessionId) -> StorageFuture<'_, ()> {
+        let _ = id;
+        Box::pin(async {
+            Err(StorageError::Corrupt(
+                "this storage does not discard unreadable history".into(),
+            ))
+        })
+    }
 }
 
 /// Exclusive storage access to one local session, owned by its session manager.

@@ -211,6 +211,51 @@ impl RecordStorage {
         .await
         .map_err(|error| StorageError::Io(error.to_string()))?
     }
+
+    /// Drop a legacy JSONL file and reset a stream without replaying it.
+    /// Replay is what refuses a predecessor record. The replacement stream is
+    /// empty, so a later open does not read the refused bytes.
+    async fn discard_unreadable_inner(&self, id: SessionId) -> Result<(), StorageError> {
+        let reservation = Reservation::acquire(self.owner.clone(), id.as_str())?;
+        let journal = SessionPaths::new(&self.root, &id).journal;
+        tokio::task::spawn_blocking(move || match std::fs::remove_file(&journal) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(StorageError::Io(error.to_string())),
+        })
+        .await
+        .map_err(|error| StorageError::Io(error.to_string()))??;
+        let runtime = self.runtime().await?.clone();
+        let stream_id =
+            StreamId::new(id.as_str()).map_err(|error| StorageError::Corrupt(error.to_string()))?;
+        let Some(stream) = runtime.find_stream(&stream_id).await.map_err(store_error)? else {
+            drop(reservation);
+            return Ok(());
+        };
+        let mut digest = Sha256::new();
+        digest.update(stream.id.as_str().as_bytes());
+        digest.update(stream.incarnation.0);
+        let operation = format!("nessa-discard-{:x}", digest.finalize());
+        runtime
+            .change_lifecycle(LifecycleRequest {
+                operation_id: LifecycleOperationId::new(operation)
+                    .map_err(|error| StorageError::Corrupt(error.to_string()))?,
+                expected: stream,
+                action: LifecycleAction::Reset,
+            })
+            .await
+            .map_err(store_error)?;
+        const MAX_CLEANUP_PASSES: usize = 1024;
+        for _ in 0..MAX_CLEANUP_PASSES {
+            let progress = runtime.cleanup_retired().await.map_err(store_error)?;
+            if !progress.remaining {
+                drop(reservation);
+                return Ok(());
+            }
+        }
+        drop(reservation);
+        Err(StorageError::Unresolved)
+    }
 }
 
 impl SessionStorage for RecordStorage {
@@ -272,6 +317,10 @@ impl SessionStorage for RecordStorage {
         id: SessionId,
     ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
         Box::pin(async move { self.open_inner(id, true).await })
+    }
+
+    fn discard_unreadable(&self, id: SessionId) -> StorageFuture<'_, ()> {
+        Box::pin(async move { self.discard_unreadable_inner(id).await })
     }
 
     fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
@@ -4122,6 +4171,82 @@ mod tests {
         assert_eq!(loaded.state(), SessionLoadState::Published);
         assert_eq!(loaded.snapshot(), Some(&sent));
         assert_eq!(invocation_names(loaded.snapshot().unwrap()), ["confirmed"]);
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn discard_unreadable_removes_legacy_jsonl_and_resets_a_predecessor_stream() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let legacy_id = SessionId::new("legacy-jsonl").unwrap();
+        let journal = SessionPaths::new(&root, &legacy_id).journal;
+        std::fs::write(&journal, b"old\n").unwrap();
+        assert!(matches!(
+            storage.open_existing(legacy_id.clone()).await,
+            Err(StorageError::Corrupt(_))
+        ));
+        storage.discard_unreadable(legacy_id.clone()).await.unwrap();
+        assert!(!journal.exists());
+        assert!(storage.open_existing(legacy_id).await.unwrap().is_none());
+
+        let id = SessionId::new("predecessor").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (change, snapshot) = opening(&id);
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                snapshot,
+                vec![SessionSaveUnit::new(vec![change]).unwrap()],
+            )
+            .await
+            .unwrap();
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        // Drop the first physical row and move the floor onto it. The stream
+        // stays contiguous from that floor, and this reader still refuses a
+        // prefix that does not start at zero. Discard retires that stream
+        // without folding what remains.
+        let database = Connection::open(root.join("records.sqlite3")).unwrap();
+        let first: Vec<u8> = database
+            .query_row(
+                "SELECT offset FROM event_records ORDER BY offset LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            database
+                .execute(
+                    "DELETE FROM event_records WHERE offset=?1",
+                    [first.as_slice()]
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            database
+                .execute(
+                    "UPDATE event_streams SET floor=?1 WHERE retired=0",
+                    [first.as_slice()],
+                )
+                .unwrap(),
+            1
+        );
+        drop(database);
+        let storage = RecordStorage::new(&root).unwrap();
+        assert!(matches!(
+            storage.open_existing(id.clone()).await,
+            Err(StorageError::Corrupt(_))
+        ));
+        storage.discard_unreadable(id.clone()).await.unwrap();
+        let lease = storage.open_existing(id).await.unwrap().unwrap();
+        let loaded = lease.load().await.unwrap();
+        assert_eq!(loaded.state(), SessionLoadState::Published);
+        assert!(loaded.snapshot().is_none());
         drop(lease);
         storage.shutdown().await.unwrap();
     }
