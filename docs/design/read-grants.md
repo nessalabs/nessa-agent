@@ -53,25 +53,30 @@ nothing and writes nothing (row G9).
   receiver bindings; every other session is one of the owner's own surfaces
   and reads by ownership, exactly as before. A gateway that pairs nothing has
   no bindings, so nothing changes for it (row G11).
-- **`admit_read`** answers one conversation; **`visible_to`** answers a list.
-  An ungranted id is refused as a conversation that is not the owner's, so a
-  device cannot tell it from one that does not exist.
+- **`admit_read`** answers one conversation. An ungranted id is refused as a
+  conversation that is not the owner's, so a device cannot tell it from one
+  that does not exist.
+- **A device lists through its catalogue**, which the store narrows to its
+  grants. The socket's lists (`conversation.list`, `.observe`,
+  `.subscribeList`) are the owner's own and are refused to a device
+  (`forbidden`), rather than read whole and filtered: a filtered list could
+  come back as empty pages, and its cursor would name the last ungranted row.
 
-Every read path asks one of them:
+Every read path asks it:
 
 | Path | Asks |
 |---|---|
 | A device's `conversation.recordsHead`, `recordsPage`, and `conversation.watchRecords` (admitted as a record head) | `AdmitPassiveRead::execute` → `admit_read` |
 | A device's catalogue head, manifest and resolve, and `conversation.watchCatalogue` | the store's page and resolve, narrowed in SQL |
 | `conversation.read` and every view subscription batch (`subscription::authorize_batch`) | `product::read_access::admit_conversation` → `admit_read` |
-| `conversation.list`, `conversation.observe`, every list subscription batch (`read_list`) | `product::read_access::visible` → `visible_to` |
+| `conversation.list`, `conversation.observe`, every list subscription batch (`read_list`) | `product::read_access::admit_list`: the owner's surfaces only |
 
 The catalogue is narrowed in SQL rather than filtered after the read, because
 a filtered page must still be a whole page: a page of 200 rows that loses 199
 after the limit would stop a device's pass. The store states "this receiver
 holds a grant on this conversation" once (`store::read_grants::granted`) and
-uses it for `is_granted`, for a device's set, and for the catalogue's page and
-resolve, so a device's catalogue and its reads cannot disagree.
+uses it for `is_granted`, for the grants on a conversation, and for the
+catalogue's page and resolve, so a device's catalogue and its reads cannot disagree.
 
 ```mermaid
 sequenceDiagram
@@ -148,17 +153,17 @@ otherwise.
 
 | Row | State and input | Result | Test |
 |---|---|---|---|
-| G1 | A paired device asks for the records (head, page, or a records watch) of a conversation never granted to it | Refused `WrongOwner`, as a conversation that is not its owner's; no source is touched | `an_ungranted_conversation_is_refused_before_its_source` |
+| G1 | A paired device asks for the records (head, page, or a records watch) of a conversation never granted to it | Refused `WrongOwner`, as a conversation that is not its owner's; no source is touched; a watch is not installed | `an_ungranted_conversation_is_refused_before_its_source`; `a_records_watch_on_an_ungranted_conversation_is_refused` (`tests/product/socket/watches.rs`) |
 | G2 | A paired device pages its owner's catalogue | Only granted rows; resolving an ungranted one finds nothing | `a_device_pages_only_the_conversations_granted_to_it` |
 | G3 | The owner grants; the device reads | Admitted | `an_ungranted_conversation_is_refused_before_its_source` (second half) |
 | G4 | A read admitted, then the grant revoked before its source finished | The admitted read finishes; the next admission is refused | `a_revoke_ends_the_next_read_and_lets_an_admitted_one_finish` |
 | G5 | A grant on a conversation older than the device's completed pass | The row's revision and the owner's head move past it; the next pass sends the row | `a_grant_moves_the_row_past_what_a_device_completed` |
 | G6 | A revoke | The row leaves the device's pages and resolve, not as deleted; the head moves | `a_revoke_takes_the_row_out_of_the_devices_catalogue` |
 | G7 | A grant on one conversation; another exists or is created later | The other is not visible | `a_grant_names_one_conversation_and_nothing_else` |
-| G8 | Share on a conversation not the caller's, a deleted one, or naming a credential that is not an active paired device of the owner | `conversation_not_found`, `conversation_deleted`, `share_target_not_paired`; nothing written | `share_refuses_what_the_owner_cannot_grant` |
+| G8 | Share on a conversation not the caller's, a deleted one, or naming a credential that is not an active paired device of the owner; ownership and deletion are checked in the transaction that writes the grant | `conversation_not_found`, `conversation_deleted`, `share_target_not_paired`; nothing written | `share_refuses_what_the_owner_cannot_grant` |
 | G9 | Share twice; unshare what is not granted | `applied: false`; no journal row, no revision | `a_repeated_share_or_unshare_changes_nothing` |
 | G10 | A grant and a revoke that change something | One journal row each: before, after, initiator, surface, request, revision | `every_grant_change_is_journaled_with_its_initiator` |
 | G11 | The owner's own surface (no receiver binding), or a gateway that pairs nothing | Reads, lists and subscribes as before | the existing subscription and conversation suites, which compose no receiver binding; `an_owner_surface_reads_everything_it_owns` |
-| G12 | A socket session with a receiver binding | `conversation.read` and a view subscribe of an ungranted id answer `conversation_not_found`; a list shows only granted rows | `a_paired_device_on_the_socket_sees_only_what_it_was_granted` |
+| G12 | A socket session with a receiver binding | `conversation.read` and a view subscribe of an ungranted id answer `conversation_not_found`, a granted one is read; `conversation.list`, `.observe`, `.subscribeList` and the share commands answer `forbidden` | `a_paired_device_on_the_socket_sees_only_what_it_was_granted` |
 | G13 | A device's view subscription; the grant is revoked between batches | Ended `refused` with `conversation_not_found` before the next read | `a_revoke_ends_a_device_subscription_before_its_next_batch` |
 | G14 | A device unpaired (its binding inactive), whatever it was granted | Socket reads refused `unauthorized`; passive reads as before | `an_unpaired_device_reads_nothing_whatever_it_was_granted` |

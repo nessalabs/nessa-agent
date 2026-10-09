@@ -178,8 +178,8 @@ request holds its capacity before it is admitted (`dispatch` does the same), so
 nothing revoked while a batch waits for a permit is read (row S30). An unsubscribe is admitted by the socket before
 it changes anything (row S29). Both use the same admission as `dispatch`
 (`admit_now`). A view batch also asks the per-conversation read grant there, and a
-list batch asks it in `read_list`, which every list batch reads through
-([read grants](read-grants.md)); nothing else decides whether a frame may be read.
+list batch is refused to a paired device in `read_list`, which every list batch
+reads through ([read grants](read-grants.md)); nothing else decides whether a frame may be read.
 
 ### Limits
 
