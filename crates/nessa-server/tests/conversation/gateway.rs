@@ -103,6 +103,7 @@ mod gateway {
         state.verifier = authority;
         state.with_agents_catalog(
             serde_json::from_value(serde_json::json!({
+                "environments": [],
                 "agents": [{
                     "agent": "claude",
                     "defaultModel": "test",
@@ -486,7 +487,7 @@ mod gateway {
                 deletion_budgets: conversation_support::DELETION_BUDGETS,
                 message_commit_clock: Arc::new(nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new()),
                 clock: Arc::new(conversation_support::TestClock),
-                environment: crate::conversation::infrastructure::in_process_environment(),
+                environment: crate::conversation::infrastructure::in_process_environment().into(),
             },
             ConversationLimits::default(),
             Some("/workspace".into()),

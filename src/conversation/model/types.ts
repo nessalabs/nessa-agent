@@ -51,14 +51,21 @@ export type ConversationRuntime = {
 export type ConversationLease = {
   state: "live" | "ending" | "ended" | "interrupted" | "refused" | "unreadable"
   revision?: number
-  /** `here` is the gateway's own machine. */
-  environment?: "here"
+  /** `here` is the gateway's own machine; `ssh` a host reached over SSH. */
+  environment?: "here" | "ssh"
+  /** The SSH destination, exactly when `environment` is `ssh`. */
+  host?: string
   /** `harness_default` is whatever the agent's harness encloses, and nothing more. */
   sandbox?: "harness_default"
   /** Why it is ending or ended: the first cause recorded. */
   cause?: "stopped" | "closed" | "revoked" | "expired" | "lost"
   cleanup?: "confirmed" | "forced" | "not_held"
-  refusal?: "sandbox_unavailable"
+  refusal?:
+    | "sandbox_unavailable"
+    | "environment_unreachable"
+    | "environment_version_mismatch"
+    | "environment_busy"
+    | "agent_unavailable"
   droppedEvents: number
 }
 
@@ -77,6 +84,9 @@ export type ConversationSelection = {
   agent: string
   model: string
   approvalMode: ApprovalMode
+  /** The SSH host the conversation runs on for its whole life, one the
+   * gateway's catalog names; absent runs it on the gateway's own machine. */
+  environment?: string
 }
 
 /** Creation fixes the selection before the first send or attachment upload. */
@@ -132,6 +142,12 @@ export type CommandFailure =
   | "agent-startup-deadline"
   /** No lease was granted: the sandbox the agent runs in could not be given. */
   | "sandbox-unavailable"
+  /** This conversation runs on an SSH host the gateway does not name any more. */
+  | "environment-not-configured"
+  /** Its SSH host could not be reached, is busy, or cannot run its agent. */
+  | "environment-unavailable"
+  /** Its SSH host runs another Nessa build; nothing was sent there. */
+  | "environment-version-mismatch"
   | "conversation-state-unreadable"
   | "invalid-request"
   /**

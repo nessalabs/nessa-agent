@@ -367,6 +367,7 @@ sys.stdin.read()
             .stdin
             .as_ref()
             .unwrap()
+            .local()
             .as_fd()
             .try_clone_to_owned()
             .unwrap(),
@@ -464,6 +465,7 @@ async fn startup_write_duration_reports_blocked_pipe_until_deadline() {
             .stdin
             .as_ref()
             .unwrap()
+            .local()
             .as_fd()
             .try_clone_to_owned()
             .unwrap(),

@@ -46,6 +46,12 @@ const REFUSALS: Partial<Record<ConversationErrorCode, string>> = {
     "The agent was still starting and ran out of time, so nothing was sent. Starting it is slowest the first time after an install or update, while the operating system scans the runtime. Retry normally succeeds once the runtime is warm.",
   sandbox_unavailable:
     "The gateway could not give this conversation's agent the sandbox it runs in, so the agent did not start and nothing was sent.",
+  environment_not_configured:
+    'This conversation runs on an SSH host the gateway\'s config.json does not name under "sshHosts", so nothing was sent.',
+  environment_unavailable:
+    "The SSH host this conversation runs on could not be reached, is serving another gateway, or cannot run its agent, so nothing was sent. Retry once the host is reachable.",
+  environment_version_mismatch:
+    "The SSH host this conversation runs on has another version of Nessa than this gateway, so nothing was sent to it. Install this version there.",
 }
 
 /**
@@ -114,8 +120,13 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
       return true
     // No lease was granted for the agent's run, so the gateway never opened a
     // provider: the refusal comes from the same startup that ends before
-    // anything reaches one.
+    // anything reaches one. The same for an SSH host: placed nowhere
+    // configured, unreachable, busy, unable to run the agent, or another
+    // build — no lease, nothing opened.
     case ConversationErrorCode.SandboxUnavailable:
+    case ConversationErrorCode.EnvironmentNotConfigured:
+    case ConversationErrorCode.EnvironmentUnavailable:
+    case ConversationErrorCode.EnvironmentVersionMismatch:
       return true
     // The gateway could not read what it saved for this conversation. It caches
     // that and answers every later command from it without opening an agent, so

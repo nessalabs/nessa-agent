@@ -1,11 +1,22 @@
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::caller_wake::contain_caller_wake;
-use crate::application::agent_execution::providers::CloseOutcome;
+use crate::application::agent_execution::providers::{
+    CloseOutcome, HarnessControl, HarnessProcess,
+};
 #[cfg(all(test, unix))]
 use std::{collections::VecDeque, sync::Mutex};
-use std::{fmt, io, path::Path, path::PathBuf, process::Stdio, sync::Arc, time::Duration};
+use std::{
+    fmt, io,
+    path::Path,
+    path::PathBuf,
+    pin::Pin,
+    process::Stdio,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
+};
 use tokio::{
-    io::AsyncReadExt,
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf},
     process::{Child, ChildStdin, ChildStdout, Command},
     task::JoinHandle,
     time::{sleep, timeout, Instant},
@@ -17,11 +28,9 @@ use tokio::sync::oneshot;
 /// For explicitly restricted, non-detaching subprocess profiles only.
 /// A process group is deliberately not offered as arbitrary command containment.
 pub(crate) struct ProcessScope {
-    child: Child,
-    group: u32,
-    pub stdin: Option<ChildStdin>,
-    pub stdout: Option<ChildStdout>,
-    stderr: Option<JoinHandle<()>>,
+    process: Process,
+    pub stdin: Option<ProcessInput>,
+    pub stdout: Option<ProcessOutput>,
     forced: bool,
     outcome: Option<CloseOutcome>,
     retained_directory: Option<RetainedDirectory>,
@@ -29,6 +38,91 @@ pub(crate) struct ProcessScope {
     fail_next_cleanup: bool,
     #[cfg(all(test, unix))]
     cleanup_confirmation: Option<oneshot::Sender<CloseOutcome>>,
+}
+
+/// Where the scope's harness runs: a child of this process, in a process
+/// group of its own, or on a host that supervises it ([`HarnessProcess`]).
+enum Process {
+    Local {
+        child: Child,
+        group: u32,
+        stderr: Option<JoinHandle<()>>,
+    },
+    Remote(Box<dyn HarnessControl>),
+}
+
+/// The harness's standard input: this process's pipe to its child, or the
+/// stream a host carries to its own.
+pub(crate) enum ProcessInput {
+    Local(ChildStdin),
+    Remote(Box<dyn AsyncWrite + Send + Unpin>),
+}
+
+/// The harness's standard output: this process's pipe from its child, or the
+/// stream a host carries from its own.
+pub(crate) enum ProcessOutput {
+    Local(ChildStdout),
+    Remote(Box<dyn AsyncRead + Send + Unpin>),
+}
+
+impl AsyncWrite for ProcessInput {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bytes: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            Self::Local(pipe) => Pin::new(pipe).poll_write(cx, bytes),
+            Self::Remote(stream) => Pin::new(stream).poll_write(cx, bytes),
+        }
+    }
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Local(pipe) => Pin::new(pipe).poll_flush(cx),
+            Self::Remote(stream) => Pin::new(stream).poll_flush(cx),
+        }
+    }
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Local(pipe) => Pin::new(pipe).poll_shutdown(cx),
+            Self::Remote(stream) => Pin::new(stream).poll_shutdown(cx),
+        }
+    }
+}
+
+impl AsyncRead for ProcessOutput {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Local(pipe) => Pin::new(pipe).poll_read(cx, buffer),
+            Self::Remote(stream) => Pin::new(stream).poll_read(cx, buffer),
+        }
+    }
+}
+
+#[cfg(test)]
+impl ProcessInput {
+    /// The child's pipe, for tests that drive a local harness's descriptor.
+    pub(crate) fn local(&self) -> &ChildStdin {
+        match self {
+            Self::Local(pipe) => pipe,
+            Self::Remote(_) => panic!("a local harness's input"),
+        }
+    }
+}
+
+#[cfg(test)]
+impl ProcessOutput {
+    /// The child's pipe, for tests that read a local harness directly.
+    pub(crate) fn into_local(self) -> ChildStdout {
+        match self {
+            Self::Local(pipe) => pipe,
+            Self::Remote(_) => panic!("a local harness's output"),
+        }
+    }
 }
 
 pub(crate) struct ProcessStartFailure {
@@ -236,11 +330,13 @@ impl ProcessScope {
             }
         });
         Ok(Self {
-            child,
-            group,
-            stdin,
-            stdout: Some(stdout),
-            stderr: Some(stderr),
+            process: Process::Local {
+                child,
+                group,
+                stderr: Some(stderr),
+            },
+            stdin: stdin.map(ProcessInput::Local),
+            stdout: Some(ProcessOutput::Local(stdout)),
             forced: false,
             outcome: None,
             retained_directory: None,
@@ -249,6 +345,32 @@ impl ProcessScope {
             #[cfg(all(test, unix))]
             cleanup_confirmation: None,
         })
+    }
+
+    /// The scope of a harness a host started: its streams are the host's,
+    /// and releasing it is the host's confirmation ([`HarnessControl`]).
+    pub(crate) fn remote(process: HarnessProcess) -> Self {
+        Self {
+            process: Process::Remote(process.control),
+            stdin: Some(ProcessInput::Remote(process.input)),
+            stdout: Some(ProcessOutput::Remote(process.output)),
+            forced: false,
+            outcome: None,
+            retained_directory: None,
+            #[cfg(all(test, unix))]
+            fail_next_cleanup: false,
+            #[cfg(all(test, unix))]
+            cleanup_confirmation: None,
+        }
+    }
+
+    /// The local child's process group, for tests that probe it directly.
+    #[cfg(all(test, unix))]
+    pub(crate) fn group(&self) -> u32 {
+        match &self.process {
+            Process::Local { group, .. } => *group,
+            Process::Remote(_) => panic!("a local harness's group"),
+        }
     }
 
     /// Spawn a process with a fresh private directory retained until confirmed cleanup.
@@ -315,36 +437,10 @@ impl ProcessScope {
             return Err(AgentError::CleanupUncertain);
         }
         self.stdin.take(); // EOF asks the adapter to tear down every owned query.
-
-        let mut gone = self.wait_scope(grace).await;
-        if !gone {
-            // Forced only if a signal reached the group; a group that already
-            // left on EOF exited by itself.
-            if signal_group(self.group, false)? == SignalDelivery::Delivered {
-                self.forced = true;
-            }
-            gone = self.wait_scope(kill_timeout).await;
-        }
-        if !gone {
-            if signal_group(self.group, true)? == SignalDelivery::Delivered {
-                self.forced = true;
-            }
-            gone = self.wait_scope(kill_timeout).await;
-        }
-        if let Some(mut stderr) = self.stderr.take() {
-            stderr.abort();
-            let _ = (&mut stderr).await;
-        }
-        if !gone {
-            return Err(AgentError::CleanupUncertain);
-        }
-        // Reap the direct child, even if the process group disappeared first.
-        timeout(kill_timeout, self.child.wait())
-            .await
-            .map_err(|_| AgentError::CleanupUncertain)?
-            .map_err(|_| AgentError::CleanupUncertain)?;
-        let outcome = CloseOutcome {
-            forced: self.forced,
+        let outcome = match &mut self.process {
+            // The host stops its own process tree and says what that took.
+            Process::Remote(control) => control.cleanup(grace, kill_timeout).await?,
+            Process::Local { .. } => self.cleanup_local(grace, kill_timeout).await?,
         };
         self.outcome = Some(outcome);
         #[cfg(all(test, unix))]
@@ -353,6 +449,49 @@ impl ProcessScope {
         }
         self.release_retained_directory(kill_timeout).await?;
         Ok(outcome)
+    }
+
+    async fn cleanup_local(
+        &mut self,
+        grace: Duration,
+        kill_timeout: Duration,
+    ) -> Result<CloseOutcome, AgentError> {
+        let Process::Local { group, .. } = self.process else {
+            unreachable!("only a local scope is waited on here")
+        };
+        let mut gone = self.wait_scope(grace).await;
+        if !gone {
+            // Forced only if a signal reached the group; a group that already
+            // left on EOF exited by itself.
+            if signal_group(group, false)? == SignalDelivery::Delivered {
+                self.forced = true;
+            }
+            gone = self.wait_scope(kill_timeout).await;
+        }
+        if !gone {
+            if signal_group(group, true)? == SignalDelivery::Delivered {
+                self.forced = true;
+            }
+            gone = self.wait_scope(kill_timeout).await;
+        }
+        let Process::Local { child, stderr, .. } = &mut self.process else {
+            unreachable!("only a local scope is waited on here")
+        };
+        if let Some(mut stderr) = stderr.take() {
+            stderr.abort();
+            let _ = (&mut stderr).await;
+        }
+        if !gone {
+            return Err(AgentError::CleanupUncertain);
+        }
+        // Reap the direct child, even if the process group disappeared first.
+        timeout(kill_timeout, child.wait())
+            .await
+            .map_err(|_| AgentError::CleanupUncertain)?
+            .map_err(|_| AgentError::CleanupUncertain)?;
+        Ok(CloseOutcome {
+            forced: self.forced,
+        })
     }
 
     async fn release_retained_directory(&mut self, budget: Duration) -> Result<(), AgentError> {
@@ -365,12 +504,16 @@ impl ProcessScope {
     }
 
     async fn wait_scope(&mut self, budget: Duration) -> bool {
+        let Process::Local { child, group, .. } = &mut self.process else {
+            return false;
+        };
+        let group = *group;
         let end = Instant::now() + budget;
         loop {
             // try_wait reaps the parent; unreaped descendants still count as live.
             // An interrupted wait is not a liveness fact: keep the same budget.
-            let watched = match self.child.try_wait() {
-                Ok(_) => watch_scope(Ok(()), group_exists(self.group)),
+            let watched = match child.try_wait() {
+                Ok(_) => watch_scope(Ok(()), group_exists(group)),
                 Err(error) => watch_scope(Err(error), Ok(true)),
             };
             match watched {
@@ -387,11 +530,15 @@ impl ProcessScope {
 }
 impl Drop for ProcessScope {
     fn drop(&mut self) {
-        if self.outcome.is_none() {
-            let _ = signal_group(self.group, true);
-        }
-        if let Some(stderr) = &self.stderr {
-            stderr.abort();
+        // A remote scope's control asks its host for a forced stop when it is
+        // dropped unconfirmed (`HarnessControl`).
+        if let Process::Local { group, stderr, .. } = &self.process {
+            if self.outcome.is_none() {
+                let _ = signal_group(*group, true);
+            }
+            if let Some(stderr) = stderr {
+                stderr.abort();
+            }
         }
     }
 }

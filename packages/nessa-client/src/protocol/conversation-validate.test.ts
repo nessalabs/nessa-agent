@@ -960,12 +960,28 @@ describe("the view's lease", () => {
     }
     for (const [key, schema] of Object.entries(properties)) {
       for (const value of schema.enum ?? []) {
+        // An SSH environment names its host.
+        const host = key === "environment" && value === "ssh" ? { host: "devbox" } : {}
         const sample =
-          key === "state" ? states[value] : { ...(carriers[key] ?? live), [key]: value }
+          key === "state"
+            ? states[value]
+            : { ...(carriers[key] ?? live), [key]: value, ...host }
         expect(sample, value).toBeDefined()
         expect(conversationView(withLease(sample), "conversation").lease).toEqual(sample)
       }
     }
+  })
+
+  it("holds a lease's host to its SSH environment", () => {
+    const there = { ...live, environment: "ssh", host: "me@devbox" }
+    expect(conversationView(withLease(there), "conversation").lease).toEqual(there)
+    for (const contradiction of [
+      { ...live, environment: "ssh" },
+      { ...live, environment: "ssh", host: "" },
+      { ...live, environment: "ssh", host: "d".repeat(254) },
+      { ...live, environment: "here", host: "devbox" },
+    ])
+      expect(() => conversationView(withLease(contradiction), "conversation")).toThrow()
   })
 
   it("accepts the view a real gateway serves for a leased conversation", () => {

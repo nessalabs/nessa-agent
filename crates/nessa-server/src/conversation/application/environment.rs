@@ -61,13 +61,13 @@ use std::{
 
 /// What an environment says about itself before any lease: where it is and
 /// which sandbox profiles it can enforce.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct EnvironmentDeclaration {
     pub(crate) environment: EnvironmentRef,
     pub(crate) sandbox: SandboxProfiles,
 }
 
-/// What an environment answers about a lease it may have been running.
+/// What an environment answers, when the answer can wait on it.
 pub(crate) type EnvironmentFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Where conversations' agents run. Implemented in infrastructure and
@@ -75,23 +75,56 @@ pub(crate) type EnvironmentFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send
 pub(crate) trait Environment: Send + Sync {
     /// Where it is and what it can enforce. No I/O.
     fn declaration(&self) -> EnvironmentDeclaration;
-    /// Begin running `binding` under the lease `grant` was admitted with,
-    /// and hand back the provider that reaches it there. Opening a session
-    /// on it is what starts the agent; this does not. A refusal here is the
-    /// environment's own (row L2): nothing ran.
-    fn open(
-        &self,
-        grant: &LeaseTerms,
+    /// Begin running `binding` under `lease`, admitted with `grant`, and hand
+    /// back the provider that reaches it there with the environment's hold on
+    /// the lease. Opening a session on the provider is what starts the
+    /// agent; this does not. A refusal here is the environment's own (row
+    /// L2): nothing ran. An environment that must be reached first answers
+    /// within a bound of its own, a refusal past it.
+    fn open<'a>(
+        &'a self,
+        lease: &'a LeaseId,
+        grant: &'a LeaseTerms,
         binding: Arc<dyn AgentProvider>,
-    ) -> Result<Arc<dyn AgentProvider>, LeaseRefusal>;
-    /// What became of `lease`, issued before this environment last started
-    /// and never ended: whether it still runs anything for it (rows L11, L12).
-    /// The opening waits for the answer and slice A does not bound the wait,
-    /// so an adapter answers without waiting on anything outside this
-    /// process; one whose answer can wait is bounded by the cleanup deadline
-    /// and its lease recorded Interrupted without one, as row L11 says, in the
-    /// slice that adds it.
-    fn account<'a>(&'a self, lease: &'a LeaseId) -> EnvironmentFuture<'a, LeaseCleanup>;
+    ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>>;
+    /// What became of `lease`, issued on an earlier connection or before this
+    /// environment last started, and never ended: whether it still runs
+    /// anything for it (rows L11, L12). `None` is no answer — the environment
+    /// could not be reached — and the lease is then recorded Interrupted, as
+    /// row L11 says. An adapter answers within a bound of its own.
+    fn account<'a>(&'a self, lease: &'a LeaseId) -> EnvironmentFuture<'a, Option<LeaseCleanup>>;
+}
+
+/// A lease an environment admitted: the provider that reaches the agent
+/// there, and the environment's hold on the lease.
+pub(crate) struct EnvironmentLease {
+    pub(crate) provider: Arc<dyn AgentProvider>,
+    pub(crate) hold: Arc<dyn LeaseHold>,
+}
+
+/// An environment's side of one Live lease. Dropping the last handle without
+/// [`Self::end`] asks the environment to end it, unanswered.
+pub(crate) trait LeaseHold: Send + Sync {
+    /// Resolves once the environment can no longer run anything for the
+    /// lease, such as its connection being lost (row L10). `None` when that
+    /// cannot happen apart from the gateway itself, as in process.
+    fn lost(&self) -> Option<EnvironmentFuture<'static, ()>>;
+    /// End the lease for `cause`: the environment stops anything still
+    /// running under it and answers what releasing it took. The caller bounds
+    /// the wait.
+    fn end(&self, cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease>;
+}
+
+/// What an environment answered when its lease was ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LeaseRelease {
+    /// The environment keeps nothing beside the agent: the Agent's own close
+    /// is the cleanup evidence, as in process.
+    ByAgentClose,
+    /// The environment's own evidence of what releasing the lease took.
+    Released(LeaseCleanup),
+    /// No evidence: the environment did not answer, or could not confirm.
+    Unanswered,
 }
 
 /// What a conversation asks a lease for. `binding` is the sandbox profiles
@@ -104,17 +137,19 @@ pub(crate) struct LeaseRequest {
 
 /// The answer to a [`LeaseRequest`]: a fence over the provider to run, and
 /// the terms to record, or the refusal to record. Either way the fence is
-/// the only provider the gateway is given; a refused one opens nothing.
+/// the only provider the gateway is given; a refused one opens nothing and
+/// has no hold.
 pub(crate) struct LeaseOpening {
     pub(crate) lease: LeaseId,
     pub(crate) terms: LeaseTerms,
     pub(crate) refusal: Option<LeaseRefusal>,
     pub(crate) fence: Arc<LeaseFence>,
+    pub(crate) hold: Option<Arc<dyn LeaseHold>>,
 }
 
 /// Decide `request` against `environment` and, when admitted, open it there.
 /// What is recorded is what was granted, never what was asked (row L1).
-pub(crate) fn open_lease(
+pub(crate) async fn open_lease(
     environment: &dyn Environment,
     request: LeaseRequest,
     binding: Arc<dyn AgentProvider>,
@@ -123,34 +158,40 @@ pub(crate) fn open_lease(
     let lease = LeaseId::new(uuid::Uuid::new_v4().to_string())
         .expect("a UUID is a portable lease identity");
     let terms = |sandbox| LeaseTerms {
-        environment: declaration.environment,
+        environment: declaration.environment.clone(),
         work: LeaseWork::Agent(request.work.clone()),
         sandbox,
         grants: LeaseGrants::Opening,
         deadline: LeaseDeadline::UntilEnded,
     };
-    let admitted = declaration
+    let admitted = match declaration
         .sandbox
         .intersect(request.binding)
         .admit(request.sandbox)
-        .and_then(|granted| {
+    {
+        Ok(granted) => {
             let terms = terms(granted);
             environment
-                .open(&terms, binding.clone())
-                .map(|provider| (terms, provider))
-        });
+                .open(&lease, &terms, binding.clone())
+                .await
+                .map(|opened| (terms, opened))
+        }
+        Err(refusal) => Err(refusal),
+    };
     match admitted {
-        Ok((terms, provider)) => LeaseOpening {
-            fence: LeaseFence::new(lease.clone(), provider, FencePhase::Live),
+        Ok((terms, opened)) => LeaseOpening {
+            fence: LeaseFence::new(lease.clone(), opened.provider, FencePhase::Live),
             lease,
             terms,
             refusal: None,
+            hold: Some(opened.hold),
         },
         Err(refusal) => LeaseOpening {
             fence: LeaseFence::new(lease.clone(), binding, FencePhase::Closed),
             lease,
             terms: terms(request.sandbox),
             refusal: Some(refusal),
+            hold: None,
         },
     }
 }
@@ -372,9 +413,8 @@ pub(crate) async fn issue(
                 return (Vec::new(), Err(LeaseIssueError::OverUnreadable));
             }
             let mut records = Vec::new();
-            if let (Some(lease), Some(cleanup)) = (current.and_then(CurrentLease::held), accounted)
-            {
-                records.extend(account_earlier(lease, cleanup));
+            if let (Some(lease), Some(answer)) = (current.and_then(CurrentLease::held), accounted) {
+                records.extend(account_earlier(lease, answer));
             }
             let revision = next_revision(current, &records);
             records.push(match opening.refusal {
@@ -434,9 +474,25 @@ fn needs_accounting(lease: &Lease) -> bool {
 }
 
 /// The records that account for `lease`, left by an earlier run of this
-/// environment, given what the environment says it still holds for it.
-fn account_earlier(lease: &Lease, cleanup: LeaseCleanup) -> Vec<LeaseRecord> {
+/// environment or an earlier connection to it, given what the environment
+/// says it still holds for it. No answer leaves it Interrupted (row L11): a
+/// later opening asks again while it has no late cleanup.
+fn account_earlier(lease: &Lease, answer: Option<LeaseCleanup>) -> Vec<LeaseRecord> {
     let id = lease.id().clone();
+    let Some(cleanup) = answer else {
+        return match lease.phase() {
+            LeasePhase::Live => vec![
+                LeaseRecord::Ending {
+                    lease: id.clone(),
+                    cause: LeaseEndCause::Lost,
+                    actor: None,
+                },
+                LeaseRecord::Interrupted { lease: id },
+            ],
+            LeasePhase::Ending { .. } => vec![LeaseRecord::Interrupted { lease: id }],
+            LeasePhase::Ended { .. } | LeasePhase::Interrupted { .. } => Vec::new(),
+        };
+    };
     match lease.phase() {
         LeasePhase::Live => vec![
             LeaseRecord::Ending {
@@ -499,21 +555,40 @@ pub(crate) fn confirmed_despite(error: &AgentError) -> Option<CloseOutcome> {
 pub(crate) struct LiveLease {
     lease: LeaseId,
     fence: Arc<LeaseFence>,
+    hold: Option<Arc<dyn LeaseHold>>,
 }
 impl LiveLease {
     pub(crate) fn new(opening: &LeaseOpening) -> Self {
         Self {
             lease: opening.lease.clone(),
             fence: opening.fence.clone(),
+            hold: opening.hold.clone(),
         }
+    }
+
+    /// Resolves once the environment can no longer run anything for this
+    /// lease (row L10); `None` when that cannot happen apart from the
+    /// gateway itself.
+    pub(crate) fn lost(&self) -> Option<EnvironmentFuture<'static, ()>> {
+        self.hold.as_ref().and_then(|hold| hold.lost())
     }
 
     /// Close `agent` under this lease for `cause`, asked by `actor`. The
     /// cause is recorded before anything is stopped, unless the lease is
-    /// already ending, when the first cause stands (rows L5, L6). The close's
-    /// own confirmation is the cleanup evidence: within `cleanup_deadline`
-    /// the lease is Ended (row L7); past it, or if the close fails, it is
-    /// Interrupted, and a close confirmed later accounts for it (row L8).
+    /// already ending, when the first cause stands (rows L5, L6). Then the
+    /// Agent closes, and the environment is told the lease ends, each within
+    /// `cleanup_deadline`.
+    ///
+    /// The cleanup evidence is the environment's: what it answered when the
+    /// lease ended, or, for an environment that keeps nothing beside the
+    /// agent ([`LeaseRelease::ByAgentClose`]), the close's own confirmation.
+    /// With evidence by the deadline the lease is Ended (row L7); past it,
+    /// or without any, it is Interrupted, and evidence that arrives later
+    /// accounts for it (row L8).
+    ///
+    /// What this answers is whether anything may still be held: the close's
+    /// confirmation, or the environment's own confirmation that the lease's
+    /// process tree is gone, which holds whatever the close reported.
     ///
     /// The caller runs this on a task of its own, so a caller that stops
     /// waiting does not stop the lease from being accounted for.
@@ -556,18 +631,53 @@ impl LiveLease {
             result = &mut close => Some(result),
             () = tokio::time::sleep(cleanup_deadline) => None,
         };
-        let (result, late) = match within {
-            Some(result) => (result, false),
+        let result = match within {
+            Some(result) => result,
             None => {
                 self.interrupt(manager).await;
-                (close.await, true)
+                close.await
             }
         };
-        match confirmed_cleanup(&result) {
-            Some(outcome) => self.cleaned(manager, outcome).await,
-            None if !late => self.interrupt(manager).await,
-            None => {}
+        let release = match &self.hold {
+            None => LeaseRelease::ByAgentClose,
+            Some(hold) => tokio::time::timeout(cleanup_deadline, hold.end(cause))
+                .await
+                .unwrap_or(LeaseRelease::Unanswered),
+        };
+        let confirmed = confirmed_cleanup(&result);
+        let evidence = match release {
+            LeaseRelease::ByAgentClose => confirmed.map(|outcome| LeaseCleanup::Confirmed {
+                forced: outcome.forced,
+            }),
+            LeaseRelease::Released(LeaseCleanup::Confirmed { forced }) => {
+                Some(LeaseCleanup::Confirmed {
+                    forced: forced || confirmed.is_some_and(|outcome| outcome.forced),
+                })
+            }
+            LeaseRelease::Released(LeaseCleanup::NotHeld) => Some(match confirmed {
+                Some(outcome) => LeaseCleanup::Confirmed {
+                    forced: outcome.forced,
+                },
+                None => LeaseCleanup::NotHeld,
+            }),
+            LeaseRelease::Unanswered => None,
+        };
+        match evidence {
+            Some(cleanup) => self.cleaned(manager, cleanup).await,
+            None => self.interrupt(manager).await,
         }
+        // The environment confirmed its process tree gone: nothing is held,
+        // whatever the close reported. A close that confirmed and failed only
+        // to save keeps its own answer below.
+        let result = match (result, evidence, release) {
+            (Err(error), Some(LeaseCleanup::Confirmed { forced }), LeaseRelease::Released(_))
+                if confirmed_despite(&error).is_none() =>
+            {
+                tracing::warn!(lease = self.lease.as_str(), %error, "the agent's close failed; its environment confirmed the lease released");
+                Ok(CloseOutcome { forced })
+            }
+            (result, _, _) => result,
+        };
         // Only now: until its close returns, the Agent is still stopping the
         // turn and is its one authority, and it settles that turn from these
         // events. Dropping them at the deadline would leave the turn
@@ -598,12 +708,9 @@ impl LiveLease {
         }
     }
 
-    /// Record the close's confirmation as this lease's cleanup evidence.
-    async fn cleaned(&self, manager: &SessionManager, outcome: CloseOutcome) {
+    /// Record `cleanup` as this lease's cleanup evidence.
+    async fn cleaned(&self, manager: &SessionManager, cleanup: LeaseCleanup) {
         let lease = self.lease.clone();
-        let cleanup = LeaseCleanup::Confirmed {
-            forced: outcome.forced,
-        };
         let _ = self
             .record(manager, move |held| match held.map(Lease::phase) {
                 Some(LeasePhase::Ending { .. }) => vec![LeaseRecord::Ended { lease, cleanup }],

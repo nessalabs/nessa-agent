@@ -49,7 +49,18 @@ export function approvalModeChoices(value: unknown): ApprovalModeChoice[] {
 /** Validate one authenticated gateway catalog before it reaches a picker. */
 export function agentsList(value: unknown): AgentsListResult {
   const result = object(value)
-  exact(result, ["agents"])
+  exact(result, ["agents", "environments"])
+  // The SSH destinations a new conversation may run on: at most 16, each
+  // named once.
+  if (!Array.isArray(result.environments) || result.environments.length > 16)
+    throw new Error("Invalid agent catalog environments")
+  const environments = new Set<string>()
+  for (const host of result.environments as unknown[]) {
+    if (typeof host !== "string" || !host || utf8.encode(host).byteLength > 253)
+      throw new Error("Invalid agent catalog environment")
+    if (environments.has(host)) throw new Error("Repeated agent catalog environment")
+    environments.add(host)
+  }
   if (!Array.isArray(result.agents) || result.agents.length > bounds.maxConfiguredAgents)
     throw new Error("Invalid configured agents")
   const agents = new Set<string>()

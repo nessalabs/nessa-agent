@@ -297,6 +297,21 @@ On first start the gateway creates a private `native-pairing/` directory beside
 `auth/` and publishes its pairing key there before binding anything. A missing key
 with enrollment history refuses startup rather than generating a new one.
 
+To run conversations on another machine you can already `ssh` into, name it in
+`sshHosts`: an OpenSSH destination (a `~/.ssh/config` alias or `user@host`; put a
+port or jump host in `~/.ssh/config`), at most 16. The composer then offers
+"Run on" for a new conversation, and the conversation stays on that host for its
+whole life. The host needs this same build of `nessa` on its `PATH` and its own
+`config.json` with an `agents` section; the gateway runs
+`ssh -T -o BatchMode=yes <host> nessa env serve` with your own keys and config,
+and refuses a host running another build:
+
+```json
+{
+  "sshHosts": ["devbox", "me@build.example.com"]
+}
+```
+
 Omitted fields use defaults. Restart the gateway after editing; offline auth
 commands read the same settings on each invocation. Positive integers are required;
 unknown fields, malformed files, and unrepresentable sizes or deadlines fail startup.

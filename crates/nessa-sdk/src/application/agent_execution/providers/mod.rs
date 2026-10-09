@@ -37,12 +37,16 @@
 //! record of a session nothing runs any more, over a connection of its own
 //! that never resumes the session; each binding says what a successful delete
 //! means for its agent (ProviderSessionDeletion).
+//! HarnessHost is where a binding starts its harness when that is another
+//! machine: the binding stays here and speaks its agent protocol over the
+//! harness's standard streams, which the host carries (`AgentProvider::on_host`).
 
 mod approval;
 mod close;
 mod deletion;
 mod executable_use;
 mod finalized_execution;
+mod harness_host;
 mod identity;
 mod images;
 mod open;
@@ -62,6 +66,9 @@ pub use executable_use::{
 };
 pub(crate) use finalized_execution::{
     FinalizedExecutionProjection, FinalizedExecutionSource, FinalizedFailureComponent,
+};
+pub use harness_host::{
+    HarnessCleanupFuture, HarnessControl, HarnessHost, HarnessLaunch, HarnessProcess,
 };
 pub use identity::ProviderIdentity;
 pub use images::{ImageInputRefusal, UserImageError, UserImageFuture, UserImageSource};

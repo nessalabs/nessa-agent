@@ -1,5 +1,5 @@
 import { useId, useState, type ReactElement, type ReactNode } from "react"
-import { conversationLeaseStatus } from "@nessa/client"
+import { conversationLeasePlace, conversationLeaseStatus } from "@nessa/client"
 import { Info, Pencil } from "lucide-react"
 import {
   ContextMenu,
@@ -167,15 +167,20 @@ function ConversationFacts({ conversation }: { conversation: Conversation }) {
 
 /** Where the agent runs and the sandbox around it, from its latest lease. */
 function LeaseFacts({ lease }: { lease: ConversationLease }) {
-  // A refused lease names what was asked for, not where anything runs.
+  // A refused lease names what was asked for, not where anything runs —
+  // except the SSH host it was asked of, which is what a person fixes.
   const granted = lease.state !== "refused"
+  const place = conversationLeasePlace(lease) ?? "Not known"
   return (
     <FactGroup title="Where it runs">
+      {!granted && lease.environment === "ssh" ? (
+        <Fact label="SSH host" value={place} />
+      ) : null}
       {granted ? (
         <>
           <Fact
-            label="Computer"
-            value={lease.environment === "here" ? "This computer" : "Not known"}
+            label={lease.environment === "ssh" ? "SSH host" : "Computer"}
+            value={place}
           />
           <Fact
             label="Sandbox"

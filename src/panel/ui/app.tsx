@@ -801,6 +801,26 @@ export function App({
                   onChoose={attachments.chooseFiles}
                   onSignOut={onSignOut}
                   agentInstallations={agentInstallations}
+                  // Where a new conversation runs: offered only when the
+                  // gateway names an SSH host, and only before it exists.
+                  environment={
+                    !chat.active.serverConversationId &&
+                    selectedAgent &&
+                    selectedModel &&
+                    choices?.catalog.environments.length
+                      ? {
+                          host: selection?.environment,
+                          hosts: choices.catalog.environments,
+                          onChange: (environment) =>
+                            chat.setSelection(chat.active.id, {
+                              agent: selectedAgent.agent,
+                              model: selectedModel.modelId,
+                              approvalMode: selectedApprovalMode,
+                              environment,
+                            }),
+                        }
+                      : undefined
+                  }
                   approval={
                     !chat.active.serverConversationId && selectedAgent && selectedModel
                       ? {
@@ -811,6 +831,7 @@ export function App({
                               agent: selectedAgent.agent,
                               model: selectedModel.modelId,
                               approvalMode,
+                              environment: selection?.environment,
                             }),
                         }
                       : chat.active.serverConversationId &&

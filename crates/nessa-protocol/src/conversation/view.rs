@@ -676,6 +676,9 @@ pub struct ConversationLeaseView {
     pub revision: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<ConversationLeaseEnvironment>,
+    /// The SSH destination, when the environment is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<ConversationLeaseSandbox>,
     /// Why it is ending or ended: the first cause recorded.
@@ -707,6 +710,8 @@ pub enum ConversationLeaseState {
 pub enum ConversationLeaseEnvironment {
     /// The gateway's own machine.
     Here,
+    /// A machine reached over SSH, named by `host`.
+    Ssh,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -738,6 +743,10 @@ pub enum ConversationLeaseCleanup {
 #[serde(rename_all = "snake_case")]
 pub enum ConversationLeaseRefusal {
     SandboxUnavailable,
+    EnvironmentUnreachable,
+    EnvironmentVersionMismatch,
+    EnvironmentBusy,
+    AgentUnavailable,
 }
 
 /// Non-secret runtime facts selected by server composition.

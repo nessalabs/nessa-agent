@@ -10,11 +10,14 @@ import { useListedChannel, useWorkspaceFrame } from "../workspace-frame"
 import { tooltip } from "../../../ui/tooltip"
 
 /**
- * Where the agent's lease stands, in the client's words; nothing for a lease
- * the gateway cannot read, since the heading has nothing true to say of it.
+ * Where the agent's lease stands, in the client's words, and the SSH host it
+ * runs on when it runs on one; nothing for a lease the gateway cannot read,
+ * since the heading has nothing true to say of it.
  */
 export function leaseNote(lease: TranscriptLease): string | undefined {
-  return lease.state === "unreadable" ? undefined : conversationLeaseStatus(lease)
+  if (lease.state === "unreadable") return undefined
+  const status = conversationLeaseStatus(lease)
+  return lease.environment === "ssh" && lease.host ? `${status} · ${lease.host}` : status
 }
 
 /**

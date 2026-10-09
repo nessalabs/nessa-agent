@@ -98,7 +98,7 @@ fn fixture_with_agents(
             deletion_budgets: DELETION_BUDGETS,
             message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock: Arc::new(TestClock),
-            environment: crate::conversation::infrastructure::in_process_environment(),
+            environment: crate::conversation::infrastructure::in_process_environment().into(),
         },
         ConversationLimits::default(),
         None,

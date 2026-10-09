@@ -141,6 +141,7 @@ mod live_changes;
 mod locks;
 mod mcp_apps;
 mod passive_read;
+mod placement;
 mod ports;
 mod provider_sessions;
 mod record_read;
@@ -158,7 +159,10 @@ pub use catalogue_read::{
 };
 // For the adapter, which only the Unix gateway composes (`infrastructure`).
 #[cfg(any(unix, test))]
-pub(crate) use environment::{Environment, EnvironmentDeclaration, EnvironmentFuture};
+pub(crate) use environment::{
+    Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, LeaseHold,
+    LeaseRelease,
+};
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use error_code::error_code;
 pub use live_changes::{LiveChangePublisher, LiveChanges};
@@ -170,6 +174,7 @@ pub use mcp_apps::{
 };
 pub(crate) use passive_read::access_refusal;
 pub use passive_read::{AdmitPassiveRead, PassiveRead, PassiveReadGrants, ReceiverAuthority};
+pub(crate) use placement::{ConversationPlacements, Environments, PlacementError};
 pub use ports::{
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreation,
     ConversationCreationAudit, ConversationCreationAuditRecord, ConversationCreationCause,

@@ -4,7 +4,8 @@ use super::profile::{native_mode, CodexProfile};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionAudit;
 use crate::application::agent_execution::providers::{
-    AgentProvider, ApprovalMode, ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest,
+    AgentProvider, ApprovalMode, HarnessHost, HarnessLaunch, ProviderIdentity, ProviderOpenFuture,
+    ProviderOpenRequest,
 };
 use crate::domain::agent_execution::permissions::PermissionScope;
 use crate::domain::agent_execution::prompts::SystemPrompt;
@@ -21,7 +22,7 @@ use crate::infrastructure::acp::sessions::{
 };
 use crate::infrastructure::process::ProcessScope;
 use serde_json::json;
-use std::sync::Arc;
+use std::{collections::BTreeMap, ffi::OsString, sync::Arc};
 use tokio::process::Command;
 
 /// Immutable composition factory; opening twice creates independent process scopes.
@@ -35,8 +36,16 @@ pub struct CodexAcpProvider {
     audit: Arc<dyn ExecutionAudit>,
     /// Deletions this binding started that are still stopping their process.
     deletions: DeletionCleanups,
+    /// Where its harness is started when that is not this machine
+    /// ([`AgentProvider::on_host`]).
+    host: Option<Arc<dyn HarnessHost>>,
 }
 impl CodexAcpProvider {
+    /// The variables this binding sets for one launch of its harness, and
+    /// the only ones a host that starts the harness for it accepts from it
+    /// (`HarnessLaunch`).
+    pub const LAUNCH_VARIABLES: &'static [&'static str] =
+        &["CODEX_CONFIG", "INITIAL_AGENT_MODE", "NO_BROWSER"];
     /// The sandbox profiles this binding can set up: only the harness's own
     /// default today, since it configures no sandbox of its own. A lease that
     /// asks for any other is refused, never run under a weaker one.
@@ -132,6 +141,7 @@ impl CodexAcpProvider {
             effort_level: None,
             audit,
             deletions: DeletionCleanups::default(),
+            host: None,
         })
     }
     /// Replace the harness's default instructions with these attributed ones.
@@ -207,6 +217,28 @@ impl CodexAcpProvider {
         }
         config.to_string()
     }
+    /// What this binding sets for every launch of its harness, wherever it
+    /// runs: its session configuration, the preset it starts in, and no
+    /// browser sign-in. Never a credential or a path.
+    fn launch_environment(&self) -> BTreeMap<OsString, OsString> {
+        [
+            ("CODEX_CONFIG", self.session_config()),
+            // The preset every session is then explicitly selected into. Setting
+            // it here as well means the session is never briefly open in a more
+            // permissive one.
+            (
+                "INITIAL_AGENT_MODE",
+                native_mode(self.approval_mode).to_owned(),
+            ),
+            // A gateway process has no browser and nobody watching it. Signing in
+            // is the desktop's business, done before an agent is offered at all.
+            ("NO_BROWSER", "1".to_owned()),
+        ]
+        .into_iter()
+        .inspect(|(key, _)| debug_assert!(Self::LAUNCH_VARIABLES.contains(key)))
+        .map(|(key, value)| (key.into(), value.into()))
+        .collect()
+    }
     fn launch_command(&self) -> Command {
         let mut command = Command::new(self.config.executable.executable());
         command
@@ -215,14 +247,7 @@ impl CodexAcpProvider {
             .env_clear()
             .envs(&self.config.environment)
             .envs(&self.config.credential_environment)
-            .env("CODEX_CONFIG", self.session_config())
-            // The preset every session is then explicitly selected into. Setting
-            // it here as well means the session is never briefly open in a more
-            // permissive one.
-            .env("INITIAL_AGENT_MODE", native_mode(self.approval_mode))
-            // A gateway process has no browser and nobody watching it. Signing in
-            // is the desktop's business, done before an agent is offered at all.
-            .env("NO_BROWSER", "1");
+            .envs(self.launch_environment());
         command
     }
 }
@@ -247,6 +272,15 @@ impl AgentProvider for CodexAcpProvider {
     }
     fn capabilities(&self) -> &EffectiveCapabilities {
         &self.capabilities
+    }
+    fn on_host(&self, host: Arc<dyn HarnessHost>) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        let config = self.config.on_host(host.workspace().to_path_buf());
+        config.validate()?;
+        Ok(Arc::new(Self {
+            config,
+            host: Some(host),
+            ..self.clone()
+        }))
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
@@ -282,6 +316,19 @@ impl CodexAcpProvider {
     /// How every connection this provider opens is launched.
     pub(super) fn process_factory(&self) -> acp_binding::ProcessFactory {
         let factory = self.clone();
-        Arc::new(move || ProcessScope::spawn(factory.launch_command()).map_err(Into::into))
+        match &self.host {
+            Some(host) => {
+                let host = host.clone();
+                Arc::new(move || {
+                    let launch = HarnessLaunch {
+                        environment: factory.launch_environment(),
+                    };
+                    Ok(ProcessScope::remote(host.start(launch)?))
+                })
+            }
+            None => {
+                Arc::new(move || ProcessScope::spawn(factory.launch_command()).map_err(Into::into))
+            }
+        }
     }
 }

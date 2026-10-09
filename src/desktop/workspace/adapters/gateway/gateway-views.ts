@@ -331,6 +331,7 @@ export function transcriptFrom(
     lease: view.lease && {
       state: view.lease.state,
       environment: view.lease.environment,
+      host: view.lease.host,
       cause: view.lease.cause,
       refusal: view.lease.refusal,
     },

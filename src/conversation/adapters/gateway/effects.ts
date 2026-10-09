@@ -182,6 +182,9 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   conversations_not_configured: "conversations-not-configured",
   agent_startup_deadline: "agent-startup-deadline",
   sandbox_unavailable: "sandbox-unavailable",
+  environment_not_configured: "environment-not-configured",
+  environment_unavailable: "environment-unavailable",
+  environment_version_mismatch: "environment-version-mismatch",
   conversation_state_unreadable: "conversation-state-unreadable",
   invalid_request: "invalid-request",
   conversation_deleted: "conversation-deleted",
@@ -240,6 +243,10 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   // No lease was granted for the agent's run. Whether one will be later
   // depends on the machine, not on this conversation, so nothing is promised.
   sandbox_unavailable: "unavailable",
+  // The same for an SSH host: whether it answers later is the host's matter.
+  environment_not_configured: "unavailable",
+  environment_unavailable: "unavailable",
+  environment_version_mismatch: "unavailable",
   attachment_capacity: "unavailable",
   attachment_cleanup_unavailable: "unavailable",
   attachment_not_found: "unavailable",
@@ -461,6 +468,7 @@ export function gatewayEffects(
             ...(selection
               ? { model: selection.model, approvalMode: selection.approvalMode }
               : {}),
+            ...(selection?.environment ? { environment: selection.environment } : {}),
           }),
         )
         .catch((error: unknown) => {

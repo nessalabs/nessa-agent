@@ -2,16 +2,20 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { environmentPortViolations } from "./environment-port.mjs"
 
-const adapter = "crates/nessa-server/src/conversation/infrastructure/environment.rs"
+const adapters = [
+  "crates/nessa-server/src/conversation/infrastructure/environment.rs",
+  "crates/nessa-server/src/conversation/infrastructure/ssh_environment/environment.rs",
+]
 
-test("the in-process adapter implements the port and the service and composition name it", () => {
-  assert.deepEqual(
-    environmentPortViolations(
-      adapter,
-      "use crate::conversation::application::{Environment, EnvironmentDeclaration, EnvironmentFuture};\nimpl Environment for InProcessEnvironment {}",
-    ),
-    [],
-  )
+test("each adapter implements the port and the service and composition name it", () => {
+  for (const adapter of adapters)
+    assert.deepEqual(
+      environmentPortViolations(
+        adapter,
+        "use crate::conversation::application::{Environment, EnvironmentDeclaration, EnvironmentFuture};\nimpl Environment for SomeEnvironment {}",
+      ),
+      [],
+    )
   assert.deepEqual(
     environmentPortViolations(
       "crates/nessa-server/src/conversation/application/service.rs",
@@ -28,9 +32,11 @@ test("the in-process adapter implements the port and the service and composition
   )
 })
 
-test("a second adapter in product source is refused, wherever it is", () => {
+test("a third adapter in product source is refused, wherever it is", () => {
   for (const path of [
     "crates/nessa-server/src/conversation/infrastructure/ssh.rs",
+    "crates/nessa-server/src/conversation/infrastructure/ssh_environment/link.rs",
+    "crates/nessa-server/src/env_serve/application/serve.rs",
     "crates/nessa-server/src/product/environments.rs",
   ])
     for (const source of [

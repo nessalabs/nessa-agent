@@ -130,6 +130,7 @@ impl ConversationService {
                 agent: requested.agent,
                 model: requested.model.clone(),
                 approval_mode: requested.approval_mode,
+                environment: None,
             },
         )
         .await

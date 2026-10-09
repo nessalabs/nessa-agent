@@ -55,12 +55,52 @@ impl LeaseRevision {
     }
 }
 
-/// Where a lease's agent runs. Today there is one environment: the process
-/// that keeps the conversation, which runs the agent as a child process.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Where a lease's agent runs: the process that keeps the conversation,
+/// running the agent as a child process, or a machine reached over SSH whose
+/// `nessa env serve` runs the agent's harness next to its files.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum EnvironmentRef {
     /// This gateway's own process and machine.
     Here,
+    /// The machine this OpenSSH destination reaches.
+    Ssh(SshDestination),
+}
+
+/// An OpenSSH destination a person named for an environment, exactly as it is
+/// handed to `ssh`: a `~/.ssh/config` alias, `host`, or `user@host`.
+///
+/// Built from an allowed alphabet rather than refusing known-bad input, so it
+/// can never be read as an option or a second argument: ASCII letters, digits,
+/// `.`, `_`, `-` and `@`, starting with a letter or digit, at most
+/// [`Self::MAX_BYTES`]. A port, a jump host or an IPv6 literal is said in
+/// `~/.ssh/config` under an alias, as for any other OpenSSH option.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SshDestination(Box<str>);
+impl SshDestination {
+    /// Longest destination accepted: a DNS name's bound.
+    pub const MAX_BYTES: usize = 253;
+    /// Accept `value` when it is in the alphabet above; otherwise
+    /// [`ExecutionError::InvalidSshDestination`].
+    pub fn new(value: impl Into<String>) -> Result<Self, ExecutionError> {
+        let value = value.into();
+        let starts_plainly = value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric());
+        if !starts_plainly
+            || value.len() > Self::MAX_BYTES
+            || !value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@')
+            })
+        {
+            return Err(ExecutionError::InvalidSshDestination);
+        }
+        Ok(Self(value.into_boxed_str()))
+    }
+    /// The destination as it was given.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// What the environment must enforce around the agent's commands. A profile
@@ -238,4 +278,16 @@ pub enum LeaseRefusal {
     /// The requested sandbox profile is not one both the binding can set up
     /// and the environment can enforce.
     SandboxUnavailable,
+    /// The environment could not be reached, or did not answer before its
+    /// deadline: the connection to it failed or ended.
+    EnvironmentUnreachable,
+    /// The environment runs another build than the one asking: its lease
+    /// frames are not this build's, and nothing was sent to it.
+    EnvironmentVersionMismatch,
+    /// The environment is already serving another connection, and serves one
+    /// at a time.
+    EnvironmentBusy,
+    /// The environment cannot run this agent: its binding cannot start its
+    /// harness elsewhere, or the environment has no runtime configured for it.
+    AgentUnavailable,
 }

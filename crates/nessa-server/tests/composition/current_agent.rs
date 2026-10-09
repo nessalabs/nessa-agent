@@ -1079,7 +1079,7 @@ fn service(root: &Path, resolver: Arc<CurrentAgentResolver>) -> ConversationServ
                 nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
             ),
             clock: Arc::new(TestClock),
-            environment: crate::conversation::infrastructure::in_process_environment(),
+            environment: crate::conversation::infrastructure::in_process_environment().into(),
         },
         ConversationLimits::default(),
         Some(root.join("workspace").to_string_lossy().into_owned()),

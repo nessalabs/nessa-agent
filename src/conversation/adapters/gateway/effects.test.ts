@@ -146,6 +146,30 @@ it("creates a draft with its exact selected agent, model and approval mode", asy
     approvalMode: "auto",
   })
 })
+
+it("creates a draft on the SSH host it was to run on", async () => {
+  const create = vi.fn(async ({ conversationId }: { conversationId: string }) => ({
+    conversationId,
+  }))
+  const effects = gatewayEffects(
+    () => ({ conversation: { create } }) as unknown as NessaClient,
+    unexpectedWait,
+    vi.fn(async () => "claude"),
+  )
+  await effects.create("server", {
+    agent: "claude",
+    model: "sonnet",
+    approvalMode: "ask",
+    environment: "devbox",
+  })
+  expect(create).toHaveBeenCalledExactlyOnceWith({
+    conversationId: "server",
+    agent: "claude",
+    model: "sonnet",
+    approvalMode: "ask",
+    environment: "devbox",
+  })
+})
 /** One open of a view subscription, as the fake gateway saw it. */
 type Opened = {
   conversationId: string

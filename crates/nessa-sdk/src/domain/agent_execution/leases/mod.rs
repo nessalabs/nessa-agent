@@ -23,4 +23,5 @@ pub use aggregates::{CleanupDecision, EndDecision, Lease, LeaseError, LeasePhase
 pub use value_objects::{
     AgentWork, EnvironmentRef, LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseId,
     LeaseRefusal, LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile, SandboxProfiles,
+    SshDestination,
 };

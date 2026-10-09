@@ -3,12 +3,11 @@ mod mutation;
 use super::session_key::conversation_session;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
-    environment::{
-        confirmed_despite, issue, open_lease, Environment, LeaseIssueError, LeaseRequest, LiveLease,
-    },
+    environment::{confirmed_despite, issue, open_lease, LeaseIssueError, LeaseRequest, LiveLease},
     live_changes::LiveChanges,
     locks::ConversationLocks,
     mcp_apps::{McpAppError, McpAppInitiator, McpAppPorts, McpAppRef},
+    placement::Environments,
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreationAudit,
@@ -212,6 +211,10 @@ pub struct RequestedConversation {
     pub agent: Option<RequestedAgent>,
     pub model: Option<String>,
     pub approval_mode: Option<ConversationApprovalMode>,
+    /// The SSH host it runs on, by the destination the configuration names
+    /// it by; `None` runs it here. Kept as asked: a name the configuration
+    /// does not have is refused where it would be used.
+    pub environment: Option<String>,
 }
 
 /// Server-selected admission limits. Clients cannot choose provider budgets or owner capacity.
@@ -664,7 +667,7 @@ struct Inner {
     provider_sessions: ProviderSessionErasers,
     deletion_budgets: ConversationDeletionBudgets,
     /// Where agents run; every opening is leased from it.
-    environment: Arc<dyn Environment>,
+    environment: Environments,
     clock: Arc<dyn Clock>,
     limits: ConversationLimits,
     conversations: Mutex<HashMap<ConversationId, Arc<Slot>>>,
@@ -840,8 +843,9 @@ pub struct ConversationDependencies {
     pub provider_sessions: ProviderSessionErasers,
     /// How long a delete waits to stop the agent and to lease the history.
     pub deletion_budgets: ConversationDeletionBudgets,
-    /// Where conversations' agents run, under a lease each.
-    pub(crate) environment: Arc<dyn Environment>,
+    /// Where conversations' agents run, under a lease each: here, and the
+    /// SSH hosts the configuration names.
+    pub(crate) environment: Environments,
     pub clock: Arc<dyn Clock>,
 }
 /// What a host chose for one of the agent's questions.
@@ -1116,6 +1120,14 @@ impl ConversationService {
                 return Err(ConversationError::Capacity);
             }
         }
+        // Where it runs is recorded before the conversation exists, under the
+        // creation lock, so it never exists without knowing; a host the
+        // configuration does not name creates nothing.
+        service
+            .inner
+            .environment
+            .place(&id, requested.environment.as_deref())
+            .await?;
         let outcome = service.inner.metadata.create(proposed).await?;
         let record = &outcome.conversation;
         record.check_access(&caller.organization_id, &caller.principal_id)?;
@@ -1381,15 +1393,29 @@ impl ConversationService {
                                     cause: ConversationError::InvalidInput,
                                     holds: false,
                                 })?;
+                            // Where it runs was decided when it was
+                            // created; a placement that cannot be read, or
+                            // names a host no longer configured, opens it
+                            // nowhere.
+                            let environment = service
+                                .inner
+                                .environment
+                                .of(&id)
+                                .await
+                                .map_err(|cause| OpeningFailure {
+                                    cause,
+                                    holds: false,
+                                })?;
                             let opening = open_lease(
-                                service.inner.environment.as_ref(),
+                                environment.as_ref(),
                                 LeaseRequest {
                                     work,
                                     sandbox: SandboxProfile::HarnessDefault,
                                     binding: configured.sandbox,
                                 },
                                 configured.provider.clone(),
-                            );
+                            )
+                            .await;
                             let agent = Agent::prepare(
                                 opening.fence.clone(),
                                 manager,
@@ -1404,7 +1430,7 @@ impl ConversationService {
                             })?;
                             let issued = issue(
                                 agent.session_manager(),
-                                service.inner.environment.as_ref(),
+                                environment.as_ref(),
                                 &opening,
                                 &actor,
                             )
@@ -1620,8 +1646,61 @@ impl ConversationService {
                 }
                 // Opened or not, a view's lifecycle says so now.
                 service.inner.live_changes.publish(&id);
+                if let Ok(live) = result {
+                    if let Some(lost) = live.lease.lost() {
+                        service.stop_when_lost(id, Arc::downgrade(&owner), lost);
+                    }
+                }
             });
         }
+    }
+
+    /// Stop the opening `slot` holds once its environment can no longer run
+    /// anything for its lease, such as its SSH connection being lost (row
+    /// L10): the lease ends as lost, the system's stop, recorded first like
+    /// any other end. There is no reconnect budget: a connection lost is the
+    /// lease lost. Nothing is stopped once the slot is let go, stopping, or
+    /// holds another opening; `lost` also resolves when the lease ends, so
+    /// this never outlives the opening.
+    fn stop_when_lost(
+        &self,
+        id: ConversationId,
+        slot: std::sync::Weak<Slot>,
+        lost: super::EnvironmentFuture<'static, ()>,
+    ) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            lost.await;
+            let Some(slot) = slot.upgrade() else {
+                return;
+            };
+            let current = service.inner.conversations.lock().await.get(&id).cloned();
+            if !current.is_some_and(|current| Arc::ptr_eq(&current, &slot))
+                || slot.stopping.load(Ordering::SeqCst)
+            {
+                return;
+            }
+            let Ok(actor) = ActionContext::new(
+                "gateway",
+                "environment_lost",
+                format!("lost-{}", Uuid::new_v4()),
+            ) else {
+                return;
+            };
+            tracing::warn!(conversation_id = %id, "the environment lost this conversation's lease; stopping it");
+            if let Err(stop) = service
+                .stop_and_release(
+                    &id,
+                    slot,
+                    &actor,
+                    &McpAppInitiator::System,
+                    LeaseEndCause::Lost,
+                )
+                .await
+            {
+                tracing::warn!(conversation_id = %id, ?stop, "a lost lease's stop did not confirm cleanup");
+            }
+        });
     }
     async fn wait_for_slot(
         &self,
@@ -1665,14 +1744,20 @@ impl ConversationService {
             // agent, and the next submission would be admitted there.
             // An agent let go whose record only was not saved answers that
             // failure: the mode is not uncertain, the records are.
-            self.stop_and_release(id, slot, &actor, &McpAppInitiator::System)
-                .await
-                .map_err(|stop| match stop {
-                    StopFailure::Failed(error) if confirmed_despite(&error).is_some() => {
-                        ConversationError::Agent(error)
-                    }
-                    _ => ConversationError::ApprovalModeUncertain,
-                })?;
+            self.stop_and_release(
+                id,
+                slot,
+                &actor,
+                &McpAppInitiator::System,
+                LeaseEndCause::Stopped,
+            )
+            .await
+            .map_err(|stop| match stop {
+                StopFailure::Failed(error) if confirmed_despite(&error).is_some() => {
+                    ConversationError::Agent(error)
+                }
+                _ => ConversationError::ApprovalModeUncertain,
+            })?;
         }
         Ok(())
     }
@@ -3823,6 +3908,11 @@ impl ConversationService {
             if let Err(error) = self.inner.summaries.erase(&id).await {
                 failures.summary = Some(error);
             }
+            // Where it ran goes with its history; failing to forget it is
+            // the summary's kind of failure, retried with the erasure.
+            if let Err(error) = self.inner.environment.erase(&id).await {
+                failures.summary.get_or_insert(error);
+            }
         }
         drop(lease);
         if failures.is_empty() {
@@ -3999,6 +4089,19 @@ impl ConversationService {
         record: &Conversation,
         session: ExecutionSessionId,
     ) -> Result<ProviderSessionErasure, AskFailure> {
+        // A conversation placed on a host kept its harness's session there,
+        // which no handler on this machine can reach: said as no handler,
+        // never asked of a local binding.
+        if self
+            .inner
+            .environment
+            .placement(record.id())
+            .await
+            .map_err(AskFailure::Failed)?
+            .is_some()
+        {
+            return Ok(ProviderSessionErasure::NoHandler);
+        }
         let eraser = match self
             .inner
             .provider_sessions
@@ -4392,6 +4495,7 @@ impl ConversationService {
         slot: Arc<Slot>,
         actor: &ActionContext,
         ended_by: &McpAppInitiator,
+        cause: LeaseEndCause,
     ) -> Result<(), StopFailure> {
         let service = self.clone();
         let id = id.clone();
@@ -4406,7 +4510,7 @@ impl ConversationService {
                     StopBy {
                         actor: &actor,
                         ended_by: &ended_by,
-                        cause: LeaseEndCause::Stopped,
+                        cause,
                     },
                     ConfirmedClose::ReleaseSlot,
                 )

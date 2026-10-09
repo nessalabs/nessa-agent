@@ -426,6 +426,127 @@ fact, not whether its close succeeded: an opening whose only failure is a
 record it could not save holds nothing, so the next command opens the
 conversation again instead of being answered from the failure.
 
+### Slice B: a conversation on an SSH host (#699)
+
+**What runs where (decision B′).** The agent binding stays on the gateway:
+the agent protocol (ACP), its permission requests, its events and the
+execution audit are the gateway's, exactly as for a local child. Only the
+harness process runs on the host, under `nessa env serve`, which owns its
+executable, arguments, the account's variables and credentials, its working
+directory and its process tree. The lease frames carry the harness's
+standard input and output, labelled by lease and channel. So events,
+approvals and Stop behave on a host as they do here, because they are the
+same code, and the host never sees a conversation record or a gateway
+credential. A binding opts in with `AgentProvider::on_host`; Claude and
+Codex do, OpenCode does not yet (its open is refused as the host's
+`agent_unavailable`). What the binding sets for a launch is only its own
+allowlisted variables (model, output budget, preset); a path or credential
+of the gateway's machine never crosses.
+
+The alternative, ACP events relayed by the host, would have put a second
+copy of the binding, its permission flow and its audit on every host, with
+two builds to keep in step for every protocol change. B′ keeps one owner of
+each.
+
+```mermaid
+sequenceDiagram
+    participant S as Surface
+    participant G as Gateway service and binding
+    participant A as SSH adapter (HostLink)
+    participant H as nessa env serve on the host
+    participant P as Harness process
+    S->>G: conversation.create with environment devbox
+    G->>G: placement written before the record
+    S->>G: message
+    G->>A: open(lease, terms, binding)
+    A->>H: ssh -T devbox nessa env serve, then the hello
+    H-->>A: Hello build and workspace
+    A->>H: Grant lease and agent
+    H-->>A: Granted
+    G->>A: binding starts its harness (Start lease and channel)
+    H->>P: spawn from the host's own config.json
+    G->>P: ACP over Input and Output frames
+    P-->>G: events, permission requests, answered here
+    S->>G: Stop
+    G->>A: harness cleanup (Stop frame)
+    H-->>A: Stopped with cleanup evidence
+    G->>A: lease end (End frame)
+    H-->>A: Ended with cleanup evidence
+    G->>G: lease Ended, or Interrupted without evidence
+```
+
+**Where a conversation runs.** `config.json` names the hosts under
+`sshHosts`; `agents.list` returns them as `environments`, and the composer
+offers them under "Run on" only when there is at least one. A conversation
+is placed when it is created and never moves: one file per placed
+conversation, `conversations/placements/<id>.json`, written and synced
+before the conversation's record exists and erased with its history. No
+placement means here, so a gateway that names no host never reaches SSH
+code (gate 5). A placement this build cannot read refuses that
+conversation alone (`conversation_state_unreadable`); one naming a host the
+configuration no longer names is refused (`environment_not_configured`),
+never run somewhere else.
+
+**Defaults chosen.**
+
+| What | Default | Why |
+| --- | --- | --- |
+| Hosts | at most 16 in `sshHosts`, each an OpenSSH destination: ASCII letters, digits, `.`, `_`, `-`, `@`, starting with a letter or digit, at most 253 bytes | never an `ssh` option or a shell word; a port, jump host or IPv6 literal goes in `~/.ssh/config` under an alias |
+| `ssh` command | `ssh -T -o BatchMode=yes -o ForwardAgent=no -o ForwardX11=no -o ClearAllForwardings=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -- <host> nessa env serve` | the user's own keys and config; no prompt, no forwarding; a silent network is noticed in about 45 s |
+| Connect and hello | 30 s | longer than a host's own 15 s wait for the previous serving process |
+| A grant's or an account's answer | 15 s | |
+| Harness stop | the binding's own grace and kill budgets; the host caps each at 60 s | the same budgets as a local child |
+| Host-side stop of an ended lease | 2 s grace, then 5 s per forced step | |
+| Connections | one per host, shared by its leases | one `ssh` process per host |
+| Serving processes | one per host data directory, by a lock on `<data>/environment/serve.lock`, waited for up to 15 s, else `busy` | a second gateway, or a reconnect racing the old process's cleanup |
+| Host audit | `<data>/environment/leases.jsonl`, one JSON line per grant, refusal, start, stop, end and drop; accounting reads its last 64 MiB | the host's own evidence, kept past the lease |
+| Gateway audit | `conversations/audit/environments/`, one record per connect, version refusal, busy, unconfigured, lost connection, dropped frame and output overflow | |
+| Frames | four-byte length then JSON, at most 256 KiB; harness bytes at most 64 KiB a frame, base64 | the pairing frame reader, bounded before allocation |
+| Harness output queued for a binding | 64 KiB pipe, then 128 frames; past that the harness is stopped and the overflow audited | a binding that stops reading never grows the gateway's memory |
+| Harness input queued on the host | past its queue the harness's input is ended, never cut in the middle | |
+| Version | the host's build must equal the gateway's | a typed refusal (`environment_version_mismatch`), and nothing is sent |
+| Lost connection | the lease ends as lost at once (no reconnect budget yet); its end is asked of a new connection with `Account` | the host ends every lease of a lost connection and records what that took |
+
+**Orderings the SSH adapter meets** (gate 15). Each row has its test, in
+`crates/nessa-server/tests/conversation/ssh_environment.rs` (adapter),
+`tests/env_serve/serve.rs` (host), `tests/env_serve_binary.rs` (the real
+binary over pipes) and `tests/conversation/leases.rs` (service).
+
+| Row | Input or order | Decision | Test |
+| --- | --- | --- | --- |
+| S1 | Grant answered Granted | Live; the binding starts its harness through the lease | adapter `a_lease_runs_its_harness_on_the_host_and_ends_with_the_hosts_evidence`, binary `a_lease_runs_its_harness_on_the_host_and_ends_with_evidence_in_the_ledger` |
+| S2 | Hello names another build | Refused `environment_version_mismatch`; nothing sent; audited | adapter `another_build_is_refused_and_sent_nothing` |
+| S3 | Host serving another connection, or not configured | Hello, then Unavailable; refused `environment_unavailable` | adapter `a_host_serving_another_gateway_is_busy`, host `a_host_that_cannot_serve_says_its_build_then_why`, binary `a_host_with_no_agents_configured_says_so_after_its_hello` |
+| S4 | Agent the host or the binding cannot run, or a duplicate grant | Refused with its reason; nothing ran | adapter `an_agent_the_host_or_its_binding_cannot_run_is_refused`, host `grants_are_refused_with_their_reason`, binary (duplicate) |
+| S5 | Host unreachable, or no answer in time | Refused `environment_unreachable` at opening; at an end, Unanswered, so Interrupted | adapter `with_the_host_unreachable_a_lost_lease_has_no_evidence` |
+| S6 | Stop, close or delete while Live | Stop and End frames; Ended with the host's cleanup | adapter S1 test, host `a_stop_is_answered_with_the_harness_cleanup`, service `b_a_conversation_created_on_a_host_runs_there_and_its_lease_names_the_host` |
+| S7 | Connection lost while Live | The host ends every lease as lost and records it; the gateway stops the conversation as lost, asks a new connection, and ends the lease with what was recorded, or Interrupted | adapter `a_lost_connection_is_seen_and_the_end_is_accounted_on_a_new_one`, host `the_gateway_gone_ends_every_lease_as_lost_with_recorded_cleanup`, binary `a_lease_held_when_the_gateways_stream_ends_is_ended_as_lost_and_accounted_after`, service `b_gate2_a_lost_connection_stops_the_conversation_and_ends_its_lease_as_lost` |
+| S8 | A frame naming a lease or channel not held, or unreadable | Dropped and audited on the side that received it | adapter and host `frames_naming_nothing_held_are_dropped_with_evidence` |
+| S9 | Account for a lease from an earlier connection | What the ledger recorded, `not_held` when it recorded nothing | host `account_answers_only_what_was_recorded` |
+| S10 | A binding stops reading its harness's output | Overflow audited, harness stopped | adapter `output_a_binding_does_not_read_is_bounded_and_stops_the_harness` |
+| S11 | No host named, unknown host, host no longer configured | Here, never SSH; refused `environment_not_configured`; refused, never run here | service `b_gate5_a_conversation_naming_no_host_never_reaches_one`, `b_a_host_the_configuration_does_not_name_is_refused_and_nothing_is_created`, `b_a_conversation_whose_host_is_no_longer_configured_is_refused_never_run_here` |
+
+Slice B's lease rows, beside slice A's above:
+
+| Row | Over SSH |
+| --- | --- |
+| L1, L5, L7 | yes: rows S1 and S6 |
+| L2 | yes: S2 to S5, recorded as Refused with the host's reason |
+| L8 | yes: an end with no answer is Interrupted (S5); late evidence accounts at the next opening, as slice A |
+| L9 | yes: S8 on both sides, and the lease's own fence as slice A |
+| L10 | in part: a lost connection ends the lease as lost at once (S7); there is no reconnect budget and no resume at a cursor |
+| L11, L12 | yes: the next opening asks the host (`Account`), as slice A asks the in-process environment |
+| L13 | yes: the gateway's one slot per conversation, and the host refuses a second grant of a lease id (S4) |
+| L17 to L19 | not in slice B: no idle sleep and no low-disk pause yet |
+
+**Not in slice B.** First-use install (the host's `PATH` must already have
+this build's `nessa`); a reconnect budget; idle sleep and low-disk pause;
+`environments.list` health; previews and artifacts; MCP servers for an
+agent on a host; OpenCode on a host; deleting the provider's own session on
+the host when a conversation is deleted (the erase answers `no_handler` for
+a placed conversation, and the host keeps it); rotating the host ledger;
+a passphrase or second factor prompt (`BatchMode=yes` refuses instead).
+
 ## Three transports, one contract
 
 | Transport | For | Who connects to whom | Authentication | Reachability |
@@ -479,7 +600,8 @@ costs nothing more than `ssh` already cost you.
   terminal; the lease waits with a deadline rather than hanging.
 - **Reconnect is bounded and said.** A dropped connection retries within
   the budget; the lease is Live(lost) meanwhile and Ended(lost) after it
-  (rows L10 to L12). The transcript shows the gap.
+  (rows L10 to L12). The transcript shows the gap. Slice B has no budget
+  yet: a dropped connection ends the lease as lost at once.
 - **Health is in the list.** `environments.list` and the composer's chip
   show reachable, version, sandbox profiles, disk, paused or sleeping, and
   open previews, so an agent or a person can choose a box with its state

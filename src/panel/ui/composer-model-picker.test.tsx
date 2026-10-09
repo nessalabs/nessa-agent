@@ -33,6 +33,7 @@ const model = (modelId: string, displayName: string, tokens: number) => ({
 })
 
 const catalog: AgentsListResult = {
+  environments: [],
   agents: [
     {
       agent: "claude",

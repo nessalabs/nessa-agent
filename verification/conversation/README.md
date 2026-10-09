@@ -1,9 +1,12 @@
 # Committed conversation controls
 
 `lease-fixture.html?case=<state>` mounts the production details sheet over one
-published lease, decoded by the actual client validator; run
-`node verification/desktop/scripts/lease-details.mjs`. Like the fixture below,
-it is served by the development server only.
+published lease, decoded by the actual client validator; `ssh-live`,
+`ssh-lost` and `ssh-refused` are leases on an SSH host.
+`run-on-fixture.html?case=none|hosts` mounts the production composer tray with
+no SSH host, or two. Run `node verification/desktop/scripts/lease-details.mjs`
+for both. Like the fixture below, they are served by the development server
+only.
 
 `fixture.html` mounts the production `ConversationControls` and `applyView` with
 current published gateway views. Every case passes the actual client decoder
