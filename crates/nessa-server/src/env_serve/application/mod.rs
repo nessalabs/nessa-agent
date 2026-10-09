@@ -5,4 +5,4 @@
 mod serve;
 mod wire;
 pub(crate) use serve::{refuse, serve, HarnessLauncher, LeaseLedger, LedgerEntry, ServeTimings};
-pub(crate) use wire::{write_frame, FrameStream};
+pub(crate) use wire::FrameStream;

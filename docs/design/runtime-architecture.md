@@ -501,7 +501,7 @@ never run somewhere else.
 | Serving processes | one per host data directory, by a lock on `<data>/environment/serve.lock`, waited for up to 15 s, else `busy` | a second gateway, or a reconnect racing the old process's cleanup |
 | Host audit | `<data>/environment/leases.jsonl`, one JSON line per grant, refusal, start, stop, end and drop; accounting reads its last 64 MiB | the host's own evidence, kept past the lease |
 | Gateway audit | `conversations/audit/environments/`, one record per connect, version refusal, busy, unconfigured, lost connection, dropped frame and output overflow | |
-| Frames | four-byte length then JSON, at most 256 KiB; harness bytes at most 64 KiB a frame, base64 | the pairing frame reader, bounded before allocation |
+| Frames | four-byte length then JSON, at most 256 KiB; harness bytes at most 64 KiB a frame, base64; a launch whose variables do not fit is refused to its binding, and the connection other leases share goes on | the pairing frame reader, bounded before allocation |
 | Harness output queued for a binding | 64 KiB pipe, then 128 frames; past that the harness is stopped and the overflow audited | a binding that stops reading never grows the gateway's memory |
 | Harness input queued on the host | past its queue the harness's input is ended, never cut in the middle | |
 | Version | the host's build must equal the gateway's | a typed refusal (`environment_version_mismatch`), and nothing is sent |

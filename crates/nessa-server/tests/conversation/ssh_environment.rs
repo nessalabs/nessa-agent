@@ -756,3 +756,29 @@ fn ssh_is_run_with_the_destination_after_its_options() {
     assert!(arguments.contains(&"BatchMode=yes"));
     assert!(arguments.contains(&"ForwardAgent=no"));
 }
+
+/// A launch whose variables do not fit in one frame is refused to its
+/// binding before anything is queued; the connection other leases share
+/// goes on carrying theirs.
+#[tokio::test]
+async fn a_launch_too_large_for_a_frame_is_refused_and_the_connection_goes_on() {
+    let connector = Connector::new(Reach::Serving);
+    let environment = environment(connector.clone(), Arc::new(Audit::default()));
+    let (binding, host) = binding(true);
+    let _opened = environment
+        .open(&lease(), &terms("claude"), binding)
+        .await
+        .unwrap_or_else(|_| panic!("granted"));
+    let host = host.lock().unwrap().clone().unwrap();
+    let huge = "x".repeat(nessa_protocol::lease::MAX_FRAME_BYTES);
+    assert!(matches!(
+        host.start(HarnessLaunch {
+            environment: BTreeMap::from([("CODEX_CONFIG".into(), huge.into())]),
+        }),
+        Err(AgentError::InvalidInput(_))
+    ));
+    let mut process = host.start(HarnessLaunch::default()).unwrap();
+    process.input.write_all(b"still").await.unwrap();
+    assert_eq!(read_some(process.output.as_mut()).await, b"still");
+    assert_eq!(connector.connects.load(Ordering::SeqCst), 1);
+}

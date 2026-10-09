@@ -20,9 +20,9 @@
 use super::audit::{EnvironmentAudit, EnvironmentEvent};
 use super::connector::LeaseConnector;
 use crate::env::VERSION;
-use crate::env_serve::application::{write_frame, FrameStream};
+use crate::env_serve::application::FrameStream;
 use nessa_protocol::lease::{
-    decode, read_hello, Cleanup, Data, FromEnvironment, GrantRefusal, ToEnvironment,
+    decode, encode, read_hello, Cleanup, Data, FromEnvironment, GrantRefusal, ToEnvironment,
     Unavailability, MAX_DATA_BYTES,
 };
 use nessa_sdk::domain::agent_execution::leases::{LeaseRefusal, SshDestination};
@@ -325,6 +325,12 @@ impl HostLink {
                 channel,
                 environment,
             };
+            // Larger than a frame carries: refused here, before it is queued
+            // for every lease's connection.
+            if encode(&start).is_err() {
+                route.channels.remove(&channel);
+                return Err(StartError::TooLarge);
+            }
             if let Err(error) = self.frames.try_send(start) {
                 route.channels.remove(&channel);
                 return Err(match error {
@@ -469,6 +475,8 @@ pub(crate) enum StartError {
     Closed,
     /// The host's queue is full.
     Busy,
+    /// The launch's variables do not fit in one frame.
+    TooLarge,
 }
 
 fn millis(duration: Duration) -> u64 {
@@ -759,12 +767,29 @@ async fn write_frames(
     mut frames: mpsc::Receiver<ToEnvironment>,
 ) {
     while let Some(frame) = frames.recv().await {
-        if let Err(error) = write_frame(&mut output, &frame).await {
+        // A frame that cannot be encoded is that frame's failure alone; the
+        // connection, which other leases share, goes on.
+        let bytes = match encode(&frame) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::error!(%error, lease = frame.lease(), "a lease frame could not be encoded; it is not sent");
+                continue;
+            }
+        };
+        if let Err(error) = write_all(&mut output, &bytes).await {
             tracing::warn!(%error, "a lease frame could not be written to the host");
             return;
         }
     }
     let _ = output.shutdown().await;
+}
+
+async fn write_all(
+    output: &mut Box<dyn AsyncWrite + Send + Unpin>,
+    bytes: &[u8],
+) -> std::io::Result<()> {
+    output.write_all(bytes).await?;
+    output.flush().await
 }
 
 async fn pump_output(mut chunks: mpsc::Receiver<Vec<u8>>, mut output: DuplexStream) {

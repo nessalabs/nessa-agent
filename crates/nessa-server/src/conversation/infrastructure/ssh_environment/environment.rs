@@ -264,6 +264,9 @@ impl HarnessHost for LeaseHost {
             .map_err(|error| match error {
                 StartError::Closed => AgentError::Closed,
                 StartError::Busy => AgentError::Backpressure,
+                StartError::TooLarge => {
+                    AgentError::InvalidInput("the harness's launch variables are too large".into())
+                }
             })?;
         Ok(HarnessProcess {
             input: Box::new(started.input),
