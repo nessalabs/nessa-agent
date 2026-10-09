@@ -508,7 +508,16 @@ async fn l8_a_close_past_its_cleanup_deadline_interrupts_and_its_late_confirmati
     let service = harness.service.clone();
     let id = harness.id.clone();
     let close = tokio::spawn(async move { service.close(id, caller("close")).await });
-    // Past the deadline the close is still waiting on the agent.
+    // Wait until the close has reached the agent, then past its deadline.
+    // A fixed sleep from the spawn alone races a slow runner, where the close
+    // may not have started when the sleep ends and so confirms in time.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while harness.provider.close_calls.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the close reaches the agent");
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert!(!close.is_finished());
     release.send(()).unwrap();
@@ -703,7 +712,18 @@ async fn l8_a_turn_running_past_the_cleanup_deadline_settles_and_the_lease_is_ac
     let id = harness.id.clone();
     let close = tokio::spawn(async move { service.close(id, caller("close")).await });
     // Past the deadline, with the turn still running, the lease is
-    // interrupted; the Agent still settles the turn it is stopping.
+    // interrupted; the Agent still settles the turn it is stopping. The
+    // deadline is counted once the close has reached the agent, not from the
+    // spawn, which a slow runner may not have started yet.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while harness.provider.cancel_calls.load(Ordering::SeqCst) == 0
+            && harness.provider.close_calls.load(Ordering::SeqCst) == 0
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the close reaches the agent");
     tokio::time::sleep(Duration::from_millis(150)).await;
     go.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(5), close)

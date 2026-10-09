@@ -212,7 +212,12 @@ async fn run_local_conversation(root: &Path) -> Evidence {
                 let row: serde_json::Value = serde_json::from_str(&text).unwrap();
                 format!("execution/{:08}", row["sequence"].as_u64().unwrap())
             } else {
-                relative.display().to_string()
+                // The same key on every host: `/` between components.
+                relative
+                    .components()
+                    .map(|part| part.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/")
             };
             (key, text)
         })
