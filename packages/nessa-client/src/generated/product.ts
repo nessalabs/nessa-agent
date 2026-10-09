@@ -793,6 +793,8 @@ export interface ConversationReceiptParams {
   model?: string
   /** Creation hint. Omitted when the original creation named no preset. */
   approvalMode?: ApprovalMode
+  /** Creation hint. Omitted when the original creation named no environment. */
+  environment?: string
 }
 /** Whether a receipt for that request is saved. Found is false when the principal has no such request. A deleted conversation is refused instead of answering found. */
 export interface ConversationReceiptResult {

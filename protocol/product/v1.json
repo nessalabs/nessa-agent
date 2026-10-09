@@ -1943,6 +1943,13 @@
         "approvalMode": {
           "$ref": "#/$defs/ApprovalMode",
           "description": "Creation hint. Omitted when the original creation named no preset."
+        },
+        "environment": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "x-utf8MaxBytes": 253,
+          "description": "Creation hint. Omitted when the original creation named no environment."
         }
       },
       "required": ["conversationId", "requestId", "operation"]

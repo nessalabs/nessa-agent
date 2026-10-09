@@ -1485,6 +1485,44 @@ async fn b_a_conversation_created_on_a_host_runs_there_and_its_lease_names_the_h
     assert!(!placement_file(root.path()).exists());
 }
 
+/// A conversation keeps the host it was created on: a later creation of
+/// the same identity, naming no host or another one, is its reopen and
+/// moves nothing (the environment is ignored on reopen).
+#[tokio::test]
+async fn b_a_reopen_keeps_the_host_the_conversation_was_created_on() {
+    let root = tempfile::tempdir().unwrap();
+    let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    let host = Arc::new(Host::new());
+    let harness = with_host(root.path(), here.clone(), Some(host.clone()));
+    harness.create_on("devbox").await.unwrap();
+    let placed = std::fs::read(placement_file(root.path())).unwrap();
+    harness
+        .service
+        .create(
+            harness.id.clone(),
+            caller("reopen"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(placement_file(root.path())).unwrap(), placed);
+    harness.service.shutdown().await.unwrap();
+    let harness = with_host(root.path(), here.clone(), Some(host.clone()));
+    harness
+        .service
+        .create(
+            harness.id.clone(),
+            caller("reopen-again"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(placement_file(root.path())).unwrap(), placed);
+    harness.turn("turn-1").await;
+    assert_eq!(here.opened.load(Ordering::SeqCst), 0);
+    assert!(host.opened.load(Ordering::SeqCst) >= 1);
+}
+
 #[tokio::test]
 async fn b_gate5_a_conversation_naming_no_host_never_reaches_one() {
     let root = tempfile::tempdir().unwrap();

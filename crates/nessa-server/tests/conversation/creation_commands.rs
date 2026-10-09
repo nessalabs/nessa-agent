@@ -621,6 +621,67 @@ async fn a_creation_identity_refuses_changed_target_origin_or_bytes() {
     retire(service, storage, metadata).await;
 }
 
+/// Where a conversation runs is part of what its creation asked for: a
+/// retry, or a lookup, of the same request naming another environment is a
+/// different request, refused as a conflict, never the original attempt
+/// run somewhere else.
+#[tokio::test]
+async fn a_creation_identity_refuses_a_changed_environment() {
+    let directory = tempfile::tempdir().unwrap();
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&directory.path().join("data"), provider.clone());
+    let target = id();
+    service
+        .create_command(
+            storage.clone(),
+            target.clone(),
+            caller("request"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    let elsewhere = || RequestedConversation {
+        environment: Some("devbox".into()),
+        ..Default::default()
+    };
+    assert!(matches!(
+        service
+            .create_command(
+                storage.clone(),
+                target.clone(),
+                caller("request"),
+                elsewhere()
+            )
+            .await,
+        Err(CreationFailure::Conflict)
+    ));
+    assert!(matches!(
+        service
+            .lookup_creation(
+                storage.clone(),
+                target.clone(),
+                caller("request"),
+                elsewhere()
+            )
+            .await,
+        Err(CreationFailure::Conflict)
+    ));
+    assert_ne!(
+        binding(&target, &caller("request"), &elsewhere())
+            .unwrap()
+            .fingerprint(),
+        binding(
+            &target,
+            &caller("request"),
+            &RequestedConversation::default()
+        )
+        .unwrap()
+        .fingerprint()
+    );
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    retire(service, storage, metadata).await;
+}
+
 #[tokio::test]
 async fn an_interrupted_creation_preserves_its_target_without_reinitialization() {
     let directory = tempfile::tempdir().unwrap();

@@ -515,7 +515,7 @@ fn requested_conversation_from_receipt(
         agent: requested_agent(params.agent.as_deref()),
         model: params.model.clone(),
         approval_mode: params.approval_mode.map(approval_mode),
-        environment: None,
+        environment: params.environment.clone(),
     })
 }
 fn approval_mode(mode: WireApprovalMode) -> ConversationApprovalMode {

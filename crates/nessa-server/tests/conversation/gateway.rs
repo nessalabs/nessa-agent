@@ -1107,6 +1107,24 @@ mod gateway {
             .await
             .ok
         );
+        // A creation's receipt is read with the hints it was asked with,
+        // its environment among them: another is another request.
+        let created = chat_request(
+            &state,
+            &session,
+            "conversation.receipt",
+            json!({"conversationId":id,"requestId":"create","operation":"create"}),
+        )
+        .await;
+        assert_eq!(created.payload.as_ref().unwrap()["found"], true, "{created:?}");
+        let elsewhere = chat_request(
+            &state,
+            &session,
+            "conversation.receipt",
+            json!({"conversationId":id,"requestId":"create","operation":"create","environment":"devbox"}),
+        )
+        .await;
+        assert!(!elsewhere.ok, "{elsewhere:?}");
         let (release, gate) = oneshot::channel();
         *provider.execution_gate.lock().unwrap() = Some(gate);
         assert!(

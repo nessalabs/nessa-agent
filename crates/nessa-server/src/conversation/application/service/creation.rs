@@ -224,12 +224,25 @@ fn binding(
     };
     // serde's tuple encoding supplies lengths, null and escaping; concatenating
     // strings would let distinct field boundaries yield the same fingerprint.
-    let canonical = serde_json::to_vec(&(
-        caller.organization_id.as_str(),
-        agent,
-        requested.model.as_deref(),
-        requested.approval_mode.map(|mode| mode.as_str()),
-    ))
+    // Where it runs is part of what was asked, as its model is: the same
+    // request naming another environment is another request. Named only
+    // when one is, so a request that names none keeps the fingerprint it
+    // always had; the array's length tells the two forms apart.
+    let canonical = match requested.environment.as_deref() {
+        None => serde_json::to_vec(&(
+            caller.organization_id.as_str(),
+            agent,
+            requested.model.as_deref(),
+            requested.approval_mode.map(|mode| mode.as_str()),
+        )),
+        Some(environment) => serde_json::to_vec(&(
+            caller.organization_id.as_str(),
+            agent,
+            requested.model.as_deref(),
+            requested.approval_mode.map(|mode| mode.as_str()),
+            environment,
+        )),
+    }
     .map_err(|_| ConversationError::InvalidInput)?;
     let mut digest = Sha256::new();
     digest.update(b"nessa.conversation.create\0");
