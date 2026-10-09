@@ -167,10 +167,10 @@ type WindowGatewayClient = GatewayClient &
 
 /**
  * The gateway's workspace, and — where apps are drawn — its servers' apps:
- * told each view the source reads, their calls made on the client the source
- * holds, so an app is asked on the same connection its conversation is read,
- * and each tool call and message through the source's `appCall`, so its
- * conversation is read while either waits on the person's review.
+ * told each view the source applies, their calls made on the client the
+ * source holds, so an app is asked on the same connection its conversation is
+ * followed on, and each tool call and message through the source's `appCall`,
+ * so its conversation is followed while either waits on the person's review.
  */
 function gatewayWorkspace(
   connect: () => Promise<WindowGatewayClient>,
@@ -187,8 +187,8 @@ function gatewayWorkspace(
     apps: gatewayApps({
       registry,
       mcpApps: {
-        // Through the source, which reads the conversation while the call
-        // may wait on a review there (#436).
+        // Through the source, which follows the conversation the call may
+        // wait on a review in (#436).
         callTool: (...args) =>
           source.appCall(args[0], () => mcpApps().then((api) => api.callTool(...args))),
         readResource: (...args) => mcpApps().then((api) => api.readResource(...args)),
@@ -198,7 +198,7 @@ function gatewayWorkspace(
           source.appCall(args[0], () =>
             mcpApps().then((api) => api.sendMessage(...args)),
           ),
-        // Nothing waits on the person: no read is started for it.
+        // Nothing waits on the person: it follows nothing.
         updateModelContext: (...args) =>
           mcpApps().then((api) => api.updateModelContext(...args)),
         fetchResource: (...args) => mcpApps().then((api) => api.fetchResource(...args)),

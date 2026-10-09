@@ -398,8 +398,8 @@ send   -> conversation.send { text, attachments: [the returned references] }
   until the gateway restarts. `unavailable` already says the panel keeps trying,
   which is true of all of them.
 - **A conversation the gateway has stopped serving outranks everything else on
-  its tab.** A command somebody asked for otherwise wins the notice over the
-  panel's own polling. The exception is `configuration-changed`, because every
+  its tab.** A command somebody asked for otherwise wins the notice over a
+  failure of the panel's own subscription to the conversation. The exception is `configuration-changed`, because every
   other notice ends in an action — refresh, resend, retry this submission — that
   the gateway can no longer complete; a lost close acknowledgement inviting a
   refresh is the concrete case. What became of each message is not lost with the
@@ -494,11 +494,27 @@ KiB).
 
 ## Views and retry behavior
 
-The panel periodically reads a bounded current view while its conversation is
-visible. This delivers live output without saving every streaming chunk. Each read
-replaces the prior projection; revision values are transient, not durable replay
-cursors. Views explicitly mark omitted history. Disconnecting and reconnecting
-never resubmits prompts to reconstruct a transcript.
+The panel follows the conversation on screen through `conversation.subscribe`,
+and reads nothing on a timer while that subscription is open. This delivers live
+output without saving every streaming chunk. Each frame is a bounded current
+view that replaces the prior projection; revision values are transient, not
+durable replay cursors. Views explicitly mark omitted history. A subscription
+refused, or ended for any reason but `lagging`, keeps the view on screen, shows
+the failure, and is opened again after `FOLLOW_RETRY_MS`, unless the
+conversation was deleted. Disconnecting and
+reconnecting never resubmits prompts to reconstruct a transcript.
+
+The desktop workspace reads nothing on a timer either. It follows the same
+bounded views through `conversation.subscribe` and the list through
+`conversation.subscribeList` ([record subscriptions](../design/record-subscriptions.md)):
+the gateway sends a view again whenever its committed records or its live facts
+change, and each frame carries a cursor (the history's incarnation and committed
+position). After a lost connection, or a subscription ended as `lagging`
+because the window did not take a frame in time, the panel and the workspace
+subscribe again from the last cursor they applied. Within the same
+incarnation nothing behind that cursor is sent; a cursor from another
+incarnation means the store was reset, and the current view is sent as a
+replacement.
 
 Each read keeps local intent the gateway has not acknowledged yet, so a view
 racing an admitted send never resends or loses it, and local failures stay

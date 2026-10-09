@@ -13,7 +13,7 @@ export type ConversationNotice = {
 /**
  * What to tell somebody whose conversation could not be refreshed.
  *
- * A read is the panel's own polling rather than anything anybody asked for, so
+ * A read is the panel's own follow rather than anything anybody asked for, so
  * both of these say the same two things first: the transcript is older than the
  * gateway's, and Nessa is still asking. What the reason changes is whether
  * asking again is worth anything. Total over the vocabulary, so a word added to
@@ -98,7 +98,7 @@ function outranksACommand(reason: ReadFailure): boolean {
  *
  * Why anything failed is asked of the panel's own words for it, which
  * `adapters/gateway/effects.ts` translated from the gateway's: `failure` for a
- * command somebody asked for, `readError` for the panel's own polling. Neither
+ * command somebody asked for, `readError` for the panel's own follow. Neither
  * is a message, and nothing here compares one against a wire code.
  *
  * A command otherwise outranks a read. It is the thing somebody was waiting on,

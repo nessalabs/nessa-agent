@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * A conversation the window listed but could not read (#433). The gateway
- * answers the handshake and lists one running conversation, then refuses
- * `conversation.read` as `temporarily_unavailable`. The open transcript's
+ * answers the handshake and lists one running conversation
+ * (`conversation.subscribeList`), then refuses to follow it
+ * (`conversation.subscribe`) as `temporarily_unavailable`. The open transcript's
  * note, and the Agents peek, say what could not be read — the conversation
  * sentence in `failure-copy.ts`, never the unconfirmed-call sentence.
  *
@@ -44,7 +45,12 @@ const sessionReady = {
   audienceId: "gateway",
   expiresAt: 2_000_000_000,
   grants: [grant("conversation.read")],
-  methods: ["server.health", "conversation.list", "conversation.read"],
+  methods: [
+    "server.health",
+    "conversation.subscribe",
+    "conversation.subscribeList",
+    "conversation.unsubscribe",
+  ],
 }
 
 const listed = {
@@ -58,13 +64,16 @@ const listed = {
 }
 
 /**
- * A product socket that lists one running conversation and refuses to read
- * it. `seen` counts the reads and names any method this check does not answer,
- * so a new call does not pass by being ignored.
+ * A product socket that lists one running conversation and refuses to follow
+ * it. `seen` counts the refused follows and names any method this check does
+ * not answer, so a new call does not pass by being ignored.
  */
 function unreadGateway(seen) {
   function route(socket) {
     const nonce = `unread-${Math.random().toString(16).slice(2)}`
+    // Events continue the socket's one sequence, after the challenge's.
+    let seq = 1
+    let subscriptions = 0
     socket.send(
       JSON.stringify({
         type: "event",
@@ -97,22 +106,38 @@ function unreadGateway(seen) {
         send({ ok: true, payload: { ok: true, runtimeStatus: "ready", uptimeMs: 1 } })
         return
       }
-      if (frame.method === "conversation.list") {
+      if (frame.method === "conversation.subscribeList") {
         const archived = frame.params?.archived === true
-        send({
-          ok: true,
-          payload: {
-            conversations: archived ? [] : [{ ...listed, archived }],
-            complete: true,
-          },
-        })
+        subscriptions += 1
+        const subscriptionId = String(subscriptions)
+        send({ ok: true, payload: { subscriptionId } })
+        seq += 1
+        socket.send(
+          JSON.stringify({
+            type: "event",
+            event: "conversation.listed",
+            seq,
+            stateVersion: 0,
+            payload: {
+              subscriptionId,
+              list: {
+                conversations: archived ? [] : [{ ...listed, archived }],
+                complete: true,
+              },
+            },
+          }),
+        )
         return
       }
-      if (frame.method === "conversation.read") {
+      if (frame.method === "conversation.unsubscribe") {
+        send({ ok: true, payload: {} })
+        return
+      }
+      if (frame.method === "conversation.subscribe") {
         seen.reads += 1
         if (frame.params?.conversationId !== conversationId)
           seen.unexpected.push(
-            `conversation.read ${String(frame.params?.conversationId)}`,
+            `conversation.subscribe ${String(frame.params?.conversationId)}`,
           )
         send({
           ok: false,
@@ -183,7 +208,7 @@ await main(
       "a conversation the window could not read says so in the transcript and the Agents peek",
     defaults: { engine: "chromium,webkit" },
     help: `
-The gateway lists one running conversation and refuses conversation.read.
+The gateway lists one running conversation and refuses conversation.subscribe.
 The transcript note and the Agents peek say what could not be read.
 
   beside    at 1440, the peek beside the list

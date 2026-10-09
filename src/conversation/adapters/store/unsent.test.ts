@@ -6,11 +6,12 @@ import { gatewayEffects } from "../gateway/effects"
 import { textContent } from "../../model"
 import {
   bindConversation,
-  refreshConversation,
+  followConversation,
   sendDraft,
   setDraft,
   submissionStarted,
 } from "./slice"
+import { followByReading } from "../../testing"
 import {
   ConversationErrorCode,
   NessaConversationMutationError,
@@ -150,7 +151,7 @@ it("known-unsent follow-up does not settle the earlier running invocation before
         create: async () => {
           throw new Error("offline")
         },
-        read: async () => ({
+        follow: followByReading(async () => ({
           conversationId: "server",
           approvalMode: "ask",
           approvalModes: [
@@ -202,12 +203,12 @@ it("known-unsent follow-up does not settle the earlier running invocation before
               status: "running",
             },
           ],
-        }),
+        })),
       },
     }),
   )
   store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
-  await store.dispatch(refreshConversation("c0"))
+  await store.dispatch(followConversation("c0"))
   await store.dispatch(sendDraft({ content: textContent("follow-up") }))
   const tab = store.getState().conversation.conversations[0]!
   expect(tab.turns[1]).toMatchObject({ receipt: "failed" })

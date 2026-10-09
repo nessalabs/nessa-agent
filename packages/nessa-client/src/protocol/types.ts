@@ -37,4 +37,7 @@ export type ClientEventMap = {
   "session.challenge": import("./product-types.js").SessionChallenge
   "conversation.changed": import("../generated/product.js").ConversationChanged
   "conversation.watchEnded": import("../generated/product.js").ConversationWatchEnded
+  "conversation.view": import("../generated/product.js").ConversationViewed
+  "conversation.listed": import("../generated/product.js").ConversationListed
+  "conversation.subscriptionEnded": import("../generated/product.js").ConversationSubscriptionEnded
 }

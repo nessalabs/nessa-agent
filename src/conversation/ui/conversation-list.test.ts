@@ -9,7 +9,7 @@ import { sessionReady } from "../../session/testing"
 import { makeStore } from "../../store"
 import { ControlFailedError, ConversationReadFailedError } from "../application/ports"
 import { listConversations } from "../adapters/store/history"
-import { openListed, refreshConversation } from "../adapters/store/slice"
+import { openListed, followConversation } from "../adapters/store/slice"
 import { scenarioEffects } from "../testing"
 import { ConversationList } from "./conversation-list"
 import type { RosterTarget } from "../application/queries/roster"
@@ -264,7 +264,7 @@ async function heldOpen(store: ReturnType<typeof makeStore>) {
   const tab = store
     .getState()
     .conversation.conversations.find((item) => item.serverConversationId === written)!
-  await store.dispatch(refreshConversation(tab.id))
+  await store.dispatch(followConversation(tab.id))
   store.dispatch(openListed({ serverConversationId: other, title: "Other" }))
   expect(
     store.getState().conversation.conversations.find((item) => item.id === tab.id)!.turns

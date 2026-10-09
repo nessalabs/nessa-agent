@@ -1985,6 +1985,75 @@ export const ChangeWatchErrorCode = {
 } as const
 export type ChangeWatchErrorCode =
   (typeof ChangeWatchErrorCode)[keyof typeof ChangeWatchErrorCode]
+/** Opaque identity of one subscription on this connection. It grants nothing and is discarded with the connection. */
+export type ConversationSubscriptionId = string
+/** Where in the committed history a view was read. Compare positions only within one incarnation. */
+export interface ConversationViewCursor {
+  /** The stored history's incarnation. A different one means the history was replaced, and the frame is a replacement for everything held. */
+  incarnation: string
+  /** Decimal committed position the view was folded through, within this incarnation. */
+  position: string
+}
+/** Follow one conversation's view: the reply comes after the first read, then a conversation.view frame whenever what the view shows changes, until conversation.subscriptionEnded or conversation.unsubscribe. */
+export interface ConversationSubscribeParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** The cursor of the last view this client applied. No frame behind it in the same incarnation is sent; at least one frame at or past it is. */
+  after?: ConversationViewCursor
+}
+/** Follow the caller's conversation list: the reply comes after the first list, then a conversation.listed frame whenever the list changes. */
+export interface ConversationSubscribeListParams {
+  /** Follow only archived conversations when true; only unarchived ones when false or absent. */
+  archived?: boolean
+}
+/** The subscription is live. Its first frame follows this reply. */
+export interface ConversationSubscribeResult {
+  subscriptionId: ConversationSubscriptionId
+}
+/** Stop one subscription of this connection. A frame already being written may arrive before the reply; none arrives after it. */
+export interface ConversationUnsubscribeParams {
+  subscriptionId: ConversationSubscriptionId
+}
+/** The conversation's current view, read after a committed or live change. Replace what was held with it. */
+export interface ConversationViewed {
+  subscriptionId: ConversationSubscriptionId
+  cursor: ConversationViewCursor
+  /** The same bounded replacement conversation.read returns. */
+  view: ConversationView
+}
+/** The caller's current conversation list, read after a change. Replace what was held with it. */
+export interface ConversationListed {
+  subscriptionId: ConversationSubscriptionId
+  /** The same list conversation.list returns, cut newest first and marked incomplete when it would not fit one frame. */
+  list: ConversationListResult
+}
+/** Why a subscription ended. lagging: a frame waited longer than x-subscriptionLimits.deliveryTimeoutMs to be written; subscribe again from lastDelivered. refused: a read or its access check was refused, with code. source_closed: the change source closed; subscribe again. too_large: a frame would not fit the frame bound. */
+export const ConversationSubscriptionEndReason = {
+  Lagging: "lagging",
+  Refused: "refused",
+  SourceClosed: "source_closed",
+  TooLarge: "too_large",
+} as const
+export type ConversationSubscriptionEndReason =
+  (typeof ConversationSubscriptionEndReason)[keyof typeof ConversationSubscriptionEndReason]
+/** The subscription's one terminal frame. Nothing of it follows. */
+export interface ConversationSubscriptionEnded {
+  subscriptionId: ConversationSubscriptionId
+  reason: ConversationSubscriptionEndReason
+  /** For refused: the conversation error code, or unauthorized or forbidden when access was refused. */
+  code?: string
+  /** Where a view subscription resumes from: the cursor of the last view frame written or, when none was, the after it was opened with. Absent for a list, and for a view subscription opened without after that wrote no frame. */
+  lastDelivered?: ConversationViewCursor
+}
+/** Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit, or the gateway's watch capacity, is full. subscription_duplicate: this connection already follows that target. unknown_subscription: no such live subscription on this connection. cursor_ahead: after names a position past the stored history. */
+export const ConversationSubscriptionErrorCode = {
+  SubscriptionCapacity: "subscription_capacity",
+  SubscriptionDuplicate: "subscription_duplicate",
+  UnknownSubscription: "unknown_subscription",
+  CursorAhead: "cursor_ahead",
+} as const
+export type ConversationSubscriptionErrorCode =
+  (typeof ConversationSubscriptionErrorCode)[keyof typeof ConversationSubscriptionErrorCode]
 export const maxChangeWatchIdBytes = 57 as const
 export const changeWatchIdPattern =
   "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$" as const
@@ -1994,6 +2063,13 @@ export const changeWatchLimits = {
   recordTargets: 1,
   catalogueTargets: 1,
 } as const
+export const subscriptionLimits = {
+  conversationTargets: 8,
+  listTargets: 1,
+  deliveryTimeoutMs: 10000,
+} as const
+export const conversationSubscriptionIdPattern = "^[1-9][0-9]{0,19}$" as const
+export const maxViewCursorIncarnationLength = 128 as const
 /** Passive source and delivery deadlines, plus the client allowance. The minimum request deadline is their sum; clients raise shorter configured timeouts to this floor. */
 export const passiveReadTiming = {
   readTimeoutMs: 10000,
@@ -2030,7 +2106,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 52,
+  maxReadyMethods: 55,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -2141,11 +2217,17 @@ export const ProductMethod = {
   ConversationWatchRecords: "conversation.watchRecords",
   ConversationWatchCatalogue: "conversation.watchCatalogue",
   ConversationUnwatch: "conversation.unwatch",
+  ConversationSubscribe: "conversation.subscribe",
+  ConversationSubscribeList: "conversation.subscribeList",
+  ConversationUnsubscribe: "conversation.unsubscribe",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
   ConversationChanged: "conversation.changed",
   ConversationWatchEnded: "conversation.watchEnded",
+  ConversationView: "conversation.view",
+  ConversationListed: "conversation.listed",
+  ConversationSubscriptionEnded: "conversation.subscriptionEnded",
 } as const
 export const ProductHandshakeMethod = "session.authenticate" as const
 export const productReadyMethods = [
@@ -2201,6 +2283,9 @@ export const productReadyMethods = [
   "conversation.watchRecords",
   "conversation.watchCatalogue",
   "conversation.unwatch",
+  "conversation.subscribe",
+  "conversation.subscribeList",
+  "conversation.unsubscribe",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake, auth.session, or a watch. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -2257,6 +2342,9 @@ export const productMethodGrants = {
   "conversation.watchRecords": null,
   "conversation.watchCatalogue": null,
   "conversation.unwatch": null,
+  "conversation.subscribe": "conversation.write",
+  "conversation.subscribeList": "conversation.write",
+  "conversation.unsubscribe": "conversation.write",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

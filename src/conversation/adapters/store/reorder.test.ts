@@ -3,7 +3,8 @@ import { makeStore } from "../../../store"
 import { createDependencies } from "../../../composition/dependencies"
 import { scenarioEffects } from "../scenario/effects"
 import type { ConversationView } from "../../application/view"
-import { bindConversation, controlConversation, refreshConversation } from "./slice"
+import { bindConversation, controlConversation, followConversation } from "./slice"
+import { followByReading } from "../../testing"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -79,10 +80,18 @@ for (const outcome of [
     const send = vi.fn(effects.send)
     const remove = vi.fn(effects.remove)
     const store = makeStore(
-      createDependencies({ conversation: { ...effects, read, reorder, send, remove } }),
+      createDependencies({
+        conversation: {
+          ...effects,
+          follow: followByReading(read),
+          reorder,
+          send,
+          remove,
+        },
+      }),
     )
     store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
-    await store.dispatch(refreshConversation("c0"))
+    await store.dispatch(followConversation("c0"))
     await store.dispatch(
       controlConversation({
         id: "c0",
@@ -106,7 +115,9 @@ it("refreshes after a lost reorder acknowledgement without replaying the control
     throw new Error("acknowledgement lost")
   })
   const store = makeStore(
-    createDependencies({ conversation: { ...effects, read, reorder } }),
+    createDependencies({
+      conversation: { ...effects, follow: followByReading(read), reorder },
+    }),
   )
   store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
   await store.dispatch(
@@ -129,7 +140,12 @@ it("captures order before awaiting creation and rejects duplicate controls while
   const reorder = vi.fn(async () => "applied" as const)
   const store = makeStore(
     createDependencies({
-      conversation: { ...effects, create, reorder, read: async () => view(["b", "a"]) },
+      conversation: {
+        ...effects,
+        create,
+        reorder,
+        follow: followByReading(async () => view(["b", "a"])),
+      },
     }),
   )
   store.dispatch(bindConversation({ id: "c0", serverId: "server" }))

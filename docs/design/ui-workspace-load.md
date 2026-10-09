@@ -17,7 +17,7 @@ Nothing in this change writes a fixture file.
 | Check | What it drives | Scale | Evidence |
 | --- | --- | --- | --- |
 | `verification/desktop/scripts/perf-budget.mjs` | Production desktop, sample workspace, calibrated 4× CPU. Chromium only: CDP throttling and Long Animation Frames. The interactions and the 50 ms unrounded-frame bound are the performance section of `verification/desktop/CHECKLIST.md`. | The sample index: 10 sessions in `starredSamples` and 18 in `labsSamples`. | Script JSON on stdout. #370 and #583 quote drag rows from their own runs. |
-| `verification/desktop/scripts/message-sync.mjs` | Production desktop delivery of ready gateway text (#532). Included in `run-all`. Chromium is throttled; WebKit is measured without that throttle. | 30 active and 15 held-list/read samples per row, not a large catalogue. | `docs/reviews/startup-latency.md` and `verification/desktop/evidence/message-sync/`. |
+| `verification/desktop/scripts/message-sync.mjs` | Production desktop delivery of a gateway frame's text (#532, #702). Included in `run-all`. Chromium is throttled; WebKit is measured without that throttle. | 30 active samples and 15 with the list's and another conversation's frames held, per row, not a large catalogue. | `docs/reviews/startup-latency.md` and `verification/desktop/evidence/message-sync/`. |
 | `verification/desktop/scripts/run-all.mjs` | Functional browser checks plus `perf-budget`. Several checks start a disposable gateway (`gateway-window.mjs`, `scripted-scenarios.mjs`, `scripted-e2e.mjs`). | One conversation or a short scripted scenario. | Each check's JSON. |
 | `verification/desktop/scripts/workspace-load.mjs` | Production preview of a seeded in-memory workspace. Chromium frames use the same 50 ms budget, calibration, and 4× throttle as `perf-budget.mjs`. WebKit runs the journeys without that throttle. Opt-in: not in `run-all`. | The dry run: seed 590, 10,000 sessions, one long transcript. Pass is the rendered count on the overview after Show All, the columns session list, and the sidebar after Show all. | Script JSON. Screenshots under `verification/desktop/evidence/workspace-load/`. |
 | `verification/desktop/scripts/alpha-perf.mjs` | Production preview. Cold and warm startup on the sample workspace, panes filled to `paneLimits.maxPanes`, and one seeded long transcript. Chromium adds CDP heap, long tasks, and Long Animation Frames. Opt-in: not in `run-all`. `--with-gateway` seeds a scripted gateway with `paneLimits.maxPanes` conversations and one four-turn transcript, then times cold and warm startup from the long conversation's session row, fills the pane cap, and scrolls that transcript. An incomplete `conversation.list` is refused before a page opens. | Sample index for the fixture startup and panes. Fixture transcript: seed 590, 24 sessions, one transcript of 24 messages, 4,000 ASCII characters. Gateway stress: four conversations, four 4,000-character user messages on the newest, each answered with the scenario's text, list complete. The scroll waits until those replies are on the page. Not 10,000. Does not time `conversation.observe`. | Script JSON. Screenshots under `verification/desktop/evidence/alpha-perf/`. |
@@ -30,16 +30,16 @@ GitHub workflows in this repository set `node-version: 24`. Desktop evidence on 
 
 ## How the desktop observes every owned summary
 
-The workspace gateway source polls `conversation.list`. It does not call `conversation.catalogueManifest`. When that list is incomplete, the same read walks `conversation.observe` until the pass finishes or a page cannot resume. [ADR 596](../adr/done/596-observe-every-owned-conversation.md).
+The workspace gateway source follows one `conversation.subscribeList` subscription ([record subscriptions](record-subscriptions.md)); each `conversation.listed` frame is what `conversation.list` returns. It does not call `conversation.catalogueManifest`. When a frame is incomplete, the list's turn walks `conversation.observe` until the pass finishes or a page cannot resume. The gateway sends an incomplete frame again when the owner's catalogue changed though the rows it carries did not, because a row it left out may have gone, and only a walk sees that ([record subscriptions](record-subscriptions.md), rows L5 and D18). [ADR 596](../adr/done/596-observe-every-owned-conversation.md).
 
 ```mermaid
 sequenceDiagram
     participant UI as Desktop gateway source
-    participant List as conversation.list
+    participant List as conversation.subscribeList
     participant Observe as conversation.observe
-    participant Read as conversation.read
-    UI->>List: one list, no cursor
-    List-->>UI: at most 500 rows and complete
+    participant View as conversation.subscribe
+    UI->>List: one list subscription
+    List-->>UI: a listed frame whenever the list changes: at most 500 rows and complete
     alt complete is true
         UI->>UI: drop sessions the list no longer names
     else complete is false
@@ -53,20 +53,21 @@ sequenceDiagram
             UI->>UI: keep sessions the pages left out
         end
     end
-    UI->>Read: watched conversations, not the whole catalogue
-    Read-->>UI: bounded replacement view
+    UI->>View: the conversations the window opened, at most 8
+    View-->>UI: a bounded replacement view whenever it changes
 ```
 
 | State | Event | Next | What the index may remove |
 | --- | --- | --- | --- |
-| Listing | `conversation.list` with `complete: true` | Applied | Sessions the list does not name |
-| Listing | `conversation.list` with `complete: false` | Observing, no cursor | Nothing yet |
+| Listing | A list frame with `complete: true` | Applied | Sessions the list does not name |
+| Listing | A list frame with `complete: false` | Observing, no cursor | Nothing yet |
 | Observing | Page `complete: true` | Applied | Sessions the observe rows do not name. The list is not membership |
 | Observing | Page `complete: false` and a cursor strictly later in the same incarnation and boundary | Observing, that cursor | Nothing yet. Rows from the page are kept |
 | Observing | Page `complete: false` and no cursor, or a cursor that does not advance | Applied incomplete | Nothing. Rows already seen stay |
-| Any | The caller was answered, or the call budget ran out | The read fails | Nothing. The answer is not applied |
+| Any | The list subscription was let go | The walk ends | Nothing |
+| Observing | A page refused, or the walk's budget ran out | Unapplied, a gap; the frame is walked again on the retry clock, or at once by the next index, unless a newer frame walks first | Nothing. The rows the frame named still apply |
 
-Creation revisions compare as integers, so a cursor of `"10"` is after `"9"`. One `within()` budget covers the list and every observe page. Before each page the walk also asks whether its caller is still waiting; a listener who has left is not asked another page (`a listener who leaves during an observe walk is asked no further page`). A stored row that cannot be read back makes that observe page unfinished and nameless as a cursor, so the index keeps the list and does not drop the rows the page left out (`an_unreadable_summary_leaves_the_page_unfinished_and_keeps_the_others`). `conversation.list` has no second page. An incomplete list of 500, with an observe pass that does not finish, is not a 10,000-chat success.
+Creation revisions compare as integers, so a cursor of `"10"` is after `"9"`. One `within()` budget covers every observe page of a walk. Before each page the walk also asks whether its list subscription is still the current one; a listener who has left is not asked another page (`a listener who leaves during an observe walk is asked no further page`). A stored row that cannot be read back makes that observe page unfinished and nameless as a cursor, so the index keeps the list and does not drop the rows the page left out (`an_unreadable_summary_leaves_the_page_unfinished_and_keeps_the_others`). A list frame has no second page. An incomplete list of 500, with an observe pass that does not finish, is not a 10,000-chat success.
 
 ## Gateway bounds that a 10,000-chat run has to respect
 

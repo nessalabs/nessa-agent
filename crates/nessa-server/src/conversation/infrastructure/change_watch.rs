@@ -31,6 +31,10 @@ impl WatchRecords for NessaRecordWatches {
             .expect("validated conversation UUID is a valid SDK session identity");
         self.storage.watch_committed(&id)
     }
+
+    fn watch_any(&self) -> Result<CommittedChangeWatch, ChangeWatchError> {
+        self.storage.watch_any_committed()
+    }
 }
 
 /// OS randomness is read only by this composed namespace adapter.

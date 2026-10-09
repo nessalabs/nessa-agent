@@ -47,7 +47,7 @@ stateDiagram-v2
     Unresolved --> Unknown: Fresh read / retain unconfirmed delivery
     Recovered --> [*]: Refresh authoritative view
     note right of Unknown
-        Reconnect restores transport and polling.
+        Reconnect restores transport and the tab's follow.
         It does not replay commands.
     end note
 ```

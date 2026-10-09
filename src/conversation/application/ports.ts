@@ -34,6 +34,17 @@ export interface ConversationGateway {
   setActive(tabs: LocalTabs, conversationId: string): LocalTabs
 }
 
+/** Who is told what a followed conversation says ({@link ConversationEffects.follow}). */
+export interface ConversationFollower {
+  view(view: ConversationView): void
+  /**
+   * `reason` is all the panel decides on; `cause` is what it was translated
+   * from, kept only so the console can say (a code this build has no name for
+   * has no other way out).
+   */
+  failed(reason: ReadFailure, cause?: unknown): void
+}
+
 /** External effects consumed by conversation commands. */
 export interface ConversationEffects {
   /** Apply an offered preset on an idle conversation and return the committed choice. */
@@ -43,11 +54,17 @@ export interface ConversationEffects {
     selection?: ConversationSelection,
   ): Promise<{ conversationId: string }>
   /**
-   * Read the gateway's current bounded view of a conversation. Rejects with
-   * {@link ConversationReadFailedError}, so no caller has to look at a wire code
-   * or a sentence to find out what went wrong.
+   * Follow a conversation: `follower.view` is told the gateway's bounded view
+   * now and again whenever it changes, until the returned function stops it;
+   * nothing is told after. Each follow is stopped only by its own function:
+   * the caller stops the earlier follow of a conversation before following it
+   * again, and the new one's first view is read after the call (so after any
+   * command answered before it), once the earlier one is closed. A view
+   * that cannot be had is `follower.failed`, with the panel's own word for
+   * why, and the follow keeps trying unless the word says nothing will
+   * change (`deleted`). No caller looks at a wire code or a sentence.
    */
-  read(conversationId: string): Promise<ConversationView>
+  follow(conversationId: string, follower: ConversationFollower): () => void
   /**
    * The caller's conversations as the gateway lists them, newest first: the
    * archived ones when `archived`, the rest otherwise. A read:

@@ -145,9 +145,9 @@ it("carries a refused creation's reason through the control that asked for it", 
             async () => undefined,
           ),
         ),
-      // The refresh the control runs before reporting has nothing to read.
-      read: () => Promise.reject(new Error("no conversation")),
     },
+    // The read the control runs before reporting has nothing to read.
+    subscriptions: { view: () => Promise.reject(new Error("no conversation")) },
   } as unknown as NessaClient
   const store = makeStore(
     createDependencies({
@@ -199,8 +199,8 @@ it.each([
               true,
             ),
           ),
-        read: () => Promise.reject(new Error("no conversation")),
       },
+      subscriptions: { view: () => Promise.reject(new Error("no conversation")) },
     } as unknown as NessaClient
     const store = makeStore(
       createDependencies({

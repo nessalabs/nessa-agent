@@ -404,6 +404,34 @@ rs += `pub const MAX_CONNECTION_CHANGE_WATCHES: usize = ${connectionWatches};\n`
 ts += `export const maxChangeWatchIdBytes = ${watchId.maxLength} as const\n`
 ts += `export const changeWatchIdPattern = ${JSON.stringify(watchId.pattern)} as const\n`
 ts += `export const changeWatchLimits = ${JSON.stringify(watchLimits)} as const\n`
+// Subscription capacity and delivery deadline are product policy too: the
+// server reads these constants, and the desktop keeps within the same limit.
+const subscriptionLimits = schema["x-subscriptionLimits"]
+const subscriptionLimitNames = ["conversationTargets", "listTargets", "deliveryTimeoutMs"]
+for (const name of subscriptionLimitNames) {
+  if (
+    !subscriptionLimits ||
+    !Object.hasOwn(subscriptionLimits, name) ||
+    !Number.isSafeInteger(subscriptionLimits[name]) ||
+    subscriptionLimits[name] <= 0
+  )
+    throw new Error(`Invalid subscription limit: ${name}`)
+}
+if (Object.keys(subscriptionLimits).length !== subscriptionLimitNames.length)
+  throw new Error("Invalid subscription limit: unknown policy key")
+rs += `pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = ${subscriptionLimits.conversationTargets};\n`
+rs += `pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = ${subscriptionLimits.listTargets};\n`
+rs += `pub const SUBSCRIPTION_DELIVERY_TIMEOUT_MS: u64 = ${subscriptionLimits.deliveryTimeoutMs};\n`
+ts += `export const subscriptionLimits = ${JSON.stringify(subscriptionLimits)} as const\n`
+const subscriptionId = schema.$defs.ConversationSubscriptionId
+if (typeof subscriptionId.pattern !== "string")
+  throw new Error("Invalid subscription ID publication")
+// Published so the client checks the identities a frame names.
+ts += `export const conversationSubscriptionIdPattern = ${JSON.stringify(subscriptionId.pattern)} as const\n`
+const incarnation = schema.$defs.ConversationViewCursor.properties.incarnation
+if (!Number.isSafeInteger(incarnation.maxLength))
+  throw new Error("Invalid view cursor publication")
+ts += `export const maxViewCursorIncarnationLength = ${incarnation.maxLength} as const\n`
 const image = schema.$defs.ImageAttachment.properties
 const mcpCall = schema.$defs.McpCallToolParams.properties
 const mcpRead = schema.$defs.McpReadResourceParams.properties

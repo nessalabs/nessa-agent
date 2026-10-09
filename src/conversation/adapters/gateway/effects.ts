@@ -10,6 +10,7 @@ import {
   type AttachmentBeginRefusal,
   type ConversationErrorCode,
   type ConversationView as GatewayConversationView,
+  type ConversationViewCursor,
   type NessaClient,
   type StoredAttachment,
 } from "@nessa/client"
@@ -386,6 +387,14 @@ function controlFailure(error: unknown): unknown {
  */
 export const BUSY_RETRY_DELAYS_MS: readonly number[] = [1000, 2000, 4000]
 
+/**
+ * How long a follow waits before subscribing again after it could not have a
+ * view: the connection down, the gateway refusing, or a subscription that
+ * ended for any reason but `lagging`. The idle pace the panel used to read at,
+ * so a gateway that cannot answer is asked no more often than before.
+ */
+export const FOLLOW_RETRY_MS = 2000
+
 /** One application-scoped adapter; a disconnected transport never becomes a fake conversation. */
 export function gatewayEffects(
   client: () => NessaClient | null,
@@ -399,7 +408,6 @@ export function gatewayEffects(
   chosenAgent: () => Promise<string | undefined> = async () => undefined,
 ): ConversationEffects {
   const creations = new Map<string, Promise<{ conversationId: string }>>()
-  const reads = new Map<string, Promise<ConversationView>>()
   const connected = () => {
     const current = client()
     if (
@@ -478,25 +486,82 @@ export function gatewayEffects(
           throw readFailure(error)
         })
     },
-    read(conversationId) {
-      // Opaque revisions have no numeric ordering. Serialize reads, including
-      // refreshes after mutations, so server snapshots cannot overtake each other.
-      const previous = reads.get(conversationId)
-      const request = (previous ?? Promise.resolve())
-        .catch(() => undefined)
-        .then(() => api().read(conversationId))
-        .then(conversationView)
-        // The gateway's answer to a read is the last thing it says in its own
+    follow(conversationId, follower) {
+      let stopped = false
+      // The open whose frames apply: anything an earlier open brings is dropped.
+      let token = {}
+      // Gives the current open up: closed now, or once answered. The client
+      // sends the next subscribe to this conversation only after that close,
+      // so following again is never refused as a duplicate of this follow.
+      let giveUp: AbortController | undefined
+      let cursor: ConversationViewCursor | undefined
+      const failed = (error: unknown) => {
+        if (stopped) return
+        // The gateway's refusal is the last thing it says in its own
         // vocabulary: from here the panel has a word of its own for it.
-        .catch((error: unknown) => {
-          throw readFailure(error)
-        })
-      reads.set(conversationId, request)
-      const release = () => {
-        if (reads.get(conversationId) === request) reads.delete(conversationId)
+        const failure = readFailure(error)
+        const { reason } = failure
+        follower.failed(reason, failure)
+        // Told, the follower may have stopped it; and nothing will change for
+        // a conversation somebody deleted.
+        if (stopped || reason === "deleted") return
+        void wait(FOLLOW_RETRY_MS).then(() => open())
       }
-      void request.then(release, release)
-      return request
+      const open = (): void => {
+        if (stopped) return
+        const mine = {}
+        token = mine
+        giveUp?.abort()
+        const { signal } = (giveUp = new AbortController())
+        const current = () => !stopped && token === mine
+        const subscribe = (after: ConversationViewCursor | undefined) =>
+          Promise.resolve().then(() =>
+            connected().subscriptions.view(
+              conversationId,
+              {
+                view: (frame) => {
+                  if (!current()) return
+                  cursor = frame.cursor
+                  follower.view(conversationView(frame.view))
+                },
+                ended: (end) => {
+                  if (!current()) return
+                  // Too slow to take a frame: on at once, from the last one taken.
+                  if (end.reason === "lagging") return open()
+                  failed(
+                    end.reason === "refused" && end.code
+                      ? new NessaRpcError(end.code, end.code)
+                      : new Error(`The conversation's subscription ended: ${end.reason}`),
+                  )
+                },
+              },
+              after === undefined ? { signal } : { after, signal },
+            ),
+          )
+        subscribe(cursor)
+          .catch((error: unknown) => {
+            // Ahead of the history the gateway holds: from the start.
+            if (!(error instanceof NessaRpcError) || error.code !== "cursor_ahead")
+              throw error
+            cursor = undefined
+            return subscribe(undefined)
+          })
+          .then(
+            (opened) => {
+              if (!current()) void opened.close().catch(() => undefined)
+            },
+            (error: unknown) => {
+              if (current()) failed(error)
+            },
+          )
+      }
+      const stop = () => {
+        if (stopped) return
+        stopped = true
+        giveUp?.abort()
+      }
+      open()
+      return stop
     },
     async send(input) {
       try {

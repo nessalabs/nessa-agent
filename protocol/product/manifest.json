@@ -213,12 +213,27 @@
     "conversation.unwatch": {
       "params": "ConversationUnwatchParams",
       "grant": null
+    },
+    "conversation.subscribe": {
+      "params": "ConversationSubscribeParams",
+      "grant": "conversation.write"
+    },
+    "conversation.subscribeList": {
+      "params": "ConversationSubscribeListParams",
+      "grant": "conversation.write"
+    },
+    "conversation.unsubscribe": {
+      "params": "ConversationUnsubscribeParams",
+      "grant": "conversation.write"
     }
   },
   "events": {
     "session.challenge": "SessionChallenge",
     "conversation.changed": "ConversationChanged",
-    "conversation.watchEnded": "ConversationWatchEnded"
+    "conversation.watchEnded": "ConversationWatchEnded",
+    "conversation.view": "ConversationViewed",
+    "conversation.listed": "ConversationListed",
+    "conversation.subscriptionEnded": "ConversationSubscriptionEnded"
   },
   "handshakeMethod": "session.authenticate"
 }

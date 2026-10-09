@@ -16,6 +16,8 @@
  */
 export {
   NessaClient,
+  createSubscriptionGate,
+  type SubscriptionGate,
   type AuthApi,
   type CredentialApi,
   type CredentialGrant,
@@ -26,6 +28,12 @@ export {
   type AgentsApi,
   type RecordReadApi,
   type ChangeWatchApi,
+  type ListSubscriptionHandlers,
+  type Subscription,
+  type SubscriptionApi,
+  type SubscriptionEnd,
+  type ViewFrame,
+  type ViewSubscriptionHandlers,
 } from "./presentation/index.js"
 export type {
   NessaClientConnectOptions,
@@ -125,6 +133,12 @@ export type {
 } from "./generated/product.js"
 export type { DecodedRecord, DecodedRecordPage } from "./protocol/record-read-validate.js"
 export { ChangeWatchEndReason, ChangeWatchErrorCode } from "./generated/product.js"
+export {
+  ConversationSubscriptionEndReason,
+  ConversationSubscriptionErrorCode,
+  subscriptionLimits,
+} from "./generated/product.js"
+export type { ConversationViewCursor } from "./generated/product.js"
 export type {
   ConversationWatchRecordsParams,
   ConversationWatchCatalogueParams,

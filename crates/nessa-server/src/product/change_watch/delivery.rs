@@ -1,6 +1,4 @@
-use super::super::{
-    passive_read::deadlines::RECORD_SEND_TIMEOUT, socket::CHALLENGE_EVENT_SEQUENCE,
-};
+use super::super::{event_sequence::EventSequence, passive_read::deadlines::RECORD_SEND_TIMEOUT};
 use super::owner::ProductWatchPermit;
 use nessa_protocol::product::generated::{
     product_event, ConversationChanged, ConversationWatchEnded, MAX_CONNECTION_CHANGE_WATCHES,
@@ -37,7 +35,6 @@ struct TargetDelivery {
 }
 struct State {
     targets: Vec<TargetDelivery>,
-    sequence: u64,
     closed: bool,
 }
 
@@ -45,6 +42,8 @@ struct State {
 pub(in crate::product) struct WatchDeliveries {
     state: Mutex<State>,
     ready: Notify,
+    // The socket's one event numbering, shared with its subscriptions.
+    sequence: Arc<EventSequence>,
 }
 
 /// The original watch charge and deadline survive movement into a physical send.
@@ -61,12 +60,16 @@ impl WatchDeliveries {
         Self {
             state: Mutex::new(State {
                 targets: Vec::with_capacity(MAX_CONNECTION_CHANGE_WATCHES),
-                // Continue the socket's one event sequence after the challenge.
-                sequence: CHALLENGE_EVENT_SEQUENCE,
                 closed: false,
             }),
             ready: Notify::new(),
+            sequence: Arc::default(),
         }
+    }
+
+    /// The socket's event numbering, for its other event owners to continue.
+    pub fn sequence(&self) -> Arc<EventSequence> {
+        self.sequence.clone()
     }
 
     pub fn reserve(&self, id: String, owner: Arc<ProductWatchPermit>) -> bool {
@@ -216,8 +219,7 @@ impl WatchDeliveries {
                     .as_ref()
                     .is_some_and(|pending| pending.authorized && pending.deadline > Instant::now())
         })?;
-        let sequence = state.sequence.checked_add(1)?;
-        state.sequence = sequence;
+        let sequence = self.sequence.next()?;
         let target = &mut state.targets[position];
         let pending = target.pending.take().expect("selected pending notice");
         let event = match pending.notice {

@@ -1,5 +1,4 @@
-import { pollConversation } from "../adapters/gateway/polling"
-import { useEffect, useEffectEvent, useState } from "react"
+import { useEffect, useState } from "react"
 import {
   type ApprovalMode,
   type ConversationSelection,
@@ -25,8 +24,8 @@ import {
   setSelection,
   controlConversation,
   stopGenerating,
-  refreshConversation,
-  invalidateRead,
+  followConversation,
+  unfollowConversation,
 } from "../adapters/store/slice"
 import { commandErrorCleared } from "../adapters/store/history"
 import { useConversationDispatch, useConversationSelector } from "../adapters/store/hooks"
@@ -42,19 +41,14 @@ export function useConversation() {
   )
   const conversations = tabs.conversations
   const active = activeConversation(tabs)
-  const pollingDelay = useEffectEvent(() =>
-    active.phase === "idle" && !active.remote?.permissions.length ? 2000 : 250,
-  )
-
+  // The tab on screen follows its conversation: the gateway sends its view
+  // when it changes, and nothing is asked on a timer.
   useEffect(() => {
     if (!active.serverReady || !gatewayAvailable) return
-    return pollConversation(
-      () => dispatch(refreshConversation(active.id)),
-      () => {
-        dispatch(invalidateRead(active.id))
-      },
-      pollingDelay,
-    )
+    void dispatch(followConversation(active.id))
+    return () => {
+      void dispatch(unfollowConversation(active.id))
+    }
   }, [dispatch, active.id, active.serverReady, gatewayAvailable])
 
   return {

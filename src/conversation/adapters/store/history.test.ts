@@ -15,7 +15,7 @@ import {
   deleteConversation,
   listConversations,
 } from "./history"
-import { openListed, refreshConversation } from "./slice"
+import { openListed, followConversation } from "./slice"
 
 const kept = "0b8f1c2e-1111-4a4a-8b8b-000000000001"
 const gone = "0b8f1c2e-1111-4a4a-8b8b-000000000002"
@@ -437,7 +437,7 @@ describe("refused as conversation_deleted", () => {
     const tab = store
       .getState()
       .conversation.conversations.find((item) => item.serverConversationId === gone)!
-    await store.dispatch(refreshConversation(tab.id))
+    await store.dispatch(followConversation(tab.id))
     expect(
       store.getState().conversation.conversations.find((item) => item.id === tab.id)
         ?.readError,

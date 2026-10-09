@@ -9,10 +9,11 @@ import { createDependencies } from "../../src/composition/dependencies"
 import { scenarioEffects } from "../../src/conversation/adapters/scenario/effects"
 import {
   closeTab,
-  refreshConversation,
+  followConversation,
   restoreConversations,
 } from "../../src/conversation/adapters/store/slice"
 import { conversationTabSnapshot } from "../../src/conversation/application/saved-tabs"
+import { followByReading } from "../../src/conversation/testing"
 import { applyView } from "../../src/conversation/application/usecases/apply-view"
 import type { ConversationView } from "../../src/conversation/application/view"
 import {
@@ -152,7 +153,7 @@ function HistoryTabConsumer() {
     const serverId = "0b8f1c2e-1111-4a4a-8b8b-000000000001"
     const effects = {
       ...scenarioEffects("echo"),
-      read: async (id: string) =>
+      follow: followByReading(async (id: string) =>
         decodeView(
           {
             ...view(state, false),
@@ -163,13 +164,14 @@ function HistoryTabConsumer() {
           },
           id,
         ),
+      ),
       close: async () => {
         closes += 1
       },
     }
     const tabs = makeStore(createDependencies({ conversation: effects }))
     tabs.dispatch(restoreConversations({ tabs: [{ conversationId: serverId }] }))
-    await tabs.dispatch(refreshConversation("c0")).unwrap()
+    await tabs.dispatch(followConversation("c0")).unwrap()
     setActive({ store: tabs, closeCalls: () => closes })
     setResult({
       name: `${state}:${truncated}`,

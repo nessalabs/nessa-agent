@@ -5,14 +5,16 @@
 //! [`OperationalLimits`], a fixed socket constant, or a bound the protocol
 //! schema publishes. `docs/limits.md` is that catalogue rendered, and the
 //! test beside this module refuses a copy that has drifted.
-use crate::conversation::infrastructure::DISCOVERY_STEPS_PER_READ;
+use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 use nessa_protocol::product::generated::{
+    MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_LIST_SUBSCRIPTIONS,
     MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
-    MAX_RECORD_RESPONSE_BYTES,
+    MAX_RECORD_RESPONSE_BYTES, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
 use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
+use nessa_sdk::infrastructure::session_storage::MAX_RECORD_CHANGE_WATCHES;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -156,6 +158,36 @@ fn catalogue() -> &'static [Limit] {
             meaning: "a watch frame still queued at this deadline is noted and dropped",
         },
         Limit {
+            id: "socket.subscription_delivery_deadline",
+            tier: "fixed",
+            owner: "protocol/product/v1.json x-subscriptionLimits.deliveryTimeoutMs",
+            meaning: "a subscription frame the writer has not taken by this ends that subscription as lagging; its end frame unwritten by this closes the socket",
+        },
+        Limit {
+            id: "socket.conversation_subscriptions",
+            tier: "fixed",
+            owner: "protocol/product/v1.json x-subscriptionLimits.conversationTargets",
+            meaning: "a conversation subscription past this on one socket is refused",
+        },
+        Limit {
+            id: "socket.list_subscriptions",
+            tier: "fixed",
+            owner: "protocol/product/v1.json x-subscriptionLimits.listTargets",
+            meaning: "a list subscription past this on one socket is refused",
+        },
+        Limit {
+            id: "record.change_watches",
+            tier: "fixed",
+            owner: "MAX_RECORD_CHANGE_WATCHES in crates/nessa-sdk/src/infrastructure/session_storage/record_changes.rs",
+            meaning: "the record watches every socket shares, devices' and subscriptions' alike; past this a watch or subscription is refused subscription_capacity. A view subscription holds one and a list subscription one (any commit), so a desktop window following its limit (8 views and the list) holds 9, and about 7 such windows fill it",
+        },
+        Limit {
+            id: "conversation.catalogue_watches",
+            tier: "fixed",
+            owner: "MAX_CATALOGUE_CHANGE_WATCHES in crates/nessa-server/src/conversation/infrastructure/catalogue_changes.rs",
+            meaning: "the catalogue watches every socket shares; a list subscription holds one beside its record watch, as a device's catalogue watch does; past this one is refused subscription_capacity",
+        },
+        Limit {
             id: "record.read_work_budget",
             tier: "configured",
             owner: "config.json limits.readWorkBudgetMs",
@@ -223,6 +255,23 @@ pub(crate) fn effective_json(
     put(
         "socket.watch_delivery_deadline",
         millis(RECORD_SEND_TIMEOUT),
+    );
+    put(
+        "socket.subscription_delivery_deadline",
+        SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
+    );
+    put(
+        "socket.conversation_subscriptions",
+        count(MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS),
+    );
+    put(
+        "socket.list_subscriptions",
+        count(MAX_CONNECTION_LIST_SUBSCRIPTIONS),
+    );
+    put("record.change_watches", count(MAX_RECORD_CHANGE_WATCHES));
+    put(
+        "conversation.catalogue_watches",
+        count(MAX_CATALOGUE_CHANGE_WATCHES),
     );
     put("record.read_work_budget", millis(limits.read_work_budget()));
     put("record.discovery_steps", count(DISCOVERY_STEPS_PER_READ));

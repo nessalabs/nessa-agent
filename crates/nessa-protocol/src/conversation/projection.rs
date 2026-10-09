@@ -83,6 +83,17 @@ fn unfinished_not_live(snapshot: &SessionSnapshot, live_here: &HashSet<String>) 
         .collect()
 }
 
+/// A view's place in the committed history ([`Projection::committed_cursor`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommittedCursor {
+    /// The stored history's incarnation; positions compare only within one.
+    pub incarnation: String,
+    /// The committed position the view was folded through.
+    pub position: u64,
+    /// The history's head as that read observed it.
+    pub observed_head: u64,
+}
+
 pub struct Projection {
     pub view: ConversationView,
     epoch: Uuid,
@@ -1085,6 +1096,20 @@ impl Projection {
 
     pub fn read(&self) -> ConversationView {
         self.read_with_mode_change(None)
+    }
+    /// Where in the committed history the view was folded through: the
+    /// position this projection last accepted, never a read it refused as
+    /// older (`replace_committed`). `None` before any history was accepted.
+    pub fn committed_cursor(&self) -> Option<CommittedCursor> {
+        self.committed_position
+            .as_ref()
+            .map(
+                |(incarnation, position, _, observed_head)| CommittedCursor {
+                    incarnation: incarnation.clone(),
+                    position: *position,
+                    observed_head: *observed_head,
+                },
+            )
     }
     pub fn read_with_mode_change(
         &self,
