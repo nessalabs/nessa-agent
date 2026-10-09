@@ -1,7 +1,17 @@
 //! Immutable chunks stream one semantic checkpoint codec without an aggregate buffer.
 use super::TranscriptError;
+use crate::application::agent_execution::sessions::StorageError;
 use std::io::{self, ErrorKind, Read, Write};
 use std::sync::Arc;
+
+/// Map a checkpoint read failure. Another format version keeps its typed
+/// refusal. Every other read failure is a malformed checkpoint.
+pub(super) fn storage_refusal(error: StorageError) -> TranscriptError {
+    match error {
+        StorageError::AnotherVersion { .. } => TranscriptError::Decision(error),
+        _ => TranscriptError::Checkpoint,
+    }
+}
 
 /// Maximum retained byte allocation for one checkpoint chunk.
 pub const MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES: usize = 1024 * 1024;
@@ -18,6 +28,10 @@ impl TranscriptCheckpoint {
     ///
     /// # Errors
     /// Refuses empty or oversized chunks before retaining their allocations.
+    /// A checkpoint whose `schemaVersion` is not this build's is
+    /// [`TranscriptError::Decision`] carrying
+    /// [`StorageError::AnotherVersion`]. Any other malformed checkpoint is
+    /// [`TranscriptError::Checkpoint`].
     pub fn from_chunks(chunks: Vec<Vec<u8>>) -> Result<Self, TranscriptError> {
         if chunks.is_empty()
             || chunks.iter().any(|chunk| {
@@ -31,7 +45,7 @@ impl TranscriptCheckpoint {
             index: 0,
             offset: 0,
         })
-        .map_err(|_| TranscriptError::Checkpoint)?;
+        .map_err(storage_refusal)?;
         let mut output = ChunkWriter::new();
         for chunk in chunks {
             output

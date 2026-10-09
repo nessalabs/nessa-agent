@@ -58,6 +58,9 @@ fn storage_failure(error: &StorageError) -> Value {
         StorageError::Unresolved => "unresolved",
         StorageError::TooLarge => "tooLarge",
         StorageError::CommittedReadUnavailable => "committedReadUnavailable",
+        StorageError::AnotherVersion { found } => {
+            return json!({"code":"anotherVersion","found":found,"expected":StorageError::SCHEMA_VERSION});
+        }
     };
     json!({"code":code})
 }

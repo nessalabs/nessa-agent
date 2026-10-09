@@ -1,5 +1,6 @@
-//! Version 1 semantic fact bodies using the existing typed snapshot field mappings.
-//! The physical frame and the application fold are separate boundaries.
+//! Semantic fact bodies. Each batch carries `schemaVersion`
+//! ([`StorageError::SCHEMA_VERSION`]). The physical frame and the application
+//! fold are separate boundaries.
 
 use super::{
     cancellation::Cancellation,
@@ -69,6 +70,8 @@ enum WireChange<E = Event> {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WireBatch<C = WireChange> {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u64,
     changes: Vec<C>,
 }
 
@@ -282,6 +285,7 @@ fn decode_wire_change(
 pub(crate) fn encode_batch(changes: &[SessionChange]) -> Result<Vec<u8>, StorageError> {
     SessionSaveUnit::check_changes(changes)?;
     let bytes = serde_json::to_vec(&WireBatch {
+        schema_version: StorageError::SCHEMA_VERSION,
         changes: changes.iter().map(WireChange::from).collect(),
     })
     .map_err(corrupt)?;
@@ -801,7 +805,11 @@ mod tests {
                 "update": {"Text": "x".repeat(crate::application::agent_execution::executions::ExecutionEvent::MAX_MESSAGE_CHUNK_BYTES + 1)}
             }
         });
-        let bytes = serde_json::to_vec(&serde_json::json!({"changes": [body]})).unwrap();
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": StorageError::SCHEMA_VERSION,
+            "changes": [body]
+        }))
+        .unwrap();
         let context = ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
         assert!(matches!(
             decode_one(&bytes, &context),
@@ -836,9 +844,127 @@ mod tests {
             SessionChange::ProviderObservation(next) if next == &event
         ));
         let bare = serde_json::to_vec(&WireChange::from(&changes[0])).unwrap();
-        assert!(matches!(
+        // A body with no batch envelope also has no schemaVersion, so it is
+        // another version rather than a broken current record.
+        assert_eq!(
             decode_batch(&bare, &ProviderContext::Absent),
+            Err(StorageError::AnotherVersion { found: None })
+        );
+    }
+
+    fn opened_change() -> SessionChange {
+        SessionChange::Opened {
+            id: SessionId::new("conversation").unwrap(),
+            provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
+            context: ProviderContext::Absent,
+        }
+    }
+
+    #[test]
+    fn a_semantic_batch_round_trips_and_carries_schema_version() {
+        let change = opened_change();
+        let bytes = encode_one(&change).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(saved["schemaVersion"], StorageError::SCHEMA_VERSION);
+        assert_eq!(
+            decode_one(&bytes, &ProviderContext::Absent).unwrap(),
+            change
+        );
+    }
+
+    #[test]
+    fn an_unmarked_record_is_another_version_and_is_not_read() {
+        let change = opened_change();
+        let bytes = encode_one(&change).unwrap();
+        let mut saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        saved.as_object_mut().unwrap().remove("schemaVersion");
+        // The pre-marker shape also lacks fields this build requires. The
+        // marker is what the refusal names; the missing field is not read.
+        saved["changes"][0]["Opened"]
+            .as_object_mut()
+            .unwrap()
+            .remove("id");
+        let old = serde_json::to_vec(&saved).unwrap();
+        let kept = old.clone();
+        assert_eq!(
+            decode_batch(&old, &ProviderContext::Absent),
+            Err(StorageError::AnotherVersion { found: None })
+        );
+        assert_eq!(old, kept);
+    }
+
+    #[test]
+    fn a_future_record_is_another_version_and_is_not_read() {
+        let bytes = encode_one(&opened_change()).unwrap();
+        let mut saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let found = StorageError::SCHEMA_VERSION + 1;
+        saved["schemaVersion"] = serde_json::json!(found);
+        saved["notInThisShape"] = serde_json::json!(true);
+        let future = serde_json::to_vec(&saved).unwrap();
+        let kept = future.clone();
+        assert_eq!(
+            decode_batch(&future, &ProviderContext::Absent),
+            Err(StorageError::AnotherVersion { found: Some(found) })
+        );
+        assert_eq!(future, kept);
+        // Zero is a different unsigned integer, not this build's version.
+        saved["schemaVersion"] = serde_json::json!(0);
+        assert_eq!(
+            decode_batch(
+                &serde_json::to_vec(&saved).unwrap(),
+                &ProviderContext::Absent
+            ),
+            Err(StorageError::AnotherVersion { found: Some(0) })
+        );
+    }
+
+    #[test]
+    fn a_record_that_is_not_an_object_is_corrupt() {
+        for bytes in [b"[]".as_slice(), b"null", b"\"record\"", b"", b"{"] {
+            assert!(
+                matches!(
+                    decode_batch(bytes, &ProviderContext::Absent),
+                    Err(StorageError::Corrupt(_))
+                ),
+                "{bytes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_current_record_with_a_broken_body_is_still_corrupt() {
+        let bytes = encode_one(&opened_change()).unwrap();
+        let mut saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        saved["changes"] = serde_json::json!("not a list");
+        let broken = serde_json::to_vec(&saved).unwrap();
+        assert!(matches!(
+            decode_batch(&broken, &ProviderContext::Absent),
             Err(StorageError::Corrupt(_))
         ));
+    }
+
+    #[test]
+    fn a_marker_that_is_not_an_unsigned_integer_is_corrupt() {
+        let bytes = encode_one(&opened_change()).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        for marker in [
+            serde_json::json!("1"),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!(null),
+        ] {
+            let mut changed = saved.clone();
+            changed["schemaVersion"] = marker;
+            assert!(
+                matches!(
+                    decode_batch(
+                        &serde_json::to_vec(&changed).unwrap(),
+                        &ProviderContext::Absent
+                    ),
+                    Err(StorageError::Corrupt(_))
+                ),
+                "{changed}"
+            );
+        }
     }
 }

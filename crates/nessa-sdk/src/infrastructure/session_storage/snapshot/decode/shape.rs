@@ -75,6 +75,7 @@ pub(super) enum Shape {
     StorageError,
     StorageChildren,
     StorageDiagnostic,
+    RecordVersion,
     Reorder,
     QueueEntries,
     QueueEntry,
@@ -180,6 +181,8 @@ impl Shape {
             (FailedAcknowledgement, "audit") => Error,
             (FailedAcknowledgement, "storage") => StorageError,
             (StorageError, "Io" | "Corrupt") => StorageDiagnostic,
+            (StorageError, "AnotherVersion") => RecordVersion,
+            (RecordVersion, "found") => Number,
             (StorageError, "ShutdownFailures") => StorageChildren,
             (StorageChildren, "read" | "runtime") => StorageError,
             (Error, "Storage") | (ErrorBody(true), "error") => StorageError,
@@ -273,8 +276,13 @@ impl Shape {
             FailedAcknowledgement => matches!(key, "audit" | "storage"),
             StorageError => matches!(
                 key,
-                "Io" | "Corrupt" | "ChangesRequired" | "Unresolved" | "ShutdownFailures"
+                "Io" | "Corrupt"
+                    | "ChangesRequired"
+                    | "Unresolved"
+                    | "ShutdownFailures"
+                    | "AnotherVersion"
             ),
+            RecordVersion => key == "found",
             StorageChildren => matches!(key, "read" | "runtime"),
             _ => true,
         }

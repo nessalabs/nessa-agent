@@ -46,6 +46,8 @@ pub enum TranscriptError {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SavedFold<S = snapshot::checkpoint::Snapshot> {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u64,
     receiver: String,
     origin: String,
     stream: String,
@@ -500,6 +502,7 @@ impl TranscriptFold {
         max_bytes: Option<usize>,
     ) -> Result<TranscriptCheckpoint, TranscriptError> {
         let saved = SavedFold {
+            schema_version: StorageError::SCHEMA_VERSION,
             receiver: self.scope.receiver().as_str().into(),
             origin: self.scope.origin().as_str().into(),
             stream: self.scope.stream().as_str().into(),
@@ -530,15 +533,17 @@ impl TranscriptFold {
     /// Save checkpoint and applied position in one receiver transaction.
     ///
     /// # Errors
-    /// Returns `Checkpoint` for malformed or inconsistent saved content, or
-    /// `Scope` when its exact identity differs.
+    /// Returns [`TranscriptError::Decision`] carrying
+    /// [`StorageError::AnotherVersion`] when `schemaVersion` is absent or is
+    /// another unsigned integer. Returns `Checkpoint` for malformed or
+    /// inconsistent saved content, or `Scope` when its exact identity differs.
     pub fn restore(
         scope: Scope,
         expected_applied: u64,
         checkpoint: &TranscriptCheckpoint,
     ) -> Result<Self, TranscriptError> {
         snapshot::decode::preflight_checkpoint(checkpoint.reader())
-            .map_err(|_| TranscriptError::Checkpoint)?;
+            .map_err(checkpoint::storage_refusal)?;
         let saved: SavedFold = serde_json::from_reader(checkpoint.reader())
             .map_err(|_| TranscriptError::Checkpoint)?;
         if saved.applied != expected_applied {
@@ -1790,6 +1795,112 @@ mod tests {
                 + 1
         ]]);
         assert!(matches!(oversized, Err(TranscriptError::Checkpoint)));
+    }
+
+    #[test]
+    fn an_unmarked_checkpoint_is_another_version_and_its_bytes_stay() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let mut value: Value = serde_json::from_reader(checkpoint.reader()).unwrap();
+        assert_eq!(value["schemaVersion"], StorageError::SCHEMA_VERSION);
+        value.as_object_mut().unwrap().remove("schemaVersion");
+        let bytes = serde_json::to_vec(&value).unwrap();
+        let kept = bytes.clone();
+        assert_eq!(
+            TranscriptCheckpoint::from_chunks(vec![bytes]),
+            Err(TranscriptError::Decision(StorageError::AnotherVersion {
+                found: None
+            }))
+        );
+        assert_eq!(kept, serde_json::to_vec(&value).unwrap());
+        assert_eq!(fold.checkpoint().unwrap(), checkpoint);
+    }
+
+    #[test]
+    fn a_future_checkpoint_is_another_version_and_a_broken_current_one_is_malformed() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let value: Value = serde_json::from_reader(fold.checkpoint().unwrap().reader()).unwrap();
+        let found = StorageError::SCHEMA_VERSION + 1;
+        let mut future = value.clone();
+        future["schemaVersion"] = serde_json::json!(found);
+        future["later"] = serde_json::json!(true);
+        let future_bytes = serde_json::to_vec(&future).unwrap();
+        let kept = future_bytes.clone();
+        assert_eq!(
+            TranscriptCheckpoint::from_chunks(vec![future_bytes]),
+            Err(TranscriptError::Decision(StorageError::AnotherVersion {
+                found: Some(found)
+            }))
+        );
+        assert_eq!(kept, serde_json::to_vec(&future).unwrap());
+        let mut broken = value;
+        broken["snapshot"] = serde_json::json!("not a snapshot");
+        let malformed =
+            TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&broken).unwrap()]).unwrap();
+        assert!(matches!(
+            TranscriptFold::restore(scope, fold.applied(), &malformed),
+            Err(TranscriptError::Checkpoint)
+        ));
+    }
+
+    #[test]
+    fn applying_another_version_leaves_the_folded_facts_in_place() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let before = (fold.applied(), fold.downloaded(), fold.fact_count());
+        let mut payload = snapshot::encode_semantic_batch(&[opened()]).unwrap();
+        let mut saved: Value = serde_json::from_slice(&payload).unwrap();
+        let found = StorageError::SCHEMA_VERSION + 1;
+        saved["schemaVersion"] = serde_json::json!(found);
+        payload = serde_json::to_vec(&saved).unwrap();
+        let binding = SessionSaveGeneration::new(
+            SessionSaveBackend::Record {
+                stream: fold.scope.stream().clone(),
+                incarnation: *Uuid::parse_str(fold.scope.incarnation().as_str())
+                    .unwrap()
+                    .as_bytes(),
+            },
+            fold.applied(),
+            1,
+        );
+        let identity = SaveIdentity::binding(&binding).unwrap();
+        let unit = Header::unit(identity, 0, EMPTY_CHAIN, &payload);
+        let start = fold.downloaded() + 1;
+        let frames = stream_fact::frame_fact(
+            &FramedFact {
+                key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
+                body: unit.encode(&payload),
+            },
+            start,
+        )
+        .unwrap();
+        let suffix = records(&fold.scope, start, &frames);
+        assert_eq!(
+            fold.apply(&suffix),
+            Err(TranscriptError::Decision(StorageError::AnotherVersion {
+                found: Some(found)
+            }))
+        );
+        assert_eq!(fold.checkpoint().unwrap(), checkpoint);
+        assert_eq!(
+            (fold.applied(), fold.downloaded(), fold.fact_count()),
+            before
+        );
+        let other_scope = scope;
+        let mut other = TranscriptFold::new(other_scope.clone()).unwrap();
+        other
+            .apply(&records(&other_scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        assert_eq!(other.fact_count(), 1);
     }
 
     #[test]

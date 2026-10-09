@@ -58,6 +58,18 @@ pub enum StorageError {
     TooLarge,
     /// This backend cannot supply an independent committed read.
     CommittedReadUnavailable,
+    /// The saved record is a format version this build does not read.
+    ///
+    /// `found` is the record's `schemaVersion`, or `None` when that field is
+    /// absent. Absence is the shape written before the marker existed.
+    /// [`Self::SCHEMA_VERSION`] is the only version this build reads. The
+    /// stored bytes are left unchanged, and other conversations continue. A
+    /// record at this build's version whose body cannot be parsed is
+    /// [`Self::Corrupt`].
+    AnotherVersion {
+        /// The `schemaVersion` integer in the record, if it has one.
+        found: Option<u64>,
+    },
 }
 
 /// Independent typed failures from read draining and record runtime shutdown.
@@ -735,6 +747,14 @@ impl SessionSnapshot {
 }
 
 impl StorageError {
+    /// `schemaVersion` written on every session-record batch and transcript checkpoint.
+    ///
+    /// This build reads only this version. A record with no marker, or with any
+    /// other unsigned integer, is [`Self::AnotherVersion`]. During alpha there
+    /// is no migration: the bytes stay where they are, and that record's
+    /// operations fail.
+    pub const SCHEMA_VERSION: u64 = 1;
+
     /// Aggregate retained diagnostic text budget; structural slots are accounted separately.
     pub(crate) const DIAGNOSTIC_BYTES: usize = 4096;
     fn measure(

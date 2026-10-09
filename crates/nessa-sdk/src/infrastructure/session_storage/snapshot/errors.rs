@@ -101,6 +101,10 @@ pub(super) enum StorageFailure {
     TooLarge,
     CommittedReadUnavailable,
     DiagnosticLimit,
+    AnotherVersion {
+        #[serde(deserialize_with = "Option::deserialize")]
+        found: Option<u64>,
+    },
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -128,6 +132,7 @@ impl TryFrom<StorageFailure> for StorageError {
             StorageFailure::TooLarge => Self::TooLarge,
             StorageFailure::CommittedReadUnavailable => Self::CommittedReadUnavailable,
             StorageFailure::DiagnosticLimit => Self::DiagnosticLimit,
+            StorageFailure::AnotherVersion { found } => Self::AnotherVersion { found },
         })
     }
 }
@@ -153,6 +158,7 @@ impl From<StorageError> for StorageFailure {
             StorageError::TooLarge => Self::TooLarge,
             StorageError::CommittedReadUnavailable => Self::CommittedReadUnavailable,
             StorageError::DiagnosticLimit => Self::DiagnosticLimit,
+            StorageError::AnotherVersion { found } => Self::AnotherVersion { found },
         }
     }
 }
@@ -692,6 +698,20 @@ mod storage_failure_tests {
         .is_err());
         assert!(serde_json::from_value::<StorageFailure>(serde_json::json!({
             "ShutdownFailures": {"read": "r", "runtime": "c", "success": true}
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn another_version_keeps_the_marker_it_found() {
+        for found in [None, Some(2)] {
+            let failure = StorageError::AnotherVersion { found };
+            let encoded = serde_json::to_value(StorageFailure::from(failure.clone())).unwrap();
+            let restored: StorageFailure = serde_json::from_value(encoded).unwrap();
+            assert_eq!(StorageError::try_from(restored).unwrap(), failure);
+        }
+        assert!(serde_json::from_value::<StorageFailure>(serde_json::json!({
+            "AnotherVersion": {}
         }))
         .is_err());
     }
