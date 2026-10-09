@@ -16,6 +16,25 @@ use nessa_protocol::conversation::read_scope::{
 };
 use std::{future::Future, pin::Pin};
 
+/// The passive read being admitted. Each variant is one read, and asks for
+/// that read's published grant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PassiveRead {
+    RecordHead,
+    RecordPage,
+    CatalogueHead,
+    CatalogueManifest,
+    CatalogueResolve,
+}
+
+/// The grant published for one passive read.
+///
+/// Admission does not name the grant. The owner of the mapping answers here;
+/// a missing grant cannot be admitted.
+pub trait PassiveReadGrants: Send + Sync {
+    fn grant(&self, read: PassiveRead) -> Option<&'static str>;
+}
+
 /// A binding authority reads committed state. A missing or unavailable binding
 /// never becomes a caller-chosen receiver identity.
 pub trait ReceiverAuthority: Send + Sync {
@@ -31,6 +50,8 @@ pub struct AdmitPassiveRead<'a> {
     pub gateway: &'a Resource,
     pub receivers: &'a dyn ReceiverAuthority,
     pub conversations: &'a dyn ConversationRepository,
+    /// Published grant for the read actually being admitted.
+    pub grants: &'a dyn PassiveReadGrants,
 }
 
 impl AdmitPassiveRead<'_> {
@@ -39,8 +60,11 @@ impl AdmitPassiveRead<'_> {
         session: &AuthenticatedSession,
         receiver_id: &str,
         access_epoch: u64,
+        read: PassiveRead,
     ) -> Result<CatalogueReadScope, ReadRefusal> {
-        let binding = self.binding(session, receiver_id, access_epoch).await?;
+        let binding = self
+            .binding(session, receiver_id, access_epoch, read)
+            .await?;
         Ok(CatalogueReadScope {
             receiver_id: binding.receiver_id,
             organization_id: binding.organization_id,
@@ -54,13 +78,16 @@ impl AdmitPassiveRead<'_> {
         session: &AuthenticatedSession,
         receiver_id: &str,
         access_epoch: u64,
+        read: PassiveRead,
         source: F,
     ) -> Result<T, ReadRefusal>
     where
         F: FnOnce(CatalogueReadScope) -> Fut,
         Fut: Future<Output = Result<T, E>>,
     {
-        let scope = self.catalogue(session, receiver_id, access_epoch).await?;
+        let scope = self
+            .catalogue(session, receiver_id, access_epoch, read)
+            .await?;
         source(scope).await.map_err(|_| ReadRefusal::Unverifiable)
     }
 
@@ -72,6 +99,7 @@ impl AdmitPassiveRead<'_> {
         conversation_id: &ConversationId,
         receiver_id: &str,
         access_epoch: u64,
+        read: PassiveRead,
         source: F,
     ) -> Result<T, ReadRefusal>
     where
@@ -79,7 +107,7 @@ impl AdmitPassiveRead<'_> {
         Fut: Future<Output = Result<T, E>>,
     {
         let scope = self
-            .execute(session, conversation_id, receiver_id, access_epoch)
+            .execute(session, conversation_id, receiver_id, access_epoch, read)
             .await?;
         source(scope).await.map_err(|_| ReadRefusal::Unverifiable)
     }
@@ -90,8 +118,11 @@ impl AdmitPassiveRead<'_> {
         conversation_id: &ConversationId,
         receiver_id: &str,
         access_epoch: u64,
+        read: PassiveRead,
     ) -> Result<ReceiverReadScope, ReadRefusal> {
-        let binding = self.binding(session, receiver_id, access_epoch).await?;
+        let binding = self
+            .binding(session, receiver_id, access_epoch, read)
+            .await?;
         let conversation = self
             .conversations
             .load(conversation_id)
@@ -118,11 +149,16 @@ impl AdmitPassiveRead<'_> {
         session: &AuthenticatedSession,
         receiver_id: &str,
         access_epoch: u64,
+        read: PassiveRead,
     ) -> Result<ReceiverBinding, ReadRefusal> {
         if receiver_id.is_empty() || receiver_id.len() > 128 || access_epoch == 0 {
             return Err(ReadRefusal::InvalidRequest);
         }
-        let action = Action::new("conversation.read").expect("static action");
+        // Admission asks only for the grant this port returns for the read.
+        // A read with no published grant, or a grant that is not an action,
+        // cannot be admitted.
+        let action_name = self.grants.grant(read).ok_or(ReadRefusal::Unverifiable)?;
+        let action = Action::new(action_name).map_err(|_| ReadRefusal::Unverifiable)?;
         match self
             .authorization
             .execute(session, &action, self.gateway)

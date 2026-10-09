@@ -1,0 +1,4 @@
+/* Where this pane's Try Again sits. The sentence's type is `styles.css`. */
+.workspace-empty [data-slot="empty-state-action"] {
+  margin-top: 0;
+}

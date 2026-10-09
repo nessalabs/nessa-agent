@@ -35,6 +35,7 @@
  * What it does not show: a gateway that answers — that is
  * `gateway-window.mjs`'s, against a real one.
  */
+import { measureAdoptedPill, pressScale } from "./lib/adopted-pill.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { readFileSync } from "node:fs"
@@ -391,7 +392,9 @@ await main(
     defaults: { engine: "chromium,webkit" },
     help: `
 It reads the poller's wait from the gateway source in the page, so it needs
---mode dev (the default); under --mode prod each scenario could not run.`,
+--mode dev (the default); under --mode prod each scenario could not run.
+Signed out, Try Again is the kit's tinted pill: 28px, fully round, the
+window's tint, and a press that scales to 0.97.`,
   },
   async ({ options, rep, url }) => {
     const origin = new URL(url).origin
@@ -421,6 +424,21 @@ It reads the poller's wait from the gateway source in the page, so it needs
             const { quietMs, recoveredMs, unaskedMs, pauseLeadMs } = timing
             const first = await measure(page)
             const failures = check(scenario, first)
+            if (!scenario.calm && first.button) {
+              const pill = await page.evaluate(measureAdoptedPill, [
+                css.workspaceEmptyRetry,
+                "Try Again",
+              ])
+              failures.push(...pill.failures)
+              if (pill.height)
+                failures.push(
+                  ...(await pressScale(
+                    page,
+                    page.locator(css.workspaceEmptyRetry),
+                    "Try Again",
+                  )),
+                )
+            }
             if (scenario.calm) {
               // Restart restarts the app. The poller, under the screen, is
               // what asks again. Cadence below still runs when the scenario

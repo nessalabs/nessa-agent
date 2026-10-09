@@ -1,6 +1,7 @@
+use super::super::passive_read::PUBLISHED_PASSIVE_READ_GRANTS;
 use crate::conversation::application::{
     access_refusal, AdmitPassiveRead, CatalogueChangeWatch, CatalogueWatchError,
-    CatalogueWatchState, ConversationError,
+    CatalogueWatchState, ConversationError, PassiveRead,
 };
 use crate::product::socket::close_reason;
 use crate::product::state::ProductRouteState;
@@ -166,47 +167,58 @@ impl WatchSelector {
         Ok(admitted)
     }
 
-    /// Passive-read admission alone, for a session whose identity and browser
-    /// presence the caller has just checked.
+    /// Selector admission alone, for a session whose identity and browser
+    /// presence the caller has just checked. A paired target is admitted as
+    /// the head it follows. An owner session uses `conversation.write` and
+    /// ownership, and does not require passive read to be composed.
     async fn admit_current(
         &self,
         state: &ProductRouteState,
         session: &AuthenticatedSession,
     ) -> Result<Admitted, WatchRefusal> {
-        let admitted = match self {
+        match self {
             Self::Records {
                 paired: Some(paired),
                 conversation,
             } => {
+                // Watch methods publish no grant of their own. A paired records
+                // watch is admitted as a record head: the same read it follows,
+                // through that read's manifest grant.
                 passive_admission(state)?
-                    .execute(session, conversation, &paired.receiver, paired.epoch)
+                    .execute(
+                        session,
+                        conversation,
+                        &paired.receiver,
+                        paired.epoch,
+                        PassiveRead::RecordHead,
+                    )
                     .await
                     .map_err(WatchRefusal::Read)?;
-                Admitted::Records(conversation.clone())
+                Ok(Admitted::Records(conversation.clone()))
             }
             Self::Catalogue {
                 paired: Some(paired),
             } => {
                 let scope = passive_admission(state)?
-                    .catalogue(session, &paired.receiver, paired.epoch)
+                    .catalogue(
+                        session,
+                        &paired.receiver,
+                        paired.epoch,
+                        PassiveRead::CatalogueHead,
+                    )
                     .await
                     .map_err(WatchRefusal::Read)?;
-                Admitted::Catalogue(CatalogueOwner {
+                Ok(Admitted::Catalogue(CatalogueOwner {
                     organization_id: scope.organization_id,
                     owner_id: scope.owner_id,
-                })
+                }))
             }
             Self::Records {
                 paired: None,
                 conversation,
-            } => {
-                return admit_owned_records(state, session, conversation).await;
-            }
-            Self::Catalogue { paired: None } => {
-                return admit_owned_catalogue(state, session).await;
-            }
-        };
-        Ok(admitted)
+            } => admit_owned_records(state, session, conversation).await,
+            Self::Catalogue { paired: None } => admit_owned_catalogue(state, session).await,
+        }
     }
 
     /// The connection's periodic re-check of its live watches (row A3). The
@@ -307,14 +319,16 @@ fn passive_admission(state: &ProductRouteState) -> Result<AdmitPassiveRead<'_>, 
         gateway: &state.gateway,
         receivers: receivers.as_ref(),
         conversations: conversations.as_ref(),
+        grants: &PUBLISHED_PASSIVE_READ_GRANTS,
     })
 }
 
 /// `conversation.write` for this session, the same grant `conversation.read`,
 /// `conversation.list`, and `conversation.observe` already require. A deny is
 /// forbidden. An access error stays a read refusal so the watch's close
-/// mapping is unchanged. This is not the passive `conversation.read` action
-/// that admits record pages.
+/// mapping is unchanged. A paired watch is admitted separately, as the head
+/// it follows, through that head's manifest grant. This owner path does not
+/// ask for that grant and does not admit record pages.
 async fn authorize_owner(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
