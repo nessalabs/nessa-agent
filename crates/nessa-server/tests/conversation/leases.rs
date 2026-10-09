@@ -1523,6 +1523,50 @@ async fn b_a_reopen_keeps_the_host_the_conversation_was_created_on() {
     assert!(host.opened.load(Ordering::SeqCst) >= 1);
 }
 
+/// A host's confirmed release proves the harness's process tree is gone,
+/// which answers a close that could not confirm its own cleanup, and
+/// nothing else: a close that failed for any other reason (its audit, its
+/// settlement) keeps that failure.
+#[tokio::test]
+async fn b_a_hosts_confirmed_release_answers_only_cleanup_uncertainty() {
+    let settlement = || AgentError::Transport("settlement".into());
+    for (failure, kept) in [
+        (AgentError::CleanupUncertain, None),
+        (AgentError::AuditFailure, Some(AgentError::AuditFailure)),
+        (settlement(), Some(settlement())),
+        (
+            AgentError::AuditAndCleanupFailure,
+            Some(AgentError::AuditFailure),
+        ),
+        (
+            AgentError::OperationAndCleanupFailure {
+                operation_error: Box::new(settlement()),
+                cleanup_error: Box::new(AgentError::CleanupUncertain),
+            },
+            Some(settlement()),
+        ),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+        let host = Arc::new(Host::new());
+        let harness = with_host(root.path(), here, Some(host.clone()));
+        harness.create_on("devbox").await.unwrap();
+        harness.turn("turn-1").await;
+        *harness.provider.close_failure.lock().unwrap() = Some(failure.clone());
+        let closed = harness
+            .service
+            .close(harness.id.clone(), caller("close"))
+            .await;
+        match &kept {
+            None => assert!(closed.is_ok(), "{failure:?}: {closed:?}"),
+            Some(kept) => assert!(
+                matches!(&closed, Err(ConversationError::Agent(error)) if error == kept),
+                "{failure:?}: {closed:?}"
+            ),
+        }
+    }
+}
+
 #[tokio::test]
 async fn b_gate5_a_conversation_naming_no_host_never_reaches_one() {
     let root = tempfile::tempdir().unwrap();

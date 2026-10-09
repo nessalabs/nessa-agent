@@ -555,6 +555,37 @@ pub(crate) fn confirmed_despite(error: &AgentError) -> Option<CloseOutcome> {
     }
 }
 
+/// What is left of a close's `error` once its environment confirmed the
+/// cleanup as `confirmed`: every failure except the doubt about what the
+/// agent still held, or `None` when that doubt was the whole error.
+fn beyond_cleanup(error: AgentError, confirmed: CloseOutcome) -> Option<AgentError> {
+    match error {
+        AgentError::CleanupUncertain => None,
+        AgentError::AuditAndCleanupFailure => Some(AgentError::AuditFailure),
+        AgentError::OperationAndCleanupFailure {
+            operation_error,
+            cleanup_error,
+        } => Some(match beyond_cleanup(*cleanup_error, confirmed) {
+            None => *operation_error,
+            Some(cleanup_error) => AgentError::OperationAndCleanupFailure {
+                operation_error,
+                cleanup_error: Box::new(cleanup_error),
+            },
+        }),
+        AgentError::StorageDuringClose {
+            error,
+            cleanup_result,
+        } => Some(AgentError::StorageDuringClose {
+            error,
+            cleanup_result: Box::new(match *cleanup_result {
+                Ok(outcome) => Ok(outcome),
+                Err(failure) => beyond_cleanup(failure, confirmed).map_or(Ok(confirmed), Err),
+            }),
+        }),
+        error => Some(error),
+    }
+}
+
 /// The lease a live conversation's agent runs under.
 pub(crate) struct LiveLease {
     lease: LeaseId,
@@ -670,15 +701,19 @@ impl LiveLease {
             Some(cleanup) => self.cleaned(manager, cleanup).await,
             None => self.interrupt(manager).await,
         }
-        // The environment confirmed its process tree gone: nothing is held,
-        // whatever the close reported. A close that confirmed and failed only
-        // to save keeps its own answer below.
+        // The environment confirmed its process tree gone: that answers the
+        // close's doubt about what it still holds, and nothing else. A failed
+        // audit, a failed save or any other failure of the close is its own
+        // fact and stays in the answer.
         let result = match (result, evidence, release) {
             (Err(error), Some(LeaseCleanup::Confirmed { forced }), LeaseRelease::Released(_))
                 if confirmed_despite(&error).is_none() =>
             {
                 tracing::warn!(lease = self.lease.as_str(), %error, "the agent's close failed; its environment confirmed the lease released");
-                Ok(CloseOutcome { forced })
+                match beyond_cleanup(error, CloseOutcome { forced }) {
+                    Some(error) => Err(error),
+                    None => Ok(CloseOutcome { forced }),
+                }
             }
             (result, _, _) => result,
         };
