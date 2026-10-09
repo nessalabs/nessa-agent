@@ -2583,6 +2583,20 @@ async fn a_repeated_share_or_unshare_changes_nothing() {
     assert_eq!(journaled, 1);
 }
 
+/// One `read_grant_changes` row, in column order.
+type JournalRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i64,
+);
+
 /// Row G10.
 #[tokio::test]
 async fn every_grant_change_is_journaled_with_its_initiator() {
@@ -2600,18 +2614,7 @@ async fn every_grant_change_is_journaled_with_its_initiator() {
              FROM read_grant_changes ORDER BY sequence",
         )
         .unwrap();
-    let rows: Vec<(
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        i64,
-        i64,
-    )> = statement
+    let rows: Vec<JournalRow> = statement
         .query_map([], |row| {
             Ok((
                 row.get(0)?,
