@@ -149,23 +149,27 @@ async fn restart_restores_pending_suffix_once() {
 }
 
 #[test]
-fn invalid_semantic_page_has_no_effects() {
+fn invalid_semantic_page_is_a_placeholder_and_stores_no_bytes() {
     let root = tempfile::tempdir().unwrap();
     let mut cache = cache(&cache_path(root.path(), "cache.sqlite3"));
     cache.observe_head(&scope(), 0).unwrap();
-    let before = cache.cached_progress(&scope()).unwrap();
+    let before = cache.cached_progress(&scope()).unwrap().unwrap();
     let invalid = Record {
         position: 1,
         id: id("invalid"),
         scope: scope(),
         payload: vec![255],
     };
-    assert_eq!(
-        cache.apply(plan(&scope(), 0, vec![invalid])),
-        Err(StoreError::Failed)
-    );
-    assert_eq!(cache.take_refusal(), Some(CacheError::Corrupt));
-    assert_eq!(cache.cached_progress(&scope()).unwrap(), before);
+    cache.apply(plan(&scope(), 0, vec![invalid])).unwrap();
+    assert_eq!(cache.take_refusal(), None);
+    let saved = cache.cached_progress(&scope()).unwrap().unwrap();
+    assert_eq!(saved.downloaded, 1);
+    assert_eq!(saved.applied, before.applied);
+    assert_eq!(saved.facts, before.facts);
+    assert_eq!(saved.generation, before.generation + 1);
+    let parts = cache.transcript(&scope()).unwrap().unreadable();
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0].position(), 1);
     let count: i64 = cache
         .connection
         .query_row("SELECT count(*) FROM transcript_records", [], |row| {
