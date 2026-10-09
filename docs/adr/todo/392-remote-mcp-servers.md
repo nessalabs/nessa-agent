@@ -864,6 +864,7 @@ replacement refresh token.
 
 | Refresh reply / ordering | Required result | Regression in `mcp_authorization::tests` |
 | --- | --- | --- |
+| Restored or held authorization and retained secret name different generations, before expiry/rejection refresh dispatch (#711) | Refuse before token POST or secret replacement and preserve retained generations | `refresh_refuses_mismatched_secret_generation_before_dispatch` |
 | Expiry refresh succeeds without `refresh_token` | Retain the dispatched token through another expiry and owner restoration | `a_refresh_without_a_new_refresh_token_preserves_the_old_one` |
 | Expiry refresh supplies a new `refresh_token` | Persist the replacement and use it at the next expiry after restoration | `a_refresh_with_a_new_refresh_token_uses_the_rotated_one` |
 | Rejected bearer refresh succeeds without `refresh_token` | Retain the dispatched token for the next expiry | `a_rejected_bearer_refresh_without_a_new_refresh_token_preserves_the_old_one` |

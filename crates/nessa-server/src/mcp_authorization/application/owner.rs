@@ -895,6 +895,7 @@ impl AuthorizationOwner {
             .await
             .ok()
             .flatten()
+            .filter(|secret| Some(secret.generation) == reply.refresh)
             .and_then(|secret| secret.refresh_token);
         let Some(endpoint) = endpoint.filter(|url| discovery::https_url(url)) else {
             self.finish_refresh(&slot, &flight, Command::RefreshNotDispatched, &reply)
