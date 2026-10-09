@@ -12,13 +12,13 @@ pub use ports::GatewayLifecycleRecovery;
 pub use ports::GatewayStopProofToken;
 pub use ports::{
     ClaudeConfigurationChangeError, ClaudeDirectoryReplacement, ClaudeDirectorySettings,
-    GatewayError, GatewayHost, GatewayPhysicalResult, GatewayReconciliationAttempt,
-    GatewayReconciliationAudit, GatewayReconciliationEffect, GatewayReconciliationEffectTiming,
-    GatewayReconciliationIds, GatewayReconciliationIntent, GatewayReconciliationIntentDelivery,
-    GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
-    GatewayReconciliationOutcomeError, GatewayReconciliationProgress, GatewayReconciliationRequest,
-    GatewayStartup, GatewayStartupEvents, GatewayStartupPhase, GatewayStopRequest,
-    GatewayStopSession, LoginShellError, LoginShellPath, MonotonicClock, ReconciledGateway,
-    StartupStep, SystemMonotonicClock,
+    ClaudeSettingsPublishError, GatewayError, GatewayHost, GatewayPhysicalResult,
+    GatewayReconciliationAttempt, GatewayReconciliationAudit, GatewayReconciliationEffect,
+    GatewayReconciliationEffectTiming, GatewayReconciliationIds, GatewayReconciliationIntent,
+    GatewayReconciliationIntentDelivery, GatewayReconciliationJournalSession,
+    GatewayReconciliationOutcome, GatewayReconciliationOutcomeError, GatewayReconciliationProgress,
+    GatewayReconciliationRequest, GatewayStartup, GatewayStartupEvents, GatewayStartupPhase,
+    GatewayStopRequest, GatewayStopSession, LoginShellError, LoginShellPath, MonotonicClock,
+    ReconciledGateway, StartupStep, SystemMonotonicClock,
 };
 pub use service::{Gateway, GatewayRuntimeDependencies};

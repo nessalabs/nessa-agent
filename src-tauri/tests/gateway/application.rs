@@ -4939,7 +4939,10 @@ fn invalid_history_cannot_hide_an_ineligible_claimed_identity() {
 #[derive(Default)]
 struct DirectorySettings(Mutex<Option<PathBuf>>);
 impl ClaudeDirectorySettings for DirectorySettings {
-    fn publish(&self, directory: Option<PathBuf>) -> Result<Option<PathBuf>, String> {
+    fn publish(
+        &self,
+        directory: Option<PathBuf>,
+    ) -> Result<Option<PathBuf>, ClaudeSettingsPublishError> {
         Ok(std::mem::replace(&mut *self.0.lock().unwrap(), directory))
     }
     fn restore(&self, expected: &Option<PathBuf>, previous: Option<PathBuf>) -> Result<(), String> {
@@ -4983,7 +4986,10 @@ fn dropping_a_directory_change_restores_durable_settings_before_releasing_owners
 fn a_failed_directory_change_preserves_rollback_failure_beside_the_native_failure() {
     struct RejectRollback;
     impl ClaudeDirectorySettings for RejectRollback {
-        fn publish(&self, _: Option<PathBuf>) -> Result<Option<PathBuf>, String> {
+        fn publish(
+            &self,
+            _: Option<PathBuf>,
+        ) -> Result<Option<PathBuf>, ClaudeSettingsPublishError> {
             Ok(None)
         }
         fn restore(&self, _: &Option<PathBuf>, _: Option<PathBuf>) -> Result<(), String> {
@@ -5033,7 +5039,10 @@ fn an_unchanged_directory_save_holds_publication_ownership_until_it_is_durable()
         release: Mutex<mpsc::Receiver<()>>,
     }
     impl ClaudeDirectorySettings for BlockingSettings {
-        fn publish(&self, directory: Option<PathBuf>) -> Result<Option<PathBuf>, String> {
+        fn publish(
+            &self,
+            directory: Option<PathBuf>,
+        ) -> Result<Option<PathBuf>, ClaudeSettingsPublishError> {
             if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
                 self.entered.send(()).unwrap();
                 self.release.lock().unwrap().recv().unwrap();

@@ -1,7 +1,7 @@
 //! Tauri entry points and event adapter for managed gateway startup.
 
 use super::super::application::{
-    ClaudeConfigurationChangeError, ClaudeDirectorySettings, Gateway,
+    ClaudeConfigurationChangeError, ClaudeDirectorySettings, ClaudeSettingsPublishError, Gateway,
     GatewayStartup as ApplicationStartup, GatewayStartupEvents, GatewayStartupPhase, StartupStep,
 };
 use crate::gateway::domain::value_objects::claude_config_directory_is_durable;
@@ -209,24 +209,42 @@ pub(crate) async fn apply_claude_configuration_directory(
             .await
             .map_err(configuration_change_error)?;
     } else {
-        saved
-            .publish(directory)
-            .map_err(|message| ClaudeConfigurationError::Settings { message })?;
+        saved.publish(directory).map_err(|error| {
+            let message = match error {
+                ClaudeSettingsPublishError::Unavailable(message)
+                | ClaudeSettingsPublishError::NotConfirmed { message, .. } => message,
+            };
+            ClaudeConfigurationError::Settings { message }
+        })?;
     }
     Ok(())
 }
 
 struct ClaudeSettings<'a>(&'a dyn SettingsStore);
 impl ClaudeDirectorySettings for ClaudeSettings<'_> {
-    fn publish(&self, directory: Option<PathBuf>) -> Result<Option<PathBuf>, String> {
+    fn publish(
+        &self,
+        directory: Option<PathBuf>,
+    ) -> Result<Option<PathBuf>, ClaudeSettingsPublishError> {
         let mut previous = None;
-        self.0
-            .update(&mut |chosen| {
-                previous = chosen.service.claude.configuration_directory.clone();
-                chosen.service.claude.configuration_directory = directory.clone();
-            })
-            .map_err(|error| error.to_string())?;
-        Ok(previous)
+        let result = self.0.update(&mut |chosen| {
+            previous = Some(chosen.service.claude.configuration_directory.clone());
+            chosen.service.claude.configuration_directory = directory.clone();
+        });
+        match result {
+            Ok(_) => previous.ok_or_else(|| {
+                ClaudeSettingsPublishError::Unavailable(
+                    "The settings adapter did not apply the directory publication".into(),
+                )
+            }),
+            Err(error) => match previous {
+                Some(previous) => Err(ClaudeSettingsPublishError::NotConfirmed {
+                    message: error.to_string(),
+                    previous,
+                }),
+                None => Err(ClaudeSettingsPublishError::Unavailable(error.to_string())),
+            },
+        }
     }
     fn restore(&self, expected: &Option<PathBuf>, previous: Option<PathBuf>) -> Result<(), String> {
         self.0
@@ -386,10 +404,14 @@ mod configuration_directory {
         },
     };
     use crate::settings::testing::in_memory;
-    use crate::settings::SettingsStore;
+    use crate::settings::{Service, Settings, SettingsStore};
     use std::{
+        io,
         path::{Path, PathBuf},
-        sync::{Arc, Mutex},
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
+        },
     };
 
     struct DirectoryHost {
@@ -647,5 +669,128 @@ mod configuration_directory {
             Some(old.clone())
         );
         assert_eq!(*host.directory.lock().unwrap(), Some(old));
+    }
+    struct UnconfirmedSettings<'a> {
+        inner: &'a dyn SettingsStore,
+        host: Arc<DirectoryHost>,
+        prior: Option<PathBuf>,
+        failures: AtomicUsize,
+        skip_callback: bool,
+    }
+    impl SettingsStore for UnconfirmedSettings<'_> {
+        fn load(&self) -> Settings {
+            self.inner.load()
+        }
+        fn load_service(&self) -> io::Result<Service> {
+            self.inner.load_service()
+        }
+        fn update(&self, change: &mut dyn FnMut(&mut Settings)) -> io::Result<Settings> {
+            // Another reconciliation must still read the old live configuration while the save is unconfirmed.
+            assert_eq!(*self.host.directory.lock().unwrap(), self.prior);
+            if self.skip_callback {
+                return Ok(self.inner.load());
+            }
+            let updated = self.inner.update(change)?;
+            if self
+                .failures
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                    count.checked_sub(1)
+                })
+                .is_ok()
+            {
+                return Err(io::Error::other("settings publication not confirmed"));
+            }
+            Ok(updated)
+        }
+    }
+
+    #[test]
+    fn an_unconfirmed_settings_publication_restores_its_known_prior_before_native_dispatch() {
+        for failures in [1, 2] {
+            let saved = in_memory();
+            let prior = Some(PathBuf::from(absolute_claude_directory(".claude-prior")));
+            saved
+                .store
+                .update(&mut |settings| {
+                    settings.service.claude.configuration_directory = prior.clone()
+                })
+                .unwrap();
+            let host = Arc::new(DirectoryHost {
+                directory: Mutex::new(prior.clone()),
+                causes: Mutex::new(Vec::new()),
+                fail: false,
+            });
+            let gateway = gateway(host.clone());
+            let uncertain = UnconfirmedSettings {
+                inner: &saved.store,
+                host: host.clone(),
+                prior: prior.clone(),
+                failures: AtomicUsize::new(failures),
+                skip_callback: false,
+            };
+            let result = tauri::async_runtime::block_on(apply_claude_configuration_directory(
+                &uncertain,
+                Some(&gateway),
+                BundledSurface::Setup,
+                Some(absolute_claude_directory(".claude-requested")),
+            ));
+            if failures == 1 {
+                assert!(matches!(
+                    result,
+                    Err(ClaudeConfigurationError::Settings { .. })
+                ));
+            } else {
+                assert!(
+                    matches!(result, Err(ClaudeConfigurationError::Rollback { failure, settings: Some(_), gateway: None }) if matches!(*failure, ClaudeConfigurationError::Settings { .. }))
+                );
+            }
+            assert_eq!(
+                saved
+                    .store
+                    .load_service()
+                    .unwrap()
+                    .claude
+                    .configuration_directory,
+                prior
+            );
+            assert_eq!(*host.directory.lock().unwrap(), prior);
+            assert!(host.causes.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn settings_success_without_applying_the_owned_change_does_not_dispatch_native_work() {
+        let saved = in_memory();
+        let host = Arc::new(DirectoryHost {
+            directory: Mutex::new(None),
+            causes: Mutex::new(Vec::new()),
+            fail: false,
+        });
+        let gateway = gateway(host.clone());
+        let unsupported = UnconfirmedSettings {
+            inner: &saved.store,
+            host: host.clone(),
+            prior: None,
+            failures: AtomicUsize::new(0),
+            skip_callback: true,
+        };
+        assert!(matches!(
+            tauri::async_runtime::block_on(apply_claude_configuration_directory(
+                &unsupported,
+                Some(&gateway),
+                BundledSurface::Setup,
+                Some(absolute_claude_directory(".claude-requested"))
+            )),
+            Err(ClaudeConfigurationError::Settings { .. })
+        ));
+        assert!(host.causes.lock().unwrap().is_empty());
+        assert_eq!(*host.directory.lock().unwrap(), None);
+        assert!(saved
+            .store
+            .load_service()
+            .unwrap()
+            .claude
+            .configuration_directory
+            .is_none());
     }
 }

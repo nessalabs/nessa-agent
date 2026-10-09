@@ -8,15 +8,17 @@ Generation reuse requires equality with the complete desired command, so a
 changed PATH, Claude directory, runtime or other command input selects a new
 incarnation before effects are admitted.
 
-| Retained state / event | Decision and effect order | Regression |
-| --- | --- | --- |
-| Exact running unit, unchanged command | Reuse generation; readiness corroboration; no stop/reload/start | unchanged definition reuse |
-| Exact running unit, new PATH or Claude directory | Fresh generation; admit before/after targets; retire exact prior; stop; publish; reload; start; confirm ready | command replacement selection and retained-definition validation |
-| Exact inactive/unloaded definition, changed directory | Validate actual old directory; publish desired definition; reload; start | inactive prior directory validation |
-| Quoted environment value contains a Claude-looking key / repeated Claude assignments | Parse complete arguments; select one unique assignment or refuse duplicates | unique environment-argument recovery |
-| Foreign bytes or directory | Refuse before replacement; retain bytes/process | canonical owned-render rejection |
-| Failure before replacing old definition | Retain old definition; durable desired settings remain retry intent | old definition remains valid against desired settings |
-| Failure after publication or desktop restart | Recovery inspects canonical on-disk definition and journal before new effects; no replay of an uncertain command | existing recovered definition/effect tests |
+| Retained state / event                                                               | Decision and effect order                                                                                                            | Regression                                                       |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| Exact running unit, unchanged command                                                | Reuse generation; readiness corroboration; no stop/reload/start                                                                      | unchanged definition reuse                                       |
+| Exact running unit, new PATH or Claude directory                                     | Fresh generation; admit before/after targets; retire exact prior; stop; publish; reload; start; confirm ready                        | command replacement selection and retained-definition validation |
+| Exact inactive/unloaded definition, changed directory                                | Validate actual old directory; publish desired definition; reload; start                                                             | inactive prior directory validation                              |
+| Quoted environment value contains a Claude-looking key / repeated Claude assignments | Parse complete arguments; select one unique assignment or refuse duplicates                                                          | unique environment-argument recovery                             |
+| Foreign bytes or directory                                                           | Refuse before replacement; retain bytes/process                                                                                      | canonical owned-render rejection                                 |
+| Settings publication pending / another reconciliation reads live configuration       | Hold the directory-publication claim without changing live configuration; publish live only after durable acknowledgement            | unconfirmed settings publication rollback                        |
+| Settings save returns failure after its update callback obtained the prior value     | Retain prior publication authority, restore the desired value if it landed, refuse native dispatch and preserve any rollback failure | unconfirmed settings publication rollback                        |
+| Failure before replacing old definition                                              | Retain old definition; durable desired settings remain retry intent                                                                  | old definition remains valid against desired settings            |
+| Failure after publication or desktop restart                                         | Recovery inspects canonical on-disk definition and journal before new effects; no replay of an uncertain command                     | existing recovered definition/effect tests                       |
 
 Durable settings publication shares the existing `ClaudePublication` owner with
 live configuration and reconciliation. The command injects its settings adapter.
