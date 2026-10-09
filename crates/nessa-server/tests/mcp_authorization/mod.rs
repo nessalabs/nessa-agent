@@ -546,6 +546,135 @@ async fn a_rejected_bearer_refreshes_the_handed_generation() {
     assert_eq!(refreshed.access_token, "replacement");
 }
 
+async fn assert_refresh_token_survives_two_expiries(
+    replacement_refresh: Option<&str>,
+    expected_refresh: &str,
+    rejected: bool,
+) {
+    let memory = Arc::new(MemoryAuthorization::new());
+    push_discovery(&memory).await;
+    let owner = Arc::new(owner(memory.clone()));
+    let answer = owner
+        .authorize(server(), "docs", "https://mcp.example/mcp")
+        .await;
+    let AuthorizeAnswer::PendingConsent { consent_url, .. } = answer else {
+        panic!("expected consent, got {answer:?}");
+    };
+    let state = consent_url
+        .split("state=")
+        .nth(1)
+        .and_then(|rest| rest.split('&').next())
+        .unwrap()
+        .to_owned();
+    memory
+        .push_route("https://as.example/token", Ok(token_body("initial")))
+        .await;
+    assert!(matches!(
+        owner
+            .complete_callback(
+                server(),
+                CallbackQuery {
+                    state,
+                    code: Some("code".into()),
+                    denied: false,
+                },
+            )
+            .await,
+        AuthorizeAnswer::Ready { generation: 1 }
+    ));
+    memory
+        .set_resource(server(), "https://mcp.example/mcp")
+        .await;
+    let initial = owner.bearer(server()).await.unwrap().unwrap();
+    assert_eq!(initial.generation, 1);
+
+    let mut response = serde_json::json!({
+        "access_token": "replacement",
+        "token_type": "Bearer",
+        "expires_in": 60,
+    });
+    if let Some(refresh) = replacement_refresh {
+        response["refresh_token"] = serde_json::json!(refresh);
+    }
+    memory
+        .push_route(
+            "https://as.example/token",
+            Ok(OAuthResponse {
+                status: 200,
+                body: response.to_string(),
+                www_authenticate: None,
+            }),
+        )
+        .await;
+    // The injected clock starts at 1,000 ms. Each token lives for 60 seconds.
+    let first = if rejected {
+        owner.rejected(server(), "Bearer").await
+    } else {
+        memory.advance_to(61_000).await;
+        owner.bearer(server()).await
+    }
+    .unwrap()
+    .unwrap();
+    assert_eq!(first.generation, 2);
+    assert_eq!(first.access_token, "replacement");
+    let stored = memory.load_secret(server()).await.unwrap().unwrap();
+
+    memory
+        .push_route(
+            "https://as.example/token",
+            Ok(OAuthResponse {
+                status: 200,
+                body: serde_json::json!({
+                    "access_token": "after-second-expiry",
+                    "token_type": "Bearer",
+                    "refresh_token": expected_refresh,
+                    "expires_in": 60,
+                })
+                .to_string(),
+                www_authenticate: None,
+            }),
+        )
+        .await;
+    // A new owner loads the acknowledged credential and authorization record.
+    let restored = Arc::new(self::owner(memory.clone()));
+    memory.advance_to(121_000).await;
+    let second = restored.bearer(server()).await;
+    let posts = memory.posts().await;
+    let refresh_posts: Vec<_> = posts
+        .iter()
+        .filter(|(url, _, body)| {
+            url == "https://as.example/token" && body.contains("grant_type=refresh_token")
+        })
+        .collect();
+    assert_eq!(stored.generation, 2);
+    assert_eq!(stored.refresh_token.as_deref(), Some(expected_refresh));
+    let second = second.unwrap().unwrap();
+    assert_eq!(second.generation, 3);
+    assert_eq!(second.access_token, "after-second-expiry");
+    assert_eq!(refresh_posts.len(), 2);
+    assert!(!refresh_posts[0].1);
+    assert!(refresh_posts[0].2.contains("refresh_token=refresh&"));
+    assert!(!refresh_posts[1].1);
+    assert!(refresh_posts[1]
+        .2
+        .contains(&format!("refresh_token={expected_refresh}&")));
+}
+
+#[tokio::test]
+async fn a_refresh_without_a_new_refresh_token_preserves_the_old_one() {
+    assert_refresh_token_survives_two_expiries(None, "refresh", false).await;
+}
+
+#[tokio::test]
+async fn a_refresh_with_a_new_refresh_token_uses_the_rotated_one() {
+    assert_refresh_token_survives_two_expiries(Some("rotated"), "rotated", false).await;
+}
+
+#[tokio::test]
+async fn a_rejected_bearer_refresh_without_a_new_refresh_token_preserves_the_old_one() {
+    assert_refresh_token_survives_two_expiries(None, "refresh", true).await;
+}
+
 /// Holds `load` until two callers have entered it, then holds the later
 /// `load_secret` calls until the test releases them. The first two secret
 /// loads are the presence checks inside `existing`.
