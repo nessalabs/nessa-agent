@@ -1,4 +1,5 @@
 //! Immutable chunks stream one semantic checkpoint codec without an aggregate buffer.
+use super::super::snapshot::decode::SchemaMarker;
 use super::TranscriptError;
 use crate::application::agent_execution::sessions::StorageError;
 use std::io::{self, ErrorKind, Read, Write};
@@ -17,21 +18,29 @@ pub(super) fn storage_refusal(error: StorageError) -> TranscriptError {
 pub const MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES: usize = 1024 * 1024;
 
 /// Ordered immutable chunks of the validated semantic continuation codec.
+///
+/// `marker` is decided when the chunks are encoded or accepted. Restore uses
+/// it and does not walk the bytes a second time.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TranscriptCheckpoint(Box<[Arc<[u8]>]>);
+pub struct TranscriptCheckpoint {
+    chunks: Box<[Arc<[u8]>]>,
+    marker: SchemaMarker,
+}
 impl TranscriptCheckpoint {
     /// Persist every chunk in this order, atomically with the receiver's applied position.
     pub fn chunks(&self) -> impl ExactSizeIterator<Item = &[u8]> {
-        self.0.iter().map(AsRef::as_ref)
+        self.chunks.iter().map(AsRef::as_ref)
     }
     /// Accept untrusted ordered chunks. Restore validates JSON, exact scope and full state.
     ///
     /// # Errors
     /// Refuses empty or oversized chunks before retaining their allocations.
-    /// A checkpoint whose `schemaVersion` is not this build's is
+    /// A checkpoint whose `schemaVersion` is another unsigned integer is
     /// [`TranscriptError::Decision`] carrying
-    /// [`StorageError::AnotherVersion`]. Any other malformed checkpoint is
-    /// [`TranscriptError::Checkpoint`].
+    /// [`StorageError::AnotherVersion`]. A marker that is not an unsigned
+    /// integer is [`TranscriptError::Checkpoint`]. An absent marker is
+    /// accepted here; restore reads it as this build's shape, or refuses it
+    /// as another version when that read fails.
     pub fn from_chunks(chunks: Vec<Vec<u8>>) -> Result<Self, TranscriptError> {
         if chunks.is_empty()
             || chunks.iter().any(|chunk| {
@@ -40,7 +49,7 @@ impl TranscriptCheckpoint {
         {
             return Err(TranscriptError::Checkpoint);
         }
-        super::snapshot::decode::preflight_checkpoint(ChunkReader {
+        let marker = super::snapshot::decode::preflight_checkpoint(ChunkReader {
             chunks: &chunks,
             index: 0,
             offset: 0,
@@ -52,11 +61,23 @@ impl TranscriptCheckpoint {
                 .write_all(&chunk)
                 .map_err(|_| TranscriptError::Checkpoint)?;
         }
-        Ok(output.finish())
+        let mut checkpoint = output.finish();
+        checkpoint.marker = marker;
+        Ok(checkpoint)
+    }
+    /// A body that did not decode. An unmarked checkpoint is the earlier
+    /// shape. A current-version body is malformed.
+    pub(super) fn unreadable_body(&self) -> TranscriptError {
+        match self.marker {
+            SchemaMarker::Unmarked => {
+                TranscriptError::Decision(StorageError::AnotherVersion { found: None })
+            }
+            SchemaMarker::Current => TranscriptError::Checkpoint,
+        }
     }
     pub(super) fn reader(&self) -> ChunkReader<'_> {
         ChunkReader {
-            chunks: &self.0,
+            chunks: &self.chunks,
             index: 0,
             offset: 0,
         }
@@ -93,7 +114,10 @@ impl ChunkWriter {
         if !self.current.is_empty() {
             self.chunks.push(Arc::from(self.current.into_boxed_slice()));
         }
-        TranscriptCheckpoint(self.chunks.into_boxed_slice())
+        TranscriptCheckpoint {
+            chunks: self.chunks.into_boxed_slice(),
+            marker: SchemaMarker::Current,
+        }
     }
 }
 impl Write for ChunkWriter {

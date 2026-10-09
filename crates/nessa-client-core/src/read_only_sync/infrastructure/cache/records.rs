@@ -13,7 +13,7 @@ use nessa_local_database::{
 };
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::projection::retained_view;
-use nessa_sdk::application::agent_execution::sessions::CommittedStatus;
+use nessa_sdk::application::agent_execution::sessions::{CommittedStatus, StorageError};
 use nessa_sdk::infrastructure::session_storage::{
     TranscriptError, TranscriptFold, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
 };
@@ -312,7 +312,7 @@ impl ReadOnlyCache {
                 let checkpoint = rows::checkpoint(&transaction, scope, self.policy)?;
                 let mut fold =
                     TranscriptFold::restore(scope.clone(), progress.applied, &checkpoint)
-                        .map_err(transcript_error)?;
+                        .map_err(checkpoint_cache_error)?;
                 raw_records::restore_suffix(&transaction, progress, &mut fold, self.policy)?;
                 fold
             }
@@ -467,6 +467,15 @@ pub(super) fn transcript_error(error: TranscriptError) -> CacheError {
         TranscriptError::Position | TranscriptError::Frame | TranscriptError::Checkpoint => {
             CacheError::Corrupt
         }
+    }
+}
+
+/// A cached checkpoint is disposable. Another version is dropped the same way
+/// a corrupt checkpoint is: the loaded fold is cleared and the bytes stay.
+pub(super) fn checkpoint_cache_error(error: TranscriptError) -> CacheError {
+    match error {
+        TranscriptError::Decision(StorageError::AnotherVersion { .. }) => CacheError::Corrupt,
+        other => transcript_error(other),
     }
 }
 

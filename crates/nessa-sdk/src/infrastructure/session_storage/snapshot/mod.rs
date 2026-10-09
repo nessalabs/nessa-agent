@@ -6,9 +6,10 @@
 //! ```
 //! The arrows mean allocation admission, the format version, decoding and
 //! explicit inward mapping, never provider replay. A record whose `schemaVersion`
-//! is not [`crate::application::agent_execution::sessions::StorageError::SCHEMA_VERSION`]
-//! is refused before it is mapped into this build's types. Preflight still walks
-//! the bytes under its existing bounds. `decode` bounds token scratch, decoded
+//! is another unsigned integer is refused before it is mapped into this build's
+//! types. A record with no marker is mapped with today's types; if that mapping
+//! fails, it is another version. Preflight still walks the bytes under its
+//! existing bounds. `decode` bounds token scratch, decoded
 //! fields, collection structure and error trees before an owned fact exists.
 //! Its 160 MiB allowance applies to each semantic batch. No previous history is
 //! re-encoded during a save.

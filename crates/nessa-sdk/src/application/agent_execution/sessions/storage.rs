@@ -60,12 +60,13 @@ pub enum StorageError {
     CommittedReadUnavailable,
     /// The saved record is a format version this build does not read.
     ///
-    /// `found` is the record's `schemaVersion`, or `None` when that field is
-    /// absent. Absence is the shape written before the marker existed.
-    /// [`Self::SCHEMA_VERSION`] is the only version this build reads. The
-    /// stored bytes are left unchanged, and other conversations continue. A
-    /// record at this build's version whose body cannot be parsed is
-    /// [`Self::Corrupt`].
+    /// `found` is the record's `schemaVersion` when that integer is not
+    /// [`Self::SCHEMA_VERSION`]. `None` means the field is absent and the
+    /// body is not the shape this build writes today: an absent field on
+    /// today's shape is version 1 and is read. The stored bytes are left
+    /// unchanged, and other conversations continue. A record at this build's
+    /// version whose body cannot be parsed is [`Self::Corrupt`]. A marker
+    /// that is not an unsigned integer is [`Self::Corrupt`].
     AnotherVersion {
         /// The `schemaVersion` integer in the record, if it has one.
         found: Option<u64>,
@@ -749,10 +750,12 @@ impl SessionSnapshot {
 impl StorageError {
     /// `schemaVersion` written on every session-record batch and transcript checkpoint.
     ///
-    /// This build reads only this version. A record with no marker, or with any
-    /// other unsigned integer, is [`Self::AnotherVersion`]. During alpha there
-    /// is no migration: the bytes stay where they are, and that record's
-    /// operations fail.
+    /// This build reads this version. A record with no marker that decodes as
+    /// the shape written today is this version too. Any other unsigned integer
+    /// is [`Self::AnotherVersion`], as is an absent marker whose body does not
+    /// decode. During alpha there is no migration: the bytes stay where they
+    /// are, and that record's operations fail. Semantic batches and transcript
+    /// checkpoints share this number: a change to either shape bumps both.
     pub const SCHEMA_VERSION: u64 = 1;
 
     /// Aggregate retained diagnostic text budget; structural slots are accounted separately.

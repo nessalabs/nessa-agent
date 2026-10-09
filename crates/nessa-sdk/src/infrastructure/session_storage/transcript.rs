@@ -46,7 +46,9 @@ pub enum TranscriptError {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SavedFold<S = snapshot::checkpoint::Snapshot> {
-    #[serde(rename = "schemaVersion")]
+    /// Missing on checkpoints saved before this field existed. Those bytes
+    /// are this build's checkpoint when the rest of the fold decodes.
+    #[serde(rename = "schemaVersion", default = "current_schema_version")]
     schema_version: u64,
     receiver: String,
     origin: String,
@@ -59,6 +61,10 @@ struct SavedFold<S = snapshot::checkpoint::Snapshot> {
     facts: u64,
     snapshot: Option<S>,
     group: Option<GroupCheckpoint>,
+}
+
+fn current_schema_version() -> u64 {
+    StorageError::SCHEMA_VERSION
 }
 
 /// One source-scoped, effect-free semantic transcript receiver. `apply` stages
@@ -534,28 +540,34 @@ impl TranscriptFold {
     ///
     /// # Errors
     /// Returns [`TranscriptError::Decision`] carrying
-    /// [`StorageError::AnotherVersion`] when `schemaVersion` is absent or is
-    /// another unsigned integer. Returns `Checkpoint` for malformed or
-    /// inconsistent saved content, or `Scope` when its exact identity differs.
+    /// [`StorageError::AnotherVersion`] when an unmarked checkpoint is not
+    /// this build's shape. `from_chunks` already refused a different unsigned
+    /// `schemaVersion`. Returns `Checkpoint` for a current-version body that
+    /// is malformed or inconsistent, or `Scope` when its identity differs.
     pub fn restore(
         scope: Scope,
         expected_applied: u64,
         checkpoint: &TranscriptCheckpoint,
     ) -> Result<Self, TranscriptError> {
-        snapshot::decode::preflight_checkpoint(checkpoint.reader())
-            .map_err(checkpoint::storage_refusal)?;
+        // `from_chunks` already classified the marker. This decode does not
+        // walk the bytes again.
         let saved: SavedFold = serde_json::from_reader(checkpoint.reader())
-            .map_err(|_| TranscriptError::Checkpoint)?;
+            .map_err(|_| checkpoint.unreadable_body())?;
+        // `from_chunks` already classified the marker. An absent field
+        // defaults to this build's version, so a decoded fold names that version.
+        if saved.schema_version != StorageError::SCHEMA_VERSION {
+            return Err(TranscriptError::Checkpoint);
+        }
         if saved.applied != expected_applied {
             return Err(TranscriptError::Checkpoint);
         }
         let saved_scope = Scope::new(
-            Id::new(saved.receiver).map_err(|_| TranscriptError::Checkpoint)?,
-            Id::new(saved.origin).map_err(|_| TranscriptError::Checkpoint)?,
-            Id::new(saved.stream).map_err(|_| TranscriptError::Checkpoint)?,
-            Id::new(saved.incarnation).map_err(|_| TranscriptError::Checkpoint)?,
-            Id::new(saved.schema).map_err(|_| TranscriptError::Checkpoint)?,
-            Id::new(saved.access_epoch).map_err(|_| TranscriptError::Checkpoint)?,
+            Id::new(saved.receiver).map_err(|_| checkpoint.unreadable_body())?,
+            Id::new(saved.origin).map_err(|_| checkpoint.unreadable_body())?,
+            Id::new(saved.stream).map_err(|_| checkpoint.unreadable_body())?,
+            Id::new(saved.incarnation).map_err(|_| checkpoint.unreadable_body())?,
+            Id::new(saved.schema).map_err(|_| checkpoint.unreadable_body())?,
+            Id::new(saved.access_epoch).map_err(|_| checkpoint.unreadable_body())?,
         );
         if saved_scope != scope {
             return Err(TranscriptError::Scope);
@@ -564,7 +576,7 @@ impl TranscriptFold {
             .snapshot
             .map(snapshot::checkpoint::Snapshot::decode)
             .transpose()
-            .map_err(|_| TranscriptError::Checkpoint)?;
+            .map_err(|_| checkpoint.unreadable_body())?;
         if snapshot
             .as_ref()
             .is_some_and(|state| state.id.as_str() != scope.stream().as_str())
@@ -814,12 +826,25 @@ mod tests {
     // Actual current grouped wire evidence for checkpoint representation fixtures.
     // Unlike the cache-allocation helper, this produces real publication lineage.
     fn save_frames(change: SessionChange, base: u64, generation: u64) -> Vec<NewEvent> {
-        let payload = snapshot::encode_semantic_batch(&[change]).unwrap();
-        save_payload_frames(&payload, base, generation)
+        save_frames_in(&scope(), change, base, generation)
     }
 
-    fn save_payload_frames(payload: &[u8], base: u64, generation: u64) -> Vec<NewEvent> {
-        let scope = scope();
+    fn save_frames_in(
+        scope: &Scope,
+        change: SessionChange,
+        base: u64,
+        generation: u64,
+    ) -> Vec<NewEvent> {
+        let payload = snapshot::encode_semantic_batch(&[change]).unwrap();
+        save_payload_frames(scope, &payload, base, generation)
+    }
+
+    fn save_payload_frames(
+        scope: &Scope,
+        payload: &[u8],
+        base: u64,
+        generation: u64,
+    ) -> Vec<NewEvent> {
         let binding = SessionSaveGeneration::new(
             SessionSaveBackend::Record {
                 stream: scope.stream().clone(),
@@ -1420,7 +1445,7 @@ mod tests {
             let mut value: Value = serde_json::from_slice(&body).unwrap();
             value["changes"][0]["ReceiptUpdated"]["after"]["Failed"]["storage"]
                 ["ShutdownFailures"]["read"] = invalid;
-            let frames = save_payload_frames(&serde_json::to_vec(&value).unwrap(), 4, 2);
+            let frames = save_payload_frames(&scope, &serde_json::to_vec(&value).unwrap(), 4, 2);
             let before = fold.snapshot().unwrap() as *const SessionSnapshot;
             assert!(fold.apply(&records(&scope, 5, &frames)).is_err());
             assert_eq!(fold.applied(), 4);
@@ -1431,7 +1456,8 @@ mod tests {
         let mut oversized_ack: Value = serde_json::from_slice(&body).unwrap();
         oversized_ack["changes"][0]["ReceiptUpdated"]["after"]["Failed"]["storage"] =
             serde_json::json!({"Io": diagnostic});
-        let frames = save_payload_frames(&serde_json::to_vec(&oversized_ack).unwrap(), 4, 2);
+        let frames =
+            save_payload_frames(&scope, &serde_json::to_vec(&oversized_ack).unwrap(), 4, 2);
         let before = fold.snapshot().unwrap() as *const SessionSnapshot;
         assert!(fold.apply(&records(&scope, 5, &frames)).is_err());
         assert_eq!((fold.applied(), fold.downloaded()), (4, 4));
@@ -1458,7 +1484,7 @@ mod tests {
                 } else {
                     let mut body = vec![b' '; 100_000];
                     body.extend_from_slice(&snapshot::encode_semantic_batch(&[opened()]).unwrap());
-                    save_payload_frames(&body, 0, 0)
+                    save_payload_frames(&scope, &body, 0, 0)
                 };
                 let head = if phase == "abort" {
                     // A later exact retry still needs its own unit seal and completion.
@@ -1798,7 +1824,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unmarked_checkpoint_is_another_version_and_its_bytes_stay() {
+    fn an_unmarked_checkpoint_in_todays_shape_restores() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
         fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
@@ -1807,16 +1833,61 @@ mod tests {
         let mut value: Value = serde_json::from_reader(checkpoint.reader()).unwrap();
         assert_eq!(value["schemaVersion"], StorageError::SCHEMA_VERSION);
         value.as_object_mut().unwrap().remove("schemaVersion");
-        let bytes = serde_json::to_vec(&value).unwrap();
-        let kept = bytes.clone();
+        let restored =
+            TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&value).unwrap()]).unwrap();
+        let loaded = TranscriptFold::restore(scope, fold.applied(), &restored).unwrap();
+        assert_eq!(loaded.fact_count(), fold.fact_count());
         assert_eq!(
-            TranscriptCheckpoint::from_chunks(vec![bytes]),
+            loaded.snapshot().map(|state| state.id.as_str()),
+            Some("conversation")
+        );
+    }
+
+    #[test]
+    fn an_unmarked_checkpoint_that_is_not_todays_shape_is_another_version() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let mut value: Value =
+            serde_json::from_reader(fold.checkpoint().unwrap().reader()).unwrap();
+        value.as_object_mut().unwrap().remove("schemaVersion");
+        value["snapshot"] = serde_json::json!("not a snapshot");
+        assert!(matches!(
+            TranscriptFold::restore(
+                scope,
+                fold.applied(),
+                &TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&value).unwrap()])
+                    .unwrap()
+            ),
             Err(TranscriptError::Decision(StorageError::AnotherVersion {
                 found: None
             }))
-        );
-        assert_eq!(kept, serde_json::to_vec(&value).unwrap());
-        assert_eq!(fold.checkpoint().unwrap(), checkpoint);
+        ));
+    }
+
+    #[test]
+    fn a_checkpoint_marker_that_is_not_an_unsigned_integer_is_malformed() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let value: Value = serde_json::from_reader(fold.checkpoint().unwrap().reader()).unwrap();
+        for marker in [
+            serde_json::json!("1"),
+            serde_json::json!(-1),
+            serde_json::json!(null),
+        ] {
+            let mut changed = value.clone();
+            changed["schemaVersion"] = marker.clone();
+            assert!(
+                matches!(
+                    TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&changed).unwrap()]),
+                    Err(TranscriptError::Checkpoint)
+                ),
+                "{marker}"
+            );
+        }
     }
 
     #[test]
@@ -1831,14 +1902,12 @@ mod tests {
         future["schemaVersion"] = serde_json::json!(found);
         future["later"] = serde_json::json!(true);
         let future_bytes = serde_json::to_vec(&future).unwrap();
-        let kept = future_bytes.clone();
         assert_eq!(
             TranscriptCheckpoint::from_chunks(vec![future_bytes]),
             Err(TranscriptError::Decision(StorageError::AnotherVersion {
                 found: Some(found)
             }))
         );
-        assert_eq!(kept, serde_json::to_vec(&future).unwrap());
         let mut broken = value;
         broken["snapshot"] = serde_json::json!("not a snapshot");
         let malformed =
@@ -1895,12 +1964,32 @@ mod tests {
             (fold.applied(), fold.downloaded(), fold.fact_count()),
             before
         );
-        let other_scope = scope;
+        let other_scope = Scope::new(
+            id("receiver"),
+            id("origin"),
+            id("other-conversation"),
+            id("00000000-0000-0000-0000-000000000001"),
+            physical_record_schema(),
+            id("access"),
+        );
         let mut other = TranscriptFold::new(other_scope.clone()).unwrap();
+        let other_open = SessionChange::Opened {
+            id: SessionId::new("other-conversation").unwrap(),
+            provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
+            context: ProviderContext::Absent,
+        };
         other
-            .apply(&records(&other_scope, 1, &save_frames(opened(), 0, 0)))
+            .apply(&records(
+                &other_scope,
+                1,
+                &save_frames_in(&other_scope, other_open, 0, 0),
+            ))
             .unwrap();
         assert_eq!(other.fact_count(), 1);
+        assert_eq!(
+            other.snapshot().map(|state| state.id.as_str()),
+            Some("other-conversation")
+        );
     }
 
     #[test]

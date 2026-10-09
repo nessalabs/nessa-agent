@@ -70,9 +70,15 @@ enum WireChange<E = Event> {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WireBatch<C = WireChange> {
-    #[serde(rename = "schemaVersion")]
+    /// Missing on records saved before this field existed. Those bytes are
+    /// version 1 when the rest of the batch is today's shape.
+    #[serde(rename = "schemaVersion", default = "current_schema_version")]
     schema_version: u64,
     changes: Vec<C>,
+}
+
+fn current_schema_version() -> u64 {
+    StorageError::SCHEMA_VERSION
 }
 
 fn encode_context(value: &ProviderContext) -> Option<String> {
@@ -290,7 +296,7 @@ pub(crate) fn encode_batch(changes: &[SessionChange]) -> Result<Vec<u8>, Storage
     })
     .map_err(corrupt)?;
     super::super::save_group::validate_unit_payload(&bytes)?;
-    super::decode::preflight_semantic_batch(bytes.as_slice())?;
+    super::decode::preflight_semantic_batch(bytes.as_slice()).map(|_| ())?;
     Ok(bytes)
 }
 
@@ -298,8 +304,25 @@ pub(crate) fn decode_batch(
     bytes: &[u8],
     context: &ProviderContext,
 ) -> Result<Vec<SessionChange>, StorageError> {
-    super::decode::preflight_semantic_batch(bytes)?;
+    let marker = super::decode::preflight_semantic_batch(bytes)?;
+    decode_current_batch(bytes, context).map_err(|error| match marker {
+        // The marker is absent. A body today's decoder accepts is version 1.
+        // A body it refuses is the shape from before that decoder.
+        super::decode::SchemaMarker::Unmarked => StorageError::AnotherVersion { found: None },
+        super::decode::SchemaMarker::Current => error,
+    })
+}
+
+fn decode_current_batch(
+    bytes: &[u8],
+    context: &ProviderContext,
+) -> Result<Vec<SessionChange>, StorageError> {
     let batch: WireBatch = serde_json::from_slice(bytes).map_err(corrupt)?;
+    // Preflight already accepted the marker. An absent field defaults to this
+    // build's version, so a decoded batch names that version.
+    if batch.schema_version != StorageError::SCHEMA_VERSION {
+        return Err(corrupt("schemaVersion disagreed with the record preflight"));
+    }
     let mut context = context.clone();
     let changes = batch
         .changes
@@ -321,7 +344,7 @@ mod tests {
             sessions::{InvocationRecord, SubmissionAcknowledgement},
         },
         domain::agent_execution::{
-            executions::{MessageChunk, MessageId},
+            executions::{ExecutionId, MessageChunk, MessageId},
             permissions::{
                 ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
                 ReviewDeclineStage,
@@ -852,6 +875,28 @@ mod tests {
         );
     }
 
+    fn person_input() -> InvocationRecord {
+        InvocationRecord {
+            target_event_offset: None,
+            submission: SubmissionMode::Immediate,
+            request: ExecutionRequest {
+                execution_id: ExecutionId::new("one").unwrap(),
+                user_message: UserMessage::text_only(PromptText::new("hello").unwrap()),
+                estimated_input_tokens: 1,
+                reserved_output_tokens: 1,
+            },
+            actor: ActionContext::new("user", "phone", "send").unwrap(),
+            acknowledgement: SubmissionAcknowledgement::Pending,
+            events: Vec::new(),
+            scheduling: Vec::new(),
+            cancellation: None,
+            provider_report: None,
+            local_cancellation: None,
+            local_outcome: None,
+            result: None,
+        }
+    }
+
     fn opened_change() -> SessionChange {
         SessionChange::Opened {
             id: SessionId::new("conversation").unwrap(),
@@ -873,24 +918,82 @@ mod tests {
     }
 
     #[test]
-    fn an_unmarked_record_is_another_version_and_is_not_read() {
+    fn an_unmarked_record_in_todays_shape_is_version_one() {
         let change = opened_change();
         let bytes = encode_one(&change).unwrap();
         let mut saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         saved.as_object_mut().unwrap().remove("schemaVersion");
-        // The pre-marker shape also lacks fields this build requires. The
-        // marker is what the refusal names; the missing field is not read.
-        saved["changes"][0]["Opened"]
-            .as_object_mut()
-            .unwrap()
-            .remove("id");
-        let old = serde_json::to_vec(&saved).unwrap();
-        let kept = old.clone();
+        assert!(saved.get("schemaVersion").is_none());
+        let unmarked = serde_json::to_vec(&saved).unwrap();
         assert_eq!(
-            decode_batch(&old, &ProviderContext::Absent),
+            decode_one(&unmarked, &ProviderContext::Absent).unwrap(),
+            change
+        );
+    }
+
+    #[test]
+    fn a_record_from_before_the_app_fields_is_another_version() {
+        let record = person_input();
+        let bytes = encode_one(&SessionChange::InputAccepted(Box::new(record))).unwrap();
+        let mut saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        saved.as_object_mut().unwrap().remove("schemaVersion");
+        {
+            let metadata = saved["changes"][0]["InputAccepted"]["metadata"]
+                .as_object_mut()
+                .unwrap();
+            // #467 added these. A record from before that change has neither,
+            // and it has no schemaVersion.
+            metadata.remove("user_app");
+            metadata.remove("user_app_model_context");
+        }
+        assert_eq!(
+            decode_batch(
+                &serde_json::to_vec(&saved).unwrap(),
+                &ProviderContext::Absent
+            ),
             Err(StorageError::AnotherVersion { found: None })
         );
-        assert_eq!(old, kept);
+    }
+
+    #[test]
+    fn the_last_foreign_schema_version_wins_and_a_duplicate_current_marker_is_malformed() {
+        let change = opened_change();
+        let text = String::from_utf8(encode_one(&change).unwrap()).unwrap();
+        let current_then_other = text.replacen(
+            "\"schemaVersion\":1",
+            "\"schemaVersion\":1,\"schemaVersion\":2",
+            1,
+        );
+        assert_eq!(
+            decode_batch(current_then_other.as_bytes(), &ProviderContext::Absent),
+            Err(StorageError::AnotherVersion { found: Some(2) })
+        );
+        // The last key is this version, so preflight would read it. The body
+        // decoder still refuses a repeated field, which is malformed.
+        let other_then_current = text.replacen(
+            "\"schemaVersion\":1",
+            "\"schemaVersion\":2,\"schemaVersion\":1",
+            1,
+        );
+        assert!(matches!(
+            decode_batch(other_then_current.as_bytes(), &ProviderContext::Absent),
+            Err(StorageError::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn a_nested_schema_version_is_not_the_record_marker() {
+        let change = opened_change();
+        let bytes = encode_one(&change).unwrap();
+        let mut saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        saved["changes"][0]["Opened"]["schemaVersion"] = serde_json::json!(99);
+        assert!(matches!(
+            decode_batch(
+                &serde_json::to_vec(&saved).unwrap(),
+                &ProviderContext::Absent
+            ),
+            Err(StorageError::Corrupt(_))
+        ));
     }
 
     #[test]
@@ -901,12 +1004,10 @@ mod tests {
         saved["schemaVersion"] = serde_json::json!(found);
         saved["notInThisShape"] = serde_json::json!(true);
         let future = serde_json::to_vec(&saved).unwrap();
-        let kept = future.clone();
         assert_eq!(
             decode_batch(&future, &ProviderContext::Absent),
             Err(StorageError::AnotherVersion { found: Some(found) })
         );
-        assert_eq!(future, kept);
         // Zero is a different unsigned integer, not this build's version.
         saved["schemaVersion"] = serde_json::json!(0);
         assert_eq!(

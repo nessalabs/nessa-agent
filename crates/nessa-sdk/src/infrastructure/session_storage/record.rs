@@ -529,6 +529,20 @@ mod tests {
         task::{Context, Poll, Wake, Waker},
     };
 
+    fn record_rows(root: &Path) -> Vec<String> {
+        let database = Connection::open(root.join("records.sqlite3")).unwrap();
+        let mut statement = database
+            .prepare(
+                "SELECT quote(stream_key)||'|'||quote(offset)||'|'||quote(event_id)||'|'||quote(schema_id)||'|'||quote(schema_version)||'|'||quote(payload) FROM event_records ORDER BY stream_key,offset",
+            )
+            .unwrap();
+        statement
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
     fn sql(root: &Path, statement: &str) {
         Connection::open(root.join("records.sqlite3"))
             .unwrap()
@@ -3171,12 +3185,13 @@ mod tests {
         storage.shutdown().await.unwrap();
     }
 
-    /// P5 of "The values, saved and sent" (`docs/design/mcp-app-calls.md`):
-    /// an accepted input saved without `user_app` or
-    /// `user_app_model_context`, as one saved before #390, is `Corrupt` for
-    /// its own conversation only. Its siblings in the same store open: one
-    /// saved by the writer, and one whose input went through this test's own
-    /// framing unchanged, which shows the refusal is the missing field's.
+    /// P5 of "The values, saved and sent" (`docs/design/mcp-app-calls.md`).
+    /// A version-1 input without `user_app` or `user_app_model_context` is
+    /// `Corrupt` for its own conversation. A record from before #467, which
+    /// has no `schemaVersion` and neither field, is `AnotherVersion` for its
+    /// own conversation. Today's shape with the marker removed is read as
+    /// version 1. Siblings in the same store open, and a refusal leaves the
+    /// stored rows unchanged.
     #[tokio::test]
     async fn an_input_saved_without_its_app_fields_is_corrupt_for_its_conversation_only() {
         let directory = tempfile::tempdir().unwrap();
@@ -3189,7 +3204,10 @@ mod tests {
         );
         // One save group of `input`, encoded as the writer would and then
         // passed through `edit`, appended after the conversation's opening.
-        let save_raw = |id: &'static str, edit: Option<&'static str>| {
+        let save_raw = |id: &'static str,
+                        edit: Option<&'static str>,
+                        drop_marker: bool,
+                        drop_app_fields: bool| {
             let storage = &storage;
             let input = input.clone();
             async move {
@@ -3210,13 +3228,22 @@ mod tests {
                     &snapshot::encode_semantic_batch(std::slice::from_ref(&input)).unwrap(),
                 )
                 .unwrap();
-                let metadata = saved["changes"][0]["InputAccepted"]["metadata"]
-                    .as_object_mut()
-                    .unwrap();
-                assert!(metadata.contains_key("user_app"));
-                assert!(metadata.contains_key("user_app_model_context"));
-                if let Some(field) = edit {
-                    metadata.remove(field).unwrap();
+                {
+                    let metadata = saved["changes"][0]["InputAccepted"]["metadata"]
+                        .as_object_mut()
+                        .unwrap();
+                    assert!(metadata.contains_key("user_app"));
+                    assert!(metadata.contains_key("user_app_model_context"));
+                    if let Some(field) = edit {
+                        metadata.remove(field).unwrap();
+                    }
+                    if drop_app_fields {
+                        metadata.remove("user_app");
+                        metadata.remove("user_app_model_context");
+                    }
+                }
+                if drop_marker {
+                    saved.as_object_mut().unwrap().remove("schemaVersion");
                 }
                 let payload = serde_json::to_vec(&saved).unwrap();
                 let identity = SaveIdentity::binding(&binding).unwrap();
@@ -3251,9 +3278,17 @@ mod tests {
                 }
             }
         };
-        save_raw("without-user-app", Some("user_app")).await;
-        save_raw("without-contexts", Some("user_app_model_context")).await;
-        save_raw("framed-unchanged", None).await;
+        save_raw("without-user-app", Some("user_app"), false, false).await;
+        save_raw(
+            "without-contexts",
+            Some("user_app_model_context"),
+            false,
+            false,
+        )
+        .await;
+        save_raw("framed-unchanged", None, false, false).await;
+        save_raw("unmarked-today", None, true, false).await;
+        save_raw("before-app-fields", None, true, true).await;
         let written = SessionId::new("written").unwrap();
         let lease = storage.open(written.clone()).await.unwrap();
         let (change, opened) = opening(&written);
@@ -3272,6 +3307,7 @@ mod tests {
         drop(lease);
         storage.shutdown().await.unwrap();
         drop(storage);
+        let before = record_rows(&root);
 
         let reopened = RecordStorage::new(&root).unwrap();
         for older in ["without-user-app", "without-contexts"] {
@@ -3283,7 +3319,13 @@ mod tests {
                 "{older}"
             );
         }
-        for sibling in ["framed-unchanged", "written"] {
+        assert!(matches!(
+            reopened
+                .open_existing(SessionId::new("before-app-fields").unwrap())
+                .await,
+            Err(StorageError::AnotherVersion { found: None })
+        ));
+        for sibling in ["framed-unchanged", "written", "unmarked-today"] {
             let id = SessionId::new(sibling).unwrap();
             let lease = reopened.open_existing(id.clone()).await.unwrap().unwrap();
             let snapshot = lease.load().await.unwrap().snapshot().unwrap().clone();
@@ -3304,6 +3346,8 @@ mod tests {
             drop(lease);
         }
         reopened.shutdown().await.unwrap();
+        drop(reopened);
+        assert_eq!(record_rows(&root), before);
     }
 
     #[ignore = "child process probe"]

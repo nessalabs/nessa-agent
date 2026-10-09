@@ -220,6 +220,17 @@ fn state_this_gateway_cannot_read_is_permanent_and_says_so_on_the_wire() {
             ConversationErrorCode::ConversationStateUnreadable
         );
     }
+    for another_version in [
+        StorageError::AnotherVersion { found: None },
+        StorageError::AnotherVersion { found: Some(2) },
+    ] {
+        assert_eq!(
+            error_code(&ConversationError::Agent(AgentError::Storage(
+                another_version
+            ))),
+            ConversationErrorCode::ConversationStateUnreadable
+        );
+    }
 
     // An identity mismatch is not this: it means the configuration changed,
     // which is answered as that and already tells somebody to start a new
