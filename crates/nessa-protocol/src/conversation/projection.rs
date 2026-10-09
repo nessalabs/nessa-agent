@@ -50,12 +50,14 @@ const REQUIRED_WORK_FAILURE: &str = "The turn could not complete all required wo
 const PROVIDER_FAILURE_PREFIX: &str = "The agent provider reported an error: ";
 
 /// The conversation's latest lease as the view shows it: what the records
-/// fold into, never more. An unreadable lease claims nothing but its
-/// revision, when that is known.
+/// fold into, never more. An unreadable lease claims nothing, not even the
+/// revision before it, which the fold keeps for itself.
 pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
     let mut view = ConversationLeaseView {
         state: ConversationLeaseState::Unreadable,
-        revision: current.revision().map(LeaseRevision::get),
+        // Only a lease this build can read says which revision it is; the
+        // fold keeps the one before an unreadable lease for itself.
+        revision: None,
         environment: None,
         sandbox: None,
         cause: None,
@@ -108,6 +110,7 @@ pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
             Some(lease.terms())
         }
     };
+    view.revision = current.revision().map(LeaseRevision::get);
     if let Some(terms) = terms {
         view.environment = Some(match terms.environment {
             EnvironmentRef::Here => ConversationLeaseEnvironment::Here,

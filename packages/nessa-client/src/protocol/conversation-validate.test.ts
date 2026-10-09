@@ -828,6 +828,14 @@ describe("the view's lease", () => {
         droppedEvents: 0,
       },
       {
+        state: "interrupted",
+        revision: 2,
+        environment: "here",
+        sandbox: "harness_default",
+        cause: "lost",
+        droppedEvents: 1,
+      },
+      {
         state: "refused",
         revision: 1,
         environment: "here",
@@ -835,7 +843,6 @@ describe("the view's lease", () => {
         refusal: "sandbox_unavailable",
         droppedEvents: 0,
       },
-      { state: "unreadable", revision: 4, droppedEvents: 0 },
       { state: "unreadable", droppedEvents: 0 },
     ]
     for (const lease of leases)
@@ -843,8 +850,21 @@ describe("the view's lease", () => {
     expect(conversationView(view(), "conversation").lease).toBeUndefined()
   })
 
+  const live = {
+    state: "live",
+    revision: 1,
+    environment: "here",
+    sandbox: "harness_default",
+    droppedEvents: 0,
+  }
+  const ended = { ...live, state: "ended", cause: "closed", cleanup: "confirmed" }
+  const refusedLease = {
+    ...live,
+    state: "refused",
+    refusal: "sandbox_unavailable",
+  }
+
   it("refuses anything outside the published shape", () => {
-    const live = { state: "live", droppedEvents: 0 }
     expect(() =>
       conversationView(withLease({ ...live, holder: "elsewhere" }), "conversation"),
     ).toThrow(/unknown fields/)
@@ -867,6 +887,46 @@ describe("the view's lease", () => {
       expect(() => conversationView(withLease(lease), "conversation")).toThrow(error)
   })
 
+  it("refuses a lease whose fields contradict its state", () => {
+    const { revision: _revision, ...unnumbered } = live
+    const { cause: _cause, ...causeless } = ended
+    const { cleanup: _cleanup, ...uncleaned } = ended
+    const { refusal: _refusal, ...unexplained } = refusedLease
+    const contradictions: [unknown, RegExp][] = [
+      [{ ...live, cause: "closed" }, /lease cause/],
+      [{ ...live, cleanup: "confirmed" }, /lease cleanup/],
+      [{ ...live, droppedEvents: 1 }, /lease droppedEvents/],
+      [unnumbered, /lease revision/],
+      [{ ...live, state: "ending" }, /lease cause/],
+      [
+        { ...live, state: "ending", cause: "closed", cleanup: "confirmed" },
+        /lease cleanup/,
+      ],
+      [
+        { ...live, state: "ending", cause: "closed", droppedEvents: 2 },
+        /lease droppedEvents/,
+      ],
+      [causeless, /lease cause/],
+      [uncleaned, /lease cleanup/],
+      [{ ...ended, refusal: "sandbox_unavailable" }, /lease refusal/],
+      [{ ...live, state: "interrupted" }, /lease cause/],
+      [unexplained, /lease refusal/],
+      [{ ...refusedLease, cause: "closed" }, /lease cause/],
+      [{ ...refusedLease, droppedEvents: 1 }, /lease droppedEvents/],
+      [{ state: "unreadable", revision: 4, droppedEvents: 0 }, /lease revision/],
+      [
+        { state: "unreadable", environment: "here", droppedEvents: 0 },
+        /lease environment/,
+      ],
+      [{ state: "unreadable", droppedEvents: 1 }, /lease droppedEvents/],
+    ]
+    for (const [lease, error] of contradictions)
+      expect(
+        () => conversationView(withLease(lease), "conversation"),
+        JSON.stringify(lease),
+      ).toThrow(error)
+  })
+
   it("knows every field and value the schema gives a view and its lease", () => {
     const defs = protocolFile("v1.json").$defs
     // A field the schema adds to the view is one the validator must know, or
@@ -884,9 +944,25 @@ describe("the view's lease", () => {
       string,
       { enum?: string[] }
     >
+    // Each value on a lease whose state carries that field.
+    const carriers: Record<string, Record<string, unknown>> = {
+      cause: ended,
+      cleanup: ended,
+      refusal: refusedLease,
+    }
+    const states: Record<string, Record<string, unknown>> = {
+      live,
+      ending: { ...live, state: "ending", cause: "closed" },
+      ended,
+      interrupted: { ...live, state: "interrupted", cause: "lost" },
+      refused: refusedLease,
+      unreadable: { state: "unreadable", droppedEvents: 0 },
+    }
     for (const [key, schema] of Object.entries(properties)) {
       for (const value of schema.enum ?? []) {
-        const sample = { state: "live", droppedEvents: 0, [key]: value }
+        const sample =
+          key === "state" ? states[value] : { ...(carriers[key] ?? live), [key]: value }
+        expect(sample, value).toBeDefined()
         expect(conversationView(withLease(sample), "conversation").lease).toEqual(sample)
       }
     }

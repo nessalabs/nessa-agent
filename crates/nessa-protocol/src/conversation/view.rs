@@ -670,7 +670,8 @@ pub enum ConversationReorderOutcome {
 #[serde(rename_all = "camelCase")]
 pub struct ConversationLeaseView {
     pub state: ConversationLeaseState,
-    /// Which issuance of this conversation's leases it is, when known.
+    /// Which issuance of this conversation's leases it is. Absent for an
+    /// unreadable lease, which does not say.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]

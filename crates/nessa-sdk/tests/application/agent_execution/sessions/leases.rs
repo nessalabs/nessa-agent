@@ -290,6 +290,20 @@ fn a_saved_lease_resumes_with_its_revision() {
         CurrentLease::resume(None, &[]),
         Err(StorageError::Corrupt(_))
     ));
+    // Only the latest lease is saved: it begins at the revision it names,
+    // which the saved revision must match, and nothing comes before it.
+    let later = [issued("b", 3), ending("b", LeaseEndCause::Closed)];
+    let resumed = CurrentLease::resume(Some(revision(3)), &later).unwrap();
+    assert_eq!(resumed.revision(), Some(revision(3)));
+    assert_eq!(resumed.records(), later);
+    assert!(matches!(
+        CurrentLease::resume(Some(revision(2)), &later),
+        Err(StorageError::Corrupt(_))
+    ));
+    assert!(matches!(
+        CurrentLease::resume(Some(revision(1)), &[ending("a", LeaseEndCause::Closed)]),
+        Err(StorageError::Corrupt(_))
+    ));
     // An unreadable lease keeps the newest revision known before it.
     let resumed = CurrentLease::resume(Some(revision(4)), &[unreadable()]).unwrap();
     assert_eq!(resumed.revision(), Some(revision(4)));

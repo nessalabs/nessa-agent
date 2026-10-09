@@ -79,11 +79,14 @@ function FactGroup({ title, children }: { title: string; children: ReactNode }) 
   )
 }
 
+/** A label and its value. A long value wraps rather than being cut short: a
+ * fact read only in part is not read (a refused lease's reason, at the
+ * panel's narrowest). */
 function Fact({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-4 py-2.5">
       <span className="shrink-0 nessa-text-4 text-foreground">{label}</span>
-      <span className="min-w-0 truncate text-end nessa-text-4 text-muted-foreground">
+      <span className="min-w-0 break-words text-end nessa-text-4 text-muted-foreground">
         {value}
       </span>
     </div>

@@ -850,6 +850,16 @@ mod tests {
     }
 
     fn checkpoint_fixture(state: SessionSnapshot) -> TranscriptFold {
+        checkpoint_fixture_with_leases(state, Vec::new())
+    }
+
+    /// As [`checkpoint_fixture`], with `leases` saved after the opening and
+    /// its inputs: every lease record the stream holds, of which the state's
+    /// lease keeps only the latest lease's.
+    fn checkpoint_fixture_with_leases(
+        state: SessionSnapshot,
+        leases: Vec<crate::application::agent_execution::sessions::LeaseRecord>,
+    ) -> TranscriptFold {
         // Existing allocation fixtures now obtain their valid checkpoint lineage
         // from the same public lease and source API used by consumers.
         std::thread::spawn(move || {
@@ -882,6 +892,7 @@ mod tests {
                             .cloned()
                             .map(|record| SessionChange::InputAccepted(Box::new(record))),
                     )
+                    .chain(leases.into_iter().map(SessionChange::Lease))
                     .map(|change| SessionSaveUnit::new(vec![change]).unwrap())
                     .collect();
                 let binding = lease.load().await.unwrap().binding().clone();
@@ -1852,6 +1863,64 @@ mod tests {
         assert_eq!(fold.semantic_decodes, 2);
         assert!(before.frames.is_pending());
         drop(before);
+    }
+
+    /// A replica that checkpoints a conversation opened a second time reads
+    /// that checkpoint back: the checkpoint keeps only the second lease,
+    /// whose records begin at revision 2.
+    #[test]
+    fn a_checkpoint_after_a_second_lease_restores() {
+        use crate::application::agent_execution::sessions::{CurrentLease, LeaseRecord};
+        use crate::domain::agent_execution::leases::{
+            AgentWork, EnvironmentRef, LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseGrants,
+            LeaseId, LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile,
+        };
+        let terms = LeaseTerms {
+            environment: EnvironmentRef::Here,
+            work: LeaseWork::Agent(AgentWork::new("claude", "sonnet").unwrap()),
+            sandbox: SandboxProfile::HarnessDefault,
+            grants: LeaseGrants::Opening,
+            deadline: LeaseDeadline::UntilEnded,
+        };
+        let actor = ActionContext::new("person", "desktop", "send").unwrap();
+        let (first, second) = (
+            LeaseId::new("lease-1").unwrap(),
+            LeaseId::new("lease-2").unwrap(),
+        );
+        let leases = vec![
+            LeaseRecord::Issued {
+                lease: first.clone(),
+                revision: LeaseRevision::FIRST,
+                terms: terms.clone(),
+                actor: actor.clone(),
+            },
+            LeaseRecord::Ending {
+                lease: first.clone(),
+                cause: LeaseEndCause::Closed,
+                actor: None,
+            },
+            LeaseRecord::Ended {
+                lease: first,
+                cleanup: LeaseCleanup::NotHeld,
+            },
+            LeaseRecord::Issued {
+                lease: second,
+                revision: LeaseRevision::new(2).unwrap(),
+                terms,
+                actor,
+            },
+        ];
+        let mut state = snapshot::checkpoint::history_fixture(1);
+        let mut lease = None;
+        for record in &leases {
+            lease = Some(CurrentLease::apply(lease.as_ref(), record).unwrap());
+        }
+        state.lease = lease;
+        let fold = checkpoint_fixture_with_leases(state, leases);
+        let checkpoint = fold.checkpoint().unwrap();
+        let restored =
+            TranscriptFold::restore(fold.scope().clone(), fold.applied(), &checkpoint).unwrap();
+        assert_eq!(restored.snapshot(), fold.snapshot());
     }
 
     #[test]

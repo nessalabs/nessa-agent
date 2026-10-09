@@ -669,4 +669,64 @@ mod tests {
         let bad_record = text.replace(r#""kind":"interrupted""#, r#""kind":"ended""#);
         assert!(matches!(decode(&bad_record), Err(StorageError::Corrupt(_))));
     }
+
+    /// The conversation's second lease, issued or refused after the first
+    /// ended. A checkpoint keeps only its records, which begin at revision 2.
+    fn second_lease(second: LeaseRecord) -> CurrentLease {
+        let first = id("lease-1");
+        let mut lease = None;
+        for record in [
+            LeaseRecord::Issued {
+                lease: first.clone(),
+                revision: LeaseRevision::FIRST,
+                terms: terms(LeaseDeadline::UntilEnded),
+                actor: actor(),
+            },
+            LeaseRecord::Ending {
+                lease: first.clone(),
+                cause: LeaseEndCause::Closed,
+                actor: None,
+            },
+            LeaseRecord::Ended {
+                lease: first,
+                cleanup: LeaseCleanup::NotHeld,
+            },
+            second,
+        ] {
+            lease = Some(CurrentLease::apply(lease.as_ref(), &record).unwrap());
+        }
+        lease.unwrap()
+    }
+
+    #[test]
+    fn a_checkpoint_of_a_second_lease_reads_back_issued_or_refused() {
+        let revision = LeaseRevision::new(2).unwrap();
+        for second in [
+            LeaseRecord::Issued {
+                lease: id("lease-2"),
+                revision,
+                terms: terms(LeaseDeadline::UntilEnded),
+                actor: actor(),
+            },
+            LeaseRecord::Refused {
+                lease: id("lease-2"),
+                revision,
+                terms: terms(LeaseDeadline::UntilEnded),
+                refusal: LeaseRefusal::SandboxUnavailable,
+                actor: actor(),
+            },
+        ] {
+            let mut snapshot = history_fixture(1);
+            snapshot.lease = Some(second_lease(second));
+            let text = checkpoint(&snapshot);
+            assert_eq!(decode(&text).unwrap(), snapshot);
+            // The saved revision is still the one its records must name.
+            let saved = r#""lease":{"revision":2,"#;
+            assert!(text.contains(saved));
+            for revision in ["1", "3"] {
+                let changed = text.replace(saved, &format!(r#""lease":{{"revision":{revision},"#));
+                assert!(matches!(decode(&changed), Err(StorageError::Corrupt(_))));
+            }
+        }
+    }
 }

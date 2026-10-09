@@ -854,6 +854,10 @@ async fn a_latest_lease_this_build_cannot_read_is_never_issued_over(profiles: Sa
     let lease = restarted.lease().await;
     assert_eq!(kinds(&lease), ["unreadable"]);
     assert_eq!(lease.records()[0], later);
+    // The view claims nothing about it, not even the revision before it.
+    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    assert_eq!(view.state, ConversationLeaseState::Unreadable);
+    assert_eq!(view.revision, None);
 }
 
 /// A second service on the same stores, as after a restart.

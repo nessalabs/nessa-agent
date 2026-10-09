@@ -186,35 +186,9 @@ impl CurrentLease {
     /// is being committed or read back, and leaves `prior` as it was.
     pub fn apply(prior: Option<&Self>, record: &LeaseRecord) -> Result<Self, StorageError> {
         match record {
-            LeaseRecord::Issued {
-                lease,
-                revision,
-                terms,
-                ..
-            } => {
+            LeaseRecord::Issued { revision, .. } | LeaseRecord::Refused { revision, .. } => {
                 Self::check_issuance(prior, *revision)?;
-                Ok(Self::begin(
-                    record,
-                    CurrentLeaseState::Held(Lease::issue(lease.clone(), *revision, terms.clone())),
-                    *revision,
-                ))
-            }
-            LeaseRecord::Refused {
-                lease,
-                revision,
-                refusal,
-                ..
-            } => {
-                Self::check_issuance(prior, *revision)?;
-                Ok(Self::begin(
-                    record,
-                    CurrentLeaseState::Refused {
-                        lease: lease.clone(),
-                        revision: *revision,
-                        refusal: *refusal,
-                    },
-                    *revision,
-                ))
+                Self::begun_by(record)
             }
             LeaseRecord::Unreadable { kind, body } => {
                 if kind.len() > LeaseRecord::MAX_UNREADABLE_KIND_BYTES
@@ -255,15 +229,22 @@ impl CurrentLease {
     /// `revision` known for it, folding the records again. The revision is
     /// kept separately because an unreadable lease does not say which revision
     /// it took; for any other lease it must be the one its records name.
+    ///
+    /// Only the latest lease's records are saved, so the first one is where
+    /// that lease began: an issuance at whatever revision it names, since the
+    /// leases before it are not there to say which revision follows them. The
+    /// saved revision is what it is checked against.
     pub(crate) fn resume(
         revision: Option<LeaseRevision>,
         records: &[LeaseRecord],
     ) -> Result<Self, StorageError> {
-        let mut current: Option<Self> = None;
-        for record in records {
-            current = Some(Self::apply(current.as_ref(), record)?);
+        let (first, rest) = records
+            .split_first()
+            .ok_or_else(|| corrupt("a saved lease has no records"))?;
+        let mut current = Self::begun_by(first)?;
+        for record in rest {
+            current = Self::apply(Some(&current), record)?;
         }
-        let mut current = current.ok_or_else(|| corrupt("a saved lease has no records"))?;
         match current.state {
             CurrentLeaseState::Unreadable { .. } if current.revision <= revision => {
                 current.revision = revision;
@@ -272,6 +253,40 @@ impl CurrentLease {
             _ => return Err(corrupt("a saved lease revision does not match its records")),
         }
         Ok(current)
+    }
+
+    /// The lease `record` begins, with nothing before it: an issuance or
+    /// refusal at the revision it names, or an unreadable record. Anything
+    /// else is corrupt, as a record before its issuance is. Whether that
+    /// revision follows the lease before it is the caller's to check.
+    fn begun_by(record: &LeaseRecord) -> Result<Self, StorageError> {
+        match record {
+            LeaseRecord::Issued {
+                lease,
+                revision,
+                terms,
+                ..
+            } => Ok(Self::begin(
+                record,
+                CurrentLeaseState::Held(Lease::issue(lease.clone(), *revision, terms.clone())),
+                *revision,
+            )),
+            LeaseRecord::Refused {
+                lease,
+                revision,
+                refusal,
+                ..
+            } => Ok(Self::begin(
+                record,
+                CurrentLeaseState::Refused {
+                    lease: lease.clone(),
+                    revision: *revision,
+                    refusal: *refusal,
+                },
+                *revision,
+            )),
+            _ => Self::apply(None, record),
+        }
     }
 
     fn check_issuance(prior: Option<&Self>, revision: LeaseRevision) -> Result<(), StorageError> {
