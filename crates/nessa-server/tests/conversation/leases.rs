@@ -1100,6 +1100,55 @@ async fn l7_a_close_whose_cleanup_record_cannot_be_saved_says_so_and_the_next_op
 }
 
 #[tokio::test]
+async fn l7_l8_a_failed_cleanup_whose_records_cannot_be_saved_answers_both_and_keeps_its_cause() {
+    let root = tempfile::tempdir().unwrap();
+    // Not even the Ending is saved.
+    let (harness, _substitute) = with_cleanup_records_failing(root.path(), |record| {
+        matches!(
+            record,
+            LeaseRecord::Ending { .. }
+                | LeaseRecord::Interrupted { .. }
+                | LeaseRecord::Ended { .. }
+                | LeaseRecord::CleanupReported { .. }
+        )
+    })
+    .await;
+    *harness.provider.close_failure.lock().unwrap() = Some(AgentError::CleanupUncertain);
+    let failed = harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap_err();
+    // The caller hears the storage failure, with the cleanup failure kept.
+    assert!(
+        matches!(
+            &failed,
+            ConversationError::Agent(AgentError::StorageDuringClose { cleanup_result, .. })
+                if matches!(cleanup_result.as_ref(), Err(AgentError::CleanupUncertain))
+        ),
+        "{failed:?}"
+    );
+    // The agent was kept; once storage and cleanup recover, the next close
+    // writes the retained records, so the first close's cause survives.
+    *harness.storage.failing.lock().unwrap() = None;
+    *harness.provider.close_failure.lock().unwrap() = None;
+    harness
+        .service
+        .close(harness.id.clone(), caller("close-again"))
+        .await
+        .unwrap();
+    let lease = harness.lease().await;
+    assert_eq!(
+        kinds(&lease),
+        ["issued", "ending", "interrupted", "cleanup_reported"]
+    );
+    assert_eq!(
+        ending_cause(&lease),
+        Some((LeaseEndCause::Closed, Some("close".into())))
+    );
+}
+
+#[tokio::test]
 async fn l5_a_desktop_stop_whose_cleanup_record_cannot_be_saved_says_so_and_the_conversation_opens_again(
 ) {
     let root = tempfile::tempdir().unwrap();

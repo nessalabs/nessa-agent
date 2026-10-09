@@ -523,7 +523,8 @@ impl LiveLease {
     /// those of an earlier close that failed to save included, and answers
     /// success only once they are durable. Otherwise a close that confirmed
     /// cleanup answers [`AgentError::StorageDuringClose`] carrying that
-    /// cleanup: its agent is let go, and the lease, which the records do not
+    /// cleanup (a failed cleanup is carried the same way, and its agent is
+    /// kept for the next close): its agent is let go, and the lease, which the records do not
     /// show ended, is accounted for by the next opening, as one an earlier
     /// run left (`l7_a_close_whose_cleanup_record_cannot_be_saved_says_so_and_the_next_opening_accounts_for_it`).
     pub(crate) async fn close(
@@ -584,11 +585,15 @@ impl LiveLease {
                     cleanup_result: Box::new(Ok(outcome)),
                 })
             }
-            // The close failed already, which is what it answers; the
-            // records stay retained for the next close.
+            // Both answered: the caller learns the records were not saved as
+            // well as why the cleanup failed. The records stay retained for
+            // the next close.
             (Err(failure), Err(error)) => {
                 tracing::error!(lease = self.lease.as_str(), %error, "a close's lease records were not saved");
-                Err(failure)
+                Err(AgentError::StorageDuringClose {
+                    error,
+                    cleanup_result: Box::new(Err(failure)),
+                })
             }
         }
     }
