@@ -15,7 +15,7 @@ delivery), [0010](../adr/done/0010-local-authentication.md) (identity),
 [344](../adr/todo/344-mcp-ui.md) and [392](../adr/todo/392-remote-mcp-servers.md)
 (extensions), and the sync lanes under #257, #263, #267, #270 and #273. It
 redefines none of their protocols. Nothing here authorizes a runtime rewrite;
-each slice is an issue of its own.
+each slice is an issue of its own.ead
 
 ## How to read this
 
@@ -381,10 +381,11 @@ API, and the honest statement is that an internet-facing listener is
 exposed to denial of service and to any defect in that handshake, which is
 why the overlay is preferred and the relay exists.
 
-Today: pairing is implemented through Approved on the native listener
-(`native.listenAddress` in `config.json`); the loopback `/session` socket
-refuses anything without a minted credential; the protected native
-channel for a phone's reads is in progress (#265); the relay is #266. The
+Today: one-use pairing and scoped device grants (#264) and authenticated
+direct device-to-gateway reads over the native listener (#265) are done;
+the listener exists only when `native.listenAddress` is in `config.json`;
+the loopback `/session` socket refuses anything without a minted
+credential; the relay is #266. The
 tunnel and overlay rows need nothing from Nessa beyond that listener.
 
 ## The mesh
@@ -612,7 +613,7 @@ locally.
 | Admission and policy | Mandatory `/session` auth, Cedar per operation, verified `ActionContext` into the SDK | Unchanged. Peer and worker principals get grant kinds of their own | Gateway `auth` application | 0010 done; #481 |
 | Turn state and receipts | SDK `Agent` per conversation; creation receipts; `requestId` on every mutation | Unchanged. The same receipt path answers the phone outbox and a desktop outbox | SDK scheduling; gateway `conversation` | 0008; #267, #268 |
 | Records | Semantic records on one event-stream SQLite runtime; bounded head/page reads; watch hints | Replay-to-live subscriptions; gateway views from committed records; desktop off polling | SDK `session_storage`; gateway delivery | 0009; #296, #277 |
-| Phone reads | Device client with private cache, finite passes, retained watch; real paired process tests | Through pairing and the optional relay | `nessa-client-core`; gateway `device_pairing` | #257, #263, #262 |
+| Phone reads | Device client with private cache, finite passes, retained watch; one-use pairing (#264) and authenticated direct reads (#265) done | Live reads through subscriptions (#702) and the optional relay (#266) | `nessa-client-core`; gateway `device_pairing` | #257, #263, #262 |
 | Phone commands | None | Durable intent outbox, receipt lookup before retry, exact-turn Stop | `nessa-client-core`; gateway receipts | #267 |
 | Where agents run | In process only: gateway composes the SDK `Agent` and its ACP binding per conversation; Nessa advertises no ACP client filesystem or terminal | An `Environment` port in the conversation application with the in-process adapter first; a lease recorded for every run | Gateway `conversation` composition | New issue (step 7) |
 | SSH environments | None | `nessa env serve` on the remote host, installed on first use; lease frames over SSH stdio | Gateway environment adapter; `nessa-server` CLI | New issue (step 8) |
@@ -774,27 +775,17 @@ needs them:
 
 ## Build order
 
-Each step is its own issue and lands behind the gates in
-`CODING_STANDARDS.md`. Phone sync finishes before any remote environment
-exists; the port is extracted before any wire is written; SSH comes before
-pairing of gateways because it needs no new trust.
-
-| Step | Delivers | Gate to pass |
-| --- | --- | --- |
-| 1. Record subscriptions and committed views (#296, #277) | Replay-to-live for every surface; desktop off polling | Lagging-subscriber close, replay/live changeover, slow-client isolation, measured latency |
-| 2. Device pairing and protected reads (#263: #264, #265) | A phone reads over its own credential | Real paired process tests; revocation ends the next read |
-| 3. Relay and sleeping state (#266) | A phone away from home reaches the gateway | Direct and relay converge; metadata exposure measured |
-| 4. Device commands (#267: #268, #269) | Prompt and exact-turn Stop from the phone, retry-safe | Lost acknowledgement cannot run twice; unknown outcomes rendered |
-| 5. Backup and quarantined restore (#270) | A lost gateway is recoverable | Restore drill proves deletion boundaries, refuses ambiguous authority |
-| 6. Artifacts over the paired channel (#273) | Images and files reach devices, verified | Digest verification; bulk audit bounded |
-| 7. `Environment` port and local leases (new issue) | Today's behavior behind one typed port; a lease recorded for every run; per-binding sandbox-profile declaration | No behavior change; identical records and cleanup evidence before and after |
-| 8. SSH environments (new issue) | `nessa env serve` over SSH stdio; "run on buildbox" in the composer; the artifact channel from an environment (situation 6); `environments.list` and `run` in `nessa-mcp` | Lease ends on Stop, close and connection loss with cleanup evidence; late events dropped; first-use install verified on macOS and Linux hosts; a DMG built remotely downloads and verifies by digest; `run` refused by tool policy and by an absent grant, with the caller as initiator in the audit |
-| 9. Peer gateways and per-conversation sharing (new issue) | Gateway-to-gateway pairing; outbound environment connection; relay fallback; local discovery; Share on one conversation with role and tool policy (situation 7); `thread.create` on a peer under ADR 329 | Narrowed grants recorded; a peer cannot hold both authorities; revocation refuses the next connection; a shared turn runs under the sharer's policy with its denials attributed to them; an ungranted id is invisible |
-| 10. Hosted workers (new issue) | Environment-only gateways per organization in containers | Two-organization isolation across leases, artifacts, tools and audit |
-| 11. Hosted identity adapter (if hosted) | Login and membership from a provider behind Nessa's model | The adapter contract suite in the identity direction |
-
-Steps 1 to 6 are the phone. Steps 7 to 10 are environments. Step 1 serves
-both and is why it goes first.
+The order, the gates and the check-boxes live in one place, the ADR's
+[implementation plan](../adr/todo/252-runtime-roles-and-execution-leases.md#implementation-plan),
+and are checked off there as each slice merges. In short: the environments
+lane runs A #698 (port and local lease), B #699 (SSH environment), C #700
+(`run` and `environments.list`), D #701 (artifact channel), E #702 (record
+subscriptions), F #703 (first-use install), G #704 (Read grants), H #705
+(peer gateways), I #706 (environment grants to peers), J #707 (Drive and
+tool policy), K #708 (hosted workers); the phone
+lane (#263, #266, #267, #270, #273) runs beside it. Each slice is inert
+until configured, lands with its gate's evidence, and deletes what it
+replaces in the same change.
 
 ## What we borrowed
 

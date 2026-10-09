@@ -94,6 +94,95 @@ What this decides for the rest, each settled in the map:
 - **Sandboxes are declared, not assumed**
   ([Sandboxes, honestly](../../design/runtime-architecture.md#sandboxes-honestly)).
 
+## Implementation plan
+
+One vertical at a time, each usable on its own, each inert until a person
+configures it, each deleting what it replaces in the change that replaces
+it. This list is the one owner of progress: check a slice off here when
+its pull request merges with the evidence its gate names, and keep the
+slice's issue number beside it. The map's
+[build order](../../design/runtime-architecture.md#build-order) points
+here and holds no second list.
+
+Four rules every slice meets:
+
+1. **Inert until configured.** A laptop that names no host, pairs no peer
+   and makes no grant runs exactly today's code paths, the way the native
+   listener exists only when `config.json` names it.
+2. **Extract behind golden evidence.** The one refactor (slice A) captures
+   a local conversation's records, audit rows and cleanup evidence before,
+   and asserts them identical after.
+3. **Replace, then delete, in one change.** A new path lands beside the
+   old one only until it has the evidence; the pull request that switches
+   to it removes the old one. No shims, no two paths.
+4. **Additive records only.** A new record kind extends the fold in
+   `nessa-protocol` in the same change; no existing record changes meaning.
+
+Environments lane, in order:
+
+- [ ] **A. `Environment` port and local lease record** ([#698](https://github.com/nessalabs/nessa-agent/issues/698)).
+  Today's in-process SDK composition behind one typed port; a lease record
+  for every run; per-binding sandbox-profile declaration. *Gate:* golden
+  evidence identical before and after; the port has one adapter; the fold
+  renders the lease.
+- [ ] **B. `nessa env serve` over SSH, binary placed by hand**
+  ([#699](https://github.com/nessalabs/nessa-agent/issues/699)). The environment role alone, speaking lease frames on stdio;
+  the gateway's SSH adapter; "run on buildbox" in the composer. *Gate:* a
+  conversation runs on a named host; Stop, close and connection loss end
+  the lease with cleanup evidence; late events dropped; no host named, no
+  code reached.
+- [ ] **C. `environments.list` and `run` in `nessa-mcp`**
+  ([#700](https://github.com/nessalabs/nessa-agent/issues/700)). A lease whose work is one bounded command; typed refusals.
+  *Gate:* the agent runs a command on the SSH host under the person's
+  approval cards; refused by an absent grant and by tool policy with the
+  caller as initiator; absent from the profile until enabled.
+- [ ] **D. Artifact channel over sftp** ([#701](https://github.com/nessalabs/nessa-agent/issues/701)). An environment
+  publishes files by digest; the transcript shows them; download verifies.
+  *Gate:* a DMG and a screenshot built remotely arrive, verify and are
+  audited with the lease as cause; the control channel carries no bytes.
+- [ ] **E. Record subscriptions; desktop off polling** ([#702](https://github.com/nessalabs/nessa-agent/issues/702);
+  bounded reads #296 and the one fold #277 are done and are its
+  foundation). *Gate:*
+  lagging-subscriber close, replay/live changeover, slow-client isolation,
+  measured latency; polling deleted in the same change.
+- [ ] **F. First-use install over SSH** ([#703](https://github.com/nessalabs/nessa-agent/issues/703)), reusing the
+  verified download of [173](../done/173-fetch-agent-runtimes.md).
+  *Gate:* install refuses on fingerprint or version mismatch; macOS and
+  Linux hosts verified.
+- [ ] **G. Per-conversation Read grants** ([#704](https://github.com/nessalabs/nessa-agent/issues/704)). A Cedar grant
+  on one conversation id for a paired device or peer. *Gate:* an ungranted
+  id is invisible; revocation ends the next read.
+- [ ] **H. Peer gateway as a `gateway` principal kind** ([#705](https://github.com/nessalabs/nessa-agent/issues/705)).
+  Device pairing reused; a peer reads what it is granted. *Gate:* same
+  enrollment and listener; one new principal kind; a peer cannot hold both
+  authorities over one conversation.
+- [ ] **I. Environment grants to peers; outbound environment connection;
+  local discovery** ([#706](https://github.com/nessalabs/nessa-agent/issues/706)). *Gate:* the peer admits and may
+  narrow under its policy; narrowed grants recorded; lease ends on revoke;
+  relay fallback converges to the same checkpoint.
+- [ ] **J. Drive role and tool policy per person** ([#707](https://github.com/nessalabs/nessa-agent/issues/707);
+  depends on the 0014 hook runtime under
+  [#130](https://github.com/nessalabs/nessa-agent/issues/130) and 0011
+  phase B). *Gate:* a shared turn runs under the sharer's policy with its
+  denials attributed to them; until the runtime exists, Drive is a typed
+  refusal, never a weaker check.
+- [ ] **K. Hosted workers** ([#708](https://github.com/nessalabs/nessa-agent/issues/708)). Environment-only gateways
+  per organization in containers. *Gate:* two-organization isolation
+  across leases, artifacts, tools and audit.
+
+Phone lane, beside it, already sliced and unchanged:
+[#263](https://github.com/nessalabs/nessa-agent/issues/263) pairing and
+protected reads (its #264 and #265 are done), [#266](https://github.com/nessalabs/nessa-agent/issues/266)
+relay, [#267](https://github.com/nessalabs/nessa-agent/issues/267) device
+commands, [#270](https://github.com/nessalabs/nessa-agent/issues/270)
+backup and restore, [#273](https://github.com/nessalabs/nessa-agent/issues/273)
+artifacts to devices. Slice E unblocks its live reads.
+
+After A to D the Mac mini workflow works for its owner with nothing new on
+the network. After E the phone and the desktop share one live read path.
+G and H reuse pairing that exists. J is the only slice gated on something
+unbuilt, and it degrades to a refusal.
+
 ## Alternatives considered
 
 - **Replicated gateways sharing one record store, or syncing everything
