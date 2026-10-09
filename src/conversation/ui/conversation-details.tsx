@@ -164,16 +164,22 @@ function ConversationFacts({ conversation }: { conversation: Conversation }) {
 
 /** Where the agent runs and the sandbox around it, from its latest lease. */
 function LeaseFacts({ lease }: { lease: ConversationLease }) {
+  // A refused lease names what was asked for, not where anything runs.
+  const granted = lease.state !== "refused"
   return (
     <FactGroup title="Where it runs">
-      <Fact
-        label="Computer"
-        value={lease.environment === "here" ? "This computer" : "Not known"}
-      />
-      <Fact
-        label="Sandbox"
-        value={lease.sandbox === "harness_default" ? "The agent's own" : "Not known"}
-      />
+      {granted ? (
+        <>
+          <Fact
+            label="Computer"
+            value={lease.environment === "here" ? "This computer" : "Not known"}
+          />
+          <Fact
+            label="Sandbox"
+            value={lease.sandbox === "harness_default" ? "The agent's own" : "Not known"}
+          />
+        </>
+      ) : null}
       <Fact label="Status" value={conversationLeaseStatus(lease)} />
     </FactGroup>
   )

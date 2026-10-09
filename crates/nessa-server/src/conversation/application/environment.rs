@@ -154,18 +154,19 @@ enum FencePhase {
     /// Sessions may open; events are accepted.
     Live,
     /// An end was decided: nothing new opens, and the work being stopped
-    /// still reports how it settled.
+    /// still reports how it settled — past the cleanup deadline too, while
+    /// the lease is recorded Interrupted, until the Agent's close returns.
     Ending,
-    /// Ended, interrupted or refused: nothing opens and every event is
-    /// dropped with evidence (row L9).
+    /// The Agent's close returned, or the lease was refused: nothing opens
+    /// and every event is dropped with evidence (row L9).
     Closed,
 }
 
 /// Most dropped events one lease keeps as records: the room
 /// [`CurrentLease::MAX_RECORDS`] leaves after the most records a lease
 /// otherwise takes (issued, ending, interrupted, cleanup reported). More are
-/// counted in the log, not kept, so recording them can never be refused for
-/// want of room.
+/// counted in the log, not kept, so recording them is never refused for want
+/// of room (`l9_drops_past_the_kept_bound_are_counted_and_not_kept_over_the_whole_lease`).
 const MAX_KEPT_DROPS: u64 = CurrentLease::MAX_RECORDS as u64 - 4;
 
 #[derive(Debug)]
@@ -417,6 +418,19 @@ fn next_revision(current: Option<&CurrentLease>, accounting: &[LeaseRecord]) -> 
     Lease::next_revision(phase, known).unwrap_or_else(|_| known.unwrap_or(LeaseRevision::FIRST))
 }
 
+/// What a close confirmed releasing, if it did: its outcome, or the outcome
+/// it observed when only saving the history's evidence of it failed — the
+/// cleanup happened, so the lease ends rather than being interrupted.
+fn confirmed_cleanup(result: &Result<CloseOutcome, AgentError>) -> Option<CloseOutcome> {
+    match result {
+        Ok(outcome) => Some(*outcome),
+        Err(AgentError::StorageDuringClose { cleanup_result, .. }) => {
+            cleanup_result.as_ref().as_ref().ok().copied()
+        }
+        Err(_) => None,
+    }
+}
+
 /// The lease a live conversation's agent runs under.
 pub(crate) struct LiveLease {
     lease: LeaseId,
@@ -467,23 +481,25 @@ impl LiveLease {
             result = &mut close => Some(result),
             () = tokio::time::sleep(cleanup_deadline) => None,
         };
-        let result = match within {
-            Some(Ok(outcome)) => {
-                self.cleaned(manager, outcome).await;
-                return Ok(outcome);
-            }
-            Some(Err(error)) => {
-                self.interrupt(manager).await;
-                return Err(error);
-            }
+        let (result, late) = match within {
+            Some(result) => (result, false),
             None => {
                 self.interrupt(manager).await;
-                close.await
+                (close.await, true)
             }
         };
-        if let Ok(outcome) = &result {
-            self.cleaned(manager, *outcome).await;
+        match confirmed_cleanup(&result) {
+            Some(outcome) => self.cleaned(manager, outcome).await,
+            None if !late => self.interrupt(manager).await,
+            None => {}
         }
+        // Only now: until its close returns, the Agent is still stopping the
+        // turn and is its one authority, and it settles that turn from these
+        // events. Dropping them at the deadline would leave the turn
+        // unsettled and the close waiting for it
+        // (`l8_a_turn_running_past_the_cleanup_deadline_settles_and_the_lease_is_accounted`).
+        self.fence.close();
+        self.record_drops(manager).await;
         result
     }
 
@@ -501,8 +517,6 @@ impl LiveLease {
             _ => Vec::new(),
         })
         .await;
-        self.fence.close();
-        self.record_drops(manager).await;
     }
 
     async fn interrupt(&self, manager: &SessionManager) {
@@ -512,8 +526,6 @@ impl LiveLease {
             _ => Vec::new(),
         })
         .await;
-        self.fence.close();
-        self.record_drops(manager).await;
     }
 
     async fn record_drops(&self, manager: &SessionManager) {

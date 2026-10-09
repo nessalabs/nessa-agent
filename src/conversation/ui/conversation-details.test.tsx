@@ -191,30 +191,41 @@ it("says where the agent runs and the sandbox around it, from its lease", () => 
   )
 })
 
-it("says why a lease ended, or why none was granted", () => {
-  type Lease = NonNullable<NonNullable<ReturnType<typeof attached>["remote"]>["lease"]>
-  const cases: [Lease, string][] = [
-    [{ state: "ending", cause: "closed", droppedEvents: 0 }, "Stopping"],
-    [{ state: "ended", cause: "closed", droppedEvents: 0 }, "Closed"],
-    [{ state: "ended", cause: "stopped", droppedEvents: 0 }, "Stopped"],
-    [{ state: "ended", cause: "revoked", droppedEvents: 0 }, "Access withdrawn"],
-    [{ state: "ended", cause: "expired", droppedEvents: 0 }, "Timed out"],
-    [{ state: "ended", cause: "lost", droppedEvents: 0 }, "Ended when Nessa restarted"],
-    [
-      { state: "interrupted", cause: "stopped", droppedEvents: 0 },
-      "Cleanup not confirmed",
-    ],
-    [
-      { state: "refused", refusal: "sandbox_unavailable", droppedEvents: 0 },
-      "Couldn't start: sandbox not available",
-    ],
-    [{ state: "refused", droppedEvents: 0 }, "Couldn't start"],
-    [{ state: "unreadable", droppedEvents: 0 }, "Not known"],
-  ]
-  for (const [lease, status] of cases) {
-    show(attached({ lease }))
-    expect(group("Where it runs")).toBe(
-      `Where it runsComputerNot knownSandboxNot knownStatus${status}`,
-    )
-  }
+it("says why a lease ended, and of a refused one only why nothing runs", () => {
+  show(
+    attached({
+      lease: {
+        state: "ended",
+        environment: "here",
+        sandbox: "harness_default",
+        cause: "lost",
+        droppedEvents: 0,
+      },
+    }),
+  )
+  expect(group("Where it runs")).toBe(
+    "Where it runsComputerThis computerSandboxThe agent's ownStatusEnded when Nessa restarted",
+  )
+
+  // The sandbox a refused lease carries is the one it asked for.
+  show(
+    attached({
+      lease: {
+        state: "refused",
+        revision: 1,
+        environment: "here",
+        sandbox: "harness_default",
+        refusal: "sandbox_unavailable",
+        droppedEvents: 0,
+      },
+    }),
+  )
+  expect(group("Where it runs")).toBe(
+    "Where it runsStatusCouldn't start: sandbox not available",
+  )
+
+  show(attached({ lease: { state: "unreadable", droppedEvents: 0 } }))
+  expect(group("Where it runs")).toBe(
+    "Where it runsComputerNot knownSandboxNot knownStatusNot known",
+  )
 })

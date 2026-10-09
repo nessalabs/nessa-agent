@@ -69,7 +69,8 @@ pub enum LeaseRecord {
         /// What was released.
         cleanup: LeaseCleanup,
     },
-    /// The cleanup deadline passed with no evidence (row L8).
+    /// Cleanup was not confirmed: the deadline passed with no evidence, or
+    /// the close failed without confirming it (row L8).
     Interrupted {
         /// The lease interrupted.
         lease: LeaseId,

@@ -352,7 +352,7 @@ Slice A's regressions, by row. "Domain" is the lease aggregate's rule
 (`crates/nessa-sdk/tests/domain/agent_execution/leases.rs`), "fold" is the
 recorded stream's (`crates/nessa-sdk/tests/application/agent_execution/sessions/leases.rs`),
 and "in process" drives a real conversation through the port with the
-in-process adapter or a substitute
+in-process adapter or a substitute, or for L9 also the lease's fence alone
 (`crates/nessa-server/tests/conversation/leases.rs` and
 `environment.rs` beside it). The domain and in-process tests are named for
 their rows; the fold's are named for what they show.
@@ -366,8 +366,8 @@ their rows; the fold's are named for what they show.
 | L5 | yes | | yes: a person's close and a desktop stop each record their cause first |
 | L6 | yes | | yes: a stop during a close joins the close's cause |
 | L7 | yes | yes | yes |
-| L8 | yes | yes | yes: a close past its deadline, and a close that fails, interrupt; late confirmation accounts once |
-| L9 | yes | yes | yes: events settle while Ending and are dropped with lease, turn and cursor once closed |
+| L8 | yes | yes | yes: a close past its deadline, with or without a turn running, and a close that fails, interrupt; late confirmation accounts once |
+| L9 | yes | yes | fence: events settle while Ending and are dropped with lease, turn and cursor once closed (see below) |
 | L10 | yes | | not reachable: in process there is no control channel to lose |
 | L11 | | | yes, at the next opening: a lease an earlier run left is accounted for before the next is issued (see below) |
 | L12 | yes | | yes, as L11: the in-process environment reports it holds nothing (`not_held`) |
@@ -380,6 +380,12 @@ their rows; the fold's are named for what they show.
 | L19 | | | not in slice A: low-disk pause is an environment limit from B |
 
 A row marked "not in slice A" is not implemented, under the rule above.
+
+How slice A meets L9 in process. The fence drops events once the Agent's
+own close has returned, not at the moment the lease is recorded
+Interrupted. Until then the Agent is still stopping the turn and is its one
+authority, and it settles that turn from those events; dropping them at the
+deadline leaves the turn unsettled and the close waiting for it forever.
 
 How slice A meets L11 and L12 in process. There is no recovery pass at
 start: a lease an earlier run left unfinished is accounted for when its

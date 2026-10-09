@@ -30,12 +30,16 @@ use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::{agents::AgentId, conversation::domain::ConversationId};
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
+    executions::ExecutionUpdate,
     permissions::ActionContext,
     providers::AgentProvider,
     sessions::{
-        CurrentLease, LeaseRecord, SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
+        CommittedSession, CurrentLease, LeaseRecord, SessionChange, SessionLoad,
+        SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit, SessionSnapshot,
+        SessionStorage, SessionStorageLease, StorageError, StorageFuture,
     },
 };
+use nessa_sdk::domain::agent_execution::executions::MessageChunk;
 use nessa_sdk::domain::agent_execution::leases::{
     AgentWork, EnvironmentRef, LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseId,
     LeaseRefusal, LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile, SandboxProfiles,
@@ -46,7 +50,7 @@ use std::{
     collections::HashMap,
     path::Path,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -104,9 +108,69 @@ impl Environment for Substitute {
     }
 }
 
+/// The record store, refusing the next save that issues a lease while
+/// `fail_issue` is set, as a disk that went away for a moment would.
+struct Records {
+    inner: RecordStorage,
+    fail_issue: Arc<AtomicBool>,
+}
+impl SessionStorage for Records {
+    fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
+        self.inner.read_committed(id)
+    }
+    fn shutdown(&self) -> StorageFuture<'_, ()> {
+        self.inner.shutdown()
+    }
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        let fail_issue = self.fail_issue.clone();
+        Box::pin(async move {
+            let inner = self.inner.open(id).await?;
+            Ok(Box::new(RecordsLease { inner, fail_issue }) as Box<dyn SessionStorageLease>)
+        })
+    }
+    fn open_existing(
+        &self,
+        id: SessionId,
+    ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
+        let fail_issue = self.fail_issue.clone();
+        Box::pin(async move {
+            Ok(self.inner.open_existing(id).await?.map(|inner| {
+                Box::new(RecordsLease { inner, fail_issue }) as Box<dyn SessionStorageLease>
+            }))
+        })
+    }
+}
+struct RecordsLease {
+    inner: Box<dyn SessionStorageLease>,
+    fail_issue: Arc<AtomicBool>,
+}
+impl SessionStorageLease for RecordsLease {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
+        self.inner.load()
+    }
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
+        let issues = units
+            .iter()
+            .flat_map(SessionSaveUnit::changes)
+            .any(|change| matches!(change, SessionChange::Lease(LeaseRecord::Issued { .. })));
+        if issues && self.fail_issue.swap(false, Ordering::SeqCst) {
+            return Box::pin(async { Err(StorageError::Io("the disk went away".into())) });
+        }
+        self.inner.save_changes(binding, snapshot, units)
+    }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.inner.erase()
+    }
+}
+
 struct Harness {
     service: ConversationService,
-    storage: Arc<RecordStorage>,
+    storage: Arc<Records>,
     provider: Arc<ProviderFactory>,
     id: ConversationId,
 }
@@ -139,7 +203,10 @@ fn harness(
     let metadata = Arc::new(
         LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3")).unwrap(),
     );
-    let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
+    let storage = Arc::new(Records {
+        inner: RecordStorage::new(root.join("sessions")).unwrap(),
+        fail_issue: Arc::new(AtomicBool::new(false)),
+    });
     let service = ConversationService::new(
         ConversationDependencies {
             agents,
@@ -292,12 +359,13 @@ async fn l1_a_run_is_live_under_a_lease_with_what_was_granted_before_its_first_t
     let root = tempfile::tempdir().unwrap();
     let harness = in_process(root.path(), DELETION_BUDGETS.stop);
     harness.create().await;
-    harness.turn("turn-1").await;
+    // Live before any turn: the opening records it.
     let view = harness
         .service
         .read(harness.id.clone(), caller("read"))
         .await
         .unwrap();
+    assert!(view.messages.is_empty());
     let lease = view.lease.expect("the view shows the lease");
     assert_eq!(lease.state, ConversationLeaseState::Live);
     assert_eq!(lease.revision, Some(1));
@@ -307,6 +375,7 @@ async fn l1_a_run_is_live_under_a_lease_with_what_was_granted_before_its_first_t
         Some(ConversationLeaseSandbox::HarnessDefault)
     );
     assert_eq!(lease.cause, None);
+    harness.turn("turn-1").await;
 
     harness
         .service
@@ -534,6 +603,110 @@ async fn l11_l12_l16_a_lease_left_live_by_an_earlier_run_ends_lost_before_the_ne
     // The stale lease was ended before this one took the next revision: the
     // fold refuses a new issuance over a lease still Live.
     assert_eq!(lease.revision, Some(3));
+}
+
+#[tokio::test]
+async fn l5_l11_a_lease_whose_record_failed_to_save_ends_with_the_opening_it_failed() {
+    let root = tempfile::tempdir().unwrap();
+    let provider = Arc::new(ProviderFactory::default());
+    let substitute = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    let binding = Arc::new(Provider::new(provider.clone()));
+    let harness = harness(
+        root.path(),
+        substitute.clone(),
+        DELETION_BUDGETS.stop,
+        provider,
+        binding,
+    );
+    harness.create().await;
+    harness.turn("turn-1").await;
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    // The next opening's lease is issued, but saving it fails: the opening
+    // fails, and its close saves the lease ended with it.
+    harness.storage.fail_issue.store(true, Ordering::SeqCst);
+    let failed = harness
+        .service
+        .submit(
+            harness.id.clone(),
+            caller("turn-2"),
+            "turn-2".into(),
+            SubmittedMessage {
+                text: "hello".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
+            SubmissionMode::Queue,
+        )
+        .await;
+    assert!(matches!(failed, Err(ConversationError::Storage(_))));
+    assert!(!harness.storage.fail_issue.load(Ordering::SeqCst));
+    let lease = harness.lease().await;
+    assert_eq!(lease.revision(), Some(LeaseRevision::new(2).unwrap()));
+    assert_eq!(kinds(&lease), ["issued", "ending", "ended"]);
+    assert_eq!(
+        ending_cause(&lease),
+        Some((LeaseEndCause::Closed, Some("turn-2".into())))
+    );
+    // So the next opening has nothing to account for: no lease is lost.
+    harness.turn("turn-3").await;
+    assert!(substitute.accounted.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn l8_a_turn_running_past_the_cleanup_deadline_settles_and_the_lease_is_accounted() {
+    let root = tempfile::tempdir().unwrap();
+    let harness = in_process(root.path(), Duration::from_millis(50));
+    harness.create().await;
+    let (go, gate) = oneshot::channel();
+    *harness.provider.execution_gate.lock().unwrap() = Some(gate);
+    harness
+        .provider
+        .execution_updates
+        .lock()
+        .unwrap()
+        .push(ExecutionUpdate::Message(MessageChunk::text("late")));
+    harness
+        .service
+        .submit(
+            harness.id.clone(),
+            caller("turn-1"),
+            "turn-1".into(),
+            SubmittedMessage {
+                text: "hello".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    harness.provider.execution_started.notified().await;
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let close = tokio::spawn(async move { service.close(id, caller("close")).await });
+    // Past the deadline, with the turn still running, the lease is
+    // interrupted; the Agent still settles the turn it is stopping.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    go.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), close)
+        .await
+        .expect("the close finishes once the turn settles")
+        .unwrap()
+        .unwrap();
+    let snapshot = harness.snapshot().await;
+    assert!(snapshot
+        .invocations
+        .iter()
+        .all(|record| record.result.is_some()));
+    let lease = snapshot.lease.expect("a lease was recorded");
+    assert_eq!(
+        kinds(&lease),
+        ["issued", "ending", "interrupted", "cleanup_reported"]
+    );
 }
 
 /// A second service on the same stores, as after a restart.

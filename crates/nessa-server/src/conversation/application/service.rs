@@ -1390,6 +1390,12 @@ impl ConversationService {
                                 &actor,
                             )
                             .await;
+                            // A lease issued whose record only failed to save is
+                            // retained, and the close below saves it: it is ended
+                            // with that close, so the stream never keeps a Live
+                            // lease nothing runs under.
+                            let retained = opening.refusal.is_none()
+                                && matches!(issued, Err(LeaseRecordError::Storage(_)));
                             let refused = match (issued, opening.refusal) {
                                 (Ok(()), None) => None,
                                 (Ok(()), Some(refusal)) => {
@@ -1416,7 +1422,19 @@ impl ConversationService {
                             if let Some(cause) = refused {
                                 // Nothing was attached; the Agent holds only
                                 // the history, which its close lets go of.
-                                let holds = agent.close(actor.clone()).await.is_err();
+                                let closed = if retained {
+                                    LiveLease::new(&opening)
+                                        .close(
+                                            &agent,
+                                            LeaseEndCause::Closed,
+                                            actor.clone(),
+                                            service.inner.deletion_budgets.stop,
+                                        )
+                                        .await
+                                } else {
+                                    agent.close(actor.clone()).await
+                                };
+                                let holds = closed.is_err();
                                 return Err(OpeningFailure { cause, holds });
                             }
                             let lease = LiveLease::new(&opening);

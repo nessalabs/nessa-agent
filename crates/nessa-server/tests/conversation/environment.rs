@@ -5,6 +5,7 @@ use super::*;
 use crate::conversation::infrastructure::in_process_environment;
 use crate::conversation_test_support::{Provider, ProviderFactory};
 use nessa_sdk::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
+use nessa_sdk::application::agent_execution::sessions::StorageError;
 use nessa_sdk::domain::agent_execution::{executions::MessageChunk, leases::LeaseRevision};
 use std::collections::VecDeque;
 
@@ -176,6 +177,27 @@ async fn l9_drops_past_the_kept_bound_are_counted_and_not_kept_over_the_whole_le
     records.extend(second);
     assert_eq!(records.len(), CurrentLease::MAX_RECORDS);
     held(&records);
+}
+
+#[test]
+fn l7_l8_a_close_that_confirmed_cleanup_but_could_not_save_it_still_ends_the_lease() {
+    let confirmed = CloseOutcome { forced: true };
+    assert_eq!(confirmed_cleanup(&Ok(confirmed)), Some(confirmed));
+    assert_eq!(
+        confirmed_cleanup(&Err(AgentError::StorageDuringClose {
+            error: StorageError::Io("the disk went away".into()),
+            cleanup_result: Box::new(Ok(confirmed)),
+        })),
+        Some(confirmed)
+    );
+    assert_eq!(
+        confirmed_cleanup(&Err(AgentError::StorageDuringClose {
+            error: StorageError::Io("the disk went away".into()),
+            cleanup_result: Box::new(Err(AgentError::CleanupUncertain)),
+        })),
+        None
+    );
+    assert_eq!(confirmed_cleanup(&Err(AgentError::CleanupUncertain)), None);
 }
 
 fn held(records: &[LeaseRecord]) -> CurrentLease {
