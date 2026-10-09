@@ -31,7 +31,7 @@ use std::{
     collections::BTreeMap,
     io,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -44,15 +44,20 @@ use tokio::{
 // ---- the host side ----
 
 /// Echoes its input, except `flood`, which it answers with a mebibyte;
-/// counts its stops.
+/// counts its stops. A harness that flooded has to be forced to stop, so
+/// its cleanup is told apart from one that answers nothing ran.
 struct Echo {
     stopped: Arc<AtomicUsize>,
 }
-struct EchoControl(Arc<AtomicUsize>);
+struct EchoControl {
+    stopped: Arc<AtomicUsize>,
+    flooded: Arc<AtomicBool>,
+}
 impl HarnessControl for EchoControl {
     fn cleanup(&mut self, _grace: Duration, _kill: Duration) -> HarnessCleanupFuture<'_> {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        Box::pin(async { Ok(CloseOutcome { forced: false }) })
+        self.stopped.fetch_add(1, Ordering::SeqCst);
+        let forced = self.flooded.load(Ordering::SeqCst);
+        Box::pin(async move { Ok(CloseOutcome { forced }) })
     }
 }
 impl HarnessLauncher for Echo {
@@ -69,10 +74,13 @@ impl HarnessLauncher for Echo {
     ) -> Result<HarnessProcess, AgentError> {
         let (input, mut harness_in) = duplex(4096);
         let (mut harness_out, output) = duplex(4096);
+        let flooded = Arc::new(AtomicBool::new(false));
+        let flooding = flooded.clone();
         tokio::spawn(async move {
             let mut buffer = [0; 256];
             while let Ok(read) = harness_in.read(&mut buffer).await {
                 if &buffer[..read] == b"flood" {
+                    flooding.store(true, Ordering::SeqCst);
                     for _ in 0..1024 {
                         if harness_out.write_all(&[b'x'; 1024]).await.is_err() {
                             return;
@@ -88,7 +96,10 @@ impl HarnessLauncher for Echo {
         Ok(HarnessProcess {
             input: Box::new(input),
             output: Box::new(output),
-            control: Box::new(EchoControl(self.stopped.clone())),
+            control: Box::new(EchoControl {
+                stopped: self.stopped.clone(),
+                flooded,
+            }),
         })
     }
 }
@@ -690,13 +701,14 @@ async fn output_a_binding_does_not_read_is_bounded_and_stops_the_harness() {
             if lease == id.as_str() && *channel == 1)
     ));
     // The binding's own stop, after the host already stopped it, is answered
-    // with the host's evidence, never left uncertain.
+    // with the host's evidence (forced, as the flood made it), never left
+    // uncertain and never as a harness that held nothing.
     assert_eq!(
         control
             .cleanup(Duration::from_millis(10), Duration::from_millis(100))
             .await
             .unwrap(),
-        CloseOutcome { forced: false }
+        CloseOutcome { forced: true }
     );
     assert_eq!(connector.stopped.load(Ordering::SeqCst), 1);
 }
