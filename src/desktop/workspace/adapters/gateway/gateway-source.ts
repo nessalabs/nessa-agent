@@ -16,8 +16,10 @@
  *   pending (an app review, a permission or a question, the provider still
  *   starting, or a turn still running or queued). Every other open chat
  *   keeps its poll. The list watch
- *   ending, or never registering, resumes
- *   the list timer, and the next round tries the watch again.
+ *   ending, or never registering, resumes the list timer. The next attempt
+ *   waits, then longer, up to a minute. An access refusal does not try again
+ *   until the session is replaced. While the socket is reconnecting, the
+ *   timers return, and `connected` registers the watches on that same socket.
  * - **Revisions are minted here.** The gateway's view revision is opaque and
  *   its list rows carry none, so this adapter counts: one counter per
  *   session's summary, one per conversation, each from 1, moved on when what
@@ -371,6 +373,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   // The connection: one client at a time, connected on first need.
   let listFollow = false
   let recordFollowed: string | undefined
+  /** An access refusal stands for this source. Later rounds do not connect again. */
+  let followGaveUp = false
+  let followDelay = timing.pollMs
+  let followNotBefore = 0
   let follower: ChangeFollower | undefined
   let current: { client: C; off: () => void } | undefined
   let connecting: Promise<C> | undefined
@@ -869,8 +875,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     )
     // A permission or a question is waiting on a person. That card is not a
     // commit ping, so the fast poll stays and this chat does not take the slot.
-    const waiting =
-      last.view.permissions.length > 0 || last.view.questions.length > 0
+    const waiting = last.view.permissions.length > 0 || last.view.questions.length > 0
     return (
       appCalls.has(sessionId) ||
       last.view.lifecycle.phase === "starting" ||
@@ -912,6 +917,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   }
   let startingFollow = false
   let followEpoch = 0
+  const followCapMs = 60_000
+  const noteFollowRetry = () => {
+    followDelay = Math.min(Math.max(followDelay * 2, timing.pollMs), followCapMs)
+    followNotBefore = clock.now() + followDelay
+  }
   const openFollow = () =>
     new Promise<FollowSocket | undefined>((resolve) => {
       let settled = false
@@ -975,27 +985,57 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           if (!currentFollow()) return
           recordFollowed = id
           if (id !== undefined) followRead(id)
+          else scheduleActive()
         },
-        onFallback: () => {
+        onWatching: (held) => {
+          if (!currentFollow()) return
+          if (!held) {
+            listFollow = false
+            recordFollowed = undefined
+            schedule()
+            scheduleActive()
+            return
+          }
+          listFollow = true
+          cancelPoll?.()
+          cancelPoll = undefined
+          void list("poller").then(
+            () => {
+              if (!currentFollow()) return
+              scheduleActive()
+            },
+            () => {
+              if (currentFollow()) gap = true
+            },
+          )
+        },
+        wait: (ms) =>
+          new Promise((resolve) => {
+            clock.after(ms, () => resolve())
+          }),
+        onFallback: (reason) => {
           if (!currentFollow()) return
           listFollow = false
           recordFollowed = undefined
-          if (startingFollow) return
           next.stop()
           if (follower === next) follower = undefined
+          if (reason === "watch-refused") followGaveUp = true
+          else noteFollowRetry()
+          if (startingFollow) return
           schedule()
           scheduleActive()
         },
       })
       follower = next
-      let outcome: "sync" | "fallback"
+      let outcome: "sync" | "refused" | "retry"
       try {
         outcome = await next.start()
       } catch {
-        outcome = "fallback"
+        outcome = "retry"
       }
-      if (!currentFollow()) {
+      if (!currentFollow() || follower !== next) {
         next.stop()
+        if (follower === next) follower = undefined
         return false
       }
       if (outcome === "sync") {
@@ -1012,6 +1052,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           gap = true
           return false
         }
+        // The watch ended while that list was in flight. The timers are
+        // already back; reporting the follow held would leave them off.
+        if (!currentFollow() || follower !== next || !listFollow) return false
         scheduleActive()
         return true
       }
@@ -1019,6 +1062,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       if (follower === next) follower = undefined
       listFollow = false
       recordFollowed = undefined
+      if (outcome === "refused") followGaveUp = true
+      else noteFollowRetry()
       return false
     } finally {
       startingFollow = false
@@ -1031,7 +1076,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       if (listFollow) return
       const connected = await client("poller")
       if (!live()) return
-      if (connected.watches && connected.on) {
+      if (
+        !followGaveUp &&
+        clock.now() >= followNotBefore &&
+        connected.watches &&
+        connected.on
+      ) {
         const adopted = await beginFollow()
         if (adopted || !live()) return
       }
@@ -1175,6 +1225,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       return () => {
         listeners.delete(listener)
         if (listeners.size === 0) {
+          // An in-flight follow must not install a socket nobody is listening to.
+          followEpoch += 1
           stopPolling()
           listFollow = false
           recordFollowed = undefined

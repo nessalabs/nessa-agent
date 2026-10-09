@@ -12,11 +12,20 @@
  * so this window holds the catalogue watch and at most one record watch on
  * that socket. A chat without that record watch keeps its own poll. The
  * catalogue watch replaces only the list timer.
+ *
+ * The managed session reconnects this socket on its own. Watch ids do not
+ * survive that: `reconnecting` suspends the follow, and `connected`
+ * registers the catalogue and the record watch again. A record the server
+ * no longer has (`wrong_owner`, `wrong_receiver`, `stale_epoch`) drops only
+ * that watch.
  */
 import { NessaRpcError } from "@nessa/client"
 
 /** Why the follow stopped and the window's timers should resume. */
 export type FollowFallback = "watch-refused" | "watch-ended"
+
+/** What `start` decided. The window backs off on `retry` and stops on `refused`. */
+export type FollowStart = "sync" | "refused" | "retry"
 
 /** The dedicated watch connection. It is not the command client. */
 export interface FollowSocket {
@@ -34,7 +43,7 @@ export interface FollowSocket {
 }
 
 export interface ChangeFollower {
-  start(): Promise<"sync" | "fallback">
+  start(): Promise<FollowStart>
   stop(): void
   /** The record target changed. Overlapping calls run one at a time. */
   retarget(): void
@@ -54,20 +63,40 @@ export interface ChangeFollowOptions {
   onConversationChanged(conversationId: string): void
   /** The record watch was installed or dropped. A new id is one read's worth. */
   onRecordHeld(conversationId: string | undefined): void
+  /**
+   * The catalogue watch is held, or the socket is reconnecting and the
+   * watches are gone until `connected` registers them again.
+   */
+  onWatching(held: boolean): void
   onFallback(reason: FollowFallback): void
+  /**
+   * Waits between capacity retries. Tests pass a stand-in; the desktop
+   * waits on the real clock. The gaps are 50, 200, and 500 milliseconds.
+   */
+  wait?(ms: number): Promise<void>
 }
 
-const ACCESS = new Set([
-  "unauthorized",
-  "forbidden",
-  "wrong_owner",
-  "wrong_receiver",
-  "stale_epoch",
-])
+/** A record watch with one of these ends. The catalogue watch on the socket stays. */
+const RECORD_DROP = new Set(["wrong_owner", "wrong_receiver", "stale_epoch"])
 const RETRY = new Set(["watch_capacity", "watch_duplicate"])
+/** Between the four registration attempts. The last gap is also the deferred record retry. */
+const RETRY_WAITS_MS = [50, 200, 500] as const
+
+type Registered =
+  { watchId: string } | { status: "refused"; code: string } | { status: "retry" }
 
 function codeOf(error: unknown): string | undefined {
   return error instanceof NessaRpcError ? error.code : undefined
+}
+
+function watchIdOf(registered: Registered): string | undefined {
+  return "watchId" in registered ? registered.watchId : undefined
+}
+
+function defaultWait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
 }
 
 /**
@@ -75,74 +104,134 @@ function codeOf(error: unknown): string | undefined {
  *
  * A catalogue ping is `onListChanged`. A record ping is
  * `onConversationChanged` for the conversation that watch names. The
- * catalogue watch ending, the socket closing, or an access refusal on
- * register is `onFallback`, and the window's timers resume. A record watch
- * ending drops only that watch.
+ * catalogue watch ending, the socket closing, or an access refusal on the
+ * catalogue is `onFallback`, and the window's timers resume. A record watch
+ * the server no longer has drops only that watch.
  */
 export function createChangeFollower(options: ChangeFollowOptions): ChangeFollower {
   let stopped = false
+  let announced = false
+  let suspended = false
   let socket: FollowSocket | undefined
   let catalogueId: string | undefined
   let recordId: string | undefined
   let recordConversation: string | undefined
+  /** A record the server refused. Not watched again until the target changes. */
+  let skipped: string | undefined
   let generation = 0
+  let end: FollowStart = "retry"
   let chain: Promise<void> = Promise.resolve()
   const unlistens: Array<() => void> = []
+  const wait = options.wait ?? defaultWait
 
   const fail = (reason: FollowFallback) => {
     if (stopped) return
-    options.onFallback(reason)
+    end = reason === "watch-refused" ? "refused" : "retry"
+    if (announced) options.onFallback(reason)
     stop()
   }
 
   async function register(
     attempt: () => Promise<{ watchId: string }>,
-  ): Promise<{ watchId: string } | "refused" | "retry"> {
-    for (let tried = 0; tried < 3; tried++) {
+    gen: number,
+  ): Promise<Registered> {
+    for (let tried = 0; tried < RETRY_WAITS_MS.length + 1; tried++) {
+      if (stopped || gen !== generation) return { status: "retry" }
       try {
         return await attempt()
       } catch (error) {
-        const code = codeOf(error)
-        if (code !== undefined && RETRY.has(code) && tried < 2) continue
-        if (code !== undefined && RETRY.has(code)) return "retry"
-        if (code !== undefined && ACCESS.has(code)) return "refused"
-        return "refused"
+        const code = codeOf(error) ?? "unavailable"
+        if (RETRY.has(code) && tried < RETRY_WAITS_MS.length) {
+          await wait(RETRY_WAITS_MS[tried] ?? 500)
+          continue
+        }
+        if (RETRY.has(code)) return { status: "retry" }
+        return { status: "refused", code }
       }
     }
-    return "retry"
+    return { status: "retry" }
+  }
+
+  function rememberSkip(target: string | undefined, registered: Registered) {
+    if (
+      target !== undefined &&
+      "status" in registered &&
+      registered.status === "refused"
+    ) {
+      if (RECORD_DROP.has(registered.code)) skipped = target
+    }
   }
 
   async function holdRecord(gen: number): Promise<void> {
     const current = socket
-    if (stopped || gen !== generation || current === undefined) return
+    if (stopped || gen !== generation || current === undefined || suspended) return
     const target = options.recordTargets()[0]
-    if (target === recordConversation && recordId !== undefined) return
+    if (target !== undefined && target !== skipped) skipped = undefined
+    if (target === recordConversation && recordId !== undefined && target !== skipped)
+      return
     const previous = recordId
     recordId = undefined
     recordConversation = undefined
     if (previous !== undefined) {
       await current.watches.unwatch(previous).catch(() => undefined)
     }
-    if (stopped || gen !== generation) return
-    if (target === undefined) {
+    if (stopped || gen !== generation || suspended) return
+    if (target === undefined || target === skipped) {
       options.onRecordHeld(undefined)
       return
     }
-    const outcome = await register(() =>
-      current.watches.records({ conversationId: target }),
+    const outcome = await register(
+      () => current.watches.records({ conversationId: target }),
+      gen,
     )
-    if (stopped || gen !== generation) return
-    if (outcome === "refused") {
+    if (stopped || gen !== generation || suspended) return
+    const accepted = watchIdOf(outcome)
+    if (accepted === undefined) {
+      if (
+        "status" in outcome &&
+        outcome.status === "refused" &&
+        RECORD_DROP.has(outcome.code)
+      ) {
+        rememberSkip(target, outcome)
+        options.onRecordHeld(undefined)
+        return
+      }
+      if ("status" in outcome && outcome.status === "retry") {
+        options.onRecordHeld(undefined)
+        const again = gen
+        void wait(RETRY_WAITS_MS[RETRY_WAITS_MS.length - 1] ?? 500).then(() => {
+          if (stopped || again !== generation || suspended) return
+          if (options.recordTargets()[0] !== target) return
+          retarget()
+        })
+        return
+      }
       fail("watch-refused")
       return
     }
-    if (outcome === "retry") {
-      options.onRecordHeld(undefined)
-      return
-    }
-    recordId = outcome.watchId
+    recordId = accepted
     recordConversation = target
     options.onRecordHeld(target)
+  }
+
+  async function resume(gen: number): Promise<void> {
+    const current = socket
+    if (stopped || gen !== generation || current === undefined) return
+    const catalogue = await register(() => current.watches.catalogue(), gen)
+    if (stopped || gen !== generation) return
+    const accepted = watchIdOf(catalogue)
+    if (accepted === undefined) {
+      fail(
+        "status" in catalogue && catalogue.status === "retry"
+          ? "watch-ended"
+          : "watch-refused",
+      )
+      return
+    }
+    catalogueId = accepted
+    suspended = false
+    options.onWatching(true)
+    await holdRecord(gen)
   }
 
   function retarget(): void {
@@ -150,21 +239,10 @@ export function createChangeFollower(options: ChangeFollowOptions): ChangeFollow
     chain = chain.then(() => holdRecord(gen))
   }
 
-  async function start(): Promise<"sync" | "fallback"> {
-    let opened: FollowSocket
-    try {
-      opened = await options.openConnection()
-    } catch {
-      options.onFallback("watch-refused")
-      return "fallback"
-    }
-    if (stopped) {
-      opened.close()
-      return "fallback"
-    }
-    socket = opened
+  function listen(opened: FollowSocket) {
     unlistens.push(
       opened.on("conversation.changed", (payload) => {
+        if (suspended) return
         if (payload.watchId === catalogueId) options.onListChanged()
         else if (payload.watchId === recordId && recordConversation !== undefined)
           options.onConversationChanged(recordConversation)
@@ -178,28 +256,66 @@ export function createChangeFollower(options: ChangeFollowOptions): ChangeFollow
         }
       }),
     )
-    if (opened.onConnectionStateChange) {
-      unlistens.push(
-        opened.onConnectionStateChange((state) => {
-          if (state.status === "closed") fail("watch-ended")
-        }),
-      )
+    if (!opened.onConnectionStateChange) return
+    unlistens.push(
+      opened.onConnectionStateChange((state) => {
+        if (state.status === "closed") {
+          fail("watch-ended")
+          return
+        }
+        if (state.status === "reconnecting") {
+          if (suspended || stopped) return
+          suspended = true
+          generation += 1
+          catalogueId = undefined
+          recordId = undefined
+          recordConversation = undefined
+          skipped = undefined
+          options.onRecordHeld(undefined)
+          options.onWatching(false)
+          return
+        }
+        if (state.status === "connected" && suspended) {
+          const gen = generation
+          chain = chain.then(() => resume(gen))
+        }
+      }),
+    )
+  }
+
+  async function start(): Promise<FollowStart> {
+    let opened: FollowSocket
+    try {
+      opened = await options.openConnection()
+    } catch {
+      return "retry"
     }
-    const catalogue = await register(() => opened.watches.catalogue())
-    if (stopped) return "fallback"
-    if (catalogue === "refused" || catalogue === "retry") {
-      fail("watch-refused")
-      return "fallback"
+    if (stopped) {
+      opened.close()
+      return "retry"
     }
-    catalogueId = catalogue.watchId
-    await holdRecord(generation)
-    if (stopped) return "fallback"
+    socket = opened
+    listen(opened)
+    const gen = generation
+    const catalogue = await register(() => opened.watches.catalogue(), gen)
+    if (stopped) return end
+    const accepted = watchIdOf(catalogue)
+    if (accepted === undefined) {
+      end = "status" in catalogue && catalogue.status === "retry" ? "retry" : "refused"
+      stop()
+      return end
+    }
+    catalogueId = accepted
+    await holdRecord(gen)
+    if (stopped) return end
+    announced = true
     return "sync"
   }
 
   function stop(): void {
     if (stopped && socket === undefined) return
     stopped = true
+    suspended = false
     generation += 1
     for (const unlisten of unlistens) unlisten()
     unlistens.length = 0

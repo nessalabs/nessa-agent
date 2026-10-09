@@ -3,11 +3,7 @@ import type { NessaClient } from "@nessa/client"
 
 import type { ConversationTabs } from "../model"
 import { createChangeFollower, type ChangeFollower } from "../adapters/gateway/sync-path"
-import {
-  commitFollowSet,
-  listConversations,
-  recordFollowSet,
-} from "../adapters/store/history"
+import { listConversations, recordFollowSet } from "../adapters/store/history"
 import { refreshConversation } from "../adapters/store/slice"
 import { useConversationDispatch, useConversationSelector } from "../adapters/store/hooks"
 
@@ -30,11 +26,16 @@ function tabFor(tabs: ConversationTabs, serverId: string) {
   return tabs.conversations.find((item) => item.serverConversationId === serverId)
 }
 
+const FOLLOW_CAP_MS = 60_000
+
 /**
  * Follows commit pings into the panel's existing list and read. Watches use
  * `connect`, a socket of their own, so a watch refusal does not sign this
  * session out. The list watch asks `listConversations`. A record watch asks
  * `refreshConversation` for that chat and is the only chat whose poll stops.
+ * An access refusal stays on that poll. A dropped socket tries again, waiting
+ * longer each time up to a minute. Reconnecting suspends the record watch
+ * until the socket registers it again.
  */
 export function ConversationFollow({
   session,
@@ -56,11 +57,30 @@ export function ConversationFollow({
   useEffect(() => {
     let disposed = false
     let current: ChangeFollower | undefined
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
+    let gaveUp = false
+    let delay = 1_000
+    const clearRetry = () => {
+      if (retryTimer !== undefined) clearTimeout(retryTimer)
+      retryTimer = undefined
+    }
+    const later = (run: () => void) => {
+      clearRetry()
+      delay = Math.min(delay * 2, FOLLOW_CAP_MS)
+      retryTimer = setTimeout(() => {
+        retryTimer = undefined
+        run()
+      }, delay)
+    }
     const start = () => {
+      clearRetry()
+      // stop() does not run onFallback, so a session swap must not leave the
+      // previous chat's record watch gating the poll.
+      dispatch(recordFollowSet(null))
       current?.stop()
       current = undefined
       follower.current = undefined
-      if (!session.get()) return
+      if (disposed || gaveUp || !session.get()) return
       const next = createChangeFollower({
         openConnection: async () => {
           const client = await connect()
@@ -91,24 +111,57 @@ export function ConversationFollow({
           const tab = tabFor(tabsRef.current, serverId)
           if (tab) void dispatch(refreshConversation(tab.id))
         },
-        onFallback: () => {
-          if (!disposed) dispatch(commitFollowSet("poll"))
+        onWatching: (held) => {
+          if (disposed) return
+          if (!held) {
+            dispatch(recordFollowSet(null))
+            return
+          }
+          void dispatch(listConversations())
+        },
+        onFallback: (reason) => {
+          if (disposed) return
+          dispatch(recordFollowSet(null))
+          current = undefined
+          follower.current = undefined
+          if (reason === "watch-refused") {
+            gaveUp = true
+            return
+          }
+          later(start)
         },
       })
       current = next
       follower.current = next
       void next.start().then((outcome) => {
         if (disposed || follower.current !== next) return
-        if (outcome === "sync") dispatch(commitFollowSet("sync"))
+        if (outcome === "sync") {
+          delay = 1_000
+          return
+        }
+        follower.current = undefined
+        current = undefined
+        dispatch(recordFollowSet(null))
+        if (outcome === "refused") {
+          gaveUp = true
+          return
+        }
+        later(start)
       })
     }
     start()
-    const unsubscribe = session.subscribe(start)
+    const unsubscribe = session.subscribe(() => {
+      gaveUp = false
+      delay = 1_000
+      start()
+    })
     return () => {
       disposed = true
+      clearRetry()
       unsubscribe()
       current?.stop()
       follower.current = undefined
+      dispatch(recordFollowSet(null))
     }
   }, [connect, dispatch, session])
 

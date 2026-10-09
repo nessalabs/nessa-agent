@@ -141,14 +141,7 @@
           "description": "Surface kind and instance. Descriptive only; the credential decides the principal."
         }
       },
-      "required": [
-        "minVersion",
-        "maxVersion",
-        "nonce",
-        "credential",
-        "client",
-        "surface"
-      ],
+      "required": ["minVersion", "maxVersion", "nonce", "credential", "client", "surface"],
       "description": "Wire request for session.authenticate. NessaClient.connect builds this after validating the server challenge; a successful response is ProductSessionReady."
     },
     "ProductSessionReady": {
@@ -4603,7 +4596,7 @@
         "receiverId": {
           "type": "string",
           "minLength": 1,
-          "description": "Paired receiver. Present together with accessEpoch. Absent, with accessEpoch, the watch is the authenticated owner's catalogue under conversation.write.",
+          "description": "Paired receiver. Present together with accessEpoch, or both absent. When both are absent, the watch is the authenticated owner's catalogue under conversation.write.",
           "x-core-utf8-bound": "id_max_utf8_bytes",
           "x-utf8MaxBytes": 128
         },
@@ -4631,7 +4624,7 @@
         "receiverId": {
           "type": "string",
           "minLength": 1,
-          "description": "Paired receiver. Present together with accessEpoch. Absent, with accessEpoch, the watch is this conversation under the authenticated owner's conversation.write grant.",
+          "description": "Paired receiver. Present together with accessEpoch, or both absent. When both are absent, the watch is this conversation under the authenticated owner's conversation.write grant.",
           "x-core-utf8-bound": "id_max_utf8_bytes",
           "x-utf8MaxBytes": 128
         },

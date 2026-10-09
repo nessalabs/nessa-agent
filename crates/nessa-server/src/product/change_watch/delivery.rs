@@ -142,6 +142,30 @@ impl WatchDeliveries {
         fresh
     }
 
+    /// Queue an already-admitted terminal notice. The watch is done; the
+    /// connection does not ask admission again and does not close.
+    pub fn conclude(&self, id: &str, reason: ChangeWatchEndReason) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(target) = state.targets.iter_mut().find(|target| target.id == id) else {
+            return;
+        };
+        if target.retiring || target.terminal_sent {
+            return;
+        }
+        target.terminal = true;
+        let deadline = target
+            .pending
+            .map(|pending| pending.deadline)
+            .unwrap_or_else(|| Instant::now() + RECORD_SEND_TIMEOUT);
+        target.pending = Some(Pending {
+            notice: Notice::Ended(reason),
+            deadline,
+            authorized: true,
+        });
+        drop(state);
+        self.ready.notify_one();
+    }
+
     pub fn authorize(&self, id: &str) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(target) = state.targets.iter_mut().find(|target| target.id == id) {

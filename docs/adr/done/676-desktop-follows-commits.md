@@ -64,21 +64,41 @@ The catalogue watch replaces only the list timer. A record watch replaces
 only that chat's fast poll, and only when nothing unsaved is pending: an
 app review, a permission or a question, a provider still starting, a turn
 still running or queued, or a chat this window has not read yet, keeps the
-250 ms poll. A running
-turn's text is the live view, and a commit ping does not carry it. Every
-other chat keeps the poll too. A watch
-refusal or the follow connection closing resumes the timers. The next poll
-round tries the watch again. It does not sign the session out.
+250 ms poll. A running turn's text is the live view, and a commit ping does
+not carry it. Every other chat keeps the poll too. Losing the follow
+connection resumes the timers. It does not sign the session out.
+
+A turn that ends is a list change whether or not it left text. Accepting a
+message records a summary. A reply with text records one too. A turn that
+fails, is stopped, or finishes on a tool records the same summary again,
+with its time moved forward, and that write is the catalogue ping. The list
+then reads `running` as it stands. The row does not stay "running" until
+some other chat happens to commit.
+
+The follow socket is a managed session, so a retryable close reconnects it.
+Watch ids belong to the connection that registered them. While the socket
+says `reconnecting`, the window polls again and treats the watches as gone.
+When it says `connected`, the same socket registers the catalogue and the
+record watch again. The window does not open a second follow connection to
+do that.
 
 | Now | What the window does |
 | --- | --- |
 | Catalogue ping | One existing list, then a read of each open chat whose row moved |
 | Record ping for the watched chat | One existing read of that chat |
+| Turn ends with no preview text | The server writes the summary again. That is a catalogue ping |
 | Chat has no record watch | Its 250 ms poll stays |
 | App review, a permission or question, provider still starting, or a turn still running or queued | That chat's poll stays, and it does not take the record slot |
-| Catalogue watch ended, or never registered | The list timer returns. The next round tries the watch again |
-| Record watch ended or refused for capacity | That chat polls. The catalogue watch stays |
-| Access refused on the follow connection | Both timers return. The next round tries again |
+| Socket `reconnecting` | Both timers return. The socket stays. `connected` registers the watches again |
+| Catalogue watch ended, or the socket closed | The list timer returns. The next attempt waits, then longer, up to a minute |
+| Catalogue registration cannot be taken yet (`watch_capacity`, `watch_duplicate`) | Same backoff. One registration tries four times, 50 then 200 then 500 milliseconds apart, before that attempt is over |
+| Access refused (`forbidden`, `unauthorized`, `invalid_request`) | Both timers return for this source. No further follow connection until the session is replaced |
+| Record watch ended, or the server no longer has that conversation | That chat polls. The catalogue watch stays. The same id is not watched again until the target changes |
+| Record registration cannot be taken yet | That chat polls. One later try on the same connection, after 500 milliseconds |
+
+An old gateway that rejects a receiver-less watch as `invalid_request` is
+the access-refused row: the window polls, and it does not connect again
+until reload.
 
 ## Why 596's four reasons still hold
 
@@ -128,7 +148,10 @@ Two idle windows hold two catalogue watches. A window following one settled
 chat holds one more record watch. A turn that is still running or queued
 does not take that slot. That is not "two windows sit on the cap of eight":
 the cap is eight watches for the whole principal, shared with any phone, and
-these windows do not fill it by themselves.
+these windows do not fill it by themselves. A phone and a window that
+already fill the cap make the next watch `watch_capacity`. The window backs
+off. It does not open a connection on every poll, and it does not raise the
+cap.
 
 A catalogue ping costs one `conversation.list` (and `conversation.observe`
 when that list is incomplete) and one `conversation.read` for each open chat

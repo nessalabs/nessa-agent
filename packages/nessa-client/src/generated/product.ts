@@ -1920,7 +1920,7 @@ export type PairingErrorCode = (typeof PairingErrorCode)[keyof typeof PairingErr
 export type ChangeWatchId = string
 /** Register catalogue interest. A paired receiver sends receiverId and accessEpoch together. An owner session sends neither and is admitted by conversation.write for the conversations it owns. Exactly one of the two fields is invalid. Acknowledgement precedes notices; no head or source read is performed. */
 export interface ConversationWatchCatalogueParams {
-  /** Paired receiver. Present together with accessEpoch. Absent, with accessEpoch, the watch is the authenticated owner's catalogue under conversation.write. */
+  /** Paired receiver. Present together with accessEpoch, or both absent. When both are absent, the watch is the authenticated owner's catalogue under conversation.write. */
   receiverId?: string
   /** Positive current numeric receiver binding epoch. Present together with receiverId, or both absent. */
   accessEpoch?: string
@@ -1929,7 +1929,7 @@ export interface ConversationWatchCatalogueParams {
 export interface ConversationWatchRecordsParams {
   /** Conversation selected under authenticated ownership. */
   conversationId: string
-  /** Paired receiver. Present together with accessEpoch. Absent, with accessEpoch, the watch is this conversation under the authenticated owner's conversation.write grant. */
+  /** Paired receiver. Present together with accessEpoch, or both absent. When both are absent, the watch is this conversation under the authenticated owner's conversation.write grant. */
   receiverId?: string
   /** Positive current numeric receiver binding epoch. Present together with receiverId, or both absent. */
   accessEpoch?: string

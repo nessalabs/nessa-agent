@@ -29,6 +29,11 @@ use nessa_protocol::{
     conversation::domain::{ConversationId, ConversationSummary},
 };
 use nessa_sdk::{
+    application::agent_execution::agents::AgentError,
+    application::agent_execution::providers::{
+        ExecutionReport, ObservationFailure, ObservationFailureCause, ProviderExecutionReply,
+        ProviderSessionState,
+    },
     application::agent_execution::sessions::{
         CommittedSession, SessionStorage, SessionStorageLease, StorageFuture,
     },
@@ -751,6 +756,82 @@ async fn sending_titles_a_conversation_once_and_previews_what_was_said_last() {
     .await;
     assert_eq!(listed[0].title.as_deref(), Some("Plan the trip"));
     assert!(!listed[0].running);
+    listing.service.shutdown().await.unwrap();
+}
+
+/// A turn that finishes without text still moves the summary. `running` on a
+/// list row is computed live, so the proof is the second write — the catalogue
+/// ping — not a list that merely says the turn is over.
+#[tokio::test]
+async fn a_turn_that_ends_without_text_writes_the_summary_again() {
+    let listing = listing(ConversationLimits::default());
+    let conversation = id();
+    listing
+        .service
+        .create(
+            conversation.clone(),
+            owner(),
+            crate::conversation::application::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    let (release, gate) = oneshot::channel();
+    *listing.provider.execution_gate.lock().unwrap() = Some(gate);
+    listing
+        .service
+        .submit(
+            conversation.clone(),
+            caller("org", "person"),
+            "silent".into(),
+            message("Hold this"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        listing.provider.execution_started.notified(),
+    )
+    .await
+    .unwrap();
+    let listed = listing.service.list(owner(), false).await.unwrap();
+    assert!(
+        listed.conversations.first().is_some_and(|row| row.running),
+        "running={:?} rows={}",
+        listed.conversations.first().map(|row| row.running),
+        listed.conversations.len()
+    );
+    assert_eq!(
+        listed.conversations[0].preview.as_deref(),
+        Some("Hold this")
+    );
+    assert_eq!(listing.summaries.writes.load(Ordering::SeqCst), 1);
+    *listing.provider.execution_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Err(AgentError::Unsupported("stopped".into()))),
+            None,
+            ProviderSessionState::Usable,
+        )));
+    *listing
+        .provider
+        .execution_observation_failure
+        .lock()
+        .unwrap() = Some(ObservationFailure::new(
+        AgentError::Unsupported("stopped".into()),
+        ObservationFailureCause::ExecutionFailed,
+    ));
+    release.send(()).unwrap();
+    listed_when(&listing.service, |_| {
+        listing.summaries.writes.load(Ordering::SeqCst) >= 2
+    })
+    .await;
+    assert_eq!(listing.summaries.writes.load(Ordering::SeqCst), 2);
+    let listed = listing.service.list(owner(), false).await.unwrap();
+    assert!(!listed.conversations[0].running);
+    assert_eq!(
+        listed.conversations[0].preview.as_deref(),
+        Some("Hold this")
+    );
     listing.service.shutdown().await.unwrap();
 }
 

@@ -4,7 +4,12 @@
  * is pending. The poller stays for a client that cannot
  * (`gateway-source.test.ts`).
  */
-import type { ConnectionState, ConversationView } from "@nessa/client"
+import {
+  NessaConnectionClosedError,
+  NessaRpcError,
+  type ConnectionState,
+  type ConversationView,
+} from "@nessa/client"
 import { expect, it } from "vitest"
 
 import { gatewaySource, type GatewayClient, type GatewayClock } from "./gateway-source"
@@ -109,6 +114,9 @@ function syncGateway(
   let catalogueWatch: string | undefined
   let updatedAt = 1_000
   let rowRunning = true
+  let catalogueCalls = 0
+  let catalogueError: string | undefined
+  let heldList: Promise<void> | undefined
   const open = (): GatewayClient => {
     const bucket = {
       changed: new Set<(payload: { watchId: string }) => void>(),
@@ -134,6 +142,9 @@ function syncGateway(
       conversation: {
         list: async (options?: { archived?: boolean }) => {
           lists.push(options?.archived ? "archived" : "open")
+          const gate = heldList
+          heldList = undefined
+          if (gate) await gate
           return {
             conversations: options?.archived
               ? []
@@ -183,6 +194,8 @@ function syncGateway(
       },
       watches: {
         ownedCatalogue: async () => {
+          catalogueCalls += 1
+          if (catalogueError) throw new NessaRpcError(catalogueError, catalogueError)
           catalogueWatch = "watch-catalogue"
           return { watchId: catalogueWatch }
         },
@@ -225,6 +238,28 @@ function syncGateway(
       if (!command) throw new Error("no command socket")
       for (const handler of [...command.states])
         handler({ status: "closed", error: new Error("closed") })
+    },
+    followState(status: "connected" | "reconnecting" | "closed") {
+      const follow = sockets.find((socket) => socket.changed.size > 0)
+      if (!follow) throw new Error("no follow socket")
+      const state: ConnectionState =
+        status === "connected"
+          ? { status: "connected" }
+          : status === "closed"
+            ? { status: "closed", error: new Error("closed") }
+            : {
+                status: "reconnecting",
+                attempt: 1,
+                error: new NessaConnectionClosedError(1013, ""),
+              }
+      for (const handler of [...follow.states]) handler(state)
+    },
+    refuseCatalogue(code: string) {
+      catalogueError = code
+    },
+    catalogueCalls: () => catalogueCalls,
+    holdNextList(gate: Promise<void>) {
+      heldList = gate
     },
   }
 }
@@ -406,5 +441,147 @@ it("keeps polling a chat whose provider is still starting", async () => {
   await time.advance(timing.activePollMs + 20)
   await settle()
   expect(gateway.reads.length).toBeGreaterThan(reads)
+  source.dispose?.()
+})
+
+it("resumes the list timer while the watch reconnects and registers again", async () => {
+  const gateway = syncGateway(["chat-a"])
+  const time = clock()
+  const source = gatewaySource({
+    connect: async () => gateway.open(),
+    clock: time,
+    timing,
+  })
+  source.subscribe(() => {})
+  await time.advance(200)
+  await settle()
+  const followed = gateway.lists.length
+  expect(followed).toBe(1)
+  expect(gateway.catalogueCalls()).toBe(1)
+  gateway.followState("reconnecting")
+  await settle()
+  await time.advance(timing.pollMs)
+  await settle()
+  expect(gateway.lists.length).toBeGreaterThan(followed)
+  const polling = gateway.lists.length
+  gateway.followState("connected")
+  await settle()
+  expect(gateway.catalogueCalls()).toBe(2)
+  const caughtUp = gateway.lists.length
+  expect(caughtUp).toBeGreaterThan(polling)
+  await time.advance(timing.pollMs)
+  await settle()
+  expect(gateway.lists.length).toBe(caughtUp)
+  source.dispose?.()
+})
+
+it("does not open a follow connection on every round after access is refused", async () => {
+  const gateway = syncGateway(["chat-a"])
+  gateway.refuseCatalogue("forbidden")
+  const time = clock()
+  const source = gatewaySource({
+    connect: async () => gateway.open(),
+    clock: time,
+    timing,
+  })
+  source.subscribe(() => {})
+  await time.advance(200)
+  await settle()
+  const opened = gateway.sockets.length
+  const tries = gateway.catalogueCalls()
+  expect(tries).toBe(1)
+  for (let at = 0; at < 1_000; at += 50) {
+    await time.advance(50)
+    await settle()
+  }
+  expect(gateway.catalogueCalls()).toBe(tries)
+  expect(gateway.sockets.length).toBe(opened)
+  expect(gateway.lists.length).toBeGreaterThan(0)
+  source.dispose?.()
+})
+
+it("backs off a catalogue watch the gateway cannot take yet", async () => {
+  const gateway = syncGateway(["chat-a"])
+  gateway.refuseCatalogue("watch_capacity")
+  const time = clock()
+  const source = gatewaySource({
+    connect: async () => gateway.open(),
+    clock: time,
+    timing,
+  })
+  source.subscribe(() => {})
+  for (let at = 0; at < 2_000; at += 50) {
+    await time.advance(50)
+    await settle()
+  }
+  const tries = gateway.catalogueCalls()
+  // Four attempts on a connection, then the next connection waits. A round
+  // every 100 ms with no backoff would be dozens of registrations.
+  expect(tries).toBeGreaterThan(4)
+  expect(tries).toBeLessThan(20)
+  source.dispose?.()
+})
+
+it("does not keep a dead follow when the watch ends during its first list", async () => {
+  const gateway = syncGateway(["chat-a"])
+  let release: (() => void) | undefined
+  gateway.holdNextList(
+    new Promise<void>((resolve) => {
+      release = resolve
+    }),
+  )
+  const time = clock()
+  const source = gatewaySource({
+    connect: async () => gateway.open(),
+    clock: time,
+    timing,
+  })
+  source.subscribe(() => {})
+  await time.advance(200)
+  await settle()
+  expect(gateway.catalogueCalls()).toBe(1)
+  gateway.endCatalogue()
+  release?.()
+  await settle()
+  const after = gateway.sockets.length
+  for (let at = 0; at < 1_000; at += 50) {
+    await time.advance(50)
+    await settle()
+  }
+  expect(gateway.sockets.length).toBeGreaterThan(after)
+  expect(gateway.catalogueCalls()).toBeGreaterThan(1)
+  source.dispose?.()
+})
+
+it("does not install a follow after the last listener leaves during connect", async () => {
+  const gateway = syncGateway(["chat-a"])
+  let releaseFollow: (() => void) | undefined
+  const followConnected = new Promise<void>((resolve) => {
+    releaseFollow = resolve
+  })
+  let opened = 0
+  const time = clock()
+  const source = gatewaySource({
+    connect: async () => {
+      opened += 1
+      if (opened > 1) await followConnected
+      return gateway.open()
+    },
+    clock: time,
+    timing,
+  })
+  const stop = source.subscribe(() => {})
+  await time.advance(100)
+  await settle()
+  expect(gateway.catalogueCalls()).toBe(0)
+  stop()
+  releaseFollow?.()
+  await settle()
+  for (let at = 0; at < 500; at += 50) {
+    await time.advance(50)
+    await settle()
+  }
+  expect(gateway.catalogueCalls()).toBe(0)
+  expect(gateway.sockets.filter((socket) => !socket.closed).length).toBe(1)
   source.dispose?.()
 })

@@ -183,6 +183,21 @@ impl ConversationSummary {
             archived: previous.is_some_and(|summary| summary.archived),
         })
     }
+    /// After a turn ended without text a preview could show: it failed, it
+    /// was stopped, or it finished on a tool. The title, preview, and
+    /// archive stay. The time moves, and recording that is what tells a
+    /// catalogue watch the list changed, so `running` is read again.
+    ///
+    /// `None` when nothing was ever said: a list has no row to move.
+    pub fn after_turn(previous: Option<&Self>, at_ms: u64) -> Option<Self> {
+        let previous = previous?;
+        Some(Self {
+            title: previous.title.clone(),
+            preview: previous.preview.clone(),
+            updated_at_ms: later(Some(previous), at_ms),
+            archived: previous.archived,
+        })
+    }
     /// After somebody archived the conversation, or unarchived it. Nothing
     /// else changes, and nothing was said, so the time does not move.
     ///

@@ -449,10 +449,42 @@ impl ConnectionWatches {
         }));
     }
 
+    /// A record watch whose conversation is gone ends that watch and leaves
+    /// the connection up. The catalogue watch on the same socket stays, and
+    /// the window follows a different chat. `true` when this refusal was that
+    /// case, including one whose watch is already ending.
+    fn release_gone_record(&mut self, key: u64) -> bool {
+        let Some(position) = self.targets.iter().position(|target| target.key == key) else {
+            return false;
+        };
+        if !matches!(
+            self.targets[position].selector,
+            WatchSelector::Records { .. }
+        ) {
+            return false;
+        }
+        let id = self.targets[position].id.clone();
+        if self.deliveries.retiring(&id) {
+            return true;
+        }
+        self.targets[position]
+            .interest
+            .store(false, Ordering::Release);
+        if let Some(wait) = self.targets[position].source_wait.take() {
+            wait.abort();
+        }
+        self.deliveries.conclude(&id, ChangeWatchEndReason::Closed);
+        true
+    }
+
     /// The one decision for a refused authority check, from a notice or the
     /// periodic check: it closes the connection only while its target is still
     /// live; a target unwatched since the check began is ignored (row A5).
-    fn refusal_closes(&self, key: u64, refusal: WatchRefusal) -> Option<SessionCloseReason> {
+    /// A gone record watch ends itself instead of closing the connection.
+    fn refusal_closes(&mut self, key: u64, refusal: WatchRefusal) -> Option<SessionCloseReason> {
+        if refusal.ends_only_this_record() && self.release_gone_record(key) {
+            return None;
+        }
         self.targets
             .iter()
             .find(|target| target.key == key)

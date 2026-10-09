@@ -434,6 +434,12 @@ impl WatchRefusal {
         }
     }
 
+    /// A record whose conversation is gone ends that watch. The catalogue
+    /// watch on the same connection stays. Any other refusal closes it.
+    pub fn ends_only_this_record(self) -> bool {
+        matches!(self, Self::Read(ReadRefusal::WrongOwner))
+    }
+
     /// How a live connection closes when a notice or a periodic check is refused.
     pub fn close_reason(self) -> SessionCloseReason {
         match self {

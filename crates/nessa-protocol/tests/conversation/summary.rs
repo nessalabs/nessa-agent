@@ -171,6 +171,13 @@ fn a_summary_keeps_its_first_title_and_follows_what_was_said_last() {
         ConversationSummary::after_reply(Some(&reply), " ", 40),
         None
     );
+    // A turn that ended without text still moves the summary, so a list
+    // watch hears it. The title and the preview stay.
+    let ended = ConversationSummary::after_turn(Some(&reply), 40).unwrap();
+    assert_eq!(ended.title().unwrap().as_str(), "Plan the trip");
+    assert_eq!(ended.preview().unwrap().as_str(), "Done.");
+    assert_eq!(ended.updated_at_ms(), 40);
+    assert!(ConversationSummary::after_turn(None, 40).is_none());
     // A reply never titles a conversation that has no title yet.
     let untitled = ConversationSummary::after_reply(None, "hello", 5).unwrap();
     assert_eq!(untitled.title(), None);

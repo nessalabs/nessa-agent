@@ -2415,6 +2415,8 @@ impl ConversationService {
             drop(live);
             if let Some(reply) = reply {
                 self.summarize_reply(conversation, &reply).await;
+            } else if new_submission {
+                self.note_turn_ended(conversation).await;
             }
             return true;
         }
@@ -2434,6 +2436,8 @@ impl ConversationService {
             drop(live);
             if let Some(reply) = reply {
                 service.summarize_reply(&conversation, &reply).await;
+            } else {
+                service.note_turn_ended(&conversation).await;
             }
         });
         false
@@ -2610,6 +2614,16 @@ impl ConversationService {
                 first_file,
                 at_ms,
             ))
+        })
+        .await;
+    }
+    /// Record that a turn ended with nothing a preview could show. The list
+    /// row's `running` flag is read live; this write is what pings a catalogue
+    /// watch so the row is read again.
+    async fn note_turn_ended(&self, id: &ConversationId) {
+        let at_ms = self.inner.clock.unix_milliseconds();
+        self.change_summary(id, |previous| {
+            ConversationSummary::after_turn(previous, at_ms)
         })
         .await;
     }

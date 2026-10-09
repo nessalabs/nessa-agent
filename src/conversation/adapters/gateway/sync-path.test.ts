@@ -58,6 +58,9 @@ function socket() {
     closeConnection() {
       for (const handler of states) handler({ status: "closed" })
     },
+    state(status: string) {
+      for (const handler of states) handler({ status })
+    },
     failCatalogue(times: number) {
       catalogueFails = times
     },
@@ -76,6 +79,7 @@ it("signals a list change and does not read", async () => {
     onListChanged: () => events.push("list"),
     onConversationChanged: (id) => events.push(id),
     onRecordHeld: () => {},
+    onWatching: () => {},
     onFallback: (reason) => events.push(reason),
   })
   await expect(follower.start()).resolves.toBe("sync")
@@ -97,6 +101,7 @@ it("signals the watched chat and keeps the list when that watch ends", async () 
     onRecordHeld: (id) => {
       held = id
     },
+    onWatching: () => {},
     onFallback: (reason) => events.push(reason),
   })
   await follower.start()
@@ -118,6 +123,7 @@ it("falls back when the catalogue watch ends or the socket closes", async () => 
     onListChanged: () => {},
     onConversationChanged: () => {},
     onRecordHeld: () => {},
+    onWatching: () => {},
     onFallback: (reason) => reasons.push(reason),
   })
   await follower.start()
@@ -131,6 +137,7 @@ it("falls back when the catalogue watch ends or the socket closes", async () => 
     onListChanged: () => {},
     onConversationChanged: () => {},
     onRecordHeld: () => {},
+    onWatching: () => {},
     onFallback: (reason) => reasons.push(reason),
   })
   await followerClosed.start()
@@ -141,16 +148,22 @@ it("falls back when the catalogue watch ends or the socket closes", async () => 
 it("retries a full watch and refuses the window on an access error", async () => {
   const follow = socket()
   follow.failCatalogue(2)
+  const waits: number[] = []
   const follower = createChangeFollower({
     openConnection: async () => follow.api,
     recordTargets: () => [],
     onListChanged: () => {},
     onConversationChanged: () => {},
     onRecordHeld: () => {},
+    onWatching: () => {},
     onFallback: () => {},
+    wait: async (ms) => {
+      waits.push(ms)
+    },
   })
   await expect(follower.start()).resolves.toBe("sync")
   expect(follow.calls.filter((call) => call === "catalogue")).toHaveLength(3)
+  expect(waits).toEqual([50, 200])
   follower.stop()
 
   const refused = socket()
@@ -164,10 +177,11 @@ it("retries a full watch and refuses the window on an access error", async () =>
     onListChanged: () => {},
     onConversationChanged: () => {},
     onRecordHeld: () => {},
+    onWatching: () => {},
     onFallback: (reason) => reasons.push(reason),
   })
-  await expect(denied.start()).resolves.toBe("fallback")
-  expect(reasons).toEqual(["watch-refused"])
+  await expect(denied.start()).resolves.toBe("refused")
+  expect(reasons).toEqual([])
 })
 
 it("moves the one record watch when the target changes", async () => {
@@ -180,6 +194,7 @@ it("moves the one record watch when the target changes", async () => {
     onListChanged: () => {},
     onConversationChanged: () => {},
     onRecordHeld: (id) => held.push(id),
+    onWatching: () => {},
     onFallback: () => {},
   })
   await follower.start()
@@ -203,6 +218,7 @@ it("reports in-process time from a ping to the callback", async () => {
     },
     onConversationChanged: () => {},
     onRecordHeld: () => {},
+    onWatching: () => {},
     onFallback: () => {},
   })
   await follower.start()
@@ -214,4 +230,92 @@ it("reports in-process time from a ping to the callback", async () => {
   expect(elapsed).toBeGreaterThanOrEqual(0)
   expect(elapsed).toBeLessThan(50)
   follower.stop()
+})
+
+it("suspends while the watch reconnects and registers again when it connects", async () => {
+  const follow = socket()
+  const watching: boolean[] = []
+  const reasons: string[] = []
+  const follower = createChangeFollower({
+    openConnection: async () => follow.api,
+    recordTargets: () => ["chat-a"],
+    onListChanged: () => {},
+    onConversationChanged: () => {},
+    onRecordHeld: () => {},
+    onWatching: (held) => watching.push(held),
+    onFallback: (reason) => reasons.push(reason),
+  })
+  await expect(follower.start()).resolves.toBe("sync")
+  follow.state("reconnecting")
+  expect(follower.recordTarget()).toBeUndefined()
+  expect(watching).toEqual([false])
+  expect(reasons).toEqual([])
+  expect(follow.calls).not.toContain("close")
+  follow.state("connected")
+  for (let i = 0; i < 10; i++) await Promise.resolve()
+  expect(watching).toEqual([false, true])
+  expect(follow.calls.filter((call) => call === "catalogue")).toHaveLength(2)
+  expect(follow.calls).toContain("records:chat-a")
+  expect(reasons).toEqual([])
+  follower.stop()
+})
+
+it("drops a deleted record watch and keeps the catalogue connection", async () => {
+  const follow = socket()
+  let held: string | undefined = "pending"
+  const reasons: string[] = []
+  let target = "chat-a"
+  const follower = createChangeFollower({
+    openConnection: async () => follow.api,
+    recordTargets: () => [target],
+    onListChanged: () => {},
+    onConversationChanged: () => {},
+    onRecordHeld: (id) => {
+      held = id
+    },
+    onWatching: () => {},
+    onFallback: (reason) => reasons.push(reason),
+  })
+  await follower.start()
+  follow.api.watches.records = async () => {
+    throw new NessaRpcError("wrong_owner", "wrong_owner")
+  }
+  follow.end("record-chat-a")
+  target = "chat-a"
+  follower.retarget()
+  for (let i = 0; i < 10; i++) await Promise.resolve()
+  expect(reasons).toEqual([])
+  expect(held).toBeUndefined()
+  expect(follow.calls).not.toContain("close")
+  target = "chat-b"
+  follow.api.watches.records = async ({ conversationId }) => {
+    follow.calls.push(`records:${conversationId}`)
+    return { watchId: `record-${conversationId}` }
+  }
+  follower.retarget()
+  for (let i = 0; i < 10; i++) await Promise.resolve()
+  expect(held).toBe("chat-b")
+  expect(reasons).toEqual([])
+  follower.stop()
+})
+
+it("returns retry when the catalogue watch stays at capacity", async () => {
+  const follow = socket()
+  follow.failCatalogue(8)
+  const waits: number[] = []
+  const follower = createChangeFollower({
+    openConnection: async () => follow.api,
+    recordTargets: () => [],
+    onListChanged: () => {},
+    onConversationChanged: () => {},
+    onRecordHeld: () => {},
+    onWatching: () => {},
+    onFallback: () => {},
+    wait: async (ms) => {
+      waits.push(ms)
+    },
+  })
+  await expect(follower.start()).resolves.toBe("retry")
+  expect(waits).toEqual([50, 200, 500])
+  expect(follow.calls.filter((call) => call === "catalogue")).toHaveLength(4)
 })

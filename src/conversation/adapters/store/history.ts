@@ -80,12 +80,6 @@ export type ConversationHistory = {
    * which it would otherwise do as a tab it has not caught up with.
    */
   deletedIds: string[]
-  /**
-   * Whether the list watch is held. `poll` is the list timer (the workspace)
-   * or the mount list (the panel). `sync` means a catalogue ping asks
-   * `listConversations` again. A chat's own poll is separate.
-   */
-  commitFollow: "poll" | "sync"
   /** The server id whose record watch is held, when this window holds one. */
   recordFollowed: string | null
 }
@@ -101,7 +95,6 @@ const initialState: ConversationHistory = {
   latestAction: null,
   leavingIds: [],
   deletedIds: [],
-  commitFollow: "poll",
   recordFollowed: null,
 }
 
@@ -317,11 +310,6 @@ const historySlice = createSlice({
       state.commandError = null
       state.undoable = null
     },
-    /** The list watch started, or the timer resumed. */
-    commitFollowSet(state, action: PayloadAction<"poll" | "sync">) {
-      state.commitFollow = action.payload
-      if (action.payload === "poll") state.recordFollowed = null
-    },
     /** The one record watch was installed or dropped. */
     recordFollowSet(state, action: PayloadAction<string | null>) {
       state.recordFollowed = action.payload
@@ -392,5 +380,4 @@ const historySlice = createSlice({
 })
 
 export const conversationHistoryReducer = historySlice.reducer
-export const { commandErrorCleared, commitFollowSet, recordFollowSet } =
-  historySlice.actions
+export const { commandErrorCleared, recordFollowSet } = historySlice.actions
