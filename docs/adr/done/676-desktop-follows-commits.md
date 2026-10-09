@@ -62,8 +62,9 @@ It signals two things:
 
 The catalogue watch replaces only the list timer. A record watch replaces
 only that chat's fast poll, and only when nothing unsaved is pending: an
-app review, a provider still starting, a turn still running or queued, or
-a chat this window has not read yet, keeps the 250 ms poll. A running
+app review, a permission or a question, a provider still starting, a turn
+still running or queued, or a chat this window has not read yet, keeps the
+250 ms poll. A running
 turn's text is the live view, and a commit ping does not carry it. Every
 other chat keeps the poll too. A watch
 refusal or the follow connection closing resumes the timers. The next poll
@@ -74,7 +75,7 @@ round tries the watch again. It does not sign the session out.
 | Catalogue ping | One existing list, then a read of each open chat whose row moved |
 | Record ping for the watched chat | One existing read of that chat |
 | Chat has no record watch | Its 250 ms poll stays |
-| App review, provider still starting, or a turn still running or queued | That chat's poll stays, and it does not take the record slot |
+| App review, a permission or question, provider still starting, or a turn still running or queued | That chat's poll stays, and it does not take the record slot |
 | Catalogue watch ended, or never registered | The list timer returns. The next round tries the watch again |
 | Record watch ended or refused for capacity | That chat polls. The catalogue watch stays |
 | Access refused on the follow connection | Both timers return. The next round tries again |

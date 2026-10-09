@@ -95,6 +95,7 @@ function syncGateway(
   ids: string[],
   phase: "attached" | "starting" = "attached",
   status: "running" | "completed" = "running",
+  waiting = false,
 ) {
   const lists: string[] = []
   const reads: string[] = []
@@ -154,6 +155,21 @@ function syncGateway(
               parts: [],
             },
           ]
+          if (waiting) {
+            body.permissions = [
+              {
+                executionId: "e",
+                permissionId: "p",
+                toolId: "t",
+                title: "run",
+                toolName: "shell",
+                options: [],
+                origin: { kind: "harness" },
+                ask: "tool",
+                argumentsJson: "{}",
+              },
+            ]
+          }
           return body
         },
         create: async () => ({ conversationId: ids[0] ?? "chat" }),
@@ -341,6 +357,27 @@ it("leaves the watch connection up when the command connection closes", async ()
   await settle()
   expect(gateway.sockets).toHaveLength(before)
   expect(follow?.closed).toBe(false)
+  source.dispose?.()
+})
+
+it("keeps polling a chat that is waiting on a permission", async () => {
+  const gateway = syncGateway(["chat-a"], "attached", "completed", true)
+  const time = clock()
+  const source = gatewaySource({
+    connect: async () => gateway.open(),
+    clock: time,
+    timing,
+  })
+  source.subscribe(() => {})
+  await time.advance(200)
+  await settle()
+  await source.transcript("chat-a")
+  await settle()
+  expect(gateway.recordWatches).toEqual([])
+  const reads = gateway.reads.length
+  await time.advance(timing.activePollMs + 20)
+  await settle()
+  expect(gateway.reads.length).toBeGreaterThan(reads)
   source.dispose?.()
 })
 

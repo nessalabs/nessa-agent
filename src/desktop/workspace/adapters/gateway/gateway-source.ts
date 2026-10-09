@@ -13,8 +13,9 @@
  *   which is what the list round used to do. One record watch, on that same
  *   connection, replaces
  *   the 250 ms poll for that one chat, and only while nothing unsaved is
- *   pending (an app review, the provider still starting, or a turn still
- *   running or queued). Every other open chat keeps its poll. The list watch
+ *   pending (an app review, a permission or a question, the provider still
+ *   starting, or a turn still running or queued). Every other open chat
+ *   keeps its poll. The list watch
  *   ending, or never registering, resumes
  *   the list timer, and the next round tries the watch again.
  * - **Revisions are minted here.** The gateway's view revision is opaque and
@@ -866,7 +867,16 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const inTurn = last.view.messages.some(
       (turn) => turn.status === "running" || turn.status === "queued",
     )
-    return appCalls.has(sessionId) || last.view.lifecycle.phase === "starting" || inTurn
+    // A permission or a question is waiting on a person. That card is not a
+    // commit ping, so the fast poll stays and this chat does not take the slot.
+    const waiting =
+      last.view.permissions.length > 0 || last.view.questions.length > 0
+    return (
+      appCalls.has(sessionId) ||
+      last.view.lifecycle.phase === "starting" ||
+      inTurn ||
+      waiting
+    )
   }
   /**
    * A chat whose settled work a record ping can see. An app review, the
