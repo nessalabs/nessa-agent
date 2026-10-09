@@ -4,17 +4,32 @@
 
 use super::MemoryStorage;
 use crate::application::agent_execution::support::*;
-use std::time::Duration;
+use std::{sync::atomic::AtomicBool, time::Duration};
 
 /// Records each preset a new context is opened at, and each live change.
 struct Backend {
     applied: Mutex<Vec<ApprovalMode>>,
     inner: RecordingSession,
+    response: Mutex<Option<tokio::sync::oneshot::Receiver<ProviderOperationResult<()>>>>,
+    started: tokio::sync::Notify,
+    closes: AtomicUsize,
+    panic_before_future: AtomicBool,
 }
 impl ProviderSessionBackend for Backend {
     fn set_approval_mode(&self, mode: ApprovalMode) -> ProviderOperationFuture<'_, ()> {
-        self.applied.lock().unwrap().push(mode);
-        Box::pin(async { Ok(()) })
+        assert!(
+            !self.panic_before_future.load(Ordering::SeqCst),
+            "approval backend panicked constructing its future"
+        );
+        Box::pin(async move {
+            let response = self.response.lock().unwrap().take();
+            self.started.notify_one();
+            if let Some(response) = response {
+                response.await.expect("provider response sender")?;
+            }
+            self.applied.lock().unwrap().push(mode);
+            Ok(())
+        })
     }
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         self.inner.prepare_invocation()
@@ -38,6 +53,7 @@ impl ProviderSessionBackend for Backend {
         self.inner.cancel_permission(input)
     }
     fn close(&self, origin: SessionCloseRequest) -> CleanupFuture<'_> {
+        self.closes.fetch_add(1, Ordering::SeqCst);
         self.inner.close(origin)
     }
 }
@@ -110,6 +126,10 @@ struct Prepared {
 async fn prepared() -> Prepared {
     let backend = Arc::new(Backend {
         applied: Mutex::new(Vec::new()),
+        response: Mutex::new(None),
+        started: tokio::sync::Notify::new(),
+        closes: AtomicUsize::new(0),
+        panic_before_future: AtomicBool::new(false),
         inner: RecordingSession {
             prompts: AtomicUsize::new(0),
         },
@@ -290,4 +310,157 @@ async fn a_close_during_admission_save_keeps_the_live_mode_on_the_record() {
         modes.iter().all(|mode| *mode == Some(ApprovalMode::Auto)),
         "steering across close recorded {modes:?}"
     );
+}
+
+/// Paused-clock gates establish acceptance before close or caller loss; no sleep
+/// creates the interleaving. A held response has independently owned completion.
+#[tokio::test(start_paused = true)]
+async fn a_pending_approval_change_is_interrupted_by_concurrent_close() {
+    let Prepared { agent, backend, .. } = prepared().await;
+    let (_release, response) = tokio::sync::oneshot::channel();
+    *backend.response.lock().unwrap() = Some(response);
+    let changing = agent.set_approval_mode(ApprovalMode::Auto);
+    tokio::pin!(changing);
+    tokio::select! {
+        _ = backend.started.notified() => {},
+        result = &mut changing => panic!("response must remain pending: {result:?}"),
+    }
+    tokio::time::timeout(Duration::from_secs(1), agent.close(close_action()))
+        .await
+        .expect("close interrupts the admitted response wait")
+        .unwrap();
+    let failure = changing.await.unwrap_err();
+    assert_eq!(failure.error(), &AgentError::Closed);
+    assert_eq!(
+        failure.session_state(),
+        &ProviderSessionState::CleanupRequired
+    );
+    assert_eq!(backend.closes.load(Ordering::SeqCst), 1);
+    assert!(backend.applied.lock().unwrap().is_empty());
+    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_dropped_approval_caller_still_publishes_its_acknowledged_mode_for_admission() {
+    let Prepared {
+        agent,
+        backend,
+        audit,
+        ..
+    } = prepared().await;
+    let (release, response) = tokio::sync::oneshot::channel();
+    *backend.response.lock().unwrap() = Some(response);
+    {
+        let changing = agent.set_approval_mode(ApprovalMode::Auto);
+        tokio::pin!(changing);
+        tokio::select! {
+            _ = backend.started.notified() => {},
+            result = &mut changing => panic!("response must remain pending: {result:?}"),
+        }
+        // Drop the actual caller future, not a proxy task waiting on it.
+    }
+    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
+    release
+        .send(Ok(()))
+        .expect("owned response survives caller loss");
+    finish(&agent, "after-dropped-caller").await;
+    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Auto));
+    assert_eq!(*backend.applied.lock().unwrap(), [ApprovalMode::Auto]);
+    assert_eq!(*audit.0.lock().unwrap(), [Some(ApprovalMode::Auto)]);
+    agent.set_approval_mode(ApprovalMode::Ask).await.unwrap();
+    finish(&agent, "after-repeated-change").await;
+    assert_eq!(
+        *audit.0.lock().unwrap(),
+        [Some(ApprovalMode::Auto), Some(ApprovalMode::Ask)]
+    );
+    agent.close(close_action()).await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn close_after_approval_caller_loss_retires_a_late_response_without_reviving_the_mode() {
+    let Prepared { agent, backend, .. } = prepared().await;
+    let (release, response) = tokio::sync::oneshot::channel();
+    *backend.response.lock().unwrap() = Some(response);
+    {
+        let changing = agent.set_approval_mode(ApprovalMode::Auto);
+        tokio::pin!(changing);
+        tokio::select! {
+            _ = backend.started.notified() => {},
+            result = &mut changing => panic!("response must remain pending: {result:?}"),
+        }
+    }
+    tokio::time::timeout(Duration::from_secs(1), agent.close(close_action()))
+        .await
+        .expect("close settles after caller loss without the response")
+        .unwrap();
+    assert!(release.send(Ok(())).is_err(), "stopped response is retired");
+    assert_eq!(backend.closes.load(Ordering::SeqCst), 1);
+    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    finish(&agent, "after-late-response").await;
+    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
+    agent.close(close_action()).await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_uncertain_approval_response_fences_its_generation_without_publishing_the_mode() {
+    let Prepared { agent, backend, .. } = prepared().await;
+    let (release, response) = tokio::sync::oneshot::channel();
+    *backend.response.lock().unwrap() = Some(response);
+    let changing = agent.set_approval_mode(ApprovalMode::Auto);
+    tokio::pin!(changing);
+    tokio::select! {
+        _ = backend.started.notified() => {},
+        result = &mut changing => panic!("response must remain pending: {result:?}"),
+    }
+    release
+        .send(Err(ProviderOperationFailure::new(
+            AgentError::SubmissionUnresolved,
+            ProviderSessionState::CleanupRequired,
+        )))
+        .unwrap();
+    let failure = changing.await.unwrap_err();
+    assert_eq!(failure.error(), &AgentError::SubmissionUnresolved);
+    assert_eq!(
+        failure.session_state(),
+        &ProviderSessionState::CleanupRequired
+    );
+    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
+    assert!(backend.applied.lock().unwrap().is_empty());
+    assert!(agent
+        .invoke(request("uncertain-mode"), close_action())
+        .await
+        .is_err());
+    assert_eq!(backend.inner.prompts.load(Ordering::SeqCst), 0);
+    agent.close(close_action()).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_backend_panic_before_returning_the_approval_future_fences_its_generation() {
+    let Prepared { agent, backend, .. } = prepared().await;
+    backend.panic_before_future.store(true, Ordering::SeqCst);
+    let failure = agent
+        .set_approval_mode(ApprovalMode::Auto)
+        .await
+        .unwrap_err();
+    assert!(matches!(failure.error(), AgentError::Protocol(_)));
+    assert_eq!(
+        failure.session_state(),
+        &ProviderSessionState::CleanupRequired
+    );
+    assert!(agent
+        .invoke(request("after-provider-panic"), close_action())
+        .await
+        .is_err());
+    assert_eq!(backend.inner.prompts.load(Ordering::SeqCst), 0);
+    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
+    agent.close(close_action()).await.unwrap();
 }
