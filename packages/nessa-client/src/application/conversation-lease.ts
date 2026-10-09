@@ -1,7 +1,7 @@
 import type { ConversationLease } from "../generated/product.js"
 
 /**
- * Where a conversation's lease stands, in a few words a person reads: running,
+ * Where a conversation's lease stands, in a few words a person reads: allowed,
  * stopping, why it ended, or why it could not start. The one wording of a
  * lease for every surface, so the panel and the desktop never say two things
  * about the same lease.
@@ -13,8 +13,10 @@ export function conversationLeaseStatus(
   lease: Pick<ConversationLease, "state" | "cause" | "refusal">,
 ): string {
   switch (lease.state) {
+    // Granted, not a claim that the harness is up: nothing moves a lease when
+    // the agent exits on its own.
     case "live":
-      return "Running"
+      return "Allowed to run"
     case "ending":
       return "Stopping"
     case "ended":

@@ -108,8 +108,8 @@ impl Environment for Substitute {
     }
 }
 
-/// The record store, refusing the next save that issues a lease while
-/// `fail_issue` is set, as a disk that went away for a moment would.
+/// The record store, refusing the next save that issues or refuses a lease
+/// while `fail_issue` is set, as a disk that went away for a moment would.
 struct Records {
     inner: RecordStorage,
     fail_issue: Arc<AtomicBool>,
@@ -157,7 +157,12 @@ impl SessionStorageLease for RecordsLease {
         let issues = units
             .iter()
             .flat_map(SessionSaveUnit::changes)
-            .any(|change| matches!(change, SessionChange::Lease(LeaseRecord::Issued { .. })));
+            .any(|change| {
+                matches!(
+                    change,
+                    SessionChange::Lease(LeaseRecord::Issued { .. } | LeaseRecord::Refused { .. })
+                )
+            });
         if issues && self.fail_issue.swap(false, Ordering::SeqCst) {
             return Box::pin(async { Err(StorageError::Io("the disk went away".into())) });
         }
@@ -455,7 +460,7 @@ async fn l5_a_desktop_stop_ends_the_lease_as_stopped_by_the_gateway() {
 }
 
 #[tokio::test]
-async fn l6_a_second_end_while_ending_joins_the_first_cause_and_is_not_recorded() {
+async fn l6_a_stop_during_a_close_records_no_second_end() {
     let root = tempfile::tempdir().unwrap();
     let harness = in_process(root.path(), DELETION_BUDGETS.stop);
     harness.create().await;
@@ -472,9 +477,18 @@ async fn l6_a_second_end_while_ending_joins_the_first_cause_and_is_not_recorded(
     })
     .await
     .expect("the close reaches the agent");
+    // In process two ends of one lease never run side by side: the close
+    // holds the conversation's submission lock until its slot is let go, so
+    // the stop waits behind it, and the joining of a second cause is the
+    // lease aggregate's rule (`l6_a_later_cause_joins_the_first_and_the_lease_ends_with_the_earliest`). What
+    // this holds is that the stop, whenever it runs, records nothing more.
     let service = harness.service.clone();
     let stop = tokio::spawn(async move { service.stop_active_agents().await });
     tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(
+        !stop.is_finished(),
+        "a stop cannot finish before the close it waits on"
+    );
     release.send(()).unwrap();
     close.await.unwrap().unwrap();
     stop.await.unwrap().unwrap();
@@ -786,6 +800,37 @@ async fn l2_a_sandbox_the_environment_cannot_enforce_is_refused_and_nothing_runs
     assert_eq!(*refusal, LeaseRefusal::SandboxUnavailable);
     // What was asked, since nothing was granted.
     assert_eq!(terms.sandbox, SandboxProfile::HarnessDefault);
+}
+
+#[tokio::test]
+async fn l2_a_refusal_whose_record_failed_to_save_is_still_the_refusal() {
+    let root = tempfile::tempdir().unwrap();
+    let provider = Arc::new(ProviderFactory::default());
+    let substitute = Arc::new(Substitute::new(SandboxProfiles::NONE));
+    let binding = Arc::new(Provider::new(provider.clone()));
+    let harness = harness(
+        root.path(),
+        substitute,
+        DELETION_BUDGETS.stop,
+        provider.clone(),
+        binding,
+    );
+    harness.storage.fail_issue.store(true, Ordering::SeqCst);
+    let refused = harness
+        .service
+        .create(
+            harness.id.clone(),
+            caller("create"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(!harness.storage.fail_issue.load(Ordering::SeqCst));
+    assert!(matches!(
+        refused,
+        ConversationError::LeaseRefused(LeaseRefusal::SandboxUnavailable)
+    ));
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

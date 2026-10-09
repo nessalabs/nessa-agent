@@ -3,7 +3,7 @@ import { leaseNote } from "./transcript-heading"
 
 describe("the heading's word on the agent's lease", () => {
   it("says where the lease stands in the client's words", () => {
-    expect(leaseNote({ state: "live", environment: "here" })).toBe("Running")
+    expect(leaseNote({ state: "live", environment: "here" })).toBe("Allowed to run")
     expect(leaseNote({ state: "ended", cause: "lost" })).toBe(
       "Ended when Nessa restarted",
     )

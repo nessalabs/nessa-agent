@@ -1398,7 +1398,12 @@ impl ConversationService {
                                 && matches!(issued, Err(LeaseRecordError::Storage(_)));
                             let refused = match (issued, opening.refusal) {
                                 (Ok(()), None) => None,
-                                (Ok(()), Some(refusal)) => {
+                                // Nothing ran and the refusal is the cause,
+                                // whether or not its record was saved.
+                                (issued, Some(refusal)) => {
+                                    if let Err(error) = issued {
+                                        tracing::error!(conversation_id = %id, %error, "a refused lease could not be recorded");
+                                    }
                                     Some(ConversationError::LeaseRefused(refusal))
                                 }
                                 (Err(error), _) => {

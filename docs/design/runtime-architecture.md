@@ -346,6 +346,7 @@ it.
 | L17 | Idle budget passes while Live and no turn is running | Live(sleeping): the harness process is stopped with its session state kept; the lease, its deadline and its grants are unchanged; `environments.list` shows sleeping |
 | L18 | Prompt arrives while sleeping | The environment resumes the harness natively; on success Live and the turn proceeds; on failure `process_lost` is recorded, the turn is `interrupted`, and a new lease is needed |
 | L19 | Environment paused for low disk while leases are Live | Workloads frozen and the pause recorded on each lease; deadlines do not advance while paused; Stop still ends a lease; new leases refused with `environment_paused` until space returns |
+| L20 | The harness exits on its own while Live | The turn's failure is the Agent's to report; the lease stays Live until something ends it, so a surface shows it as allowed to run, never as running |
 | L16 | Replacement lease requested after Ended or Interrupted | Admitted as a new lease with a new revision; the harness starts fresh with Nessa's transcript as context; native session resume is unknown per binding and recorded as such |
 
 Slice A's regressions, by row. "Domain" is the lease aggregate's rule
@@ -364,7 +365,7 @@ their rows; the fold's are named for what they show.
 | L3 | yes | | not reachable: in-process leases carry no deadline |
 | L4 | yes | | not reachable, as L3 |
 | L5 | yes | | yes: a person's close and a desktop stop each record their cause first |
-| L6 | yes | | yes: a stop during a close joins the close's cause |
+| L6 | yes | | yes, as far as it can arise: a stop during a close waits behind it and records nothing more; the join is the aggregate's |
 | L7 | yes | yes | yes |
 | L8 | yes | yes | yes: a close past its deadline, with or without a turn running, and a close that fails, interrupt; late confirmation accounts once |
 | L9 | yes | yes | fence: events settle while Ending and are dropped with lease, turn and cursor once closed (see below) |
@@ -378,6 +379,7 @@ their rows; the fold's are named for what they show.
 | L17 | | | not in slice A: idle sleep is an environment limit from B (#699) |
 | L18 | | | not in slice A, as L17 |
 | L19 | | | not in slice A: low-disk pause is an environment limit from B |
+| L20 | | | not in slice A: the lease does not watch the harness; the client words Live as "Allowed to run" |
 
 A row marked "not in slice A" is not implemented, under the rule above.
 
@@ -386,6 +388,10 @@ own close has returned, not at the moment the lease is recorded
 Interrupted. Until then the Agent is still stopping the turn and is its one
 authority, and it settles that turn from those events; dropping them at the
 deadline leaves the turn unsettled and the close waiting for it forever.
+Once the close has returned, the stream's only reader has ended with it, so
+in a running gateway nothing reaches the drop path: dropping with evidence
+is held by the fence's own tests as the contract for an environment whose
+events can still arrive after its lease ends.
 
 How slice A meets L11 and L12 in process. There is no recovery pass at
 start: a lease an earlier run left unfinished is accounted for when its

@@ -187,7 +187,7 @@ it("says where the agent runs and the sandbox around it, from its lease", () => 
   )
 
   expect(group("Where it runs")).toBe(
-    "Where it runsComputerThis computerSandboxThe agent's ownStatusRunning",
+    "Where it runsComputerThis computerSandboxThe agent's ownStatusAllowed to run",
   )
 })
 

@@ -5,7 +5,7 @@ import { conversationLeaseStatus } from "./conversation-lease.js"
 describe("a lease's status in words", () => {
   it("says whether it runs, why it ended, or why it could not start", () => {
     const cases: [Pick<ConversationLease, "state" | "cause" | "refusal">, string][] = [
-      [{ state: "live" }, "Running"],
+      [{ state: "live" }, "Allowed to run"],
       [{ state: "ending", cause: "closed" }, "Stopping"],
       [{ state: "ended", cause: "closed" }, "Closed"],
       [{ state: "ended", cause: "stopped" }, "Stopped"],

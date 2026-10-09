@@ -84,6 +84,11 @@ pub(crate) trait Environment: Send + Sync {
     ) -> Result<Arc<dyn AgentProvider>, LeaseRefusal>;
     /// What became of `lease`, issued before this environment last started
     /// and never ended: whether it still runs anything for it (rows L11, L12).
+    /// The opening waits for the answer and slice A does not bound the wait,
+    /// so an adapter answers without waiting on anything outside this
+    /// process; one whose answer can wait is bounded by the cleanup deadline
+    /// and its lease recorded Interrupted without one, as row L11 says, in the
+    /// slice that adds it.
     fn account<'a>(&'a self, lease: &'a LeaseId) -> EnvironmentFuture<'a, LeaseCleanup>;
 }
 
@@ -224,7 +229,12 @@ impl LeaseFence {
     pub(crate) fn close(&self) {
         self.state().phase = FencePhase::Closed;
     }
-    /// The events dropped since the last call, as records to commit.
+    /// The events dropped since the last call, as records to commit. The
+    /// close calls it once, after closing the fence. In process nothing can
+    /// be dropped after that — the stream's one reader is the Agent's
+    /// invocation loop, which its close has ended — so dropping is a contract
+    /// for an environment whose events can still arrive (row L9), held here
+    /// by the fence's own tests.
     pub(crate) fn take_drops(&self) -> Vec<LeaseRecord> {
         let mut state = self.state();
         if state.uncounted > 0 {
@@ -307,6 +317,13 @@ impl ExecutionEventStream for FencedEvents {
                     state.drops.push((event.execution_id().clone(), cursor));
                 } else {
                     state.uncounted = state.uncounted.saturating_add(1);
+                    if state.uncounted == 1 {
+                        tracing::warn!(
+                            turn = event.execution_id().as_str(),
+                            cursor = state.cursor,
+                            "a lease dropped more late events than it keeps; the rest are counted"
+                        );
+                    }
                 }
             }
         })
@@ -319,10 +336,11 @@ impl ExecutionEventStream for FencedEvents {
 /// accounted for first: ended as lost with what the environment says it holds
 /// for it (rows L11, L12), so a lease is never left silently Live and the new
 /// one takes the next revision (row L16). A previous lease not yet final here
-/// is never one this process still runs: its stream has one writer at a time
-/// (the SDK's history lease, which an Agent holds until its close finishes),
-/// and a conversation's slot opens once and is never reused (`Slot`), so an
-/// opening cannot begin beside a run of the same conversation
+/// is never one this process still runs: a conversation's slot opens once and
+/// is never reused (`Slot`), and a closing slot is let go only once
+/// `close_leased` has returned, after the close's last lease record and
+/// dropped events are committed (`release_live_slot`), so an opening cannot
+/// begin beside a run of the same conversation or its close
 /// (`l13_concurrent_commands_open_one_lease_and_one_agent`).
 pub(crate) async fn issue(
     manager: &SessionManager,
@@ -402,9 +420,11 @@ fn account_earlier(lease: &Lease, cleanup: LeaseCleanup) -> Vec<LeaseRecord> {
 }
 
 /// The revision the new lease takes once `accounting` has been folded onto
-/// `current`. When the rules give none — a previous lease still Live, or no
-/// revision left — this is the last one, which the fold then refuses, so the
-/// opening fails rather than a revision being reused.
+/// `current`. `account_earlier` always leaves an earlier lease final, so the
+/// rules give none only when no revision is left; then this is the last one,
+/// which the fold refuses as corrupt, so the opening fails for good rather
+/// than a revision being reused. A previous lease still Live here cannot
+/// reach this (see [`issue`]), which is how row L13 holds in process.
 fn next_revision(current: Option<&CurrentLease>, accounting: &[LeaseRecord]) -> LeaseRevision {
     let mut folded = current.cloned();
     for record in accounting {
