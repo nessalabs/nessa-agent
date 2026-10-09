@@ -13,7 +13,7 @@ import { useHostContext } from "../adapters/dom/host-context"
 import { AppView } from "../app/ui/app-view"
 import { hostDraws } from "../model/host-table"
 import type { OpenPlace, WidgetAnswer } from "../model/widget-state"
-import type { WidgetHost, WidgetPlugin } from "./plugin"
+import { readsHostSize, type WidgetHost, type WidgetPlugin } from "./plugin"
 import { offeredBy } from "./widget-answer"
 import { WidgetLine, WidgetWaiting } from "./widget-line"
 import "./widgets.css"
@@ -35,8 +35,8 @@ export function WidgetBody({
   host: WidgetHost
 }) {
   const body = useRef<HTMLDivElement>(null)
-  const context = useHostContext(body)
   const draws = hostDraws(place, answer, offeredBy(plugin))
+  const context = useHostContext(body, draws.kind === "view" && readsHostSize(plugin))
   const View = plugin?.kind === "native" ? plugin.views[place] : undefined
   return (
     <div
