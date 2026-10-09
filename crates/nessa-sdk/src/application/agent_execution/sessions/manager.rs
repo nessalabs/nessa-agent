@@ -1,9 +1,9 @@
 use super::{
-    app_sources, attachment::AttachmentLease, steering_position::SteeringPosition,
-    InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, MessageCommitClock,
-    ProviderContext, QueueHistoryRecord, SessionChange, SessionLoadState, SessionSaveGeneration,
-    SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-    StorageFuture, SubmissionAcknowledgement,
+    app_sources, attachment::AttachmentLease, steering_position::SteeringPosition, CurrentLease,
+    InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, LeaseRecord,
+    MessageCommitClock, ProviderContext, QueueHistoryRecord, SessionChange, SessionLoadState,
+    SessionSaveGeneration, SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease,
+    StorageError, StorageFuture, SubmissionAcknowledgement,
 };
 use crate::application::agent_execution::{
     agents::AgentError,
@@ -30,6 +30,7 @@ use crate::domain::agent_execution::{
 };
 use std::{
     collections::HashMap,
+    fmt,
     future::poll_fn,
     panic::{catch_unwind, AssertUnwindSafe},
     sync::{Arc, RwLock},
@@ -67,6 +68,42 @@ impl AttachmentOpenError {
         }
     }
 }
+
+/// What [`SessionManager::record_lease`] decided and whether it is durable.
+#[derive(Debug)]
+#[must_use = "a lease record that was not saved must be reported"]
+pub struct LeaseCommit<T> {
+    /// The caller's value from deciding.
+    pub decided: T,
+    /// Whether the records are durable. An error leaves them retained, and
+    /// the next save writes them.
+    pub saved: Result<(), LeaseRecordError>,
+}
+
+/// Why lease records were not recorded, or not yet saved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LeaseRecordError {
+    /// The manager has not loaded the conversation: no Agent has prepared it.
+    NotLoaded,
+    /// The lease rules refuse a record; nothing was retained.
+    Refused(StorageError),
+    /// A record of a kind this build cannot read was offered; such records
+    /// are only ever read back, never written. Nothing was retained.
+    Unreadable,
+    /// The records were retained but writing them failed.
+    Storage(StorageError),
+}
+impl fmt::Display for LeaseRecordError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotLoaded => formatter.write_str("the conversation is not loaded"),
+            Self::Refused(error) => write!(formatter, "lease record refused: {error}"),
+            Self::Unreadable => formatter.write_str("an unreadable lease record cannot be written"),
+            Self::Storage(error) => write!(formatter, "lease record not saved: {error}"),
+        }
+    }
+}
+impl std::error::Error for LeaseRecordError {}
 
 /// Owns the local conversation key, its exclusive storage lease, and saved evidence.
 /// Provider-private model/tool state is restored by the selected provider.
@@ -301,6 +338,7 @@ impl SessionManager {
         let created = compacted.is_none();
         let mut snapshot = compacted.unwrap_or_else(|| SessionSnapshot {
             queue_history: Vec::new(),
+            lease: None,
             id: self.id.clone(),
             provider: identity,
             provider_context: ProviderContext::Absent,
@@ -978,6 +1016,64 @@ impl SessionManager {
             evidence.push_change(SessionChange::QueueDecision(decision));
         }
         result
+    }
+    /// Decide and record lease facts under the same lock every other fact of
+    /// this conversation is recorded under, so two callers cannot both decide
+    /// from the same lease (rows L5 and L6).
+    ///
+    /// `decide` is given the conversation's current lease as observed, which
+    /// includes facts retained but not yet durable, and returns the records to
+    /// add and a value for the caller. The records are folded through the
+    /// lease rules ([`CurrentLease::apply`]) before anything is retained; a
+    /// record they refuse retains nothing and is
+    /// [`LeaseRecordError::Refused`]. Retained records are written at once, and
+    /// a write that fails leaves them retained for the next save, as every
+    /// other fact is: [`LeaseCommit::saved`] says which.
+    ///
+    /// Only an attached manager records: before [`Agent::prepare`] has loaded
+    /// the conversation this is [`LeaseRecordError::NotLoaded`].
+    ///
+    /// [`Agent::prepare`]: crate::application::agent_execution::agents::Agent::prepare
+    pub async fn record_lease<T>(
+        &self,
+        decide: impl FnOnce(Option<&CurrentLease>) -> (Vec<LeaseRecord>, T),
+    ) -> Result<LeaseCommit<T>, LeaseRecordError> {
+        let mut evidence = self.evidence.lock().await;
+        let snapshot = evidence
+            .observed
+            .as_mut()
+            .ok_or(LeaseRecordError::NotLoaded)?;
+        let (records, decided) = decide(snapshot.lease.as_ref());
+        if records.is_empty() {
+            return Ok(LeaseCommit {
+                decided,
+                saved: Ok(()),
+            });
+        }
+        let mut lease = snapshot.lease.clone();
+        for record in &records {
+            if matches!(record, LeaseRecord::Unreadable { .. }) {
+                return Err(LeaseRecordError::Unreadable);
+            }
+            lease = Some(
+                CurrentLease::apply(lease.as_ref(), record).map_err(LeaseRecordError::Refused)?,
+            );
+        }
+        snapshot.lease = lease;
+        evidence.append_unit(records.into_iter().map(SessionChange::Lease).collect());
+        let saved = self.save_observed(&mut evidence).await;
+        Ok(LeaseCommit {
+            decided,
+            saved: saved.map_err(LeaseRecordError::Storage),
+        })
+    }
+    /// Write the lease records, and any other evidence, that an earlier
+    /// [`Self::record_lease`] retained but could not save
+    /// ([`LeaseCommit::saved`]). Nothing retained is nothing to write. A
+    /// caller that will not close the Agent through an attachment uses this so
+    /// a retained record is not left unsaved.
+    pub async fn save_retained_lease_records(&self) -> Result<(), StorageError> {
+        self.flush_observed().await
     }
     /// Write observed evidence retained by an earlier transition. An unchanged
     /// retry flushes evidence an earlier failed write left observed.

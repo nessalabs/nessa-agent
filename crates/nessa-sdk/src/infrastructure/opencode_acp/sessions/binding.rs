@@ -126,6 +126,11 @@ pub struct OpencodeAcpProvider {
 }
 
 impl OpencodeAcpProvider {
+    /// The sandbox profiles this binding can set up: only the harness's own
+    /// default today, since it configures no sandbox of its own. A lease that
+    /// asks for any other is refused, never run under a weaker one.
+    pub const SANDBOX_PROFILES: crate::domain::agent_execution::leases::SandboxProfiles =
+        crate::domain::agent_execution::leases::SandboxProfiles::HARNESS_DEFAULT;
     /// The existing fixed plan policy exposed for a configured OpenCode model.
     /// OpenCode mode switching remains unavailable until its approval behavior
     /// is verified with this binding's complete launch profile.

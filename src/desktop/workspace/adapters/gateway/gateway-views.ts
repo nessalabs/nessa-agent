@@ -328,6 +328,12 @@ export function transcriptFrom(
     approval,
     revision,
     agent: view.runtime?.agent,
+    lease: view.lease && {
+      state: view.lease.state,
+      environment: view.lease.environment,
+      cause: view.lease.cause,
+      refusal: view.lease.refusal,
+    },
     authenticationRefusal: latestTurn?.authenticationRequired
       ? latestTurn.executionId
       : undefined,

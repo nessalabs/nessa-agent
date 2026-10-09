@@ -184,6 +184,7 @@ pub(super) async fn provider_agent_with_review(
             local_outcome: None,
             result: None,
         }],
+        lease: None,
     };
     let mut accepted = snapshot.invocations[0].clone();
     accepted.events.clear();

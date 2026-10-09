@@ -1249,6 +1249,7 @@ mod tests {
             provider_context: ProviderContext::Absent,
             invocations: Vec::new(),
             queue_history: Vec::new(),
+            lease: None,
         };
         let mut changes = vec![SessionChange::Opened {
             id: session.clone(),
@@ -3266,6 +3267,7 @@ mod tests {
             provider_context: ProviderContext::Absent,
             invocations: Vec::new(),
             queue_history: Vec::new(),
+            lease: None,
         };
         runtime
             .block_on(lease.save_changes(

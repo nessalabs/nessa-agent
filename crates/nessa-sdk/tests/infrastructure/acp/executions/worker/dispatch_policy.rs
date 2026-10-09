@@ -64,6 +64,7 @@ async fn worker_projection_after_reload(
             local_outcome: None,
             result: Some(report.clone().into_result()),
         }],
+        lease: None,
     };
     let storage = InMemoryStorage::new();
     let lease = storage.open(session_id.clone()).await.unwrap();

@@ -2,6 +2,7 @@ import type {
   ApprovalMode,
   ApprovalModeChoice,
   ConversationCapabilities,
+  ConversationLease,
   ConversationRuntime,
   ConversationTranscriptState,
   ImageReference,
@@ -11,6 +12,8 @@ import type { AgentPart } from "../model/types"
 /** Authorized bounded gateway projection. It does not own execution scheduling. */
 export type ConversationView = {
   runtime?: ConversationRuntime
+  /** The latest lease, absent before any was recorded. */
+  lease?: ConversationLease
   approvalMode: ApprovalMode
   approvalModes: ApprovalModeChoice[]
   approvalModeChange?: {

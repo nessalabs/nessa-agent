@@ -327,6 +327,7 @@ impl CurrentAgentResolver {
                         .expect("configured managed adapter")
                         .output_tokens,
                     readiness: None,
+                    sandbox: built.sandbox,
                 }))
             })
             .await

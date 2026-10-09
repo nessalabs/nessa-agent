@@ -296,6 +296,7 @@ fn conversation_service(
                 nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
             ),
             clock: Arc::new(TestClock),
+            environment: crate::conversation::infrastructure::in_process_environment(),
         },
         ConversationLimits::default(),
         None,
@@ -532,6 +533,7 @@ impl SubscriptionFixture {
                         provider_context: context.clone(),
                         invocations: Vec::new(),
                         queue_history: Vec::new(),
+                        lease: None,
                     },
                     vec![SessionSaveUnit::new(vec![change]).unwrap()],
                 )
@@ -599,6 +601,7 @@ impl SubscriptionFixture {
                     provider_context: context,
                     invocations: Vec::new(),
                     queue_history: Vec::new(),
+                    lease: None,
                 },
                 vec![SessionSaveUnit::new(changes).unwrap()],
             )

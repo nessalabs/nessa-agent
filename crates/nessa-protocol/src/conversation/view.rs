@@ -59,6 +59,10 @@ pub struct ConversationView {
     /// the same title `conversation.list` shows, from the same summary — or
     /// `None` before anything was said. Always on the wire, as `null` then.
     pub title: Option<String>,
+    /// The conversation's latest lease: where its agent runs and under what
+    /// limits, or why it could not. Absent before any lease was recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lease: Option<ConversationLeaseView>,
 }
 /// Product status of the last physical committed read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -657,6 +661,83 @@ pub enum ConversationReorderOutcome {
     Unchanged,
     QueueChanged,
     PriorityConflict,
+}
+
+/// The conversation's latest lease as its records fold. A lease of a kind
+/// this build cannot read is shown as [`ConversationLeaseState::Unreadable`]
+/// with nothing else claimed about it, rather than failing the view.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationLeaseView {
+    pub state: ConversationLeaseState,
+    /// Which issuance of this conversation's leases it is. Absent for an
+    /// unreadable lease, which does not say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment: Option<ConversationLeaseEnvironment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<ConversationLeaseSandbox>,
+    /// Why it is ending or ended: the first cause recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cause: Option<ConversationLeaseCause>,
+    /// What the environment reported releasing, once it has.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleanup: Option<ConversationLeaseCleanup>,
+    /// Why it was refused, when it was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<ConversationLeaseRefusal>,
+    /// Events that arrived after it ended and were dropped.
+    pub dropped_events: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationLeaseState {
+    Live,
+    Ending,
+    Ended,
+    Interrupted,
+    Refused,
+    Unreadable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationLeaseEnvironment {
+    /// The gateway's own machine.
+    Here,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationLeaseSandbox {
+    /// Whatever the agent's harness encloses by default; nothing more.
+    HarnessDefault,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationLeaseCause {
+    Stopped,
+    Closed,
+    Revoked,
+    Expired,
+    Lost,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationLeaseCleanup {
+    Confirmed,
+    Forced,
+    NotHeld,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationLeaseRefusal {
+    SandboxUnavailable,
 }
 
 /// Non-secret runtime facts selected by server composition.

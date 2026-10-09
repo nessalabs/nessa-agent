@@ -865,6 +865,7 @@ pub(crate) fn image_fixture_with_model(
                 nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
             ),
             clock: Arc::new(TestClock),
+            environment: crate::conversation::infrastructure::in_process_environment(),
         },
         ConversationLimits::default(),
         None,
@@ -886,6 +887,8 @@ pub(crate) fn only(provider: Arc<dyn AgentProvider>) -> ConversationAgents {
                 execution_audit: Arc::new(AcceptingAudit),
                 reserved_output_tokens: 4096,
                 readiness: None,
+                sandbox:
+                    nessa_sdk::domain::agent_execution::leases::SandboxProfiles::HARNESS_DEFAULT,
             },
         )]),
         AgentId::Claude,
@@ -930,6 +933,7 @@ impl ModeAgentSource {
             execution_audit: self.audit.clone(),
             reserved_output_tokens: 4096,
             readiness: None,
+            sandbox: nessa_sdk::domain::agent_execution::leases::SandboxProfiles::HARNESS_DEFAULT,
         }
     }
 }
@@ -987,6 +991,7 @@ pub(crate) fn mode_fixture() -> (
                 nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
             ),
             clock: Arc::new(TestClock),
+            environment: crate::conversation::infrastructure::in_process_environment(),
         },
         ConversationLimits::default(),
         None,
@@ -1028,6 +1033,7 @@ pub(crate) fn fixture(
                 nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
             ),
             clock: Arc::new(TestClock),
+            environment: crate::conversation::infrastructure::in_process_environment(),
         },
         limits,
         None,

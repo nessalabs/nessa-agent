@@ -56,6 +56,10 @@ pub enum ExecutionError {
     RepeatedSeparatorInFilePath,
     /// The local storage key is not a portable session identity.
     InvalidSessionId,
+    /// A lease identity is not a portable key.
+    InvalidLeaseId,
+    /// A lease revision is zero, which names no issuance.
+    InvalidLeaseRevision,
     /// This live attachment ended; restoration requires a fresh aggregate.
     SessionClosed,
     /// The live attachment already owns an active execution.

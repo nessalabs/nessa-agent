@@ -4,3 +4,6 @@ crates/nessa-sdk/harnesses/codex-acp/package-lock.json text eol=lf
 scripts/mcp-test-server/server.mjs text eol=lf
 scripts/mcp-test-server/http-server.mjs text eol=lf
 scripts/mcp-test-server/capture-http.mjs text eol=lf
+# Golden evidence is compared byte for byte; keep it LF on every host.
+crates/nessa-server/tests/conversation/golden/*.txt text eol=lf
+protocol/product/samples/*.json text eol=lf

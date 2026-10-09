@@ -675,6 +675,7 @@ pub(super) fn providers(
         let build::ProviderComposition {
             provider,
             execution_audit,
+            sandbox,
             session_eraser,
         } = match build::provider(
             agent,
@@ -723,6 +724,7 @@ pub(super) fn providers(
                 // This builds providers and knows nothing about the durable
                 // directories a warm-up writes to.
                 readiness: None,
+                sandbox,
             },
         );
     }
@@ -746,6 +748,7 @@ pub(super) fn provider_for(
     let build::ProviderComposition {
         provider,
         execution_audit,
+        sandbox,
         session_eraser: _,
     } = build::provider(
         agent,
@@ -761,6 +764,7 @@ pub(super) fn provider_for(
         execution_audit,
         reserved_output_tokens: runtime.output_tokens,
         readiness: None,
+        sandbox,
     })
 }
 
@@ -787,6 +791,7 @@ pub(super) fn provider_for_fixed(
     let build::ProviderComposition {
         provider,
         execution_audit,
+        sandbox,
         session_eraser: _,
     } = build::provider(
         agent,
@@ -802,6 +807,7 @@ pub(super) fn provider_for_fixed(
         execution_audit,
         reserved_output_tokens: runtime.output_tokens,
         readiness: None,
+        sandbox,
     })
 }
 
@@ -910,6 +916,7 @@ pub(super) mod build {
         infrastructure::{BindingSessionEraser, DurableExecutionAudit},
     };
     use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
+    use nessa_sdk::domain::agent_execution::leases::SandboxProfiles;
     use nessa_sdk::{
         application::agent_execution::{
             agents::AgentError,
@@ -929,6 +936,7 @@ pub(super) mod build {
         },
         infrastructure::{
             acp::sessions::{AcpConfig, McpServerList, StandInSessions},
+            claude_acp::sessions::ClaudeAcpProvider,
             clock::RuntimeClock,
             codex_acp::sessions::CodexAcpProvider,
             opencode_acp::sessions::OpencodeAcpProvider,
@@ -939,6 +947,8 @@ pub(super) mod build {
     pub(in crate::composition) struct ProviderComposition {
         pub(in crate::composition) provider: Arc<dyn AgentProvider>,
         pub(in crate::composition) execution_audit: Arc<dyn ExecutionAudit>,
+        /// The sandbox profiles the binding declares it can set up.
+        pub(in crate::composition) sandbox: SandboxProfiles,
         /// How this agent deletes its own record of a session: its binding,
         /// whose own module says what a delete means for it.
         pub(in crate::composition) session_eraser: Arc<dyn ProviderSessionEraser>,
@@ -1171,63 +1181,75 @@ pub(super) mod build {
         let failed = |e: AgentError| RunError::Agent(format!("{}: {e}", agent.name()));
         // One entry per agent: its provider, and the same binding as the way
         // it deletes its own record of a session.
-        let (provider, binding): (Arc<dyn AgentProvider>, Arc<dyn ProviderSessionDeleter>) =
-            match agent {
-                AgentId::Claude => bound(
-                    CredentialedClaudeProvider::new(
-                        acp,
-                        model,
-                        limits,
-                        audit.clone(),
-                        prompt,
-                        dependencies.credentials.clone(),
-                    )
+        let (provider, binding, sandbox): (
+            Arc<dyn AgentProvider>,
+            Arc<dyn ProviderSessionDeleter>,
+            SandboxProfiles,
+        ) = match agent {
+            AgentId::Claude => bound(
+                ClaudeAcpProvider::SANDBOX_PROFILES,
+                CredentialedClaudeProvider::new(
+                    acp,
+                    model,
+                    limits,
+                    audit.clone(),
+                    prompt,
+                    dependencies.credentials.clone(),
+                )
+                .map_err(failed)?
+                .with_approval_mode(approval_mode)
+                .map_err(failed)?,
+            ),
+            AgentId::Codex => bound(
+                CodexAcpProvider::SANDBOX_PROFILES,
+                CodexAcpProvider::new(acp, &model, limits, audit.clone())
                     .map_err(failed)?
+                    .with_system_prompt(prompt)
                     .with_approval_mode(approval_mode)
                     .map_err(failed)?,
-                ),
-                AgentId::Codex => bound(
-                    CodexAcpProvider::new(acp, &model, limits, audit.clone())
-                        .map_err(failed)?
-                        .with_system_prompt(prompt)
-                        .with_approval_mode(approval_mode)
-                        .map_err(failed)?,
-                ),
-                // No prompt, because there is nowhere to put one that Opencode can
-                // be shown to read: its binding offers no `with_system_prompt` for
-                // exactly that reason, and this arm not calling one is the compiler
-                // enforcing it rather than a convention someone has to remember.
-                // Opencode therefore runs under its own instructions. What keeps
-                // that difference from mattering yet is not the session mode, which
-                // only denies edits, but the permission policy its binding launches
-                // it with: reading and searching allowed, everything else denied,
-                // including this server's own MCP shell tool.
-                AgentId::Opencode => {
-                    if approval_mode != ApprovalMode::Ask {
-                        return Err(RunError::Agent(
-                            "OpenCode approval policy is fixed to ask".into(),
-                        ));
-                    }
-                    bound(
-                        OpencodeAcpProvider::new(acp, &model, limits, audit.clone())
-                            .map_err(failed)?,
-                    )
+            ),
+            // No prompt, because there is nowhere to put one that Opencode can
+            // be shown to read: its binding offers no `with_system_prompt` for
+            // exactly that reason, and this arm not calling one is the compiler
+            // enforcing it rather than a convention someone has to remember.
+            // Opencode therefore runs under its own instructions. What keeps
+            // that difference from mattering yet is not the session mode, which
+            // only denies edits, but the permission policy its binding launches
+            // it with: reading and searching allowed, everything else denied,
+            // including this server's own MCP shell tool.
+            AgentId::Opencode => {
+                if approval_mode != ApprovalMode::Ask {
+                    return Err(RunError::Agent(
+                        "OpenCode approval policy is fixed to ask".into(),
+                    ));
                 }
-            };
+                bound(
+                    OpencodeAcpProvider::SANDBOX_PROFILES,
+                    OpencodeAcpProvider::new(acp, &model, limits, audit.clone()).map_err(failed)?,
+                )
+            }
+        };
         Ok(ProviderComposition {
             provider,
             execution_audit: audit,
+            sandbox,
             session_eraser: Arc::new(BindingSessionEraser::new(binding)),
         })
     }
 
-    /// One binding, as the provider that runs its agent and as the way that
-    /// agent deletes its own record of a session.
+    /// One binding, as the provider that runs its agent, as the way that
+    /// agent deletes its own record of a session, and with the sandbox
+    /// profiles it declares.
     fn bound<B: AgentProvider + ProviderSessionDeleter + 'static>(
+        sandbox: SandboxProfiles,
         binding: B,
-    ) -> (Arc<dyn AgentProvider>, Arc<dyn ProviderSessionDeleter>) {
+    ) -> (
+        Arc<dyn AgentProvider>,
+        Arc<dyn ProviderSessionDeleter>,
+        SandboxProfiles,
+    ) {
         let binding = Arc::new(binding);
-        (binding.clone(), binding)
+        (binding.clone(), binding, sandbox)
     }
 }
 

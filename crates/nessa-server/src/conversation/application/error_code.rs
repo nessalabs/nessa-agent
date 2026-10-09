@@ -9,6 +9,7 @@ use nessa_sdk::application::agent_execution::{
     providers::ImageInputRefusal,
     sessions::StorageError,
 };
+use nessa_sdk::domain::agent_execution::leases::LeaseRefusal;
 
 pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
     match error {
@@ -36,6 +37,12 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::DeletionIncomplete(failures) => deletion_incomplete(failures),
         ConversationError::AgentNotConfigured => ConversationErrorCode::AgentNotConfigured,
         ConversationError::AgentUnsupported => ConversationErrorCode::AgentUnsupported,
+        ConversationError::LeaseRefused(LeaseRefusal::SandboxUnavailable) => {
+            ConversationErrorCode::SandboxUnavailable
+        }
+        // Saved state this build cannot read and never will: the same answer
+        // as an unreadable history, which no retry changes.
+        ConversationError::LeaseUnreadable => ConversationErrorCode::ConversationStateUnreadable,
         ConversationError::ModelUnavailable => ConversationErrorCode::ModelUnavailable,
         ConversationError::ApprovalModeUnavailable => {
             ConversationErrorCode::ApprovalModeUnavailable

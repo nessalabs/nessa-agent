@@ -172,3 +172,60 @@ it("names no agent for an id setup does not list", () => {
   expect(document.body.querySelector("p > svg")).toBeNull()
   expect(document.body.textContent).toContain("Model Mp")
 })
+
+it("says where the agent runs and the sandbox around it, from its lease", () => {
+  show(
+    attached({
+      lease: {
+        state: "live",
+        revision: 1,
+        environment: "here",
+        sandbox: "harness_default",
+        droppedEvents: 0,
+      },
+    }),
+  )
+
+  expect(group("Where it runs")).toBe(
+    "Where it runsComputerThis computerSandboxThe agent's ownStatusAllowed to run",
+  )
+})
+
+it("says why a lease ended, and of a refused one only why nothing runs", () => {
+  show(
+    attached({
+      lease: {
+        state: "ended",
+        environment: "here",
+        sandbox: "harness_default",
+        cause: "lost",
+        droppedEvents: 0,
+      },
+    }),
+  )
+  expect(group("Where it runs")).toBe(
+    "Where it runsComputerThis computerSandboxThe agent's ownStatusEnded when Nessa restarted",
+  )
+
+  // The sandbox a refused lease carries is the one it asked for.
+  show(
+    attached({
+      lease: {
+        state: "refused",
+        revision: 1,
+        environment: "here",
+        sandbox: "harness_default",
+        refusal: "sandbox_unavailable",
+        droppedEvents: 0,
+      },
+    }),
+  )
+  expect(group("Where it runs")).toBe(
+    "Where it runsStatusCouldn't start: sandbox not available",
+  )
+
+  show(attached({ lease: { state: "unreadable", droppedEvents: 0 } }))
+  expect(group("Where it runs")).toBe(
+    "Where it runsComputerNot knownSandboxNot knownStatusNot known",
+  )
+})

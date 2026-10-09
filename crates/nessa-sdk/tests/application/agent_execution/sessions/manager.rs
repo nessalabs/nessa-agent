@@ -523,6 +523,7 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
     invocations.push(active);
     let snapshot = SessionSnapshot {
         queue_history: Vec::new(),
+        lease: None,
         id: id.clone(),
         provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
         provider_context: ProviderContext::Recorded(
@@ -1168,6 +1169,7 @@ fn a_restored_tool_call_that_changes_its_mcp_identity_is_corrupt() {
             ),
             invocations: vec![record],
             queue_history: Vec::new(),
+            lease: None,
         }
     };
     for kept in [None, Some(McpTool::new("charts", "show").unwrap())] {
@@ -1184,5 +1186,146 @@ fn a_restored_tool_call_that_changes_its_mcp_identity_is_corrupt() {
             crate::application::agent_execution::sessions::validation::validate(&snapshot(Some(changed))),
             Err(StorageError::Corrupt(message)) if message.contains("DifferentMcpTool")
         ));
+    }
+}
+
+mod lease_records {
+    use super::*;
+    use crate::application::agent_execution::sessions::{CurrentLease, LeaseRecordError};
+    use crate::domain::agent_execution::leases::{
+        AgentWork, EnvironmentRef, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseId,
+        LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile,
+    };
+
+    fn issued() -> LeaseRecord {
+        LeaseRecord::Issued {
+            lease: LeaseId::new("lease-1").unwrap(),
+            revision: LeaseRevision::FIRST,
+            terms: LeaseTerms {
+                environment: EnvironmentRef::Here,
+                work: LeaseWork::Agent(AgentWork::new("claude", "sonnet").unwrap()),
+                sandbox: SandboxProfile::HarnessDefault,
+                grants: LeaseGrants::Opening,
+                deadline: LeaseDeadline::UntilEnded,
+            },
+            actor: ActionContext::new("person", "desktop", "send").unwrap(),
+        }
+    }
+    fn ending() -> LeaseRecord {
+        LeaseRecord::Ending {
+            lease: LeaseId::new("lease-1").unwrap(),
+            cause: LeaseEndCause::Closed,
+            actor: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_lease_record_is_decided_on_the_current_lease_and_saved_as_one_unit() {
+        let (manager, lease, _) = manager(0).await;
+        let commit = manager
+            .record_lease(|current| {
+                assert_eq!(current, None);
+                (vec![issued()], "decided")
+            })
+            .await
+            .unwrap();
+        assert_eq!(commit.decided, "decided");
+        assert_eq!(commit.saved, Ok(()));
+        let expected = CurrentLease::apply(None, &issued()).unwrap();
+        assert_eq!(
+            lease.changes.lock().unwrap().last().unwrap(),
+            &vec![SessionChange::Lease(issued())]
+        );
+        let load = lease.load().await.unwrap();
+        assert_eq!(load.snapshot().unwrap().lease.as_ref(), Some(&expected));
+
+        let commit = manager
+            .record_lease(|current| {
+                assert_eq!(current, Some(&expected));
+                (Vec::new(), ())
+            })
+            .await
+            .unwrap();
+        assert_eq!(commit.saved, Ok(()));
+        assert_eq!(lease.changes.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_record_the_lease_rules_refuse_retains_nothing() {
+        let (manager, lease, _) = manager(0).await;
+        let refused = manager.record_lease(|_| (vec![ending()], ())).await;
+        assert!(matches!(
+            refused,
+            Err(LeaseRecordError::Refused(StorageError::Corrupt(_)))
+        ));
+        // Row L13: a second issuance while the first is live.
+        let refused = manager
+            .record_lease(|_| (vec![issued(), issued()], ()))
+            .await;
+        assert!(matches!(refused, Err(LeaseRecordError::Refused(_))));
+        let unreadable = manager
+            .record_lease(|_| {
+                (
+                    vec![LeaseRecord::Unreadable {
+                        kind: "k".into(),
+                        body: "{}".into(),
+                    }],
+                    (),
+                )
+            })
+            .await;
+        assert!(matches!(unreadable, Err(LeaseRecordError::Unreadable)));
+        assert!(lease.changes.lock().unwrap().is_empty());
+        assert_eq!(
+            manager
+                .evidence
+                .lock()
+                .await
+                .observed
+                .as_ref()
+                .unwrap()
+                .lease,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_save_keeps_the_record_for_the_next_save() {
+        let (manager, lease, _) = manager(0).await;
+        lease.fail_save.store(true, Ordering::SeqCst);
+        let commit = manager
+            .record_lease(|_| (vec![issued()], ()))
+            .await
+            .unwrap();
+        assert!(matches!(
+            commit.saved,
+            Err(LeaseRecordError::Storage(StorageError::Io(_)))
+        ));
+        lease.fail_save.store(false, Ordering::SeqCst);
+        manager.flush_observed().await.unwrap();
+        let saves = lease.changes.lock().unwrap();
+        assert_eq!(saves.len(), 2);
+        assert_eq!(saves[1], vec![SessionChange::Lease(issued())]);
+    }
+
+    #[tokio::test]
+    async fn nothing_is_recorded_before_the_conversation_is_loaded() {
+        let (manager, _, _) = manager(0).await;
+        manager.evidence.lock().await.observed = None;
+        let refused = manager.record_lease(|_| (vec![issued()], ())).await;
+        assert!(matches!(refused, Err(LeaseRecordError::NotLoaded)));
+    }
+
+    #[test]
+    fn every_lease_record_error_explains_itself() {
+        let errors = [
+            LeaseRecordError::NotLoaded,
+            LeaseRecordError::Refused(StorageError::Corrupt("x".into())),
+            LeaseRecordError::Unreadable,
+            LeaseRecordError::Storage(StorageError::Io("y".into())),
+        ];
+        let messages: std::collections::HashSet<String> =
+            errors.iter().map(ToString::to_string).collect();
+        assert_eq!(messages.len(), errors.len());
     }
 }

@@ -523,3 +523,30 @@ function recovery(transcript: ReturnType<typeof transcriptFrom>) {
     [],
   )
 }
+
+describe("a conversation view's lease", () => {
+  it("is carried as where the agent runs, and is absent until one is recorded", () => {
+    expect(transcriptFrom(view("c", {}), 1, at).lease).toBeUndefined()
+    const transcript = transcriptFrom(
+      view("c", {
+        lease: {
+          state: "ended",
+          revision: 2,
+          environment: "here",
+          sandbox: "harness_default",
+          cause: "closed",
+          cleanup: "confirmed",
+          droppedEvents: 0,
+        },
+      }),
+      1,
+      at,
+    )
+    expect(transcript.lease).toEqual({
+      state: "ended",
+      environment: "here",
+      cause: "closed",
+      refusal: undefined,
+    })
+  })
+})

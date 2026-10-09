@@ -40,6 +40,7 @@ const functional = [
   "safe-area",
   "columns",
   "committed-transcript",
+  "lease-details",
   "load-fallback",
   "gateway-states",
   "conversation-unread",

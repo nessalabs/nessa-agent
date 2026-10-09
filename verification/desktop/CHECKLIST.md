@@ -1281,6 +1281,18 @@ says why where the conversations would be.
   by another edit landing on the dev server mid-run is not a finding —
   re-run.
 
+## Where a conversation runs
+
+- [ ] **The details sheet says where the agent runs and the lease's status, for
+  every lease state the gateway publishes, read in full.**
+  _Check:_ `lease-details.mjs` mounts the production details sheet over each
+  published lease (none, live, ending, ended, interrupted, refused, unreadable),
+  decoded by the actual client validator, at 360, 600 and 1440 px. It asserts
+  the "Where it runs" rows in order (a refused lease shows only its status; an
+  unreadable one claims nothing known), that no value is cut short, and that
+  the section stays inside the viewport. Fixture map:
+  [conversation verification](../conversation/README.md).
+
 ## Committed transcript controls
 
 - [ ] **Unconfirmed history has one notice and no offered controls.**

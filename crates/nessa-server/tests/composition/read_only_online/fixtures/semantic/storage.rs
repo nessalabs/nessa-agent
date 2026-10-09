@@ -122,6 +122,7 @@ async fn confirmed_producer_snapshot_changes_only_after_successful_save() {
         provider_context: ProviderContext::Absent,
         invocations: vec![],
         queue_history: vec![],
+        lease: None,
     };
     let receipt = lease
         .save_changes(

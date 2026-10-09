@@ -181,6 +181,7 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   turn_running: "turn-running",
   conversations_not_configured: "conversations-not-configured",
   agent_startup_deadline: "agent-startup-deadline",
+  sandbox_unavailable: "sandbox-unavailable",
   conversation_state_unreadable: "conversation-state-unreadable",
   invalid_request: "invalid-request",
   conversation_deleted: "conversation-deleted",
@@ -236,6 +237,9 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   agent_unsupported: "unavailable",
   conversations_not_configured: "unavailable",
   agent_startup_deadline: "unavailable",
+  // No lease was granted for the agent's run. Whether one will be later
+  // depends on the machine, not on this conversation, so nothing is promised.
+  sandbox_unavailable: "unavailable",
   attachment_capacity: "unavailable",
   attachment_cleanup_unavailable: "unavailable",
   attachment_not_found: "unavailable",

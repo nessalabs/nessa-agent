@@ -779,3 +779,200 @@ it("accepts typed authentication only on a failed turn and rejects untyped value
     ),
   ).toThrow(/authenticationRequired/)
 })
+
+function protocolFile(path: string) {
+  return JSON.parse(
+    readFileSync(
+      new URL(`../../../../protocol/product/${path}`, import.meta.url),
+      "utf8",
+    ),
+  )
+}
+
+describe("the view's lease", () => {
+  const withLease = (lease: unknown) => ({ ...view(), lease })
+
+  it("accepts every state the schema publishes, with the fields that go with it", () => {
+    const leases = [
+      {
+        state: "live",
+        revision: 1,
+        environment: "here",
+        sandbox: "harness_default",
+        droppedEvents: 0,
+      },
+      {
+        state: "ending",
+        revision: 2,
+        environment: "here",
+        sandbox: "harness_default",
+        cause: "closed",
+        droppedEvents: 0,
+      },
+      {
+        state: "ended",
+        revision: 2,
+        environment: "here",
+        sandbox: "harness_default",
+        cause: "lost",
+        cleanup: "not_held",
+        droppedEvents: 3,
+      },
+      {
+        state: "interrupted",
+        revision: 2,
+        environment: "here",
+        sandbox: "harness_default",
+        cause: "stopped",
+        cleanup: "forced",
+        droppedEvents: 0,
+      },
+      {
+        state: "interrupted",
+        revision: 2,
+        environment: "here",
+        sandbox: "harness_default",
+        cause: "lost",
+        droppedEvents: 1,
+      },
+      {
+        state: "refused",
+        revision: 1,
+        environment: "here",
+        sandbox: "harness_default",
+        refusal: "sandbox_unavailable",
+        droppedEvents: 0,
+      },
+      { state: "unreadable", droppedEvents: 0 },
+    ]
+    for (const lease of leases)
+      expect(conversationView(withLease(lease), "conversation").lease).toEqual(lease)
+    expect(conversationView(view(), "conversation").lease).toBeUndefined()
+  })
+
+  const live = {
+    state: "live",
+    revision: 1,
+    environment: "here",
+    sandbox: "harness_default",
+    droppedEvents: 0,
+  }
+  const ended = { ...live, state: "ended", cause: "closed", cleanup: "confirmed" }
+  const refusedLease = {
+    ...live,
+    state: "refused",
+    refusal: "sandbox_unavailable",
+  }
+
+  it("refuses anything outside the published shape", () => {
+    expect(() =>
+      conversationView(withLease({ ...live, holder: "elsewhere" }), "conversation"),
+    ).toThrow(/unknown fields/)
+    const refused: [unknown, RegExp][] = [
+      [{ state: "paused", droppedEvents: 0 }, /lease state/],
+      [{ droppedEvents: 0 }, /lease state/],
+      [{ ...live, environment: "remote" }, /lease environment/],
+      [{ ...live, sandbox: "container" }, /lease sandbox/],
+      [{ ...live, cause: "toString" }, /lease cause/],
+      [{ ...live, cleanup: "no_process" }, /lease cleanup/],
+      [{ ...live, refusal: "busy" }, /lease refusal/],
+      [{ ...live, revision: 0 }, /lease revision/],
+      [{ ...live, revision: 1.5 }, /lease revision/],
+      [{ state: "live" }, /lease droppedEvents/],
+      [{ ...live, droppedEvents: -1 }, /lease droppedEvents/],
+      [{ ...live, droppedEvents: Number.MAX_SAFE_INTEGER + 1 }, /lease droppedEvents/],
+      [null, /Invalid conversation response/],
+    ]
+    for (const [lease, error] of refused)
+      expect(() => conversationView(withLease(lease), "conversation")).toThrow(error)
+  })
+
+  it("refuses a lease whose fields contradict its state", () => {
+    const { revision: _revision, ...unnumbered } = live
+    const { cause: _cause, ...causeless } = ended
+    const { cleanup: _cleanup, ...uncleaned } = ended
+    const { refusal: _refusal, ...unexplained } = refusedLease
+    const contradictions: [unknown, RegExp][] = [
+      [{ ...live, cause: "closed" }, /lease cause/],
+      [{ ...live, cleanup: "confirmed" }, /lease cleanup/],
+      [{ ...live, droppedEvents: 1 }, /lease droppedEvents/],
+      [unnumbered, /lease revision/],
+      [{ ...live, state: "ending" }, /lease cause/],
+      [
+        { ...live, state: "ending", cause: "closed", cleanup: "confirmed" },
+        /lease cleanup/,
+      ],
+      [
+        { ...live, state: "ending", cause: "closed", droppedEvents: 2 },
+        /lease droppedEvents/,
+      ],
+      [causeless, /lease cause/],
+      [uncleaned, /lease cleanup/],
+      [{ ...ended, refusal: "sandbox_unavailable" }, /lease refusal/],
+      [{ ...live, state: "interrupted" }, /lease cause/],
+      [unexplained, /lease refusal/],
+      [{ ...refusedLease, cause: "closed" }, /lease cause/],
+      [{ ...refusedLease, droppedEvents: 1 }, /lease droppedEvents/],
+      [{ state: "unreadable", revision: 4, droppedEvents: 0 }, /lease revision/],
+      [
+        { state: "unreadable", environment: "here", droppedEvents: 0 },
+        /lease environment/,
+      ],
+      [{ state: "unreadable", droppedEvents: 1 }, /lease droppedEvents/],
+    ]
+    for (const [lease, error] of contradictions)
+      expect(
+        () => conversationView(withLease(lease), "conversation"),
+        JSON.stringify(lease),
+      ).toThrow(error)
+  })
+
+  it("knows every field and value the schema gives a view and its lease", () => {
+    const defs = protocolFile("v1.json").$defs
+    // A field the schema adds to the view is one the validator must know, or
+    // every view that carries it is refused as unknown.
+    for (const key of Object.keys(defs.ConversationView.properties)) {
+      let error: unknown
+      try {
+        conversationView({ ...view(), [key]: undefined }, "conversation")
+      } catch (caught) {
+        error = caught
+      }
+      expect(String(error), key).not.toMatch(/unknown fields/)
+    }
+    const properties = defs.ConversationLease.properties as Record<
+      string,
+      { enum?: string[] }
+    >
+    // Each value on a lease whose state carries that field.
+    const carriers: Record<string, Record<string, unknown>> = {
+      cause: ended,
+      cleanup: ended,
+      refusal: refusedLease,
+    }
+    const states: Record<string, Record<string, unknown>> = {
+      live,
+      ending: { ...live, state: "ending", cause: "closed" },
+      ended,
+      interrupted: { ...live, state: "interrupted", cause: "lost" },
+      refused: refusedLease,
+      unreadable: { state: "unreadable", droppedEvents: 0 },
+    }
+    for (const [key, schema] of Object.entries(properties)) {
+      for (const value of schema.enum ?? []) {
+        const sample =
+          key === "state" ? states[value] : { ...(carriers[key] ?? live), [key]: value }
+        expect(sample, value).toBeDefined()
+        expect(conversationView(withLease(sample), "conversation").lease).toEqual(sample)
+      }
+    }
+  })
+
+  it("accepts the view a real gateway serves for a leased conversation", () => {
+    // The gateway's own conversation.read answer, written by its test
+    // (`read_joins_the_fixed_selection_to_the_authenticated_catalog`), never by hand.
+    const served = protocolFile("samples/conversation-read.json")
+    const parsed = conversationView(served, served.conversationId)
+    expect(parsed.lease?.state).toBe("live")
+  })
+})

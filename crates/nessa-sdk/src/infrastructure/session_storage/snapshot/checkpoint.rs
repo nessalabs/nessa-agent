@@ -1,5 +1,6 @@
 //! Full semantic checkpoint mapping reuses storage field codecs and the shared validator.
 use super::{
+    leases::SavedLease,
     queue_order::QueueEvent,
     records::{Event, Metadata, Provider},
     scheduling::SchedulingEvent,
@@ -40,6 +41,10 @@ struct SnapshotCodec<I, Q> {
     context: Option<String>,
     invocations: I,
     queue_history: Q,
+    /// Absent before any lease was recorded, so a checkpoint without one is
+    /// written exactly as before leases existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lease: Option<SavedLease>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -65,6 +70,7 @@ impl Serialize for SnapshotRef<'_> {
                 .map(|id| id.as_str().to_owned()),
             invocations: InvocationList(&value.invocations),
             queue_history: QueueList(&value.queue_history),
+            lease: value.lease.as_ref().map(SavedLease::from),
         }
         .serialize(serializer)
     }
@@ -150,6 +156,7 @@ impl Snapshot {
                 .into_iter()
                 .map(QueueEvent::decode)
                 .collect::<Result<_, _>>()?,
+            lease: value.lease.map(SavedLease::decode).transpose()?,
         };
         super::validate(&snapshot)?;
         Ok(snapshot)
@@ -187,5 +194,6 @@ pub(crate) fn history_fixture(count: usize) -> SessionSnapshot {
         provider_context: ProviderContext::Absent,
         invocations,
         queue_history: Vec::new(),
+        lease: None,
     }
 }

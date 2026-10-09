@@ -55,6 +55,7 @@ fn opened(id: &SessionId) -> (SessionChange, SessionSnapshot) {
             provider_context: ProviderContext::Absent,
             invocations: Vec::new(),
             queue_history: Vec::new(),
+            lease: None,
         },
     )
 }

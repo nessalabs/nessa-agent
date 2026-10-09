@@ -129,6 +129,19 @@ export function optionOf(
   return approval.options.find((option) => option.choice === choice)
 }
 
+/**
+ * Where a conversation's agent runs, from its latest run's lease (ADR 252),
+ * in the gateway's own words: whether it runs, why it ended, or why it could
+ * not start. `unreadable` is a lease the gateway cannot read.
+ */
+export interface TranscriptLease {
+  readonly state: "live" | "ending" | "ended" | "interrupted" | "refused" | "unreadable"
+  /** `here` is the gateway's own machine. */
+  readonly environment?: "here"
+  readonly cause?: "stopped" | "closed" | "revoked" | "expired" | "lost"
+  readonly refusal?: "sandbox_unavailable"
+}
+
 /** What a running agent is doing, and since when; absent while its reply streams in. */
 export interface Activity {
   readonly label: string
@@ -146,6 +159,8 @@ export interface Transcript {
   readonly latestInputId?: string
   /** Authoritative runtime agent; never inferred from the model catalogue. */
   readonly agent?: string
+  /** Where its agent runs; absent until the gateway has recorded a lease. */
+  readonly lease?: TranscriptLease
   /** The source's count of changes to this conversation; see `revision.ts`. */
   readonly revision: number
 }

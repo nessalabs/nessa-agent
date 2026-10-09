@@ -14,6 +14,7 @@ mod cancellation;
 pub(super) mod checkpoint;
 pub(super) mod decode;
 mod errors;
+mod leases;
 mod permissions;
 mod queue_order;
 mod records;
