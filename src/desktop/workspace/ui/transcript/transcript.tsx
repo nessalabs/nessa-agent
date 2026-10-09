@@ -12,11 +12,8 @@ import { ProviderSignIn } from "./provider-sign-in"
 import { ApprovalCard } from "./approval-card"
 import { LiveRow } from "./live-row"
 import { Message } from "./message"
-import {
-  UNREADABLE_PART,
-  type Message as MessageValue,
-  type UnreadableRow,
-} from "../../model/transcript"
+import { UNREADABLE_PART } from "../../../../conversation"
+import { type Message as MessageValue, type UnreadableRow } from "../../model/transcript"
 import { TranscriptHeading } from "./transcript-heading"
 import "./transcript.css"
 import { readFailureCopy } from "../failure-copy"
@@ -26,16 +23,13 @@ const noGaps: readonly UnreadableRow[] = []
 
 function UnreadableNote({ row }: { row: UnreadableRow }) {
   return (
-    <div
+    <p
       className="workspace-transcript-note"
-      role="status"
-      data-unreadable-session={row.sessionId}
       data-unreadable-position={row.position}
       data-unreadable-reason={row.reason}
-      {...(row.found === undefined ? {} : { "data-unreadable-found": row.found })}
     >
-      <p>{UNREADABLE_PART}</p>
-    </div>
+      {UNREADABLE_PART}
+    </p>
   )
 }
 
@@ -137,7 +131,9 @@ export const Transcript = memo(function Transcript({
   const gaps = transcript?.unreadable ?? noGaps
   const seenIds = new Set(messages.map((message) => message.id))
   const leading = gaps.filter((gap) => gap.afterId === undefined)
-  const missed = gaps.filter((gap) => gap.afterId !== undefined && !seenIds.has(gap.afterId))
+  const missed = gaps.filter(
+    (gap) => gap.afterId !== undefined && !seenIds.has(gap.afterId),
+  )
 
   return (
     <div
@@ -176,7 +172,10 @@ export const Transcript = memo(function Transcript({
             {gaps
               .filter((gap) => gap.afterId === message.id)
               .map((gap, index) => (
-                <UnreadableNote key={`unreadable:${message.id}:${index}:${gap.position}`} row={gap} />
+                <UnreadableNote
+                  key={`unreadable:${message.id}:${index}:${gap.position}`}
+                  row={gap}
+                />
               ))}
           </Fragment>
         ))}

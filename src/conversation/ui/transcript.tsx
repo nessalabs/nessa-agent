@@ -22,7 +22,7 @@ import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
 import { ProviderSignInCard } from "../../provider-authentication/ui/provider-sign-in"
 import { TranscriptDivider } from "@nessa-ui/react/transcript-divider"
 
-import { type Conversation, type Receipt, type Turn } from "../model"
+import { UNREADABLE_PART, type Conversation, type Receipt, type Turn } from "../model"
 import { EmptyState } from "./empty-state"
 import { Starting, Thinking } from "./thinking"
 import { selectedWork } from "./work-selection"
@@ -98,12 +98,10 @@ export function Transcript({
   const provider = conversation.remote?.runtime?.agent
   const sentTurns = conversation.turns.filter((turn) => turn.from === "user").length
   const unreadable = conversation.remote?.unreadable ?? []
-  const anchored = new Set(
-    [
-      ...rows.flatMap((row) => (row.promptId ? [row.promptId] : [])),
-      ...waitingUsers.map((turn) => turn.id),
-    ],
-  )
+  const anchored = new Set([
+    ...rows.flatMap((row) => (row.promptId ? [row.promptId] : [])),
+    ...waitingUsers.map((turn) => turn.id),
+  ])
   const leading = unreadable.filter((part) => part.afterTurnId === undefined)
   const unanchored = unreadable.filter(
     (part) => part.afterTurnId !== undefined && !anchored.has(part.afterTurnId),
@@ -131,7 +129,10 @@ export function Transcript({
               />
             ) : null}
             {leading.map((part, index) => (
-              <UnreadablePartRow key={`unreadable:lead:${index}:${part.position}`} part={part} />
+              <UnreadablePartRow
+                key={`unreadable:lead:${index}:${part.position}`}
+                part={part}
+              />
             ))}
             {rows.map((row) => {
               const user = row.promptId ? users.get(row.promptId) : undefined
@@ -236,7 +237,10 @@ export function Transcript({
               </React.Fragment>
             ))}
             {unanchored.map((part, index) => (
-              <UnreadablePartRow key={`unreadable:rest:${index}:${part.position}`} part={part} />
+              <UnreadablePartRow
+                key={`unreadable:rest:${index}:${part.position}`}
+                part={part}
+              />
             ))}
             {conversation.phase === "thinking" &&
             (rows.length === 0 || rows.at(-1)?.status === "running") &&
@@ -273,8 +277,6 @@ export function Transcript({
   )
 }
 
-const UNREADABLE_PART = "Couldn't read this part of the conversation"
-
 function UnreadablePartRow({
   part,
 }: {
@@ -282,11 +284,8 @@ function UnreadablePartRow({
 }) {
   return (
     <p
-      role="status"
-      data-unreadable-session={part.session}
       data-unreadable-position={part.position}
       data-unreadable-reason={part.reason}
-      {...(part.found === undefined ? {} : { "data-unreadable-found": part.found })}
       className="text-muted-foreground px-3 py-2 text-xs [overflow-wrap:anywhere]"
     >
       {UNREADABLE_PART}

@@ -460,12 +460,8 @@ impl Projection {
             .map(|snapshot| snapshot.invocations.len())
             .unwrap_or(0);
         let evicted = invocations.saturating_sub(next.view.messages.len());
-        next.view.unreadable = unreadable_rows(
-            &next.view.conversation_id,
-            committed.unreadable(),
-            evicted,
-            next.view.messages.len(),
-        );
+        next.view.unreadable =
+            unreadable_rows(committed.unreadable(), evicted, next.view.messages.len());
         let changed = serde_json::to_vec(&next.view).ok() != serde_json::to_vec(&self.view).ok();
         if changed {
             next.bump();
@@ -1184,8 +1180,8 @@ const MAX_UNREADABLE_PARTS: usize = 128;
 /// Place each dropped group after the visible messages that were already
 /// folded. `evicted` is how many invocations the bounded window left out at
 /// the front. An index past the window clamps to the last visible message.
+/// A gap whose invocations were all evicted clamps to the first row.
 fn unreadable_rows(
-    conversation_id: &str,
     parts: &[UnreadablePart],
     evicted: usize,
     visible: usize,
@@ -1194,7 +1190,6 @@ fn unreadable_rows(
         .iter()
         .take(MAX_UNREADABLE_PARTS)
         .map(|part| UnreadableTranscriptPart {
-            session: conversation_id.to_owned(),
             position: part.position(),
             reason: match part.reason() {
                 UnreadableReason::AnotherVersion { .. } => {
@@ -1203,7 +1198,6 @@ fn unreadable_rows(
                 UnreadableReason::Identity => UnreadableTranscriptReason::Identity,
                 UnreadableReason::Unreadable => UnreadableTranscriptReason::Unreadable,
             },
-            found: part.reason().found(),
             after_message: part
                 .after_invocation()
                 .saturating_sub(evicted as u64)

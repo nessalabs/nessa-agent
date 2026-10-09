@@ -172,10 +172,8 @@ export function applyView(current: Conversation, view: ConversationView): Conver
         const index = Math.min(part.afterMessage, anchors.length)
         const anchor = index === 0 ? undefined : anchors[index - 1]
         return {
-          session: part.session,
           position: part.position,
           reason: part.reason,
-          ...(part.found === undefined ? {} : { found: part.found }),
           ...(anchor === undefined ? {} : { afterTurnId: anchor }),
         }
       }),

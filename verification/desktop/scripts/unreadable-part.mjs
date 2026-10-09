@@ -96,15 +96,11 @@ const read = {
   queueComplete: true,
   transcriptState: "complete",
   approvalMode: "ask",
-  approvalModes: [
-    { id: "ask", name: "Ask", description: "Ask before tools." },
-  ],
+  approvalModes: [{ id: "ask", name: "Ask", description: "Ask before tools." }],
   unreadable: [
     {
-      session: conversationId,
       position: 4,
       reason: "another_version",
-      found: 2,
       afterMessage: 1,
     },
   ],
@@ -163,7 +159,9 @@ function gappedGateway(seen) {
       if (frame.method === "conversation.read") {
         seen.reads += 1
         if (frame.params?.conversationId !== conversationId)
-          seen.unexpected.push(`conversation.read ${String(frame.params?.conversationId)}`)
+          seen.unexpected.push(
+            `conversation.read ${String(frame.params?.conversationId)}`,
+          )
         send({ ok: true, payload: read })
         return
       }
@@ -184,15 +182,16 @@ async function drawn(page) {
       }
       const row = document.querySelector(part)
       const area = document.querySelector(chat)
-      const order = [...document.querySelectorAll(`${message}, ${part}`)].map((element) => ({
-        text: element.textContent,
-        gap: element.matches(part),
-        button: element.querySelector("button") !== null,
-        session: element.getAttribute("data-unreadable-session"),
-        position: element.getAttribute("data-unreadable-position"),
-        reason: element.getAttribute("data-unreadable-reason"),
-        found: element.getAttribute("data-unreadable-found"),
-      }))
+      const order = [...document.querySelectorAll(`${message}, ${part}`)].map(
+        (element) => ({
+          text: element.textContent,
+          gap: element.matches(part),
+          button: element.querySelector("button") !== null,
+          position: element.getAttribute("data-unreadable-position"),
+          reason: element.getAttribute("data-unreadable-reason"),
+          role: element.getAttribute("role"),
+        }),
+      )
       return {
         order,
         part: row ? rect(row) : null,
@@ -206,12 +205,13 @@ async function drawn(page) {
 await main(
   {
     name: "unreadable-part",
-    summary: "a part this build could not read is one muted row, and the messages around it still show",
+    summary:
+      "a part this build could not read is one muted row, and the messages around it still show",
     defaults: { engine: "chromium,webkit" },
     help: `
 The gateway lists one conversation and reads it with two turns and one
 unreadable part between them. The row sits between those turns, names the
-session, position, and reason, and has no button.`,
+position and reason, and has no button.`,
   },
   async ({ options, rep, url }) => {
     const origin = new URL(url).origin
@@ -224,7 +224,9 @@ session, position, and reason, and has no button.`,
             url: `${origin}/desktop.html`,
             width: 1440,
             height: 900,
-            initScripts: [[gatewayHost, { endpoint: fakeGateway, credential: "fixture-only" }]],
+            initScripts: [
+              [gatewayHost, { endpoint: fakeGateway, credential: "fixture-only" }],
+            ],
             readySelector: css.unreadablePart,
             beforeLoad: async (context) => {
               await context.routeWebSocket(`${fakeGateway}/**`, gappedGateway(seen))
@@ -257,14 +259,14 @@ session, position, and reason, and has no button.`,
             if (gap.text !== sentence)
               failures.push(`the row says ${JSON.stringify(gap.text)}`)
             if (gap.button) failures.push("the row has a button")
-            if (gap.session !== conversationId)
-              failures.push(`the row session is ${JSON.stringify(gap.session)}`)
+            if (gap.role !== null)
+              failures.push(`the row role is ${JSON.stringify(gap.role)}`)
             if (gap.position !== "4") failures.push(`the row position is ${gap.position}`)
             if (gap.reason !== "another_version")
               failures.push(`the row reason is ${JSON.stringify(gap.reason)}`)
-            if (gap.found !== "2") failures.push(`the row found is ${JSON.stringify(gap.found)}`)
           }
-          if (!view.part || !view.chat) failures.push("no unreadable row in the chat area")
+          if (!view.part || !view.chat)
+            failures.push("no unreadable row in the chat area")
           else if (!inside(view.part, view.chat))
             failures.push("the unreadable row is outside the chat area")
           if (seen.reads < 1) failures.push("the conversation was never read")

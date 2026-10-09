@@ -65,15 +65,21 @@ describe("a conversation view as a transcript", () => {
     const transcript = transcriptFrom(
       view("c", {
         messages: [
-          turn({ executionId: "before", userText: "Kept before", parts: [textPart("Answer before", 0)] }),
-          turn({ executionId: "after", userText: "Kept after", parts: [textPart("Answer after", 0)] }),
+          turn({
+            executionId: "before",
+            userText: "Kept before",
+            parts: [textPart("Answer before", 0)],
+          }),
+          turn({
+            executionId: "after",
+            userText: "Kept after",
+            parts: [textPart("Answer after", 0)],
+          }),
         ],
         unreadable: [
           {
-            session: "c",
             position: 4,
             reason: "another_version",
-            found: 2,
             afterMessage: 1,
           },
         ],
@@ -89,10 +95,8 @@ describe("a conversation view as a transcript", () => {
     ])
     expect(transcript.unreadable).toEqual([
       {
-        sessionId: "c",
         position: 4,
         reason: "another_version",
-        found: 2,
         afterId: replyId("before"),
       },
     ])

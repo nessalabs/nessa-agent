@@ -3412,7 +3412,6 @@ impl ConversationService {
             leased = self.erasure_lease(&id) => leased.map_err(ConversationError::Storage),
             () = self.retired() => Err(ConversationError::Unavailable),
         };
-        let mut lost_unreadable = false;
         let lease = match leased {
             Ok(lease) => Some(lease),
             // Still held after the wait for it: the one place a deletion
@@ -3423,51 +3422,16 @@ impl ConversationService {
                 failures.history_leased_elsewhere = true;
                 None
             }
-            // Legacy JSONL and a predecessor stream never open. Drop the
-            // container without folding it, and settle the provider link as
-            // unknown so the delete can finish.
-            Err(ConversationError::Storage(
-                StorageError::Corrupt(_) | StorageError::AnotherVersion { .. },
-            )) => {
-                match self
-                    .inner
-                    .storage
-                    .discard_unreadable(conversation_session(&id))
-                    .await
-                {
-                    Ok(()) => {
-                        lost_unreadable = true;
-                        Some(None)
-                    }
-                    Err(StorageError::Busy) => {
-                        failures.history_leased_elsewhere = true;
-                        None
-                    }
-                    Err(error) => {
-                        failures.history = Some(ConversationError::Storage(error));
-                        None
-                    }
-                }
-            }
+            // A stream this build cannot open, including legacy JSONL, is
+            // history the delete did not erase. The failure stays on the
+            // deletion.
             Err(error) => {
                 failures.history = Some(error);
                 None
             }
         };
         let mut record = record;
-        if lost_unreadable && matches!(deletion.provider_session(), ProviderSessionLink::Unread) {
-            match self
-                .inner
-                .metadata
-                .record_deletion(record.id(), deletion.after_losing_history())
-                .await
-            {
-                Ok(kept) => record = kept,
-                Err(error) => failures.tombstone = Some(error),
-            }
-        } else if let (ProviderSessionLink::Unread, Some(lease)) =
-            (deletion.provider_session(), &lease)
-        {
+        if let (ProviderSessionLink::Unread, Some(lease)) = (deletion.provider_session(), &lease) {
             // What could not be read is the history's; what was read and
             // could not be kept is the tombstone's
             // (`a_history_read_that_cannot_be_kept_is_the_tombstone_s_failure`).

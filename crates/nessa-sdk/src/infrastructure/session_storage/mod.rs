@@ -43,6 +43,7 @@
 //! identifies stale JSONL history so the record adapter refuses it unchanged.
 
 mod creation;
+mod gap;
 mod memory;
 mod message_commit_clock;
 mod ownership;
@@ -75,26 +76,6 @@ pub use transcript::{
 };
 
 use crate::application::agent_execution::sessions::StorageError;
-
-/// A saved record that cannot be folded as part of a valid save group.
-///
-/// Unmarked bytes, another format version, a corrupt body, another chat's
-/// identity, a body past the size limit, and a unit that contradicts the fold
-/// drop that group. The chat stays open. Later records are still read.
-/// A decoded record whose save lineage disagrees with the fold.
-///
-/// A corrupt body is not this: it is its own placeholder. A later record that
-/// only disagrees because a group was dropped extends that group's placeholder.
-/// The record decoded, then disagreed with the folded lineage.
-///
-/// A frame that does not match its own header is a different corrupt
-/// message, so it stays its own placeholder instead of joining this one.
-pub(super) fn contradicts_fold(error: &StorageError) -> bool {
-    matches!(
-        error,
-        StorageError::Corrupt(text) if text == "semantic save envelope disagrees with its lineage"
-    )
-}
 
 pub(super) fn truncates_history(error: &StorageError) -> bool {
     matches!(

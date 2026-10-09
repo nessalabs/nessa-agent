@@ -106,6 +106,24 @@ pub struct TranscriptFold {
     deep_restore: Option<CommittedTranscript>,
 }
 
+struct GapMiss {
+    error: StorageError,
+    identity: Option<super::save_group::SaveIdentity>,
+    link: Option<super::gap::DropLink>,
+    turns: super::gap::DroppedTurns,
+    own: bool,
+}
+
+enum FoldMiss {
+    Hard(TranscriptError),
+    Gap {
+        error: StorageError,
+        link: Option<super::gap::DropLink>,
+        turns: super::gap::DroppedTurns,
+        own: bool,
+    },
+}
+
 impl TranscriptFold {
     /// Start a receiver for the exact scope returned by a source. No record is
     /// read and no empty view is asserted until `confirm_empty` or `apply`.
@@ -312,18 +330,31 @@ impl TranscriptFold {
         if record.position != downloaded.checked_add(1).ok_or(TranscriptError::Position)? {
             return Err(TranscriptError::Position);
         }
-        let (&tag, bytes) = record.payload.split_first().ok_or(TranscriptError::Frame)?;
-        let schema = stream_fact::schema_for_tag(tag).map_err(|_| TranscriptError::Frame)?;
+        let Some((&tag, bytes)) = record.payload.split_first() else {
+            self.note_frame(semantic, record.position)?;
+            return Ok(());
+        };
+        let Ok(schema) = stream_fact::schema_for_tag(tag) else {
+            self.note_frame(semantic, record.position)?;
+            return Ok(());
+        };
+        let Ok(id) = EventId::new(record.id.as_str()) else {
+            self.note_frame(semantic, record.position)?;
+            return Ok(());
+        };
         let event = NewEvent {
-            id: EventId::new(record.id.as_str()).map_err(|_| TranscriptError::Frame)?,
+            id,
             schema,
             payload: Payload::copy_from_slice(bytes),
         };
-        match self
-            .frames
-            .push(&event, record.position)
-            .map_err(|_| TranscriptError::Frame)?
-        {
+        let step = match self.frames.push(&event, record.position) {
+            Ok(step) => step,
+            Err(_) => {
+                self.note_frame(semantic, record.position)?;
+                return Ok(());
+            }
+        };
+        match step {
             FrameStep::Pending(piece) => {
                 if self.fact_start.is_none() {
                     self.fact_start = Some(record.position);
@@ -355,11 +386,14 @@ impl TranscriptFold {
                 };
                 let decoded = Header::decode(body);
                 if let Ok(header) = &decoded {
-                    if self.unread.consume_rest(
-                        &header.identity,
-                        physical_key.kind(),
-                        header.ordinal,
-                    ) {
+                    let envelope = physical_key.ordinal() != header.ordinal;
+                    if !envelope
+                        && self.unread.consume_rest(
+                            &header.identity,
+                            physical_key.kind(),
+                            physical_key.ordinal(),
+                        )
+                    {
                         self.unread.extend(record.position);
                         if physical_key.kind() == FactKind::SaveComplete {
                             self.note_lineage(record.position);
@@ -378,7 +412,17 @@ impl TranscriptFold {
                 } else {
                     self.group_start = Some(fact_start);
                     let cause = decoded.expect_err("header decode failed");
-                    self.seal(semantic, record.position, &cause, None)?;
+                    self.seal(
+                        semantic,
+                        record.position,
+                        GapMiss {
+                            error: cause,
+                            identity: None,
+                            link: None,
+                            turns: super::gap::DroppedTurns::unknown(),
+                            own: false,
+                        },
+                    )?;
                 }
             }
         }
@@ -399,25 +443,73 @@ impl TranscriptFold {
         fact_start: u64,
         header: Option<&Header>,
     ) -> Result<(), TranscriptError> {
-        if header.is_some_and(|header| header.ordinal == 0) {
+        let envelope = header.is_some_and(|header| header.ordinal != physical_key.ordinal());
+        if envelope || header.is_some() && physical_key.ordinal() == 0 {
             self.group_start = Some(fact_start);
         }
-        if let Err(error) = self.accept_fact(record, physical_key, body, semantic) {
-            let TranscriptError::Decision(cause) = &error else {
-                return Err(error);
-            };
-            if !super::truncates_history(cause) {
-                return Err(error);
-            }
-            self.seal(semantic, record.position, cause, header)?;
-            if physical_key.kind() == FactKind::SaveComplete && header.is_some() {
-                self.note_lineage(record.position);
+        if let Err(miss) = self.accept_fact(record, physical_key, body, semantic) {
+            match miss {
+                FoldMiss::Hard(error) => return Err(error),
+                FoldMiss::Gap {
+                    error,
+                    link,
+                    turns,
+                    own,
+                } => {
+                    self.seal(
+                        semantic,
+                        record.position,
+                        GapMiss {
+                            error,
+                            identity: header.map(|header| header.identity.clone()),
+                            link,
+                            turns,
+                            own,
+                        },
+                    )?;
+                    if physical_key.kind() == FactKind::SaveComplete && header.is_some() {
+                        self.note_lineage(record.position);
+                    }
+                }
             }
         } else {
             self.unread.close();
             if physical_key.kind() == FactKind::SaveComplete {
                 self.group_start = None;
             }
+        }
+        Ok(())
+    }
+
+    fn note_frame(
+        &mut self,
+        semantic: &mut CommittedTransactionState,
+        position: u64,
+    ) -> Result<(), TranscriptError> {
+        let start = self.fact_start.take().unwrap_or(position);
+        // The next record is tried as a fact start. A run of bad frames is one
+        // placeholder. If none of them is a start, that placeholder is the rest.
+        self.frames = FrameValidator::after(position);
+        self.pending.clear();
+        self.groups.reset_frame();
+        let _ = self.committed.seal_open_group(semantic, self.publication);
+        self.groups = self.groups_at_publication.clone();
+        let after = self
+            .published
+            .as_ref()
+            .map(|snapshot| snapshot.invocations.len() as u64)
+            .unwrap_or(0);
+        let added = self.unread.note_frame(start, position, after);
+        if added {
+            super::warn_truncated(
+                self.scope.stream().as_str(),
+                start,
+                &StorageError::Corrupt("conversation fact is invalid".into()),
+            );
+        }
+        self.loaded = true;
+        if self.freshness == CommittedFreshness::Current {
+            self.freshness = CommittedFreshness::Unknown;
         }
         Ok(())
     }
@@ -435,17 +527,36 @@ impl TranscriptFold {
         physical_key: &FactKey,
         body: &[u8],
         semantic: &mut CommittedTransactionState,
-    ) -> Result<(), TranscriptError> {
-        self.groups.piece(body).map_err(TranscriptError::Decision)?;
-        let header = self
-            .groups
-            .complete(physical_key, record.position)
-            .map_err(TranscriptError::Decision)?;
+    ) -> Result<(), FoldMiss> {
+        if let Err(error) = self.groups.piece(body) {
+            return Err(self.miss(error, None, super::gap::DroppedTurns::unknown(), false));
+        }
+        let header = match self.groups.complete(physical_key, record.position) {
+            Ok(header) => header,
+            Err(fault) => {
+                let own = fault == super::save_group::GroupFault::Envelope;
+                let link = match fault {
+                    super::save_group::GroupFault::Lineage => Some(super::gap::DropLink::Lineage),
+                    super::save_group::GroupFault::Envelope => None,
+                };
+                return Err(FoldMiss::Gap {
+                    error: super::save_group::fault_storage(fault),
+                    link,
+                    turns: super::gap::DroppedTurns::unknown(),
+                    own,
+                });
+            }
+        };
         if !header.identity.matches_scope(
             self.scope.stream().as_str(),
             self.scope.incarnation().as_str(),
         ) {
-            return Err(TranscriptError::Decision(StorageError::IdentityMismatch));
+            return Err(self.miss(
+                StorageError::IdentityMismatch,
+                None,
+                super::gap::DroppedTurns::unknown(),
+                false,
+            ));
         }
         match physical_key.kind() {
             FactKind::SaveUnit => {
@@ -459,17 +570,60 @@ impl TranscriptFold {
                 {
                     self.semantic_decodes += 1;
                 }
-                let changes = snapshot::decode_semantic_batch(&body[HEADER_BYTES..], &context)
-                    .map_err(TranscriptError::Decision)?;
-                self.committed
+                let changes = match snapshot::decode_semantic_batch(&body[HEADER_BYTES..], &context)
+                {
+                    Ok(changes) => changes,
+                    Err(error) => {
+                        if let Some((link, learned)) = self.linked_batch(&body[HEADER_BYTES..]) {
+                            return Err(FoldMiss::Gap {
+                                error: StorageError::Corrupt(
+                                    "semantic record depends on a dropped save".into(),
+                                ),
+                                link: Some(link),
+                                turns: learned,
+                                own: false,
+                            });
+                        }
+                        return Err(self.miss(
+                            error,
+                            None,
+                            super::gap::DroppedTurns::unknown(),
+                            false,
+                        ));
+                    }
+                };
+                if let Some(link) = self.dependent(&changes) {
+                    return Err(FoldMiss::Gap {
+                        error: StorageError::Corrupt(
+                            "semantic record depends on a dropped save".into(),
+                        ),
+                        link: Some(link),
+                        turns: super::gap::DroppedTurns::from_changes(&changes),
+                        own: false,
+                    });
+                }
+                if let Err(error) = self
+                    .committed
                     .stage_apply(record.position, &changes, semantic)
-                    .map_err(TranscriptError::Decision)?;
+                {
+                    return Err(self.miss(
+                        error,
+                        None,
+                        super::gap::DroppedTurns::from_changes(&changes),
+                        false,
+                    ));
+                }
                 if self
                     .committed
                     .snapshot()
                     .is_some_and(|state| state.id.as_str() != self.scope.stream().as_str())
                 {
-                    return Err(TranscriptError::Decision(StorageError::IdentityMismatch));
+                    return Err(self.miss(
+                        StorageError::IdentityMismatch,
+                        None,
+                        super::gap::DroppedTurns::from_changes(&changes),
+                        false,
+                    ));
                 }
             }
             FactKind::SaveComplete => {
@@ -486,6 +640,50 @@ impl TranscriptFold {
         Ok(())
     }
 
+    fn dependent(
+        &self,
+        changes: &[crate::application::agent_execution::sessions::SessionChange],
+    ) -> Option<super::gap::DropLink> {
+        let turns = self.unread.open_turns()?;
+        super::gap::link_changes(
+            changes,
+            &super::gap::published_turns(self.published.as_deref()),
+            turns,
+        )
+    }
+
+    /// A batch that did not decode, when its wire still names the open drop.
+    fn linked_batch(
+        &self,
+        bytes: &[u8],
+    ) -> Option<(super::gap::DropLink, super::gap::DroppedTurns)> {
+        let turns = self.unread.open_turns()?;
+        super::gap::link_batch(
+            bytes,
+            &super::gap::published_turns(self.published.as_deref()),
+            turns,
+        )
+    }
+
+    fn miss(
+        &self,
+        error: StorageError,
+        link: Option<super::gap::DropLink>,
+        turns: super::gap::DroppedTurns,
+        own: bool,
+    ) -> FoldMiss {
+        if super::truncates_history(&error) {
+            FoldMiss::Gap {
+                error,
+                link,
+                turns,
+                own,
+            }
+        } else {
+            FoldMiss::Hard(TranscriptError::Decision(error))
+        }
+    }
+
     /// Drop the open group that contains the unreadable record. The downloaded
     /// prefix stays, including this record's frames, so a later page is not a
     /// hole. The published snapshot does not include the dropped group.
@@ -493,9 +691,15 @@ impl TranscriptFold {
         &mut self,
         semantic: &mut CommittedTransactionState,
         position: u64,
-        error: &StorageError,
-        header: Option<&Header>,
+        gap: GapMiss,
     ) -> Result<(), TranscriptError> {
+        let GapMiss {
+            error,
+            identity,
+            link,
+            turns,
+            own,
+        } = gap;
         let (applied, facts) = self.committed.seal_open_group(semantic, self.publication);
         if self.committed.snapshot() != self.published.as_deref() {
             let restored = CommittedTranscript::restore(
@@ -506,24 +710,26 @@ impl TranscriptFold {
             .map_err(|_| TranscriptError::Checkpoint)?;
             self.deep_restore = Some(mem::replace(&mut self.committed, restored));
         }
-        self.groups = self.groups_at_publication.clone();
+        self.groups.revert_open_group();
         self.pending.clear();
         let start = self.group_start.unwrap_or(position);
-        let reason = UnreadableReason::from_storage(error);
-        let contradiction = header.is_some() && super::contradicts_fold(error);
-        let added = self.unread.note(
+        let reason = UnreadableReason::from_storage(&error);
+        let added = self.unread.note(super::unread::Placement {
             start,
-            position,
-            self.published
+            through: position,
+            after_invocation: self
+                .published
                 .as_ref()
                 .map(|snapshot| snapshot.invocations.len() as u64)
                 .unwrap_or(0),
             reason,
-            header.map(|header| header.identity.clone()),
-            contradiction,
-        );
+            identity,
+            link,
+            turns,
+            own,
+        });
         if added {
-            super::warn_truncated(self.scope.stream().as_str(), start, error);
+            super::warn_truncated(self.scope.stream().as_str(), start, &error);
         }
         Ok(())
     }
@@ -1881,12 +2087,24 @@ mod tests {
         let mut unknown_schema = first[0].clone();
         unknown_schema.position = 3;
         unknown_schema.payload[0] = 99;
-        assert_eq!(fold.apply(&[unknown_schema]), Err(TranscriptError::Frame));
-        assert_eq!(fold.downloaded(), 2);
+        fold.apply(&[unknown_schema]).unwrap();
+        assert_eq!(fold.downloaded(), 3);
+        assert_eq!(fold.unreadable().len(), 1);
+        assert_eq!(fold.applied(), 2);
 
-        let second = records(&scope, 3, &save_frames(opened(), 2, 1));
+        let second = records(
+            &scope,
+            fold.downloaded() + 1,
+            &save_group_at(
+                &scope,
+                &snapshot::encode_semantic_batch(&[opened()]).unwrap(),
+                2,
+                1,
+                fold.downloaded(),
+            ),
+        );
         fold.apply(&second).unwrap();
-        assert!(fold.downloaded() > 2);
+        assert!(fold.downloaded() > 3);
         assert_eq!(fold.applied(), 2);
         assert_eq!(fold.snapshot().unwrap().invocations.len(), 0);
     }
@@ -2293,11 +2511,11 @@ mod tests {
             scope: scope.clone(),
             payload: vec![0xff, 1, 2, 3],
         });
-        assert!(matches!(fold.apply(&batch), Err(TranscriptError::Frame)));
-        assert_eq!(
-            (fold.applied(), fold.downloaded(), fold.fact_count()),
-            before
-        );
+        fold.apply(&batch).unwrap();
+        assert_eq!((fold.applied(), fold.fact_count()), (before.0, before.2));
+        assert!(fold.downloaded() > before.1);
+        assert_eq!(fold.unreadable().len(), 1);
+        assert_eq!(fold.snapshot().unwrap().invocations.len(), 0);
     }
 
     #[test]
@@ -2311,7 +2529,7 @@ mod tests {
                 .invocations
                 .remove(0),
         ));
-        let frames = save_frames(input, 2, 1);
+        let frames = save_frames(input.clone(), 2, 1);
         assert!(frames.len() > 60);
         for (index, event) in frames[..frames.len() - 2].iter().enumerate() {
             fold.apply(&records(
@@ -2334,32 +2552,27 @@ mod tests {
         let before = fold.clone();
         let mut invalid = seal.clone();
         invalid[0].payload[1] ^= 1;
-        assert_eq!(fold.apply(&invalid), Err(TranscriptError::Frame));
-        assert_eq!(fold.downloaded(), before.downloaded());
-        assert_eq!(
-            fold.pending.retained_bytes(),
-            before.pending.retained_bytes()
-        );
-        assert_eq!(fold.semantic_decodes, 1);
-        fold.apply(&seal).unwrap();
-        assert_eq!(fold.semantic_decodes, 2);
+        fold.apply(&invalid).unwrap();
+        assert!(fold.downloaded() > before.downloaded());
         assert_eq!(fold.pending.retained_bytes(), 0);
-        assert_eq!(fold.frames.allocation_bytes(), 0);
+        assert_eq!(fold.semantic_decodes, 1);
         assert!(!fold.frames.is_pending());
-        assert_eq!(fold.applied(), 2);
+        assert_eq!(fold.unreadable().len(), 1);
         assert_eq!(fold.snapshot().unwrap().invocations.len(), 0);
-        let completion_position = fold.downloaded() + 1;
-        fold.apply(&records(
+        let retry = save_group_at(
             &scope,
-            completion_position,
-            &frames[frames.len() - 1..],
-        ))
-        .unwrap();
-        assert_eq!(fold.applied(), completion_position);
+            &snapshot::encode_semantic_batch(std::slice::from_ref(&input)).unwrap(),
+            fold.applied(),
+            1,
+            fold.downloaded(),
+        );
+        fold.apply(&records(&scope, fold.downloaded() + 1, &retry))
+            .unwrap();
         assert_eq!(fold.snapshot().unwrap().invocations.len(), 1);
         assert_eq!(fold.semantic_decodes, 2);
         assert!(before.frames.is_pending());
         drop(before);
+        drop(seal);
     }
 
     #[test]

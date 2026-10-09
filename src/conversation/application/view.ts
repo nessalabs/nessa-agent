@@ -106,10 +106,8 @@ export type ConversationView = {
    * a row. Absent when every saved record folded.
    */
   unreadable?: {
-    session: string
     position: number
     reason: "another_version" | "identity" | "unreadable"
-    found?: number
     /** How many messages in this view come before the row. */
     afterMessage: number
   }[]

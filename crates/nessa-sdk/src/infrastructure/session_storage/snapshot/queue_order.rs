@@ -45,6 +45,18 @@ struct Entry {
     id: String,
     kind: Kind,
 }
+impl QueueEvent {
+    /// The turn this decision names. `None` is a queue-wide mutation.
+    pub(super) fn referenced_id(&self) -> Option<&str> {
+        match &self.mutation {
+            Mutation::Admitted { id, .. }
+            | Mutation::Selected { id }
+            | Mutation::Removed { id, .. } => Some(id.as_str()),
+            Mutation::Reordered { .. } | Mutation::Restored => None,
+        }
+    }
+}
+
 impl From<&QueueHistoryRecord> for QueueEvent {
     fn from(value: &QueueHistoryRecord) -> Self {
         Self {

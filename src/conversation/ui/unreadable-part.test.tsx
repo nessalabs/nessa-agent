@@ -38,7 +38,9 @@ function gapped(): Conversation {
         executionId: "before",
         text: "Answer before",
         status: "completed",
-        parts: [{ offset: 0, kind: "text", text: "Answer before", toolId: "", noticeId: "" }],
+        parts: [
+          { offset: 0, kind: "text", text: "Answer before", toolId: "", noticeId: "" },
+        ],
       },
       {
         id: "after:user",
@@ -53,14 +55,14 @@ function gapped(): Conversation {
         executionId: "after",
         text: "Answer after",
         status: "completed",
-        parts: [{ offset: 0, kind: "text", text: "Answer after", toolId: "", noticeId: "" }],
+        parts: [
+          { offset: 0, kind: "text", text: "Answer after", toolId: "", noticeId: "" },
+        ],
       },
     ],
     remote: {
       approvalMode: "ask",
-      approvalModes: [
-        { id: "ask", name: "Ask", description: "Ask before tools." },
-      ],
+      approvalModes: [{ id: "ask", name: "Ask", description: "Ask before tools." }],
       questions: [],
       running: false,
       permissions: [],
@@ -91,10 +93,8 @@ function gapped(): Conversation {
       truncated: false,
       unreadable: [
         {
-          session: "gap",
           position: 4,
           reason: "another_version",
-          found: 2,
           afterTurnId: "before:user",
         },
       ],
@@ -144,10 +144,9 @@ it("draws a muted row for a part it could not read, between the messages around 
   const row = container.querySelector("[data-unreadable-position]")
   expect(row?.textContent).toBe("Couldn't read this part of the conversation")
   expect(row?.querySelector("button")).toBeNull()
-  expect(row?.getAttribute("data-unreadable-session")).toBe("gap")
+  expect(row?.getAttribute("role")).toBeNull()
   expect(row?.getAttribute("data-unreadable-position")).toBe("4")
   expect(row?.getAttribute("data-unreadable-reason")).toBe("another_version")
-  expect(row?.getAttribute("data-unreadable-found")).toBe("2")
   const text = container.textContent ?? ""
   const gap = text.indexOf("Couldn't read this part of the conversation")
   expect(text.indexOf("Kept before")).toBeLessThan(gap)

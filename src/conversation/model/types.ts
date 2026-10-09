@@ -348,10 +348,8 @@ type ConversationState = {
     interactionViewError?: string
     /** Parts this build could not read. Each one is a row after `afterTurnId`. */
     unreadable?: {
-      session: string
       position: number
       reason: "another_version" | "identity" | "unreadable"
-      found?: number
       /** Turn this row follows. Absent when the row leads the transcript. */
       afterTurnId?: string
     }[]

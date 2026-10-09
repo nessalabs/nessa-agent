@@ -17,6 +17,9 @@ pub enum RecordReadError {
     IdentityChanged,
     HistoryPruned,
     RecordTooLarge,
+    /// The stored bytes are corrupt or a format version this build does not
+    /// read. Reading them again cannot succeed.
+    Unreadable,
     TemporarilyUnavailable,
     /// Unexpected outer worker panic, retained for process cleanup diagnostics.
     WorkerPanicked,

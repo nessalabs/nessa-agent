@@ -843,7 +843,9 @@ fn incarnation_id(stream: &StreamKey) -> Id {
 }
 
 fn frame_payload(record: &StreamRecord) -> Result<Vec<u8>, SourceError> {
-    let tag = stream_fact::frame_tag(&record.event).map_err(|_| SourceError::Unavailable)?;
+    // A schema this build does not frame is still a record. Tag 0 is not a
+    // fact start, so the fold shows one placeholder and keeps reading.
+    let tag = stream_fact::frame_tag(&record.event).unwrap_or(0);
     let mut payload = Vec::with_capacity(record.event.payload.len() + 1);
     payload.push(tag);
     payload.extend_from_slice(record.event.payload.as_bytes());
@@ -2488,7 +2490,8 @@ mod tests {
         let captured = reader.check_stream().await.unwrap();
 
         // A later record is deliberately invalid. Neither the earlier captured
-        // head nor a fixed historical page should inspect it. A fresh head must.
+        // head nor a fixed historical page should inspect it. A fresh head
+        // skips it and keeps the last publication.
         let mut later = test_save_frames(
             &stream,
             first,
@@ -2522,7 +2525,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(page.unwrap().records.len(), 1);
-        assert_eq!(current_head, Err(SourceError::Unavailable));
+        assert_eq!(current_head, Ok(first));
         storage.shutdown().await.unwrap();
     }
 
@@ -2781,7 +2784,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(results.0, Err(SourceError::IdentityChanged));
-        assert_eq!(results.1, Err(SourceError::Unavailable));
+        assert_eq!(results.1, Ok(0));
         storage.shutdown().await.unwrap();
     }
 
@@ -3195,9 +3198,22 @@ mod tests {
             limits,
         )
         .unwrap();
-        assert_eq!(receiver.apply(invalid_schema), Err(StoreError::Failed));
-        assert_eq!(receiver.progress().unwrap().unwrap(), initial);
+        // A frame this build does not know is one placeholder. It does not
+        // fail the replica. The byte is not in the authority stream, so the
+        // restart below still begins from the real prefix.
+        assert_eq!(receiver.apply(invalid_schema), Ok(()));
+        let placeholder = receiver.progress().unwrap().unwrap();
+        assert_eq!(placeholder.applied, initial.applied);
+        assert!(placeholder.downloaded > initial.downloaded);
         drop(receiver);
+        for suffix in ["", "-wal", "-shm"] {
+            let path = directory.path().join(format!("receiver.sqlite3{suffix}"));
+            if path.exists() {
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+        let rebuilt = run_receiver_child(authority.address, &authority.scope, &db_path, "first");
+        assert!(rebuilt.contains("NESSA_DURABLE_TRAFFIC"));
 
         let second = run_receiver_child(authority.address, &authority.scope, &db_path, "resume");
         assert!(second.contains("NESSA_DURABLE_TRAFFIC"));

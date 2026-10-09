@@ -123,6 +123,7 @@ fn error_code(error: RecordReadError) -> RecordReadErrorCode {
         RecordReadError::IdentityChanged => RecordReadErrorCode::IdentityChanged,
         RecordReadError::HistoryPruned => RecordReadErrorCode::HistoryPruned,
         RecordReadError::RecordTooLarge => RecordReadErrorCode::RecordTooLarge,
+        RecordReadError::Unreadable => RecordReadErrorCode::Unverifiable,
         RecordReadError::TemporarilyUnavailable | RecordReadError::WorkerPanicked => {
             RecordReadErrorCode::TemporarilyUnavailable
         }
@@ -157,5 +158,22 @@ pub(in crate::product) fn refusal_code(refusal: ReadRefusal) -> RecordReadErrorC
         ReadRefusal::WrongReceiver => RecordReadErrorCode::WrongReceiver,
         ReadRefusal::StaleEpoch => RecordReadErrorCode::StaleEpoch,
         ReadRefusal::Unverifiable => RecordReadErrorCode::Unverifiable,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unreadable_record_is_not_temporarily_unavailable() {
+        assert_eq!(
+            error_code(RecordReadError::Unreadable),
+            RecordReadErrorCode::Unverifiable
+        );
+        assert_eq!(
+            error_code(RecordReadError::TemporarilyUnavailable),
+            RecordReadErrorCode::TemporarilyUnavailable
+        );
     }
 }

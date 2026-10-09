@@ -32,9 +32,9 @@ pub(super) struct RecordWriter {
     next: SessionSaveGeneration,
     pending: Option<FramedFact>,
     unfinished: bool,
-    /// Dropped save groups. A later save still appends at the physical tail
-    /// and continues from [`Self::next`].
-    unread: super::unread::UnreadTracker,
+    /// The one open dropped save. A later save still appends at the physical
+    /// tail and continues from [`Self::next`].
+    gaps: super::gap::WriterGaps,
     /// First physical position of the save group currently being folded.
     group_start: Option<u64>,
     /// Physical offset where a confirmation scan starts. Zero when every
@@ -55,6 +55,7 @@ impl RecordWriter {
         if bounds.floor.offset != 0 || bounds.floor.stream != stream {
             return Err(corrupt("conversation record prefix is unavailable"));
         }
+        let tail = bounds.tail.clone();
         let next = binding(&stream, 0, 0)?;
         let mut writer = Self {
             id,
@@ -68,7 +69,7 @@ impl RecordWriter {
             next,
             pending: None,
             unfinished: false,
-            unread: super::unread::UnreadTracker::default(),
+            gaps: super::gap::WriterGaps::default(),
             group_start: None,
             resume_from: 0,
             blocked: false,
@@ -76,22 +77,18 @@ impl RecordWriter {
             changes: None,
         };
         loop {
-            match stream_fact::read_next_fact(reader, &writer.stream, &writer.cursor)
-                .await
-                .map_err(fact_error)?
-            {
-                FactRead::Absent => break,
-                FactRead::Partial => {
+            match stream_fact::read_next_fact(reader, &writer.stream, &writer.cursor).await {
+                Ok(FactRead::Absent) => break,
+                Ok(FactRead::Partial) => {
                     // Recovery terminates only the physical attempt, then re-reads
                     // its retained start identity/digest on the next iteration.
                     stream_fact::abort_partial_fact(reader, &writer.stream, &writer.cursor)
                         .await
                         .map_err(fact_error)?;
                 }
-                FactRead::Aborted { cursor, key, .. } => {
-                    if writer.unread.is_open() {
+                Ok(FactRead::Aborted { cursor, key, .. }) => {
+                    if writer.gaps.is_open() {
                         writer.resume_from = cursor.offset;
-                        writer.unread.extend(cursor.offset);
                         writer.cursor = cursor;
                         continue;
                     }
@@ -103,10 +100,35 @@ impl RecordWriter {
                     writer.unfinished = true;
                     writer.cursor = cursor;
                 }
-                FactRead::Complete { fact, cursor } => writer.accept(fact, cursor)?,
+                Ok(FactRead::Complete { fact, cursor }) => writer.accept(fact, cursor)?,
+                Err(
+                    FactCommitError::Frame(_)
+                    | FactCommitError::Conflict
+                    | FactCommitError::InvalidStream,
+                ) => {
+                    let resync =
+                        stream_fact::resync_frame(reader, &writer.stream, &writer.cursor, &tail)
+                            .await
+                            .map_err(fact_error)?;
+                    let start = writer.cursor.offset.saturating_add(1);
+                    if resync.through >= start {
+                        writer.note_frame(start);
+                    }
+                    writer.resume_from = resync.resume.offset;
+                    writer.cursor = resync.resume;
+                    if !resync.found_boundary {
+                        break;
+                    }
+                }
+                Err(error) => return Err(fact_error(error)),
             }
         }
         Ok(writer)
+    }
+
+    #[cfg(test)]
+    pub(super) fn gap_positions(&self) -> Vec<u64> {
+        self.gaps.positions()
     }
     pub(super) fn with_changes(mut self, changes: RecordChanges) -> Self {
         self.changes = Some(changes);
@@ -152,31 +174,34 @@ impl RecordWriter {
         let fact_start = self.cursor.offset.saturating_add(1);
         let decoded = Header::decode(&fact.body);
         if let Ok(header) = &decoded {
-            if self.unread.consume_rest(&header.identity, kind, ordinal) {
+            // The key and the header name one ordinal. A mismatch is this
+            // frame's own gap, not the rest of an open save.
+            let envelope = ordinal != header.ordinal;
+            if !envelope && self.gaps.consume_rest(&header.identity, kind, ordinal) {
                 self.resume_from = cursor.offset;
-                self.unread.extend(cursor.offset);
                 if kind == FactKind::SaveComplete {
                     self.note_lineage(cursor.offset);
                 }
                 self.cursor = cursor;
                 return Ok(());
             }
-            if ordinal == 0 {
+            if envelope || ordinal == 0 {
                 self.group_start = Some(fact_start);
             }
         } else {
             self.group_start = Some(fact_start);
         }
-        match self.fold_fact(fact, cursor.clone()) {
+        match self.fold_fact(&fact, cursor.clone()) {
             Ok(()) => {
-                self.unread.close();
+                self.gaps.close();
                 if kind == FactKind::SaveComplete {
                     self.group_start = None;
                 }
                 Ok(())
             }
-            Err(error) if super::truncates_history(&error) => {
-                self.seal(cursor.offset, &error, decoded.as_ref().ok())?;
+            Err(FoldStop::Hard(error)) => Err(error),
+            Err(FoldStop::Gap(gap)) => {
+                self.seal(cursor.offset, *gap)?;
                 if kind == FactKind::SaveComplete && decoded.is_ok() {
                     self.note_lineage(cursor.offset);
                 }
@@ -184,7 +209,6 @@ impl RecordWriter {
                 self.cursor = cursor;
                 Ok(())
             }
-            Err(error) => Err(error),
         }
     }
 
@@ -195,23 +219,59 @@ impl RecordWriter {
         self.progress.set_lineage_base(lineage);
     }
 
-    fn fold_fact(&mut self, fact: FramedFact, cursor: Cursor) -> Result<(), StorageError> {
-        let header = Header::decode(&fact.body)?;
+    fn fold_fact(&mut self, fact: &FramedFact, cursor: Cursor) -> Result<(), FoldStop> {
+        let header = match Header::decode(&fact.body) {
+            Ok(header) => header,
+            Err(error) => {
+                return Err(Self::stop(
+                    error,
+                    None,
+                    None,
+                    super::gap::DroppedTurns::unknown(),
+                ));
+            }
+        };
         let original = binding(
             &self.stream,
             header.identity.base,
             header.identity.generation,
-        )?;
-        if SaveIdentity::binding(&original)? != header.identity {
-            return Err(StorageError::IdentityMismatch);
+        )
+        .map_err(FoldStop::Hard)?;
+        if SaveIdentity::binding(&original).map_err(FoldStop::Hard)? != header.identity {
+            return Err(Self::stop(
+                StorageError::IdentityMismatch,
+                Some(header),
+                None,
+                super::gap::DroppedTurns::unknown(),
+            ));
         }
         if self.binding.as_ref() != Some(&original) {
             self.baseline = self.committed.clone();
-            self.staged = Continuation::restore(self.baseline.clone())?;
+            self.staged = Continuation::restore(self.baseline.clone()).map_err(FoldStop::Hard)?;
             self.binding = Some(original.clone());
         }
-        self.progress.piece(&fact.body)?;
-        self.progress.complete(&fact.key, cursor.offset)?;
+        if let Err(error) = self.progress.piece(&fact.body) {
+            return Err(Self::stop(
+                error,
+                Some(header),
+                None,
+                super::gap::DroppedTurns::unknown(),
+            ));
+        }
+        if let Err(fault) = self.progress.complete(&fact.key, cursor.offset) {
+            let link = match fault {
+                super::save_group::GroupFault::Lineage => Some(super::gap::DropLink::Lineage),
+                super::save_group::GroupFault::Envelope => None,
+            };
+            let own = fault == super::save_group::GroupFault::Envelope;
+            return Err(FoldStop::Gap(Box::new(GapStop {
+                error: super::save_group::fault_storage(fault),
+                header: Some(header),
+                link,
+                turns: super::gap::DroppedTurns::unknown(),
+                own,
+            })));
+        }
         match fact.key.kind() {
             FactKind::SaveUnit => {
                 let context = self
@@ -222,15 +282,57 @@ impl RecordWriter {
                         state.provider_context.clone()
                     });
                 let changes =
-                    snapshot::decode_semantic_batch(&fact.body[HEADER_BYTES..], &context)?;
-                self.staged.apply_unit(&changes)?;
+                    match snapshot::decode_semantic_batch(&fact.body[HEADER_BYTES..], &context) {
+                        Ok(changes) => changes,
+                        Err(error) => {
+                            if let Some((link, learned)) =
+                                self.linked_batch(&fact.body[HEADER_BYTES..])
+                            {
+                                return Err(FoldStop::Gap(Box::new(GapStop {
+                                    error: corrupt("semantic record depends on a dropped save"),
+                                    header: Some(header),
+                                    link: Some(link),
+                                    turns: learned,
+                                    own: false,
+                                })));
+                            }
+                            return Err(Self::stop(
+                                error,
+                                Some(header),
+                                None,
+                                super::gap::DroppedTurns::unknown(),
+                            ));
+                        }
+                    };
+                if let Some(link) = self.dependent(&changes) {
+                    return Err(FoldStop::Gap(Box::new(GapStop {
+                        error: corrupt("semantic record depends on a dropped save"),
+                        header: Some(header),
+                        link: Some(link),
+                        turns: super::gap::DroppedTurns::from_changes(&changes),
+                        own: false,
+                    })));
+                }
+                if let Err(error) = self.staged.apply_unit(&changes) {
+                    return Err(Self::stop(
+                        error,
+                        Some(header),
+                        None,
+                        super::gap::DroppedTurns::from_changes(&changes),
+                    ));
+                }
                 if self
                     .staged
                     .snapshot
                     .as_ref()
                     .is_some_and(|state| state.id != self.id)
                 {
-                    return Err(StorageError::IdentityMismatch);
+                    return Err(Self::stop(
+                        StorageError::IdentityMismatch,
+                        Some(header),
+                        None,
+                        super::gap::DroppedTurns::from_changes(&changes),
+                    ));
                 }
                 self.unfinished = true;
             }
@@ -242,14 +344,19 @@ impl RecordWriter {
                     original
                         .generation()
                         .checked_add(1)
-                        .ok_or_else(|| corrupt("save generation exhausted"))?,
-                )?;
-                self.receipt = Some(SessionSaveReceipt::new(
-                    original,
-                    self.next.clone(),
-                    header.ordinal,
-                    header.previous,
-                )?);
+                        .ok_or_else(|| corrupt("save generation exhausted"))
+                        .map_err(FoldStop::Hard)?,
+                )
+                .map_err(FoldStop::Hard)?;
+                self.receipt = Some(
+                    SessionSaveReceipt::new(
+                        original,
+                        self.next.clone(),
+                        header.ordinal,
+                        header.previous,
+                    )
+                    .map_err(FoldStop::Hard)?,
+                );
                 self.unfinished = false;
                 // Actual SaveComplete is the publication owner; Unit seals and
                 // Abort only advance retained private/physical work.
@@ -261,40 +368,84 @@ impl RecordWriter {
         Ok(())
     }
 
+    /// A decoded unit that names a dropped turn, or that would continue one.
+    fn dependent(
+        &self,
+        changes: &[crate::application::agent_execution::sessions::SessionChange],
+    ) -> Option<super::gap::DropLink> {
+        let turns = self.gaps.turns()?;
+        super::gap::link_changes(
+            changes,
+            &super::gap::published_turns(self.committed.as_ref()),
+            turns,
+        )
+    }
+
+    /// A batch that did not decode, when its wire still names the open drop.
+    fn linked_batch(
+        &self,
+        bytes: &[u8],
+    ) -> Option<(super::gap::DropLink, super::gap::DroppedTurns)> {
+        let turns = self.gaps.turns()?;
+        super::gap::link_batch(
+            bytes,
+            &super::gap::published_turns(self.committed.as_ref()),
+            turns,
+        )
+    }
+
+    fn stop(
+        error: StorageError,
+        header: Option<Header>,
+        link: Option<super::gap::DropLink>,
+        turns: super::gap::DroppedTurns,
+    ) -> FoldStop {
+        if super::truncates_history(&error) {
+            FoldStop::Gap(Box::new(GapStop {
+                error,
+                header,
+                link,
+                turns,
+                own: false,
+            }))
+        } else {
+            FoldStop::Hard(error)
+        }
+    }
+
+    fn note_frame(&mut self, start: u64) {
+        let added = self.gaps.note_frame(start);
+        if added {
+            super::warn_truncated(
+                self.id.as_str(),
+                start,
+                &corrupt("conversation fact is invalid"),
+            );
+        }
+    }
+
     /// Drop the open group that held the unreadable record. The last folded
     /// save stays. The physical cursor stays at the tail so a later save
     /// appends after those bytes instead of colliding with them.
-    fn seal(
-        &mut self,
-        position: u64,
-        error: &StorageError,
-        header: Option<&Header>,
-    ) -> Result<(), StorageError> {
+    fn seal(&mut self, position: u64, gap: GapStop) -> Result<(), StorageError> {
         let lineage = self.progress.lineage_base();
         self.staged = Continuation::restore(self.committed.clone())?;
         self.baseline = self.committed.clone();
         self.binding = None;
         self.unfinished = false;
         self.pending = None;
-        self.progress = GroupProgress::after(self.next.base());
+        self.progress.revert_open_group();
         self.progress.set_lineage_base(lineage);
         let start = self.group_start.unwrap_or(position);
-        let reason =
-            crate::application::agent_execution::sessions::UnreadableReason::from_storage(error);
-        let contradiction = header.is_some() && super::contradicts_fold(error);
-        let added = self.unread.note(
+        let added = self.gaps.note(
             start,
-            position,
-            self.committed
-                .as_ref()
-                .map(|snapshot| snapshot.invocations.len() as u64)
-                .unwrap_or(0),
-            reason,
-            header.map(|header| header.identity.clone()),
-            contradiction,
+            gap.header.as_ref().map(|header| header.identity.clone()),
+            gap.link,
+            gap.turns,
+            gap.own,
         );
         if added {
-            super::warn_truncated(self.id.as_str(), start, error);
+            super::warn_truncated(self.id.as_str(), start, &gap.error);
         }
         Ok(())
     }
@@ -579,6 +730,19 @@ impl RecordWriter {
     ) -> Result<bool, StorageError> {
         Ok(Self::encode_unit(units, headers, index)?.as_ref() == Some(fact))
     }
+}
+
+struct GapStop {
+    error: StorageError,
+    header: Option<Header>,
+    link: Option<super::gap::DropLink>,
+    turns: super::gap::DroppedTurns,
+    own: bool,
+}
+
+enum FoldStop {
+    Hard(StorageError),
+    Gap(Box<GapStop>),
 }
 
 fn binding(

@@ -223,7 +223,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   }
   if (item.interactionViewError !== undefined)
     text(item, "interactionViewError", 2048, false)
-  if (item.unreadable !== undefined) unreadableParts(item, expected)
+  if (item.unreadable !== undefined) unreadableParts(item)
   const messages = items(item, "messages", 128)
   const messageIds = new Set<string>()
   const messageStatuses = new Map<string, string>()
@@ -664,24 +664,15 @@ export function conversationReorder(
 }
 
 /** Parts this build could not read. A bad part refuses the view, as any other field does. */
-function unreadableParts(item: Record<string, unknown>, expected: string) {
+function unreadableParts(item: Record<string, unknown>) {
   const parts = items(item, "unreadable", 128)
   for (const part of parts) {
-    exact(part, ["session", "position", "reason", "found", "afterMessage"])
-    if (identity(part, "session") !== expected)
-      throw new Error("Unreadable part belongs to another conversation")
+    exact(part, ["position", "reason", "afterMessage"])
     const position = part.position
     if (!Number.isSafeInteger(position) || (position as number) < 1)
       throw new Error("Invalid conversation unreadable position")
     const reason = text(part, "reason", 16, false)
     oneOf(reason, ["another_version", "identity", "unreadable"])
-    if (part.found !== undefined) {
-      if (reason !== "another_version")
-        throw new Error("Unreadable part records a version it did not find")
-      const found = part.found
-      if (!Number.isSafeInteger(found) || (found as number) < 0)
-        throw new Error("Invalid conversation unreadable version")
-    }
     const after = part.afterMessage
     if (!Number.isSafeInteger(after) || (after as number) < 0)
       throw new Error("Invalid conversation unreadable position")

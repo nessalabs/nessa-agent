@@ -1344,15 +1344,8 @@
     "UnreadablePart": {
       "type": "object",
       "additionalProperties": false,
-      "description": "One save group this build could not read. The chat shows it as a row. A later report can name the same session, position, and reason.",
+      "description": "One save group this build could not read. The chat shows it as a row. The conversation already names the chat. A later report can name the position and reason.",
       "properties": {
-        "session": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256,
-          "x-utf8MaxBytes": 256,
-          "description": "The conversation this part was read for."
-        },
         "position": {
           "type": "integer",
           "minimum": 1,
@@ -1364,12 +1357,6 @@
           "enum": ["another_version", "identity", "unreadable"],
           "description": "Why the group was dropped. The same name the tracing warning records."
         },
-        "found": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991,
-          "description": "The schemaVersion that was present, when reason is another_version and the marker was an unsigned integer."
-        },
         "afterMessage": {
           "type": "integer",
           "minimum": 0,
@@ -1377,7 +1364,7 @@
           "description": "How many messages in this view come before the row."
         }
       },
-      "required": ["session", "position", "reason", "afterMessage"]
+      "required": ["position", "reason", "afterMessage"]
     },
     "ConversationView": {
       "type": "object",

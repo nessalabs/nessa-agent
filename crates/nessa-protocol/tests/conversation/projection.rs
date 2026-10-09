@@ -150,18 +150,15 @@ fn an_unreadable_part_stays_in_place_and_a_later_message_is_shown() {
     assert_eq!(view.unreadable.len(), 2);
     assert_eq!(view.unreadable[0].after_message, 0);
     assert_eq!(view.unreadable[0].position, 2);
-    assert_eq!(view.unreadable[0].session, "conversation");
     assert_eq!(
         view.unreadable[0].reason,
         UnreadableTranscriptReason::AnotherVersion
     );
-    assert_eq!(view.unreadable[0].found, Some(2));
     assert_eq!(view.unreadable[1].after_message, 1);
     assert_eq!(
         view.unreadable[1].reason,
         UnreadableTranscriptReason::Unreadable
     );
-    assert_eq!(view.unreadable[1].found, None);
     let mut wire = serde_json::to_value(&view).unwrap();
     assert!(wire.get("unreadable").is_some());
     let fields = wire.as_object_mut().unwrap();
@@ -176,7 +173,6 @@ fn an_unreadable_part_stays_in_place_and_a_later_message_is_shown() {
     assert_eq!(parts.len(), 2);
     assert_eq!(parts[0].position, 2);
     assert_eq!(parts[0].reason, "another_version");
-    assert_eq!(parts[0].found, Some(2));
     assert_eq!(parts[0].after_message, 0);
     assert!(serde_json::to_value(projection_for("conversation").read())
         .unwrap()
@@ -187,7 +183,6 @@ fn an_unreadable_part_stays_in_place_and_a_later_message_is_shown() {
 #[test]
 fn an_unreadable_part_in_the_hidden_prefix_clamps_into_the_window() {
     let rows = crate::conversation::projection::unreadable_rows(
-        "conversation",
         &[
             UnreadablePart::new(1, 0, UnreadableReason::Unreadable),
             UnreadablePart::new(50, 30, UnreadableReason::Identity),
@@ -200,7 +195,6 @@ fn an_unreadable_part_in_the_hidden_prefix_clamps_into_the_window() {
     assert_eq!(rows[1].after_message, 20);
     assert_eq!(rows[1].reason, UnreadableTranscriptReason::Identity);
     assert_eq!(rows[2].after_message, 24);
-    assert_eq!(rows[2].found, None);
 }
 
 #[test]
@@ -208,7 +202,7 @@ fn more_unreadable_parts_than_the_view_allows_keep_the_chat_open() {
     let parts: Vec<_> = (0..130)
         .map(|index| UnreadablePart::new(index + 1, 0, UnreadableReason::Unreadable))
         .collect();
-    let rows = crate::conversation::projection::unreadable_rows("conversation", &parts, 0, 0);
+    let rows = crate::conversation::projection::unreadable_rows(&parts, 0, 0);
     assert_eq!(rows.len(), 128);
     assert_eq!(rows[0].position, 1);
     assert_eq!(rows[127].position, 128);

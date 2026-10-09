@@ -98,6 +98,9 @@ fn discover<T>(
 pub(super) fn storage_error(error: StorageError) -> RecordReadError {
     match error {
         StorageError::IdentityMismatch => RecordReadError::IdentityChanged,
+        StorageError::Corrupt(_) | StorageError::AnotherVersion { .. } => {
+            RecordReadError::Unreadable
+        }
         _ => RecordReadError::TemporarilyUnavailable,
     }
 }
@@ -109,5 +112,30 @@ fn source_error(error: SourceError) -> RecordReadError {
         SourceError::InvalidRequest => RecordReadError::InvalidRequest,
         SourceError::IdentityChanged => RecordReadError::IdentityChanged,
         SourceError::OversizedRecord => RecordReadError::RecordTooLarge,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corrupt_and_another_version_are_permanent() {
+        assert_eq!(
+            storage_error(StorageError::Corrupt("body".into())),
+            RecordReadError::Unreadable
+        );
+        assert_eq!(
+            storage_error(StorageError::AnotherVersion { found: None }),
+            RecordReadError::Unreadable
+        );
+        assert_eq!(
+            storage_error(StorageError::AnotherVersion { found: Some(2) }),
+            RecordReadError::Unreadable
+        );
+        assert_eq!(
+            storage_error(StorageError::Io("disk".into())),
+            RecordReadError::TemporarilyUnavailable
+        );
     }
 }

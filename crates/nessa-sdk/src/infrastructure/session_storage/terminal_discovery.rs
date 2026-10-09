@@ -144,39 +144,43 @@ impl Scan {
                 if record.cursor.stream != *key {
                     return Err(SourceError::IdentityChanged);
                 }
-                let step = state
-                    .validator
-                    .push(&record.event, record.cursor.offset)
-                    .map_err(|_| {
-                        state.failed = true;
-                        SourceError::Unavailable
-                    })?;
+                // A frame that is not a fact is not a reason to stop the read.
+                // The next record is tried as a fact start. The bytes stay in
+                // the page the client folds.
+                let step = match state.validator.push(&record.event, record.cursor.offset) {
+                    Ok(step) => step,
+                    Err(_) => {
+                        state.validator = FrameValidator::after(record.cursor.offset);
+                        state.groups.reset_frame();
+                        continue;
+                    }
+                };
                 match step {
-                    FrameStep::Pending(Some(bytes)) => state.groups.piece(bytes).map_err(|_| {
-                        state.failed = true;
-                        SourceError::Unavailable
-                    })?,
+                    FrameStep::Pending(Some(bytes)) => {
+                        if state.groups.piece(bytes).is_err() {
+                            state.validator = FrameValidator::after(record.cursor.offset);
+                            state.groups.reset_frame();
+                            continue;
+                        }
+                    }
                     FrameStep::Pending(None) => {}
                     FrameStep::Aborted => state.groups.reset_frame(),
                     FrameStep::Complete { key, body } => {
                         if let Some(bytes) = body {
-                            state.groups.piece(bytes).map_err(|_| {
-                                state.failed = true;
-                                SourceError::Unavailable
-                            })?;
+                            if state.groups.piece(bytes).is_err() {
+                                state.validator = FrameValidator::after(record.cursor.offset);
+                                state.groups.reset_frame();
+                                continue;
+                            }
                         }
                         let previous = state.groups.published();
-                        let header =
-                            state
-                                .groups
-                                .complete(&key, record.cursor.offset)
-                                .map_err(|_| {
-                                    state.failed = true;
-                                    SourceError::Unavailable
-                                })?;
+                        let Ok(header) = state.groups.complete(&key, record.cursor.offset) else {
+                            state.groups.reset_frame();
+                            continue;
+                        };
                         if !header.identity.matches_stream(&record.cursor.stream) {
-                            state.failed = true;
-                            return Err(SourceError::Unavailable);
+                            state.groups.reset_frame();
+                            continue;
                         }
                         let published = state.groups.published();
                         if published != previous && !proven.contains(&published) {

@@ -4,7 +4,10 @@
 //! are still read. A later record that only contradicts that dropped group
 //! extends the same placeholder.
 
-use super::save_group::SaveIdentity;
+use super::{
+    gap::{DropLink, DroppedTurns},
+    save_group::SaveIdentity,
+};
 use crate::application::agent_execution::sessions::{
     records::FactKind, UnreadablePart, UnreadableReason,
 };
@@ -27,12 +30,27 @@ struct Item {
     part: UnreadablePart,
     through: u64,
     identity: Option<SaveIdentity>,
+    turns: DroppedTurns,
 }
 
 #[derive(Clone)]
 struct Open {
-    identity: SaveIdentity,
+    identity: Option<SaveIdentity>,
     index: usize,
+    /// A run of physical frames that are not a save. The next bad frame extends it.
+    frame: bool,
+}
+
+/// One dropped save, as the fold records it.
+pub(super) struct Placement {
+    pub(super) start: u64,
+    pub(super) through: u64,
+    pub(super) after_invocation: u64,
+    pub(super) reason: UnreadableReason,
+    pub(super) identity: Option<SaveIdentity>,
+    pub(super) link: Option<DropLink>,
+    pub(super) turns: DroppedTurns,
+    pub(super) own: bool,
 }
 
 /// Placeholders produced while reading one stream, oldest first.
@@ -62,7 +80,12 @@ impl UnreadTracker {
         let Some(open) = &self.open else {
             return false;
         };
-        &open.identity == identity && !(kind == FactKind::SaveUnit && ordinal == 0)
+        !open.frame && super::gap::rest_of(open.identity.as_ref(), identity, kind, ordinal)
+    }
+
+    /// The turns the open dropped save named, when one is open.
+    pub(super) fn open_turns(&self) -> Option<&DroppedTurns> {
+        self.open.as_ref().map(|open| &self.items[open.index].turns)
     }
 
     pub(super) fn extend(&mut self, through: u64) {
@@ -79,25 +102,40 @@ impl UnreadTracker {
 
     /// Record `start`..=`through` as unreadable.
     ///
-    /// A contradiction of an open group, or another failure of that group's
-    /// identity, extends the open row. Anything else starts a new one.
+    /// A typed [`DropLink`], or another failure of the open save's identity,
+    /// extends the open row. An envelope mismatch (`own`) is its own row.
     /// Returns whether a new row was added.
-    pub(super) fn note(
-        &mut self,
-        start: u64,
-        through: u64,
-        after_invocation: u64,
-        reason: UnreadableReason,
-        identity: Option<SaveIdentity>,
-        contradiction: bool,
-    ) -> bool {
+    pub(super) fn note(&mut self, placed: Placement) -> bool {
+        let Placement {
+            start,
+            through,
+            after_invocation,
+            reason,
+            identity,
+            link,
+            turns,
+            own,
+        } = placed;
         if let Some(open) = &self.open {
-            let same = identity.as_ref().is_some_and(|id| id == &open.identity);
-            if contradiction || same {
-                let item = &mut self.items[open.index];
+            let same = identity
+                .as_ref()
+                .is_some_and(|id| open.identity.as_ref() == Some(id));
+            if !own && (link.is_some() || same) {
+                let index = open.index;
+                let learned = identity.is_some();
+                let item = &mut self.items[index];
                 item.through = item.through.max(through);
                 if item.identity.is_none() {
-                    item.identity = identity;
+                    item.identity = identity.clone();
+                }
+                item.turns.absorb(turns);
+                if learned {
+                    let identity = item.identity.clone();
+                    self.open = Some(Open {
+                        identity,
+                        index,
+                        frame: false,
+                    });
                 }
                 return false;
             }
@@ -107,8 +145,35 @@ impl UnreadTracker {
             part: UnreadablePart::new(start, after_invocation, reason),
             through: through.max(start),
             identity: identity.clone(),
+            turns,
         });
-        self.open = identity.map(|identity| Open { identity, index });
+        self.open = Some(Open {
+            identity,
+            index,
+            frame: false,
+        });
+        true
+    }
+
+    /// A physical frame that is not a fact. Consecutive bad frames are one row.
+    /// A bad frame while a save is already dropped extends that row.
+    pub(super) fn note_frame(&mut self, start: u64, through: u64, after_invocation: u64) -> bool {
+        if self.open.is_some() {
+            self.extend(through);
+            return false;
+        }
+        let index = self.items.len();
+        self.items.push(Item {
+            part: UnreadablePart::new(start, after_invocation, UnreadableReason::Unreadable),
+            through: through.max(start),
+            identity: None,
+            turns: DroppedTurns::unknown(),
+        });
+        self.open = Some(Open {
+            identity: None,
+            index,
+            frame: true,
+        });
         true
     }
 
@@ -162,22 +227,22 @@ impl UnreadTracker {
                 "unreadable" if item.found.is_none() => UnreadableReason::Unreadable,
                 _ => return Err(()),
             };
-            if item.open && item.identity.is_none() {
-                return Err(());
-            }
             previous = item.through;
+            let frame = item.open && item.identity.is_none();
             tracker.items.push(Item {
                 part: UnreadablePart::new(item.start, item.after_invocation, reason),
                 through: item.through,
                 identity: item.identity.clone(),
+                turns: DroppedTurns::unknown(),
             });
             if item.open {
                 if tracker.open.is_some() {
                     return Err(());
                 }
                 tracker.open = Some(Open {
-                    identity: item.identity.expect("open identity checked"),
+                    identity: item.identity,
                     index,
+                    frame,
                 });
             }
         }

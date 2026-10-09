@@ -257,6 +257,22 @@ impl GroupProgress {
         self.hash = Sha256::new();
         self.payload_length = 0;
     }
+
+    /// Drop an unfinished unit and keep the last folded completion.
+    ///
+    /// The completed extent stays, so the next group's generation is still
+    /// checked against that save. Only the generation is relaxed when a later
+    /// group follows a dropped completion (`follows_dropped` in [`Self::complete`]).
+    /// Stream and incarnation still have to match.
+    pub(super) fn revert_open_group(&mut self) {
+        self.reset_frame();
+        if self.is_unfinished() {
+            self.extent = self.checkpoint.clone().map(|group| Extent {
+                group,
+                complete: true,
+            });
+        }
+    }
     pub(super) fn piece(&mut self, mut bytes: &[u8]) -> Result<(), StorageError> {
         let take = bytes.len().min(HEADER_BYTES - self.prefix.len());
         self.prefix.extend_from_slice(&bytes[..take]);
@@ -268,21 +284,15 @@ impl GroupProgress {
         self.hash.update(bytes);
         Ok(())
     }
-    pub(super) fn complete(
-        &mut self,
-        key: &FactKey,
-        position: u64,
-    ) -> Result<Header, StorageError> {
-        let header = Header::decode(&self.prefix)?;
+    pub(super) fn complete(&mut self, key: &FactKey, position: u64) -> Result<Header, GroupFault> {
+        let header = Header::decode(&self.prefix).map_err(|_| GroupFault::Envelope)?;
         // A frame that does not match its own header is corrupt on its own.
         // It is not a later record that only contradicts a dropped group, so
         // it must not join that group's placeholder.
         if key.ordinal() != header.ordinal
             || self.hash.clone().finalize().as_slice() != header.payload
         {
-            return Err(StorageError::Corrupt(
-                "semantic save envelope payload does not match".into(),
-            ));
+            return Err(GroupFault::Envelope);
         }
         let same = self
             .extent
@@ -293,25 +303,23 @@ impl GroupProgress {
                 .lineage_base
                 .is_some_and(|base| base == header.identity.base);
         // A group written from a dropped completion carries that physical base.
-        // Its generation is its own, not the last folded save's next generation.
+        // Its generation is its own. Stream and incarnation still have to match.
         let follows_dropped = self
             .lineage_base
             .is_some_and(|base| base == header.identity.base && base != self.published);
-        let generation_blocked = if follows_dropped {
-            false
-        } else {
-            self.extent.as_ref().map_or(
-                self.published == 0 && header.identity.generation != 0,
-                |extent| {
-                    extent.group.identity.generation.checked_add(1)
-                        != Some(header.identity.generation)
-                        || extent.group.identity.stream != header.identity.stream
-                        || extent.group.identity.incarnation != header.identity.incarnation
-                },
-            )
-        };
+        let generation_blocked = self.extent.as_ref().map_or(
+            !follows_dropped && self.published == 0 && header.identity.generation != 0,
+            |extent| {
+                let wrong_generation = !follows_dropped
+                    && extent.group.identity.generation.checked_add(1)
+                        != Some(header.identity.generation);
+                wrong_generation
+                    || extent.group.identity.stream != header.identity.stream
+                    || extent.group.identity.incarnation != header.identity.incarnation
+            },
+        );
         if !same && (self.is_unfinished() || !base_matches || generation_blocked) {
-            return Err(invalid());
+            return Err(GroupFault::Lineage);
         }
         let (count, chain) = if same {
             let extent = self.extent.as_ref().expect("matched extent");
@@ -320,14 +328,14 @@ impl GroupProgress {
             (0, EMPTY_CHAIN)
         };
         if header.ordinal != count || header.previous != chain {
-            return Err(invalid());
+            return Err(GroupFault::Lineage);
         }
         match key.kind() {
             FactKind::SaveUnit if self.payload_length != 0 => {
                 self.extent = Some(Extent {
                     group: GroupCheckpoint {
                         identity: header.identity.clone(),
-                        count: count.checked_add(1).ok_or_else(invalid)?,
+                        count: count.checked_add(1).ok_or(GroupFault::Lineage)?,
                         chain: header.chain(self.payload_length),
                         unit_previous: header.previous,
                         unit_payload: header.payload,
@@ -354,12 +362,35 @@ impl GroupProgress {
                 self.checkpoint = Some(group);
                 self.lineage_base = None;
             }
-            _ => return Err(invalid()),
+            _ => return Err(GroupFault::Lineage),
         }
         self.reset_frame();
         Ok(header)
     }
 }
+
+/// Why a save envelope cannot join the folded history.
+///
+/// Callers match this type. They do not match the text of a [`StorageError`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum GroupFault {
+    /// The frame's key or payload hash disagrees with the header it carries.
+    Envelope,
+    /// The save's ordinal, chain, or generation disagrees with the fold.
+    Lineage,
+}
+
+pub(super) fn fault_storage(fault: GroupFault) -> StorageError {
+    match fault {
+        GroupFault::Envelope => {
+            StorageError::Corrupt("semantic save envelope payload does not match".into())
+        }
+        GroupFault::Lineage => {
+            StorageError::Corrupt("semantic save envelope disagrees with its lineage".into())
+        }
+    }
+}
+
 fn invalid() -> StorageError {
-    StorageError::Corrupt("semantic save envelope disagrees with its lineage".into())
+    fault_storage(GroupFault::Lineage)
 }

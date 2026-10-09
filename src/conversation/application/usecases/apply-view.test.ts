@@ -96,20 +96,16 @@ it("places an unreadable part after the message it follows, and a chat of only t
     ...view,
     unreadable: [
       {
-        session: "server",
         position: 4,
         reason: "another_version",
-        found: 2,
         afterMessage: 1,
       },
     ],
   })
   expect(projected.remote?.unreadable).toEqual([
     {
-      session: "server",
       position: 4,
       reason: "another_version",
-      found: 2,
       afterTurnId: "run:user",
     },
   ])
@@ -121,9 +117,7 @@ it("places an unreadable part after the message it follows, and a chat of only t
     tools: [],
     transcriptState: "complete_empty",
     truncated: false,
-    unreadable: [
-      { session: "server", position: 1, reason: "unreadable", afterMessage: 0 },
-    ],
+    unreadable: [{ position: 1, reason: "unreadable", afterMessage: 0 }],
   })
   expect(only.turns).toEqual([])
   expect(conversationHistoryEmpty(only)).toBe(false)

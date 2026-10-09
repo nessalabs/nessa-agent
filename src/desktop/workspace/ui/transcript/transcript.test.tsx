@@ -18,9 +18,9 @@ import { transcriptFrom } from "../../adapters/gateway/gateway-views"
 import { view } from "../../adapters/gateway/fake-gateway"
 import { workspaceActions } from "../../adapters/store/slice"
 import { ClockProvider } from "../../adapters/dom/clock"
+import { UNREADABLE_PART } from "../../../../conversation"
 import {
   emptyTranscript,
-  UNREADABLE_PART,
   type Transcript as TranscriptValue,
 } from "../../model/transcript"
 import { fakeSource, settle, testStore } from "../../testing"
@@ -194,7 +194,11 @@ describe("a part this build could not read", () => {
       root.render(
         <Provider store={store}>
           <ClockProvider now={() => 1000}>
-            <Transcript sessionId="b" scrollRef={createRef()} onHeadingVisible={() => {}} />
+            <Transcript
+              sessionId="b"
+              scrollRef={createRef()}
+              onHeadingVisible={() => {}}
+            />
           </ClockProvider>
         </Provider>,
       )
@@ -214,7 +218,13 @@ describe("a part this build could not read", () => {
                     files: [],
                     status: "completed",
                     parts: [
-                      { kind: "text", offset: 0, text: "Answer before", toolId: "", noticeId: "" },
+                      {
+                        kind: "text",
+                        offset: 0,
+                        text: "Answer before",
+                        toolId: "",
+                        noticeId: "",
+                      },
                     ],
                   },
                   {
@@ -224,16 +234,20 @@ describe("a part this build could not read", () => {
                     files: [],
                     status: "completed",
                     parts: [
-                      { kind: "text", offset: 0, text: "Answer after", toolId: "", noticeId: "" },
+                      {
+                        kind: "text",
+                        offset: 0,
+                        text: "Answer after",
+                        toolId: "",
+                        noticeId: "",
+                      },
                     ],
                   },
                 ],
                 unreadable: [
                   {
-                    session: "b",
                     position: 4,
                     reason: "another_version",
-                    found: 2,
                     afterMessage: 1,
                   },
                 ],
@@ -248,13 +262,13 @@ describe("a part this build could not read", () => {
     const row = host.querySelector("[data-unreadable-position]")
     expect(row?.textContent).toBe(UNREADABLE_PART)
     expect(row?.querySelector("button")).toBeNull()
-    expect(row?.getAttribute("data-unreadable-session")).toBe("b")
+    expect(row?.getAttribute("role")).toBeNull()
+    expect(row?.tagName).toBe("P")
     expect(row?.getAttribute("data-unreadable-position")).toBe("4")
     expect(row?.getAttribute("data-unreadable-reason")).toBe("another_version")
-    expect(row?.getAttribute("data-unreadable-found")).toBe("2")
-    const order = [...host.querySelectorAll(".workspace-message, [data-unreadable-position]")].map(
-      (element) => element.textContent,
-    )
+    const order = [
+      ...host.querySelectorAll(".workspace-message, [data-unreadable-position]"),
+    ].map((element) => element.textContent)
     expect(order).toEqual([
       "Kept before",
       "Answer before",

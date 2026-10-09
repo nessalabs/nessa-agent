@@ -67,20 +67,16 @@ pub struct ConversationView {
 
 /// One part of the transcript this build could not read.
 ///
-/// `session`, `position`, and `reason` are the address a later report can
-/// name. `after_message` is how many messages in this view come before the row.
+/// `position` and `reason` are the address a later report can name. The
+/// conversation already identifies the chat. `after_message` is how many
+/// messages in this view come before the row.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnreadableTranscriptPart {
-    /// The conversation this part was read for.
-    pub session: String,
     /// First physical record of the dropped save group.
     pub position: u64,
     /// Why the group was dropped.
     pub reason: UnreadableTranscriptReason,
-    /// The foreign `schemaVersion`, when `reason` is `another_version`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub found: Option<u64>,
     /// How many messages in this view come before the row.
     pub after_message: u64,
 }

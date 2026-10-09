@@ -211,51 +211,6 @@ impl RecordStorage {
         .await
         .map_err(|error| StorageError::Io(error.to_string()))?
     }
-
-    /// Drop a legacy JSONL file and reset a stream without replaying it.
-    /// Replay is what refuses a predecessor record. The replacement stream is
-    /// empty, so a later open does not read the refused bytes.
-    async fn discard_unreadable_inner(&self, id: SessionId) -> Result<(), StorageError> {
-        let reservation = Reservation::acquire(self.owner.clone(), id.as_str())?;
-        let journal = SessionPaths::new(&self.root, &id).journal;
-        tokio::task::spawn_blocking(move || match std::fs::remove_file(&journal) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(StorageError::Io(error.to_string())),
-        })
-        .await
-        .map_err(|error| StorageError::Io(error.to_string()))??;
-        let runtime = self.runtime().await?.clone();
-        let stream_id =
-            StreamId::new(id.as_str()).map_err(|error| StorageError::Corrupt(error.to_string()))?;
-        let Some(stream) = runtime.find_stream(&stream_id).await.map_err(store_error)? else {
-            drop(reservation);
-            return Ok(());
-        };
-        let mut digest = Sha256::new();
-        digest.update(stream.id.as_str().as_bytes());
-        digest.update(stream.incarnation.0);
-        let operation = format!("nessa-discard-{:x}", digest.finalize());
-        runtime
-            .change_lifecycle(LifecycleRequest {
-                operation_id: LifecycleOperationId::new(operation)
-                    .map_err(|error| StorageError::Corrupt(error.to_string()))?,
-                expected: stream,
-                action: LifecycleAction::Reset,
-            })
-            .await
-            .map_err(store_error)?;
-        const MAX_CLEANUP_PASSES: usize = 1024;
-        for _ in 0..MAX_CLEANUP_PASSES {
-            let progress = runtime.cleanup_retired().await.map_err(store_error)?;
-            if !progress.remaining {
-                drop(reservation);
-                return Ok(());
-            }
-        }
-        drop(reservation);
-        Err(StorageError::Unresolved)
-    }
 }
 
 impl SessionStorage for RecordStorage {
@@ -319,9 +274,6 @@ impl SessionStorage for RecordStorage {
         Box::pin(async move { self.open_inner(id, true).await })
     }
 
-    fn discard_unreadable(&self, id: SessionId) -> StorageFuture<'_, ()> {
-        Box::pin(async move { self.discard_unreadable_inner(id).await })
-    }
     fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
         Box::pin(contain_caller_wake("record committed read", async move {
             self.read_committed_source(&id).await
@@ -569,7 +521,10 @@ mod tests {
             tools::{ToolCallId, ToolCallUpdate, ToolObservation},
         },
     };
-    use event_stream::{infrastructure::SqliteFailureInjection, EventSink, NewEvent, StreamId};
+    use event_stream::{
+        infrastructure::SqliteFailureInjection, EventId, EventSink, NewEvent, Payload, SchemaId,
+        SchemaRef, StreamId,
+    };
     use rusqlite::Connection;
     use std::{
         future::Future,
@@ -3469,126 +3424,420 @@ mod tests {
         serde_json::to_vec(&saved).unwrap()
     }
 
-    /// Every record unmarked opens empty. A bad record in the middle keeps the
-    /// records after it. A send after an unreadable tail appends from the last
-    /// folded save and is still there after reopen.
+    /// The gateway writer and the client fold drop the same groups. A corrupt
+    /// frame is one placeholder and a later send still lands. A record that
+    /// names a dropped turn joins that placeholder. A record that would
+    /// continue a turn the dropped save may have changed does not fold, and
+    /// an independent input after it does.
     #[tokio::test]
-    async fn unreadable_history_opens_on_the_prefix_and_a_later_send_appends() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("sessions");
-        let storage = RecordStorage::new(&root).unwrap();
-        let input = accepted_input(
-            ExecutionId::new("accepted").unwrap(),
-            SubmissionMode::Immediate,
-            vec![],
-        );
+    async fn writer_and_client_fold_agree_on_gaps() {
+        for case in [
+            Gap::Unmarked,
+            Gap::Future,
+            Gap::Corrupt,
+            Gap::Middle,
+            Gap::Multi,
+            Gap::Foreign,
+            Gap::Header,
+            Gap::Frame,
+            Gap::Dependent,
+            Gap::Resume,
+            Gap::Crash,
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+            let id = build_gap(&storage, case).await;
+            let (names, gaps, none) = case.expect();
+            agree(&storage, &id, names, gaps, none).await;
+            if case == Gap::Resume {
+                let snapshot = storage
+                    .read_committed(id.clone())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .snapshot()
+                    .unwrap()
+                    .clone();
+                assert!(
+                    snapshot.invocations[0].scheduling.is_empty(),
+                    "a transition of a turn the gap may have changed is not folded"
+                );
+            }
+            if case == Gap::Frame {
+                let lease = storage.open_existing(id.clone()).await.unwrap().unwrap();
+                let loaded = lease.load().await.unwrap();
+                let sent_change = message("sent");
+                let base = loaded.snapshot().unwrap().clone();
+                let sent =
+                    records::fold_changes(Some(&base), std::slice::from_ref(&sent_change)).unwrap();
+                lease
+                    .save_changes(
+                        loaded.binding().clone(),
+                        sent,
+                        vec![SessionSaveUnit::new(vec![sent_change]).unwrap()],
+                    )
+                    .await
+                    .unwrap();
+                drop(lease);
+                agree(&storage, &id, &["framed", "sent"], 1, false).await;
+            }
+            storage.shutdown().await.unwrap();
+        }
+    }
 
-        let unmarked_id = SessionId::new("all-unmarked").unwrap();
-        let unmarked_lease = storage.open(unmarked_id.clone()).await.unwrap();
-        let unmarked_binding = unmarked_lease.load().await.unwrap().binding().clone();
-        drop(unmarked_lease);
-        let (opened, _) = opening(&unmarked_id);
-        append_frames(
-            &storage,
-            &unmarked_id,
-            framed_group(&unmarked_binding, &without_marker(&opened), true),
-        )
-        .await;
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Gap {
+        Unmarked,
+        Future,
+        Corrupt,
+        Middle,
+        Multi,
+        Foreign,
+        Header,
+        Frame,
+        Dependent,
+        Resume,
+        Crash,
+    }
 
-        let middle_id = SessionId::new("bad-middle").unwrap();
-        let middle_lease = storage.open(middle_id.clone()).await.unwrap();
-        let (middle_open, middle_snapshot) = opening(&middle_id);
-        middle_lease
-            .save_changes(
-                middle_lease.load().await.unwrap().binding().clone(),
-                middle_snapshot.clone(),
-                vec![SessionSaveUnit::new(vec![middle_open]).unwrap()],
-            )
-            .await
-            .unwrap();
-        let middle_binding = middle_lease.load().await.unwrap().binding().clone();
-        drop(middle_lease);
-        let bad_middle = framed_group(&middle_binding, &without_marker(&input), true);
-        let after_bad = middle_binding.base() + bad_middle.len() as u64;
-        append_frames(&storage, &middle_id, bad_middle).await;
-        let later = SessionSaveGeneration::new(middle_binding.backend().clone(), after_bad, 2);
-        let later_payload = snapshot::encode_semantic_batch(std::slice::from_ref(&input)).unwrap();
-        append_frames(
-            &storage,
-            &middle_id,
-            framed_group(&later, &later_payload, true),
-        )
-        .await;
+    impl Gap {
+        fn expect(self) -> (&'static [&'static str], usize, bool) {
+            match self {
+                Self::Unmarked => (&[], 1, true),
+                Self::Future
+                | Self::Corrupt
+                | Self::Multi
+                | Self::Foreign
+                | Self::Header
+                | Self::Dependent
+                | Self::Crash => (&[], 1, false),
+                Self::Middle => (&["kept"], 1, false),
+                Self::Frame => (&["framed"], 1, false),
+                Self::Resume => (&["kept", "fresh"], 1, false),
+            }
+        }
+    }
 
-        let tail_id = SessionId::new("bad-tail").unwrap();
-        let tail_lease = storage.open(tail_id.clone()).await.unwrap();
-        let (tail_open, tail_snapshot) = opening(&tail_id);
-        tail_lease
-            .save_changes(
-                tail_lease.load().await.unwrap().binding().clone(),
-                tail_snapshot.clone(),
-                vec![SessionSaveUnit::new(vec![tail_open]).unwrap()],
-            )
-            .await
-            .unwrap();
-        let tail_binding = tail_lease.load().await.unwrap().binding().clone();
-        drop(tail_lease);
-        append_frames(
-            &storage,
-            &tail_id,
-            framed_group(&tail_binding, &without_marker(&input), false),
-        )
-        .await;
-
-        storage.shutdown().await.unwrap();
-        drop(storage);
-        let before = record_rows(&root);
-
-        let reopened = RecordStorage::new(&root).unwrap();
-        let unmarked = reopened.open_existing(unmarked_id).await.unwrap().unwrap();
-        let unmarked_load = unmarked.load().await.unwrap();
-        assert_eq!(unmarked_load.state(), SessionLoadState::Published);
-        assert!(unmarked_load.snapshot().is_none());
-        drop(unmarked);
-
-        let middle = reopened.open_existing(middle_id).await.unwrap().unwrap();
-        let middle_load = middle.load().await.unwrap();
-        let with_later =
-            records::fold_changes(Some(&middle_snapshot), std::slice::from_ref(&input)).unwrap();
-        assert_eq!(middle_load.state(), SessionLoadState::Published);
-        assert_eq!(middle_load.snapshot(), Some(&with_later));
-        drop(middle);
-        assert_eq!(record_rows(&root), before);
-
-        let tail = reopened
-            .open_existing(tail_id.clone())
+    async fn agree(
+        storage: &RecordStorage,
+        id: &SessionId,
+        names: &[&str],
+        gaps: usize,
+        none: bool,
+    ) {
+        let runtime = storage.runtime().await.unwrap();
+        let stream = runtime
+            .find_stream(&StreamId::new(id.as_str()).unwrap())
             .await
             .unwrap()
             .unwrap();
-        let tail_load = tail.load().await.unwrap();
-        assert_eq!(tail_load.state(), SessionLoadState::Published);
-        assert_eq!(tail_load.snapshot(), Some(&tail_snapshot));
-        let sent =
-            records::fold_changes(Some(&tail_snapshot), std::slice::from_ref(&input)).unwrap();
-        tail.save_changes(
-            tail_load.binding().clone(),
-            sent.clone(),
-            vec![SessionSaveUnit::new(vec![input]).unwrap()],
-        )
-        .await
-        .unwrap();
-        assert_eq!(tail.load().await.unwrap().snapshot(), Some(&sent));
-        drop(tail);
+        let writer = RecordWriter::replay(runtime, id.clone(), stream)
+            .await
+            .unwrap();
+        assert!(writer.readable_snapshot().is_ok());
+        let folded = match storage.read_committed(id.clone()).await {
+            Ok(Some(folded)) => folded,
+            other => panic!("committed read {names:?}: {other:?}"),
+        };
+        assert_eq!(writer.snapshot(), folded.snapshot());
+        if none {
+            assert!(writer.snapshot().is_none());
+        } else {
+            assert_eq!(invocation_names(writer.snapshot().unwrap()), names);
+        }
+        let fold_at: Vec<u64> = folded
+            .unreadable()
+            .iter()
+            .map(|part| part.position())
+            .collect();
+        let reasons: Vec<_> = folded
+            .unreadable()
+            .iter()
+            .map(|part| (part.position(), part.reason().name()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            (writer.gap_positions(), fold_at.len()),
+            (fold_at.clone(), gaps),
+            "{names:?} {reasons:?}"
+        );
+    }
 
-        reopened.shutdown().await.unwrap();
-        drop(reopened);
-        let restored = RecordStorage::new(&root).unwrap();
-        let tail = restored.open_existing(tail_id).await.unwrap().unwrap();
-        let restored_load = tail.load().await.unwrap();
-        assert_eq!(restored_load.state(), SessionLoadState::Published);
-        assert_eq!(restored_load.snapshot(), Some(&sent));
-        drop(tail);
-        restored.shutdown().await.unwrap();
+    async fn build_gap(storage: &RecordStorage, case: Gap) -> SessionId {
+        if case == Gap::Unmarked {
+            let id = SessionId::new("all-unmarked").unwrap();
+            let lease = storage.open(id.clone()).await.unwrap();
+            let binding = lease.load().await.unwrap().binding().clone();
+            drop(lease);
+            let (opened, _) = opening(&id);
+            append_frames(
+                storage,
+                &id,
+                framed_group(&binding, &without_marker(&opened), true),
+            )
+            .await;
+            return id;
+        }
+        let id = SessionId::new(match case {
+            Gap::Future => "future",
+            Gap::Corrupt => "corrupt",
+            Gap::Middle => "middle",
+            Gap::Multi => "multi",
+            Gap::Foreign => "foreign",
+            Gap::Header => "header",
+            Gap::Frame => "frame",
+            Gap::Dependent => "dependent",
+            Gap::Resume => "resume",
+            Gap::Crash => "crash",
+            Gap::Unmarked => unreachable!(),
+        })
+        .unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, snapshot) = opening(&id);
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                snapshot.clone(),
+                vec![SessionSaveUnit::new(vec![opened]).unwrap()],
+            )
+            .await
+            .unwrap();
+        let mut next = lease.load().await.unwrap().binding().clone();
+        if case == Gap::Resume {
+            let kept = message("kept");
+            let with_kept =
+                records::fold_changes(Some(&snapshot), std::slice::from_ref(&kept)).unwrap();
+            lease
+                .save_changes(
+                    next,
+                    with_kept,
+                    vec![SessionSaveUnit::new(vec![kept]).unwrap()],
+                )
+                .await
+                .unwrap();
+            next = lease.load().await.unwrap().binding().clone();
+        }
+        drop(lease);
+        match case {
+            Gap::Future => {
+                append_frames(
+                    storage,
+                    &id,
+                    framed_group(&next, &marked(&message("gap"), next_version), true),
+                )
+                .await;
+            }
+            Gap::Corrupt => {
+                append_frames(
+                    storage,
+                    &id,
+                    framed_group(&next, &marked(&message("gap"), corrupt_body), true),
+                )
+                .await;
+            }
+            Gap::Middle => {
+                let bad = framed_group(&next, &without_marker(&message("gap")), true);
+                let after = next.base() + bad.len() as u64;
+                append_frames(storage, &id, bad).await;
+                let later = SessionSaveGeneration::new(next.backend().clone(), after, 2);
+                append_frames(
+                    storage,
+                    &id,
+                    framed_group(&later, &encode(&message("kept")), true),
+                )
+                .await;
+            }
+            Gap::Multi => {
+                let valid = encode(&message("kept-out"));
+                let bad = without_marker(&message("bad-part"));
+                append_frames(
+                    storage,
+                    &id,
+                    framed_units(
+                        &next,
+                        &[valid.as_slice(), bad.as_slice()],
+                        next.base(),
+                        true,
+                    ),
+                )
+                .await;
+            }
+            Gap::Foreign => {
+                let other = storage
+                    .open(SessionId::new("theirs").unwrap())
+                    .await
+                    .unwrap();
+                let foreign = SessionSaveGeneration::new(
+                    other.load().await.unwrap().binding().backend().clone(),
+                    next.base(),
+                    next.generation(),
+                );
+                drop(other);
+                append_frames(
+                    storage,
+                    &id,
+                    framed_group(&foreign, &encode(&message("theirs")), true),
+                )
+                .await;
+            }
+            Gap::Header => {
+                append_frames(
+                    storage,
+                    &id,
+                    mismatched_header(&next, &encode(&message("bad"))),
+                )
+                .await;
+            }
+            Gap::Frame => {
+                let through = append_garbage(storage, &id).await;
+                let later = SessionSaveGeneration::new(next.backend().clone(), next.base(), 1);
+                append_frames(
+                    storage,
+                    &id,
+                    framed_units(
+                        &later,
+                        &[encode(&message("framed")).as_slice()],
+                        through,
+                        true,
+                    ),
+                )
+                .await;
+            }
+            Gap::Dependent => {
+                let gone = message("gone");
+                let execution = match &gone {
+                    SessionChange::InputAccepted(record) => record.request.execution_id.clone(),
+                    _ => unreachable!(),
+                };
+                let bad = framed_group(&next, &without_marker(&gone), true);
+                let after = next.base() + bad.len() as u64;
+                append_frames(storage, &id, bad).await;
+                let observation = SessionChange::ProviderObservation(ExecutionEvent::new(
+                    execution,
+                    ExecutionUpdate::Message(MessageChunk::text("seen")),
+                ));
+                let later = SessionSaveGeneration::new(next.backend().clone(), after, 2);
+                append_frames(
+                    storage,
+                    &id,
+                    framed_group(&later, &encode(&observation), true),
+                )
+                .await;
+            }
+            Gap::Resume => {
+                let noise = framed_group(&next, &without_marker(&message("noise")), true);
+                let after = next.base() + noise.len() as u64;
+                append_frames(storage, &id, noise).await;
+                let transition = SessionChange::SchedulingTransition {
+                    execution_id: ExecutionId::new("kept").unwrap(),
+                    event: InvocationSchedulingEvent {
+                        kind: InvocationKind::Queued,
+                        target: None,
+                        before: Some(InvocationStage::Queued),
+                        stage: InvocationStage::Running,
+                        cause: SchedulingCause::Dispatched,
+                        actor: None,
+                    },
+                };
+                let scheduled = framed_group(
+                    &SessionSaveGeneration::new(
+                        next.backend().clone(),
+                        after,
+                        next.generation() + 1,
+                    ),
+                    &encode(&transition),
+                    true,
+                );
+                let after_scheduled = after + scheduled.len() as u64;
+                append_frames(storage, &id, scheduled).await;
+                append_frames(
+                    storage,
+                    &id,
+                    framed_group(
+                        &SessionSaveGeneration::new(
+                            next.backend().clone(),
+                            after_scheduled,
+                            next.generation() + 2,
+                        ),
+                        &encode(&message("fresh")),
+                        true,
+                    ),
+                )
+                .await;
+            }
+            Gap::Crash => {
+                let gap = framed_group(&next, &without_marker(&message("gap")), false);
+                let tail = next.base() + gap.len() as u64;
+                append_frames(storage, &id, gap).await;
+                append_frames(
+                    storage,
+                    &id,
+                    framed_units(
+                        &next,
+                        &[encode(&message("confirmed")).as_slice()],
+                        tail,
+                        false,
+                    ),
+                )
+                .await;
+            }
+            Gap::Unmarked => unreachable!(),
+        }
+        id
+    }
+
+    fn encode(change: &SessionChange) -> Vec<u8> {
+        snapshot::encode_semantic_batch(std::slice::from_ref(change)).unwrap()
+    }
+
+    fn marked(change: &SessionChange, edit: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
+        let mut saved: serde_json::Value = serde_json::from_slice(&encode(change)).unwrap();
+        edit(&mut saved);
+        serde_json::to_vec(&saved).unwrap()
+    }
+
+    fn next_version(saved: &mut serde_json::Value) {
+        saved["schemaVersion"] = serde_json::json!(StorageError::SCHEMA_VERSION + 1);
+    }
+
+    fn corrupt_body(saved: &mut serde_json::Value) {
+        saved["changes"] = serde_json::json!("not changes");
+    }
+
+    fn mismatched_header(binding: &SessionSaveGeneration, payload: &[u8]) -> Vec<NewEvent> {
+        let identity = SaveIdentity::binding(binding).unwrap();
+        let header = Header::unit(identity, 1, EMPTY_CHAIN, payload);
+        stream_fact::frame_fact(
+            &FramedFact {
+                key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
+                body: header.encode(payload),
+            },
+            binding.base() + 1,
+        )
+        .unwrap()
+    }
+
+    async fn append_garbage(storage: &RecordStorage, id: &SessionId) -> u64 {
+        let runtime = storage.runtime().await.unwrap();
+        let stream = runtime
+            .find_stream(&StreamId::new(id.as_str()).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        runtime
+            .append(
+                &stream,
+                NewEvent {
+                    id: EventId::new("not-a-fact-0123456789abcdef0123456789abcdef").unwrap(),
+                    schema: SchemaRef {
+                        id: SchemaId::new("not.a.fact").unwrap(),
+                        version: 1,
+                    },
+                    payload: Payload::copy_from_slice(&[0xff, 1, 2, 3]),
+                },
+            )
+            .await
+            .unwrap();
+        runtime.bounds(&stream).await.unwrap().tail.offset
     }
 
     fn message(name: &str) -> SessionChange {
@@ -3873,171 +4122,6 @@ mod tests {
         assert_eq!(loaded.state(), SessionLoadState::Published);
         assert_eq!(loaded.snapshot(), Some(&sent));
         assert_eq!(invocation_names(loaded.snapshot().unwrap()), ["confirmed"]);
-        drop(lease);
-        storage.shutdown().await.unwrap();
-    }
-
-    /// Unit 0 of a save is readable and unit 1 is not. The open group is
-    /// dropped with the gap. The opening remains. The completion after the
-    /// gap is not folded.
-    #[tokio::test]
-    async fn a_gap_inside_a_multi_part_save_drops_the_open_group() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("sessions");
-        let storage = RecordStorage::new(&root).unwrap();
-        let id = SessionId::new("multi-part-gap").unwrap();
-        let lease = storage.open(id.clone()).await.unwrap();
-        let (opened, snapshot) = opening(&id);
-        lease
-            .save_changes(
-                lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
-                vec![SessionSaveUnit::new(vec![opened]).unwrap()],
-            )
-            .await
-            .unwrap();
-        let next = lease.load().await.unwrap().binding().clone();
-        drop(lease);
-        let kept_out = message("kept-out");
-        let valid = snapshot::encode_semantic_batch(std::slice::from_ref(&kept_out)).unwrap();
-        let bad = without_marker(&message("bad-part"));
-        append_frames(
-            &storage,
-            &id,
-            framed_units(
-                &next,
-                &[valid.as_slice(), bad.as_slice()],
-                next.base(),
-                true,
-            ),
-        )
-        .await;
-        storage.shutdown().await.unwrap();
-        drop(storage);
-
-        let storage = RecordStorage::new(&root).unwrap();
-        let lease = storage.open_existing(id).await.unwrap().unwrap();
-        let loaded = lease.load().await.unwrap();
-        assert_eq!(loaded.state(), SessionLoadState::Published);
-        assert_eq!(loaded.snapshot(), Some(&snapshot));
-        assert!(loaded.snapshot().unwrap().invocations.is_empty());
-        drop(lease);
-        storage.shutdown().await.unwrap();
-    }
-
-    /// A fact saved for another chat is one placeholder. The opening snapshot
-    /// stays, and the chat still opens.
-    #[tokio::test]
-    async fn another_chats_identity_is_a_placeholder() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("sessions");
-        let storage = RecordStorage::new(&root).unwrap();
-        let id = SessionId::new("ours").unwrap();
-        let lease = storage.open(id.clone()).await.unwrap();
-        let (opened, snapshot) = opening(&id);
-        lease
-            .save_changes(
-                lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
-                vec![SessionSaveUnit::new(vec![opened]).unwrap()],
-            )
-            .await
-            .unwrap();
-        let next = lease.load().await.unwrap().binding().clone();
-        drop(lease);
-        let other = SessionId::new("theirs").unwrap();
-        let other_lease = storage.open(other).await.unwrap();
-        let foreign = SessionSaveGeneration::new(
-            other_lease
-                .load()
-                .await
-                .unwrap()
-                .binding()
-                .backend()
-                .clone(),
-            next.base(),
-            next.generation(),
-        );
-        drop(other_lease);
-        let theirs = message("theirs");
-        append_frames(
-            &storage,
-            &id,
-            framed_group(
-                &foreign,
-                &snapshot::encode_semantic_batch(std::slice::from_ref(&theirs)).unwrap(),
-                true,
-            ),
-        )
-        .await;
-        storage.shutdown().await.unwrap();
-        drop(storage);
-
-        let storage = RecordStorage::new(&root).unwrap();
-        let lease = storage.open_existing(id).await.unwrap().unwrap();
-        let loaded = lease.load().await.unwrap();
-        assert_eq!(loaded.state(), SessionLoadState::Published);
-        assert_eq!(loaded.snapshot(), Some(&snapshot));
-        assert!(loaded.snapshot().unwrap().invocations.is_empty());
-        drop(lease);
-        storage.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn discard_unreadable_removes_legacy_jsonl_and_resets_a_predecessor_stream() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("sessions");
-        let storage = RecordStorage::new(&root).unwrap();
-        let legacy_id = SessionId::new("legacy-jsonl").unwrap();
-        let journal = SessionPaths::new(&root, &legacy_id).journal;
-        std::fs::write(&journal, b"old\n").unwrap();
-        assert!(matches!(
-            storage.open_existing(legacy_id.clone()).await,
-            Err(StorageError::Corrupt(_))
-        ));
-        storage.discard_unreadable(legacy_id.clone()).await.unwrap();
-        assert!(!journal.exists());
-        assert!(storage.open_existing(legacy_id).await.unwrap().is_none());
-
-        let id = SessionId::new("predecessor").unwrap();
-        let lease = storage.open(id.clone()).await.unwrap();
-        let (change, snapshot) = opening(&id);
-        lease
-            .save_changes(
-                lease.load().await.unwrap().binding().clone(),
-                snapshot,
-                vec![SessionSaveUnit::new(vec![change]).unwrap()],
-            )
-            .await
-            .unwrap();
-        drop(lease);
-        storage.shutdown().await.unwrap();
-        drop(storage);
-
-        let unsupported = include_bytes!(
-            "../../../tests/infrastructure/session_storage/fixtures/retired-opening.bin"
-        );
-        Connection::open(root.join("records.sqlite3"))
-            .unwrap()
-            .execute(
-                "UPDATE event_records SET event_id=?1,payload=?2 WHERE offset=?3",
-                rusqlite::params![
-                    "nessa-fact-d819b917251c1029a94eeb8cafc383ec1e913cab2f92e9b3215c04cbaa787787-start",
-                    unsupported,
-                    1u64.to_be_bytes().as_slice()
-                ],
-            )
-            .unwrap();
-        let storage = RecordStorage::new(&root).unwrap();
-        assert!(matches!(
-            storage.open_existing(id.clone()).await,
-            Err(StorageError::Corrupt(_))
-        ));
-        storage.discard_unreadable(id.clone()).await.unwrap();
-        let lease = storage.open_existing(id).await.unwrap().unwrap();
-        let loaded = lease.load().await.unwrap();
-        assert_eq!(loaded.state(), SessionLoadState::Published);
-        assert!(loaded.snapshot().is_none());
         drop(lease);
         storage.shutdown().await.unwrap();
     }

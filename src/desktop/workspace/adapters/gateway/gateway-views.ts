@@ -330,10 +330,8 @@ export function transcriptFrom(
     const index = Math.min(part.afterMessage, anchors.length)
     const afterId = index === 0 ? undefined : anchors[index - 1]
     return {
-      sessionId: part.session,
       position: part.position,
       reason: part.reason,
-      ...(part.found === undefined ? {} : { found: part.found }),
       ...(afterId === undefined ? {} : { afterId }),
     }
   })

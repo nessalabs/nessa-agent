@@ -68,9 +68,8 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
             storage: None,
         } => ConversationErrorCode::AgentOperationFailed,
         // Legacy JSONL and a predecessor stream refuse to open. That refusal
-        // is permanent on every path, including delete: trying again cannot
-        // read the bytes. Delete discards the container instead of returning
-        // this. A lease someone else holds, and I/O, stay the retryable code.
+        // is permanent: trying again cannot read the bytes. A lease someone
+        // else holds, and I/O, stay the retryable code.
         ConversationError::Storage(
             StorageError::Corrupt(_) | StorageError::AnotherVersion { .. },
         ) => ConversationErrorCode::ConversationStateUnreadable,
@@ -122,10 +121,9 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
             // whether trying again could differ, and a panel that assumes it
             // could offers a retry that can only ever return this. A corrupt
             // body and another format version are the same permanence when
-            // they still surface as this error. The session-record reader
-            // stops at the first one and opens the prefix, so a truncated
-            // chat does not return this. This arm keeps a leaked one off
-            // the retry screen.
+            // they still surface as this error. A chat that opened shows a
+            // placeholder for the record instead of returning this. This arm
+            // keeps a leaked one off the retry screen.
             // `IdentityMismatch` is answered above as a changed configuration,
             // which is what it means and already says "start a new one".
             AgentError::Storage(StorageError::Corrupt(_) | StorageError::AnotherVersion { .. }) => {

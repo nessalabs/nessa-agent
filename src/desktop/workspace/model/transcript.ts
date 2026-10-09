@@ -135,17 +135,13 @@ export interface Activity {
   readonly since: number
 }
 
-/** One saved part this build could not read. A later report can name the same address. */
+/** One saved part this build could not read. Position and reason are the address. */
 export interface UnreadableRow {
-  readonly sessionId: string
   readonly position: number
   readonly reason: "another_version" | "identity" | "unreadable"
-  readonly found?: number
   /** Message this row follows. Absent when the row leads the transcript. */
   readonly afterId?: string
 }
-
-export const UNREADABLE_PART = "Couldn't read this part of the conversation"
 
 export interface Transcript {
   readonly sessionId: string

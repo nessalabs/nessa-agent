@@ -594,11 +594,8 @@ pub struct ConversationMcpTool {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UnreadablePart {
-    pub session: String,
     pub position: u64,
     pub reason: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub found: Option<u64>,
     pub after_message: u64,
 }
 #[derive(Deserialize, Serialize)]

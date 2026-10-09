@@ -296,6 +296,60 @@ pub(crate) fn encode_batch(changes: &[SessionChange]) -> Result<Vec<u8>, Storage
     Ok(bytes)
 }
 
+/// Turns a current-version batch names, without folding provider context.
+///
+/// A provider observation's body needs that context. Its execution id does
+/// not, so a dropped save can still recognize the observation as its own.
+pub(crate) struct BatchRefs {
+    pub(crate) ids: Vec<ExecutionId>,
+    /// Scheduling and queue decisions. These choose the state an agent resumes.
+    pub(crate) resume_ids: Vec<ExecutionId>,
+    pub(crate) queue_wide: bool,
+}
+
+pub(crate) fn batch_refs(bytes: &[u8]) -> Result<BatchRefs, StorageError> {
+    super::decode::preflight_semantic_batch(bytes)?;
+    let batch: WireBatch = serde_json::from_slice(bytes).map_err(corrupt)?;
+    debug_assert_eq!(batch.schema_version, StorageError::SCHEMA_VERSION);
+    let mut ids = Vec::new();
+    let mut resume_ids = Vec::new();
+    let mut queue_wide = false;
+    for change in batch.changes {
+        match change {
+            WireChange::SchedulingTransition { execution_id, .. } => {
+                let id = ExecutionId::new(execution_id).map_err(corrupt)?;
+                resume_ids.push(id.clone());
+                ids.push(id);
+            }
+            WireChange::ReceiptUpdated { execution_id, .. }
+            | WireChange::StopDecision { execution_id, .. }
+            | WireChange::ProviderReport { execution_id, .. }
+            | WireChange::LocalSettlement { execution_id, .. } => {
+                ids.push(ExecutionId::new(execution_id).map_err(corrupt)?);
+            }
+            WireChange::ProviderObservation(event) => {
+                ids.push(ExecutionId::new(event.execution_id).map_err(corrupt)?);
+            }
+            WireChange::QueueDecision(decision) => match decision.referenced_id() {
+                Some(id) => {
+                    let id = ExecutionId::new(id).map_err(corrupt)?;
+                    resume_ids.push(id.clone());
+                    ids.push(id);
+                }
+                None => queue_wide = true,
+            },
+            WireChange::InputAccepted { .. }
+            | WireChange::Opened { .. }
+            | WireChange::ProviderContext { .. } => {}
+        }
+    }
+    Ok(BatchRefs {
+        ids,
+        resume_ids,
+        queue_wide,
+    })
+}
+
 pub(crate) fn decode_batch(
     bytes: &[u8],
     context: &ProviderContext,

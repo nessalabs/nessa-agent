@@ -583,6 +583,71 @@ pub(crate) fn validate_abort_prefix(
     Ok(())
 }
 
+/// Where reading resumes after a fact that was not a valid frame.
+pub(crate) struct FrameResync {
+    /// Cursor just before the next fact start, or the tail when none exists.
+    pub(crate) resume: Cursor,
+    /// Last physical offset the gap covers.
+    pub(crate) through: u64,
+    /// A later record parsed as a fact start. When false, the gap is the rest
+    /// of the stream and `resume` is `tail`.
+    pub(crate) found_boundary: bool,
+}
+
+/// Skip a fact that did not decode and look for the next start.
+///
+/// Each event is its own record, so the next offset can begin a fact. The
+/// first event after `after` is the fact that already failed, and is not a
+/// boundary. When no later record is a start, or the log is not a sequence of
+/// records, the gap runs through `tail`.
+pub(crate) async fn resync_frame(
+    reader: &dyn EventReader,
+    stream: &StreamKey,
+    after: &Cursor,
+    tail: &Cursor,
+) -> Result<FrameResync, FactCommitError> {
+    let rest = FrameResync {
+        resume: tail.clone(),
+        through: tail.offset,
+        found_boundary: false,
+    };
+    if after.stream != *stream || tail.stream != *stream || after.offset > tail.offset {
+        return Ok(rest);
+    }
+    let mut cursor = after.clone();
+    let mut skipped = false;
+    while cursor.offset < tail.offset {
+        let page = match reader.read_after(&cursor, PAGE, Some(tail)).await {
+            Ok(page) => page,
+            Err(event_stream::Error::StoreCorrupt(_)) => return Ok(rest),
+            Err(error) => return Err(FactCommitError::Stream(error)),
+        };
+        if page.records.is_empty() {
+            return Ok(rest);
+        }
+        for record in page.records {
+            if record.cursor.stream != *stream || record.cursor.offset != cursor.offset + 1 {
+                return Ok(rest);
+            }
+            let offset = record.cursor.offset;
+            cursor = record.cursor.clone();
+            if skipped {
+                if let Ok(parsed) = parse_start(&record.event) {
+                    if parsed.attempt_start == offset {
+                        return Ok(FrameResync {
+                            resume: Cursor::new(stream.clone(), offset - 1),
+                            through: offset - 1,
+                            found_boundary: true,
+                        });
+                    }
+                }
+            }
+            skipped = true;
+        }
+    }
+    Ok(rest)
+}
+
 /// Read one complete logical fact after `after`, or report an unfinished tail.
 /// This stops at the first fact seal even when the page also contains later facts.
 pub(crate) async fn read_next_fact(

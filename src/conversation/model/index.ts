@@ -1,4 +1,5 @@
 export { AGENT_HUES, AGENT_ICON_TONE, AGENT_ICON_WASH, AGENT_SEED } from "./identity"
+export { UNREADABLE_PART } from "./unreadable-copy"
 export { conversationInTabs, emptyTabs, type ConversationTabs } from "./tabs"
 export {
   conversation,
