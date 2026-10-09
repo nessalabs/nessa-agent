@@ -3,14 +3,19 @@
  * `conversation.changed` ping, then a head check, then one view read when
  * the head moved.
  *
- * The catalogue watch is the list. One connection may watch one conversation
- * (`recordTargets` is 1), so this window keeps that watch on its main
- * connection and at most two more connections, one conversation each.
- * Anything past that, or a record watch that drops, is read when its
- * catalogue row changes. The catalogue watch dropping, or never registering,
- * is the poller's to resume. A full membership replace happens on the first
- * catch-up and when the stream's identity changes, including an access epoch
- * that moved.
+ * The catalogue watch is the list. Watches sit on their own connection, never
+ * on the session or command socket: a watch refusal closes that connection,
+ * and that close must not sign the desktop out. One connection may watch one
+ * conversation (`recordTargets` is 1) and one catalogue. This window puts the
+ * catalogue and at most one record watch on the watch connection, and at most
+ * two further connections, one conversation each. Record watches are for the
+ * conversations the caller names first. Anything else the caller still lists
+ * in `targets` is read when its catalogue row changes. The catalogue watch
+ * dropping, or never registering, is the poller's to resume. A full membership
+ * replace happens on the first catch-up and when the stream's identity
+ * changes, including an access epoch that moved. That replace is seeded from
+ * `conversation.list` when the caller provides one, so catch-up does not
+ * resolve every catalogue payload.
  *
  * `recordsPage` is not folded here. The head is the position; the view is
  * still `conversation.read`, which owns the projection and the live state
@@ -26,8 +31,27 @@ import {
   type RecordScope,
 } from "@nessa/client"
 
-/** Record watches one window holds: the main connection plus two extras, so two windows fit the principal cap of 8. */
+/**
+ * Record watches one window may hold at once: one on the catalogue connection
+ * and two more connections. Idle chats do not use these slots. Two idle
+ * windows then hold two catalogue watches, not six, of the principal's eight.
+ */
 export const MAX_RECORD_WATCHES = 3
+
+/**
+ * Whether a view is still in progress on this screen.
+ *
+ * The gateway's own running bit is only an invocation in `Running`. A queued
+ * turn is included here because the person is still waiting on work the
+ * gateway has accepted.
+ */
+export function viewIsInProgress(view: {
+  messages: readonly { status: string }[]
+}): boolean {
+  return view.messages.some(
+    (turn) => turn.status === "running" || turn.status === "queued",
+  )
+}
 
 const MAX_MANIFEST_PAGES = 64
 
@@ -40,7 +64,7 @@ const ACCESS_ENDED = new Set([
   "stale_epoch",
 ])
 
-/** Why the follow stopped and the poller should resume. Revocation is separate and does not resume it. */
+/** Why the follow stopped and the poller should resume, including a binding that was revoked. */
 export type FollowFallback =
   "unbound" | "watch-refused" | "watch-ended" | "malformed" | "incomplete"
 
@@ -133,9 +157,9 @@ export interface CommitCheckpoint {
 }
 
 export interface CommitFollower {
-  start(): Promise<"sync" | "fallback" | "revoked">
+  start(): Promise<"sync" | "fallback">
   stop(): void
-  /** The set of conversations to watch changed. */
+  /** The set of conversations to watch changed. Overlapping calls run one at a time. */
   retarget(): void
   /** Register watches again on this socket and recheck from the saved heads. */
   reregister(): Promise<void>
@@ -146,14 +170,32 @@ export interface CommitFollower {
 
 export interface CommitFollowOptions {
   client: CommitSocket
-  /** Another connection that can hold one record watch. Absent means only the main connection's single watch. */
+  /**
+   * A connection used only for watches. When this is set, no watch is
+   * registered on `client`, so a watch refusal cannot close the session.
+   * Absent, watches stay on `client` (tests, and a caller with one socket).
+   */
+  openWatchConnection?: () => Promise<CommitSocket | undefined>
+  /** Another connection that can hold one record watch. */
   openRecordConnection?: () => Promise<CommitSocket | undefined>
-  /** Conversations this window is showing, in the order they should be watched. */
+  /**
+   * Every conversation this window should refresh from a catalogue row,
+   * including ones that do not hold a record watch.
+   */
   targets(): readonly string[]
+  /**
+   * Conversations that should hold a record watch, highest priority first.
+   * Absent means `targets`, still capped at {@link MAX_RECORD_WATCHES}.
+   */
+  recordWatchTargets?: () => readonly string[]
+  /**
+   * Membership for a full replace: one list, not one resolve per conversation.
+   * `complete: false` falls through to the catalogue walk.
+   */
+  listMembership?: () => Promise<{ rows: CatalogueRow[]; complete: boolean }>
   onView(conversationId: string, view: ConversationView): void
   onCatalogue(update: CatalogueUpdate): void
   onFallback(reason: FollowFallback): void
-  onRevoked(): void
   /** Restored heads. Absent means the first catch-up replaces membership. */
   checkpoint?: CommitCheckpoint
 }
@@ -274,7 +316,13 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
   let generation = 0
   let stopped = false
   let admitted = false
-  let outcome: "sync" | "fallback" | "revoked" | undefined
+  let outcome: "sync" | "fallback" | undefined
+  let manifestGeneration = 0
+  /** Watch connection opened by `openWatchConnection`. Never the command client. */
+  let dedicated: CommitSocket | undefined
+  /** Set while that connection is being replaced, so its close is not a fallback. */
+  let replacingWatch = false
+  let catalogueSocket: CommitSocket | undefined
   let binding = options.checkpoint
     ? {
         receiverId: options.checkpoint.receiverId,
@@ -302,16 +350,17 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
   const recordDirty = new Set<string>()
   const recordDepth = new Map<string, number>()
   let handlingAccess = false
+  /** A nested access refusal arrived while this rebind was still in flight. */
+  let rebindFailed = false
   let subscribed = false
   let resumeReady: () => void = () => {}
   const untilReady = new Promise<void>((resolve) => {
     resumeReady = resolve
   })
   let reregistering: Promise<void> = Promise.resolve()
+  let retargeting: Promise<void> = Promise.resolve()
 
-  const finish = (
-    next: "sync" | "fallback" | "revoked",
-  ): "sync" | "fallback" | "revoked" => {
+  const finish = (next: "sync" | "fallback"): "sync" | "fallback" => {
     outcome ??= next
     return outcome
   }
@@ -338,10 +387,18 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
     recordWatches.clear()
     const catalogueId = catalogueWatchId
     catalogueWatchId = undefined
-    void dropWatch(options.client, catalogueId)
+    const catalogueHeld = catalogueSocket
+    catalogueSocket = undefined
+    if (catalogueHeld) void dropWatch(catalogueHeld, catalogueId)
     for (const watch of watches) void dropWatch(watch.socket, watch.watchId)
     for (const extra of extras) extra.close()
     extras.length = 0
+    if (dedicated && dedicated !== options.client) {
+      replacingWatch = true
+      dedicated.close()
+      dedicated = undefined
+      replacingWatch = false
+    }
   }
 
   async function dropWatch(socket: CommitSocket, watchId: string | undefined) {
@@ -356,31 +413,9 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
   function subscribe() {
     if (subscribed) return
     subscribed = true
-    off.push(
-      options.client.on("conversation.changed", (payload) => {
-        if (stopped) return
-        if (payload.watchId === catalogueWatchId) {
-          void pullCatalogue(false)
-          return
-        }
-        const watch = [...recordWatches.values()].find(
-          (item) => item.watchId === payload.watchId,
-        )
-        if (watch) void pullRecord(watch.conversationId)
-      }),
-      options.client.on("conversation.watchEnded", (payload) => {
-        if (stopped) return
-        if (payload.watchId === catalogueWatchId) {
-          catalogueWatchId = undefined
-          options.onFallback("watch-ended")
-          finish("fallback")
-          stop()
-          return
-        }
-        endRecordWatch(payload.watchId)
-      }),
-    )
+    if (!options.openWatchConnection) listenWatch(options.client, false)
     for (const extra of extras) listenExtra(extra)
+    if (dedicated) listenWatch(dedicated, true)
     if (options.client.onConnectionStateChange) {
       off.push(
         options.client.onConnectionStateChange((state) => {
@@ -389,6 +424,50 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
         }),
       )
     }
+  }
+
+  /** Catalogue and record notices on the connection that holds the catalogue watch. */
+  function listenWatch(socket: CommitSocket, dedicatedHost: boolean) {
+    off.push(
+      socket.on("conversation.changed", (payload) => {
+        if (stopped) return
+        if (payload.watchId === catalogueWatchId) {
+          void pullCatalogue(false)
+          return
+        }
+        const watch = [...recordWatches.values()].find(
+          (item) => item.socket === socket && item.watchId === payload.watchId,
+        )
+        if (watch) void pullRecord(watch.conversationId)
+      }),
+      socket.on("conversation.watchEnded", (payload) => {
+        if (stopped) return
+        if (payload.watchId === catalogueWatchId) {
+          catalogueWatchId = undefined
+          options.onFallback("watch-ended")
+          finish("fallback")
+          stop()
+          return
+        }
+        endRecordWatch(payload.watchId, false)
+      }),
+    )
+    if (!socket.onConnectionStateChange) return
+    off.push(
+      socket.onConnectionStateChange((state) => {
+        if (stopped || replacingWatch || state.status !== "closed") return
+        if (dedicatedHost && dedicated !== socket) return
+        if (!dedicatedHost && options.openWatchConnection) return
+        // The catalogue connection closed. That is the watch ending, not the session.
+        for (const watch of [...recordWatches.values()]) {
+          if (watch.socket === socket) recordWatches.delete(watch.conversationId)
+        }
+        catalogueWatchId = undefined
+        options.onFallback("watch-ended")
+        finish("fallback")
+        stop()
+      }),
+    )
   }
 
   function listenExtra(socket: CommitSocket) {
@@ -405,21 +484,49 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
         const watch = [...recordWatches.values()].find(
           (item) => item.socket === socket && item.watchId === payload.watchId,
         )
-        if (watch) endRecordWatch(watch.watchId)
+        if (watch) endRecordWatch(watch.watchId, false)
+      }),
+    )
+    if (!socket.onConnectionStateChange) return
+    off.push(
+      socket.onConnectionStateChange((state) => {
+        if (stopped || state.status !== "closed") return
+        for (const watch of [...recordWatches.values()]) {
+          if (watch.socket !== socket) continue
+          endRecordWatch(watch.watchId, true)
+        }
       }),
     )
   }
 
-  function endRecordWatch(watchId: string) {
+  function endRecordWatch(watchId: string, alreadyClosed: boolean) {
     for (const [id, watch] of recordWatches) {
       if (watch.watchId !== watchId) continue
       recordWatches.delete(id)
       if (!watch.extra) return
       const at = extras.indexOf(watch.socket)
       if (at !== -1) extras.splice(at, 1)
-      watch.socket.close()
+      if (!alreadyClosed) watch.socket.close()
       return
     }
+  }
+
+  async function watchHost(): Promise<CommitSocket | undefined> {
+    if (!options.openWatchConnection) return options.client
+    if (dedicated) return dedicated
+    let opened: CommitSocket | undefined
+    try {
+      opened = await options.openWatchConnection()
+    } catch {
+      opened = undefined
+    }
+    if (!opened || stopped) {
+      opened?.close()
+      return undefined
+    }
+    dedicated = opened
+    listenWatch(opened, true)
+    return opened
   }
 
   async function handleAccess(error: unknown): Promise<boolean> {
@@ -433,7 +540,11 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
     }
     // Another refusal is already rebinding. Stopping here would drop that
     // attempt and leave the window with neither watches nor the poller.
-    if (handlingAccess) return true
+    // The in-flight rebind records the failure and falls back when it finishes.
+    if (handlingAccess) {
+      rebindFailed = true
+      return true
+    }
     handlingAccess = true
     try {
       const next = await options.client.conversation.binding()
@@ -444,26 +555,45 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
         next.accessEpoch !== binding.accessEpoch
       binding = next
       if (moved) {
+        rebindFailed = false
         catalogue = undefined
         savedRecords.clear()
         const previous = catalogueWatchId
         catalogueWatchId = undefined
-        await dropWatch(options.client, previous)
-        for (const watch of [...recordWatches.values()]) {
-          recordWatches.delete(watch.conversationId)
-          await dropWatch(watch.socket, watch.watchId)
+        await dropWatch(catalogueSocket ?? options.client, previous)
+        const watches = [...recordWatches.values()]
+        recordWatches.clear()
+        for (const watch of watches) await dropWatch(watch.socket, watch.watchId)
+        // Retarget opens fresh record connections. Leaving these open would
+        // keep their watches and their slots after the epoch moved.
+        for (const extra of extras) extra.close()
+        extras.length = 0
+        const abandon = () => {
+          if (stopped) return
+          options.onFallback("watch-refused")
+          finish("fallback")
+          stop()
         }
-        if (await registerCatalogue()) {
-          await pullCatalogue(true)
-          await retargetWatches()
+        if (!(await registerCatalogue()) || rebindFailed) {
+          abandon()
+          return true
         }
+        await pullCatalogue(true)
+        if (stopped || rebindFailed) {
+          abandon()
+          return true
+        }
+        await retargetWatches()
+        if (rebindFailed) abandon()
       }
       return true
     } catch (again) {
       const againCode = rpcCode(again)
+      // A binding that was held and is now refused still leaves `conversation.read`
+      // available. The poller resumes; the next round tries the watch again.
       if (againCode && ACCESS_ENDED.has(againCode)) {
-        options.onRevoked()
-        finish("revoked")
+        options.onFallback("watch-refused")
+        finish("fallback")
         stop()
         return true
       }
@@ -501,8 +631,16 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
 
   async function registerCatalogue(): Promise<boolean> {
     if (!binding) return false
+    const socket = await watchHost()
+    if (!socket) {
+      options.onFallback("watch-refused")
+      finish("fallback")
+      stop()
+      return false
+    }
+    catalogueSocket = socket
     try {
-      const result = await options.client.watches.catalogue({
+      const result = await socket.watches.catalogue({
         receiverId: binding.receiverId,
         accessEpoch: binding.accessEpoch,
       })
@@ -574,11 +712,12 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
       catalogue !== undefined && !sameScope(catalogue.scope, head.scope)
     const replace = reset || identityChanged
     if (!replace && catalogue && catalogue.completed === head.head) return
+    if (replace && (await seedFromList(head, gen))) return
     const pass = {
       scope: head.scope,
       completed: replace ? "0" : (catalogue?.completed ?? "0"),
       boundary: head.head,
-      generation: "1",
+      generation: String(++manifestGeneration),
       ...(replace || !catalogue?.cursor ? {} : { cursor: catalogue.cursor }),
     }
     const entries: CatalogueDescriptor[] = []
@@ -675,6 +814,41 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
     await readUnwatched(rows, gen)
   }
 
+  /**
+   * A complete list is the membership. Returns false when there is no list,
+   * or the list is not the whole catalogue, so the resolve walk still runs.
+   */
+  async function seedFromList(
+    head: { scope: RecordScope; head: string },
+    gen: number,
+  ): Promise<boolean> {
+    if (!options.listMembership || !binding) return false
+    let listed: { rows: CatalogueRow[]; complete: boolean }
+    try {
+      listed = await options.listMembership()
+    } catch (error) {
+      if (stopped || gen !== generation) return true
+      if (await handleAccess(error)) return true
+      return false
+    }
+    if (stopped || gen !== generation) return true
+    if (!listed.complete) return false
+    const rows = listed.rows
+    const seen = new Set(rows.map((row) => row.conversationId))
+    const removedIds: string[] = []
+    for (const id of [...knownUpdated.keys()]) {
+      if (seen.has(id)) continue
+      removedIds.push(id)
+      knownUpdated.delete(id)
+    }
+    catalogue = { scope: head.scope, completed: head.head }
+    for (const row of rows) knownUpdated.set(row.conversationId, row.updatedAtMs)
+    if (stopped || gen !== generation) return true
+    options.onCatalogue({ reset: true, rows, removedIds })
+    await readUnwatched(rows, gen)
+    return true
+  }
+
   async function readUnwatched(rows: CatalogueRow[], gen: number): Promise<void> {
     const watched = new Set(recordWatches.keys())
     const wanted = new Set(options.targets())
@@ -744,7 +918,12 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
     } catch (error) {
       if (stopped || gen !== generation) return
       if (await handleAccess(error)) return
-      recordWatches.delete(conversationId)
+      // A head that is not an access refusal still holds the server watch.
+      // Unwatch it and close an extra connection so the slot is released.
+      // The next retarget, or a catalogue read, covers the chat. Retrying
+      // here would open the same watch again and loop on a persistent failure.
+      await dropWatch(watch.socket, watch.watchId)
+      endRecordWatch(watch.watchId, false)
       return
     }
     if (stopped || gen !== generation || recordWatches.get(conversationId) !== watch)
@@ -781,8 +960,8 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
     conversationId: string,
     socket: CommitSocket,
     extra: boolean,
-  ): Promise<boolean> {
-    if (!binding) return false
+  ): Promise<"ok" | "later" | "no"> {
+    if (!binding) return "no"
     try {
       const result = await socket.watches.records({
         conversationId,
@@ -798,18 +977,38 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
         head: saved?.head,
         scope: saved?.scope,
       })
-      return true
+      return "ok"
     } catch (error) {
       const code = rpcCode(error)
-      if (code === "watch_capacity" || code === "watch_duplicate") return false
-      if (await handleAccess(error)) return false
-      return false
+      // The previous watch may still be retiring. The caller retries.
+      if (code === "watch_capacity" || code === "watch_duplicate") return "later"
+      if (await handleAccess(error)) return "no"
+      return "no"
     }
+  }
+
+  async function watchRecordRetrying(
+    conversationId: string,
+    socket: CommitSocket,
+    extra: boolean,
+  ): Promise<boolean> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = await watchRecord(conversationId, socket, extra)
+      if (result === "ok") return true
+      if (result === "no" || stopped) return false
+      await Promise.resolve()
+    }
+    return false
   }
 
   async function retargetWatches(): Promise<void> {
     if (stopped || !binding) return
-    const wanted = [...new Set(options.targets())].slice(0, MAX_RECORD_WATCHES)
+    const host = catalogueSocket ?? (await watchHost())
+    if (!host) return
+    const wanted = [...new Set((options.recordWatchTargets ?? options.targets)())].slice(
+      0,
+      MAX_RECORD_WATCHES,
+    )
     for (const [id, watch] of [...recordWatches]) {
       if (wanted.includes(id)) continue
       recordWatches.delete(id)
@@ -820,13 +1019,13 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
         if (at !== -1) extras.splice(at, 1)
       }
     }
-    let usedMain = [...recordWatches.values()].some((watch) => !watch.extra)
+    let usedHost = [...recordWatches.values()].some((watch) => watch.socket === host)
     for (const id of wanted) {
       if (recordWatches.has(id) || stopped) continue
-      if (!usedMain) {
-        const watched = await watchRecord(id, options.client, false)
+      if (!usedHost) {
+        const watched = await watchRecordRetrying(id, host, false)
         if (watched) {
-          usedMain = true
+          usedHost = true
           await pullRecord(id)
         }
         continue
@@ -841,14 +1040,27 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
       if (!socket || stopped) continue
       extras.push(socket)
       listenExtra(socket)
-      const watched = await watchRecord(id, socket, true)
+      const watched = await watchRecordRetrying(id, socket, true)
       if (!watched) {
         socket.close()
-        extras.pop()
+        const at = extras.indexOf(socket)
+        if (at !== -1) extras.splice(at, 1)
         continue
       }
       await pullRecord(id)
     }
+  }
+
+  function enqueueRetarget(): Promise<void> {
+    const run = retargeting.then(
+      () => retargetWatches(),
+      () => retargetWatches(),
+    )
+    retargeting = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
   }
 
   function reregister(): Promise<void> {
@@ -872,17 +1084,24 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
     catalogueWatchId = undefined
     const watches = [...recordWatches.values()]
     recordWatches.clear()
-    await dropWatch(options.client, previousCatalogue)
+    await dropWatch(catalogueSocket ?? options.client, previousCatalogue)
+    catalogueSocket = undefined
     for (const watch of watches) await dropWatch(watch.socket, watch.watchId)
     for (const extra of extras) extra.close()
     extras.length = 0
+    if (dedicated) {
+      replacingWatch = true
+      dedicated.close()
+      dedicated = undefined
+      replacingWatch = false
+    }
     if (stopped || generation !== gen) return
     if (!(await readBinding())) return
     if (stopped || generation !== gen) return
     if (!(await registerCatalogue())) return
     if (stopped || generation !== gen) return
     subscribe()
-    await retargetWatches()
+    await enqueueRetarget()
     if (stopped || generation !== gen) return
     await pullCatalogue(catalogue === undefined)
     if (!stopped && generation === gen) finish("sync")
@@ -893,7 +1112,8 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
     checkpoint,
     stop,
     retarget() {
-      if (!stopped && admitted) void retargetWatches()
+      if (stopped || !admitted) return
+      void enqueueRetarget()
     },
     reregister,
     async start() {
@@ -901,7 +1121,7 @@ export function createCommitFollower(options: CommitFollowOptions): CommitFollow
         subscribe()
         if (!(await readBinding())) return outcome ?? "fallback"
         if (!(await registerCatalogue())) return outcome ?? "fallback"
-        await retargetWatches()
+        await enqueueRetarget()
         if (stopped) return outcome ?? "fallback"
         await pullCatalogue(catalogue === undefined)
         if (stopped) return outcome ?? "fallback"

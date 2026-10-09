@@ -60,7 +60,12 @@ const panel = (
     />
     {dependencies.usesLocalSession && <SessionLifecycle dependencies={dependencies} />}
     {dependencies.usesLocalSession && (
-      <ConversationFollow session={dependencies.session} />
+      <ConversationFollow
+        session={dependencies.session}
+        connect={() =>
+          dependencies.connectSession().then((established) => established.client)
+        }
+      />
     )}
   </Provider>
 )

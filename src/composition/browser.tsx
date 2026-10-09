@@ -97,13 +97,17 @@ function BrowserSession({
   onDisconnect: () => void
   onTerminalFailure: (error: unknown) => void
 }) {
+  const connectWatch = useCallback(
+    () => scope.dependencies.connectSession().then((established) => established.client),
+    [scope.dependencies],
+  )
   return (
     <BrowserSetupGate dependencies={scope.dependencies}>
       <SessionLifecycle
         dependencies={scope.dependencies}
         onTerminalFailure={onTerminalFailure}
       />
-      <ConversationFollow session={scope.dependencies.session} />
+      <ConversationFollow session={scope.dependencies.session} connect={connectWatch} />
       <App
         attachmentResources={scope.dependencies.attachments}
         canChoosePaths={scope.dependencies.canChoosePaths}

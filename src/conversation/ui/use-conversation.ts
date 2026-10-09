@@ -50,7 +50,20 @@ export function useConversation() {
   )
 
   useEffect(() => {
-    if (!active.serverReady || !gatewayAvailable || commitFollow !== "poll") return
+    if (!active.serverReady || !gatewayAvailable) return
+    // Idle chats follow the catalogue. A running chat, or one waiting on a
+    // person, keeps the fast poll: that state is not a commit.
+    const waiting =
+      active.phase !== "idle" ||
+      (active.remote?.permissions.length ?? 0) > 0 ||
+      (active.remote?.questions.length ?? 0) > 0
+    if (commitFollow === "sync" && !waiting) {
+      // Opening an idle chat does not register a record watch, and the
+      // catalogue ping does not fire just because the tab changed. One read
+      // fills the transcript; later commits still arrive as pings.
+      dispatch(refreshConversation(active.id))
+      return
+    }
     return pollConversation(
       () => dispatch(refreshConversation(active.id)),
       () => {
@@ -58,7 +71,16 @@ export function useConversation() {
       },
       pollingDelay,
     )
-  }, [dispatch, active.id, active.serverReady, gatewayAvailable, commitFollow])
+  }, [
+    dispatch,
+    active.id,
+    active.phase,
+    active.remote?.permissions.length,
+    active.remote?.questions.length,
+    active.serverReady,
+    gatewayAvailable,
+    commitFollow,
+  ])
 
   return {
     setApprovalMode: (id: string, mode: ApprovalMode) =>

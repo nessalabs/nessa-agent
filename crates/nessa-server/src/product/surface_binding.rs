@@ -42,6 +42,8 @@ pub(super) async fn dispatch(
             )
         }
         Ok(_) => failure(frame_id, ConversationErrorCode::NotBound.as_str()),
+        // The socket's word for a journal that cannot be read. It is a record
+        // read code, not a conversation-command code, so it stays a string.
         Err(_) => failure(frame_id, "unverifiable"),
     }
 }

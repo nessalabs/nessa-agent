@@ -303,6 +303,19 @@ function rejected(
   if (action.payload?.permanent) withdrawUndoOf(state, id)
 }
 
+/** Newest first, matching `conversation.list` (`updated_at_ms DESC, id ASC`). */
+function byRecentUpdate(
+  left: { updatedAtMs: number; conversationId: string },
+  right: { updatedAtMs: number; conversationId: string },
+): number {
+  if (left.updatedAtMs !== right.updatedAtMs) return right.updatedAtMs - left.updatedAtMs
+  return left.conversationId < right.conversationId
+    ? -1
+    : left.conversationId > right.conversationId
+      ? 1
+      : 0
+}
+
 const historySlice = createSlice({
   name: "conversationHistory",
   initialState,
@@ -336,6 +349,10 @@ const historySlice = createSlice({
     ) {
       const incoming = action.payload
       state.catalogueGeneration += 1
+      // The catalogue is membership from this action on, even if the follower
+      // has not yet reported sync. A list that resolves in between must not
+      // replace these rows. A later fallback sets the follow back to poll.
+      state.commitFollow = "sync"
       state.failure = null
       for (const id of incoming.removedIds) known(state.deletedIds, id)
       if (state.rows === null || incoming.reset) {
@@ -350,6 +367,7 @@ const historySlice = createSlice({
             ...row,
             running: previous.get(row.conversationId)?.running ?? false,
           }))
+          .sort(byRecentUpdate)
         state.archivedIds = incoming.rows
           .filter((row) => row.archived && !state.deletedIds.includes(row.conversationId))
           .map((row) => row.conversationId)
@@ -376,7 +394,7 @@ const historySlice = createSlice({
           rows[at] = { ...row, running: previous.running }
         }
       }
-      state.rows = rows
+      state.rows = rows.sort(byRecentUpdate)
     },
     /** A view read said whether this conversation is running. */
     runningObserved(

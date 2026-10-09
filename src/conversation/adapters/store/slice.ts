@@ -728,8 +728,14 @@ const conversationSlice = createSlice({
         (item) => item.serverConversationId === serverId,
       )
       const current = state.conversations[index]
-      if (!current || current.readRequest) return
-      if (current.revision === view.revision) return
+      if (!current) return
+      // A follow view is the commit. Applying it drops an in-flight poll so
+      // that older read cannot replace it when it arrives. `applyView` clears
+      // `readRequest`.
+      if (current.revision === view.revision) {
+        current.readRequest = undefined
+        return
+      }
       state.conversations[index] = applyView(current, view)
       releaseOldPreviews(state)
     },

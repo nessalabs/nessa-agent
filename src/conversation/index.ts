@@ -28,6 +28,7 @@ export {
   MAX_RECORD_WATCHES,
   createCommitFollower,
   isCommitSocket,
+  viewIsInProgress,
   type CatalogueRow,
   type CommitCheckpoint,
   type CommitFollower,

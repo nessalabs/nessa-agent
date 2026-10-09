@@ -3,7 +3,11 @@ import type { NessaClient } from "@nessa/client"
 
 import type { ConversationTabs } from "../model"
 import { conversationView } from "../adapters/gateway/effects"
-import { createCommitFollower, isCommitSocket } from "../adapters/gateway/sync-path"
+import {
+  createCommitFollower,
+  isCommitSocket,
+  viewIsInProgress,
+} from "../adapters/gateway/sync-path"
 import {
   catalogueApplied,
   commitFollowSet,
@@ -27,21 +31,28 @@ function watchTargets(tabs: ConversationTabs): string[] {
 
 /**
  * Follows the gateway's commit pings into the panel's list and the open
- * conversation. With no binding, or when the watch ends, the timer in
- * `useConversation` keeps reading.
+ * conversation. Watches use `connect`, a socket of their own, so a watch
+ * refusal does not sign this session out. With no binding, or when the watch
+ * ends, the timer in `useConversation` keeps reading. A chat that is running
+ * or waiting keeps that timer even while the watch is held.
  */
 export function ConversationFollow({
   session,
+  connect,
 }: {
   session: {
     get(): NessaClient | null
     subscribe(listener: () => void): () => void
   }
+  /** A new gateway connection used only for watches. */
+  connect: () => Promise<NessaClient>
 }) {
   const dispatch = useConversationDispatch()
   const tabs = useConversationSelector((state) => state.conversation)
   const targets = useRef<string[]>([])
+  const tabsRef = useRef(tabs)
   targets.current = watchTargets(tabs)
+  tabsRef.current = tabs
   const follower = useRef<ReturnType<typeof createCommitFollower> | undefined>(undefined)
 
   useEffect(() => {
@@ -55,7 +66,38 @@ export function ConversationFollow({
       if (!client || !isCommitSocket(client)) return
       const next = createCommitFollower({
         client,
+        openWatchConnection: async () => {
+          try {
+            return await connect()
+          } catch {
+            return undefined
+          }
+        },
         targets: () => targets.current,
+        recordWatchTargets: () =>
+          targets.current.filter((id) => {
+            const tab = tabsRef.current.conversations.find(
+              (item) => item.serverConversationId === id,
+            )
+            return tab !== undefined && tab.phase !== "idle"
+          }),
+        listMembership: async () => {
+          const current = session.get()
+          if (!current) return { rows: [], complete: false }
+          const [open, archived] = await Promise.all([
+            current.conversation.list(),
+            current.conversation.list({ archived: true }),
+          ])
+          const rows = [...open.conversations, ...archived.conversations].map((row) => ({
+            conversationId: row.conversationId,
+            title: row.title,
+            preview: row.preview,
+            updatedAtMs: row.updatedAtMs,
+            createdAtMs: row.createdAtMs,
+            archived: row.archived,
+          }))
+          return { rows, complete: open.complete && archived.complete }
+        },
         onCatalogue: (update) => {
           dispatch(
             catalogueApplied({
@@ -79,17 +121,12 @@ export function ConversationFollow({
           dispatch(
             runningObserved({
               conversationId: id,
-              running: view.messages.some(
-                (message) => message.status === "running" || message.status === "queued",
-              ),
+              running: viewIsInProgress(view),
             }),
           )
         },
         onFallback: () => {
           if (!disposed) dispatch(commitFollowSet("poll"))
-        },
-        onRevoked: () => {
-          if (!disposed) dispatch(commitFollowSet("revoked"))
         },
       })
       current = next
@@ -107,7 +144,7 @@ export function ConversationFollow({
       current?.stop()
       follower.current = undefined
     }
-  }, [dispatch, session])
+  }, [connect, dispatch, session])
 
   useEffect(() => {
     follower.current?.retarget()
