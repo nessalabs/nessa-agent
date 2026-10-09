@@ -17,6 +17,7 @@ impl Default for EventSequence {
 
 impl EventSequence {
     /// The next number; `None` once the numbering is spent.
+    #[allow(deprecated, reason = "Rust 1.89 MSRV; try_update requires Rust 1.95")]
     pub fn next(&self) -> Option<u64> {
         self.0
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |last| {
