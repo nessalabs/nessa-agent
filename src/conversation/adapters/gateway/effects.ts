@@ -247,7 +247,6 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   conversation_storage_unavailable: "unavailable",
   image_input_unsupported: "unavailable",
   invalid_request: "unavailable",
-  not_bound: "unavailable",
   stale_permission: "unavailable",
   submission_conflict: "unavailable",
   submission_unresolved: "unavailable",

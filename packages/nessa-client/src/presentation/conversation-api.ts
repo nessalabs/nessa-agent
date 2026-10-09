@@ -36,8 +36,7 @@ import {
   conversationReorder,
   conversationApprovalMode,
 } from "../protocol/conversation-validate.js"
-import { decimal, validPositiveReadEpoch } from "../protocol/passive-read-validate.js"
-import { validRecordReceiverId } from "../protocol/record-read-validate.js"
+import { decimal } from "../protocol/passive-read-validate.js"
 
 /** Which of the caller's conversations `list()` returns. */
 export type ConversationListOptions = {
@@ -95,14 +94,6 @@ export type ConversationApi = {
   ) => Promise<ConversationSetApprovalModeResult>
   /** Read current provider lifecycle, output, queue, tools, and complete actionable permission choices. */
   read: (conversationId: string) => Promise<ConversationView>
-  /**
-   * The authenticated credential's own receiver binding.
-   *
-   * The caller does not name a receiver and this does not pair one. A missing
-   * or inactive binding is `not_bound` and nothing is read. Watches and record
-   * reads still admit that binding on every call.
-   */
-  binding: () => Promise<{ receiverId: string; accessEpoch: string }>
   /**
    * List the conversations the authenticated caller owns, most recently
    * updated first, at most 500: each with its title, the last thing said in
@@ -254,27 +245,6 @@ function validConversationId(value: string): string {
   if (!conversationIdPattern.test(value))
     throw new TypeError("Conversation ID must be a canonical lowercase UUID")
   return value
-}
-
-/** The binding result, read only for the two fields it owns. */
-function bindingResult(value: unknown): { receiverId: string; accessEpoch: string } {
-  if (typeof value !== "object" || value === null) throw new TypeError("Invalid binding")
-  const record = value as Record<string, unknown>
-  if (
-    Object.keys(record).length !== 2 ||
-    !Object.hasOwn(record, "receiverId") ||
-    !Object.hasOwn(record, "accessEpoch")
-  )
-    throw new TypeError("Invalid binding")
-  const receiverId = record.receiverId
-  const accessEpoch = record.accessEpoch
-  if (
-    !validRecordReceiverId(receiverId) ||
-    receiverId.length === 0 ||
-    !validPositiveReadEpoch(accessEpoch)
-  )
-    throw new TypeError("Invalid binding")
-  return { receiverId, accessEpoch }
 }
 
 export function createConversationApi(
@@ -459,8 +429,6 @@ export function createConversationApi(
         }),
         id,
       ),
-    binding: async () =>
-      bindingResult(await session.request(ProductMethod.ConversationBinding, {})),
     send: (id, text, attachments, files, options) =>
       submit(ProductMethod.ConversationSend, id, text, attachments, files, options),
     steer: (id, text, attachments, files, options) =>

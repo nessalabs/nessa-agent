@@ -19,12 +19,24 @@ export interface ChangeWatchApi {
   records(params: ConversationWatchRecordsParams): Promise<ConversationWatchResult>
   /** Register this receiver's catalogue. The server selects its current authorized owner. */
   catalogue(params: ConversationWatchCatalogueParams): Promise<ConversationWatchResult>
+  /**
+   * Register one conversation the authenticated owner session already may read.
+   * Sends no receiver. A paired device uses {@link ChangeWatchApi.records}.
+   */
+  ownedRecords(conversationId: string): Promise<ConversationWatchResult>
+  /**
+   * Register the authenticated owner's catalogue. Sends no receiver. A paired
+   * device uses {@link ChangeWatchApi.catalogue}.
+   */
+  ownedCatalogue(): Promise<ConversationWatchResult>
   /** Remove an ID minted on this connection. Exact repeat removal is idempotent; foreign IDs refuse. The ACK confirms interest cancellation; admitted authority/frame ownership can remain. Immediate replacement may refuse until that original work completes. */
   unwatch(watchId: string): Promise<ConversationUnwatchResult>
 }
 
-function binding(params: { receiverId: string; accessEpoch: string }): void {
+function binding(params: { receiverId?: string; accessEpoch?: string }): void {
   if (
+    params.receiverId === undefined ||
+    params.accessEpoch === undefined ||
     !validRecordReceiverId(params.receiverId) ||
     !validPositiveReadEpoch(params.accessEpoch)
   )
@@ -49,6 +61,21 @@ export function createChangeWatchApi(session: RpcRequester): ChangeWatchApi {
         await session.request(ProductMethod.ConversationWatchCatalogue, params, options),
       )
     },
+    ownedRecords: async (conversationId) => {
+      if (!conversationIdPattern.test(conversationId))
+        throw new TypeError("Invalid conversation ID")
+      return watchResult(
+        await session.request(
+          ProductMethod.ConversationWatchRecords,
+          { conversationId },
+          options,
+        ),
+      )
+    },
+    ownedCatalogue: async () =>
+      watchResult(
+        await session.request(ProductMethod.ConversationWatchCatalogue, {}, options),
+      ),
     unwatch: async (watchId) => {
       if (!validChangeWatchId(watchId)) throw new TypeError("Invalid change watch ID")
       const result = watchResult(

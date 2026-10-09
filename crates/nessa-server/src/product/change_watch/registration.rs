@@ -1,15 +1,13 @@
 use crate::conversation::application::{
     access_refusal, AdmitPassiveRead, CatalogueChangeWatch, CatalogueWatchError,
-    CatalogueWatchState,
+    CatalogueWatchState, ConversationError,
 };
 use crate::product::socket::close_reason;
 use crate::product::state::ProductRouteState;
-use nessa_auth::application::ports::AccessError;
+use nessa_auth::application::ports::{AccessError, Decision};
 use nessa_auth::application::{authorization::AuthorizeAction, session::AuthenticatedSession};
-use nessa_protocol::conversation::{
-    domain::ConversationId,
-    read_scope::{CatalogueReadScope, ReadRefusal},
-};
+use nessa_auth::domain::{Action, OrganizationId, PrincipalId};
+use nessa_protocol::conversation::{domain::ConversationId, read_scope::ReadRefusal};
 use nessa_protocol::product::generated::{
     product_method, ConversationWatchCatalogueParams, ConversationWatchRecordsParams,
     MAX_CHANGE_WATCH_ID_BYTES, MAX_CONNECTION_CATALOGUE_WATCHES, MAX_CONNECTION_RECORD_WATCHES,
@@ -77,17 +75,39 @@ impl WatchToken {
     }
 }
 
+/// A paired receiver's binding. Both fields are present, or the watch is an
+/// owner-session watch and this is absent.
+#[derive(Clone, PartialEq, Eq)]
+pub(in crate::product) struct PairedWatch {
+    receiver: String,
+    epoch: u64,
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub(in crate::product) enum WatchSelector {
     Records {
         conversation: ConversationId,
-        receiver: String,
-        epoch: u64,
+        paired: Option<PairedWatch>,
     },
     Catalogue {
-        receiver: String,
-        epoch: u64,
+        paired: Option<PairedWatch>,
     },
+}
+
+/// Both receiver fields, or neither. Exactly one is not a watch.
+fn paired_watch(
+    receiver_id: Option<String>,
+    access_epoch: Option<String>,
+) -> Result<Option<PairedWatch>, ChangeWatchErrorCode> {
+    let invalid = ChangeWatchErrorCode::InvalidRequest;
+    match (receiver_id, access_epoch) {
+        (None, None) => Ok(None),
+        (Some(receiver), Some(epoch)) => Ok(Some(PairedWatch {
+            receiver: Id::new(receiver).map_err(|_| invalid)?.as_str().to_owned(),
+            epoch: decode_epoch(&epoch).map_err(|_| invalid)?,
+        })),
+        _ => Err(invalid),
+    }
 }
 
 impl WatchSelector {
@@ -98,21 +118,13 @@ impl WatchSelector {
                 serde_json::from_value(params).map_err(|_| invalid())?;
             Ok(Self::Records {
                 conversation: ConversationId::new(&value.conversation_id).map_err(|_| invalid())?,
-                receiver: Id::new(value.receiver_id)
-                    .map_err(|_| invalid())?
-                    .as_str()
-                    .to_owned(),
-                epoch: decode_epoch(&value.access_epoch).map_err(|_| invalid())?,
+                paired: paired_watch(value.receiver_id, value.access_epoch)?,
             })
         } else if method == product_method::CONVERSATION_WATCH_CATALOGUE {
             let value: ConversationWatchCatalogueParams =
                 serde_json::from_value(params).map_err(|_| invalid())?;
             Ok(Self::Catalogue {
-                receiver: Id::new(value.receiver_id)
-                    .map_err(|_| invalid())?
-                    .as_str()
-                    .to_owned(),
-                epoch: decode_epoch(&value.access_epoch).map_err(|_| invalid())?,
+                paired: paired_watch(value.receiver_id, value.access_epoch)?,
             })
         } else {
             Err(invalid())
@@ -136,9 +148,9 @@ impl WatchSelector {
         )
     }
 
-    /// Current authority for this selector: credential, policy, receiver binding,
-    /// target ownership and browser presence, through the existing passive owner.
-    /// Registration and every notice ask this same function.
+    /// Current authority for this selector: credential, policy, and either a
+    /// paired receiver or the session's own `conversation.write` grant plus
+    /// ownership. Registration and every notice ask this same function.
     async fn admit(
         &self,
         state: &ProductRouteState,
@@ -161,45 +173,45 @@ impl WatchSelector {
         state: &ProductRouteState,
         session: &AuthenticatedSession,
     ) -> Result<Admitted, WatchRefusal> {
-        let (receivers, conversations) = state
-            .passive_read
-            .as_ref()
-            .ok_or(WatchRefusal::Unavailable)?;
-        let admission = AdmitPassiveRead {
-            authorization: AuthorizeAction {
-                access: state.access.as_ref(),
-                clock: state.clock.as_ref(),
-                policy: state.policy.as_ref(),
-            },
-            gateway: &state.gateway,
-            receivers: receivers.as_ref(),
-            conversations: conversations.as_ref(),
-        };
         let admitted = match self {
             Self::Records {
+                paired: Some(paired),
                 conversation,
-                receiver,
-                epoch,
             } => {
-                admission
-                    .execute(session, conversation, receiver, *epoch)
+                passive_admission(state)?
+                    .execute(session, conversation, &paired.receiver, paired.epoch)
                     .await
                     .map_err(WatchRefusal::Read)?;
                 Admitted::Records(conversation.clone())
             }
-            Self::Catalogue { receiver, epoch } => Admitted::Catalogue(
-                admission
-                    .catalogue(session, receiver, *epoch)
+            Self::Catalogue {
+                paired: Some(paired),
+            } => {
+                let scope = passive_admission(state)?
+                    .catalogue(session, &paired.receiver, paired.epoch)
                     .await
-                    .map_err(WatchRefusal::Read)?,
-            ),
+                    .map_err(WatchRefusal::Read)?;
+                Admitted::Catalogue(CatalogueOwner {
+                    organization_id: scope.organization_id,
+                    owner_id: scope.owner_id,
+                })
+            }
+            Self::Records {
+                paired: None,
+                conversation,
+            } => {
+                return admit_owned_records(state, session, conversation).await;
+            }
+            Self::Catalogue { paired: None } => {
+                return admit_owned_catalogue(state, session).await;
+            }
         };
         Ok(admitted)
     }
 
     /// The connection's periodic re-check of its live watches (row A3). The
     /// connection's own refresh has just confirmed `current` (identity and
-    /// browser presence) and passes it in, so this asks only passive-read
+    /// browser presence) and passes it in, so this asks only the selector's
     /// admission, once per distinct target, one after another. Returns one
     /// result per entry of `selectors`, in order.
     pub async fn recheck(
@@ -267,11 +279,102 @@ impl WatchSelector {
     }
 }
 
+/// The catalogue watch key. Both admission paths install the same organization
+/// and owner; a paired receiver is not part of the key.
+struct CatalogueOwner {
+    organization_id: OrganizationId,
+    owner_id: PrincipalId,
+}
+
 /// What current admission established for one selector: the stable record
-/// target, or the catalogue owner the receiver binding currently names.
+/// target, or the catalogue owner.
 enum Admitted {
     Records(ConversationId),
-    Catalogue(CatalogueReadScope),
+    Catalogue(CatalogueOwner),
+}
+
+fn passive_admission(state: &ProductRouteState) -> Result<AdmitPassiveRead<'_>, WatchRefusal> {
+    let (receivers, conversations) = state
+        .passive_read
+        .as_ref()
+        .ok_or(WatchRefusal::Unavailable)?;
+    Ok(AdmitPassiveRead {
+        authorization: AuthorizeAction {
+            access: state.access.as_ref(),
+            clock: state.clock.as_ref(),
+            policy: state.policy.as_ref(),
+        },
+        gateway: &state.gateway,
+        receivers: receivers.as_ref(),
+        conversations: conversations.as_ref(),
+    })
+}
+
+/// `conversation.write` for this session, the same grant `conversation.read`,
+/// `conversation.list`, and `conversation.observe` already require. A deny is
+/// forbidden. An access error stays a read refusal so the watch's close
+/// mapping is unchanged. This is not the passive `conversation.read` action
+/// that admits record pages.
+async fn authorize_owner(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<(), WatchRefusal> {
+    let action = Action::new("conversation.write").expect("static action");
+    let authorization = AuthorizeAction {
+        access: state.access.as_ref(),
+        clock: state.clock.as_ref(),
+        policy: state.policy.as_ref(),
+    };
+    match authorization
+        .execute(session, &action, &state.gateway)
+        .await
+    {
+        Ok(Decision::Allow) => Ok(()),
+        Ok(Decision::Deny) => Err(WatchRefusal::Read(ReadRefusal::Forbidden)),
+        Err(error) => Err(WatchRefusal::Read(access_refusal(error))),
+    }
+}
+
+async fn admit_owned_catalogue(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<Admitted, WatchRefusal> {
+    if state.conversations.is_none() {
+        return Err(WatchRefusal::Unavailable);
+    }
+    authorize_owner(state, session).await?;
+    let context = session.context();
+    Ok(Admitted::Catalogue(CatalogueOwner {
+        organization_id: context.organization_id().clone(),
+        owner_id: context.principal_id().clone(),
+    }))
+}
+
+async fn admit_owned_records(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    conversation: &ConversationId,
+) -> Result<Admitted, WatchRefusal> {
+    let service = state
+        .conversations
+        .as_ref()
+        .ok_or(WatchRefusal::Unavailable)?;
+    authorize_owner(state, session).await?;
+    let caller = super::super::conversation::caller(session, "watch".to_owned());
+    service
+        .caller_owns(conversation, &caller)
+        .await
+        .map_err(ownership_refusal)?;
+    Ok(Admitted::Records(conversation.clone()))
+}
+
+fn ownership_refusal(error: ConversationError) -> WatchRefusal {
+    match error {
+        ConversationError::NotFound | ConversationError::Deleted => {
+            WatchRefusal::Read(ReadRefusal::WrongOwner)
+        }
+        _ => WatchRefusal::Read(ReadRefusal::Unverifiable),
+    }
 }
 
 pub(in crate::product) enum WatchHandle {
@@ -301,7 +404,7 @@ impl WatchHandle {
 pub(in crate::product) enum WatchRefusal {
     /// The session's credential, membership or browser session is no longer current.
     Access(AccessError),
-    /// Passive-read admission refused: grant, receiver binding, epoch or ownership.
+    /// Admission refused: grant, receiver binding, epoch, or ownership.
     Read(ReadRefusal),
     /// The gateway has no passive-read authority composed, or the task failed.
     Unavailable,
@@ -387,5 +490,284 @@ mod tests {
         assert!(!tokens.can_accept(1));
         assert_eq!(tokens.next(), Err(ChangeWatchErrorCode::WatchCapacity));
         assert!(tokens.owns(&format!("{}-{}", Uuid::from_u128(1), u64::MAX)));
+    }
+
+    #[test]
+    fn owner_params_omit_the_receiver_and_a_half_pair_is_invalid() {
+        let catalogue = WatchSelector::decode(
+            product_method::CONVERSATION_WATCH_CATALOGUE,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert!(matches!(
+            catalogue,
+            WatchSelector::Catalogue { paired: None }
+        ));
+        let id = "00000000-0000-4000-8000-000000000001";
+        let records = WatchSelector::decode(
+            product_method::CONVERSATION_WATCH_RECORDS,
+            serde_json::json!({ "conversationId": id }),
+        )
+        .unwrap();
+        assert!(matches!(
+            records,
+            WatchSelector::Records { paired: None, .. }
+        ));
+        let paired = WatchSelector::decode(
+            product_method::CONVERSATION_WATCH_RECORDS,
+            serde_json::json!({
+                "conversationId": id,
+                "receiverId": "receiver",
+                "accessEpoch": "3"
+            }),
+        )
+        .unwrap();
+        assert!(matches!(
+            paired,
+            WatchSelector::Records {
+                paired: Some(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            WatchSelector::decode(
+                product_method::CONVERSATION_WATCH_CATALOGUE,
+                serde_json::json!({ "receiverId": "receiver" }),
+            ),
+            Err(ChangeWatchErrorCode::InvalidRequest)
+        ));
+        assert!(matches!(
+            WatchSelector::decode(
+                product_method::CONVERSATION_WATCH_RECORDS,
+                serde_json::json!({ "conversationId": id, "accessEpoch": "3" }),
+            ),
+            Err(ChangeWatchErrorCode::InvalidRequest)
+        ));
+    }
+
+    #[test]
+    fn a_missing_or_deleted_conversation_is_the_wrong_owner() {
+        assert_eq!(
+            ownership_refusal(ConversationError::NotFound).code(),
+            ChangeWatchErrorCode::WrongOwner
+        );
+        assert_eq!(
+            ownership_refusal(ConversationError::Deleted).code(),
+            ChangeWatchErrorCode::WrongOwner
+        );
+        assert_eq!(
+            ownership_refusal(ConversationError::InvalidInput).code(),
+            ChangeWatchErrorCode::Unverifiable
+        );
+    }
+
+    /// An owner session registers a catalogue watch and a record watch from
+    /// `conversation.write` and ownership. The passive `conversation.read`
+    /// action is not required, and passive read is not composed.
+    #[tokio::test]
+    async fn owner_session_registers_without_a_receiver() {
+        use crate::agents_test_support::StubAgentProbe;
+        use crate::conversation::application::{
+            ConversationDependencies, ConversationLimits, ConversationRepository,
+            ConversationService, ProviderSessionErasers,
+        };
+        use crate::conversation::domain::Conversation;
+        use crate::conversation_test_support::{
+            only, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit,
+            MemoryListing, MemoryRepository, MemorySummaries, Provider, ProviderFactory,
+            RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
+        };
+        use crate::product::ProductDependencies;
+        use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
+        use nessa_auth::application::ports::{
+            AccessReader, AccessSnapshot, Clock, CredentialEvidence, CredentialVerifier,
+            PortFuture, VerifiedCredential,
+        };
+        use nessa_auth::application::session::AuthenticateSession;
+        use nessa_auth::domain::{
+            AudienceId, Credential, CredentialId, Grant, Membership, MembershipId, MembershipRole,
+            MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
+        };
+        use nessa_protocol::agents::AgentId;
+        use nessa_protocol::clock::Clock as UptimeClock;
+        use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
+        use nessa_sdk::infrastructure::session_storage::{
+            InMemoryStorage, RuntimeMessageCommitClock,
+        };
+        use std::sync::atomic::AtomicBool;
+        use std::sync::{Arc, Mutex};
+
+        struct Authority {
+            snapshot: Mutex<AccessSnapshot>,
+        }
+        impl CredentialVerifier for Authority {
+            fn verify<'a>(
+                &'a self,
+                evidence: &'a CredentialEvidence,
+                audience: &'a AudienceId,
+            ) -> PortFuture<'a, VerifiedCredential> {
+                Box::pin(async move {
+                    if evidence.expose_bytes() != b"secret" || audience.as_str() != "gateway" {
+                        return Err(AccessError::InvalidCredential);
+                    }
+                    Ok(VerifiedCredential {
+                        credential_id: CredentialId::new("credential").unwrap(),
+                        expires_at: Some(200),
+                    })
+                })
+            }
+        }
+        impl AccessReader for Authority {
+            fn read<'a>(&'a self, _: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+                Box::pin(async move { Ok(self.snapshot.lock().unwrap().clone()) })
+            }
+        }
+        impl Clock for Authority {
+            fn unix_milliseconds(&self) -> u64 {
+                100_000
+            }
+        }
+        impl UptimeClock for Authority {
+            fn elapsed_ms(&self) -> u64 {
+                1
+            }
+        }
+
+        let organization = OrganizationId::new("organization").unwrap();
+        let principal = PrincipalId::new("principal").unwrap();
+        let resource = Resource::new(
+            organization.clone(),
+            ResourceId::new("gateway-resource").unwrap(),
+        );
+        let grants = ["conversation.write", "server.read"]
+            .into_iter()
+            .map(|action| Grant::new(Action::new(action).unwrap(), resource.clone()))
+            .collect();
+        let authority = Arc::new(Authority {
+            snapshot: Mutex::new(AccessSnapshot {
+                credential: Credential::new(
+                    CredentialId::new("credential").unwrap(),
+                    principal.clone(),
+                    organization.clone(),
+                    AudienceId::new("gateway").unwrap(),
+                    100,
+                    200,
+                    grants,
+                )
+                .unwrap(),
+                membership: Membership::new(
+                    MembershipId::new("membership").unwrap(),
+                    principal.clone(),
+                    organization.clone(),
+                    MembershipRole::Member,
+                    MembershipStatus::Active,
+                ),
+                revision: 1,
+            }),
+        });
+        let repository = Arc::new(MemoryRepository::default());
+        let summaries = Arc::new(MemorySummaries {
+            summaries: Mutex::new(std::collections::HashMap::new()),
+            writes: std::sync::atomic::AtomicUsize::new(0),
+            load_fails: AtomicBool::new(false),
+            record_fails: AtomicBool::new(false),
+            erase_fails: AtomicBool::new(false),
+            record_panics: AtomicBool::new(false),
+            load_gate: Mutex::new(None),
+        });
+        let owned = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+        repository
+            .create(
+                Conversation::new(
+                    owned.clone(),
+                    organization.clone(),
+                    principal.clone(),
+                    "panel".into(),
+                    "create".into(),
+                    1,
+                    AgentId::Claude,
+                    ConversationModelId::new("model").unwrap(),
+                    ConversationApprovalMode::Ask,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let provider = Arc::new(ProviderFactory::default());
+        let service = ConversationService::new(
+            ConversationDependencies {
+                agents: only(Arc::new(Provider::new(provider))),
+                storage: Arc::new(InMemoryStorage::default()),
+                message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
+                metadata: repository,
+                creation_audit: Arc::new(AcceptingCreationAudit),
+                mode_audit: Arc::new(AcceptingModeAudit),
+                file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                deletion_audit: Arc::new(AcceptingDeletionAudit),
+                attachments: None,
+                summaries: summaries.clone(),
+                listing: Arc::new(MemoryListing {
+                    repository: Arc::new(MemoryRepository::default()),
+                    summaries,
+                }),
+                provider_sessions: ProviderSessionErasers::default(),
+                deletion_budgets: DELETION_BUDGETS,
+                clock: Arc::new(TestClock),
+            },
+            ConversationLimits::default(),
+            None,
+        )
+        .unwrap();
+        let state = ProductRouteState::new(
+            ResourceId::new("gateway-resource").unwrap(),
+            organization,
+            AudienceId::new("gateway").unwrap(),
+            ProductDependencies {
+                verifier: authority.clone(),
+                access: authority.clone(),
+                clock: authority.clone(),
+                policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
+                uptime_clock: authority.clone(),
+                agent_probe: Arc::new(StubAgentProbe::answering(false, false)),
+            },
+        )
+        .with_conversations(Arc::new(service));
+        assert!(state.passive_read.is_none());
+        let session = AuthenticateSession {
+            verifier: state.verifier.as_ref(),
+            access: state.access.as_ref(),
+            clock: state.clock.as_ref(),
+        }
+        .execute(
+            &CredentialEvidence::new(b"secret".to_vec()).unwrap(),
+            state.audience(),
+        )
+        .await
+        .unwrap();
+        let catalogue = WatchSelector::decode(
+            product_method::CONVERSATION_WATCH_CATALOGUE,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        let records = WatchSelector::decode(
+            product_method::CONVERSATION_WATCH_RECORDS,
+            serde_json::json!({ "conversationId": owned.to_string() }),
+        )
+        .unwrap();
+        let missing = WatchSelector::decode(
+            product_method::CONVERSATION_WATCH_RECORDS,
+            serde_json::json!({
+                "conversationId": "00000000-0000-4000-8000-000000000002"
+            }),
+        )
+        .unwrap();
+        let admitted =
+            WatchSelector::recheck(&[catalogue, records, missing], &state, &session).await;
+        assert!(admitted[0].is_ok(), "{:?}", admitted[0].unwrap_err().code());
+        assert!(admitted[1].is_ok(), "{:?}", admitted[1].unwrap_err().code());
+        assert_eq!(
+            admitted[2].unwrap_err().code(),
+            ChangeWatchErrorCode::WrongOwner
+        );
     }
 }

@@ -81,13 +81,13 @@ export type ConversationHistory = {
    */
   deletedIds: string[]
   /**
-   * Whether this window follows commits. `poll` is the timer. `sync` is the
-   * watch. `revoked` stops both: access was taken away, and polling would
-   * keep reading.
+   * Whether the list watch is held. `poll` is the list timer (the workspace)
+   * or the mount list (the panel). `sync` means a catalogue ping asks
+   * `listConversations` again. A chat's own poll is separate.
    */
-  commitFollow: "poll" | "sync" | "revoked"
-  /** How many catalogue passes have replaced or updated the rows. */
-  catalogueGeneration: number
+  commitFollow: "poll" | "sync"
+  /** The server id whose record watch is held, when this window holds one. */
+  recordFollowed: string | null
 }
 
 const initialState: ConversationHistory = {
@@ -102,7 +102,7 @@ const initialState: ConversationHistory = {
   leavingIds: [],
   deletedIds: [],
   commitFollow: "poll",
-  catalogueGeneration: 0,
+  recordFollowed: null,
 }
 
 type Extra = { extra: { conversation: ConversationEffects } }
@@ -303,19 +303,6 @@ function rejected(
   if (action.payload?.permanent) withdrawUndoOf(state, id)
 }
 
-/** Newest first, matching `conversation.list` (`updated_at_ms DESC, id ASC`). */
-function byRecentUpdate(
-  left: { updatedAtMs: number; conversationId: string },
-  right: { updatedAtMs: number; conversationId: string },
-): number {
-  if (left.updatedAtMs !== right.updatedAtMs) return right.updatedAtMs - left.updatedAtMs
-  return left.conversationId < right.conversationId
-    ? -1
-    : left.conversationId > right.conversationId
-      ? 1
-      : 0
-}
-
 const historySlice = createSlice({
   name: "conversationHistory",
   initialState,
@@ -330,81 +317,14 @@ const historySlice = createSlice({
       state.commandError = null
       state.undoable = null
     },
-    /** The commit follow started, fell back to the timer, or was revoked. */
-    commitFollowSet(state, action: PayloadAction<"poll" | "sync" | "revoked">) {
+    /** The list watch started, or the timer resumed. */
+    commitFollowSet(state, action: PayloadAction<"poll" | "sync">) {
       state.commitFollow = action.payload
+      if (action.payload === "poll") state.recordFollowed = null
     },
-    /**
-     * Rows from the catalogue watch. A reset replaces membership. An
-     * incremental pass updates the rows it names and drops the ones it
-     * deleted. Running is kept: the catalogue payload does not carry it.
-     */
-    catalogueApplied(
-      state,
-      action: PayloadAction<{
-        reset: boolean
-        rows: ConversationSummary[]
-        removedIds: string[]
-      }>,
-    ) {
-      const incoming = action.payload
-      state.catalogueGeneration += 1
-      // The catalogue is membership from this action on, even if the follower
-      // has not yet reported sync. A list that resolves in between must not
-      // replace these rows. A later fallback sets the follow back to poll.
-      state.commitFollow = "sync"
-      state.failure = null
-      for (const id of incoming.removedIds) known(state.deletedIds, id)
-      if (state.rows === null || incoming.reset) {
-        const previous = new Map(
-          (state.rows ?? []).map((row) => [row.conversationId, row]),
-        )
-        state.rows = incoming.rows
-          .filter(
-            (row) => !row.archived && !state.deletedIds.includes(row.conversationId),
-          )
-          .map((row) => ({
-            ...row,
-            running: previous.get(row.conversationId)?.running ?? false,
-          }))
-          .sort(byRecentUpdate)
-        state.archivedIds = incoming.rows
-          .filter((row) => row.archived && !state.deletedIds.includes(row.conversationId))
-          .map((row) => row.conversationId)
-        state.complete = true
-        return
-      }
-      const rows = state.rows.filter(
-        (row) => !incoming.removedIds.includes(row.conversationId),
-      )
-      for (const row of incoming.rows) {
-        if (state.deletedIds.includes(row.conversationId)) continue
-        if (row.archived) {
-          const at = rows.findIndex((item) => item.conversationId === row.conversationId)
-          if (at !== -1) rows.splice(at, 1)
-          known(state.archivedIds, row.conversationId)
-          continue
-        }
-        state.archivedIds = state.archivedIds.filter((id) => id !== row.conversationId)
-        const at = rows.findIndex((item) => item.conversationId === row.conversationId)
-        if (at === -1) rows.push({ ...row, running: false })
-        else {
-          const previous = rows[at]
-          if (!previous) continue
-          rows[at] = { ...row, running: previous.running }
-        }
-      }
-      state.rows = rows.sort(byRecentUpdate)
-    },
-    /** A view read said whether this conversation is running. */
-    runningObserved(
-      state,
-      action: PayloadAction<{ conversationId: string; running: boolean }>,
-    ) {
-      const row = state.rows?.find(
-        (item) => item.conversationId === action.payload.conversationId,
-      )
-      if (row) row.running = action.payload.running
+    /** The one record watch was installed or dropped. */
+    recordFollowSet(state, action: PayloadAction<string | null>) {
+      state.recordFollowed = action.payload
     },
   },
   extraReducers: (builder) => {
@@ -414,11 +334,6 @@ const historySlice = createSlice({
       })
       .addCase(listConversations.fulfilled, (state, action) => {
         if (state.requestId !== action.meta.requestId) return
-        // A catalogue pass already replaced the rows this list was going to.
-        if (state.commitFollow === "sync" && state.catalogueGeneration > 0) {
-          state.requestId = null
-          return
-        }
         state.rows = action.payload.rows
         state.archivedIds = action.payload.archivedIds
         state.complete = action.payload.complete
@@ -477,5 +392,5 @@ const historySlice = createSlice({
 })
 
 export const conversationHistoryReducer = historySlice.reducer
-export const { commandErrorCleared, commitFollowSet, catalogueApplied, runningObserved } =
+export const { commandErrorCleared, commitFollowSet, recordFollowSet } =
   historySlice.actions

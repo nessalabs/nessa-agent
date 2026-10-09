@@ -53,16 +53,13 @@ use nessa_auth::{
     application::{
         credential_admin::{
             CredentialAdmin, CredentialAdminError, IssueCredentialOutcome, IssueCredentialRequest,
-            ListCredentialsRequest, ListTransitionsRequest, RevokeCredentialOutcome,
-            RevokeCredentialRequest,
+            ListCredentialsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
         },
-        dto::{
-            CredentialMetadataDto, CredentialTransitionDto, IssuanceCauseDto, TransitionCauseDto,
-        },
+        dto::CredentialMetadataDto,
         pairing::PairingStore,
         ports::{Clock, PortFuture},
     },
-    domain::{AudienceId, CredentialId, OrganizationId, PrincipalId, Resource, ResourceId},
+    domain::{AudienceId, OrganizationId, Resource, ResourceId},
 };
 use nessa_local_database::OpenError;
 use nessa_protocol::clock::Clock as ServerClock;
@@ -223,19 +220,6 @@ pub(super) async fn product_state(
     } else {
         None
     };
-    // The panel credential is the desktop's session. Pair it with a receiver
-    // so watches and record reads use the same admission as a linked device.
-    // A credential that is not that surface, or is not issued yet, is left alone.
-    // A journal error here does not stop the gateway: the windows poll until
-    // a later start can bind.
-    if let Some(receivers) = &receivers {
-        if let Err(error) = bind_local_surface(receivers, &store) {
-            tracing::warn!(
-                %error,
-                "local surface binding was not created; conversation watches stay on the poller"
-            );
-        }
-    }
     // Before any socket is bound: the key is restored or first published,
     // this gateway's unfinished enrollments are settled, and ended ones have
     // their receivers settled (design rows S3–S8).
@@ -514,95 +498,6 @@ pub(super) fn mcp_app_ports(
         tickets: mcp.resource_tickets.clone(),
         dropped,
     }
-}
-
-/// Whether this credential is the desktop panel's own surface credential.
-///
-/// Paired phones are issued to the same principal (`surface:nessa-panel`)
-/// when the panel approves them, with `DevicePairing` rather than
-/// `SurfaceProvision`. Principal alone would bind that phone at startup,
-/// outside pairing, and a later pairing of the same credential conflicts
-/// because `credential_id` is unique. A revoked surface credential is left
-/// alone: startup does not regrant.
-fn credential_is_desktop_surface(
-    credential: &CredentialMetadataDto,
-    transitions: &[CredentialTransitionDto],
-) -> bool {
-    if credential.revoked_at.is_some() || credential.principal_id != "surface:nessa-panel" {
-        return false;
-    }
-    transitions.iter().any(|transition| {
-        transition.credential_id == credential.id
-            && matches!(
-                transition.cause,
-                TransitionCauseDto::Issued {
-                    cause: IssuanceCauseDto::SurfaceProvision,
-                }
-            )
-    })
-}
-
-/// Pair the desktop panel credential with its own receiver.
-///
-/// The desktop authenticates as that credential and has no device enrollment.
-/// The binding is the same row a paired receiver has: server-minted id, epoch,
-/// and the credential's organization and principal. Startup does not regrant a
-/// binding that was revoked, and does not bind a phone credential that shares
-/// the panel principal. A gateway with no panel credential yet does nothing.
-/// One credential's journal error is logged and skipped so the others still bind.
-fn bind_local_surface(
-    receivers: &LocalReceiverAuthority,
-    store: &LocalCredentialStore,
-) -> Result<(), RunError> {
-    let identity = store.identity().map_err(|error| {
-        RunError::Authentication(format!("could not read the local organization: {error}"))
-    })?;
-    let Some(organization) = identity.organization_ids.into_iter().next() else {
-        return Err(RunError::Authentication(
-            "local gateway has no organization".into(),
-        ));
-    };
-    let credentials = store
-        .list_sync(&ListCredentialsRequest {
-            organization_id: organization.clone(),
-        })
-        .map_err(|error| {
-            RunError::Authentication(format!("could not list surface credentials: {error}"))
-        })?;
-    let transitions = store
-        .list_transitions_sync(&ListTransitionsRequest {
-            organization_id: organization,
-        })
-        .map_err(|error| {
-            RunError::Authentication(format!("could not list credential transitions: {error}"))
-        })?;
-    for credential in credentials {
-        if !credential_is_desktop_surface(&credential, &transitions) {
-            continue;
-        }
-        let Ok(credential_id) = CredentialId::new(credential.id.clone()) else {
-            tracing::warn!(
-                credential_id = %credential.id,
-                "skipping a surface credential with an id the receiver journal cannot store"
-            );
-            continue;
-        };
-        let Ok(organization_id) = OrganizationId::new(credential.organization_id.clone()) else {
-            continue;
-        };
-        let Ok(owner_id) = PrincipalId::new(credential.principal_id.clone()) else {
-            continue;
-        };
-        if let Err(error) = receivers.ensure_local_surface(credential_id, organization_id, owner_id)
-        {
-            tracing::warn!(
-                ?error,
-                credential_id = %credential.id,
-                "could not bind the local surface receiver"
-            );
-        }
-    }
-    Ok(())
 }
 
 /// Open the namespace's receiver journal.

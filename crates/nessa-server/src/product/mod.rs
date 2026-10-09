@@ -24,10 +24,6 @@
 //! `change_watch` owns original watch permits and first task faults; normal host
 //! cleanup in composition consumes its close/drain through ProductRouteState.
 //!
-//! `surface_binding` answers `conversation.binding` with the authenticated
-//! credential's own receiver. Composition mints that row for the local panel
-//! surface; this read does not.
-
 mod attachment;
 pub(crate) mod catalogue_read;
 mod change_watch;
@@ -49,7 +45,6 @@ mod mcp_apps;
 pub(crate) mod mcp_servers;
 mod native;
 mod pairing;
-mod surface_binding;
 
 pub use native::{DeviceCredentials, NativeSessions};
 

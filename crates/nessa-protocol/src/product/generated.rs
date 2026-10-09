@@ -641,12 +641,6 @@ pub struct ConversationReadParams {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConversationBindingResult {
-    pub receiver_id: String,
-    pub access_epoch: String,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationListParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived: Option<bool>,
@@ -1876,15 +1870,19 @@ pub type ChangeWatchId = String;
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationWatchCatalogueParams {
-    pub receiver_id: String,
-    pub access_epoch: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_epoch: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationWatchRecordsParams {
     pub conversation_id: String,
-    pub receiver_id: String,
-    pub access_epoch: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_epoch: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2003,7 +2001,6 @@ pub mod product_method {
     pub const PAIRING_APPROVE: &str = "pairing.approve";
     pub const PAIRING_DENY: &str = "pairing.deny";
     pub const PAIRING_CANCEL: &str = "pairing.cancel";
-    pub const CONVERSATION_BINDING: &str = "conversation.binding";
     pub const CONVERSATION_WATCH_RECORDS: &str = "conversation.watchRecords";
     pub const CONVERSATION_WATCH_CATALOGUE: &str = "conversation.watchCatalogue";
     pub const CONVERSATION_UNWATCH: &str = "conversation.unwatch";
@@ -2192,7 +2189,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 53
+                items.len() <= 52
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -2266,7 +2263,6 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "pairing.approve",
     "pairing.deny",
     "pairing.cancel",
-    "conversation.binding",
     "conversation.watchRecords",
     "conversation.watchCatalogue",
     "conversation.unwatch",
@@ -2328,8 +2324,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.recordsPage"
         | "conversation.catalogueHead"
         | "conversation.catalogueManifest"
-        | "conversation.catalogueResolve"
-        | "conversation.binding" => Some("conversation.read"),
+        | "conversation.catalogueResolve" => Some("conversation.read"),
         _ => None,
     }
 }

@@ -97,8 +97,8 @@ impl GatewayConnection {
     ) -> Result<Registered, GatewayError> {
         let params = ConversationWatchRecordsParams {
             conversation_id: conversation.to_string(),
-            receiver_id: receiver.as_str().to_owned(),
-            access_epoch: epoch.to_string(),
+            receiver_id: Some(receiver.as_str().to_owned()),
+            access_epoch: Some(epoch.to_string()),
         };
         let attempt = self.run(|| {
             self.0

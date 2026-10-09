@@ -306,7 +306,7 @@ not reading the session, which stays unread.
   nothing shows the session, and a read of the index again reads every
   conversation on screen again, setting aside a read asked before it; `hooks.ts`,
   the typed hooks; and `selectors.ts`, narrow per pane and per row. `adapters/gateway/` is the
-  port over the gateway's conversations: a commit watch when the session has a receiver binding, and otherwise one-second summary polling and independent
+  port over the gateway's conversations: a commit watch on its own connection when the session can follow, and otherwise one-second summary polling and independent
   250 ms active transcript polling, with serialized reads per conversation, with revisions it mints and the views read into the
   workspace's types (`gateway-views.ts`). `adapters/in-memory/` is the
   only home of the sample index and the scripted, streamed replies,
@@ -813,7 +813,7 @@ The projection also carries ordered runtime-owned declined-review notices from
 persisted invocation events, replacing selection with later local write evidence
 by identity without turning it into permission authority or provider output.
 NessaClient sends stable-ID commands over its existing authenticated socket.
-The floating panel follows commit watches when the session has a receiver binding, and otherwise polls current replacement views, displays streaming output and
+The floating panel follows commit watches on their own connection: a list ping refreshes the list, and a record ping refreshes that chat. A chat without that watch, or one still starting or waiting on a person, keeps polling. It otherwise polls current replacement views, displays streaming output and
 permission choices, distinguishes provider startup from model thinking, and queues
 follow-ups while attachment is pending. Create, read, and queue admission use the
 ordinary client command deadline; provider startup settles later through the same

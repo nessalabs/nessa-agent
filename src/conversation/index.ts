@@ -25,14 +25,11 @@ export { Transcript } from "./ui/transcript"
 export { useConversation } from "./ui/use-conversation"
 export { ConversationFollow } from "./ui/commit-follow"
 export {
-  MAX_RECORD_WATCHES,
-  createCommitFollower,
-  isCommitSocket,
-  viewIsInProgress,
-  type CatalogueRow,
-  type CommitCheckpoint,
-  type CommitFollower,
-  type CommitSocket,
+  createChangeFollower,
+  type ChangeFollower,
+  type ChangeFollowOptions,
+  type FollowFallback,
+  type FollowSocket,
 } from "./adapters/gateway/sync-path"
 
 export { fromEditor, toEditor, pastedTextLabel } from "./ui/composer-content"

@@ -62,7 +62,7 @@ the Interactive macOS policy, local timing logs, and deferred follow-up work.
 | [344 — MCP UI](done/344-mcp-ui.md) | Nessa hosts MCP Apps: a gateway MCP client, tool identity and `_meta`, app calls with policy and audit, and a sandboxed iframe host. Slices #346–#349 are closed. Amends 326 (plugin kinds) and 333 (where an experiment view is built) |
 | [483 — Gateway protocol and device client crates](done/483-protocol-and-client-core-crates.md) | Shared wire/read model in `nessa-protocol`, device enrollment and retained sync in `nessa-client-core`, gateway dev-only client dependency and portable dependency boundaries |
 | [596 — Observe every owned conversation](done/596-observe-every-owned-conversation.md) | The desktop index walks `conversation.observe` when `conversation.list` is incomplete. The list bound stays 500. The page size is the catalogue's. Listing and observing open no provider |
-| [676 — The desktop follows commits](done/676-desktop-follows-commits.md) | Both windows follow `conversation.changed` and read a head, then one view when it moved. The local panel credential gets a receiver binding that startup does not regrant. The poller remains when that watch is absent |
+| [676 — The desktop follows commits](done/676-desktop-follows-commits.md) | Proposed. A payloadless ping on the owner's own session asks the existing list or read. No panel receiver binding. The poller remains per chat when that chat has no record watch |
 
 ## Todo — implementation priority
 

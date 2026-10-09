@@ -59,6 +59,23 @@ describe("connection-local watch API", () => {
       { atLeastMs: passiveReadTiming.minRequestTimeoutMs },
     )
   })
+  it("registers an owner-session watch with no receiver", async () => {
+    const { watches, sent } = fixture()
+    await watches.ownedCatalogue()
+    await watches.ownedRecords(conversationId)
+    expect(sent).toHaveBeenNthCalledWith(
+      1,
+      ProductMethod.ConversationWatchCatalogue,
+      {},
+      { atLeastMs: passiveReadTiming.minRequestTimeoutMs },
+    )
+    expect(sent).toHaveBeenNthCalledWith(
+      2,
+      ProductMethod.ConversationWatchRecords,
+      { conversationId },
+      { atLeastMs: passiveReadTiming.minRequestTimeoutMs },
+    )
+  })
   it("refuses malformed unwatch identity before dispatch", async () => {
     const { watches, sent } = fixture()
     for (const invalid of ["invalid-1", `${conversationId}-0`, `${conversationId}-01`]) {

@@ -1908,6 +1908,19 @@ impl ConversationService {
         self.check_view_access(id, caller).await?;
         Ok(Some(bound_view(view)))
     }
+    /// Whether this caller owns the conversation and it is not deleted.
+    ///
+    /// The same check `read` makes before it projects a view. A missing
+    /// conversation and one owned by someone else are both not found; a
+    /// deleted one the caller owns is deleted. Watch admission maps both
+    /// refusals and does not read the view.
+    pub async fn caller_owns(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<(), ConversationError> {
+        self.check_view_access(id, caller).await
+    }
     async fn check_view_access(
         &self,
         id: &ConversationId,

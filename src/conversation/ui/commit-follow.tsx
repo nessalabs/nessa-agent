@@ -2,39 +2,39 @@ import { useEffect, useRef } from "react"
 import type { NessaClient } from "@nessa/client"
 
 import type { ConversationTabs } from "../model"
-import { conversationView } from "../adapters/gateway/effects"
+import { createChangeFollower, type ChangeFollower } from "../adapters/gateway/sync-path"
 import {
-  createCommitFollower,
-  isCommitSocket,
-  viewIsInProgress,
-} from "../adapters/gateway/sync-path"
-import {
-  catalogueApplied,
   commitFollowSet,
-  conversationDeleted,
-  runningObserved,
+  listConversations,
+  recordFollowSet,
 } from "../adapters/store/history"
-import { followedView } from "../adapters/store/slice"
+import { refreshConversation } from "../adapters/store/slice"
 import { useConversationDispatch, useConversationSelector } from "../adapters/store/hooks"
 
-/** The open conversation, then any busy one, in watch order. */
-function watchTargets(tabs: ConversationTabs): string[] {
-  const ids: string[] = []
+/**
+ * The open chat, when its poll can stop. A starting chat, or one waiting on
+ * a person, keeps the timer: that state is not a commit, and this window
+ * has one record slot.
+ */
+function recordTarget(tabs: ConversationTabs): string[] {
   const active = tabs.conversations.find((item) => item.id === tabs.activeId)
-  if (active?.serverConversationId) ids.push(active.serverConversationId)
-  for (const item of tabs.conversations) {
-    if (item.phase === "idle" || !item.serverConversationId) continue
-    if (!ids.includes(item.serverConversationId)) ids.push(item.serverConversationId)
-  }
-  return ids
+  if (!active?.serverConversationId) return []
+  if (active.phase === "idle" || active.phase === "starting") return []
+  if ((active.remote?.permissions.length ?? 0) > 0) return []
+  if ((active.remote?.questions.length ?? 0) > 0) return []
+  if (active.remote?.lifecycle.phase === "starting") return []
+  return [active.serverConversationId]
+}
+
+function tabFor(tabs: ConversationTabs, serverId: string) {
+  return tabs.conversations.find((item) => item.serverConversationId === serverId)
 }
 
 /**
- * Follows the gateway's commit pings into the panel's list and the open
- * conversation. Watches use `connect`, a socket of their own, so a watch
- * refusal does not sign this session out. With no binding, or when the watch
- * ends, the timer in `useConversation` keeps reading. A chat that is running
- * or waiting keeps that timer even while the watch is held.
+ * Follows commit pings into the panel's existing list and read. Watches use
+ * `connect`, a socket of their own, so a watch refusal does not sign this
+ * session out. The list watch asks `listConversations`. A record watch asks
+ * `refreshConversation` for that chat and is the only chat whose poll stops.
  */
 export function ConversationFollow({
   session,
@@ -49,81 +49,47 @@ export function ConversationFollow({
 }) {
   const dispatch = useConversationDispatch()
   const tabs = useConversationSelector((state) => state.conversation)
-  const targets = useRef<string[]>([])
   const tabsRef = useRef(tabs)
-  targets.current = watchTargets(tabs)
   tabsRef.current = tabs
-  const follower = useRef<ReturnType<typeof createCommitFollower> | undefined>(undefined)
+  const follower = useRef<ChangeFollower | undefined>(undefined)
 
   useEffect(() => {
     let disposed = false
-    let current = follower.current
+    let current: ChangeFollower | undefined
     const start = () => {
       current?.stop()
       current = undefined
       follower.current = undefined
-      const client = session.get()
-      if (!client || !isCommitSocket(client)) return
-      const next = createCommitFollower({
-        client,
-        openWatchConnection: async () => {
-          try {
-            return await connect()
-          } catch {
-            return undefined
+      if (!session.get()) return
+      const next = createChangeFollower({
+        openConnection: async () => {
+          const client = await connect()
+          return {
+            watches: {
+              records: ({ conversationId }) =>
+                client.watches.ownedRecords(conversationId),
+              catalogue: () => client.watches.ownedCatalogue(),
+              unwatch: (watchId) => client.watches.unwatch(watchId),
+            },
+            on: (event, handler) => client.on(event, handler),
+            onConnectionStateChange: (handler) => client.onConnectionStateChange(handler),
+            close: () => client.close(),
           }
         },
-        targets: () => targets.current,
-        recordWatchTargets: () =>
-          targets.current.filter((id) => {
-            const tab = tabsRef.current.conversations.find(
-              (item) => item.serverConversationId === id,
-            )
-            return tab !== undefined && tab.phase !== "idle"
-          }),
-        listMembership: async () => {
-          const current = session.get()
-          if (!current) return { rows: [], complete: false }
-          const [open, archived] = await Promise.all([
-            current.conversation.list(),
-            current.conversation.list({ archived: true }),
-          ])
-          const rows = [...open.conversations, ...archived.conversations].map((row) => ({
-            conversationId: row.conversationId,
-            title: row.title,
-            preview: row.preview,
-            updatedAtMs: row.updatedAtMs,
-            createdAtMs: row.createdAtMs,
-            archived: row.archived,
-          }))
-          return { rows, complete: open.complete && archived.complete }
+        recordTargets: () => recordTarget(tabsRef.current),
+        onListChanged: () => {
+          if (!disposed) void dispatch(listConversations())
         },
-        onCatalogue: (update) => {
-          dispatch(
-            catalogueApplied({
-              reset: update.reset,
-              removedIds: update.removedIds,
-              rows: update.rows.map((row) => ({
-                conversationId: row.conversationId,
-                title: row.title,
-                preview: row.preview,
-                updatedAtMs: row.updatedAtMs,
-                running: false,
-                archived: row.archived,
-              })),
-            }),
-          )
-          for (const id of update.removedIds) dispatch(conversationDeleted(id))
+        onConversationChanged: (serverId) => {
+          const tab = tabFor(tabsRef.current, serverId)
+          if (tab && !disposed) void dispatch(refreshConversation(tab.id))
         },
-        onView: (id, seen) => {
-          const view = conversationView(seen)
-          dispatch(followedView({ serverId: id, view }))
-          dispatch(
-            runningObserved({
-              conversationId: id,
-              running: viewIsInProgress(view),
-            }),
-          )
+        onRecordHeld: (serverId) => {
+          if (disposed) return
+          dispatch(recordFollowSet(serverId ?? null))
+          if (!serverId) return
+          const tab = tabFor(tabsRef.current, serverId)
+          if (tab) void dispatch(refreshConversation(tab.id))
         },
         onFallback: () => {
           if (!disposed) dispatch(commitFollowSet("poll"))

@@ -2364,32 +2364,3 @@ impl Drop for HostWatchFixture {
         self.release();
     }
 }
-
-/// `conversation.binding` is dispatched on the socket for the session credential.
-/// Empty params return that credential's receiver. Anything else is refused
-/// before a receiver is named.
-#[tokio::test]
-async fn conversation_binding_reads_the_authenticated_credential() {
-    let fixture = WatchFixture::new().await;
-    let (socket, mut peer) = test_socket(None);
-    let socket = tokio::spawn(run_authenticated(
-        socket,
-        fixture.state.clone(),
-        fixture.session.clone(),
-    ));
-    fixture.send(&peer, "binding", "conversation.binding", json!({}));
-    let bound = text(peer.message().await);
-    assert_eq!(bound["ok"], true, "{bound}");
-    assert_eq!(bound["payload"]["receiverId"], "receiver");
-    assert_eq!(bound["payload"]["accessEpoch"], "3");
-    fixture.send(
-        &peer,
-        "binding-params",
-        "conversation.binding",
-        json!({ "receiverId": "other" }),
-    );
-    let refused = text(peer.message().await);
-    assert_eq!(refused["ok"], false, "{refused}");
-    assert_eq!(refused["error"]["code"], "invalid_request", "{refused}");
-    fixture.finish(peer, socket).await;
-}

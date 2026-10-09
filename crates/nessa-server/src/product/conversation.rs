@@ -52,9 +52,6 @@ pub(super) async fn dispatch(
     // caller naming an agent this one is not configured for. Sharing a code
     // between them made the panel tell someone with a working Claude that the
     // gateway has no agent configured.
-    if frame.method == "conversation.binding" {
-        return super::surface_binding::dispatch(state, session, &frame.id, &frame.params).await;
-    }
     let Some(service) = state.conversations.as_ref() else {
         // Not `agent_not_configured`: this gateway runs no conversations at
         // all, and telling a user with a working agent to go configure one

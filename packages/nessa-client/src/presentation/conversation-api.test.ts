@@ -1455,21 +1455,6 @@ it("reads a view's title as the gateway's, null before anything was said, and re
   await expect(reading(undefined)).rejects.toThrow(/title/)
 })
 
-it("reads the session's own binding and does not invent one", async () => {
-  const request = vi.fn(async () => ({ receiverId: "receiver-1", accessEpoch: "1" }))
-  const api = createConversationApi({ request }, () => "unused")
-  await expect(api.binding()).resolves.toEqual({
-    receiverId: "receiver-1",
-    accessEpoch: "1",
-  })
-  expect(request).toHaveBeenCalledWith("conversation.binding", {})
-  const missing = createConversationApi(
-    { request: async () => ({ receiverId: "receiver-1" }) },
-    () => "unused",
-  )
-  await expect(missing.binding()).rejects.toThrow(/Invalid binding/)
-})
-
 it("waits out one delete's worst case, and only for delete", async () => {
   const request = vi.fn(
     async (_method: string, params: unknown, _deadline?: unknown) => ({

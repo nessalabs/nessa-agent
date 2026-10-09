@@ -40,8 +40,8 @@ export function useConversation() {
   const gatewayAvailable = useConversationSelector((state) =>
     canUseGateway(state.session),
   )
-  const commitFollow = useConversationSelector(
-    (state) => state.conversationHistory.commitFollow,
+  const recordFollowed = useConversationSelector(
+    (state) => state.conversationHistory.recordFollowed,
   )
   const conversations = tabs.conversations
   const active = activeConversation(tabs)
@@ -51,19 +51,15 @@ export function useConversation() {
 
   useEffect(() => {
     if (!active.serverReady || !gatewayAvailable) return
-    // Idle chats follow the catalogue. A running chat, or one waiting on a
-    // person, keeps the fast poll: that state is not a commit.
-    const waiting =
-      active.phase !== "idle" ||
+    // This chat's poll stops only while its record watch is held and nothing
+    // unsaved is pending. A starting provider, a permission, or a question
+    // is not a commit. Every other chat keeps its timer.
+    const unsaved =
+      active.phase === "starting" ||
+      active.remote?.lifecycle.phase === "starting" ||
       (active.remote?.permissions.length ?? 0) > 0 ||
       (active.remote?.questions.length ?? 0) > 0
-    if (commitFollow === "sync" && !waiting) {
-      // Opening an idle chat does not register a record watch, and the
-      // catalogue ping does not fire just because the tab changed. One read
-      // fills the transcript; later commits still arrive as pings.
-      dispatch(refreshConversation(active.id))
-      return
-    }
+    if (recordFollowed === active.serverConversationId && !unsaved) return
     return pollConversation(
       () => dispatch(refreshConversation(active.id)),
       () => {
@@ -75,11 +71,13 @@ export function useConversation() {
     dispatch,
     active.id,
     active.phase,
+    active.serverConversationId,
+    active.remote?.lifecycle.phase,
     active.remote?.permissions.length,
     active.remote?.questions.length,
     active.serverReady,
     gatewayAvailable,
-    commitFollow,
+    recordFollowed,
   ])
 
   return {

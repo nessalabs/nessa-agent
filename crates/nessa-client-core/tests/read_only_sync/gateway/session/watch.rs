@@ -13,8 +13,8 @@ const WATCH: &str = "00000000-0000-4000-8000-000000000001-1";
 fn params() -> ConversationWatchRecordsParams {
     ConversationWatchRecordsParams {
         conversation_id: "conversation".into(),
-        receiver_id: "receiver".into(),
-        access_epoch: "3".into(),
+        receiver_id: Some("receiver".into()),
+        access_epoch: Some("3".into()),
     }
 }
 fn event_bytes(name: &str, payload: serde_json::Value) -> Vec<u8> {

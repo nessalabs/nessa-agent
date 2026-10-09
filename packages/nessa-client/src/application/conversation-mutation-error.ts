@@ -125,8 +125,6 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     // a refusal at all. The rest are either certainly after dispatch, or not
     // proven to be before it — `conversation_erasure_incomplete` certainly
     // after: the delete happened, and only its erasure did not finish.
-    // `not_bound` is answered by `conversation.binding`, not by a message.
-    // A conversation command that met it has not proved the message was kept.
     case ConversationErrorCode.UnknownMethod:
     case ConversationErrorCode.ConversationClosed:
     case ConversationErrorCode.ConversationConfigurationChanged:
@@ -141,7 +139,6 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.AttachmentStorageUnavailable:
     case ConversationErrorCode.AttachmentCleanupUnavailable:
     case ConversationErrorCode.ConversationErasureIncomplete:
-    case ConversationErrorCode.NotBound:
     case ConversationErrorCode.ApprovalModeNotApplied:
     case ConversationErrorCode.ApprovalModeUncertain:
       return false

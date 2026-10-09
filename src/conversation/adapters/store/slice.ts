@@ -719,26 +719,6 @@ const conversationSlice = createSlice({
         current.readRequest = undefined
       }
     },
-    followedView(
-      state,
-      action: PayloadAction<{ serverId: string; view: ConversationView }>,
-    ) {
-      const { serverId, view } = action.payload
-      const index = state.conversations.findIndex(
-        (item) => item.serverConversationId === serverId,
-      )
-      const current = state.conversations[index]
-      if (!current) return
-      // A follow view is the commit. Applying it drops an in-flight poll so
-      // that older read cannot replace it when it arrives. `applyView` clears
-      // `readRequest`.
-      if (current.revision === view.revision) {
-        current.readRequest = undefined
-        return
-      }
-      state.conversations[index] = applyView(current, view)
-      releaseOldPreviews(state)
-    },
     viewReceived(
       state,
       action: PayloadAction<{
@@ -811,7 +791,6 @@ export const {
   readStarted,
   invalidateRead,
   readFailed,
-  followedView,
   viewReceived,
   controlStarted,
   controlFinished,

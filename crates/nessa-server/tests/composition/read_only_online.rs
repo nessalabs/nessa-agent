@@ -588,8 +588,8 @@ fn online_replay_then_live_hints_converge_with_a_fresh_replay() {
     };
     let watch_params = ConversationWatchRecordsParams {
         conversation_id: setup.conversation.clone(),
-        receiver_id: setup.receiver.clone(),
-        access_epoch: setup.epoch.to_string(),
+        receiver_id: Some(setup.receiver.clone()),
+        access_epoch: Some(setup.epoch.to_string()),
     };
     let hint = |receiver: &mut WireClient, watch: &str| match receiver.frame() {
         Frame::Text { value, bytes } => {

@@ -1,8 +1,10 @@
 /**
- * A client that can follow commits does not poll. The poller stays for a
- * client that cannot (`gateway-source.test.ts`).
+ * A client that can follow commits does not poll the list. Each chat keeps
+ * its own read timer unless it holds the one record watch and nothing unsaved
+ * is pending. The poller stays for a client that cannot
+ * (`gateway-source.test.ts`).
  */
-import { NessaRpcError, type ConnectionState, type ConversationView } from "@nessa/client"
+import type { ConnectionState, ConversationView } from "@nessa/client"
 import { expect, it } from "vitest"
 
 import { gatewaySource, type GatewayClient, type GatewayClock } from "./gateway-source"
@@ -38,7 +40,7 @@ function clock(): GatewayClock & { advance(ms: number): Promise<void> } {
   }
 }
 
-function view(id: string): ConversationView {
+function view(id: string, phase: "attached" | "starting" = "attached"): ConversationView {
   return {
     conversationId: id,
     revision: "r1",
@@ -72,168 +74,34 @@ function view(id: string): ConversationView {
         incomingElicitation: "unknown",
       },
     },
-    lifecycle: { phase: "attached" },
+    lifecycle: { phase },
   }
 }
 
-it("does not list on the timer once the commit watch is held", async () => {
-  const lists: unknown[] = []
-  const reads: string[] = []
-  let catalogueWatch: string | undefined
-  const changed = new Set<(payload: { watchId: string }) => void>()
-  const scope = {
-    receiver: "receiver-1",
-    origin: "origin",
-    stream: "stream",
-    incarnation: "inc",
-    schema: "schema",
-    accessEpoch: "epoch-1",
-  }
-  const client = {
-    connectionState: { status: "connected" } as ConnectionState,
-    onConnectionStateChange: () => () => {},
-    close: () => {},
-    on: (
-      event: "conversation.changed" | "conversation.watchEnded",
-      handler: (payload: { watchId: string }) => void,
-    ) => {
-      if (event === "conversation.changed") changed.add(handler)
-      return () => changed.delete(handler)
-    },
-    conversation: {
-      binding: async () => ({ receiverId: "receiver-1", accessEpoch: "1" }),
-      list: async () => {
-        lists.push(true)
-        return {
-          conversations: [
-            {
-              conversationId: "chat-a",
-              title: "Alpha",
-              preview: "Last said",
-              createdAtMs: 1_000,
-              updatedAtMs: 2_000,
-              running: false,
-              archived: false,
-            },
-          ],
-          complete: true,
-        }
-      },
-      observe: async () => ({ conversations: [], complete: true }),
-      read: async (id: string) => {
-        reads.push(id)
-        return view(id)
-      },
-      create: async () => ({ conversationId: "chat-a" }),
-      send: async () => ({ requestId: "r", executionId: "e", disposition: "queued" }),
-      answer: async () => ({ requestId: "r", applied: true }),
-      archive: async () => ({ requestId: "r", applied: true }),
-    },
-    records: {
-      head: async () => ({ scope, head: "1" }),
-    },
-    catalogue: {
-      head: async () => ({ scope, head: "1" }),
-      manifest: async () => ({
-        request: {
-          maxEntries: 256,
-          pass: { scope, completed: "0", boundary: "1", generation: "1" },
-        },
-        entries: [
-          {
-            key: { creation: "1", id: "chat-a" },
-            revision: "1",
-            deleted: false,
-          },
-        ],
-        hasMore: false,
-      }),
-      resolve: async () => ({
-        entry: { key: { creation: "1", id: "chat-a" }, revision: "1", deleted: false },
-        payload: new TextEncoder().encode(
-          JSON.stringify({
-            id: "chat-a",
-            createdAtMs: 1_000,
-            agent: null,
-            model: "claude",
-            approvalMode: "ask",
-            summary: {
-              title: "Alpha",
-              preview: "Last said",
-              updatedAtMs: 2_000,
-              archived: false,
-            },
-          }),
-        ),
-      }),
-    },
-    watches: {
-      catalogue: async () => {
-        catalogueWatch = "watch-catalogue"
-        return { watchId: catalogueWatch }
-      },
-      records: async () => ({ watchId: "watch-chat-a" }),
-      unwatch: async () => ({ watchId: "gone" }),
-    },
-  } satisfies GatewayClient
-  const time = clock()
-  const updates: { kind: string; title?: string }[] = []
-  const source = gatewaySource({
-    connect: async () => client,
-    clock: time,
-    timing,
-  })
-  source.subscribe((update) => {
-    if (update.kind === "session")
-      updates.push({ kind: update.kind, title: update.session.title })
-  })
-  await time.advance(500)
-  for (let i = 0; i < 40; i++) await Promise.resolve()
-  // Catch-up lists once for open rows and once for archived rows, then the timer stops.
-  const seeded = lists.length
-  expect(seeded).toBe(2)
-  await time.advance(500)
-  expect(lists).toHaveLength(seeded)
-  expect(catalogueWatch).toBe("watch-catalogue")
-  expect(updates.some((update) => update.title === "Alpha")).toBe(true)
-  source.dispose?.()
-})
-
-function row(id: string, updatedAtMs: number) {
+function row(id: string, updatedAtMs: number, running = false) {
   return {
     conversationId: id,
     title: id,
     preview: null,
     createdAtMs: 1_000,
     updatedAtMs,
-    running: false,
+    running,
     archived: false,
   }
 }
 
-/** A gateway whose watches, lists, and connections the test can move. Each connect is its own socket. */
-function syncGateway(ids: string[]) {
+/** Each connect is its own socket. Watches are owner-session watches. */
+function syncGateway(ids: string[], phase: "attached" | "starting" = "attached") {
   const lists: string[] = []
   const reads: string[] = []
+  const recordWatches: string[] = []
   const sockets: {
     changed: Set<(payload: { watchId: string }) => void>
     ended: Set<(payload: { watchId: string; reason?: string }) => void>
     states: Set<(state: ConnectionState) => void>
     closed: boolean
   }[] = []
-  let catalogueHead = "1"
-  let bindingError: unknown
-  let live = false
   let catalogueWatch: string | undefined
-  const scope = {
-    receiver: "receiver-1",
-    origin: "origin",
-    stream: "stream",
-    incarnation: "inc",
-    schema: "schema",
-    accessEpoch: "epoch-1",
-  }
-  const entries = () => ids.map((id, index) => row(id, 1_000 + index))
   const open = (): GatewayClient => {
     const bucket = {
       changed: new Set<(payload: { watchId: string }) => void>(),
@@ -257,32 +125,29 @@ function syncGateway(ids: string[]) {
         return () => set.delete(handler)
       },
       conversation: {
-        binding: async () => {
-          if (bindingError) throw bindingError
-          return { receiverId: "receiver-1", accessEpoch: "1" }
-        },
         list: async (options?: { archived?: boolean }) => {
           lists.push(options?.archived ? "archived" : "open")
           return {
-            conversations: options?.archived ? [] : entries(),
+            conversations: options?.archived
+              ? []
+              : ids.map((id, index) => row(id, 1_000 + index, true)),
             complete: true,
           }
         },
-        observe: async () => ({ conversations: entries(), complete: true }),
+        observe: async () => ({ conversations: [], complete: true }),
         read: async (id: string) => {
           reads.push(id)
-          const body = view(id)
-          if (live)
-            body.messages = [
-              {
-                executionId: "e",
-                userText: "hi",
-                attachments: [],
-                files: [],
-                status: "running",
-                parts: [],
-              },
-            ]
+          const body = view(id, phase)
+          body.messages = [
+            {
+              executionId: "e",
+              userText: "hi",
+              attachments: [],
+              files: [],
+              status: "running",
+              parts: [],
+            },
+          ]
           return body
         },
         create: async () => ({ conversationId: ids[0] ?? "chat" }),
@@ -294,49 +159,16 @@ function syncGateway(ids: string[]) {
         answer: async () => ({ requestId: "r", applied: true }),
         archive: async () => ({ requestId: "r", applied: true }),
       },
-      records: { head: async () => ({ scope, head: "1" }) },
-      catalogue: {
-        head: async () => ({ scope, head: catalogueHead }),
-        manifest: async () => ({
-          request: {
-            maxEntries: 256,
-            pass: { scope, completed: "0", boundary: catalogueHead, generation: "1" },
-          },
-          entries: ids.map((id) => ({
-            key: { creation: "1", id },
-            revision: catalogueHead,
-            deleted: false,
-          })),
-          hasMore: false,
-        }),
-        resolve: async (params) => ({
-          entry: { ...params.descriptor, revision: catalogueHead, deleted: false },
-          payload: new TextEncoder().encode(
-            JSON.stringify({
-              id: params.descriptor.key.id,
-              createdAtMs: 1_000,
-              agent: null,
-              model: "claude",
-              approvalMode: "ask",
-              summary: {
-                title: params.descriptor.key.id,
-                preview: null,
-                updatedAtMs: Number(catalogueHead) * 1_000,
-                archived: false,
-              },
-            }),
-          ),
-        }),
-      },
       watches: {
-        catalogue: async () => {
+        ownedCatalogue: async () => {
           catalogueWatch = "watch-catalogue"
           return { watchId: catalogueWatch }
         },
-        records: async (params: { conversationId: string }) => ({
-          watchId: `watch-${params.conversationId}`,
-        }),
-        unwatch: async () => ({ watchId: "gone" }),
+        ownedRecords: async (conversationId: string) => {
+          recordWatches.push(conversationId)
+          return { watchId: `watch-${conversationId}` }
+        },
+        unwatch: async (watchId: string) => ({ watchId }),
       },
     }
   }
@@ -344,20 +176,16 @@ function syncGateway(ids: string[]) {
     open,
     lists,
     reads,
+    recordWatches,
     sockets,
-    set catalogueHead(value: string) {
-      catalogueHead = value
-    },
-    failBinding(error: unknown) {
-      bindingError = error
-    },
-    showRunning() {
-      live = true
-    },
     emitCatalogue() {
       if (!catalogueWatch) throw new Error("catalogue watch is not registered")
       for (const socket of sockets)
         for (const handler of [...socket.changed]) handler({ watchId: catalogueWatch })
+    },
+    emitRecord(id: string) {
+      for (const socket of sockets)
+        for (const handler of [...socket.changed]) handler({ watchId: `watch-${id}` })
     },
     endCatalogue() {
       if (!catalogueWatch) throw new Error("catalogue watch is not registered")
@@ -374,7 +202,32 @@ function syncGateway(ids: string[]) {
   }
 }
 
-it("reads a fourth open chat from the catalogue when only three record slots exist", async () => {
+async function settle() {
+  for (let i = 0; i < 40; i++) await Promise.resolve()
+}
+
+it("does not list on the timer once the list watch is held", async () => {
+  const gateway = syncGateway(["chat-a"])
+  const time = clock()
+  const source = gatewaySource({
+    connect: async () => gateway.open(),
+    clock: time,
+    timing,
+  })
+  source.subscribe(() => {})
+  await time.advance(500)
+  await settle()
+  const seeded = gateway.lists.length
+  expect(seeded).toBe(1)
+  await time.advance(500)
+  expect(gateway.lists).toHaveLength(seeded)
+  gateway.emitCatalogue()
+  await settle()
+  expect(gateway.lists.length).toBeGreaterThan(seeded)
+  source.dispose?.()
+})
+
+it("polls a chat that does not hold the one record watch", async () => {
   const gateway = syncGateway(["chat-a", "chat-b", "chat-c", "chat-d"])
   const time = clock()
   const source = gatewaySource({
@@ -384,17 +237,20 @@ it("reads a fourth open chat from the catalogue when only three record slots exi
   })
   source.subscribe(() => {})
   await time.advance(200)
-  for (let i = 0; i < 30; i++) await Promise.resolve()
+  await settle()
   for (const id of ["chat-a", "chat-b", "chat-c", "chat-d"]) await source.transcript(id)
-  const before = gateway.reads.filter((id) => id === "chat-d").length
-  gateway.catalogueHead = "2"
-  gateway.emitCatalogue()
-  for (let i = 0; i < 40; i++) await Promise.resolve()
-  expect(gateway.reads.filter((id) => id === "chat-d").length).toBeGreaterThan(before)
+  await settle()
+  expect(gateway.recordWatches.at(-1)).toBe("chat-d")
+  const before = gateway.reads.filter((id) => id === "chat-a").length
+  const watched = gateway.reads.filter((id) => id === "chat-d").length
+  await time.advance(timing.activePollMs + 20)
+  await settle()
+  expect(gateway.reads.filter((id) => id === "chat-a").length).toBeGreaterThan(before)
+  expect(gateway.reads.filter((id) => id === "chat-d").length).toBe(watched)
   source.dispose?.()
 })
 
-it("resumes the list poller when the catalogue watch ends and the binding is gone", async () => {
+it("reads the watched chat when its record ping arrives", async () => {
   const gateway = syncGateway(["chat-a"])
   const time = clock()
   const source = gatewaySource({
@@ -404,18 +260,37 @@ it("resumes the list poller when the catalogue watch ends and the binding is gon
   })
   source.subscribe(() => {})
   await time.advance(200)
-  for (let i = 0; i < 30; i++) await Promise.resolve()
+  await settle()
+  await source.transcript("chat-a")
+  await settle()
+  const before = gateway.reads.filter((id) => id === "chat-a").length
+  gateway.emitRecord("chat-a")
+  await settle()
+  expect(gateway.reads.filter((id) => id === "chat-a").length).toBeGreaterThan(before)
+  source.dispose?.()
+})
+
+it("resumes the list timer when the catalogue watch ends", async () => {
+  const gateway = syncGateway(["chat-a"])
+  const time = clock()
+  const source = gatewaySource({
+    connect: async () => gateway.open(),
+    clock: time,
+    timing,
+  })
+  source.subscribe(() => {})
+  await time.advance(200)
+  await settle()
   const seeded = gateway.lists.length
   expect(seeded).toBeGreaterThan(0)
-  gateway.failBinding(new NessaRpcError("unauthorized", "unauthorized"))
   gateway.endCatalogue()
   await time.advance(timing.pollMs + 50)
-  for (let i = 0; i < 40; i++) await Promise.resolve()
+  await settle()
   expect(gateway.lists.length).toBeGreaterThan(seeded)
   source.dispose?.()
 })
 
-it("rejoins the watch after the command connection closes", async () => {
+it("leaves the watch connection up when the command connection closes", async () => {
   const gateway = syncGateway(["chat-a"])
   const time = clock()
   const source = gatewaySource({
@@ -425,23 +300,18 @@ it("rejoins the watch after the command connection closes", async () => {
   })
   source.subscribe(() => {})
   await time.advance(200)
-  for (let i = 0; i < 30; i++) await Promise.resolve()
+  await settle()
   const before = gateway.sockets.length
-  const command = gateway.sockets[0]
-  if (!command) throw new Error("no command socket")
-  expect(command.closed).toBe(false)
+  const follow = gateway.sockets[before - 1]
   gateway.emitCommandClosed()
-  for (let i = 0; i < 40; i++) await Promise.resolve()
-  // A saved catalogue is rechecked, not listed again. The new sockets are the rejoin.
-  expect(gateway.sockets.length).toBeGreaterThan(before)
-  expect(gateway.lists).toHaveLength(2)
-  expect(gateway.sockets.slice(before).some((socket) => !socket.closed)).toBe(true)
+  await settle()
+  expect(gateway.sockets).toHaveLength(before)
+  expect(follow?.closed).toBe(false)
   source.dispose?.()
 })
 
-it("keeps reading a running chat on the fast timer while the watch is held", async () => {
-  const gateway = syncGateway(["chat-a"])
-  gateway.showRunning()
+it("keeps polling a chat whose provider is still starting", async () => {
+  const gateway = syncGateway(["chat-a"], "starting")
   const time = clock()
   const source = gatewaySource({
     connect: async () => gateway.open(),
@@ -450,11 +320,13 @@ it("keeps reading a running chat on the fast timer while the watch is held", asy
   })
   source.subscribe(() => {})
   await time.advance(200)
-  for (let i = 0; i < 30; i++) await Promise.resolve()
+  await settle()
   await source.transcript("chat-a")
+  await settle()
+  expect(gateway.recordWatches).toEqual([])
   const reads = gateway.reads.length
   await time.advance(timing.activePollMs + 20)
-  for (let i = 0; i < 20; i++) await Promise.resolve()
+  await settle()
   expect(gateway.reads.length).toBeGreaterThan(reads)
   source.dispose?.()
 })

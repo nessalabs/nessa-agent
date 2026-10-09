@@ -8,7 +8,7 @@ import { createDependencies } from "../../composition/dependencies"
 import { sessionReady } from "../../session/testing"
 import { makeStore } from "../../store"
 import { ControlFailedError, ConversationReadFailedError } from "../application/ports"
-import { catalogueApplied, listConversations } from "../adapters/store/history"
+import { listConversations } from "../adapters/store/history"
 import { openListed, refreshConversation } from "../adapters/store/slice"
 import { scenarioEffects } from "../testing"
 import { ConversationList } from "./conversation-list"
@@ -89,100 +89,6 @@ it("lists what the gateway holds, including a conversation no tab has open", asy
     serverConversationId: written,
     title: null,
   } satisfies RosterTarget)
-})
-
-it("shows a chat created elsewhere without listing again", async () => {
-  const { store, list } = await gatewayWithClosedConversation()
-  await render(store)
-  const calls = list.mock.calls.length
-  const elsewhere = "0b8f1c2e-1111-4a4a-8b8b-000000000099"
-  await React.act(async () => {
-    store.dispatch(
-      catalogueApplied({
-        reset: false,
-        removedIds: [],
-        rows: [
-          {
-            conversationId: elsewhere,
-            title: "From the other window",
-            preview: "hello",
-            updatedAtMs: 5_000,
-            running: false,
-            archived: false,
-          },
-        ],
-      }),
-    )
-  })
-  expect(list.mock.calls).toHaveLength(calls)
-  expect(
-    rows()
-      .map((row) => row.textContent)
-      .join("\n"),
-  ).toContain("From the other window")
-})
-
-it("keeps the newest catalogue row first when a chat arrives out of order", async () => {
-  const { store } = await gatewayWithClosedConversation()
-  await render(store)
-  const older = "0b8f1c2e-1111-4a4a-8b8b-0000000000aa"
-  const newer = "0b8f1c2e-1111-4a4a-8b8b-0000000000bb"
-  await React.act(async () => {
-    store.dispatch(
-      catalogueApplied({
-        reset: true,
-        removedIds: [],
-        rows: [
-          {
-            conversationId: older,
-            title: "Older chat",
-            preview: null,
-            updatedAtMs: 1_000,
-            running: false,
-            archived: false,
-          },
-          {
-            conversationId: newer,
-            title: "Newer chat",
-            preview: null,
-            updatedAtMs: 9_000,
-            running: false,
-            archived: false,
-          },
-        ],
-      }),
-    )
-  })
-  const titles = rows().map((row) => row.textContent ?? "")
-  expect(titles[0]).toContain("Newer chat")
-  expect(titles[1]).toContain("Older chat")
-})
-
-it("keeps catalogue rows when a list resolves after catch-up", async () => {
-  const { store } = await gatewayWithClosedConversation()
-  await render(store)
-  await React.act(async () => {
-    store.dispatch(
-      catalogueApplied({
-        reset: true,
-        removedIds: [],
-        rows: [
-          {
-            conversationId: other,
-            title: "From the catalogue",
-            preview: null,
-            updatedAtMs: 5_000,
-            running: false,
-            archived: false,
-          },
-        ],
-      }),
-    )
-    await store.dispatch(listConversations())
-  })
-  const titles = rows().map((row) => row.textContent ?? "")
-  expect(titles.some((title) => title.includes("From the catalogue"))).toBe(true)
-  expect(store.getState().conversationHistory.commitFollow).toBe("sync")
 })
 
 it("reads the list again once the gateway arrives", async () => {

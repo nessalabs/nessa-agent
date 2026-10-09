@@ -202,10 +202,6 @@
       "params": "PairingInvitationParams",
       "grant": "credential.manage"
     },
-    "conversation.binding": {
-      "params": null,
-      "grant": "conversation.read"
-    },
     "conversation.watchRecords": {
       "params": "ConversationWatchRecordsParams",
       "grant": null
