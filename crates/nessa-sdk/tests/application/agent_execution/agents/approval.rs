@@ -5,13 +5,17 @@
 use super::MemoryStorage;
 use crate::application::agent_execution::support::*;
 use std::{sync::atomic::AtomicBool, time::Duration};
+use tokio::sync::{
+    oneshot::{self, Receiver},
+    Notify,
+};
 
 /// Records each preset a new context is opened at, and each live change.
 struct Backend {
     applied: Mutex<Vec<ApprovalMode>>,
     inner: RecordingSession,
-    response: Mutex<Option<tokio::sync::oneshot::Receiver<ProviderOperationResult<()>>>>,
-    started: tokio::sync::Notify,
+    response: Mutex<Option<Receiver<ProviderOperationResult<()>>>>,
+    started: Notify,
     closes: AtomicUsize,
     panic_before_future: AtomicBool,
 }
@@ -127,7 +131,7 @@ async fn prepared() -> Prepared {
     let backend = Arc::new(Backend {
         applied: Mutex::new(Vec::new()),
         response: Mutex::new(None),
-        started: tokio::sync::Notify::new(),
+        started: Notify::new(),
         closes: AtomicUsize::new(0),
         panic_before_future: AtomicBool::new(false),
         inner: RecordingSession {
@@ -317,7 +321,7 @@ async fn a_close_during_admission_save_keeps_the_live_mode_on_the_record() {
 #[tokio::test(start_paused = true)]
 async fn a_pending_approval_change_is_interrupted_by_concurrent_close() {
     let Prepared { agent, backend, .. } = prepared().await;
-    let (_release, response) = tokio::sync::oneshot::channel();
+    let (_release, response) = oneshot::channel();
     *backend.response.lock().unwrap() = Some(response);
     let changing = agent.set_approval_mode(ApprovalMode::Auto);
     tokio::pin!(changing);
@@ -348,7 +352,7 @@ async fn a_dropped_approval_caller_still_publishes_its_acknowledged_mode_for_adm
         audit,
         ..
     } = prepared().await;
-    let (release, response) = tokio::sync::oneshot::channel();
+    let (release, response) = oneshot::channel();
     *backend.response.lock().unwrap() = Some(response);
     {
         let changing = agent.set_approval_mode(ApprovalMode::Auto);
@@ -379,7 +383,7 @@ async fn a_dropped_approval_caller_still_publishes_its_acknowledged_mode_for_adm
 #[tokio::test(start_paused = true)]
 async fn close_after_approval_caller_loss_retires_a_late_response_without_reviving_the_mode() {
     let Prepared { agent, backend, .. } = prepared().await;
-    let (release, response) = tokio::sync::oneshot::channel();
+    let (release, response) = oneshot::channel();
     *backend.response.lock().unwrap() = Some(response);
     {
         let changing = agent.set_approval_mode(ApprovalMode::Auto);
@@ -413,7 +417,7 @@ async fn close_after_approval_caller_loss_retires_a_late_response_without_revivi
 #[tokio::test(start_paused = true)]
 async fn an_uncertain_approval_response_fences_its_generation_without_publishing_the_mode() {
     let Prepared { agent, backend, .. } = prepared().await;
-    let (release, response) = tokio::sync::oneshot::channel();
+    let (release, response) = oneshot::channel();
     *backend.response.lock().unwrap() = Some(response);
     let changing = agent.set_approval_mode(ApprovalMode::Auto);
     tokio::pin!(changing);
