@@ -20,7 +20,7 @@ import {
 // carries the setup gate and with it the host.
 import { AGENT_CHOICES } from "../../onboarding/model/onboarding"
 import { AgentMark } from "../../onboarding/ui/agent-mark"
-import type { AgentFeatures, Conversation } from "../model"
+import type { AgentFeatures, Conversation, ConversationLease } from "../model"
 
 type FeatureSupport = AgentFeatures[keyof AgentFeatures]
 
@@ -45,6 +45,51 @@ function support(value: FeatureSupport) {
       return "Supported"
     default: {
       const exhaustive: never = value
+      return exhaustive
+    }
+  }
+}
+
+/** Where a lease stands, in a word or two. */
+function leaseStatus(lease: ConversationLease) {
+  switch (lease.state) {
+    case "live":
+      return "Running"
+    case "ending":
+      return "Stopping"
+    case "ended":
+      return leaseEnd(lease.cause)
+    case "interrupted":
+      return "Cleanup not confirmed"
+    case "refused":
+      return lease.refusal === "sandbox_unavailable"
+        ? "Couldn't start: sandbox not available"
+        : "Couldn't start"
+    case "unreadable":
+      return "Not known"
+    default: {
+      const exhaustive: never = lease.state
+      return exhaustive
+    }
+  }
+}
+
+/** Why a lease ended. */
+function leaseEnd(cause: ConversationLease["cause"]) {
+  switch (cause) {
+    case "closed":
+      return "Closed"
+    case "revoked":
+      return "Access withdrawn"
+    case "expired":
+      return "Timed out"
+    case "lost":
+      return "Ended when Nessa restarted"
+    case "stopped":
+    case undefined:
+      return "Stopped"
+    default: {
+      const exhaustive: never = cause
       return exhaustive
     }
   }
@@ -149,6 +194,7 @@ function ConversationFacts({ conversation }: { conversation: Conversation }) {
           )}
         </FactGroup>
       ) : null}
+      {remote?.lease ? <LeaseFacts lease={remote.lease} /> : null}
       {runtime ? (
         <FactGroup title="Workspace">
           <div className="py-2.5 nessa-text-4 break-all text-foreground">
@@ -157,6 +203,23 @@ function ConversationFacts({ conversation }: { conversation: Conversation }) {
         </FactGroup>
       ) : null}
     </div>
+  )
+}
+
+/** Where the agent runs and the sandbox around it, from its latest lease. */
+function LeaseFacts({ lease }: { lease: ConversationLease }) {
+  return (
+    <FactGroup title="Where it runs">
+      <Fact
+        label="Computer"
+        value={lease.environment === "here" ? "This computer" : "Not known"}
+      />
+      <Fact
+        label="Sandbox"
+        value={lease.sandbox === "harness_default" ? "The agent's own" : "Not known"}
+      />
+      <Fact label="Status" value={leaseStatus(lease)} />
+    </FactGroup>
   )
 }
 

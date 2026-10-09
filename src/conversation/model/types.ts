@@ -43,6 +43,26 @@ export type ConversationRuntime = {
 }
 
 /**
+ * The conversation's latest lease, as the gateway folds its records: where
+ * its agent runs and under what limits, or why it could not run (ADR 252).
+ * Every run of the agent has one. `unreadable` is a lease this gateway cannot
+ * read; nothing else is claimed about it.
+ */
+export type ConversationLease = {
+  state: "live" | "ending" | "ended" | "interrupted" | "refused" | "unreadable"
+  revision?: number
+  /** `here` is the gateway's own machine. */
+  environment?: "here"
+  /** `harness_default` is whatever the agent's harness encloses, and nothing more. */
+  sandbox?: "harness_default"
+  /** Why it is ending or ended: the first cause recorded. */
+  cause?: "stopped" | "closed" | "revoked" | "expired" | "lost"
+  cleanup?: "confirmed" | "forced" | "no_process"
+  refusal?: "sandbox_unavailable"
+  droppedEvents: number
+}
+
+/**
  * How much the agent may do without asking (ADR 231). The gateway publishes
  * both availability and user-facing names; the panel renders that answer.
  */
@@ -110,6 +130,8 @@ export type CommandFailure =
   | "turn-running"
   | "conversations-not-configured"
   | "agent-startup-deadline"
+  /** No lease was granted: the sandbox the agent runs in could not be given. */
+  | "sandbox-unavailable"
   | "conversation-state-unreadable"
   | "invalid-request"
   /**
@@ -278,6 +300,8 @@ type ConversationState = {
     /** Raw execution identity of the latest published input, including pending. */
     latestInputId?: string
     runtime?: ConversationRuntime
+    /** Where its agent runs, under the lease of its latest run. */
+    lease?: ConversationLease
     /** The committed approval mode in this gateway view. */
     approvalMode: ApprovalMode
     /** The modes this conversation's agent can honour. */

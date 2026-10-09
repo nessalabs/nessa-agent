@@ -114,9 +114,10 @@ export function imageRefusalMessage(
  * What to tell somebody whose message the gateway refused before taking it.
  * One sentence per refusal, chosen by its typed reason.
  *
- * Six answer undefined, and the panel shows the client's own message instead.
+ * Some answer undefined, and the panel shows the client's own message instead.
  * For `agent-not-configured`, `agent-unsupported`,
- * `conversations-not-configured` and `agent-startup-deadline` that message
+ * `conversations-not-configured`, `agent-startup-deadline` and
+ * `sandbox-unavailable` that message
  * names the remedy at length — unlike a control, a refused message does get a
  * sentence of its own from the client. `invalid-request` has nothing better to
  * say than the client already did about the arguments it refused. And
@@ -149,6 +150,7 @@ export function submissionRefusalMessage(reason: CommandFailure): string | undef
     case "agent-unsupported":
     case "conversations-not-configured":
     case "agent-startup-deadline":
+    case "sandbox-unavailable":
     case "approval-mode-unavailable":
     case "approval-mode-not-applied":
     case "approval-mode-uncertain":

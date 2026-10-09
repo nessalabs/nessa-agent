@@ -172,3 +172,49 @@ it("names no agent for an id setup does not list", () => {
   expect(document.body.querySelector("p > svg")).toBeNull()
   expect(document.body.textContent).toContain("Model Mp")
 })
+
+it("says where the agent runs and the sandbox around it, from its lease", () => {
+  show(
+    attached({
+      lease: {
+        state: "live",
+        revision: 1,
+        environment: "here",
+        sandbox: "harness_default",
+        droppedEvents: 0,
+      },
+    }),
+  )
+
+  expect(group("Where it runs")).toBe(
+    "Where it runsComputerThis computerSandboxThe agent's ownStatusRunning",
+  )
+})
+
+it("says why a lease ended, or why none was granted", () => {
+  type Lease = NonNullable<NonNullable<ReturnType<typeof attached>["remote"]>["lease"]>
+  const cases: [Lease, string][] = [
+    [{ state: "ending", cause: "closed", droppedEvents: 0 }, "Stopping"],
+    [{ state: "ended", cause: "closed", droppedEvents: 0 }, "Closed"],
+    [{ state: "ended", cause: "stopped", droppedEvents: 0 }, "Stopped"],
+    [{ state: "ended", cause: "revoked", droppedEvents: 0 }, "Access withdrawn"],
+    [{ state: "ended", cause: "expired", droppedEvents: 0 }, "Timed out"],
+    [{ state: "ended", cause: "lost", droppedEvents: 0 }, "Ended when Nessa restarted"],
+    [
+      { state: "interrupted", cause: "stopped", droppedEvents: 0 },
+      "Cleanup not confirmed",
+    ],
+    [
+      { state: "refused", refusal: "sandbox_unavailable", droppedEvents: 0 },
+      "Couldn't start: sandbox not available",
+    ],
+    [{ state: "refused", droppedEvents: 0 }, "Couldn't start"],
+    [{ state: "unreadable", droppedEvents: 0 }, "Not known"],
+  ]
+  for (const [lease, status] of cases) {
+    show(attached({ lease }))
+    expect(group("Where it runs")).toBe(
+      `Where it runsComputerNot knownSandboxNot knownStatus${status}`,
+    )
+  }
+})

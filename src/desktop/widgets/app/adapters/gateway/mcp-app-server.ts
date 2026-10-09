@@ -111,6 +111,7 @@ const outcomes: Readonly<Record<ConversationErrorCode, Outcome>> = {
   [ConversationErrorCode.SubmissionUnresolved]: "failed",
   [ConversationErrorCode.StalePermission]: "failed",
   [ConversationErrorCode.AgentStartupDeadline]: "failed",
+  [ConversationErrorCode.SandboxUnavailable]: "failed",
   [ConversationErrorCode.AgentOperationFailed]: "failed",
   [ConversationErrorCode.ImageInputUnsupported]: "failed",
   [ConversationErrorCode.AttachmentNotFound]: "failed",

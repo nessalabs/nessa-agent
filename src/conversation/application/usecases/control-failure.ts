@@ -117,6 +117,8 @@ function nothingWasDone(
     // having no agent rather than about this conversation's.
     case "conversations-not-configured":
       return "This gateway is not set up to run conversations, so nothing was done. Configure an agent and restart it."
+    case "sandbox-unavailable":
+      return "The gateway could not give this conversation's agent the sandbox it runs in, so the agent did not start and nothing was done."
     case "conversation-not-found":
       return "The gateway no longer has this conversation, so nothing was done."
     case "conversation-state-unreadable":
