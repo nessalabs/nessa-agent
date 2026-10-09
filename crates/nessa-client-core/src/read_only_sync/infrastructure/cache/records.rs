@@ -316,8 +316,15 @@ impl ReadOnlyCache {
                 rows::CheckpointBody::Unreadable(error) => return Err(transcript_error(error)),
                 rows::CheckpointBody::Read(checkpoint) => {
                     let mut fold =
-                        TranscriptFold::restore(scope.clone(), progress.applied, &checkpoint)
-                            .map_err(transcript_error)?;
+                        match TranscriptFold::restore(scope.clone(), progress.applied, &checkpoint)
+                        {
+                            Ok(fold) => fold,
+                            Err(error) if disposable_checkpoint(&error) => {
+                                drop(transaction);
+                                return self.drop_cached_transcript(scope);
+                            }
+                            Err(error) => return Err(transcript_error(error)),
+                        };
                     raw_records::restore_suffix(&transaction, progress, &mut fold, self.policy)?;
                     fold
                 }
@@ -435,8 +442,8 @@ impl ReadOnlyCache {
     }
 
     /// Delete one conversation's cached transcript and continue with an empty
-    /// fold. A missing or other `schemaVersion` cannot be read, and the rows are
-    /// not the truth store. A later head observation writes a new checkpoint.
+    /// fold. A checkpoint this build cannot read is not the truth store. A
+    /// later head observation writes a new checkpoint.
     fn drop_cached_transcript(&mut self, scope: &Scope) -> Result<(), CacheError> {
         tracing::warn!(
             session = scope.stream().as_str(),
@@ -489,13 +496,15 @@ impl TranscriptCache for ReadOnlyCache {
     }
 }
 
-/// A checkpoint whose `schemaVersion` is missing or is another unsigned
-/// integer is disposable. An invalid marker type, quota, and database
-/// failures are not.
+/// A cached checkpoint this build cannot use is disposable. That is a missing
+/// or other `schemaVersion`, a marker that is not an unsigned integer, and a
+/// body the fold refuses as [`TranscriptError::Checkpoint`]. Quota, a fenced
+/// row, and database failures are not.
 fn disposable_checkpoint(error: &TranscriptError) -> bool {
     matches!(
         error,
         TranscriptError::Decision(StorageError::AnotherVersion { .. })
+            | TranscriptError::Checkpoint
     )
 }
 

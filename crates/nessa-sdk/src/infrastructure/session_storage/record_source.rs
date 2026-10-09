@@ -1092,7 +1092,20 @@ fn committed_source_error(error: SourceError) -> StorageError {
 }
 
 fn committed_fold_error(error: super::transcript::TranscriptError) -> StorageError {
-    StorageError::Corrupt(format!("committed transcript: {error:?}"))
+    // A decision keeps its cause: another version, and a body that does not
+    // decode, stay those errors. A race or other fold failure used to be
+    // flattened into `Corrupt`, which this build now treats as unreadable.
+    // Those stay retryable I/O.
+    match error {
+        super::transcript::TranscriptError::Decision(cause) => cause,
+        super::transcript::TranscriptError::Position
+        | super::transcript::TranscriptError::Scope
+        | super::transcript::TranscriptError::Frame
+        | super::transcript::TranscriptError::Checkpoint
+        | super::transcript::TranscriptError::CheckpointTooLarge => {
+            StorageError::Io(format!("committed transcript: {error:?}"))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1378,6 +1391,36 @@ mod tests {
         }
         assert_eq!(prior.snapshot().unwrap().invocations.len(), 8);
         storage.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn a_committed_fold_keeps_a_decision_and_retries_a_race() {
+        use crate::infrastructure::session_storage::TranscriptError;
+        assert_eq!(
+            committed_fold_error(TranscriptError::Decision(StorageError::AnotherVersion {
+                found: None,
+            })),
+            StorageError::AnotherVersion { found: None }
+        );
+        assert_eq!(
+            committed_fold_error(TranscriptError::Decision(StorageError::Corrupt(
+                "schemaVersion is not an unsigned integer".into(),
+            ))),
+            StorageError::Corrupt("schemaVersion is not an unsigned integer".into())
+        );
+        for error in [
+            TranscriptError::Position,
+            TranscriptError::Scope,
+            TranscriptError::Frame,
+            TranscriptError::Checkpoint,
+            TranscriptError::CheckpointTooLarge,
+        ] {
+            let label = format!("{error:?}");
+            assert!(
+                matches!(committed_fold_error(error), StorageError::Io(_)),
+                "{label}"
+            );
+        }
     }
 
     #[test]

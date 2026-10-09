@@ -305,11 +305,9 @@ pub(crate) fn decode_batch(
 ) -> Result<Vec<SessionChange>, StorageError> {
     super::decode::preflight_semantic_batch(bytes)?;
     let batch: WireBatch = serde_json::from_slice(bytes).map_err(corrupt)?;
-    if batch.schema_version != StorageError::SCHEMA_VERSION {
-        return Err(StorageError::AnotherVersion {
-            found: Some(batch.schema_version),
-        });
-    }
+    // Preflight already classified `schemaVersion`. The field stays so a body
+    // without it cannot deserialize.
+    let _ = batch.schema_version;
     let mut context = context.clone();
     let changes = batch
         .changes
@@ -884,17 +882,16 @@ mod tests {
 
     #[test]
     fn an_unmarked_or_other_version_is_not_read() {
-        let bytes = encode_one(&opened_change()).unwrap();
-        let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        let mut unmarked = saved.clone();
-        unmarked.as_object_mut().unwrap().remove("schemaVersion");
+        // Bytes main's encoder writes for one Opened and one InputAccepted.
         assert_eq!(
             decode_batch(
-                &serde_json::to_vec(&unmarked).unwrap(),
+                crate::infrastructure::session_storage::UNMARKED_SESSION_BATCH,
                 &ProviderContext::Absent
             ),
             Err(StorageError::AnotherVersion { found: None })
         );
+        let bytes = encode_one(&opened_change()).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         for found in [0, StorageError::SCHEMA_VERSION + 1] {
             let mut other = saved.clone();
             other["schemaVersion"] = serde_json::json!(found);

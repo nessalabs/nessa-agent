@@ -613,6 +613,27 @@ pub trait SessionStorage: Send + Sync {
     ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
         Box::pin(async move { self.open(id).await.map(Some) })
     }
+
+    /// Remove history this build cannot open, without reading it.
+    ///
+    /// Delete calls this when opening the history returns
+    /// [`StorageError::AnotherVersion`] or [`StorageError::Corrupt`]. The
+    /// default refuses, so an adapter that can hold that history must
+    /// override it or the delete stays incomplete. The record adapter drops
+    /// a legacy journal if one is there and resets the stream without replay.
+    ///
+    /// # Errors
+    /// The default returns [`StorageError::Corrupt`]. [`StorageError::Busy`]
+    /// when another owner holds the session. A backend error when the reset
+    /// cannot be acknowledged.
+    fn discard_unreadable(&self, id: SessionId) -> StorageFuture<'_, ()> {
+        let _ = id;
+        Box::pin(async {
+            Err(StorageError::Corrupt(
+                "this storage does not discard unreadable history".into(),
+            ))
+        })
+    }
 }
 
 /// Exclusive storage access to one local session, owned by its session manager.
@@ -756,7 +777,9 @@ impl StorageError {
     ///
     /// A finished object with no marker, or with any other unsigned integer, is
     /// [`Self::AnotherVersion`]. A marker that is not an unsigned integer is
-    /// [`Self::Corrupt`]. This build reads only this value. Old files are
+    /// [`Self::Corrupt`]. A missing marker together with a body the walk
+    /// refuses is also [`Self::Corrupt`]: the broken body is reported, not
+    /// another version. This build reads only this value. Old files are
     /// deleted by hand. Nothing is migrated.
     pub const SCHEMA_VERSION: u64 = 1;
     fn measure(

@@ -95,9 +95,10 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
             storage: None,
         } => ConversationErrorCode::AgentOperationFailed,
         // A record this build cannot read will not become readable later.
-        // Opening that chat answers the permanent code the panel already
-        // shows as can't-open. A lease someone else holds, and I/O, stay
-        // the retryable code.
+        // `AnotherVersion` is that marker. `Corrupt` on this path is stored
+        // data that does not decode. Opening that chat answers the permanent
+        // code the panel already shows as can't-open. A fold race is `Io`,
+        // and a lease someone else holds stays the retryable code.
         ConversationError::Storage(
             StorageError::Corrupt(_) | StorageError::AnotherVersion { .. },
         ) => ConversationErrorCode::ConversationStateUnreadable,

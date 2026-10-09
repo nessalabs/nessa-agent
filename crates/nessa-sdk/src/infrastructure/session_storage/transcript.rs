@@ -549,11 +549,9 @@ impl TranscriptFold {
             .map_err(checkpoint::storage_refusal)?;
         let saved: SavedFold = serde_json::from_reader(checkpoint.reader())
             .map_err(|_| TranscriptError::Checkpoint)?;
-        if saved.schema_version != StorageError::SCHEMA_VERSION {
-            return Err(TranscriptError::Decision(StorageError::AnotherVersion {
-                found: Some(saved.schema_version),
-            }));
-        }
+        // Preflight already classified `schemaVersion`. The field stays so a
+        // body without it cannot deserialize.
+        let _ = saved.schema_version;
         if saved.applied != expected_applied {
             return Err(TranscriptError::Checkpoint);
         }
@@ -1945,10 +1943,10 @@ mod tests {
         let checkpoint = fold.checkpoint().unwrap();
         let value: Value = serde_json::from_reader(checkpoint.reader()).unwrap();
         assert_eq!(value["schemaVersion"], StorageError::SCHEMA_VERSION);
-        let mut unmarked = value.clone();
-        unmarked.as_object_mut().unwrap().remove("schemaVersion");
         assert_eq!(
-            TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&unmarked).unwrap()]),
+            TranscriptCheckpoint::from_chunks(vec![
+                crate::infrastructure::session_storage::UNMARKED_SESSION_CHECKPOINT.to_vec()
+            ]),
             Err(TranscriptError::Decision(StorageError::AnotherVersion {
                 found: None
             }))
