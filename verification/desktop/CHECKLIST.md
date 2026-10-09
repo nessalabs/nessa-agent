@@ -1019,6 +1019,14 @@ it is redesigned on its own branch.
   sample never is: their type is held by #657's before/after shots
   (`evidence/657/empty-*`, `rims-all-clear-*`), not by a script. Rule: `styles.css` › Empty states. Settings' own are left to
   its redesign.
+- [ ] **The empty list's New Session and a failed workspace's Try Again are
+  the kit's tinted pill (#657).** 28px tall, the kit's full round
+  (`shape="pill"`, not the window's 999px pill), filled with
+  `--desktop-selected`, and a press scales to 0.97. The old
+  `.workspace-button`, a missing button, another corner, another fill, or a
+  press that does not scale fails. _Check:_ `shared-controls.mjs` (`empty`,
+  columns: the writing channel's one session is archived, then New Session);
+  `gateway-states.mjs` (signed out, Try Again). Rule: `ui/pill-ink.css`.
 - [ ] **Counts are the kit's `Badge`; lit points are `StatusGlyph`'s (#657).**
   A sidebar row's count is the kit's `Badge` as the row's caption (16px tall,
   at least 18 wide, no border, the needs light for what waits); the session

@@ -5,6 +5,7 @@
  * given the window's inks in one rule. Every instance on the page is held to
  * that component's measured contract.
  */
+import { measureAdoptedPill, pressScale } from "./lib/adopted-pill.mjs"
 import { openPage, need, withEngines } from "./lib/browser.mjs"
 import { attempt, chosen } from "./lib/cli.mjs"
 import { main } from "./lib/run.mjs"
@@ -290,6 +291,32 @@ function measureEmptyStates(sel) {
 }
 
 /**
+ * The empty list's New Session. The sample's writing channel has one
+ * session; archiving it is the list with nothing in it and no query, which
+ * is the only place that button is drawn.
+ */
+async function emptyListPill(page) {
+  await page.locator(css.sidebar).getByText("writing", { exact: true }).click()
+  await page.waitForFunction(
+    (selector) => document.querySelectorAll(selector).length === 1,
+    css.sessionListRow,
+  )
+  await page.locator(css.sessionListRow).click({ button: "right" })
+  await page.getByRole("menuitem", { name: "Archive" }).click()
+  await page.waitForSelector(css.listEmptyAction, { timeout: 5000 }).catch(() => {})
+  const pill = await page.evaluate(measureAdoptedPill, [
+    css.listEmptyAction,
+    "New Session",
+  ])
+  const failures = [...pill.failures]
+  if (pill.height)
+    failures.push(
+      ...(await pressScale(page, page.locator(css.listEmptyAction), "New Session")),
+    )
+  return failures
+}
+
+/**
  * The window's counts and lit points: a count is the kit's `Badge` skinned as
  * a row's caption (`source-list.css`), a point is `StatusGlyph`'s — 6px, in
  * the needs or the running light, wherever it stands. In the page.
@@ -558,6 +585,7 @@ const checks = {
       inList = await page.evaluate(measureEmptyStates, css)
       failures.push(...inList.failures)
       if (inList.seen.length === 0) failures.push("no kit EmptyState in the session list")
+      failures.push(...(await emptyListPill(page)))
     }
     const classic = await open("classic")
     let inClassic
@@ -812,6 +840,11 @@ Checks, per engine and layout (--only badges,empty,identity,keys,list,rims,rows,
   empty      every empty state — the session list's with no match, the classic
              shell's notes — is the kit's EmptyState in the window's type: a
              quiet one faint footnote, a titled one at reading size, 600.
+             Columns: the writing channel's one session is archived, and New
+             Session is the kit's tinted pill (28px, fully round,
+             --desktop-selected, press scale 0.97). A missing button, the old
+             button, another corner, another fill, or a press that does not
+             scale fails.
   identity   "nessa Studio" at the sidebar's foot, "‹ nessa Agent" at Settings'
              and the classic shell's are one control (ui/identity.tsx): a pill
              the corner controls' size and radius, "nessa" and a word in
