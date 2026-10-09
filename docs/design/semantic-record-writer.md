@@ -124,16 +124,17 @@ execution ID UTF-8, ordinal u64)` and physical framing version remains 1. The
 current semantic codec uses kind 12 `SaveUnit` and kind 13 `SaveComplete`. Their
 `FactKey`s carry no execution ID — the physical key stores a zero-length ID — and
 an ordinal in the original save. A `SaveUnit` payload may still contain execution
-IDs inside its semantic changes. This intentionally refuses predecessor
-semantic kinds 1–11, even though their physical framing version is also 1.
-Unchanged physical framing does not preserve readability of those semantic records.
-Opening such a SQLite stream returns corruption without appending an abort,
-rewriting its bytes or translating it into a current unfinished save. There is
-one current semantic contract, with no legacy reader or format-version bump.
-`predecessor_semantic_sqlite_record_refuses_without_mutation` substitutes a fixed,
+IDs inside its semantic changes. This build does not fold predecessor semantic kinds 1–11, even though their
+physical framing version is also 1. Unchanged physical framing does not
+preserve readability of those semantic records. Opening such a SQLite stream
+succeeds without appending an abort, rewriting its bytes, or translating it
+into a current unfinished save. The unread record is a placeholder, and the
+published snapshot does not include it. There is one current semantic
+contract, with no legacy reader or format-version bump.
+`predecessor_semantic_sqlite_record_opens_without_mutation` substitutes a fixed,
 handcrafted retired-shape row into a stream emitted by the current public producer.
-It checks repeated typed corruption, unchanged stored evidence and an accepted
-original-current-data neighbor. It is not an observed historical producer capture;
+It checks repeated opens, unchanged stored evidence, an empty published
+snapshot, and an accepted original-current-data neighbor. It is not an observed historical producer capture;
 exact historical emitted provenance remains OPEN. Physical event IDs hash the key and actual
 attempt start offset; strict retry compares original bytes, not ID equality alone.
 

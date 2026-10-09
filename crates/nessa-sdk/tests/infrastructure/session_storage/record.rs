@@ -723,7 +723,7 @@ async fn child_unpublished_unit_crash_probe() {
 }
 
 #[tokio::test]
-async fn predecessor_semantic_sqlite_record_refuses_without_mutation() {
+async fn predecessor_semantic_sqlite_record_opens_without_mutation() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("sessions");
     let storage = RecordStorage::new(&root).unwrap();
@@ -756,7 +756,7 @@ async fn predecessor_semantic_sqlite_record_refuses_without_mutation() {
         rusqlite::params!["nessa-fact-d819b917251c1029a94eeb8cafc383ec1e913cab2f92e9b3215c04cbaa787787-start", unsupported, 1u64.to_be_bytes().as_slice()]
     ).unwrap(), 1);
     let count = rows(&root);
-    // Preserve every persisted record and stream field across both refused opens.
+    // Preserve every persisted record and stream field across both opens.
     let evidence = || {
         let records = database.prepare(
             "SELECT quote(stream_key)||'|'||quote(offset)||'|'||quote(event_id)||'|'||quote(schema_id)||'|'||quote(schema_version)||'|'||quote(payload) FROM event_records ORDER BY stream_key,offset"
@@ -769,12 +769,16 @@ async fn predecessor_semantic_sqlite_record_refuses_without_mutation() {
         (records, streams)
     };
     let retained = evidence();
+    // A retired semantic payload is one record this build cannot fold. Opening
+    // still succeeds, leaves the stored bytes alone, and publishes no snapshot
+    // from the record it could not read.
     for _ in 0..2 {
         let reopened = RecordStorage::new(&root).unwrap();
-        assert!(matches!(
-            reopened.open_existing(id.clone()).await,
-            Err(StorageError::Corrupt(_))
-        ));
+        let lease = reopened.open_existing(id.clone()).await.unwrap().unwrap();
+        let loaded = lease.load().await.unwrap();
+        assert_eq!(loaded.state(), SessionLoadState::Published);
+        assert!(loaded.snapshot().is_none());
+        drop(lease);
         reopened.shutdown().await.unwrap();
         assert_eq!(rows(&root), count);
         assert_eq!(evidence(), retained);
