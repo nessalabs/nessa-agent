@@ -89,6 +89,9 @@ type Live = {
   ended(end: SubscriptionEnd): void
 }
 
+/** What arrived for an identity before its open registered it. */
+type Unclaimed = { frame?: { event: string; payload: unknown }; end?: SubscriptionEnd }
+
 export function createSubscriptionApi(session: SubscriptionPort): SubscriptionApi {
   // The first read can take the passive delivery budget before the reply.
   const deadline = { atLeastMs: passiveReadTiming.minRequestTimeoutMs }
@@ -96,10 +99,31 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
   const gated = createSubscriptionGate()
   // Changes whenever the connection is lost: an identity from before means nothing after.
   let connection = 0
+  // Frames of no live subscription, kept while an open is on its way: the
+  // transport may hand over a subscribe's answer and its first frames in one
+  // turn, before the open registers the identity the answer names. Its open
+  // claims them; nothing else does. A frame is a replacement, so the last one
+  // of each identity is enough, and its end after it. A late frame of a
+  // subscription already closed is kept too, never claimed (the gateway
+  // never reuses an identity on a connection: `minted` in
+  // `crates/nessa-server/src/product/subscription/connection.rs`): at most one frame for each
+  // identity, and all of them let go once no open is on its way.
+  let opening = 0
+  const unclaimed = new Map<string, Unclaimed>()
+  const hold = (id: string) => {
+    if (opening === 0) return undefined
+    const held = unclaimed.get(id) ?? {}
+    unclaimed.set(id, held)
+    return held
+  }
 
   const finish = (id: string, end: SubscriptionEnd) => {
     const entry = live.get(id)
-    if (!entry) return
+    if (!entry) {
+      const held = hold(id)
+      if (held) held.end ??= end
+      return
+    }
     live.delete(id)
     entry.ended(end)
   }
@@ -111,8 +135,14 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
     )
   const route = (event: string, payload: unknown) => {
     const id = framedSubscription(payload)
-    const entry = id === undefined ? undefined : live.get(id)
-    if (id === undefined || !entry || entry.event !== event) return
+    if (id === undefined) return
+    const entry = live.get(id)
+    if (!entry) {
+      const held = hold(id)
+      if (held && held.end === undefined) held.frame = { event, payload }
+      return
+    }
+    if (entry.event !== event) return
     let deliver: () => void
     try {
       deliver = entry.check(payload)
@@ -143,6 +173,7 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
   session.onState((state) => {
     if (state.status === "connected") return
     connection += 1
+    unclaimed.clear()
     for (const id of [...live.keys()]) finish(id, { reason: "disconnected" })
   })
 
@@ -150,17 +181,34 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
     method: string,
     params: unknown,
     entry: Live,
+    signal: AbortSignal | undefined,
   ): Promise<Subscription> {
     const on = connection
-    const { subscriptionId } = subscribeResult(
-      await session.request(method, params, deadline),
-    )
+    let subscriptionId: string
+    let held: Unclaimed | undefined
+    opening += 1
+    try {
+      ;({ subscriptionId } = subscribeResult(
+        await session.request(method, params, deadline),
+      ))
+      held = unclaimed.get(subscriptionId)
+      unclaimed.delete(subscriptionId)
+    } finally {
+      opening -= 1
+      if (opening === 0) unclaimed.clear()
+    }
     if (on !== connection) {
       // Answered just before that connection was lost.
       queueMicrotask(() => entry.ended({ reason: "disconnected" }))
       return { id: subscriptionId, close: async () => undefined }
     }
     live.set(subscriptionId, entry)
+    // What arrived with the answer, in the order it came; nothing of an open
+    // given up on its way, which the gate closes next.
+    if (signal?.aborted) held = undefined
+    if (held?.frame) route(held.frame.event, held.frame.payload)
+    // A held frame that failed its checks has ended it already.
+    if (held?.end && live.has(subscriptionId)) finish(subscriptionId, held.end)
     return {
       id: subscriptionId,
       close: async () => {
@@ -191,6 +239,7 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
             },
             ended: (end) => handlers.ended(end),
           },
+          options.signal,
         ),
       )
     },
@@ -208,6 +257,7 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
             },
             ended: (end) => handlers.ended(end),
           },
+          options.signal,
         ),
       )
     },

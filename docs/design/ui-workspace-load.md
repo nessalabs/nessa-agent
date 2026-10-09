@@ -30,7 +30,7 @@ GitHub workflows in this repository set `node-version: 24`. Desktop evidence on 
 
 ## How the desktop observes every owned summary
 
-The workspace gateway source follows one `conversation.subscribeList` subscription ([record subscriptions](record-subscriptions.md)); each `conversation.listed` frame is what `conversation.list` returns. It does not call `conversation.catalogueManifest`. When a frame is incomplete and names other conversations than the last one walked, the list's turn walks `conversation.observe` until the pass finishes or a page cannot resume. [ADR 596](../adr/done/596-observe-every-owned-conversation.md).
+The workspace gateway source follows one `conversation.subscribeList` subscription ([record subscriptions](record-subscriptions.md)); each `conversation.listed` frame is what `conversation.list` returns. It does not call `conversation.catalogueManifest`. When a frame is incomplete, the list's turn walks `conversation.observe` until the pass finishes or a page cannot resume. The gateway sends an incomplete frame again when the owner's catalogue changed though the rows it carries did not, because a row it left out may have gone, and only a walk sees that ([record subscriptions](record-subscriptions.md), rows L5 and D18). [ADR 596](../adr/done/596-observe-every-owned-conversation.md).
 
 ```mermaid
 sequenceDiagram
@@ -42,7 +42,7 @@ sequenceDiagram
     List-->>UI: a listed frame whenever the list changes: at most 500 rows and complete
     alt complete is true
         UI->>UI: drop sessions the list no longer names
-    else complete is false and the rows name other conversations than the last walk
+    else complete is false
         loop until the pass finishes or a page cannot resume
             UI->>Observe: cursor, absent on the first page
             Observe-->>UI: one catalogue page, complete, optional cursor
@@ -60,8 +60,7 @@ sequenceDiagram
 | State | Event | Next | What the index may remove |
 | --- | --- | --- | --- |
 | Listing | A list frame with `complete: true` | Applied | Sessions the list does not name |
-| Listing | A list frame with `complete: false` naming other conversations than the last walk | Observing, no cursor | Nothing yet |
-| Listing | A list frame with `complete: false` naming the same conversations | Applied incomplete | Nothing |
+| Listing | A list frame with `complete: false` | Observing, no cursor | Nothing yet |
 | Observing | Page `complete: true` | Applied | Sessions the observe rows do not name. The list is not membership |
 | Observing | Page `complete: false` and a cursor strictly later in the same incarnation and boundary | Observing, that cursor | Nothing yet. Rows from the page are kept |
 | Observing | Page `complete: false` and no cursor, or a cursor that does not advance | Applied incomplete | Nothing. Rows already seen stay |

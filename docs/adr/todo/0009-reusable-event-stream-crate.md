@@ -57,8 +57,8 @@ and resume, folded by the one conversation read path
 ([record subscriptions](../../design/record-subscriptions.md)). They are built on
 the SDK's committed-change watches, registered before each read, and on bounded
 committed reads, not on `event-stream`'s own subscription API. The desktop
-workspace follows them; the conversation panel and the phone still read on their
-own schedules ([#277](https://github.com/nessalabs/nessa-agent/issues/277),
+workspace and the conversation panel follow them; only the phone still reads on
+its own schedule ([#277](https://github.com/nessalabs/nessa-agent/issues/277),
 [#296](https://github.com/nessalabs/nessa-agent/issues/296)). The
 [semantic record writer design](../../design/semantic-record-writer.md) gives the
 commit boundaries and ordering table.

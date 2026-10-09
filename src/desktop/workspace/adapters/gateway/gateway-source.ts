@@ -276,6 +276,21 @@ const followed = <T>(): Followed<T> => ({
   waiters: new Set(),
 })
 
+/**
+ * Lets the current open of `follow` go, list or conversation alike: no frame
+ * or end of it applies after, nothing is on its way, and its subscription is
+ * closed — now, or once answered, and before this target is subscribed again
+ * (D23, D24). Who waits for a frame keeps waiting for the next open's.
+ */
+const letGo = <T>(follow: Followed<T>) => {
+  follow.token = {}
+  follow.giveUp?.abort()
+  follow.giveUp = undefined
+  follow.handle = undefined
+  follow.opening = undefined
+  follow.applied = false
+}
+
 const settle = <T>(follow: Followed<T>, outcome: { value: T } | { error: unknown }) => {
   const waiters = [...follow.waiters]
   follow.waiters.clear()
@@ -560,20 +575,15 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   // Sessions whose archive is on its way: a list frame that arrives meanwhile
   // may have been read before it, and does not list them again (W6).
   const archiving = new Set<string>()
-  // The conversations of the last incomplete list frame walked (D6).
-  let walkedIds: string | undefined
+  // How many list frames have come: only the newest queued is applied (D18).
+  let listFrames = 0
 
   /** Lets a conversation's subscription go: no frame or end of it applies after. */
   const unfollow = (sessionId: string, why: unknown) => {
     const follow = views.get(sessionId)
     if (!follow) return
     views.delete(sessionId)
-    follow.token = {}
-    // An open still on its way is closed once answered, before this
-    // conversation is subscribed again (D23).
-    follow.giveUp?.abort()
-    follow.giveUp = undefined
-    follow.handle = undefined
+    letGo(follow)
     settle(follow, { error: why })
   }
 
@@ -643,10 +653,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
 
   /**
    * One list frame, in the list's turn. A complete one is the membership. An
-   * incomplete one whose conversations differ from the last one walked walks
-   * `conversation.observe` in the same turn, until the pass finishes or a
-   * page cannot resume (`docs/design/ui-workspace-load.md`); one naming the
-   * same conversations applies its rows and removes nothing (D18). A frame of
+   * incomplete one walks `conversation.observe` in the same turn, until the
+   * pass finishes or a page cannot resume (`docs/design/ui-workspace-load.md`):
+   * the gateway sends one when a row it left out changed, though the rows it
+   * carries are the same, and only a walk sees that row (D18). A frame of
    * a subscription no longer current, or one whose walk outlived the
    * subscription, applies nothing.
    */
@@ -656,28 +666,24 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     current: () => boolean,
   ) => {
     const crossed = new Set(archiving)
+    const mine = ++listFrames
     const { settled } = inTurn(listing, async () => {
-      if (!current()) return
+      // A frame is a replacement: one queued behind a walk gives way to the
+      // newest, so frames that come during a walk cost one more walk (D18).
+      if (!current() || mine !== listFrames) return
       let applied = result
       if (!result.complete) {
-        const ids = result.conversations
-          .map((row) => row.conversationId)
-          .sort()
-          .join("\n")
-        if (ids !== walkedIds) {
-          try {
-            applied = await within(
-              (live) => observedCatalogue(connected, result, live, current),
-              { subject: "index" },
-            )
-            walkedIds = ids
-          } catch {
-            // The rows the frame named still apply; the rest waits for the next frame.
-            if (!current()) return
-            gap = true
-          }
+        try {
+          applied = await within(
+            (live) => observedCatalogue(connected, result, live, current),
+            { subject: "index" },
+          )
+        } catch {
+          // The rows the frame named still apply; the rest waits for the next frame.
+          if (!current()) return
+          gap = true
         }
-      } else walkedIds = undefined
+      }
       if (!current()) return
       applyList({
         ...applied,
@@ -713,19 +719,29 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const token = {}
     list.token = token
     list.applied = false
+    const { signal } = (list.giveUp = new AbortController())
     const current = () => list.token === token && !disposed
     const opening = within(
       async (live) => {
         const connected = await client(who)
         if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
-        const handle = await connected.subscriptions.list({
-          list: (result) => {
-            if (current()) listFrame(connected, result, current)
-          },
-          ended: (end) => {
-            if (current()) listEnded(end)
-          },
-        })
+        const handle = await connected.subscriptions
+          .list(
+            {
+              list: (result) => {
+                if (current()) listFrame(connected, result, current)
+              },
+              ended: (end) => {
+                if (current()) listEnded(end)
+              },
+            },
+            { signal },
+          )
+          .catch((error: unknown) => {
+            // Given up on its way: the answer of an open let go once answered.
+            if (signal.aborted) throw new WorkspaceSourceError("unavailable")
+            throw error
+          })
         if (!live() || !current()) {
           void handle.close()
           throw new WorkspaceSourceError("unavailable")
@@ -938,6 +954,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
             },
           )
         } catch (error) {
+          // Given up on its way: the answer of an open let go once answered,
+          // as for the list.
+          if (signal.aborted) throw new WorkspaceSourceError("unavailable")
           deleted = deletedConversation(error)
           throw error
         }
@@ -1019,16 +1038,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const stopStreams = () => {
     cancelRetry?.()
     cancelRetry = undefined
-    list.token = {}
-    void list.handle?.close()
-    list.handle = undefined
-    list.applied = false
-    for (const follow of views.values()) {
-      follow.token = {}
-      follow.applied = false
-      void follow.handle?.close()
-      follow.handle = undefined
-    }
+    // An open on its way is let go too, so a listener back before it is
+    // answered opens anew, after its close (D24).
+    letGo(list)
+    for (const follow of views.values()) letGo(follow)
   }
 
   const waitingReview = async (sessionId: string, approvalId: string) => {

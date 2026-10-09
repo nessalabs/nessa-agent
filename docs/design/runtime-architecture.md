@@ -677,10 +677,10 @@ forwarded to the surface's own loopback, for the life of the lease.
   reopened from its checkpoint (0009, 0011). The gateway's
   `conversation.subscribe` and `conversation.subscribeList` do this for its
   bounded views, folded by the same read path as `conversation.read`, and the
-  desktop workspace follows them; its polling is gone (#702,
-  [record subscriptions](record-subscriptions.md)). The phone's live reads
-  (#296, #277) use the same subscriptions, so there is one read path to
-  measure and secure.
+  desktop workspace and the conversation panel follow them; their polling is
+  gone (#702, [record subscriptions](record-subscriptions.md)). The phone's
+  live reads (#296, #277) are planned to use the same subscriptions, so there
+  is one read path to measure and secure.
 - Replicas verify, they do not trust. The phone cache keeps scope,
   generation, deletion fences and reset receipts and refuses a record
   whose identity changed meaning ([read-only sync](read-only-sync-example.md)).
@@ -764,7 +764,7 @@ locally.
 | --- | --- | --- | --- | --- |
 | Admission and policy | Mandatory `/session` auth, Cedar per operation, verified `ActionContext` into the SDK | Unchanged. Peer and worker principals get grant kinds of their own | Gateway `auth` application | 0010 done; #481 |
 | Turn state and receipts | SDK `Agent` per conversation; creation receipts; `requestId` on every mutation | Unchanged. The same receipt path answers the phone outbox and a desktop outbox | SDK scheduling; gateway `conversation` | 0008; #267, #268 |
-| Records | Semantic records on one event-stream SQLite runtime; bounded head/page reads; watch hints; replay-to-live view and list subscriptions from the client's cursor, the desktop workspace off polling (#702) | Read grants checked per batch where subscriptions admit one (`authorize_batch`); the conversation panel and the phone on the same subscriptions | SDK `session_storage`; gateway delivery | 0009; E [#702](https://github.com/nessalabs/nessa-agent/issues/702), G |
+| Records | Semantic records on one event-stream SQLite runtime; bounded head/page reads; watch hints; replay-to-live view and list subscriptions from the client's cursor, the desktop workspace and the conversation panel off polling (#702) | Read grants checked per batch where subscriptions admit one (`authorize_batch`); the phone on the same subscriptions | SDK `session_storage`; gateway delivery | 0009; E [#702](https://github.com/nessalabs/nessa-agent/issues/702), G |
 | Phone reads | Device client with private cache, finite passes, retained watch; one-use pairing (#264) and authenticated direct reads (#265) done | Live reads through subscriptions (#702) and the optional relay (#266) | `nessa-client-core`; gateway `device_pairing` | #257, #263, #262 |
 | Phone commands | None | Durable intent outbox, receipt lookup before retry, exact-turn Stop | `nessa-client-core`; gateway receipts | #267 |
 | Where agents run | In process only: gateway composes the SDK `Agent` and its ACP binding per conversation; Nessa advertises no ACP client filesystem or terminal | An `Environment` port in the conversation application with the in-process adapter first; a lease recorded for every run | Gateway `conversation` composition | A [#698](https://github.com/nessalabs/nessa-agent/issues/698) |

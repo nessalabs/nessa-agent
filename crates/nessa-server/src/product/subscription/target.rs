@@ -162,6 +162,9 @@ struct Sources {
 
 enum Wake {
     Changed,
+    /// The owner's catalogue changed: a row the list frame left out may
+    /// have changed too (row L5).
+    Catalogue,
     Closed,
 }
 
@@ -213,6 +216,23 @@ impl Sources {
         })
     }
 
+    /// Takes every notice already waiting without waiting for another, and
+    /// says whether one of them was the catalogue's. Called right before a
+    /// list reads, so a commit that dirtied both the records and the
+    /// catalogue is one read, not two (row L5). A notice after this is still
+    /// waiting for the next `changed`; a closed source is said by it.
+    async fn drain(&mut self) -> bool {
+        let mut catalogue = false;
+        while let Ok(wake) = tokio::time::timeout(Duration::ZERO, self.changed()).await {
+            match wake {
+                Wake::Changed => {}
+                Wake::Catalogue => catalogue = true,
+                Wake::Closed => break,
+            }
+        }
+        catalogue
+    }
+
     async fn changed(&mut self) -> Wake {
         let catalogue = async {
             match self.catalogue.as_mut() {
@@ -232,7 +252,7 @@ impl Sources {
                 ChangeWatchState::Closed => Wake::Closed,
             },
             state = catalogue => match state {
-                CatalogueWatchState::Dirty => Wake::Changed,
+                CatalogueWatchState::Dirty => Wake::Catalogue,
                 CatalogueWatchState::Closed | CatalogueWatchState::NotificationFailed => Wake::Closed,
             },
             changed = live => match changed {
@@ -308,9 +328,12 @@ async fn read_batch(
 ) -> Result<Batch, String> {
     let mut attempt = 0;
     loop {
-        let current = authorize_batch(state, session, target).await?;
-        // A batch is a request of the gateway's like any other.
+        // A batch is a request of the gateway's like any other: it holds its
+        // capacity, then is admitted, then reads, as `dispatch` orders a
+        // request. Admitted before waiting for capacity, a grant revoked
+        // during the wait would let one read through (row S30).
         let permit = state.requests.clone().acquire_owned().await;
+        let current = authorize_batch(state, session, target).await?;
         let read = match target {
             Target::View { conversation, .. } => {
                 // A follower opens nothing (row S26).
@@ -409,6 +432,11 @@ struct Sent {
     last: Option<(Option<Cursor>, Value)>,
     /// Where the last read of a view got to, sent or not.
     read_through: Option<Cursor>,
+    /// How many catalogue changes a list has been woken by. Part of an
+    /// incomplete list's key, so a change to a row the frame left out is
+    /// sent though the rows it carries are the same, and the client walks
+    /// the catalogue for it (row L5).
+    catalogue: u64,
 }
 
 impl Sent {
@@ -518,7 +546,11 @@ impl Sent {
                     list: fitted(list, &self.id),
                 })
                 .expect("generated payload serializes");
-                let key = payload["list"].clone();
+                let key = if payload["list"]["complete"] == true {
+                    payload["list"].clone()
+                } else {
+                    serde_json::json!([payload["list"], self.catalogue])
+                };
                 Framed::Frame(Frame {
                     payload,
                     cursor: None,
@@ -661,6 +693,7 @@ pub(super) async fn run(run: Run) {
         floor: after.clone(),
         last: None,
         read_through: None,
+        catalogue: 0,
     };
     let mut reply = Some(slot);
     loop {
@@ -717,6 +750,7 @@ pub(super) async fn run(run: Run) {
         }
         match sources.changed().await {
             Wake::Changed => {}
+            Wake::Catalogue => sent.catalogue += 1,
             Wake::Closed => {
                 sent.end(ConversationSubscriptionEndReason::SourceClosed, None);
                 return;
@@ -724,6 +758,9 @@ pub(super) async fn run(run: Run) {
         }
         if matches!(target, Target::List { .. }) {
             tokio::time::sleep(LIST_REREAD_FLOOR).await;
+            if sources.drain().await {
+                sent.catalogue += 1;
+            }
         }
     }
 }
@@ -779,6 +816,7 @@ mod tests {
             floor: None,
             last: None,
             read_through: None,
+            catalogue: 0,
         }
     }
 
@@ -931,6 +969,51 @@ mod tests {
         );
         assert_eq!(retry_after(&busy, TRANSIENT_RETRIES), None);
         assert_eq!(retry_after(&ConversationError::Unavailable, 0), None);
+    }
+
+    async fn waits(sources: &mut Sources) -> bool {
+        tokio::time::timeout(Duration::ZERO, sources.changed())
+            .await
+            .is_err()
+    }
+
+    /// Row L5: notices that wait together are taken before a list reads, so
+    /// a commit that dirtied two sources is one read; whether the catalogue
+    /// was among them is said, and nothing taken is left to wake it again.
+    #[tokio::test]
+    async fn a_list_takes_every_waiting_notice_before_it_reads() {
+        use crate::conversation::application::catalogue_watch::{
+            CatalogueChangeSignal, CatalogueWatchRegistration,
+        };
+        struct Unregistered;
+        impl CatalogueWatchRegistration for Unregistered {}
+        let directory = tempfile::tempdir().unwrap();
+        let changes = nessa_sdk::infrastructure::session_storage::RecordStorage::new(
+            directory.path().join("records.sqlite"),
+        )
+        .unwrap();
+        let signal = Arc::new(CatalogueChangeSignal::default());
+        let (live, receiver) = watch::channel(0u64);
+        let mut sources = Sources {
+            records: changes.watch_any_committed().unwrap(),
+            catalogue: Some(CatalogueChangeWatch::new(
+                signal.clone(),
+                Box::new(Unregistered),
+            )),
+            live: Some(receiver),
+        };
+        assert!(!sources.drain().await, "nothing waiting");
+        live.send(1).unwrap();
+        signal.publish();
+        assert!(sources.drain().await, "the catalogue's notice is said");
+        assert!(waits(&mut sources).await, "both taken");
+        live.send(2).unwrap();
+        assert!(
+            !sources.drain().await,
+            "another source's alone is not the catalogue's"
+        );
+        assert!(waits(&mut sources).await);
+        drop(changes);
     }
 
     /// Row S19 at the source level.

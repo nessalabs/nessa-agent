@@ -135,6 +135,17 @@ panel (P4) only abort; the desktop's test gateway uses the same gate. The
 gateway admits an unsubscribe inline, so a close sent before a subscribe
 lands before it.
 
+### A frame that comes with its answer
+
+The gateway writes a subscription's first frame right after its reply, and a
+transport may hand both over in one turn (a socket that reads several
+messages at once), before the open has registered the identity the reply
+names. The client keeps frames of no live subscription while an open is on its
+way, the last of each identity and its end; the open that is answered with
+that identity takes them, in order, as it registers it (row A1). Nothing is
+kept once no open is on its way, so a frame of a subscription already closed
+is still dropped.
+
 ### Lagging and slow clients
 
 The task offers its frame to the connection's writer and waits. If the writer
@@ -159,7 +170,9 @@ value, and reads happen in the subscription's own task under the server-wide
 `product/subscription/target.rs::authorize_batch` is the one place a batch is
 admitted. A subscription's task asks it before it registers any wake source,
 so a session that may not follow takes nothing from the shared watch pools,
-and again before every read. An unsubscribe is admitted by the socket before
+and again before every read, once the batch holds its `requests` permit: a
+request holds its capacity before it is admitted (`dispatch` does the same), so
+nothing revoked while a batch waits for a permit is read (row S30). An unsubscribe is admitted by the socket before
 it changes anything (row S29). Both use the same admission as `dispatch`
 (`admit_now`). Slice G (read grants) adds its per-conversation check there; nothing
 else decides whether a frame may be read.
@@ -171,7 +184,16 @@ else decides whether a frame may be read.
 watch registries keep their own producer bounds (64 each); a full one refuses
 `subscription_capacity`. A list frame larger than the 64 KiB frame bound is
 cut, newest first, and marked `complete: false` (row L3): the client walks
-`conversation.observe` for the rest, as it does for any incomplete list.
+`conversation.observe` for the rest, as it does for any incomplete list. A
+list the service bounds (`MAX_LISTED_CONVERSATIONS`) is incomplete the same
+way. Either way the rows a frame carries cannot show a change to a row it
+left out, so an incomplete list is sent again after any catalogue change,
+though the rows are the same, and the client walks every incomplete frame
+(rows L5, D18). A commit alone (a turn's `running`) sends a frame only when
+the rows change. Before a list reads, it takes every notice already waiting,
+so a commit that dirtied both the records and the catalogue is one read and
+at most one frame; and the client applies only the newest of the frames that
+queue behind a walk, so frames during a walk cost one more walk, not one each.
 
 ## State and order table
 
@@ -210,10 +232,12 @@ otherwise.
 | S27 | A followed conversation has an unfinished approval-mode change | The view shows the change pending; recovery is not run and the agent is not opened | `a_pending_mode_change_is_shown_not_recovered_by_a_follower` |
 | S28 | The agent's opening fails while a follower waits on it (or failed and holds its slot) | The follower is shown the committed history, read-only; `conversation.read` and a send report the failure | `a_failed_opening_holding_its_slot_is_read_by_a_follower_as_its_history` (`tests/conversation/desktop_stop.rs`) |
 | S29 | A subscribe or unsubscribe the session may not make (grant, presence, or no longer current) | Refused with the admission's code; a subscribe takes no watch from the shared pools first | `a_forbidden_subscribe_is_refused_before_it_takes_a_watch`, `a_forbidden_unsubscribe_is_refused` |
+| S30 | Every request permit taken when a batch is woken; the grant is revoked while it waits for one | Ended `refused` with `forbidden`; no frame is read under the old grant, because a batch is admitted only once it holds its capacity, as `dispatch` admits a request | `a_grant_revoked_while_a_batch_waits_for_capacity_ends_it_before_the_read` |
 | L1 | List subscription; a catalogue change | A new list frame | `a_list_subscription_follows_the_catalogue` |
 | L2 | A turn starts or ends without a summary change | A new list frame with `running` changed | `a_turn_without_a_summary_change_updates_the_list` |
 | L3 | A list larger than one frame | Cut newest first, `complete: false` | `a_list_too_large_for_one_frame_is_cut_and_marked_incomplete` (unit) |
 | L4 | A stream of commits under a list subscription | List frames no closer than `LIST_REREAD_FLOOR` | `list_frames_come_no_closer_than_the_reread_floor` |
+| L5 | An incomplete list; the owner's catalogue changes in a row the frame left out (archived, deleted), so the rows it carries are the same | A frame all the same, so the client walks the catalogue (D18); a commit that changes nothing it carries sends none; notices already waiting when a list reads are taken by that read | `a_change_the_incomplete_list_leaves_out_is_still_sent`; `a_list_takes_every_waiting_notice_before_it_reads` (unit, `product/subscription/target.rs`) |
 
 Desktop rows (`src/desktop/workspace/adapters/gateway/gateway-source.test.ts`;
 the test names begin with the row id). The adapter subscribes only: it sends
@@ -239,12 +263,13 @@ asks of the client does not offer them.
 | D15 | A subscription that could not open | A gap, opened again on the retry clock; the next list frame resyncs |
 | D16 | Ended `source_closed` | Opened again on the retry clock from its cursor |
 | D17 | The retry clock | Runs only while someone listens and something is not subscribed; stops when the last listener leaves |
-| D18 | An incomplete frame naming the same conversations as the last one walked | No walk; one naming others walks again |
+| D18 | An incomplete frame, whatever conversations it names; frames that come while a walk is on its way | Walked, so a row it left out that went is taken out (L5 sends one for that); of the frames queued behind a walk only the newest is applied, and walks once |
 | D19 | `after` refused `cursor_ahead` | Opened once more without `after` |
 | D20 | `transcript` of a conversation followed | The view held; no second subscription |
 | D21 | An answer in a conversation let go past the limit | Followed again before the answer is sent |
 | D22 | `dispose` | Every subscription closed; nothing applies after |
 | D23 | A conversation let go past the limit while its open is on its way, then opened again | The open is given up (its `signal`); subscribed again only once it has been answered and its close finished, so the gateway does not refuse it `subscription_duplicate` |
+| D24 | The last listener leaves while the list or a conversation is opening, and one comes back before it is answered (StrictMode) | Every open on its way is given up as in D23, list and conversation alike; both are opened again once the old opens are closed, and a transcript waiting for a frame is answered by the new one; an index call that awaited the old list open is refused `unavailable` and asked again |
 
 Conversation panel rows (`src/conversation/adapters/gateway/effects.test.ts`
 and `adapters/store/slice.test.ts`; the test names begin with the row id).
@@ -261,6 +286,13 @@ subscription is open.
 | P5 | A command answered (send, control, stop) | A followed tab is followed again, so its next view is read after the answer; a tab not on screen is read once and left unfollowed |
 | P6 | A frame identical to the last one this follow applied | Not applied again, so what is on screen keeps its references; any other frame applies, whatever its revision |
 | P7 | The tab switched, closed or unmounted | Its follow stopped; nothing it says applies after |
+
+Client rows (`packages/nessa-client/src/presentation/subscription-api.test.ts`;
+the test names begin with the row id).
+
+| Row | State and input | Result |
+|---|---|---|
+| A1 | The subscribe's answer and the subscription's first frames (or its end) in one turn, before the open has registered it | The open hands them over as it registers: the latest frame, then the end; a frame of an identity no open claims is dropped |
 
 The rows of #248 and #419 that do not depend on a timer read keep their ids
 (connection C, writes W, refusals F, connect rules S); the poll-cadence rows

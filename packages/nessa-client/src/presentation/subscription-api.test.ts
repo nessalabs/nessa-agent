@@ -284,4 +284,76 @@ describe("subscription API", () => {
     wire.emit(ProductEvent.ConversationView, { subscriptionId: "1", cursor, view })
     expect(handlers.view).not.toHaveBeenCalled()
   })
+
+  it("A1: hands over the frames that come in the same turn as the subscribe's answer", async () => {
+    // The transport resolves the answer and dispatches the next frames in one
+    // turn, as a socket that reads several messages at once does: the open
+    // has not registered the identity yet when they arrive.
+    const answers: Array<(value: unknown) => void> = []
+    const wire = port(
+      () =>
+        new Promise((done) => {
+          answers.push(done)
+        }),
+    )
+    const api = createSubscriptionApi(wire.session)
+    const handlers = viewHandlers()
+    const opened = api.view(conversationId, handlers)
+    const ended = viewHandlers()
+    const endedOpen = api.view("00000000-0000-4000-8000-000000000002", ended)
+    await vi.waitFor(() => expect(answers).toHaveLength(2))
+    const later = { incarnation: "store", position: "8" }
+    answers[0]!({ subscriptionId: "1" })
+    wire.emit(ProductEvent.ConversationView, { subscriptionId: "1", cursor, view })
+    wire.emit(ProductEvent.ConversationView, { subscriptionId: "1", cursor: later, view })
+    // Another identity's frame is claimed by nobody.
+    wire.emit(ProductEvent.ConversationView, { subscriptionId: "9", cursor, view })
+    answers[1]!({ subscriptionId: "2" })
+    wire.emit(ProductEvent.ConversationSubscriptionEnded, {
+      subscriptionId: "2",
+      reason: "refused",
+      code: "forbidden",
+    })
+    expect(await opened).toMatchObject({ id: "1" })
+    await endedOpen
+    // A frame is a replacement: the latest is what the caller is handed.
+    expect(handlers.view).toHaveBeenCalledExactlyOnceWith({ cursor: later, view })
+    expect(ended.ended).toHaveBeenCalledExactlyOnceWith({
+      reason: "refused",
+      code: "forbidden",
+    })
+    // Nothing is held once no open is on its way.
+    answers.length = 0
+    const third = viewHandlers()
+    const next = api.view("00000000-0000-4000-8000-000000000003", third)
+    await vi.waitFor(() => expect(answers).toHaveLength(1))
+    answers[0]!({ subscriptionId: "9" })
+    await next
+    expect(third.view).not.toHaveBeenCalled()
+  })
+
+  it("A1: hands nothing of an open given up before its answer, though its frame came with it", async () => {
+    const answers: Array<(value: unknown) => void> = []
+    const wire = port((method) =>
+      method === ProductMethod.ConversationUnsubscribe
+        ? {}
+        : new Promise((done) => {
+            answers.push(done)
+          }),
+    )
+    const stopped = new AbortController()
+    const handlers = viewHandlers()
+    const opened = createSubscriptionApi(wire.session)
+      .view(conversationId, handlers, { signal: stopped.signal })
+      .catch((error: unknown) => error)
+    await vi.waitFor(() => expect(answers).toHaveLength(1))
+    stopped.abort()
+    answers[0]!({ subscriptionId: "1" })
+    wire.emit(ProductEvent.ConversationView, { subscriptionId: "1", cursor, view })
+    expect(await opened).toMatchObject({ name: "AbortError" })
+    expect(handlers.view).not.toHaveBeenCalled()
+    expect(wire.request).toHaveBeenLastCalledWith(ProductMethod.ConversationUnsubscribe, {
+      subscriptionId: "1",
+    })
+  })
 })

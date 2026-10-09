@@ -270,22 +270,49 @@ describe("the index and the list subscription", () => {
     expect(gateway.count("observe")).toBe(5)
   })
 
-  it("D18: an incomplete frame naming the conversations the last one walked walks nothing; one naming others walks again", async () => {
+  it("D18: every incomplete frame walks, so a row it left out that went is taken out though the rows it names are the same", async () => {
     const { gateway, source, follow } = started()
-    for (const id of ["a", "b", "c"])
+    for (const id of ["a", "b", "c", "d"])
       gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
     gateway.listLimit = 2
     gateway.observePageSize = 1
     follow()
     await source.index()
-    expect(gateway.count("observe")).toBe(3)
-    gateway.publishList()
-    await flush()
-    expect(gateway.count("observe")).toBe(3)
-    gateway.rows.set("d", row("d", { updatedAtMs: 999_000 }))
+    expect(gateway.count("observe")).toBe(4)
+    // The oldest goes elsewhere: the frame names the same two as before,
+    // and the list is still incomplete.
+    gateway.rows.delete("a")
     gateway.publishList()
     await flush()
     expect(gateway.count("observe")).toBe(7)
+    expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
+      "b",
+      "c",
+      "d",
+    ])
+  })
+
+  it("D18: frames that come while a walk is on its way give way to the newest, which walks once", async () => {
+    const { gateway, source, follow } = started()
+    for (const id of ["a", "b", "c"])
+      gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
+    gateway.listLimit = 2
+    gateway.observePageSize = 10
+    follow()
+    await source.index()
+    expect(gateway.count("observe")).toBe(1)
+    const held = deferred<void>()
+    gateway.once("observe", (normal) => held.promise.then(normal))
+    gateway.publishList()
+    await flush()
+    expect(gateway.count("observe")).toBe(2)
+    gateway.rows.set("d", row("d", { updatedAtMs: 1 }))
+    gateway.publishList()
+    gateway.publishList()
+    gateway.publishList()
+    held.resolve()
+    await flush()
+    expect(gateway.count("observe")).toBe(3)
     expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
       "a",
       "b",
@@ -711,6 +738,37 @@ describe("conversations", () => {
     await flush()
     expect(subscribesOf(gateway, "c0")).toHaveLength(2)
     expect(gateway.live("c0")).toBe(1)
+  })
+
+  it("D24: the last listener leaving while the list and a conversation are opening, then one back before they are answered, opens both again once the old opens are closed", async () => {
+    const { gateway, source, follow } = started()
+    gateway.rows.set("a", row("a"))
+    gateway.views.set("a", view("a"))
+    const listHeld = deferred<void>()
+    const viewHeld = deferred<void>()
+    gateway.once("subscribeList", (normal) => listHeld.promise.then(normal))
+    gateway.once("subscribe", (normal) => viewHeld.promise.then(normal))
+    const stop = follow()
+    const shown = source.transcript("a")
+    await flush()
+    expect(gateway.count("subscribeList")).toBe(1)
+    expect(subscribesOf(gateway, "a")).toHaveLength(1)
+    // Mounted, unmounted and mounted again, as StrictMode does.
+    stop()
+    follow()
+    await flush()
+    expect(gateway.count("subscribeList")).toBe(1)
+    expect(subscribesOf(gateway, "a")).toHaveLength(1)
+    listHeld.resolve()
+    viewHeld.resolve()
+    await flush()
+    expect(gateway.count("unsubscribe")).toBe(2)
+    expect(gateway.count("subscribeList")).toBe(2)
+    expect(subscribesOf(gateway, "a")).toHaveLength(2)
+    expect(gateway.live("list")).toBe(1)
+    expect(gateway.live("a")).toBe(1)
+    expect((await shown).sessionId).toBe("a")
+    expect((await source.index()).sessions.map((session) => session.id)).toEqual(["a"])
   })
 
   it("D13: a subscription answered after its session was taken out is closed unused, and its frame applies nothing", async () => {

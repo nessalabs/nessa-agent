@@ -1008,6 +1008,53 @@ async fn a_revoked_grant_ends_the_subscription_before_the_next_batch() {
     client.close().await;
 }
 
+/// Row S30: a batch woken while every request permit is taken waits for
+/// one, and is admitted only once it holds it, so a grant revoked during
+/// that wait lets no read through.
+#[tokio::test]
+async fn a_grant_revoked_while_a_batch_waits_for_capacity_ends_it_before_the_read() {
+    let fixture = SubscriptionFixture::new().await;
+    let mut client = fixture.connect();
+    let id = client.subscribe("subscribe", &fixture.id).await;
+    client.next().await;
+    let permits = u32::try_from(fixture.state.limits.requests()).unwrap();
+    let held = fixture
+        .state
+        .requests
+        .clone()
+        .acquire_many_owned(permits)
+        .await
+        .unwrap();
+    // A turn wakes the subscription; its batch waits for a permit. The sleep
+    // only lets the wake land before the revocation: if it lands after, the
+    // old order passes too, so a slow run can miss the regression but never
+    // fails this test wrongly.
+    fixture
+        .service
+        .submit(
+            fixture.id.clone(),
+            caller(&fixture.session, "while-full".into()),
+            "turn-1".into(),
+            SubmittedMessage {
+                text: "question".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    grants(&fixture.authority, &["server.read"]);
+    drop(held);
+    let frames = client
+        .until(&id, |frame| frame["event"] == "conversation.subscriptionEnded")
+        .await;
+    assert_eq!(frames.len(), 1, "nothing read under the revoked grant: {frames:?}");
+    assert_eq!(frames[0]["payload"]["reason"], "refused");
+    assert_eq!(frames[0]["payload"]["code"], "forbidden");
+    client.close().await;
+}
+
 /// Row S15.
 #[tokio::test]
 async fn deleting_the_conversation_ends_its_subscription() {
@@ -1400,6 +1447,64 @@ async fn list_frames_come_no_closer_than_the_reread_floor() {
     for pair in arrivals.windows(2) {
         assert!(pair[1] - pair[0] >= LIST_REREAD_FLOOR, "{arrivals:?}");
     }
+    client.close().await;
+}
+
+/// Row L5: a catalogue larger than one list leaves rows out of the frame.
+/// A change to one of those rows changes nothing the frame carries, and is
+/// sent all the same, so the client walks the catalogue for it.
+#[tokio::test]
+async fn a_change_the_incomplete_list_leaves_out_is_still_sent() {
+    use crate::conversation::application::{ConversationSummaries, MAX_LISTED_CONVERSATIONS};
+    use nessa_protocol::conversation::domain::ConversationSummary;
+    let fixture = SubscriptionFixture::new().await;
+    let mut oldest = None;
+    // One past the bound: the oldest is left out of the list.
+    for created in 0..=MAX_LISTED_CONVERSATIONS {
+        let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+        fixture
+            .metadata
+            .create(
+                Conversation::new(
+                    id.clone(),
+                    OrganizationId::new("organization").unwrap(),
+                    PrincipalId::new("principal").unwrap(),
+                    "panel".into(),
+                    format!("create-{id}"),
+                    created as u64,
+                    AgentId::Claude,
+                    ConversationModelId::new("test").unwrap(),
+                    ConversationApprovalMode::Ask,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let said = ConversationSummary::after_message(None, "said", None, created as u64 + 1);
+        fixture.metadata.record(&id, said).await.unwrap();
+        oldest.get_or_insert(id);
+    }
+    let oldest = oldest.unwrap();
+    let mut client = fixture.connect();
+    client.send("list", "conversation.subscribeList", json!({}));
+    let (reply, _) = client.reply("list").await;
+    let id = reply["payload"]["subscriptionId"].as_str().unwrap().to_owned();
+    let first = client.next().await;
+    assert_eq!(first["payload"]["list"]["complete"], false);
+    let rows = first["payload"]["list"]["conversations"].as_array().unwrap();
+    assert!(
+        rows.iter().all(|row| row["conversationId"] != oldest.to_string()),
+        "the oldest is left out"
+    );
+    let archived = fixture
+        .call(
+            "conversation.archive",
+            json!({"conversationId": oldest.to_string(), "requestId": "archive"}),
+        )
+        .await;
+    assert_eq!(archived["ok"], true, "{archived}");
+    let next = client.until(&id, |_| true).await;
+    assert_eq!(next[0]["payload"]["list"], first["payload"]["list"], "the same rows");
     client.close().await;
 }
 
