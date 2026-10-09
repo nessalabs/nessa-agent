@@ -187,7 +187,7 @@ describe("a card in a message", () => {
 })
 
 describe("the widget pane", () => {
-  it("answers with its shell on the open, and fills its body on the next frame", async () => {
+  it("opens a pane whose body is the widget", async () => {
     const store = await render()
     await act(async () => {
       void store.dispatch(
@@ -196,9 +196,8 @@ describe("the widget pane", () => {
     })
     const pane = host.querySelector("[data-widget-pane]")
     expect(pane?.querySelector("nav")?.textContent).toBe("Session aSample trail")
-    expect(pane?.querySelector("[data-widget-body]")).toBeNull()
     await frames()
-    expect(pane?.querySelector("[data-sample-view='trail']")).not.toBeNull()
+    expect(pane?.querySelector("[data-widget-body]")).not.toBeNull()
   })
 
   it("goes back to its conversation: focusing the pane showing it, or opening it beside", async () => {
@@ -310,6 +309,16 @@ describe("the session's header", () => {
 })
 
 describe("the window", () => {
+  it("opens its body with the window", async () => {
+    const store = await render()
+    await act(async () => {
+      void store.dispatch(
+        openWidget({ widget: sampleWidgets.trail, place: "window", origin: "a" }),
+      )
+    })
+    expect(windowShown()?.querySelector("[data-widget-body]")).not.toBeNull()
+  })
+
   async function openWindow(store: Store) {
     const pane = await openTrailBeside(store)
     await click(button(pane, "Open in Window"))

@@ -16,7 +16,7 @@ import type { PaneFrame } from "../../../split-panes"
 import type { PanePlacement } from "../../../split-panes/model/pane-sizing"
 import { Conversation, PaneHome } from "./conversation"
 import { PaneHeader } from "./pane-header"
-import { useFilledOnNextFrame } from "./use-filled-on-next-frame"
+import { useFilledAfterFirstPaint } from "./use-filled-after-first-paint"
 import { usePaneFocus } from "./use-pane-focus"
 
 /**
@@ -53,7 +53,7 @@ export const Pane = memo(function Pane({
   )
   const listed = sessionTitle !== undefined
   const [headingVisible, setHeadingVisible] = useState(false)
-  const filled = useFilledOnNextFrame()
+  const filled = useFilledAfterFirstPaint()
 
   const homeRef = useRef<HTMLDivElement>(null)
   const [arriving, setArriving] = useState<{

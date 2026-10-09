@@ -21,7 +21,7 @@ import type { PaneFrame } from "../../../split-panes"
 import type { PaneKey } from "../../../split-panes/model/pane-layout"
 import { IconButton } from "../../../ui/icon-button"
 import { ClosePaneButton, PaneHeaderFrame } from "./pane-header-frame"
-import { useFilledOnNextFrame } from "./use-filled-on-next-frame"
+import { useFilledAfterFirstPaint } from "./use-filled-after-first-paint"
 import { usePaneFocus } from "./use-pane-focus"
 import { WidgetTrail } from "./widget-trail"
 
@@ -91,7 +91,7 @@ function WidgetPaneParts({
   const origin = widgetOrigin(answer)
   const title = widgetTitle(answer)
   const host = usePaneWidgetHost(pane, widget, origin, steps)
-  const filled = useFilledOnNextFrame()
+  const filled = useFilledAfterFirstPaint()
   // Back to the conversation: focused where it is, or opened beside this pane.
   const toOrigin = useCallback(
     (sessionId: string) => dispatch(openBeside({ sessionId, target: pane })),
