@@ -779,3 +779,124 @@ it("accepts typed authentication only on a failed turn and rejects untyped value
     ),
   ).toThrow(/authenticationRequired/)
 })
+
+function protocolFile(path: string) {
+  return JSON.parse(
+    readFileSync(
+      new URL(`../../../../protocol/product/${path}`, import.meta.url),
+      "utf8",
+    ),
+  )
+}
+
+describe("the view's lease", () => {
+  const withLease = (lease: unknown) => ({ ...view(), lease })
+
+  it("accepts every state the schema publishes, with the fields that go with it", () => {
+    const leases = [
+      {
+        state: "live",
+        revision: 1,
+        environment: "here",
+        sandbox: "harness_default",
+        droppedEvents: 0,
+      },
+      {
+        state: "ending",
+        revision: 2,
+        environment: "here",
+        sandbox: "harness_default",
+        cause: "closed",
+        droppedEvents: 0,
+      },
+      {
+        state: "ended",
+        revision: 2,
+        environment: "here",
+        sandbox: "harness_default",
+        cause: "lost",
+        cleanup: "not_held",
+        droppedEvents: 3,
+      },
+      {
+        state: "interrupted",
+        revision: 2,
+        environment: "here",
+        sandbox: "harness_default",
+        cause: "stopped",
+        cleanup: "forced",
+        droppedEvents: 0,
+      },
+      {
+        state: "refused",
+        revision: 1,
+        environment: "here",
+        sandbox: "harness_default",
+        refusal: "sandbox_unavailable",
+        droppedEvents: 0,
+      },
+      { state: "unreadable", revision: 4, droppedEvents: 0 },
+      { state: "unreadable", droppedEvents: 0 },
+    ]
+    for (const lease of leases)
+      expect(conversationView(withLease(lease), "conversation").lease).toEqual(lease)
+    expect(conversationView(view(), "conversation").lease).toBeUndefined()
+  })
+
+  it("refuses anything outside the published shape", () => {
+    const live = { state: "live", droppedEvents: 0 }
+    expect(() =>
+      conversationView(withLease({ ...live, holder: "elsewhere" }), "conversation"),
+    ).toThrow(/unknown fields/)
+    const refused: [unknown, RegExp][] = [
+      [{ state: "paused", droppedEvents: 0 }, /lease state/],
+      [{ droppedEvents: 0 }, /lease state/],
+      [{ ...live, environment: "remote" }, /lease environment/],
+      [{ ...live, sandbox: "container" }, /lease sandbox/],
+      [{ ...live, cause: "toString" }, /lease cause/],
+      [{ ...live, cleanup: "no_process" }, /lease cleanup/],
+      [{ ...live, refusal: "busy" }, /lease refusal/],
+      [{ ...live, revision: 0 }, /lease revision/],
+      [{ ...live, revision: 1.5 }, /lease revision/],
+      [{ state: "live" }, /lease droppedEvents/],
+      [{ ...live, droppedEvents: -1 }, /lease droppedEvents/],
+      [{ ...live, droppedEvents: Number.MAX_SAFE_INTEGER + 1 }, /lease droppedEvents/],
+      [null, /Invalid conversation response/],
+    ]
+    for (const [lease, error] of refused)
+      expect(() => conversationView(withLease(lease), "conversation")).toThrow(error)
+  })
+
+  it("knows every field and value the schema gives a view and its lease", () => {
+    const defs = protocolFile("v1.json").$defs
+    // A field the schema adds to the view is one the validator must know, or
+    // every view that carries it is refused as unknown.
+    for (const key of Object.keys(defs.ConversationView.properties)) {
+      let error: unknown
+      try {
+        conversationView({ ...view(), [key]: undefined }, "conversation")
+      } catch (caught) {
+        error = caught
+      }
+      expect(String(error), key).not.toMatch(/unknown fields/)
+    }
+    const properties = defs.ConversationLease.properties as Record<
+      string,
+      { enum?: string[] }
+    >
+    for (const [key, schema] of Object.entries(properties)) {
+      for (const value of schema.enum ?? []) {
+        const sample = { state: "live", droppedEvents: 0, [key]: value }
+        expect(conversationView(withLease(sample), "conversation").lease).toEqual(sample)
+      }
+    }
+  })
+
+  it("accepts the view a real gateway serves for a leased conversation", () => {
+    // The gateway's own conversation.read answer, written by its test
+    // (`read_joins_the_fixed_selection_to_the_authenticated_catalog`), never by hand.
+    const served = protocolFile("samples/conversation-read.json")
+    const parsed = conversationView(served, served.conversationId)
+    expect(parsed.lease?.state).toBe("live")
+  })
+})

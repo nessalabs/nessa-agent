@@ -511,12 +511,37 @@ mod gateway {
             json!({"conversationId": id}),
         )
         .await;
-        let runtime = &response.payload.unwrap()["runtime"];
+        let mut payload = response.payload.unwrap();
+        let runtime = &payload["runtime"];
         assert_eq!(runtime["agent"], "claude");
         assert_eq!(runtime["model"], "test");
         assert_eq!(runtime["modelName"], "Test model");
         assert_eq!(runtime["contextWindowTokens"], 100000);
         assert_eq!(runtime["reasoning"], false);
+        assert_eq!(payload["lease"]["state"], "live");
+
+        // This answer, as the wire carries it, is the sample the client's
+        // validator reads (`packages/nessa-client/src/protocol/conversation-validate.test.ts`),
+        // so a field the gateway sends and the client does not know fails
+        // there, not in a person's window. The revision names this run's view
+        // incarnation and how many changes it saw, which timing decides; only
+        // its shape is the client's business.
+        const SERVED_VIEW: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../protocol/product/samples/conversation-read.json"
+        );
+        assert!(payload["revision"]
+            .as_str()
+            .is_some_and(|revision| revision.contains(':')));
+        payload["revision"] = "00000000-0000-4000-8000-000000000000:1".into();
+        let served = serde_json::to_string_pretty(&payload).unwrap() + "\n";
+        if std::env::var_os("NESSA_UPDATE_GOLDEN").is_some() {
+            std::fs::create_dir_all(std::path::Path::new(SERVED_VIEW).parent().unwrap())
+                .unwrap();
+            std::fs::write(SERVED_VIEW, &served).unwrap();
+        }
+        let sample = std::fs::read_to_string(SERVED_VIEW).expect("the served view is checked in");
+        assert_eq!(served, sample, "regenerate with NESSA_UPDATE_GOLDEN=1");
     }
 
     #[tokio::test]
