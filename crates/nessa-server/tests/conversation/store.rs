@@ -2551,10 +2551,6 @@ async fn a_grant_names_one_conversation_and_nothing_else() {
         .create(owned_by(&later, "org", "alice", 9))
         .await
         .unwrap();
-    assert_eq!(
-        opened.store.granted("phone").await.unwrap(),
-        std::collections::HashSet::from([shared.clone()])
-    );
     for id in [&existing, &later] {
         assert!(!opened.store.is_granted(id, "phone").await.unwrap());
     }

@@ -163,8 +163,8 @@ pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
 };
 pub use read_grants::{
-    admit_read, reader_of, visible_to, ReadGrant, ReadGrantChange, ReadGrantTransition, ReadGrants,
-    Reader, ShareConversation, Visible,
+    admit_read, reader_of, ReadGrant, ReadGrantChange, ReadGrantTransition, ReadGrants, Reader,
+    ShareConversation,
 };
 pub use record_read::{
     ReadRecords, RecordHead, RecordReadError, RecordReadFuture, RecordReadLease,

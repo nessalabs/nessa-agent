@@ -4,16 +4,18 @@
 //! are written from.
 //!
 //! One authority answers "may this reader read this conversation":
-//! [`admit_read`] for one conversation and [`visible_to`] for a list. Every
-//! read path asks one of them, and none keeps its own copy:
+//! [`admit_read`] for one conversation, and for a paired device's list the
+//! store's grant predicate. Every read path asks one of them, and none keeps
+//! its own copy:
 //!
 //! - a paired device's record head, page and records watch
 //!   (`AdmitPassiveRead::execute`);
-//! - the socket's `conversation.read`, `conversation.list`,
-//!   `conversation.observe` and every subscription batch
-//!   (`product::read_access`).
+//! - the socket's `conversation.read` and every view subscription batch
+//!   (`product::read_access`). The socket's lists (`conversation.list`,
+//!   `conversation.observe`, list subscriptions) are the owner's own and
+//!   refuse a paired device, which lists through its catalogue.
 //!
-//! A paired device's catalogue pages are filtered by the store in SQL, because
+//! A paired device's catalogue pages are narrowed by the store in SQL, because
 //! a filtered page must still be a whole page; the store answers
 //! [`ReadGrants::is_granted`] and those pages with one predicate
 //! (`store::read_grants::GRANTED`), so the two cannot disagree.
@@ -30,7 +32,6 @@ use crate::conversation::domain::ReceiverBinding;
 use nessa_auth::domain::{AuthContext, CredentialId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
-use std::collections::HashSet;
 
 /// Who is reading, as far as read grants are concerned.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -97,37 +98,6 @@ pub async fn admit_read(
     }
 }
 
-/// Which of the owner's conversations `reader` may see in a list.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Visible {
-    /// Everything the owner's list holds.
-    All,
-    /// Only these ids.
-    Only(HashSet<ConversationId>),
-}
-
-impl Visible {
-    pub fn contains(&self, id: &ConversationId) -> bool {
-        match self {
-            Self::All => true,
-            Self::Only(ids) => ids.contains(id),
-        }
-    }
-}
-
-/// What `reader` may see of its owner's list (row G12).
-pub async fn visible_to(
-    grants: &dyn ReadGrants,
-    reader: &Reader,
-) -> Result<Visible, ConversationError> {
-    match reader {
-        Reader::Owner => Ok(Visible::All),
-        Reader::PairedDevice { receiver_id } => {
-            grants.granted(receiver_id).await.map(Visible::Only)
-        }
-    }
-}
-
 /// One grant as the owner sees it in `conversation.shares`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReadGrant {
@@ -178,11 +148,6 @@ pub trait ReadGrants: Send + Sync {
         id: &'a ConversationId,
         receiver_id: &'a str,
     ) -> ConversationFuture<'a, bool>;
-    /// Every conversation `receiver_id` holds a grant on.
-    fn granted<'a>(
-        &'a self,
-        receiver_id: &'a str,
-    ) -> ConversationFuture<'a, HashSet<ConversationId>>;
     /// Apply one change. `false` when it changed nothing (granting a grant
     /// already held, revoking one not held); nothing is journaled then.
     fn change(&self, change: ReadGrantChange) -> ConversationFuture<'_, bool>;
@@ -198,9 +163,10 @@ pub struct ShareConversation<'a> {
 }
 
 impl ShareConversation<'_> {
-    /// Grant `credential`'s device Read on `id`. The conversation must be the
-    /// caller's and not deleted; the credential must be an active paired
-    /// device of the same owner, or `ShareTargetNotPaired` (row G8).
+    /// Grant `credential`'s device Read on `id`. The credential must be an
+    /// active paired device of the caller, or `ShareTargetNotPaired`; the
+    /// store refuses a conversation that is not the caller's or is deleted,
+    /// in the transaction that writes the grant (row G8).
     pub async fn share(
         &self,
         caller: ConversationCaller,
@@ -208,7 +174,7 @@ impl ShareConversation<'_> {
         credential: CredentialId,
         at_ms: u64,
     ) -> Result<bool, ConversationError> {
-        self.owned(&caller, &id).await?;
+        caller.actor()?;
         let binding = self
             .receivers
             .resolve(&credential)
@@ -235,7 +201,7 @@ impl ShareConversation<'_> {
 
     /// Revoke `credential`'s grant on `id`. Allowed on a deleted conversation
     /// and for a device since unpaired: taking access away needs no more
-    /// than ownership.
+    /// than ownership, which the store checks as it writes.
     pub async fn unshare(
         &self,
         caller: ConversationCaller,
@@ -243,7 +209,7 @@ impl ShareConversation<'_> {
         credential: CredentialId,
         at_ms: u64,
     ) -> Result<bool, ConversationError> {
-        self.owner_of(&caller, &id).await?;
+        caller.actor()?;
         self.grants
             .change(ReadGrantChange {
                 transition: ReadGrantTransition::Revoke,
@@ -264,22 +230,6 @@ impl ShareConversation<'_> {
     ) -> Result<Vec<ReadGrant>, ConversationError> {
         self.owner_of(caller, id).await?;
         self.grants.grants(id).await
-    }
-
-    /// The caller owns `id` and it is not deleted.
-    async fn owned(
-        &self,
-        caller: &ConversationCaller,
-        id: &ConversationId,
-    ) -> Result<(), ConversationError> {
-        caller.actor()?;
-        let conversation = self
-            .conversations
-            .load(id)
-            .await?
-            .ok_or(ConversationError::NotFound)?;
-        conversation.check_access(&caller.organization_id, &caller.principal_id)?;
-        Ok(())
     }
 
     /// The caller owns `id`, deleted or not.

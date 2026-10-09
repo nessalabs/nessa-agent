@@ -6,7 +6,7 @@
 //! asks it. `conversation.read` and every subscription batch
 //! (`subscription::authorize_batch`) ask [`admit_conversation`];
 //! `conversation.list`, `conversation.observe` and every list batch ask
-//! [`visible`]. A gateway that pairs no device has no receiver binding, so
+//! [`admit_list`]. A gateway that pairs no device has no receiver binding, so
 //! every session is the owner's and reads exactly as before (row G11).
 use super::{
     conversation::{caller, conversation_id},
@@ -14,15 +14,14 @@ use super::{
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    admit_read, error_code, reader_of, visible_to, ConversationError, Reader, ShareConversation,
-    Visible,
+    admit_read, error_code, reader_of, ConversationError, Reader, ShareConversation,
 };
 use nessa_auth::{application::session::AuthenticatedSession, domain::CredentialId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
 use nessa_protocol::product::generated::{
     ConversationMutationResult, ConversationShare, ConversationShareParams,
-    ConversationSharesParams, ConversationSharesResult, ConversationSummary,
+    ConversationSharesParams, ConversationSharesResult,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
@@ -57,31 +56,18 @@ pub(super) async fn admit_conversation(
         .map_err(refusal_code)
 }
 
-/// What of the owner's list `session` may see (row G12).
-pub(super) async fn visible(
+/// Whether `session` may ask for the owner's list. A paired device lists
+/// through its catalogue, which the store narrows to its grants; the socket's
+/// lists are the owner's own, so a device is refused them (row G12) rather
+/// than handed a list filtered after it was read.
+pub(super) async fn admit_list(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
-) -> Result<Visible, &'static str> {
-    let reader = reader(state, session).await?;
-    let Some((_, _, grants)) = state.passive_read.as_ref() else {
-        return Ok(Visible::All);
-    };
-    visible_to(grants.as_ref(), &reader)
-        .await
-        .map_err(|error| error_code(&error).as_str())
-}
-
-/// Keep only the rows `visible` allows. A row left out is not missing, so
-/// the list's `complete` is unchanged.
-pub(super) fn retain_visible(visible: &Visible, conversations: &mut Vec<ConversationSummary>) {
-    if matches!(visible, Visible::All) {
-        return;
+) -> Result<(), &'static str> {
+    match reader(state, session).await? {
+        Reader::Owner => Ok(()),
+        Reader::PairedDevice { .. } => Err("forbidden"),
     }
-    conversations.retain(|summary| {
-        ConversationId::new(&summary.conversation_id)
-            .map(|id| visible.contains(&id))
-            .unwrap_or(false)
-    });
 }
 
 /// `WrongOwner` is how an ungranted id is refused; to the socket that is a
@@ -116,6 +102,14 @@ pub(super) async fn dispatch_share(
         receivers: receivers.as_ref(),
         grants: grants.as_ref(),
     };
+    // Sharing is the owner's: a paired device signs in as its owner's
+    // principal, so it is refused here by what it is, not only by the
+    // grant its credential lacks (row G8).
+    match reader(state, session).await {
+        Ok(Reader::Owner) => {}
+        Ok(Reader::PairedDevice { .. }) => return failure(&frame.id, "forbidden"),
+        Err(code) => return failure(&frame.id, code),
+    }
     let now = state.clock.unix_milliseconds();
     let result: Result<OutgoingMessage, ConversationError> = async {
         match frame.method.as_str() {

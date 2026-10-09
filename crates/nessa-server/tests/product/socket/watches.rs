@@ -2311,3 +2311,35 @@ impl Drop for HostWatchFixture {
         self.release();
     }
 }
+
+/// Read grants row G1: a records watch on a conversation the device was not
+/// granted is refused at admission and installs no watch.
+#[tokio::test]
+async fn a_records_watch_on_an_ungranted_conversation_is_refused() {
+    let fixture = WatchFixture::new().await;
+    let grants = fixture.state.passive_read.as_ref().unwrap().2.clone();
+    let revoked = grants
+        .change(crate::conversation::application::ReadGrantChange {
+            transition: crate::conversation::application::ReadGrantTransition::Revoke,
+            conversation_id: fixture.id.clone(),
+            receiver_id: None,
+            credential_id: CredentialId::new("receiver-credential").unwrap(),
+            initiator: crate::product::conversation::caller(&fixture.session, "unshare".into()),
+            at_ms: 1,
+        })
+        .await
+        .unwrap();
+    assert!(revoked);
+    let (socket, mut peer) = test_socket(None);
+    let socket = tokio::spawn(run_authenticated(
+        socket,
+        fixture.state.clone(),
+        fixture.session.clone(),
+    ));
+    fixture.watch(&peer, "install");
+    let reply = text(peer.message().await);
+    assert_eq!(reply["id"], "install");
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert_eq!(fixture.records.installed.load(Ordering::SeqCst), 0);
+    fixture.finish(peer, socket).await;
+}

@@ -147,6 +147,9 @@ pub(super) async fn dispatch(
             }
             "conversation.observe" => {
                 let params = params!(ConversationObserveParams);
+                if let Err(code) = super::read_access::admit_list(state, session).await {
+                    return Ok(failure(&frame.id, code));
+                }
                 let cursor = match params.cursor {
                     Some(cursor) => Some(observation_cursor(cursor)?),
                     None => None,
@@ -159,14 +162,7 @@ pub(super) async fn dispatch(
                     )
                     .await;
                 trace_conversation_observe(observed.as_ref().err());
-                let mut result = observe_result(observed?);
-                match super::read_access::visible(state, session).await {
-                    Ok(visible) => {
-                        super::read_access::retain_visible(&visible, &mut result.conversations)
-                    }
-                    Err(code) => return Ok(failure(&frame.id, code)),
-                }
-                Ok(success(&frame.id, &result))
+                Ok(success(&frame.id, &observe_result(observed?)))
             }
             "conversation.send" | "conversation.steer" => {
                 let params = params!(ConversationSendParams);
@@ -473,7 +469,7 @@ pub(super) async fn read_view(
 /// same read.
 ///
 /// The outer error is the read grant refusing the session as a reader
-/// (`read_access::visible`); the inner one is the list's own.
+/// (`read_access::admit_list`); the inner one is the list's own.
 pub(super) async fn read_list(
     state: &ProductRouteState,
     service: &ConversationService,
@@ -481,18 +477,14 @@ pub(super) async fn read_list(
     archived: bool,
     request_id: &str,
 ) -> Result<Result<ConversationListResult, ConversationError>, &'static str> {
-    let visible = super::read_access::visible(state, session).await?;
+    super::read_access::admit_list(state, session).await?;
     let listed = service
         .list(caller(session, request_id.to_owned()), archived)
         .await;
     // The desktop's index asks this list first. An incomplete list continues
     // as conversation.observe. The subject tells a list from a read.
     trace_conversation_index(listed.as_ref().err());
-    Ok(listed.map(|listed| {
-        let mut result = list_result(listed);
-        super::read_access::retain_visible(&visible, &mut result.conversations);
-        result
-    }))
+    Ok(listed.map(list_result))
 }
 
 pub(super) fn caller(session: &AuthenticatedSession, request_id: String) -> ConversationCaller {

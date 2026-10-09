@@ -1725,6 +1725,20 @@ impl SubscriptionFixture {
         assert_eq!(listed["ok"], true, "{listed}");
         listed["payload"]["conversations"].as_array().unwrap().clone()
     }
+
+    /// `conversation.list`, `.observe` and `.subscribeList` all answer
+    /// `forbidden`, so no list row or cursor reaches a device.
+    async fn assert_lists_refused(&self) {
+        for method in ["conversation.list", "conversation.observe"] {
+            let reply = self.call(method, json!({})).await;
+            assert_eq!(reply["error"]["code"], "forbidden", "{method}: {reply}");
+        }
+        let mut client = self.connect();
+        client.send("list", "conversation.subscribeList", json!({}));
+        let (reply, _) = client.reply("list").await;
+        assert_eq!(reply["error"]["code"], "forbidden", "{reply}");
+        client.close().await;
+    }
 }
 
 /// This session's credential is a paired device bound to receiver `receiver`.
@@ -1771,7 +1785,16 @@ async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
         )
         .await;
     assert_eq!(read["error"]["code"], "conversation_not_found", "{read}");
-    assert!(fixture.listed().await.is_empty());
+    // The socket's lists are the owner's: a device lists through its
+    // catalogue, so it is refused them, whatever it was granted.
+    fixture.assert_lists_refused().await;
+    let shared = fixture
+        .call(
+            "conversation.shares",
+            json!({"conversationId": fixture.id.to_string()}),
+        )
+        .await;
+    assert_eq!(shared["error"]["code"], "forbidden", "{shared}");
     let mut client = fixture.connect();
     client.send(
         "view",
@@ -1791,9 +1814,7 @@ async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
         )
         .await;
     assert_eq!(read["ok"], true, "{read}");
-    let listed = fixture.listed().await;
-    assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0]["conversationId"], fixture.id.to_string());
+    fixture.assert_lists_refused().await;
 }
 
 /// Row G13: a revoke ends a device's subscription before its next batch.

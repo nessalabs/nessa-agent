@@ -2,10 +2,9 @@
 //! conversations and the catalogue revisions a grant change moves.
 //!
 //! [`granted`] is the one statement of "this receiver holds a grant on this
-//! conversation". `is_granted` asks it for one conversation, `granted` for a
-//! device's whole set, and the catalogue page and resolve ask it for a paired
-//! device's rows (`store.rs`), so a device's list and its reads cannot
-//! disagree about what it may see.
+//! conversation". `is_granted` asks it for one conversation, and the
+//! catalogue page and resolve ask it for a paired device's rows (`store.rs`),
+//! so a device's list and its reads cannot disagree about what it may see.
 use super::{
     cells, failed, next_revision, read, stored_time, time, unreadable, LocalConversationStore,
 };
@@ -16,7 +15,6 @@ use crate::conversation::application::{
 use nessa_auth::domain::{CredentialId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{params, OptionalExtension, TransactionBehavior};
 use nessa_protocol::conversation::domain::ConversationId;
-use std::collections::HashSet;
 
 /// SQL that is true when the receiver bound to parameter `receiver` holds a
 /// grant on the conversation whose id is `conversation`. Both are names this
@@ -51,28 +49,6 @@ impl ReadGrants for LocalConversationStore {
         })
     }
 
-    fn granted<'a>(
-        &'a self,
-        receiver_id: &'a str,
-    ) -> ConversationFuture<'a, HashSet<ConversationId>> {
-        let receiver_id = receiver_id.to_owned();
-        self.run(move |connection| {
-            let mut statement = connection
-                .prepare(&format!(
-                    "SELECT c.id FROM conversations AS c WHERE {}",
-                    granted("c.id", "?1")
-                ))
-                .map_err(failed)?;
-            let mut rows = statement.query([receiver_id]).map_err(failed)?;
-            let mut ids = HashSet::new();
-            while let Some(row) = rows.next().map_err(failed)? {
-                let id: String = row.get(0).map_err(failed)?;
-                ids.insert(ConversationId::new(&id).map_err(|_| unreadable("read_grants", &id))?);
-            }
-            Ok(ids)
-        })
-    }
-
     fn change(&self, change: ReadGrantChange) -> ConversationFuture<'_, bool> {
         let changes = self.changes.clone();
         self.run(move |connection| {
@@ -82,6 +58,19 @@ impl ReadGrants for LocalConversationStore {
             let id = change.conversation_id.to_string();
             let conversation = read(&transaction, &change.conversation_id)?
                 .ok_or(ConversationError::NotFound)?;
+            // Asked inside the transaction that writes the grant, so a delete
+            // cannot land between the check and the write: a grant needs a
+            // conversation that is the initiator's and not deleted, a revoke
+            // only that it is the initiator's (row G8).
+            let (organization, principal) =
+                (&change.initiator.organization_id, &change.initiator.principal_id);
+            match change.transition {
+                ReadGrantTransition::Grant => conversation.check_access(organization, principal)?,
+                ReadGrantTransition::Revoke if !conversation.allows(organization, principal) => {
+                    return Err(ConversationError::NotFound);
+                }
+                ReadGrantTransition::Revoke => {}
+            }
             let existing: Option<(String, String)> = transaction
                 .query_row(
                     "SELECT receiver_id, credential_id FROM read_grants
