@@ -184,6 +184,9 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   conversation_state_unreadable: "conversation-state-unreadable",
   invalid_request: "invalid-request",
   conversation_deleted: "conversation-deleted",
+  // Answers only `conversation.share`, which the panel never sends; one that
+  // met a command would be a request this panel had no business making.
+  share_target_not_paired: "invalid-request",
 }
 
 /**
