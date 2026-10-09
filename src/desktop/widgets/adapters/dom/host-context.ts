@@ -12,15 +12,24 @@
  * always report. Its own `size-observer.test.ts` holds that each is reported.
  * `widgets.mjs --only host-size` holds what this reports to the place's box,
  * in whole pixels, in Chromium and WebKit.
+ *
+ * The first read is synchronous, in a layout effect, and it lays the place
+ * out. It runs only when `readsSize` is set: the ref passed otherwise is
+ * empty, and the effect returns before touching layout. A view that does
+ * not read `context.size` pays nothing for it.
  */
-import { useMemo, type RefObject } from "react"
+import { useMemo, useRef, type RefObject } from "react"
 import { useMeasuredSize } from "@nessa-ui/react/lib/size-observer"
 import type { HostContext } from "../../model/widget-state"
 
 const noInsets = { top: 0, right: 0, bottom: 0, left: 0 } as const
 
-export function useHostContext(place: RefObject<HTMLElement | null>): HostContext {
-  const size = useMeasuredSize(place)
+export function useHostContext(
+  place: RefObject<HTMLElement | null>,
+  readsSize: boolean,
+): HostContext {
+  const unmeasured = useRef<HTMLElement | null>(null)
+  const size = useMeasuredSize(readsSize ? place : unmeasured)
   const theme = document.documentElement.classList.contains("dark") ? "dark" : "light"
   const locale = navigator.language
   // One value while nothing in it changes, so a view memoised on it draws only for a change.

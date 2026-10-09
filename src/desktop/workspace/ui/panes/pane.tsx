@@ -1,12 +1,4 @@
-import {
-  memo,
-  startTransition,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react"
+import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
 import { sendMessage } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
@@ -24,6 +16,7 @@ import type { PaneFrame } from "../../../split-panes"
 import type { PanePlacement } from "../../../split-panes/model/pane-sizing"
 import { Conversation, PaneHome } from "./conversation"
 import { PaneHeader } from "./pane-header"
+import { useFilledAfterFirstPaint } from "./use-filled-after-first-paint"
 import { usePaneFocus } from "./use-pane-focus"
 
 /**
@@ -60,14 +53,7 @@ export const Pane = memo(function Pane({
   )
   const listed = sessionTitle !== undefined
   const [headingVisible, setHeadingVisible] = useState(false)
-  // A new pane answers on the frame it was asked for: its shell fades in at
-  // once, and what it shows fills in over the next frames, under the fade, in
-  // a transition React may slice, so a split never waits on a home's scene.
-  const [filled, setFilled] = useState(false)
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => startTransition(() => setFilled(true)))
-    return () => cancelAnimationFrame(frame)
-  }, [])
+  const filled = useFilledAfterFirstPaint()
 
   const homeRef = useRef<HTMLDivElement>(null)
   const [arriving, setArriving] = useState<{

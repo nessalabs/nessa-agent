@@ -527,6 +527,9 @@ on.
   overlapping, and the title keeps a positive width inside the header.
   A production Chromium run fails when the open's longest frame exceeds
   50 ms. _Check:_ `subagents.mjs --only narrow` (1000 × 560).
+- [ ] **The card's Open is measured the same way.** A production Chromium
+  run at the same size fails when that click's longest frame exceeds
+  50 ms. _Check:_ `subagents.mjs --only card-open` (1000 × 560).
 
 ## MCP Apps
 
