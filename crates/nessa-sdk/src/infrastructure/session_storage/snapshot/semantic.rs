@@ -70,15 +70,11 @@ enum WireChange<E = Event> {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WireBatch<C = WireChange> {
-    /// Missing on records saved before this field existed. Those bytes are
-    /// version 1 when the rest of the batch is today's shape.
-    #[serde(rename = "schemaVersion", default = "current_schema_version")]
+    /// Required. A batch with no `schemaVersion` is refused in preflight as
+    /// another version and is not mapped by this struct.
+    #[serde(rename = "schemaVersion")]
     schema_version: u64,
     changes: Vec<C>,
-}
-
-fn current_schema_version() -> u64 {
-    StorageError::SCHEMA_VERSION
 }
 
 fn encode_context(value: &ProviderContext) -> Option<String> {
@@ -296,7 +292,7 @@ pub(crate) fn encode_batch(changes: &[SessionChange]) -> Result<Vec<u8>, Storage
     })
     .map_err(corrupt)?;
     super::super::save_group::validate_unit_payload(&bytes)?;
-    super::decode::preflight_semantic_batch(bytes.as_slice()).map(|_| ())?;
+    super::decode::preflight_semantic_batch(bytes.as_slice())?;
     Ok(bytes)
 }
 
@@ -304,13 +300,10 @@ pub(crate) fn decode_batch(
     bytes: &[u8],
     context: &ProviderContext,
 ) -> Result<Vec<SessionChange>, StorageError> {
-    let marker = super::decode::preflight_semantic_batch(bytes)?;
-    decode_current_batch(bytes, context).map_err(|error| match marker {
-        // The marker is absent. A body today's decoder accepts is version 1.
-        // A body it refuses is the shape from before that decoder.
-        super::decode::SchemaMarker::Unmarked => StorageError::AnotherVersion { found: None },
-        super::decode::SchemaMarker::Current => error,
-    })
+    // An absent marker and any other unsigned integer fail here, before the
+    // body is mapped into this build's types.
+    super::decode::preflight_semantic_batch(bytes)?;
+    decode_current_batch(bytes, context)
 }
 
 fn decode_current_batch(
@@ -318,8 +311,7 @@ fn decode_current_batch(
     context: &ProviderContext,
 ) -> Result<Vec<SessionChange>, StorageError> {
     let batch: WireBatch = serde_json::from_slice(bytes).map_err(corrupt)?;
-    // Preflight already accepted the marker. An absent field defaults to this
-    // build's version, so a decoded batch names that version.
+    // Preflight already required this build's marker.
     if batch.schema_version != StorageError::SCHEMA_VERSION {
         return Err(corrupt("schemaVersion disagreed with the record preflight"));
     }
@@ -918,16 +910,18 @@ mod tests {
     }
 
     #[test]
-    fn an_unmarked_record_in_todays_shape_is_version_one() {
+    fn an_unmarked_record_in_todays_shape_is_another_version() {
         let change = opened_change();
         let bytes = encode_one(&change).unwrap();
         let mut saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         saved.as_object_mut().unwrap().remove("schemaVersion");
         assert!(saved.get("schemaVersion").is_none());
-        let unmarked = serde_json::to_vec(&saved).unwrap();
         assert_eq!(
-            decode_one(&unmarked, &ProviderContext::Absent).unwrap(),
-            change
+            decode_batch(
+                &serde_json::to_vec(&saved).unwrap(),
+                &ProviderContext::Absent
+            ),
+            Err(StorageError::AnotherVersion { found: None })
         );
     }
 

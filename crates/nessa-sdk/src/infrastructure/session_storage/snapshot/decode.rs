@@ -288,24 +288,20 @@ impl Visitor<'_> for Key {
         Ok(text.into())
     }
 }
-pub(crate) fn preflight_checkpoint(reader: impl Read) -> Result<SchemaMarker, StorageError> {
-    version_marker(preflight_record(reader, Shape::Checkpoint)?)
+pub(crate) fn preflight_checkpoint(reader: impl Read) -> Result<(), StorageError> {
+    preflight_record(reader, Shape::Checkpoint)
 }
 
-pub(super) fn preflight_semantic_batch(reader: impl Read) -> Result<SchemaMarker, StorageError> {
-    version_marker(preflight_record(reader, Shape::SemanticBatch)?)
-}
-
-fn version_marker(marker: Option<SchemaMarker>) -> Result<SchemaMarker, StorageError> {
-    marker.ok_or_else(|| super::tools::corrupt("session record had no version state"))
+pub(super) fn preflight_semantic_batch(reader: impl Read) -> Result<(), StorageError> {
+    preflight_record(reader, Shape::SemanticBatch)
 }
 
 #[cfg(test)]
 fn preflight_shape(reader: impl Read, shape: Shape) -> Result<(), StorageError> {
-    preflight_record(reader, shape).map(|_| ())
+    preflight_record(reader, shape)
 }
 
-fn preflight_record(reader: impl Read, shape: Shape) -> Result<Option<SchemaMarker>, StorageError> {
+fn preflight_record(reader: impl Read, shape: Shape) -> Result<(), StorageError> {
     let limit = Rc::new(Cell::new(KEY_BYTES));
     let reader = TokenReader::new(reader, limit.clone());
     let mut deserializer = serde_json::Deserializer::from_reader(reader);
@@ -347,22 +343,12 @@ enum RecordVersion {
     Invalid,
 }
 
-/// Whether a session-record batch or checkpoint carried this build's marker.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SchemaMarker {
-    /// `schemaVersion` is [`StorageError::SCHEMA_VERSION`].
-    Current,
-    /// The root object has no `schemaVersion`. Today's decoder decides if
-    /// that object is version 1.
-    Unmarked,
-}
-
 fn classify_record_version(
     version: Option<&Cell<RecordVersion>>,
     walked: Result<(), StorageError>,
-) -> Result<Option<SchemaMarker>, StorageError> {
+) -> Result<(), StorageError> {
     let Some(version) = version else {
-        return walked.map(|()| None);
+        return walked;
     };
     match version.get() {
         // A marker this build does not read wins over a later bound failure.
@@ -372,17 +358,18 @@ fn classify_record_version(
         RecordVersion::Invalid => Err(super::tools::corrupt(
             "schemaVersion is not an unsigned integer",
         )),
-        // No marker. Today's decoder still runs. A body it accepts is version
-        // 1. A body it refuses is the earlier shape.
+        // Alpha reads one shape. A finished object with no marker is another
+        // version, and its body is not mapped. A walk that fails first stays
+        // that error.
         RecordVersion::Absent => match walked {
-            Ok(()) => Ok(Some(SchemaMarker::Unmarked)),
+            Ok(()) => Err(StorageError::AnotherVersion { found: None }),
             Err(error) => Err(error),
         },
         RecordVersion::Unseen => match walked {
             Ok(()) => Err(super::tools::corrupt("session record is not a JSON object")),
             Err(error) => Err(error),
         },
-        RecordVersion::Current => walked.map(|()| Some(SchemaMarker::Current)),
+        RecordVersion::Current => walked,
     }
 }
 

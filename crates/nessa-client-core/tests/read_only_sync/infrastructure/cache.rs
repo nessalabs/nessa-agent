@@ -433,7 +433,15 @@ fn another_version_checkpoint_is_dropped_and_the_bytes_stay() {
         .unwrap();
     drop(first);
     let mut reopened = cache(&unmarked_path);
-    assert!(reopened.load(&scope()).unwrap().is_some());
+    assert_eq!(reopened.load(&scope()), Err(StoreError::Failed));
+    assert_eq!(reopened.take_refusal(), Some(CacheError::Corrupt));
+    let kept: Vec<u8> = reopened
+        .connection
+        .query_row("SELECT payload FROM transcript_checkpoints", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(kept, unmarked);
 
     let earlier_path = cache_path(root.path(), "earlier-shape.sqlite3");
     let mut first = cache(&earlier_path);

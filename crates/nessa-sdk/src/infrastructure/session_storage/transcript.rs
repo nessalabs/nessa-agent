@@ -46,9 +46,9 @@ pub enum TranscriptError {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SavedFold<S = snapshot::checkpoint::Snapshot> {
-    /// Missing on checkpoints saved before this field existed. Those bytes
-    /// are this build's checkpoint when the rest of the fold decodes.
-    #[serde(rename = "schemaVersion", default = "current_schema_version")]
+    /// Required. A checkpoint with no `schemaVersion` is refused in preflight
+    /// as another version and is not mapped by this struct.
+    #[serde(rename = "schemaVersion")]
     schema_version: u64,
     receiver: String,
     origin: String,
@@ -61,10 +61,6 @@ struct SavedFold<S = snapshot::checkpoint::Snapshot> {
     facts: u64,
     snapshot: Option<S>,
     group: Option<GroupCheckpoint>,
-}
-
-fn current_schema_version() -> u64 {
-    StorageError::SCHEMA_VERSION
 }
 
 /// One source-scoped, effect-free semantic transcript receiver. `apply` stages
@@ -539,9 +535,7 @@ impl TranscriptFold {
     /// Save checkpoint and applied position in one receiver transaction.
     ///
     /// # Errors
-    /// Returns [`TranscriptError::Decision`] carrying
-    /// [`StorageError::AnotherVersion`] when an unmarked checkpoint is not
-    /// this build's shape. `from_chunks` already refused a different unsigned
+    /// `from_chunks` already refused a missing marker and any other unsigned
     /// `schemaVersion`. Returns `Checkpoint` for a current-version body that
     /// is malformed or inconsistent, or `Scope` when its identity differs.
     pub fn restore(
@@ -552,9 +546,8 @@ impl TranscriptFold {
         // `from_chunks` already classified the marker. This decode does not
         // walk the bytes again.
         let saved: SavedFold = serde_json::from_reader(checkpoint.reader())
-            .map_err(|_| checkpoint.unreadable_body())?;
-        // `from_chunks` already classified the marker. An absent field
-        // defaults to this build's version, so a decoded fold names that version.
+            .map_err(|_| TranscriptError::Checkpoint)?;
+        // `from_chunks` already required this build's marker.
         if saved.schema_version != StorageError::SCHEMA_VERSION {
             return Err(TranscriptError::Checkpoint);
         }
@@ -562,12 +555,12 @@ impl TranscriptFold {
             return Err(TranscriptError::Checkpoint);
         }
         let saved_scope = Scope::new(
-            Id::new(saved.receiver).map_err(|_| checkpoint.unreadable_body())?,
-            Id::new(saved.origin).map_err(|_| checkpoint.unreadable_body())?,
-            Id::new(saved.stream).map_err(|_| checkpoint.unreadable_body())?,
-            Id::new(saved.incarnation).map_err(|_| checkpoint.unreadable_body())?,
-            Id::new(saved.schema).map_err(|_| checkpoint.unreadable_body())?,
-            Id::new(saved.access_epoch).map_err(|_| checkpoint.unreadable_body())?,
+            Id::new(saved.receiver).map_err(|_| TranscriptError::Checkpoint)?,
+            Id::new(saved.origin).map_err(|_| TranscriptError::Checkpoint)?,
+            Id::new(saved.stream).map_err(|_| TranscriptError::Checkpoint)?,
+            Id::new(saved.incarnation).map_err(|_| TranscriptError::Checkpoint)?,
+            Id::new(saved.schema).map_err(|_| TranscriptError::Checkpoint)?,
+            Id::new(saved.access_epoch).map_err(|_| TranscriptError::Checkpoint)?,
         );
         if saved_scope != scope {
             return Err(TranscriptError::Scope);
@@ -576,7 +569,7 @@ impl TranscriptFold {
             .snapshot
             .map(snapshot::checkpoint::Snapshot::decode)
             .transpose()
-            .map_err(|_| checkpoint.unreadable_body())?;
+            .map_err(|_| TranscriptError::Checkpoint)?;
         if snapshot
             .as_ref()
             .is_some_and(|state| state.id.as_str() != scope.stream().as_str())
@@ -1824,22 +1817,20 @@ mod tests {
     }
 
     #[test]
-    fn an_unmarked_checkpoint_in_todays_shape_restores() {
+    fn an_unmarked_checkpoint_in_todays_shape_is_another_version() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
         fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
             .unwrap();
-        let checkpoint = fold.checkpoint().unwrap();
-        let mut value: Value = serde_json::from_reader(checkpoint.reader()).unwrap();
+        let mut value: Value =
+            serde_json::from_reader(fold.checkpoint().unwrap().reader()).unwrap();
         assert_eq!(value["schemaVersion"], StorageError::SCHEMA_VERSION);
         value.as_object_mut().unwrap().remove("schemaVersion");
-        let restored =
-            TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&value).unwrap()]).unwrap();
-        let loaded = TranscriptFold::restore(scope, fold.applied(), &restored).unwrap();
-        assert_eq!(loaded.fact_count(), fold.fact_count());
         assert_eq!(
-            loaded.snapshot().map(|state| state.id.as_str()),
-            Some("conversation")
+            TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&value).unwrap()]),
+            Err(TranscriptError::Decision(StorageError::AnotherVersion {
+                found: None
+            }))
         );
     }
 
@@ -1853,17 +1844,13 @@ mod tests {
             serde_json::from_reader(fold.checkpoint().unwrap().reader()).unwrap();
         value.as_object_mut().unwrap().remove("schemaVersion");
         value["snapshot"] = serde_json::json!("not a snapshot");
-        assert!(matches!(
-            TranscriptFold::restore(
-                scope,
-                fold.applied(),
-                &TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&value).unwrap()])
-                    .unwrap()
-            ),
+        // The missing marker is the refusal. The body is not mapped.
+        assert_eq!(
+            TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&value).unwrap()]),
             Err(TranscriptError::Decision(StorageError::AnotherVersion {
                 found: None
             }))
-        ));
+        );
     }
 
     #[test]

@@ -3187,11 +3187,10 @@ mod tests {
 
     /// P5 of "The values, saved and sent" (`docs/design/mcp-app-calls.md`).
     /// A version-1 input without `user_app` or `user_app_model_context` is
-    /// `Corrupt` for its own conversation. A record from before #467, which
-    /// has no `schemaVersion` and neither field, is `AnotherVersion` for its
-    /// own conversation. Today's shape with the marker removed is read as
-    /// version 1. Siblings in the same store open, and a refusal leaves the
-    /// stored rows unchanged.
+    /// `Corrupt` for its own conversation. A record with no `schemaVersion`
+    /// is `AnotherVersion` for its own conversation, including today's shape
+    /// with only the marker removed. Siblings in the same store open, and a
+    /// refusal leaves the stored rows unchanged.
     #[tokio::test]
     async fn an_input_saved_without_its_app_fields_is_corrupt_for_its_conversation_only() {
         let directory = tempfile::tempdir().unwrap();
@@ -3319,13 +3318,18 @@ mod tests {
                 "{older}"
             );
         }
-        assert!(matches!(
-            reopened
-                .open_existing(SessionId::new("before-app-fields").unwrap())
-                .await,
-            Err(StorageError::AnotherVersion { found: None })
-        ));
-        for sibling in ["framed-unchanged", "written", "unmarked-today"] {
+        for unmarked in ["unmarked-today", "before-app-fields"] {
+            assert!(
+                matches!(
+                    reopened
+                        .open_existing(SessionId::new(unmarked).unwrap())
+                        .await,
+                    Err(StorageError::AnotherVersion { found: None })
+                ),
+                "{unmarked}"
+            );
+        }
+        for sibling in ["framed-unchanged", "written"] {
             let id = SessionId::new(sibling).unwrap();
             let lease = reopened.open_existing(id.clone()).await.unwrap().unwrap();
             let snapshot = lease.load().await.unwrap().snapshot().unwrap().clone();

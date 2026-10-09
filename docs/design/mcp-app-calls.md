@@ -381,7 +381,7 @@ was.
 | P4 | more than 4 saved contexts | `Corrupt`, before a fifth is built |
 | P5 | a version-1 saved message without `user_app` or `user_app_model_context` | `Corrupt`, for that conversation only; another opens |
 | P5a | a message saved before #467: no `schemaVersion`, and without those fields | `AnotherVersion { found: None }`, for that conversation only; another opens; the stored rows stay |
-| P5b | today's saved message with no `schemaVersion` | read as version 1 |
+| P5b | today's saved message with no `schemaVersion` | `AnotherVersion { found: None }`, for that conversation only; another opens; the stored rows stay |
 | P6 | an `UnknownApp` failure saved and read back | the same variant |
 | P7 | a message's writer and contexts | counted in the session's retained bytes, every byte |
 | B1 | a message carrying contexts, sent | one leading text block: the preamble, then the JSON array in order; then the message |
