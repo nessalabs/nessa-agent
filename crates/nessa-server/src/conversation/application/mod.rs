@@ -190,3 +190,7 @@ mod linked_file_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/listing.rs"]
 mod listing_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/local_golden.rs"]
+mod local_golden_tests;
