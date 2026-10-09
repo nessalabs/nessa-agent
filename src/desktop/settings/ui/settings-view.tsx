@@ -7,7 +7,9 @@ import {
   useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
 } from "react"
+import { IdentityButton, IdentityRow } from "../../ui/identity"
 import type { HostKind } from "../../../host/features"
 import { holdStill, slideFrom } from "../../adapters/hold-still"
 import { isMac } from "../../adapters/platform"
@@ -17,12 +19,12 @@ import { useThemePreference } from "../../adapters/theme-preference"
 import { useEdgePeek } from "../../adapters/use-edge-peek"
 import { useWindowWidth } from "../../adapters/window-width"
 import { chosen, drawn, fitted, type SideColumn } from "../../model/side-column"
-import { ColumnHeader } from "../../ui/column-header"
 import { EdgePeekStrip } from "../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../ui/history-buttons"
 import { focusInFront } from "../../workspace"
 import { settingsSidebar, settingsSidebarFits } from "../model/settings-sidebar"
 import {
+  dekOf,
   firstTabOf,
   searchSettings,
   settingsCategories,
@@ -37,16 +39,19 @@ import {
 } from "../model/settings-catalogue"
 import { DesktopIcon, type DesktopIconRole } from "../../ui/icons"
 import { FoundSetting } from "./settings-controls"
+import { SettingsMasthead } from "./settings-masthead"
 import { settingsTabPages } from "./settings-tabs"
 import "./settings.css"
 import { tooltip } from "../../ui/tooltip"
 
 /**
  * Prototype: Settings as its own surface over the window. A short sidebar of
- * categories and, beside it, the chosen category's page: its title, a strip
- * of tabs, and the tab's settings in grouped rows, the way System Settings
- * lays them out. What exists is catalogued in `model/settings-catalogue.ts`;
- * the pages are in `settings-tabs.tsx`.
+ * categories and, beside it, the chosen category's page in one centred
+ * column: its masthead (the name set large, and its tabs when it has
+ * several), then the tab's settings in grouped rows. What exists is
+ * catalogued in `model/settings-catalogue.ts`; the pages are in
+ * `settings-tabs.tsx`; the pieces they are built from, over the UI kit's, in
+ * `settings-controls.tsx`.
  *
  * Opened from "nessa Studio" at the foot of the app's sidebar (or ⌘,); in
  * Settings that same place reads "nessa Agent" with a back chevron, and
@@ -63,6 +68,9 @@ export function openSettings() {
 
 /** ⌘B shows and hides Settings' sidebar, as it does the window's. */
 const sidebarChord: Chord = { code: "KeyB", command: true }
+
+/** ⌘F goes to Settings' search, as it does in the system's own settings. */
+const searchChord: Chord = { code: "KeyF", command: true }
 
 /** Each category's icon in the sidebar, for every category the catalogue has. */
 const categoryIcons: Record<SettingsCategoryId, DesktopIconRole> = {
@@ -176,6 +184,9 @@ function SettingsView({
   const scrollRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const resultsRef = useRef<HTMLUListElement>(null)
+  const contentRef = useRef<HTMLElement>(null)
+  // ⌘F with the sidebar away shows it, then searches once it is there.
+  const [searchAsked, setSearchAsked] = useState(false)
 
   const tabs = tabsOf(category)
   const tabsShown = showsTabs(category)
@@ -204,16 +215,32 @@ function SettingsView({
     const onKeyDown = (event: KeyboardEvent) => {
       if (!commandKey(event, isMac) && !event.ctrlKey) return
       event.stopPropagation()
+      if (matchesChord(event, searchChord, isMac)) {
+        event.preventDefault()
+        if (sidebarOpen) {
+          searchRef.current?.focus()
+          searchRef.current?.select()
+        } else {
+          setSidebarColumn((column) => chosen(column))
+          setSearchAsked(true)
+        }
+        return
+      }
       if (!matchesChord(event, sidebarChord, isMac)) return
       event.preventDefault()
       toggleSidebar()
     }
     window.addEventListener("keydown", onKeyDown, true)
     return () => window.removeEventListener("keydown", onKeyDown, true)
-  }, [toggleSidebar])
+  }, [toggleSidebar, sidebarOpen, setSidebarColumn])
+  useEffect(() => {
+    if (!searchAsked || !sidebarOpen) return
+    setSearchAsked(false)
+    searchRef.current?.focus()
+  }, [searchAsked, sidebarOpen])
 
   // The sidebar's room changes at once, and the page slides into its new
-  // place by transform, as the workspace's columns do; an inline title holds
+  // place by transform, as the workspace's columns do; the bar's title holds
   // still at its own place meanwhile (`holdStill`), clear of the window's
   // controls, rather than ride the slide from under them.
   const sidebarWas = useRef(sidebarOpen)
@@ -225,9 +252,7 @@ function SettingsView({
     if (!content) return
     const width = settingsSidebar.width
     if (!slideFrom(content, (was ? width : 0) - (sidebarOpen ? width : 0))) return
-    const title = content.querySelector<HTMLElement>(
-      ":scope > .desktop-column-bar > .desktop-column-title:not(.desktop-column-sizer)",
-    )
+    const title = content.querySelector<HTMLElement>(":scope > .settings-bar > *")
     if (title) holdStill(title)
   }, [sidebarOpen])
 
@@ -240,20 +265,48 @@ function SettingsView({
     if (!sidebarOpen && !revealed && lost) toggleRef.current?.focus()
   }, [sidebarOpen, revealed])
 
-  // A new tab starts at its top; a jump to a setting brings that setting into view.
+  // A new page starts at its top; a jump to a setting brings that setting
+  // to the middle of the view, where the eye is.
   useLayoutEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 })
-  }, [tab])
+  }, [category, tab])
   useEffect(() => {
     if (!found) return
     const row = scrollRef.current?.querySelector(`[data-setting="${found}"]`)
     row?.scrollIntoView({
-      block: "nearest",
+      block: "center",
       behavior: reducedMotion() ? "auto" : "smooth",
     })
     const timer = window.setTimeout(() => setFound(null), 1600)
     return () => window.clearTimeout(timer)
   }, [found])
+
+  // Once the masthead's title has scrolled under the bar, the bar shows the
+  // page's name small. Read on scroll, at most once a frame, and written
+  // straight to the page's attribute, so a scroll is not a render.
+  useEffect(() => {
+    const scroller = scrollRef.current
+    const content = contentRef.current
+    const title = scroller?.querySelector(".settings-title")
+    if (!scroller || !content || !title) return
+    let frame = 0
+    const update = () => {
+      frame = 0
+      const under =
+        title.getBoundingClientRect().bottom <= scroller.getBoundingClientRect().top
+      content.toggleAttribute("data-condensed", under)
+    }
+    const onScroll = () => {
+      if (frame === 0) frame = requestAnimationFrame(update)
+    }
+    update()
+    scroller.addEventListener("scroll", onScroll, { passive: true })
+    return () => {
+      scroller.removeEventListener("scroll", onScroll)
+      cancelAnimationFrame(frame)
+      content.removeAttribute("data-condensed")
+    }
+  }, [category])
 
   const showTab = (next: SettingsTab) => {
     setChosenTabs((all) => ({ ...all, [next.category]: next.id }))
@@ -435,54 +488,89 @@ function SettingsView({
           )}
 
           {/* Where "nessa Studio" opened Settings, the way back to the app. */}
-          <button
-            type="button"
-            className="settings-identity"
-            aria-label="Back to nessa Agent"
-            onClick={onClose}
-          >
-            <DesktopIcon name="chevronLeft" className="settings-identity-back" />
-            <span className="settings-identity-name">
-              <strong>nessa</strong>
-              <span>Agent</span>
-            </span>
-          </button>
+          <IdentityRow as="div">
+            <IdentityButton
+              product="Agent"
+              back
+              label="Back to nessa Agent"
+              onClick={onClose}
+            />
+          </IdentityRow>
         </nav>
       </div>
 
-      <main className="settings-content" aria-labelledby="settings-heading">
-        <ColumnHeader
-          key={category}
-          title={settingsCategory(category).label}
-          heading="h1"
-          headingId="settings-heading"
-        >
-          {tabsShown ? (
-            <div className="settings-column settings-head-tabs">
-              <SettingsTabStrip tabs={tabs} selected={tab} onSelect={showTab} />
-            </div>
-          ) : null}
-        </ColumnHeader>
+      <main
+        ref={contentRef}
+        className="settings-content"
+        aria-labelledby="settings-heading"
+      >
+        {/* The page's drag strip; its title shows once the masthead's has scrolled away. */}
+        <div className="settings-bar" data-tauri-drag-region>
+          <span className="settings-bar-title" aria-hidden="true">
+            {settingsCategory(category).label}
+          </span>
+        </div>
         <div ref={scrollRef} className="settings-scroll">
-          <div
-            key={tab}
-            className="settings-column settings-panel"
-            id="settings-panel"
-            role={tabsShown ? "tabpanel" : undefined}
-            aria-labelledby={tabsShown ? tabButtonId(tab) : undefined}
+          <SettingsPage
+            key={category}
+            category={category}
+            tab={tab}
+            tabs={tabsShown ? tabs : undefined}
+            onTab={showTab}
           >
             <FoundSetting.Provider value={found}>
               <Page />
             </FoundSetting.Provider>
-          </div>
+          </SettingsPage>
         </div>
       </main>
     </div>
   )
 }
 
-const tabButtonId = (tab: SettingsTabId) => `settings-tab-${tab}`
 const resultKey = (match: SettingsMatch) => `${match.tab}:${match.setting ?? match.label}`
+
+const tabButtonId = (tab: SettingsTabId) => `settings-tab-${tab}`
+
+/**
+ * One category's page in the centred column: its masthead — the title, and
+ * the strip of tabs under it when it has several — then the open tab's
+ * settings, the strip's panel.
+ */
+function SettingsPage({
+  category,
+  tab,
+  tabs,
+  onTab,
+  children,
+}: {
+  category: SettingsCategoryId
+  tab: SettingsTabId
+  tabs: readonly SettingsTab[] | undefined
+  onTab: (tab: SettingsTab) => void
+  children: ReactNode
+}) {
+  return (
+    <div className="settings-column settings-page">
+      <SettingsMasthead
+        title={settingsCategory(category).label}
+        dek={dekOf(category)}
+        headingId="settings-heading"
+      >
+        {tabs ? <SettingsTabStrip tabs={tabs} selected={tab} onSelect={onTab} /> : null}
+      </SettingsMasthead>
+      <div
+        key={tab}
+        id="settings-panel"
+        className="settings-panel"
+        role={tabs ? "tabpanel" : undefined}
+        aria-labelledby={tabs ? tabButtonId(tab) : undefined}
+      >
+        {children}
+      </div>
+    </div>
+  )
+}
 
 /**
  * The tabs across the top of a category's page. One tab stop: the arrow keys,

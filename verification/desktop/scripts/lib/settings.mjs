@@ -40,7 +40,10 @@ export async function integrationsFit(page, widths) {
       (sel) => {
         const settings = document.querySelector(sel.settings)
         const panel = document.querySelector(sel.panel)
-        const cards = panel?.querySelectorAll(`${sel.card}, ${sel.groupHeading}`) ?? []
+        // The kit's cards always; a card Settings draws itself only while it is open.
+        const cards =
+          panel?.querySelectorAll(`${sel.card}, ${sel.formCard}, ${sel.groupHeading}`) ??
+          []
         const scrollers = settings?.querySelectorAll(sel.scrollers) ?? []
         // A selector that finds nothing measures nothing: say so, not "fits".
         // Each part of a list on its own, so one renamed class is not hidden
@@ -126,6 +129,7 @@ export async function integrationsFit(page, widths) {
         text: css.mcpRowText,
         actions: css.mcpRowActions,
         card: css.settingsCard,
+        formCard: css.settingsFormCard,
         groupHeading: css.settingsGroupHeading,
         scrollers: css.settingsScrollers,
       },

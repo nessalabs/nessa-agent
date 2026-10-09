@@ -13,6 +13,11 @@
   transition-delay: var(--desktop-fast);
 }
 
+/* The overview owns this group's inert state; each region keeps its own. */
+.workspace-content {
+  display: contents;
+}
+
 /*
  * The Agents overview's layer (`ui/overview/overview-layer.tsx`): over the
  * session list and the panes, from where the list begins — past the sidebar

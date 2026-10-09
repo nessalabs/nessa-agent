@@ -31,6 +31,7 @@ verification/
     evidence/
       conversation-unread/  screenshots the pull request shows for that check
     fixtures/
+      sandbox-probes/      labelled host for visible isolation and navigation probes
       attachments-races/    real panel with controlled attachment host and scenario gateway effects
       onboarding-readiness/ real setup with stalled HTTP response and retry cases
       provider-sign-in/     real transcript with typed auth refusal and controlled login launch
@@ -48,6 +49,7 @@ verification/
       perf-budget.mjs       the frame budget, production build, 4× CPU throttling
       alpha-perf.mjs        cold/warm startup, the pane cap, one long transcript; --with-gateway seeds a scripted gateway (opt-in; not in run-all)
       safe-area.mjs         nothing painted under the window controls, per frame
+      columns.mjs           no two columns overlap in any state of the side rail, sidebar, list and overview; the rail's toggle and "nessa Studio" hold still; a full view's workspace takes no keys
       load-fallback.mjs     the load fallback inside, and centred in, the visible panel
       gateway-states.mjs    the desktop app's window when it cannot read the gateway: says why, never the sample
       conversation-unread.mjs a listed conversation the window could not read: the transcript and the Agents peek say what (#433)
@@ -95,6 +97,12 @@ guessing; a step that began and then waited in vain for the product has
 failed. Steps wait on conditions (`until`, `settled`, `contentIs`,
 `paneCountIs` in `lib/workspace.mjs`), not on fixed times; where a check
 asserts that something does not happen, its window is named and explained.
+
+The standalone MCP sandbox departure and chart checks use
+`desktop/fixtures/sandbox-probes/index.html`. Their visible frames stay on that
+labelled verification page, separate from the product UI. Every check releases
+its message-listener owner and removes its frames before closing the page;
+cleanup assertions report any remaining frames or product markup.
 
 ## Prerequisites
 

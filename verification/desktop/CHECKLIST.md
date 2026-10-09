@@ -82,6 +82,11 @@ production build at 4× CPU throttling.
   _Check:_ `perf-budget.mjs` (defaults: `--mode prod --throttle 4 --runs 3`).
   Read max and median per row; every over-budget frame carries its Long
   Animation Frame attribution (scripts, forced layout, style-and-layout time).
+- [ ] **Frame gaps use callback execution time.** Sampling `performance.now()`
+  inside rAF keeps delayed callbacks, the interaction origin and attribution
+  on one clock. A nominal frame timestamp must not shorten known blocking work.
+  _Check:_ `lib/perf.test.mjs` (delayed timestamps and a zero first timestamp),
+  `perf-budget.mjs` (known-cost calibration).
 - [ ] **The budget decides on the unrounded frame** (#369). The table rounds
   maxima for display. A 50.1 ms frame fails when that table shows 50; an exact
   50 ms frame and a 49.6 ms frame pass.
@@ -199,30 +204,29 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
 - [ ] **Only the primary button carries**: the right button joining the left
   mid-drag ends the drag; nothing is carried after it and its release drops
   nothing. _Check:_ `drag.mjs` (`chord-right-button`).
-- [ ] **Nothing carried is painted under the window's controls**, the corner
-  pane's copy included, every frame, and the corner pane's copy lays its
-  header out as the pane does, its title as far in (± 2 px). _Check:_
-  `drag.mjs` (`copy-under-controls`).
-- [ ] **No text selection is left behind**, during or after a drag. _Check:_
-  `drag.mjs` (`sweep-across-zones`, `outside-cancels`).
-- [ ] **Preview equals commit** — the placeholder marks exactly the rect the
-  drop takes. _Check:_ unit test `panes.test.ts`; by eye with `--headed`.
-- [ ] **The copy takes the shape of where it would land** (ADR 238 › _What
-  the copy and the panes are drawn at_): with a zone shown and the pointer
-  at rest, the copy's painted size is the placeholder's (± 2 px) and its
-  centre is on the pointer (± 2 px); with no zone it is the carried pane's
-  own size; each change of size runs one way, never past where it goes,
-  with nothing painted under the controls and no title drawn stretched.
-  _Check:_ `drag.mjs` (`copy-takes-slot-shape`; `--shots <dir>` saves it
-  below, beside, and over its own place); unit tests `split-panes/model/drag.test.ts`,
-  `split-panes/adapters/dom/drag.test.tsx`,
+- [ ] **Nothing carried paints under the window controls.** The compact
+  card is clipped below the titlebar during every frame.
+  _Check:_ `drag.mjs` (`copy-under-controls`).
+- [ ] **No text selection is left behind**, during or after a drag.
+  _Check:_ `drag.mjs` (`sweep-across-zones`, `outside-cancels`).
+- [ ] **The shown zone commits the same drop outcome.** The target highlight
+  identifies the gesture's zone; the model's proposal determines the final
+  layout. _Check:_ unit test `panes.test.ts`; `drag.mjs` (`stationary-drag-target`).
+- [ ] **The carried card stays compact.** Its row-sized box keeps the same
+  dimensions over every target and its centre follows the pointer within 2px;
+  its title never stretches. It contains no transcript, image band or composer.
+  _Check:_ `drag.mjs` (`compact-drag-card`; `--shots <dir>` saves target views),
   `workspace/adapters/dom/split-panes-drag.test.tsx`.
-- [ ] **Every pane previews the shape it lands at**: with a zone shown and
-  the pointer at rest, each pane is painted at the rect the drop then gives
-  it (± 2 px), its conversation centred across that shape (± 2 px), its
-  header held to the top left, and cut to it —
-  its title never drawn stretched, any frame — and a drag leaves no pane at a size of its own. _Check:_
-  `drag.mjs` (`preview-panes-take-shape`; every drag check's residue).
+- [ ] **Live chats stay still during targeting.** Their rects stay within 2px
+  of their starting geometry, pane material and body visibility stay unchanged,
+  and the highlight marks the hovered half or whole pane. Release commits the
+  split; cancellation leaves the layout unchanged and removes owned resources.
+  _Check:_ `drag.mjs` (`stationary-drag-target`; every drag check's residue).
+- [ ] **A layout flight leaves stationary chats live.** Closing or swapping panes keeps
+  unchanged panes' bodies and material visible. A temporary measurement hold
+  never reaches paint; only moving panes restore one body per frame.
+  _Check:_ `drag.mjs` (`stationary-layout-flight`, `stationary-drop-commit`),
+  `split-panes/adapters/dom/flip.test.tsx` (interrupted subsets).
 - _Harmless, and not a failure:_ a single read of a title's transforms in
   WebKit that mixes two moments. How the two stretch checks read a title is
   `recordShapeFrames` (`scripts/lib/shape-sampler.mjs`), and why, with the runs and probes, is #365.
@@ -262,6 +266,35 @@ _ADR 238 › One fit rule for every change of layout_.
   the pane showing another session. _ADR 238 › What is typed and not sent_.
   _Check:_ manual.
 
+## Side rail
+
+_Prototype, `workspace/ui/chrome/side-rail.*`, off until Settings › Advanced ›
+Experimental turns it on; the rail stands beside the workspace in
+`.workspace-window`, not inside it. `columns.mjs` turns it on for its checks._
+
+- [ ] **Off by default, and off means absent**: no rail, no toggle, the
+  workspace at the window's edge. _Check:_ `columns.mjs --only rail-off`;
+  `smoke.mjs` (Experimental offers the side rail's switch, off).
+
+- [ ] **No two columns overlap**, and nothing sits under the rail, in any
+  combination of the rail, the sidebar, the session list and the Agents
+  overview, at 1440, 1000 and 760 wide. _Check:_ `columns.mjs --only no-overlap`
+  (Chromium and WebKit, both layouts).
+- [ ] **The rail's toggle never moves**: it is at the control edge of the
+  window's bottom-left corner in every state, and hidden exactly when the rail
+  and the sidebar are both closed. **"nessa Studio" is at the same pixels in
+  Agents and in an item's full view**, and never under the toggle.
+  _Check:_ `columns.mjs --only rail-corner`.
+- [ ] **Under an item's full view the workspace takes no keys**: ⌘B, ⌘0 and
+  ⌥⌘S change nothing behind it. _Check:_ `columns.mjs --only rail-view-inert`.
+- [ ] **The titlebar's controls never pass under the window's controls while
+  the rail opens or closes**: every frame draws them between where they were
+  and where they land — still, in the macOS window. _Check:_
+  `columns.mjs --only titlebar-steady`.
+- [ ] **Toggling the rail moves things by transform only**: the width lands at
+  once and FlipScope plays the columns back, so no frame lays text out again.
+  _Check:_ `perf-budget.mjs` (production build) — not yet run for the rail.
+
 ## Keyboard and focus
 
 _ADR 238 › Focus follows the focused pane_; keys in
@@ -295,6 +328,49 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
 - [ ] **The keyboard walks its items; ⌘↩ allows, ⌘⌫ denies, ⌘R replies**, and
   the caret stays in the overview after an answer. _Check:_ `focus.mjs`
   (`focus-overview`, the walk); `perf-budget.mjs --only overview-answer` (answer lands); ⌘⌫ and ⌘R by hand.
+- [ ] **One row at a time shows its answers, and only when pointed at or
+  reached by the keyboard**: at rest a request row shows its title and time,
+  its why and its command, and no answers — nor room kept for them: the why
+  and the command run on to the time (the row's 12px gap before it, ±4).
+  Pointed at, or with the keyboard visibly on it (`:focus-visible`), Deny and
+  Allow Once (⌥ turns it into Always Allow where offered) take the time's
+  place at its end, sliding in (at once with less motion); the row's height
+  and the list do not change. A row clicked and chosen (its peek beside the
+  list) shows none while the pointer is on another row or off the list. The
+  answers carry no tooltip; each names its chord (`aria-keyshortcuts`);
+  labels ≥ 4.5:1. _Check:_ `responsive.mjs --only overview-row-answers`
+  (Chromium and WebKit); unit tests `overview.test.tsx`.
+- [ ] **An answered request moves to where it now belongs in one beat**: no
+  label on the row and nothing drawn around it — no ring, box or line — in
+  any frame. Taken, the row waits, quiet, until the source moves its session
+  on (at most 2s; then it shows as the workspace holds it), so it never
+  springs back into Needs you. Then it dematerializes where it stood (a copy
+  that fades, scales to 0.97 and blurs over `--desktop-slow`) while the
+  session's row materializes in its new group (from 0.98 and a blur) — the
+  arrival's first visible frame within one frame of the departure's — and
+  the rows after it close the gap by transform; the copy is gone within
+  400ms and the next row ends where the answered one stood. Deny leaves the
+  same way. The live region says "Allowed: <title>" / "Denied: <title>".
+  With less motion: no copy, no blur or scale — the row is simply where it
+  now belongs. _Check:_ `responsive.mjs --only overview-leave` (Chromium and
+  WebKit), with its revert probe; unit tests `overview.test.tsx`,
+  `overview-reflow.test.tsx`.
+- [ ] **The edge between the list and the peek resizes, as the window's
+  other edges do**: at rest nothing of it shows — no fill, shadow, border or
+  glow over the peek's hairline; near the pointer, or with the keyboard on
+  it, the edge light glows along it. Dragged, the boundary follows the
+  pointer (+120px moves it 120px); ← / → move it 16px; a double-click restores
+  the even split. The list keeps at least 340px and the peek 320px, dragged
+  or as the window narrows, and the dragged width holds while the window is
+  open (the layer's state, not a stored preference). It is a separator
+  (`aria-valuenow`/`min`/`max`) and a tab stop between the list and the
+  peek. The peek's content — header, where it stands, the story and the
+  reply — is one column centred in the peek at every width (its gaps either
+  side equal ±2px, their edges shared ±1px). What the peek says scrolls above its reply pill,
+  as a pane's transcript does above its composer (fading 20px at its edges):
+  nothing is drawn behind the pill at any scroll, and the last line scrolls
+  clear of it. _Check:_ `responsive.mjs --only
+  overview-edge` (Chromium and WebKit); its place in the tab order, by hand.
 - [ ] **One press answers one request** (_ADR 238 › What fills the content
   region_): a held ⌘↩ answers one; two presses 80ms apart answer one; a held ↩
   on a pane card's Allow Once answers one and sends nothing typed; a double
@@ -371,7 +447,7 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
 
 ## Widgets
 
-_ADR 326_ ([`docs/adr/todo/326-widgets.md`](../../docs/adr/todo/326-widgets.md)):
+_ADR 326_ ([`docs/adr/done/326-widgets.md`](../../docs/adr/done/326-widgets.md)):
 a plugin's view is drawn inline in a message, in a pane of its own, or in the
 window over the panes; Escape and focus as its _Focus_ and _Escape_ say. The
 scripts drive the sample plugin the sample workspace registers
@@ -427,10 +503,11 @@ scripts drive the sample plugin the sample workspace registers
 
 ## Subagents
 
-The read-only sample panel (ADR 329, #330, #331): a conversation's widget
-opens a list of the agents it put to work, and one child's conversation.
-The sample fills the retry-budget session only. No composer, no header
-accessory.
+The read-only sample panel (ADR 329, #330, #331, #332): a conversation's
+widget opens a list of the agents it put to work, and one child's
+conversation. The sample fills the retry-budget session only. No composer.
+The same conversation's pane header shows those agents when the preview is
+on.
 
 - [ ] **The card opens a pane beside the conversation**, the list in activity
   order with a closed child called closed, and a child opens on its
@@ -442,10 +519,18 @@ accessory.
   `subagents.mjs --only panel`.
 - [ ] **The list fits a narrow pane in a short window.** _Check:_
   `subagents.mjs --only narrow` (1000 × 560).
+- [ ] **The conversation's header shows its subagents, the busiest first.**
+  Nothing is drawn for a conversation without them, or with the preview off
+  (`subagent-stack.test.tsx`). A click opens the panel beside the
+  conversation. At a narrow width the stack, the header's title and the
+  pane's menu sit in the header without it overflowing and without
+  overlapping, and the title keeps a positive width inside the header.
+  A production Chromium run fails when the open's longest frame exceeds
+  50 ms. _Check:_ `subagents.mjs --only narrow` (1000 × 560).
 
 ## MCP Apps
 
-_ADR 344_ ([`docs/adr/todo/344-mcp-ui.md`](../../docs/adr/todo/344-mcp-ui.md)),
+_ADR 344_ ([`docs/adr/done/344-mcp-ui.md`](../../docs/adr/done/344-mcp-ui.md)),
 #349: an MCP server's app is drawn behind a sandbox proxy on another origin,
 inline, in a pane (its fullscreen) and in the window, and spoken to over the
 `ui/*` bridge. The script drives the fixture app the sample workspace
@@ -656,6 +741,11 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   position. _ADR 238 › A new session's home takes its pane's shape_.
   _Check:_ `responsive.mjs --only home-shape --shots <dir>`, then look at the
   shots beside the conversation pane.
+- [ ] **First-message handoff has one composer.** Sending from a new-session
+  home replaces it without overlapping composer instances; the reply receives
+  the caret and keeps the next draft. The composer glides into its dock and
+  the sent words rise into their bubble; reduced motion performs neither flight.
+  _Check:_ `focus.mjs` (`focus-home-handoff`, `focus-home-handoff-reduced`).
 - [ ] **Focus on Customize survives the home becoming small.** Customize
   focused in a new session's home, the window shortened until the home takes
   a small pane's shape: the header stays, and focus stays on Customize.
@@ -693,22 +783,57 @@ phone's scanner is not this screen.
   _Check:_ `smoke.mjs` (`settings`); inertness by hand (click under it).
 - [ ] **Its sidebar folds for room below a 420px page.** _Check:_
   `responsive.mjs --only settings-fold`.
-- [ ] **Pending settings say "Not available yet" and their controls are
-  disabled** — nothing looks as if it works when it does not. _Check:_ unit
-  test `settings-view.test.tsx`; by eye.
+- [ ] **Pending settings say "Not available yet" once, and their controls
+  are disabled** — nothing looks as if it works when it does not. A group
+  whose settings are all pending says it once under its card, and each
+  disabled control is described by that note (`aria-describedby`); a pending
+  row in a group with others says it on its own row. _Check:_ unit tests
+  `settings-view.test.tsx`, `settings-controls.test.tsx`; by eye.
 - [ ] **A setting for one layout says so elsewhere**: "Show session list" and
   "Keep running sessions at the top" work in three columns; in sessions in
   the sidebar and classic their switches are disabled and say "Three columns
   only". _Check:_ unit test `settings-view.test.tsx` (per layout).
+- [ ] **Segmented choices are one Tab stop each option, for now**: they are
+  the kit's `SegmentedControl` (a group of pressed buttons, no arrow keys);
+  one Tab stop with arrows waits on its radio-group mode (nessalabs/nessa_ui#120).
+  _Check:_ by hand.
 - [ ] **Advanced › Experimental is the home of previews**: Advanced sits just
-  before About with its flask in both icon families; its one tab,
-  Experimental, offers the subagents preview as a switch (on unless turned
-  off) and shows "Nothing to try right now." only while no preview is on
-  offer; General has no Experimental tab; search finds the tab as
-  "advanced", "experimental", "labs" or "preview". _Check:_ `smoke.mjs`
-  (`settings`); unit tests `settings-view.test.tsx`,
-  `settings-catalogue.test.ts`, `icon-provider.test.tsx`; the flask by eye in
-  both families.
+  before About with its flask in both icon families; one line under its
+  title says what it is for, and with one tab there is no tab strip; it
+  offers each preview as one switch — the subagents preview (on unless
+  turned off) and the side rail (off until turned on); General has no Experimental tab; search finds it as "advanced",
+  "experimental", "labs" or "preview". _Check:_ `smoke.mjs` (`settings`);
+  unit tests `settings-view.test.tsx`, `settings-catalogue.test.ts`,
+  `icon-provider.test.tsx`; the flask by eye in both families.
+- [ ] **A page's title stands clear of the window's controls**: at 1440 × 900,
+  1000 × 700, 760 × 700 and 600 × 700 (sidebar folded) every category's
+  title starts at least 16px below the titlebar row; at 1000 × 700 every row
+  of General, Appearance, Workspace, Models and Privacy & Permissions (their
+  first tabs) is above the fold. _ADR 238 › The titlebar's safe area._
+  _Check:_ `settings-page.mjs --only masthead`.
+- [ ] **No word shows twice at once**: no tab in a strip is named as its
+  category is (General's first tab is Startup); no group's title on screen
+  repeats its page's or its tab's name (Workspace › Keyboard's groups are
+  Window and Panes and sessions; Linked devices lists Your devices); and a
+  card named as its tab (Agents, Providers, Layout, Linked devices) keeps its
+  title for assistive technology only. _Check:_ unit tests
+  `settings-catalogue.test.ts`, `settings-view.test.tsx` (every page without
+  a gateway); Linked devices with a gateway by eye.
+- [ ] **Scrolled, the page's bar names it**: once the title has scrolled under
+  the bar, the bar shows the page's name small — starting with the column,
+  or after the window's controls with the sidebar folded — and it goes when
+  scrolled back. _Check:_ `settings-page.mjs --only condense` (1000 × 700,
+  600 × 700); `safe-area.mjs --only settings,settings-sidebar-return`.
+- [ ] **A page arrives quickly, and at once under less motion**: a category or
+  tab change runs at most 300ms of motion, on the masthead and the page only,
+  and none under Reduce motion. _Check:_ `settings-page.mjs --only arrive`.
+- [ ] **Search lands on the setting**: Enter takes the first result's
+  category and tab, brings the setting to the middle of the view and marks it
+  for a moment; ⌘F goes to the search field, showing a hidden sidebar first.
+  _Check:_ `settings-page.mjs --only search`.
+- [ ] **Keyboard focus shows the window's focus ring** on Settings' tabs and
+  controls (not a fill). _Check:_ `settings-page.mjs --only focus-ring`
+  (WebKit walks with ⌥Tab, as Safari does).
 
 ### Integrations: the gateway's MCP servers
 
@@ -847,6 +972,78 @@ it is redesigned on its own branch.
   engine and layout, on load and with the switcher open). Rule: `chrome.css` ›
   Keys. At the base commit the session list's and the switcher's keys were
   bare text, unlike the sidebar's cap.
+- [ ] **Every list row is one of two components, answering the same way
+  (#657).** The sidebar's channels, its Agents entry and "Show all" are the
+  kit's `SidebarMenuItem` (`xs`); the sidebar's sessions, the session list,
+  the overview's sessions and the switcher's results are the window's
+  `ListRow` (`ui/list-row.tsx`), where a row is a listbox's option or its
+  trailing detail is as wide as it says. Under the pointer every kind fills
+  with `--desktop-hover`, a chosen row with `--desktop-selected`, and an
+  unread title weighs `--desktop-unread-weight`; a kit row's name says the
+  count or glyph the kit lays beside it, which stays silent, and pointed at
+  that glyph the row keeps its fill; a switcher result, whose choice
+  follows the pointer, draws no hover of its own. _Check:_ `shared-controls.mjs`
+  (`rows`, per engine and layout: on load, in the overview, with the switcher
+  open). Rules: `ui/list-row.css`, `source-list.css` › Rows. At the base
+  commit no row was either component, and unread weighed 560, 600 or 650 by
+  list.
+- [ ] **The window's name is one control in every place (#657).** "nessa
+  Studio" at the workspace's and the classic shell's foot and "‹ nessa Agent"
+  at Settings' are `ui/identity.tsx`: a pill the corner controls' size and
+  radius, "nessa" and its word in `--desktop-muted`, named, filled with
+  `--desktop-hover` under the pointer; Settings' row stands where the
+  window's does. _Check:_ `shared-controls.mjs` (`identity`, per engine and
+  layout; "‹ nessa Agent" measured inside Settings, over the inert window
+  that keeps its own; and in the classic shell). Rule:
+  `ui/identity.css`. At the base commit the classic shell's read
+  "nessaStudio" with no name, no pill and no fill, in the kit's grey.
+- [ ] **Every empty state is the kit's `EmptyState`, in the window's type
+  (#657).** The session list's, the workspace's failure, an overview group
+  shown alone, "Nothing needs you", the classic shell's notes, the subagents
+  panel's and a widget's line: a quiet one (`compact`) a faint footnote line
+  with its action 12px under it, a titled one at reading size, 600, its
+  sentence muted. Where each sits is its surface's. _Check:_
+  `shared-controls.mjs` (`empty`: the quiet ones — the session list with no
+  match, the classic shell's notes); `gateway-states.mjs` reads the
+  workspace's sentence from the kit's title. The titled ones ("Nothing needs
+  you", the subagents panel's) show only with nothing listed, which the
+  sample never is: their type is held by #657's before/after shots
+  (`evidence/657/empty-*`, `rims-all-clear-*`), not by a script. Rule: `styles.css` › Empty states. Settings' own are left to
+  its redesign.
+- [ ] **Counts are the kit's `Badge`; lit points are `StatusGlyph`'s (#657).**
+  A sidebar row's count is the kit's `Badge` as the row's caption (16px tall,
+  at least 18 wide, no border, the needs light for what waits); the session
+  list's unread point and the overview's "Needs you" point are
+  `StatusGlyph`'s 6px points (`unread`, `needs-you`; `flush` where words start
+  at the point, `decorative` beside words that say it). _Check:_
+  `shared-controls.mjs` (`badges`, on load and in the overview; an unread
+  point and the heading's point must be found);
+  `status-glyph.test.tsx` for what each says. Rules: `source-list.css` ›
+  `.workspace-badge`, `chrome.css` › `.workspace-status`. At the base commit
+  the unread point and the heading's point were drawn by their own rules.
+- [ ] **A card set into a surface has one edge (#657).** A code block, an
+  agent's command, a widget's card and "Nothing needs you" take
+  `--desktop-card-rim`, a 0.5px hairline at 10% of the ink; a pane's glass
+  keeps `--desktop-rim`. _Check:_ `shared-controls.mjs` (`rims`: on load, in
+  the widget sample, in the overview's peek; a code block, a command and a
+  widget's card must be found; "Nothing needs you" shows only with nothing
+  listed, which the sample never is: `evidence/657/rims-all-clear-*`). Rule: `styles.css` ›
+  `--desktop-card-rim`. At the base commit the four had four edges (1px at
+  4%, 1px `--desktop-rim`, 0.5px at 9% and at 10%). Settings' cards are left
+  to its redesign; warm edges (a review, the peek's request) are their own.
+- [ ] **A session's pane, a widget's pane and the window share one header
+  bar (#657).** `panes/pane-header-frame.tsx`: name, spacer, what is added,
+  actions, with `headerBar`'s drag attributes; a pane's × keeps its room
+  (`ClosePaneButton`). _Check:_ `pane-header-frame.test.tsx`; the markup of
+  every header is unchanged from the base (scratch comparison in #657's pull
+  request); `drag.mjs`, `widgets.mjs` and `safe-area.mjs` hold the behaviour.
+- [ ] **The overview's counts are the kit's `SegmentedControl` (#657).**
+  Bare, in the line's own type: none pressed while every group shows,
+  `--desktop-hover` under the pointer, `--desktop-selected` pressed, nothing
+  moving as one is chosen, and the pressed one chosen again letting go. The
+  side rail's lens and Settings' own controls stay with their owners.
+  _Check:_ `shared-controls.mjs` (`segmented`); `overview.test.tsx` for
+  what each count shows. Rule: `overview.css` › counts.
 
 ## Menus and tooltips
 
@@ -1096,6 +1293,26 @@ Both cases require zero page errors. The rule is owned by
 `src/onboarding/adapters/agents.ts`; ordering and unit regressions are in the
 [adapter tests](../../src/onboarding/adapters/agents.test.ts) and
 [setup recovery tests](../../src/onboarding/ui/onboarding-readiness-timeout.test.tsx).
+
+### Linux linger at setup
+
+`node verification/desktop/scripts/linux-linger.mjs` drives the real setup UI
+and controller in Chromium and WebKit. The fixture supplies the host's linger
+answer; it does not call logind. After the shortcut, an offer shows the choice
+and does not say the gateway keeps running after logout, and it does not ask
+for an administrator. Accepting shows that sentence only when the answer is
+`enabled`. Declining finishes setup without a call. A refusal and a failure
+name `loginctl enable-linger` and claim nothing. An unsupported host claims
+nothing. An account that is already lingering is reported without a call. Both
+engines require zero page errors and painted controls. The screen is
+[ADR 217](../../docs/adr/done/217-linux-linger-at-setup.md). The live bus is
+`scripts/desktop/check-linux-linger.sh`, for user `lt` only. After the PAM
+login session ends, the user is `lingering`, `user@<uid>` is active, and
+`sleep infinity` is still running. A per-user `systemctl` machine match is
+not that proof: it starts the user manager itself. `terminate-user` stops
+that manager even when the linger file is present, so it is the negative
+control: with linger then disabled, `user@` is inactive and the process is
+gone.
 
 ### Attachment admission races
 

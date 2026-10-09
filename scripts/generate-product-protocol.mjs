@@ -44,12 +44,15 @@ if (
 const manifest = JSON.parse(
   readFileSync(resolve(root, "protocol/product/manifest.json"), "utf8"),
 )
+// Each method names its params schema and the grant Cedar is asked for.
+// `grant: null` is a declaration that another owner admits the method.
+const productMethods = methodCatalog(manifest.methods)
 if (
   typeof manifest.handshakeMethod !== "string" ||
-  !Object.hasOwn(manifest.methods, manifest.handshakeMethod)
+  !Object.hasOwn(productMethods, manifest.handshakeMethod)
 )
   throw new Error("Product handshake method must name an owned manifest method")
-const readyMethods = Object.keys(manifest.methods).filter(
+const readyMethods = Object.keys(productMethods).filter(
   (method) => method !== manifest.handshakeMethod,
 )
 const ownedSchema = JSON.stringify(schema)
@@ -259,7 +262,7 @@ function doc(description) {
 let ts =
   "/* eslint-disable */\n/* Generated from protocol/product/v1.json and manifest.json. Do not edit. */\n"
 let rs =
-  "//! Generated from protocol/product/v1.json. Do not edit.\n//! Bounds are validated at the transport boundary; these are payload types only.\n//! Variant names are the schema's wire spellings, so a shared prefix is the wire's.\n#![allow(dead_code, clippy::enum_variant_names)]\nuse serde::{Deserialize, Serialize};\nuse serde_json::Value;\n"
+  "//! Generated from protocol/product/v1.json and manifest.json. Do not edit.\n//! Bounds are validated at the transport boundary; these are payload types only.\n//! Variant names are the schema's wire spellings, so a shared prefix is the wire's.\n#![allow(dead_code, clippy::enum_variant_names)]\nuse serde::{Deserialize, Serialize};\nuse serde_json::Value;\n"
 // ConversationErrorCode is named by MCP app audit — a refused call, an app's
 // message answered and not sent — and by the product wire.
 // It has no payload field, so it is published here with the other outcome
@@ -625,7 +628,7 @@ ts += `${doc(
   "Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift.",
 )}export const bounds = ${JSON.stringify(bounds)} as const\n`
 for (const [kind, entries] of [
-  ["Method", manifest.methods],
+  ["Method", productMethods],
   ["Event", manifest.events],
 ]) {
   const key = (name) =>
@@ -649,9 +652,13 @@ rs += rustWireShapes(schema.$defs, [
 rs += `pub const PRODUCT_HANDSHAKE_METHOD: &str = ${JSON.stringify(manifest.handshakeMethod)};
 pub const PRODUCT_READY_METHODS: &[&str] = &[${readyMethods.map(JSON.stringify).join(",")}];
 `
+rs += actionForMethodRust(productMethods)
 ts += `export const ProductHandshakeMethod = ${JSON.stringify(manifest.handshakeMethod)} as const
 export const productReadyMethods = ${JSON.stringify(readyMethods)} as const
 `
+ts += `${doc(
+  "The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake, auth.session, or a watch. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage.",
+)}export const productMethodGrants = ${JSON.stringify(methodGrants(productMethods))} as const\n`
 rs += `pub const PRODUCT_VERSION: u64 = ${manifest.version};\npub const PRODUCT_SESSION_PATH: &str = ${JSON.stringify(manifest.path)};\n`
 function wireShape(node) {
   return Object.fromEntries(
@@ -735,4 +742,83 @@ for (const [path, contents] of outputs) {
     mkdirSync(dirname(target), { recursive: true })
     writeFileSync(target, contents)
   }
+}
+
+/**
+ * Each product method as the manifest declares it: the params schema name,
+ * or null, and the grant Cedar is asked for, or null when another owner
+ * admits the method. A missing grant is a refusal, not a default.
+ *
+ * @param {unknown} methods
+ * @returns {Record<string, { params: string | null, grant: string | null }>}
+ */
+function methodCatalog(methods) {
+  if (!methods || typeof methods !== "object" || Array.isArray(methods))
+    throw new Error("Product manifest methods must be an object")
+  /** @type {Record<string, { params: string | null, grant: string | null }>} */
+  const catalog = {}
+  for (const [method, spec] of Object.entries(methods)) {
+    if (!spec || typeof spec !== "object" || Array.isArray(spec))
+      throw new Error(`Product method ${method} must declare params and a grant`)
+    for (const key of Object.keys(spec)) {
+      if (key !== "params" && key !== "grant")
+        throw new Error(`Product method ${method} has unknown field ${key}`)
+    }
+    if (!Object.hasOwn(spec, "grant"))
+      throw new Error(`Product method ${method} has no declared grant`)
+    if (!Object.hasOwn(spec, "params"))
+      throw new Error(`Product method ${method} must declare params`)
+    const params = spec.params
+    const grant = spec.grant
+    if (params !== null && typeof params !== "string")
+      throw new Error(`Product method ${method} params must name a schema or be null`)
+    if (grant !== null && (typeof grant !== "string" || grant.length === 0))
+      throw new Error(`Product method ${method} has no declared grant`)
+    catalog[method] = { params, grant }
+  }
+  return catalog
+}
+
+/** @param {Record<string, { grant: string | null }>} methods */
+function methodGrants(methods) {
+  return Object.fromEntries(
+    Object.entries(methods).map(([method, spec]) => [method, spec.grant]),
+  )
+}
+
+/**
+ * The socket's mapping, generated so it cannot drift from the manifest.
+ *
+ * @param {Record<string, { grant: string | null }>} methods
+ */
+function actionForMethodRust(methods) {
+  /** @type {Map<string, string[]>} */
+  const byGrant = new Map()
+  for (const [method, spec] of Object.entries(methods)) {
+    if (spec.grant === null) continue
+    const group = byGrant.get(spec.grant) ?? []
+    group.push(method)
+    byGrant.set(spec.grant, group)
+  }
+  const arms = [...byGrant.entries()].map(([grant, group]) => {
+    const patterns = group.map((method) => JSON.stringify(method)).join(" | ")
+    return `${patterns} => Some(${JSON.stringify(grant)}),`
+  })
+  return `/// The grant Cedar is asked for before this method is dispatched.
+///
+/// Generated from \`protocol/product/manifest.json\`. Writing
+/// to a conversation, including answering its question, uploading into it, and
+/// an app's calls, asks for \`conversation.write\`. Reading its records or
+/// catalogue asks for \`conversation.read\`. Running a configured server with
+/// the gateway's authority, and enrolling a device, asks for
+/// \`credential.manage\`; Auth asks again for the exact consent. \`None\`
+/// means another owner admits the method: the handshake, \`auth.session\`, or
+/// a watch.
+pub fn action_for_method(method: &str) -> Option<&'static str> {
+    match method {
+        ${arms.join("\n        ")}
+        _ => None,
+    }
+}
+`
 }

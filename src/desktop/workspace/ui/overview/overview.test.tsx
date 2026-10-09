@@ -42,6 +42,7 @@ import type { ApprovalAsk, ApprovalOption, ApprovalOrigin } from "../../model/tr
 import type { WorkspaceIndex } from "../../model/workspace-index"
 import { failureCopy, readFailureCopy } from "../failure-copy"
 import { OverviewRow } from "../source-list/overview-row"
+import { OverviewQuietProvider } from "../source-list/overview-quiet"
 import { answerPause } from "../../model/overview/walk"
 import { peekParts } from "../../model/overview/peek"
 import { OverviewLayer } from "./overview-layer"
@@ -114,6 +115,7 @@ async function mount({
   options = sampleAnswers,
   beforeLoad,
   secondAsks = "tool",
+  listClosed,
 }: {
   strict?: boolean
   wrap?: (tree: ReactNode) => ReactNode
@@ -126,6 +128,7 @@ async function mount({
   beforeLoad?: (source: FakeSource) => void
   /** What the second session's approval asks. */
   secondAsks?: ApprovalAsk
+  listClosed?: boolean
 } = {}) {
   const source = fakeSource(index)
   for (const [sessionId, command] of [
@@ -181,18 +184,29 @@ async function mount({
   const scope = { current: host }
   const tree = (
     <Provider store={store}>
-      <ClockProvider now={() => 1000}>
-        <nav>
-          <OverviewRow />
-        </nav>
-        {/* The focused pane, as the shell draws it: its composer is where the caret goes back. */}
-        <main className="workspace-chat" {...{ [focusedPaneAttribute]: "" }}>
-          <div className="desktop-composer">
-            <textarea aria-label="Message" />
+      <OverviewQuietProvider store={store} root={scope}>
+        <ClockProvider now={() => 1000}>
+          <nav>
+            <OverviewRow />
+          </nav>
+          {/* The focused pane, as the shell draws it: its composer is where the caret goes back. */}
+          <div className="workspace-content">
+            {listClosed !== undefined ? (
+              <section
+                className="workspace-list"
+                inert={listClosed}
+                aria-hidden={listClosed}
+              />
+            ) : null}
+            <main className="workspace-chat" {...{ [focusedPaneAttribute]: "" }}>
+              <div className="desktop-composer">
+                <textarea aria-label="Message" />
+              </div>
+            </main>
           </div>
-        </main>
-        {wrap(<OverviewLayer root={scope} />)}
-      </ClockProvider>
+          {wrap(<OverviewLayer root={scope} />)}
+        </ClockProvider>
+      </OverviewQuietProvider>
     </Provider>
   )
   await act(async () => root.render(strict ? <StrictMode>{tree}</StrictMode> : tree))
@@ -307,7 +321,7 @@ describe("the agents overview", () => {
     })
     await open()
     expect(host.querySelector("#agents-needs-you")).toBeNull()
-    expect(host.querySelector(".agents-clear-title")).toBeNull()
+    expect(host.querySelector(".agents-clear")).toBeNull()
     expect(host.querySelector("#agents-working")).not.toBeNull()
   })
 
@@ -315,9 +329,9 @@ describe("the agents overview", () => {
     await mount({ index: { ...sampleIndex(), sessions: [] } })
     await open()
     expect(host.querySelector("#agents-needs-you")).toBeNull()
-    expect(host.querySelector(".agents-clear-title")?.textContent).toBe(
-      "Nothing needs you",
-    )
+    expect(
+      host.querySelector('.agents-clear [data-slot="empty-state-title"]')?.textContent,
+    ).toBe("Nothing needs you")
     expect(host.querySelector("[data-overview-listed]")).not.toBeNull()
   })
 
@@ -343,7 +357,7 @@ describe("the agents overview", () => {
     expect(host.querySelector(".agents-overview")).toBeNull()
     await nextFrame()
     expect(host.hasAttribute("data-overview-covered")).toBe(true)
-    expect(host.querySelector(".workspace-chat")?.hasAttribute("inert")).toBe(true)
+    expect(host.querySelector(".workspace-content")?.hasAttribute("inert")).toBe(true)
     expect(
       host.querySelector(".workspace-overview-layer")?.hasAttribute("data-covered"),
     ).toBe(true)
@@ -363,7 +377,7 @@ describe("the agents overview", () => {
       host.querySelector(".agents-overview-surface")?.hasAttribute("data-bare"),
     ).toBe(true)
     expect(host.querySelector(".agents-filter")).toBeNull()
-    expect(host.querySelector(".agents-overview-header p")?.textContent).toBe(
+    expect(host.querySelector(".agents-overview-counts")?.textContent).toBe(
       "2 need you · 1 working",
     )
     expect(host.querySelector(".agents-request, .agents-row")).toBeNull()
@@ -394,7 +408,7 @@ describe("the agents overview", () => {
       "security import build.p12",
     )
     expect(host.querySelector(".agents-row")?.textContent).toContain("Split panes")
-    expect(host.querySelector(".agents-overview-header p")?.textContent).toBe(
+    expect(host.querySelector(".agents-overview-counts")?.textContent).toBe(
       "2 need you · 1 working",
     )
     // The panes are kept, laid out, under the overview.
@@ -492,14 +506,9 @@ describe("the agents overview", () => {
       [...(scope?.querySelectorAll<HTMLElement>("button[data-tooltip]") ?? [])]
         .map((each) => each.dataset.tooltip ?? "")
         .filter((tip) => / it/.test(tip))
-    expect(tips(card("second"))).toEqual([
-      "Don’t send it",
-      "Send it once. Hold ⌥ to always allow it",
-    ])
-    expect(tips(card("first"))).toEqual([
-      "Don’t run it",
-      "Run it once. Hold ⌥ to always allow it",
-    ])
+    // The row's answers carry no tooltip: they say what they do.
+    expect(card("second")?.querySelectorAll("button[data-tooltip]")).toHaveLength(0)
+    expect(card("first")?.querySelectorAll("button[data-tooltip]")).toHaveLength(0)
     await act(async () => card("second")?.click())
     await act(async () => settle(10))
     const peek = host.querySelector(".agents-inline-peek .agents-peek-ask")
@@ -532,8 +541,13 @@ describe("the agents overview", () => {
       "once",
     ])
     expect(document.activeElement).toBe(card("second"))
-    // Held in place while it settles, saying what became of it.
-    expect(card("first")?.dataset.phase).toBe("settled")
+    // Taken, it leaves at once — no label dwells on the row — and what
+    // became of it is said to a screen reader.
+    expect(card("first")?.dataset.phase).toBe("leaving")
+    expect(card("first")?.textContent).not.toContain("Allowed")
+    expect(host.querySelector(".agents-overview-said")?.textContent).toBe(
+      "Allowed: Sign the build",
+    )
     // A new press, once the person can see where the keyboard went.
     elapse(answerPause)
     await press(card("second") as HTMLElement, "Backspace", { command: true })
@@ -544,6 +558,20 @@ describe("the agents overview", () => {
       "person",
       "deny",
     ])
+  })
+
+  it("keeps an answered row leaving until the source moves its session on, then lists it where it now is", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await press(card("first") as HTMLElement, "Enter", { command: true })
+    // Sent, but the source has not said so yet: the row stays leaving, never asking again.
+    await act(async () => settle(10))
+    expect(card("first")?.dataset.phase).toBe("leaving")
+    await moveOn(source, "first", "Sign the build", "running")
+    await nextFrame()
+    expect(card("first")).toBeNull()
+    expect(row("first")?.dataset.kind).toBe("working")
   })
 
   it("answers one request per press: a held key's repeats, or a press straight after, answer nothing more", async () => {
@@ -691,7 +719,14 @@ describe("the agents overview", () => {
   })
 
   it("keeps End and the arrows on mounted rows while later rows are still arriving", async () => {
-    const { store } = await mount()
+    const index = sampleIndex()
+    const later = Array.from({ length: 8 }, (_, at) =>
+      summary(`later-${at}`, "desktop", 1, "running"),
+    )
+    const { store } = await mount({
+      index: { ...index, sessions: [...index.sessions, ...later] },
+    })
+    await act(async () => store.dispatch(selectInOverview({ sessionId: "first" })))
     await act(async () => entry()?.click())
     await act(async () => settle(10))
     const mounted = () =>
@@ -716,6 +751,22 @@ describe("the agents overview", () => {
     // reach and a later one it must not name.
     expect(before.length).toBeGreaterThanOrEqual(2)
     const lastMounted = before[before.length - 1]
+    await act(async () => {
+      focused?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          code: "End",
+          key: "End",
+          bubbles: true,
+          cancelable: true,
+        }),
+      )
+      const active = document.activeElement?.closest<HTMLElement>("[data-overview-item]")
+      const tabbable = [
+        ...host.querySelectorAll<HTMLElement>("[data-overview-item]"),
+      ].find((item) => item.tabIndex === 0)
+      expect(active?.dataset.overviewItem).toBe(lastMounted)
+      expect(tabbable).toBe(active)
+    })
     await press(focused as HTMLElement, "End")
     const afterEnd = document.activeElement?.closest<HTMLElement>("[data-overview-item]")
     expect(afterEnd?.dataset.overviewItem).toBe(lastMounted)
@@ -757,14 +808,27 @@ describe("the agents overview", () => {
     await press(card("first") as HTMLElement, "Escape")
     expect(host.querySelector(".agents-overview")).toBeNull()
     // Inert lifts a frame after the leave, so that key does not lay the panes out.
-    expect(host.querySelector(".workspace-chat")?.hasAttribute("inert")).toBe(true)
+    expect(host.querySelector(".workspace-content")?.hasAttribute("inert")).toBe(true)
     // The leave paints, then the caret follows (`overview-layer.tsx`).
     await nextFrame()
-    expect(host.querySelector(".workspace-chat")?.hasAttribute("inert")).toBe(false)
+    expect(host.querySelector(".workspace-content")?.hasAttribute("inert")).toBe(false)
+    await nextFrame()
+    // Finding the composer gives its layout this paint before focus lands.
+    expect(document.activeElement).not.toBe(
+      host.querySelector('textarea[aria-label="Message"]'),
+    )
     await nextFrame()
     expect(document.activeElement).toBe(
       host.querySelector('textarea[aria-label="Message"]'),
     )
+  })
+
+  it("preserves a folded list's own inert state when the overview releases its cover", async () => {
+    await mount({ listClosed: true })
+    await open()
+    await press(card("first") as HTMLElement, "Escape")
+    await nextFrame()
+    expect(host.querySelector(".workspace-list")?.hasAttribute("inert")).toBe(true)
   })
 
   it("puts the keyboard on the current row when opened, and so the peek's session is chosen", async () => {
@@ -796,6 +860,8 @@ describe("the agents overview", () => {
     expect(card("first")).toBeNull()
     await nextFrame()
     expect(card("first")).not.toBeNull()
+    expect(document.activeElement).not.toBe(card("first"))
+    await nextFrame()
     expect(document.activeElement).not.toBe(card("first"))
     await nextFrame()
     expect(document.activeElement).toBe(card("first"))
@@ -979,6 +1045,23 @@ describe("the agents overview", () => {
     ])
   })
 
+  it("names each answer's chord on the row, and gives none a tooltip", async () => {
+    await mount()
+    await open()
+    expect(
+      [...(card("first")?.querySelectorAll<HTMLButtonElement>("button") ?? [])].map(
+        (each) => [
+          each.dataset.answer,
+          each.getAttribute("aria-keyshortcuts"),
+          each.dataset.tooltip,
+        ],
+      ),
+    ).toEqual([
+      ["deny", "Control+Backspace", undefined],
+      ["once", "Control+Enter", undefined],
+    ])
+  })
+
   it("rests on the list once the last request is answered, rather than jumping away", async () => {
     await mount()
     await open()
@@ -994,7 +1077,7 @@ describe("the agents overview", () => {
     await mount()
     await open()
     expect(row("rest")).toBeNull()
-    expect(host.querySelector(".agents-overview-resting")?.textContent).toContain(
+    expect(host.querySelector(".agents-overview-footnote")?.textContent).toContain(
       "1 more session outside this view",
     )
   })
@@ -1009,7 +1092,7 @@ describe("the agents overview", () => {
     // The sessions the wider filter adds arrive on the next frame, with the open list.
     await nextFrame()
     expect(row("rest")).not.toBeNull()
-    expect(host.querySelector(".agents-overview-header p")?.textContent).toBe(
+    expect(host.querySelector(".agents-overview-counts")?.textContent).toBe(
       "2 need you · 1 working · 1 earlier",
     )
     expect(host.querySelector(".agents-filter")?.textContent).toBe("All")
@@ -1120,9 +1203,9 @@ describe("the counts show one group alone", () => {
     await act(async () => store.dispatch(showOverviewGroup({ group: "earlier" })))
     expect(pressed()).toEqual(["0 earlier"])
     const resting = () =>
-      [...host.querySelectorAll(".agents-overview-resting")].map((line) =>
-        line.textContent?.trim(),
-      )
+      [
+        ...host.querySelectorAll(".agents-overview-resting, .agents-overview-footnote"),
+      ].map((line) => line.textContent?.trim())
     expect(resting()).toEqual([
       "Nothing from earlier",
       "1 more session outside this view · Show All",
@@ -1217,9 +1300,9 @@ describe("the counts show one group alone", () => {
     await mount()
     await open()
     // Ongoing keeps out the idle session, which is not working.
-    expect(host.querySelector(".agents-overview-resting")).not.toBeNull()
+    expect(host.querySelector(".agents-overview-footnote")).not.toBeNull()
     await act(async () => count("1 working")?.click())
-    expect(host.querySelector(".agents-overview-resting")).toBeNull()
+    expect(host.querySelector(".agents-overview-footnote")).toBeNull()
   })
 })
 
@@ -2036,4 +2119,135 @@ it("asks in its peek with the pane's own approval parts, one component for both"
     "$ security import build.p12",
   )
   expect(peek?.querySelector(".workspace-approval-actions")).not.toBeNull()
+})
+
+it("keeps an early reply's row when it changes group before the list finishes opening", async () => {
+  const originalObserver = globalThis.ResizeObserver
+  class NarrowObserver {
+    private active = true
+    constructor(private readonly callback: ResizeObserverCallback) {}
+    observe(target: Element) {
+      queueMicrotask(() => {
+        if (!this.active) return
+        this.callback(
+          [{ target, contentRect: { width: 700 } } as ResizeObserverEntry],
+          this as unknown as ResizeObserver,
+        )
+      })
+    }
+    disconnect() {
+      this.active = false
+    }
+  }
+  Object.assign(globalThis, { ResizeObserver: NarrowObserver })
+  try {
+    const index = sampleIndex()
+    const extra = Array.from({ length: 12 }, (_, at) =>
+      summary(`extra-${at}`, "desktop", 190 - at, "needs-you", { title: `Extra ${at}` }),
+    )
+    const { source, store } = await mount({
+      index: { ...index, sessions: [...index.sessions, ...extra] },
+    })
+    store.dispatch(followWorkspace())
+    await act(async () => entry()?.click())
+    await act(async () => settle(10))
+    for (let frame = 0; frame < 10; frame++) await nextFrame()
+    expect(host.querySelector("[data-overview-listed]")).toBeNull()
+    const first = card("first")
+    expect(first).not.toBeNull()
+    await press(first as HTMLElement, "KeyR", { command: true })
+    expect(host.querySelector('[data-reply-for="first"] textarea')).not.toBeNull()
+    await act(async () => {
+      const held = source.transcripts.get("first")
+      if (held) {
+        const next = { ...held, approval: null, revision: held.revision + 1 }
+        source.transcripts.set("first", next)
+        source.emit({ kind: "transcript", transcript: next })
+      }
+      source.emit({
+        kind: "session",
+        session: summary("first", "desktop", 600, "running", {
+          title: "Sign the build",
+          revision: 2,
+        }),
+      })
+      await settle(10)
+    })
+    expect(
+      row("first")?.closest(".agents-overview-group")?.querySelector("h2")?.textContent,
+    ).toBe("Working")
+    const field = host.querySelector('[data-reply-for="first"] textarea')
+    expect(field).not.toBeNull()
+    expect(document.activeElement).toBe(field)
+  } finally {
+    Object.assign(globalThis, { ResizeObserver: originalObserver })
+  }
+})
+
+it("schedules only the next row once the opening peek and caret have painted", async () => {
+  const index = sampleIndex()
+  const extra = Array.from({ length: 12 }, (_, at) =>
+    summary(`extra-${at}`, "desktop", 190 - at, "needs-you", { title: `Extra ${at}` }),
+  )
+  await mount({ index: { ...index, sessions: [...index.sessions, ...extra] } })
+  await act(async () => entry()?.click())
+  await act(async () => settle(10))
+  for (let frame = 0; frame < 10; frame++) await nextFrame()
+  expect(document.activeElement).toBe(card("first"))
+  expect(host.querySelector("[data-overview-listed]")).toBeNull()
+  expect(animation.pending()).toBe(1)
+  await nextFrame()
+  expect(animation.pending()).toBe(1)
+})
+
+it("lands the opening caret before the same frame inserts another row", async () => {
+  await mount()
+  await act(async () => entry()?.click())
+  await act(async () => settle(10))
+  for (let frame = 0; frame < 8; frame++) await nextFrame()
+  const events: string[] = []
+  const focus = HTMLElement.prototype.focus
+  const append = Node.prototype.appendChild
+  const insert = Node.prototype.insertBefore
+  const focused = vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (
+    this: HTMLElement,
+    options,
+  ) {
+    if (this.dataset.overviewItem === "first") events.push("focus")
+    focus.call(this, options)
+  })
+  const appended = vi.spyOn(Node.prototype, "appendChild").mockImplementation(function <
+    T extends Node,
+  >(this: Node, child: T): T {
+    if (
+      host.contains(this) &&
+      child instanceof Element &&
+      (child.matches("[data-overview-item]") ||
+        child.querySelector("[data-overview-item]"))
+    )
+      events.push("row")
+    return append.call(this, child) as T
+  })
+  const inserted = vi.spyOn(Node.prototype, "insertBefore").mockImplementation(function <
+    T extends Node,
+  >(this: Node, child: T, before: Node | null): T {
+    if (
+      host.contains(this) &&
+      child instanceof Element &&
+      (child.matches("[data-overview-item]") ||
+        child.querySelector("[data-overview-item]"))
+    )
+      events.push("row")
+    return insert.call(this, child, before) as T
+  })
+  try {
+    await nextFrame()
+    expect(events).toContain("focus")
+    expect(events).toContain("row")
+    expect(events.indexOf("focus")).toBeLessThan(events.indexOf("row"))
+  } finally {
+    focused.mockRestore()
+    appended.mockRestore()
+    inserted.mockRestore()
+  }
 })

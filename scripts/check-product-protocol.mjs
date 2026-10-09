@@ -32,10 +32,18 @@ ajv.addKeyword({
     value.reduce((total, item) => total + (Number(item?.size) || 0), 0) <= limit,
 })
 ajv.addSchema(schema)
-for (const name of [
-  ...Object.values(manifest.methods),
-  ...Object.values(manifest.events),
-].filter(Boolean)) {
+for (const [method, spec] of Object.entries(manifest.methods)) {
+  if (
+    !spec ||
+    typeof spec !== "object" ||
+    Array.isArray(spec) ||
+    !Object.hasOwn(spec, "params")
+  )
+    throw new Error(`Product method ${method} must declare params`)
+  if (spec.params !== null && !schema.$defs[spec.params])
+    throw new Error(`Missing product schema: ${spec.params}`)
+}
+for (const name of Object.values(manifest.events).filter(Boolean)) {
   if (!schema.$defs[name]) throw new Error(`Missing product schema: ${name}`)
 }
 for (const [name, fixture] of Object.entries(read("fixtures.json"))) {

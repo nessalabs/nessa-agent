@@ -10,7 +10,13 @@ import { launch, need, openPage } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { safeArea, safeAreaInit, summarize } from "./lib/safe-area.mjs"
 import { css, keys, storage } from "./lib/selectors.mjs"
-import { hideColumns, leaveSettings, settled, switchLayout } from "./lib/workspace.mjs"
+import {
+  hideColumns,
+  leaveSettings,
+  settled,
+  switchLayout,
+  hoverPeekEdge,
+} from "./lib/workspace.mjs"
 
 /**
  * Each scenario gets `{ page, watch, layout, size }` and drives the
@@ -36,7 +42,7 @@ const scenarios = {
   "edge-peek": async ({ page, watch, size }) => {
     await page.keyboard.press(keys.toggleSidebar)
     await settled(page)
-    await watch("peek in", () => page.mouse.move(3, size.height / 2))
+    await watch("peek in", () => hoverPeekEdge(page, size.height / 2))
     await watch("peek out", () => page.mouse.move(size.width - 100, size.height / 2))
   },
   "drag-to-collapse": async ({ page, watch }) => {
@@ -69,7 +75,9 @@ const scenarios = {
   settings: async ({ page, watch, size }) => {
     await watch("open Settings", () => page.keyboard.press(keys.settings))
     await watch("Settings ⌘B hide", () => page.keyboard.press(keys.toggleSidebar))
-    await watch("Settings peek in", () => page.mouse.move(3, size.height / 2))
+    await watch("Settings peek in", () =>
+      hoverPeekEdge(page, size.height / 2, css.settings),
+    )
     await watch("Settings peek out", () =>
       page.mouse.move(size.width - 100, size.height / 2),
     )

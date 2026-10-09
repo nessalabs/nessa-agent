@@ -28,39 +28,23 @@
  *   peek-session-no-zone (sidebar layout) a session carried inside the sidebar revealed
  *                        from the edge offers no zone and no placeholder, the reveal stays
  *                        for the whole drag, and the release changes nothing
- *   copy-under-controls  the corner pane carried: nothing of its copy is painted under the
- *                        window's controls, any frame, and its header is laid out as the
- *                        pane's (the title starts within 2px of where the pane's does)
- *   docked-columns-no-zone  (1440 × 900) a pane carried over the docked sidebar, and over
- *                        the docked session list, offers no zone and no placeholder; the
- *                        release there changes nothing
- *   peek-press-while-hiding  the sidebar revealed from the edge, the pointer leaves it for a
- *                        pane's header and presses within the reveal's 350 ms hide: the
- *                        reveal stays, every frame of the drag; over it is no zone, just past
- *                        it a pane is a target; released away, it hides
- *   reduced-motion       with Motion set to Reduced, a pane carried over the middle of the
- *                        one beside it: that one is drawn in the carried pane's place, at
- *                        once — no frame draws it on its way — the placeholder marks the
- *                        slot, and the release swaps them with no frame drawing a pane
- *                        off where it lands
- *   copy-takes-slot-shape  a tall pane carried below a wide one: at rest with the zone shown,
- *                        the copy is the placeholder's size, its centre on the pointer; over
- *                        its own place (no zone) it is its own size; each change of size is
- *                        drawn one way, never past where it goes; nothing under the controls
- *   preview-panes-take-shape  at rest with a zone shown, every pane is drawn at the rect the
- *                        drop then gives it. The conversation is not painted during the
- *                        preview, so it is not a positioned part. The composer keeps to the
- *                        foot. A painted transcript is held to its top — centred across
- *                        where it grows, held left where it shrinks — and the title and
- *                        the copy's are never drawn stretched, any frame
+ *   copy-under-controls  nothing carried paints under the window controls
+ *   docked-columns-no-zone  sidebar and session list never offer a target
+ *   peek-press-while-hiding  the revealed sidebar stays while a drag owns it
+ *   reduced-motion       live panes stay still; releasing commits without motion
+ *   compact-drag-card     a row-sized card keeps its size and follows the pointer
+ *   stationary-drag-target  chats keep their geometry and material; only the target highlights
+ *   stationary-layout-flight  closing one pane never suppresses stationary chats
+ *   stationary-drop-commit    a committed swap never suppresses untouched chats
  *
- * `--shots <dir>` saves, from copy-takes-slot-shape, the copy below a wide
+ * `--shots <dir>` saves, from compact-drag-card, the copy below a wide
  * pane, beside it, and over its own place.
  *
  * `--reduced-motion` runs every check with the system's reduced motion on.
  */
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
+import { register } from "tsx/esm/api"
 import {
   attempt,
   CannotRun,
@@ -92,9 +76,14 @@ import {
   settled,
   state,
   zoneSays,
+  hoverPeekEdge,
 } from "./lib/workspace.mjs"
 
 const tolerance = 2
+
+register()
+const { restAfter } = await import("../../../src/desktop/split-panes/model/drop.ts")
+const { marks } = await import("../../../src/desktop/split-panes/adapters/dom/marks.ts")
 
 /**
  * How long the copy's glide to its centre may take: `--desktop-base`, read
@@ -253,43 +242,6 @@ const px = (r) =>
   `${Math.round(r.w)}×${Math.round(r.h)} at ${Math.round(r.x)},${Math.round(r.y)}`
 
 /**
- * Where the copy's size changed, one frame after another: the copy's width
- * and height, each, move one way and never past the sizes they start and end
- * at (no overshoot). Checked from `from` to `to` (frame times).
- */
-function oneWaySize(frames, from, to, label) {
-  const sizes = frames.filter((f) => f.ghost && f.t >= from && f.t <= to)
-  if (sizes.length < 3) return [`${label}: only ${sizes.length} frames of the copy`]
-  const out = []
-  for (const axis of ["w", "h"]) {
-    const values = sizes.map((f) => f.ghost[axis])
-    const low = Math.min(values[0], values.at(-1)) - 1
-    const high = Math.max(values[0], values.at(-1)) + 1
-    const past = values.find((v) => v < low || v > high)
-    if (past !== undefined)
-      out.push(
-        `${label}: the copy's ${axis === "w" ? "width" : "height"} went past ${Math.round(values[0])} → ${Math.round(values.at(-1))} (${Math.round(past)})`,
-      )
-    let direction = 0
-    for (let i = 1; i < values.length; i++) {
-      const d = values[i] - values[i - 1]
-      if (Math.abs(d) < 0.5) continue
-      if (direction && Math.sign(d) !== direction) {
-        out.push(
-          `${label}: the copy's ${axis === "w" ? "width" : "height"} turned back (${values
-            .slice(Math.max(0, i - 2), i + 1)
-            .map(Math.round)
-            .join(" → ")})`,
-        )
-        break
-      }
-      direction = Math.sign(d)
-    }
-  }
-  return out
-}
-
-/**
  * A title whose transforms never read the same twice in a row in one frame
  * (`recordShapeFrames`): what it is drawn at is unknown, so it is a failure of
  * its own — never judged, never passed.
@@ -405,6 +357,96 @@ async function changeMidDrag(page, layout, name, act, expectAfter) {
   return failures
 }
 
+/** Stationary chats remain live through an actual layout change, frame by frame. */
+async function stationaryThrough(page, { focus, count, change }) {
+  await openPanes(page, 4)
+  await page.locator(css.pane).nth(focus).locator(css.field).focus()
+  await settled(page)
+  await frames(page, 8)
+  const before = await panes(page)
+  const colors = await page.evaluate(
+    (sel) =>
+      [...document.querySelectorAll(sel)].map((pane) => ({
+        key: pane.dataset.paneKey,
+        fill: getComputedStyle(pane).backgroundColor,
+      })),
+    css.pane,
+  )
+  const reduced = await page.evaluate(
+    () => matchMedia("(prefers-reduced-motion: reduce)").matches,
+  )
+  await page.evaluate(
+    ({ selectors, mark }) => {
+      window.__paneFlightFrames = []
+      window.__paneFlightOn = true
+      const take = () => {
+        if (!window.__paneFlightOn) return
+        const root = document.querySelector(selectors.workspace)
+        window.__paneFlightFrames.push({
+          flight: root?.hasAttribute(mark.flipping),
+          measuring: root?.hasAttribute(mark.measuring),
+          panes: [...document.querySelectorAll(selectors.pane)].map((pane) => ({
+            key: pane.dataset.paneKey,
+            quiet: getComputedStyle(pane.querySelector(selectors.paneBody))
+              .contentVisibility,
+            fill: getComputedStyle(pane).backgroundColor,
+            flying: pane.hasAttribute(mark.flying),
+            restoring: pane.hasAttribute(mark.restoring),
+          })),
+        })
+        requestAnimationFrame(take)
+      }
+      requestAnimationFrame(take)
+    },
+    {
+      selectors: { workspace: css.workspace, pane: css.pane, paneBody: css.paneBody },
+      mark: marks,
+    },
+  )
+  let samples
+  try {
+    await change(page, before)
+    await settled(page)
+    await frames(page, 12)
+  } finally {
+    samples = await page.evaluate(() => {
+      window.__paneFlightOn = false
+      return window.__paneFlightFrames
+    })
+  }
+  const after = await panes(page)
+  const stationary = after
+    .filter((pane) => {
+      const old = before.find((item) => item.key === pane.key)
+      return old && ["x", "y", "w", "h"].every((axis) => near(old[axis], pane[axis]))
+    })
+    .map((pane) => pane.key)
+  if (!stationary.length) throw new CannotRun("the layout change left no stationary pane")
+  const failures = []
+  if (after.length !== count)
+    failures.push(`pane count ${after.length}, expected ${count}`)
+  if (
+    !after.some((pane) => {
+      const old = before.find((item) => item.key === pane.key)
+      return old && ["x", "y", "w", "h"].some((axis) => !near(old[axis], pane[axis]))
+    })
+  )
+    failures.push("the action changed no pane geometry")
+  if (!reduced && !samples.some((sample) => sample.flight))
+    failures.push("no layout flight was observed")
+  for (const sample of samples) {
+    if (sample.measuring) failures.push("the temporary measurement hold reached paint")
+    for (const pane of sample.panes) {
+      if (!stationary.includes(pane.key)) continue
+      if (pane.quiet === "hidden" || pane.flying || pane.restoring)
+        failures.push(`stationary pane ${pane.key} was suppressed`)
+      if (pane.fill !== colors.find((old) => old.key === pane.key)?.fill)
+        failures.push(`stationary pane ${pane.key} changed its material`)
+    }
+  }
+  return { stationary, samples, failures: [...new Set(failures)] }
+}
+
 const checks = {
   "sweep-across-zones": async (page, layout) => {
     const list = await fourPanes(page, layout)
@@ -447,13 +489,21 @@ const checks = {
   "sideways-top": async (page, layout) => {
     const [, middle] = await threeColumns(page, layout)
     const failures = []
+    const observations = []
     for (const dy of [30, 50, 90]) {
       await lift(page, 2)
       await page.mouse.move(middle.x + middle.w + 30, middle.y + dy, { steps: 10 })
       const zones = await recordZones(page)
       await page.mouse.move(middle.x + middle.w * 0.45, middle.y + dy, { steps: 30 })
       await frames(page, 2)
-      const said = await zones.take()
+      const recorded = await zones.take()
+      observations.push({ dy, recorded })
+      // A sweep's direction is judged while moving. A late rendering frame
+      // may arrive after the model's legitimate rest transition at the edge.
+      // These timestamps attribute observation, not the model's decision.
+      const said = recorded
+        .filter((entry) => entry.at - entry.lastMoveAt < restAfter)
+        .map((entry) => entry.said)
       if (!said.length)
         failures.push(`sweeping left at top+${dy}px announced no zone at all`)
       if (said.some((z) => zoneSaid.vertical.test(z)))
@@ -462,7 +512,7 @@ const checks = {
         )
       await letGo(page, { escape: true })
     }
-    return { failures }
+    return { failures, observations }
   },
   "boundary-jitter": async (page, layout) => {
     const list = await fourPanes(page, layout)
@@ -484,7 +534,7 @@ const checks = {
     for (let i = 0; i < 40; i++)
       await page.mouse.move(x + (i % 2 ? 6 : -6), target.y + target.h / 2)
     await frames(page, 2)
-    const said = await zones.take()
+    const said = (await zones.take()).map((entry) => entry.said)
     const current = await page.locator(css.dropAnnouncer).first().textContent()
     await letGo(page, { escape: true })
     if (!said.length && !current)
@@ -748,7 +798,7 @@ const checks = {
       })
       // Past `restAfter`, so a zone would have settled if one were offered.
       await page.waitForTimeout(300)
-      const said = await zones.take()
+      const said = (await zones.take()).map((entry) => entry.said)
       const placeholders = await page.locator(css.dragPlaceholder).count()
       await letGo(page)
       const failures = []
@@ -877,7 +927,7 @@ Object.assign(checks, {
       await page.keyboard.press(keys.toggleSidebar)
       await settled(page)
       const size = page.viewportSize()
-      await page.mouse.move(3, size.height / 2)
+      await hoverPeekEdge(page, size.height / 2)
       const peeked = () =>
         page.evaluate(
           (sel) => "peek" in (document.querySelector(sel)?.dataset ?? {}),
@@ -909,7 +959,7 @@ Object.assign(checks, {
         await page.mouse.move(row.x + 20 + i * 4, row.y + row.h / 2 + i)
       // Past `restAfter`, and past the reveal's own hide delay: pacing, not a wait for state.
       await page.waitForTimeout(500)
-      const said = await zones.take()
+      const said = (await zones.take()).map((entry) => entry.said)
       const placeholders = await page.locator(css.dragPlaceholder).count()
       const carried = (await dragResidue(page)).copies
       const stayed = await peeked()
@@ -986,7 +1036,7 @@ Object.assign(checks, {
     await settled(page)
     const size = page.viewportSize()
     const peekShown = (sel) => "peek" in (document.querySelector(sel)?.dataset ?? {})
-    await page.mouse.move(3, size.height / 2)
+    await hoverPeekEdge(page, size.height / 2)
     await page.waitForFunction(peekShown, css.workspace, { timeout: 2000 })
     await settled(page)
     const peek = await page.locator(css.sidebar).first().boundingBox()
@@ -1054,7 +1104,7 @@ Object.assign(checks, {
     // that showed no swap was (#286); the system's setting takes the same path.
     const still = await fresh({ prefs: { [storage.motion]: "reduced" } })
     const list = await threeColumns(still, layout)
-    const [own, next] = list
+    const [, next] = list
     const shapes = await recordShapes(still)
     await lift(still, 0)
     // Over the middle of the pane beside it: a swap.
@@ -1073,12 +1123,11 @@ Object.assign(checks, {
     const after = await order(still)
     const failures = []
     if (!said) throw new CannotRun("no swap was offered over the pane beside it")
-    // The pane beside it is drawn where the drop puts it — in the carried
-    // pane's place.
+    // Targeting leaves the existing pane where it is.
     const drawn = recorded.at(-1)?.panes.find((p) => p.key === next.key) ?? next
-    if (!near(drawn.x, own.x) || !near(drawn.w, own.w))
+    if (!near(drawn.x, next.x) || !near(drawn.w, next.w))
       failures.push(
-        `with a swap shown, the pane beside is drawn ${px(drawn)}, not in the carried pane's place ${px(own)}`,
+        `with a swap shown, the pane beside is drawn ${px(drawn)}, not at its original place ${px(next)}`,
       )
     // And gets there at once: while the zone said stays the same, no pane
     // is drawn anywhere new from one frame to the next.
@@ -1094,13 +1143,20 @@ Object.assign(checks, {
       failures.push(
         `with less motion, a pane glided: ${px(glided[0])} (${glided.length} frames)`,
       )
-    // Released, each pane is where the preview drew it, every frame: the
-    // preview goes as the drop lays them out, never drawing them moved again.
+    // A reduced-motion commit has no intermediate shape; its deferred frame
+    // may still show the original geometry before the new one lands.
     const final = landed.at(-1)?.panes ?? []
-    const jumped = landed.flatMap((f) =>
-      f.panes.filter((p) => {
-        const end = final.find((q) => q.key === p.key)
-        return end && (!near(p.x, end.x) || !near(p.w, end.w))
+    const jumped = landed.flatMap((frame) =>
+      frame.panes.filter((pane) => {
+        const end = final.find((item) => item.key === pane.key)
+        const start = list.find((item) => item.key === pane.key)
+        const matches = (box) =>
+          box &&
+          near(pane.x, box.x) &&
+          near(pane.y, box.y) &&
+          near(pane.w, box.w) &&
+          near(pane.h, box.h)
+        return !matches(start) && !matches(end)
       }),
     )
     if (jumped.length)
@@ -1113,230 +1169,159 @@ Object.assign(checks, {
     failures.push(...residueFailures(await dragResidue(still)))
     return { failures }
   },
-  "copy-takes-slot-shape": async (page, layout, fresh, run) => {
+  "compact-drag-card": async (page, layout, fresh, run) => {
     const { own, other } = await sideBySide(page, layout)
-    const failures = []
-    const sampler = safeArea(page)
     const shapes = await recordShapes(page)
-    const shot = async (name) => {
-      if (!run.shots) return
-      mkdirSync(run.shots, { recursive: true })
-      await page.screenshot({ path: join(run.shots, `${run.tag}-${name}.png`) })
-    }
-    /** At rest now: the copy against the slot it should have and the pointer. */
-    const restsAs = async (label, slot) => {
-      const f = await shapes.now()
-      if (!f?.ghost || !f.pointer) return [`${label}: no copy drawn at rest`]
-      const out = []
-      if (!near(f.ghost.w, slot.w) || !near(f.ghost.h, slot.h))
-        out.push(
-          `${label}: the copy is ${px(f.ghost)}, not ${Math.round(slot.w)}×${Math.round(slot.h)}`,
-        )
-      const title = f.titles.find((t) => t.of === "copy")
-      if (title?.unsteady) out.push(unsteadily(title, `${label}: at rest`))
-      else if (title && (Math.abs(title.sx - 1) > 0.02 || Math.abs(title.sy - 1) > 0.02))
-        out.push(
-          `${label}: at rest the copy's title is drawn at ${title.sx.toFixed(3)}×${title.sy.toFixed(3)}, not its own size`,
-        )
-      const cx = f.ghost.x + f.ghost.w / 2
-      const cy = f.ghost.y + f.ghost.h / 2
-      if (!near(cx, f.pointer.x) || !near(cy, f.pointer.y))
-        out.push(
-          `${label}: the copy's centre is ${Math.round(cx - f.pointer.x)},${Math.round(cy - f.pointer.y)} from the pointer`,
-        )
-      return out
-    }
-    let below = null
-    /** Frames in which the copy's title was measured: a stretch check over none holds nothing. */
-    let copyTitled = 0
-    const copyFrames = (list) =>
-      list.filter((f) => f.titles.some((title) => title.of === "copy")).length
-    await sampler.watch(
-      "carry below, beside, and back",
-      async () => {
-        await lift(page, 0)
-        const t0 = (await shapes.now())?.t ?? 0
-        await headBelow(page, other)
-        if (!(await zoneSays(page, /below/)))
-          throw new CannotRun(
-            `heading down the other pane offered "${await page.locator(css.dropAnnouncer).first().textContent()}", not below it`,
-          )
-        await atRest(page)
-        const rest = await shapes.now()
-        below = rest.placeholder
-        if (!below) failures.push("below: no placeholder at rest")
-        else failures.push(...(await restsAs("below", below)))
-        if (below && below.w <= below.h)
-          throw new CannotRun(`the slot below is ${px(below)}: not wide and short`)
-        await shot("below")
-        // The copy grew wide and short: one way, never past it.
-        const toBelow = await shapes.stop()
-        const zoneAt = toBelow.find((f) => /below/.test(f.zone))?.t ?? t0
-        failures.push(...oneWaySize(toBelow, zoneAt, rest.t, "into the slot below"))
-        failures.push(...stretched(toBelow, "into the slot below"))
-        copyTitled += copyFrames(toBelow)
-        // Beside it, to its right: a tall slot.
-        const again = await recordShapes(page)
-        await page.mouse.move(other.x + other.w * 0.93, other.y + other.h * 0.5, {
-          steps: 12,
-        })
-        if (await zoneSays(page, /right of/)) {
-          await atRest(page)
-          const beside = (await again.now()).placeholder
-          if (beside) failures.push(...(await restsAs("beside", beside)))
-          await shot("right")
-        } else
-          failures.push("heading right in the other pane offered no zone to its right")
-        // Over its own place: nothing offered, its own size.
-        await page.mouse.move(own.x + own.w / 2, own.y + own.h / 2, { steps: 12 })
-        const cleared = await zoneSays(page, "")
-        await atRest(page)
-        const back = await again.stop()
-        if (!cleared) failures.push("over its own place, a zone was still said")
-        failures.push(...(await restsAs("own place", own)))
-        await shot("own-place")
-        const leftAt = [...back].reverse().find((f) => f.zone !== "")?.t ?? 0
-        failures.push(...oneWaySize(back, leftAt, back.at(-1).t, "back to its own size"))
-        failures.push(...stretched(back, "beside and back"))
-        copyTitled += copyFrames(back)
-        await page.keyboard.press(keys.escape)
-        await page.mouse.up()
-      },
-      3000,
+    const failures = []
+    await lift(page, 0)
+    const first = await shapes.now()
+    if (!first?.ghost) throw new CannotRun("no compact card was drawn")
+    if (
+      first.ghost.w > 320 ||
+      first.ghost.h > 64 ||
+      first.ghost.w < 180 ||
+      first.ghost.h < 32
     )
-    await settled(page)
-    if (!copyTitled)
-      failures.push("the copy's title was never measured: no stretch was checked")
-    failures.push(...summarize(await sampler.take()).map((f) => `safe-area: ${f}`))
-    failures.push(...residueFailures(await dragResidue(page)))
-    return {
-      own: px(own),
-      below: below ? px(below) : null,
-      copyTitled,
-      failures,
+      failures.push(`the card is not row-sized: ${px(first.ghost)}`)
+    for (const [name, x, y] of [
+      ["below", other.x + other.w / 2, other.y + other.h * 0.94],
+      ["beside", other.x + other.w * 0.94, other.y + other.h / 2],
+      ["own-place", own.x + own.w / 2, own.y + own.h / 2],
+    ]) {
+      await page.mouse.move(x, y, { steps: 12 })
+      await atRest(page)
+      const frame = await shapes.now()
+      if (!frame?.ghost || !frame.pointer) failures.push(`${name}: no card or pointer`)
+      else {
+        if (!near(frame.ghost.w, first.ghost.w) || !near(frame.ghost.h, first.ghost.h))
+          failures.push(`${name}: card resized to ${px(frame.ghost)}`)
+        if (
+          !near(frame.ghost.x + frame.ghost.w / 2, frame.pointer.x) ||
+          !near(frame.ghost.y + frame.ghost.h / 2, frame.pointer.y)
+        )
+          failures.push(`${name}: card left the pointer`)
+      }
+      if (run.shots) {
+        mkdirSync(run.shots, { recursive: true })
+        await page.screenshot({ path: join(run.shots, `${run.tag}-${name}.png`) })
+      }
     }
+    await page.keyboard.press(keys.escape)
+    await page.mouse.up()
+    await settled(page)
+    const recorded = await shapes.stop()
+    if (!recorded.some((frame) => frame.titles.some((title) => title.of === "copy")))
+      failures.push("the card title was never sampled")
+    failures.push(
+      ...stretched(recorded, "compact card"),
+      ...residueFailures(await dragResidue(page)),
+    )
+    return { card: first.ghost, failures }
   },
-  "preview-panes-take-shape": async (page, layout) => {
+  "stationary-drag-target": async (page, layout) => {
     await hideColumns(page, layout)
     await openPanes(page, 3)
     await settled(page)
-    const list = (await panes(page)).sort((a, b) => a.x - b.x)
-    const target = list.at(-1)
+    await frames(page, 8)
+    // Pressing its header takes focus; compare the normal focused material,
+    // rather than attributing that ordinary focus change to dragging.
+    await page.locator(css.pane).first().locator(css.field).focus()
+    await settled(page)
+    await frames(page, 4)
+    const baseline = await panes(page)
+    const target = [...baseline].sort((a, b) => a.x - b.x).at(-1)
+    const colors = () =>
+      page.evaluate(
+        ([sel, body]) =>
+          [...document.querySelectorAll(sel)].map((pane) => ({
+            key: pane.dataset.paneKey,
+            color: getComputedStyle(pane).backgroundColor,
+            body: getComputedStyle(pane.querySelector(body)).contentVisibility,
+          })),
+        [css.pane, css.paneBody],
+      )
+    const before = await colors()
     const shapes = await recordShapes(page)
-    // Each pane's parts as laid out, before anything is previewed.
-    await frames(page)
-    const laid = (await shapes.now()).panes
     await lift(page, 0)
     await headBelow(page, target)
     if (!(await zoneSays(page, /below/)))
-      throw new CannotRun("heading down the far pane offered no zone below it")
+      throw new CannotRun("no lower target was offered")
     await atRest(page)
     const shown = await shapes.now()
-    const said = shown.zone
-    const releasedAt = await page.evaluate(() => performance.now())
+    const during = await colors()
+    const failures = []
+    for (const pane of shown.panes) {
+      const old = baseline.find((item) => item.key === pane.key)
+      if (
+        !old ||
+        !near(pane.x, old.x) ||
+        !near(pane.y, old.y) ||
+        !near(pane.w, old.w) ||
+        !near(pane.h, old.h)
+      )
+        failures.push(`live pane ${pane.key} moved during targeting`)
+    }
+    for (const pane of during) {
+      const old = before.find((item) => item.key === pane.key)
+      if (pane.color !== old?.color || pane.body !== old?.body)
+        failures.push(`live pane ${pane.key} changed its material or hid its body`)
+    }
+    const box = shown.placeholder
+    if (
+      !box ||
+      !near(box.x, target.x) ||
+      !near(box.y, target.y + target.h / 2) ||
+      !near(box.w, target.w) ||
+      !near(box.h, target.h / 2)
+    )
+      failures.push("the highlight did not mark the hovered pane's lower half")
     await page.mouse.up()
     await settled(page)
-    const during = await shapes.stop()
-    const landed = await panes(page)
-    const failures = []
-    const moved = landed.filter((p) => {
-      const was = list.find((q) => q.key === p.key)
-      return was && (!near(was.w, p.w) || !near(was.h, p.h))
-    })
-    if (!moved.length)
-      throw new CannotRun(`"${said}" changed no pane's size: nothing to take shape`)
-    for (const p of landed) {
-      const previewed = shown.panes.find((q) => q.key === p.key)
-      if (!previewed) failures.push(`pane ${p.key} was not drawn in the preview`)
-      else if (
-        !near(previewed.x, p.x) ||
-        !near(previewed.y, p.y) ||
-        !near(previewed.w, p.w) ||
-        !near(previewed.h, p.h)
-      )
-        failures.push(`pane ${p.key} previewed ${px(previewed)}, landed ${px(p)}`)
-    }
-    // Each pane's transcript keeps its top, centred across the shape it
-    // would take where that grows, as a pane that wide centres it, and held
-    // left where it shrinks, so its lines lose their ends, never their
-    // starts; its composer keeps to the foot.
-    for (const p of shown.panes) {
-      const was = laid.find((q) => q.key === p.key)
-      if (!was) continue
-      if (p.transcript && was.transcript) {
-        const dy = p.transcript.y - p.y - (was.transcript.y - was.y)
-        const dx =
-          p.w >= was.w - tolerance
-            ? p.transcript.x + p.transcript.w / 2 - (p.x + p.w / 2)
-            : p.transcript.x - p.x - (was.transcript.x - was.x)
-        if (Math.abs(dy) > tolerance || Math.abs(dx) > tolerance)
-          failures.push(
-            `pane ${p.key}'s transcript is drawn ${Math.round(dx)}px across and ${Math.round(dy)}px down from where its previewed rect keeps it`,
-          )
-      }
-      if (p.dock && was.dock) {
-        const dy =
-          p.y + p.h - (p.dock.y + p.dock.h) - (was.y + was.h - (was.dock.y + was.dock.h))
-        if (Math.abs(dy) > tolerance)
-          failures.push(
-            `pane ${p.key}'s composer is drawn ${Math.round(dy)}px off its previewed rect's foot`,
-          )
-      }
-    }
-    failures.push(
-      ...stretched(during, `"${said}"`).map(
-        (f) => `${f} (released at ${Math.round(releasedAt)}ms)`,
-      ),
+    await frames(page, 8)
+    const after = await panes(page)
+    if (
+      !after.some((pane) => {
+        const old = baseline.find((item) => item.key === pane.key)
+        return old && (!near(old.w, pane.w) || !near(old.h, pane.h))
+      })
     )
+      failures.push("releasing the highlighted split changed no pane geometry")
     failures.push(...residueFailures(await dragResidue(page)))
-    return {
-      zone: said,
-      resized: moved.map((p) => `${p.key}: ${px(p)}`),
-      failures,
-    }
+    await shapes.stop()
+    return { before, during, highlight: box, failures }
   },
+  "stationary-layout-flight": (page) =>
+    stationaryThrough(page, {
+      focus: 3,
+      count: 3,
+      change: (p) => p.keyboard.press(keys.closePane),
+    }),
+  "stationary-drop-commit": (page) =>
+    stationaryThrough(page, {
+      focus: 0,
+      count: 4,
+      change: async (p, before) => {
+        const target = before.at(-1)
+        if (!target) throw new CannotRun("no pane to swap with")
+        await lift(p, 0)
+        await p.mouse.move(target.x + target.w / 2, target.y + target.h / 2, {
+          steps: 15,
+        })
+        if (!(await zoneSays(p, zoneSaid.swap)))
+          throw new CannotRun("no swap was offered")
+        await atRest(p)
+        await p.mouse.up()
+      },
+    }),
   "copy-under-controls": async (page, layout) => {
     await hideColumns(page, layout)
     await openPanes(page, 2)
     const sampler = safeArea(page)
-    // Where the corner pane's title starts in its pane: past the window's
-    // controls, as a pane in the corner lays out its header.
-    const titleIn = (box, title) =>
-      page.evaluate(
-        ([boxSelector, titleSelector]) => {
-          const outer = document.querySelector(boxSelector)
-          const inner = outer?.querySelector(titleSelector)
-          return outer && inner
-            ? inner.getBoundingClientRect().left - outer.getBoundingClientRect().left
-            : null
-        },
-        [box, title],
-      )
-    // The pane measured, and lifted, must be the corner's, with both side
-    // columns closed so its header steps past the controls — or the check
-    // compares two plainly padded headers.
-    const [corner, alone] = await page.evaluate(
-      ([pane, cornerPane, panesAlone]) => [
-        !!document.querySelector(pane)?.matches(cornerPane),
-        !!document.querySelector(panesAlone),
-      ],
-      [css.pane, css.cornerPane, css.panesAlone],
-    )
-    if (!corner)
-      throw new CannotRun(`the first pane is not ${css.cornerPane}: nothing to compare`)
-    if (!alone)
-      throw new CannotRun(
-        `no ${css.panesAlone}: a side column is open, nothing to compare`,
-      )
-    const inPane = await titleIn(css.pane, css.titleText)
-    let inCopy = null
     await sampler.watch(
-      "carry the corner pane",
+      "carry near the controls",
       async () => {
         await lift(page, 0)
-        // Held near where it was grabbed while the copy glides to its centre.
         await page.waitForTimeout(300)
-        inCopy = await titleIn(css.dragGhost, css.titleText)
         await page.keyboard.press(keys.escape)
         await page.mouse.up()
       },
@@ -1348,13 +1333,6 @@ Object.assign(checks, {
       failures: [
         ...summarize(await sampler.take()),
         ...residueFailures(await dragResidue(page)),
-        // The copy is the pane as it looks: its header keeps the corner's
-        // start, never the plain padding of a pane beside another.
-        ...(inPane === null || inCopy === null
-          ? [`no title to measure (pane ${inPane}, copy ${inCopy})`]
-          : Math.abs(inCopy - inPane) > 2
-            ? [`the copy's title starts ${inCopy}px into it, the pane's ${inPane}px`]
-            : []),
       ],
     }
   },
@@ -1378,7 +1356,7 @@ Usage: node verification/desktop/scripts/drag.mjs [options]
                    ${Object.keys(checks).join(", ")}
   --sizes <list>   Window sizes (default 1440x900,1000x700).
   --reduced-motion Every check with the system's reduced motion on.
-  --shots <dir>    Screenshots from copy-takes-slot-shape go there.
+  --shots <dir>    Screenshots from compact-drag-card go there.
 
 sweep-across-zones covers follows-pointer, inside-grid, inside-window, one-way
 and no-selection in one recorded drag. Side columns are hidden first so the

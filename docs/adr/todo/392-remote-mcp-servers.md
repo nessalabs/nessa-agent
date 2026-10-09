@@ -303,16 +303,16 @@ ownership. Mandatory audit has its own documented bounded delivery attempts.
 
 ### Owned POST event streams (#622)
 
-`HttpSession` owns non-initialize POST readers separately from pending JSON-RPC
+`HttpSession` owns POST body/startup readers separately from pending JSON-RPC
 calls. Its collection retains at most 256 handles (`MAX_POST_STREAMS`), including
 aborted readers until reaped after completion. The semaphore is the sole capacity
 authority: each retained reader holds its permit beside its task handle through
 reaping or close joining. Initialization identity and GET/POST reader admission share one reader-registry
 lock with close;
-readers own the response and inbound sender, with no reference back to the session.
-Before a non-initialize request POST, a capacity permit is reserved, or the call
-is refused with `Busy` before exchange. JSON/202/failure releases that permit;
-a streamed response holds it through reader teardown. Notification and ping-reply
+readers own the response and inbound sender, with no strong reference back to the session.
+Before a request POST (including initialize), a capacity permit is reserved, or the call
+is refused with `Busy` before exchange. Buffered JSON/202/failure releases that permit;
+a streamed JSON or SSE response holds it through reader teardown. Notification and ping-reply
 POSTs bypass request reservation so they can unblock active streams. If those
 POSTs unexpectedly return a stream, they acquire available capacity or end with
 `Unconfirmed` after dropping the excess body. This does not claim cancellation.
@@ -321,7 +321,7 @@ POSTs unexpectedly return a stream, they acquire available capacity or end with
 stateDiagram-v2
     [*] --> Reserved: pre-POST capacity permit
     Reserved --> Reading: response registered with JoinHandle
-    Reserved --> Released: JSON / 202 / exchange failure
+    Reserved --> Released: buffered JSON / 202 / exchange failure
     Reading --> Finished: matching terminal / EOF / body failure
     Reading --> Stopping: caller cancellation / session close (abort)
     Stopping --> Finished: task destruction completes
@@ -356,7 +356,7 @@ when the inbound channel is backpressured.
 | --- | --- | --- | --- |
 | P1 | Active reader receives notices/ping, then matching result/error; peer holds body | Forward preceding events and matching response, release body; repeated successful calls retain bounded readers | `post_result_releases_held_body`, `post_error_releases_held_body`, `post_ping_before_result_remains_live` |
 | P2 | Active reader receives another id's response, same-id server request or nonterminal envelope | Forward it without ending this reader; retain until its own response/EOF/cancel/close | `post_other_response_does_not_retire_reader` |
-| P3 | Active reader reaches EOF before its matching response, or body failure | Release body before publishing `Unconfirmed`; a deadline-less request settles explicitly. EOF on an uncorrelated notification/reply stream releases normally | `post_eof_and_failure_release_body`, `post_eof_and_failure_settle_deadline_less_call`, `post_uncorrelated_eof_releases_normally` |
+| P3 | Request-correlated JSON/SSE body completes without its matching terminal (streamed or buffered), or body failure; uncorrelated body ends normally | Forward other valid evidence, then publish typed `Unconfirmed` for the unanswered call; release body and settle deadline-less calls. Uncorrelated EOF is normal. Private recovery refuses invalid initialize as `SessionExpired` (P14) | `post_eof_and_failure_settle_deadline_less_call`, `post_matched_response_before_eof_settles_normally`, `post_uncorrelated_eof_releases_normally`, `j2_complete_body_without_own_terminal_settles_deadline_less_call`, `j2_matching_json_result_and_error_remain_accepted`, `j2_neighbor_reply_is_preserved_before_unconfirmed_completion` |
 | P4 | Caller disappears during active read | Abort local reader; best-effort remote notification remains separate | `post_caller_cancellation_releases_body`, `post_cancellation_with_full_outgoing_queue_releases_active_body`, `post_cancellation_during_headers_releases_late_body` |
 | P5 | Close/drop while reader waits (including startup tools/list) or blocked inbound send; drop from an ordinary thread | Fence admission, abort and join owned readers before finished; repeated close shares completion | `post_close_joins_held_and_blocked_readers`, `post_finished_waits_for_reader_destruction`, `post_drop_releases_body`, `post_drop_outside_runtime_context_joins_body` |
 | P6 | POST exchange returns streamed body after close drained readers | Reject late admission with `Closed`, drop body | `post_late_body_after_close_is_dropped` |
@@ -396,9 +396,182 @@ handle to run the local joins from an ordinary thread too; the owning runtime mu
 remain running through completion. Runtime shutdown is not fabricated as a
 finished HTTP close observation.
 
-This slice covers asynchronous non-initialize POST readers, including lists during
-opening. Stalled JSON body writes (#623) and held initialize handshakes (#626)
-remain separate work; stream release is not confirmation of remote tool stopping.
+The #622 slice established owned non-initialize POST SSE readers. The #623/#626/#634
+extension below also owns streamed JSON and initialization/recovery startup;
+body release is not confirmation of a remote tool stopping.
+
+### Owned JSON and initialization progress (#623, #626, #634, #636)
+
+The same bounded POST registry owns streamed JSON, streamed initialization and
+replacement initialization. JSON consumption does not run on the frame writer.
+Initialization accepts only its matching result, validated by `wire::initialized`,
+and commits identity/version under the registry fence before GET or readiness.
+An SSE reader retires at that terminal event rather than waiting for EOF.
+Reader tasks keep weak session references only for synchronous commits. Two
+review rounds found new cases in duplicated JSON/SSE message policy. The structural
+repair is one per-message owner: typed body purpose, one correlation decision,
+matching initialization publication, forwarding and terminal retirement. JSON/SSE
+codecs only frame messages. Private recovery suppresses only its matching terminal;
+valid neighboring replies remain visible before invalid recovery settles.
+
+The private `Recovery` state is Available, Initializing, ReadyForWriter, Completed
+or Failed with its first typed cause. One handoff check before dispatch and before
+admission distinguishes actual close, retained failure, expired budget and unknown
+owner loss. A lost completion channel cannot replace the writer's observed failure.
+Identity publication does not change call admission. Recovery is
+registered before its initialize exchange. While it is initializing,
+ordinary calls are refused with `Busy`; cancellation and server replies remain
+available. The registered startup owner performs the fresh initialize exchange;
+ordinary frames and the initialized notification use the serialized writer.
+A private `RecoveryReady` event uses that existing bounded writer queue to send
+initialized; it creates no additional general frame sender. Recovery is bounded
+by the injected clock's initialization budget, and never replays the failed call.
+Close alone owns DELETE, retaining the ID claim through the attempt's completion.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Available
+    Available --> Initializing: session-bound 404 / register startup before header I/O
+    Initializing --> Initializing: early peer request / provisional reply binding only
+    Initializing --> ReadyForWriter: matching validated initialize / publish identity
+    Initializing --> Failed: startup failure or budget / retain first cause
+    ReadyForWriter --> Completed: initialized accepted + valid predeadline delivery / atomic registry commit
+    ReadyForWriter --> Failed: rejection, expiry or failed delivery / retain first cause
+    Completed --> Completed: late startup timeout or failure / no-op
+    Failed --> Failed: later failure / retain first cause
+    note right of Completed
+        Terminal recovery success; ordinary calls admitted.
+        Waiter scheduling cannot reverse the commit.
+    end note
+    note right of Failed
+        Terminal recovery failure; ordinary calls refused.
+        The first typed cause remains authoritative.
+    end note
+```
+
+Close is a separate registry fence, not another Recovery state. It prevents
+publication and completion admission, joins registered owners, and owns DELETE;
+a prior terminal recovery cause remains authoritative during teardown.
+
+| Row | Trigger/order | Required outcome and ownership | Enforcer |
+| --- | --- | --- | --- |
+| J1 | JSON headers arrive, body stalls; call times out/drops | Writer can send cancellation and another call; direct cancellation aborts registered body; no replay | `j1_stalled_json_timeout_allows_cancel_and_next_call` |
+| J2 | JSON/SSE completion without own terminal, valid terminal completion, body failure, oversize, or close | Forward neighboring evidence before typed Unconfirmed for an unanswered correlated call (P3); accept matching result/error. Bounded body and retained permit release only after destruction/reaping or joins | `j2_complete_streamed_json_settles_and_releases_body`, `j2_complete_body_without_own_terminal_settles_deadline_less_call`, `j2_matching_json_result_and_error_remain_accepted`, `j2_json_read_failure_and_bound_are_typed`, `j2_json_capacity_is_retained_through_physical_destruction` |
+| J3 | Matching initialize SSE result; peer holds body | Commit validated identity/version before GET/readiness, retire body, initialized/list/ping answer dispatch before EOF | `j3_public_open_held_initialize_dispatches_initialized_list_and_ping` |
+| J4 | Initialize has wrong id, request envelope, invalid version, repeated result or bad trailing bytes | Only first matching valid result establishes validated phase; invalid evidence does not start GET; terminal retirement ignores trailing bytes | `j4_invalid_initialize_version_does_not_claim_or_start_get`, `j4_initialize_terminal_precedes_bad_trailing_bytes`, P12/P13/P14 |
+| J5 | Close wins before initialization publication | Refuse validated publication/admission, no new claim or GET after close; owned reader/startup is joined | `j5_close_held_initialize_body_has_no_late_publication`, `j5_drop_initial_reader_does_not_retain_session`, P10 |
+| J6 | Initialization publication wins then close/caller loss | Close owns one DELETE and its completion; no independent cleanup attempt | `j6_recovery_publication_then_close_owns_one_retained_delete`, `j6_j7_close_owns_delete_and_retains_claim_through_completion` |
+| J7 | DELETE held; duplicate close or a new opening repeats its ID | Finished waits; retained claim refuses collision and prevents DELETE targeting a new owner | `j7_public_open_collision_while_delete_is_held_is_not_deleted`, `j6_j7_close_owns_delete_and_retains_claim_through_completion` |
+| J8 | Session 404; recovery header/body held | Failed call is SessionExpired without replay; recovery is owned before header I/O; ordinary requests Busy while controls remain available | `j8_recovery_owned_before_headers_and_controls_remain_available`, `j8_stalled_recovery_json_is_owned_and_bounded`, `j8_recovery_server_ping_reply_dispatches_before_initialize_result` |
+| J9 | Recovery succeeds, fails, times out, or races close before initialized dispatch | Identity publication is separate from call admission. Gate queued calls before RecoveryReady and while initialized headers are held. One remaining initialization budget covers headers/body, queue handoff and initialized dispatch; writer revalidates its correlated handoff before dispatch and admission. Timeout/close/stale handoff/rejected initialized cannot release admission. Close joins startup and owns any claimed ID | `j9_recovery_gate_covers_queued_calls_and_initialized_headers`, `j9_expired_queued_handoff_cannot_dispatch_initialized`, `j9_saturated_queue_budget_expiry_retains_close_ownership`, `j9_timeout_while_initialized_headers_held_cannot_reopen`, `j9_rejected_initialized_does_not_release_admission`, J6 recovery-close test |
+| J10 | JSON/SSE private recovery carries another pending call's reply, then ends without its own terminal | Forward the observed neighboring result before SessionExpired; no validated identity, GET or initialized; absent an early peer request, no replacement claim | `j10_recovery_neighbor_reply_precedes_invalid_initialize` |
+| J11 | Budget expires after initialized acceptance but before admission; stale queued handoff or completion channel loss follows a failure | Retain typed Timeout or first non-timeout failure; actual close is Closed, unknown loss alone is Unconfirmed; no admission from stale handoff | `j11_accepted_initialized_at_expiry_reports_timeout`, `j11_completion_loss_preserves_writer_failure`, `j9_expired_queued_handoff_cannot_dispatch_initialized`, J6 actual-close test |
+
+The completion channel and recovery phase share one terminal owner. The writer
+hands its owned completion sender to `finish_recovery`; under the registry fence,
+validated initialized acceptance, successful synchronous completion delivery and
+Completed publication are one transition. Failed delivery fences calls before the
+writer handles another frame. Completed is terminal: a startup waiter selecting
+its budget after that commit cannot replace success or publish a late timeout.
+Typed HTTP response failures have one classifier shared with ordinary POSTs.
+
+| Row | Trigger/order | Required outcome and ownership | Enforcer |
+| --- | --- | --- | --- |
+| J12 | Completion receiver disappears after initialized acceptance, before completion commit | Failed delivery becomes terminal before any queued ordinary frame; no temporary Completed/admission gap | `j12_lost_completion_cannot_admit_queued_call` |
+| J13 | Successful predeadline completion delivery wins, then startup observes its ready timer; or timeout wins before delivery | Timer selection after predeadline delivery/commit leaves Completed successful with no late Timeout; timer-first Failed Timeout blocks delivery/admission | `j13_completed_commit_defeats_late_timeout`, J9 expired handoff |
+| J14 | Recovery initialized POST receives 5xx, refreshed retry receives 401, or claimed replacement returns 404 | Preserve Unconfirmed, Unauthorized or SessionExpired through writer, startup and public pending calls; claimed 404 terminates without a second recovery or replay (stateless 404 is Malformed) | `j14_initialized_http_failures_keep_typed_causes` |
+
+Response classification owns immutable evidence of the actual POST attempt. The
+same branch that emits `Mcp-Session-Id` records SessionBound; omission records
+Stateless, while initialize retains its method purpose and captured initial-only
+legacy eligibility. Each refreshed retry captures its own emitted headers. The
+response travels with this context; neither consumer consults a later phase to
+infer which request produced it.
+
+| Row | Trigger/order | Required outcome and ownership | Enforcer |
+| --- | --- | --- | --- |
+| J15 | Stateless control waits on headers; private initialize publishes replacement; control returns 404 | Classify actual stateless attempt as Malformed FailCall(None), preserve queued Ready and successful subsequent replacement call; no second initialize/replay | `j15_control_response_uses_its_actual_request_context` |
+| J16 | Stateless control returns 401 after replacement publication; refreshed retry emits replacement ID and returns 404 | Classify final bound attempt as SessionExpired, end without second recovery/replay; capture context separately for each real attempt | `j16_refreshed_control_retry_uses_its_own_bound_context` |
+
+Early peer replies carry immutable response binding through Connection's framing
+queue. A provisional claim permits that answer only; validation remains the owner
+of version, GET and ordinary admission. A captured binding is checked on each real
+POST attempt, including authorization retry, and cannot adopt a replacement.
+Private initialize and ordinary POST share authorization/status policy; private
+initialize has no legacy eligibility. A bound peer-answer 404 ends SessionExpired; a stateless 404 is Malformed.
+Neither starts recovery or replay; ordinary-call 404 retains its existing single recovery.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Absent
+    Absent --> Provisional: early peer request / bounded claim
+    Absent --> Validated: matching valid initialize / bounded claim
+    Provisional --> Validated: matching valid initialize / promote same binding
+    Absent --> Closed: close fence
+    Provisional --> Closed: close fence / retain claim through DELETE
+    Validated --> Closed: close fence / retain claim through DELETE
+```
+
+| Row | Trigger/order | Required outcome and ownership | Enforcer |
+| --- | --- | --- | --- |
+| J17 | Initial/replacement SSE request precedes matching result; peer waits for answer | Answer carries originating ID, without negotiated version. Provisional claim starts no GET/initialized/admission; valid result promotes same binding. No-ID response remains stateless | `j17_initial_peer_reply_keeps_response_binding_before_validation`, `j17_public_open_waits_for_bound_peer_answer_before_validation`, `j8_recovery_server_ping_reply_dispatches_before_initialize_result`, `j17_ordinary_body_reply_keeps_request_binding_and_ignores_returned_identity`, `j17_ordinary_terminal_ignores_non_authoritative_oversized_header` |
+| J18 | Provisional ID collides, exceeds 1024 bytes, or close wins | Typed refusal before answer effect/publication. Collision loser DELETE=0; owning close retains provisional claim through sole DELETE | `j18_early_peer_claim_refuses_collision_and_oversize_before_answer`, `j18_provisional_claim_is_retained_through_close_delete`, `j18_public_open_error_closes_provisional_binding` |
+| J19 | Reply queues before replacement, timeout, failure or close; peer answer returns 404 | Stale answer cannot acquire current identity. Refuse before dispatch after close/failure; a stale preterminal request ending the connection fences private startup against late replacement publication/admission. Every overlapping shutdown caller raises the HTTP admission fence before returning, even if another caller already claimed cleanup. An ordinary neighboring terminal preserves healthy recovery; bound peer-answer404 ends SessionExpired (stateless404 is Malformed), without recovery/replay. Ordinary-call404 positive control recovers | `j19_queued_reply_keeps_unnegotiated_version_and_is_refused_after_close`, `j19_old_reply_cannot_adopt_reused_or_stateless_replacement_binding`, `j19_peer_answer_404_ends_without_recovery_or_replay`, `j19_close_during_reply_authorization_refuses_post_effect`, `j19_reply_retry_cannot_adopt_identity_published_during_authorization`, `j19_preterminal_stale_request_cannot_revive_ended_connection`, `j19_preterminal_ordinary_terminal_preserves_recovery_control`, `j19_reader_failure_fences_http_owner_before_ended`, `j19_duplicate_shutdown_fences_effects_after_cleanup_claim`, `repeated_shutdown_keeps_one_delete_and_releases_its_claim`; ordinary recovery control in J20 |
+| J20 | Private initialize receives 401/retry, 403, 5xx, 400/404/405, 202 or exchange failure | One rejected retry maximum; observe exact scope challenge; Unauthorized/InsufficientScope/Unreachable/Malformed remain typed. 202/missing terminal is SessionExpired. No legacy GET, replacement GET/initialized or replay on failure; healthy and retry-success controls remain accepted | `j20_private_initialize_preserves_shared_authorization_and_status_policy`, `j20_private_initialize_healthy_and_retry_success_controls`, `j20_private_initialize_exchange_failure_is_unreachable`, J10 missing-terminal controls |
+
+### Bounded peer-reply admission (#665)
+
+The existing FIFO writer reserves one physical slot against ordinary frame
+pressure. Its queue owner limits ordinary frames (including best-effort remote
+cancellation notifications) to 64 and derives HTTP capacity as 64 + 1. Stdio
+retains 64 slots without a reserve. A queued ordinary frame owns a permit until
+it is dequeued; dropping a waiting send or the receiver releases its ownership.
+`PeerReply` and `RecoveryReady` consume no ordinary permit. Controls may occupy
+otherwise free ordinary slots, but the physical queue remains bounded at 65.
+This provides admission against ordinary saturation, without control priority or
+unlimited progress. Root accepted this single-FIFO design with Astra advisory;
+a separate priority lane would add scheduling and ordering decisions.
+
+Peer replies never await queue capacity in the reader. A full HTTP control
+admission ends with typed `TooLarge("queued MCP control frames")`; a closed
+writer ends with its retained terminal cause or `ServerGone`. The existing
+reader shutdown fence and connection end owner retain the first cause and one
+cleanup. `RecoveryReady` still awaits FIFO admission and completion under the
+remaining initialization budget. Direct local cancellation remains independent
+of its best-effort remote notification. The HTTP owner remains the authority
+for captured binding, recovery admission, deadlines and close.
+
+| Row | Trigger/order | Required outcome and ownership | Enforcer |
+| --- | --- | --- | --- |
+| J21 | 64 ordinary frames wait behind a held writer; early recovery ping or unsupported request arrives before matching initialize | Reserve admits the answer without blocking the reader. Drain pressure; ordinary calls remain Busy and answer uses originating SID and unnegotiated version. Matching initialization supplied after actual answer advances | `j21_saturated_ordinary_queue_preserves_early_recovery_answers` |
+| J22 | Matching initialize arrives while saturated ordinary frames and early answer remain queued | Captured answer retains unnegotiated version; FIFO answer precedes RecoveryReady/initialized. Ordinary admission remains fenced until valid initialized completion | `j22_matching_initialize_preserves_queued_reply_order` |
+| J23 | Physical queue fills with ordinary frames and one answer or entirely with controls; a live call/notification waits for ordinary or physical admission, then another peer request overflows, or writer is closed | Explicit typed overflow/closed termination through existing reader fence; first cause survives later close/failure, no queued answer effect after fence, one retained DELETE and joined startup. Connection admission observes existing Shared end publication so blocked calls/notifications resolve retained cause before the held writer drains; admission subscribes before its retained-State snapshot, and a recorded end returns that cause even while watch publication is paused. Watch publishes after releasing State and before pending response wakes. HTTP shutdown remains the downstream effect fence | `j23_control_overflow_retains_first_cause_and_one_cleanup`, `j23_terminal_admission_wakes_physical_waiters_and_refuses_ended_notifications`, `connection::end_tests::recorded_end_refuses_admission_while_watch_publication_is_held`, `j23_closed_control_queue_is_explicit` |
+| J24 | Ordinary sender waits for capacity and is dropped; dequeue retains returned frame; receiver is dropped | No permit leak; dequeue releases ordinary capacity before dispatch completion; later frames progress; closed receiver rejects remaining sends. Canceling terminal Connection admission drops pending send permits/envelopes without inventing a second terminal owner | `j24_ordinary_capacity_releases_on_dequeue_and_cancellation`, `j23_terminal_admission_wakes_physical_waiters_and_refuses_ended_notifications` |
+| J25 | Recovery budget expires while early answer or handoff waits behind writer pressure | Timeout remains authoritative; queued reply/initialized cannot dispatch or reopen admission after expiry; provisional claim remains close-owned | `j25_deadline_refuses_queued_saturated_reply`, existing J9/J11 handoff expiry tests |
+| J26 | Explicit close or control POST failure wins before queued saturated answer dispatch | No downstream answer/initialized effect; explicit HTTP close raises its existing shutdown fence before committing the first Shared end cause, then publishes watch outside State before waking responses. Later competing causes cannot replace the first commit. Admission checked open before that commit may race queue insertion, but HTTP effects remain fenced | `j26_close_or_writer_failure_refuses_queued_saturated_reply`, `j26_close_fences_http_and_publishes_before_response_wakes`, existing J19 close-fence tests |
+
+J4/J5/J10's no-claim requirements describe bodies without an early claim for a peer answer.
+An already answered request may own provisional cleanup but cannot validate
+initialization. J8 previously checked dispatch only, and J14 covers the later
+initialized notification; neither established J17/J20's header/status guarantees.
+
+```mermaid
+sequenceDiagram
+    participant Writer
+    participant Registry
+    participant Body as Owned body/startup task
+    participant Peer
+    Writer->>Peer: POST
+    Peer-->>Writer: headers and body
+    Writer->>Registry: register body with capacity permit
+    Registry->>Body: consume JSON/SSE off writer
+    Body->>Registry: commit matching validated initialize under close fence
+    Body-->>Writer: RecoveryReady (replacement only, existing queue)
+    Writer->>Peer: notifications/initialized
+    Note over Registry: close fences admission, joins tasks, owns DELETE
+    Registry->>Peer: DELETE claimed ID once
+    Note over Registry: release claim after DELETE observation and finish after joins
+```
 
 ## Audit verification by recorded meaning (#631)
 
@@ -681,6 +854,20 @@ OAuth storage or desktop controls already satisfy these rows.
 | A8 | Remote revoke unsupported/fails; private deletion fails | Local token use remains fenced; actual remote/local outcomes are retained |
 | A9 | Audit unavailable, UI gone or response lost; deletion succeeds but outcome audit fails | Required cleanup continues; failed bounded settlement remains RevocationIncomplete; no success without required evidence; caller loss does not abandon owner |
 | A10 | Restart with usable, closing or incomplete token record | Revalidate binding; resume cleanup/fenced state; presence of a token does not grant dispatch |
+
+Issue [#687](https://github.com/nessalabs/nessa-agent/issues/687) specifies the
+successful-refresh token retention cases within A5–A7. The application owner
+publishes the replacement credential; storage does not merge generations. Carry
+the token used by that refresh into publication, rather than reloading a possibly
+replaced secret after the HTTP response. RFC 6749 section 6 permits omission of a
+replacement refresh token.
+
+| Refresh reply / ordering | Required result | Regression in `mcp_authorization::tests` |
+| --- | --- | --- |
+| Expiry refresh succeeds without `refresh_token` | Retain the dispatched token through another expiry and owner restoration | `a_refresh_without_a_new_refresh_token_preserves_the_old_one` |
+| Expiry refresh supplies a new `refresh_token` | Persist the replacement and use it at the next expiry after restoration | `a_refresh_with_a_new_refresh_token_uses_the_rotated_one` |
+| Rejected bearer refresh succeeds without `refresh_token` | Retain the dispatched token for the next expiry | `a_rejected_bearer_refresh_without_a_new_refresh_token_preserves_the_old_one` |
+| Refresh publication is overtaken by revoke | Preserve A7's fence and delete the late candidate | `a_token_published_after_revoke_is_deleted` |
 
 ### Apps and current configuration
 

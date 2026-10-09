@@ -19,8 +19,9 @@ This skill is how to use them; it restates neither.
 | --- | --- |
 | anything in `src/desktop/` (always, first) | `smoke.mjs` |
 | `ui/icon-button.*`, or any icon-only control | `icon-buttons.mjs` (`--layout classic` for the classic shell) |
-| a key cap (`<kbd>`) outside Settings | `shared-controls.mjs` |
+| a key cap (`<kbd>`), a list row (`ui/list-row.*`, the kit's sidebar rows), the identity at a sidebar's foot (`ui/identity.*`) or another repeated pattern | `shared-controls.mjs` |
 | titlebar, column heads, side columns, Settings chrome, the picture band, anything that slides | `safe-area.mjs` |
+| the side rail, its toggle or a full view (`workspace/ui/chrome/side-rail.*`), the window frame (`.workspace-window`), anything that places a column from the workspace's edge | `columns.mjs` |
 | drag and drop, `drop.ts`, `drag.ts`, pane headers | `drag.mjs` |
 | keys, `focus.ts`, panes being added/closed/focused, dialogs, the overview | `focus.mjs` |
 | widgets: `src/desktop/widgets/`, a widget's pane or the window, Escape for the widget in front, the edge peek's Escape | `widgets.mjs` |
@@ -28,6 +29,7 @@ This skill is how to use them; it restates neither.
 | an app's review: reading it while the app's call or message waits (`appCall` and `stale()` in `gateway-source.ts`, the `callTool` and `sendMessage` routing in `dependencies.ts`), and who asks, and what, on the card or in the overview (`approval-request.tsx`, `gateway-views.ts`) | `app-review.mjs` |
 | an agent's command in a review, including bidi (`said.tsx`, `ApprovalCommand`, the overview row) | `command-order.mjs` |
 | widths: approval card, composer (its thinking control too), column titles, Settings sidebar | `responsive.mjs --shots <dir>` |
+| a Settings page: its masthead, tabs, the bar's title on scroll, search landing, its focus ring (`src/desktop/settings/ui/`) | `settings-page.mjs` |
 | `index.html`'s load fallback, the panel's stage and window size | `load-fallback.mjs` |
 | where the window's workspace comes from (`main.tsx`, `model/workspace-backend.ts`, `adapters/host-gateway.ts`), the gateway source's connect and reconnect wait (`workspace/adapters/gateway/gateway-source.ts`), the index's failure sentences (`readFailureCopy` for `"index"` in `workspace/ui/failure-copy.ts`), the empty workspace. A `?seeded` page is the seeded large workspace row | `gateway-states.mjs` |
 | a conversation the window listed but could not read (`readFailureCopy` for `"conversation"` in `workspace/ui/failure-copy.ts`, the transcript note, the Agents peek) | `conversation-unread.mjs` |

@@ -1,34 +1,33 @@
 import { useEffect, useState } from "react"
-import { showContent } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
+import { showContent } from "../../adapters/store/commands"
 import { selectOverviewOpen, selectStatusCounts } from "../../adapters/store/selectors"
 import { useWorkspaceFrame } from "../workspace-frame"
-import { SidebarRow } from "./channel-row"
+import { SidebarRow } from "./sidebar-row"
 
-/**
- * The sidebar's way into the Agents overview: "Agents", with how many wait
- * on the person — the overview holds what waits and what runs. A place to
- * go, like a channel: chosen again, it stays; ⌘0 does the same.
- */
+/** The sidebar's overview entry publishes its selected paint after opening. */
 export function OverviewRow() {
   const dispatch = useWorkspaceDispatch()
   const frame = useWorkspaceFrame()
   const open = useWorkspaceSelector(selectOverviewOpen)
-  // Not on the open's own paint. A click flushes this effect before that
-  // paint, so the mark waits two frames (`layouts.test.tsx`).
   const [marked, setMarked] = useState(false)
   useEffect(() => {
     if (!open) {
       setMarked(false)
       return
     }
-    let inner = 0
+    let active = true
+    let inner: number | null = null
     const outer = requestAnimationFrame(() => {
-      inner = requestAnimationFrame(() => setMarked(true))
+      if (!active) return
+      inner = requestAnimationFrame(() => {
+        if (active) setMarked(true)
+      })
     })
     return () => {
+      active = false
       cancelAnimationFrame(outer)
-      cancelAnimationFrame(inner)
+      if (inner !== null) cancelAnimationFrame(inner)
     }
   }, [open])
   const waiting = useWorkspaceSelector((state) => selectStatusCounts(state).needsYou)

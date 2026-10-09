@@ -6,7 +6,7 @@ status: "mixed"
 summary: "A tool can offer an interactive MCP App alongside its result."
 parent: "extensions-ui"
 sources:
-  - "docs/adr/todo/344-mcp-ui.md"
+  - "docs/adr/done/344-mcp-ui.md"
   - "src/desktop/widgets/ui/plugin.ts"
   - "src/desktop/widgets/ui/widget-answer.tsx"
   - "src/desktop/widgets/ui/hosts.test.tsx"
@@ -45,4 +45,4 @@ stateDiagram-v2
 
 ## Further reading
 
-[Source](../../../../adr/todo/344-mcp-ui.md) · [Related source](../../../../../src/desktop/widgets/ui/plugin.ts) · [Related tests](../../../../../src/desktop/widgets/ui/hosts.test.tsx)
+[Source](../../../../adr/done/344-mcp-ui.md) · [Related source](../../../../../src/desktop/widgets/ui/plugin.ts) · [Related tests](../../../../../src/desktop/widgets/ui/hosts.test.tsx)

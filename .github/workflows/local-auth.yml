@@ -408,6 +408,13 @@ jobs:
       - name: Exercise the disposable systemd user-manager lifecycle
         if: runner.os == 'Linux'
         run: bash scripts/desktop/check-systemd-user-service.sh
+      # Same runner as the step above, which already built the nessa-app tests.
+      # A throwaway user, never the runner account. Stock set-self-linger does
+      # not prompt; the test failing to return would be that prompt.
+      - name: Prove linger for a throwaway Linux user
+        if: runner.os == 'Linux'
+        timeout-minutes: 15
+        run: bash scripts/desktop/check-linux-linger.sh
       # This repeats a release build of nessa-server after the matrix's debug
       # build below, and a release build of nessa-mcp after gateway-contract.
       # It is intentionally unique: this is the shipping-profile evidence that

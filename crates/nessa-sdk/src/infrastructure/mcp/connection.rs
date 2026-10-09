@@ -2,7 +2,8 @@
 //! to it: the client's own requests and every stand-in's forwarded ones.
 //!
 //! ```text
-//! call ──frame──▶ writer task ──▶ server stdin
+//! call / HTTP controls ──bounded FIFO (ordinary permits, HTTP reserve)──▶ writer task
+//!                                                                    └──▶ stdin / POST
 //!   ▲                                  │
 //!   └── pending[id] ◀── reader task ◀──┘ server stdout
 //!                         ├── server request ──▶ answered here (ping, else -32601)
@@ -16,26 +17,38 @@
 use super::framing::{self, FrameEnd, Frames, MAX_FRAME_BYTES};
 use super::http::{HttpSession, SendOutcome};
 use super::McpError;
-use crate::infrastructure::clock::{within, Clock};
+use crate::infrastructure::clock::{within, Clock, ClockInstant};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, Weak,
     },
     time::Duration,
 };
+#[cfg(all(test, unix))]
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    sync::{broadcast, mpsc, oneshot, watch},
+    sync::{
+        broadcast,
+        mpsc::{
+            self,
+            error::{SendError, TrySendError},
+            Receiver, Sender,
+        },
+        oneshot, watch, OwnedSemaphorePermit, Semaphore,
+    },
     task::JoinHandle,
 };
 
 /// The most calls waiting on one server at a time.
 pub(crate) const MAX_IN_FLIGHT: usize = 256;
 /// Frames queued for the server's stdin before callers wait.
-const OUTGOING_FRAMES: usize = 64;
+pub(super) const OUTGOING_FRAMES: usize = 64;
+/// Extra physical room for HTTP controls under ordinary frame pressure.
+pub(super) const HTTP_CONTROL_RESERVE: usize = 1;
 /// Change notices held for a stand-in that has not read them yet. They are
 /// idempotent, so one that lags misses only repeats.
 const NOTICES: usize = 16;
@@ -68,10 +81,10 @@ impl Shared {
             state.ended = Some(cause.clone());
             std::mem::take(&mut state.pending)
         };
+        self.ended.send_replace(Some(cause.clone()));
         for (_, waiter) in pending {
             let _ = waiter.send(Err(cause.clone()));
         }
-        self.ended.send_replace(Some(cause));
     }
 
     /// Fail one admitted call and leave the connection open. The first end
@@ -88,11 +101,119 @@ impl Shared {
     }
 }
 
+/// Frames and HTTP controls share the bounded FIFO owned by [`OutgoingQueue`].
+pub(crate) enum Outgoing {
+    Frame(Vec<u8>),
+    PeerReply {
+        frame: Vec<u8>,
+        context: super::http::ReplyContext,
+    },
+    RecoveryReady {
+        deadline: ClockInstant,
+        completed: oneshot::Sender<Result<(), McpError>>,
+    },
+}
+
+/// One FIFO admission owner: ordinary frames retain permits until dequeue;
+/// HTTP controls can use reserved or otherwise free physical capacity.
+#[derive(Clone)]
+pub(crate) struct OutgoingQueue {
+    sender: Sender<Queued>,
+    ordinary: Arc<Semaphore>,
+}
+
+struct Queued {
+    message: Outgoing,
+    _ordinary: Option<OwnedSemaphorePermit>,
+}
+
+/// The writer releases queue capacity before it starts dispatching a frame.
+pub(crate) struct OutgoingFrames {
+    receiver: Receiver<Queued>,
+}
+
+impl Outgoing {
+    fn is_ordinary(&self) -> bool {
+        match self {
+            Self::Frame(_) => true,
+            Self::PeerReply { .. } | Self::RecoveryReady { .. } => false,
+        }
+    }
+}
+
+impl OutgoingQueue {
+    /// Derive the physical bound from ordinary admission and its control reserve.
+    pub(crate) fn new(ordinary: usize, reserve: usize) -> (Self, OutgoingFrames) {
+        let (sender, receiver) = mpsc::channel(ordinary + reserve);
+        (
+            Self {
+                sender,
+                ordinary: Arc::new(Semaphore::new(ordinary)),
+            },
+            OutgoingFrames { receiver },
+        )
+    }
+
+    /// Wait for bounded admission; cancellation releases any acquired permit.
+    pub(crate) async fn send(&self, message: Outgoing) -> Result<(), SendError<Outgoing>> {
+        let permit = if message.is_ordinary() {
+            match self.ordinary.clone().acquire_owned().await {
+                Ok(permit) => Some(permit),
+                Err(_) => return Err(SendError(message)),
+            }
+        } else {
+            None
+        };
+        self.sender
+            .send(Queued {
+                message,
+                _ordinary: permit,
+            })
+            .await
+            .map_err(|error| SendError(error.0.message))
+    }
+
+    /// A peer-answer reader and a dropped caller cannot wait for queue capacity.
+    pub(crate) fn try_send(&self, message: Outgoing) -> Result<(), TrySendError<Outgoing>> {
+        if self.sender.is_closed() {
+            return Err(TrySendError::Closed(message));
+        }
+        let permit = if message.is_ordinary() {
+            match self.ordinary.clone().try_acquire_owned() {
+                Ok(permit) => Some(permit),
+                Err(_) => return Err(TrySendError::Full(message)),
+            }
+        } else {
+            None
+        };
+        self.sender
+            .try_send(Queued {
+                message,
+                _ordinary: permit,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(queued) => TrySendError::Full(queued.message),
+                TrySendError::Closed(queued) => TrySendError::Closed(queued.message),
+            })
+    }
+}
+
+impl OutgoingFrames {
+    pub(crate) async fn recv(&mut self) -> Option<Outgoing> {
+        self.receiver.recv().await.map(|queued| queued.message)
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn try_recv(&mut self) -> Result<Outgoing, TryRecvError> {
+        self.receiver.try_recv().map(|queued| queued.message)
+    }
+}
+
 /// A connection to one MCP server. Dropping it stops its tasks, which closes
 /// the server's stdin.
 pub(crate) struct Connection {
     shared: Arc<Shared>,
-    outgoing: mpsc::Sender<Vec<u8>>,
+    outgoing: OutgoingQueue,
     clock: Arc<dyn Clock>,
     writer: JoinHandle<()>,
     reader: JoinHandle<()>,
@@ -121,11 +242,14 @@ impl Connection {
             notices: broadcast::channel(NOTICES).0,
             next_id: AtomicU64::new(1),
         });
-        let (outgoing, mut frames) = mpsc::channel::<Vec<u8>>(OUTGOING_FRAMES);
+        let (outgoing, mut frames) = OutgoingQueue::new(OUTGOING_FRAMES, 0);
         let writer = tokio::spawn({
             let shared = shared.clone();
             async move {
                 while let Some(frame) = frames.recv().await {
+                    let Outgoing::Frame(frame) = frame else {
+                        continue;
+                    };
                     if framing::write(&mut output, &frame).await.is_err() {
                         shared.end(McpError::ServerGone);
                         return;
@@ -154,7 +278,7 @@ impl Connection {
     /// the HTTP session down so its DELETE runs once.
     pub(crate) fn open_http(
         session: Arc<HttpSession>,
-        incoming: mpsc::Receiver<Result<Vec<u8>, McpError>>,
+        incoming: mpsc::Receiver<Result<super::http::HttpMessage, McpError>>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         let shared = Arc::new(Shared {
@@ -166,13 +290,24 @@ impl Connection {
             notices: broadcast::channel(NOTICES).0,
             next_id: AtomicU64::new(1),
         });
-        let (outgoing, mut frames) = mpsc::channel::<Vec<u8>>(OUTGOING_FRAMES);
+        let (outgoing, mut frames) = OutgoingQueue::new(OUTGOING_FRAMES, HTTP_CONTROL_RESERVE);
+        session.set_writer(outgoing.clone(), clock.clone());
         let writer = tokio::spawn({
             let shared = shared.clone();
             let session = session.clone();
             async move {
                 while let Some(frame) = frames.recv().await {
-                    match session.dispatch(&frame).await {
+                    let outcome = match frame {
+                        Outgoing::Frame(frame) => session.dispatch(&frame).await,
+                        Outgoing::PeerReply { frame, context } => {
+                            session.dispatch_reply(&frame, context).await
+                        }
+                        Outgoing::RecoveryReady {
+                            deadline,
+                            completed,
+                        } => session.finish_recovery(deadline, completed).await,
+                    };
+                    match outcome {
                         SendOutcome::Done => {}
                         SendOutcome::FailCall { id, error } => {
                             if let Some(id) = id {
@@ -180,6 +315,7 @@ impl Connection {
                             }
                         }
                         SendOutcome::End(error) => {
+                            session.shutdown();
                             shared.end(error);
                             return;
                         }
@@ -187,7 +323,12 @@ impl Connection {
                 }
             }
         });
-        let reader = tokio::spawn(read_messages(incoming, shared.clone(), outgoing.clone()));
+        let reader = tokio::spawn(read_messages(
+            incoming,
+            shared.clone(),
+            outgoing.clone(),
+            Arc::downgrade(&session),
+        ));
         Self {
             shared,
             outgoing,
@@ -240,9 +381,7 @@ impl Connection {
             id,
             sent: false,
         };
-        if self.outgoing.send(frame).await.is_err() {
-            return Err(self.end_cause().unwrap_or(McpError::ServerGone));
-        }
+        self.send_frame(frame).await?;
         guard.sent = true;
         let reply = answered.await.unwrap_or(Err(McpError::ServerGone));
         guard.id = 0;
@@ -279,10 +418,22 @@ impl Connection {
             notification["params"] = params;
         }
         let frame = framing::encode(&notification)?;
-        self.outgoing
-            .send(frame)
-            .await
-            .map_err(|_| self.end_cause().unwrap_or(McpError::ServerGone))
+        self.send_frame(frame).await
+    }
+
+    /// Admission waits observe the existing end publication without draining the writer.
+    async fn send_frame(&self, frame: Vec<u8>) -> Result<(), McpError> {
+        let ended = self.ended();
+        if let Some(cause) = self.end_cause() {
+            return Err(cause);
+        }
+        tokio::select! {
+            biased;
+            cause = ended => Err(cause),
+            sent = self.outgoing.send(Outgoing::Frame(frame)) => {
+                sent.map_err(|_| self.end_cause().unwrap_or(McpError::ServerGone))
+            }
+        }
     }
 
     /// Why the connection ended, or `None` while it is open.
@@ -314,10 +465,10 @@ impl Connection {
     /// End the connection with `cause` and close the server's stdin. Calls
     /// waiting on it get `cause`.
     pub(crate) fn close(&self, cause: McpError) {
-        self.shared.end(cause);
         if let Some(http) = &self.http {
             http.shutdown();
         }
+        self.shared.end(cause);
         self.writer.abort();
     }
 }
@@ -356,7 +507,7 @@ impl Drop for Pending<'_> {
                 "params": { "requestId": self.id, "reason": "the caller stopped waiting" },
             });
             if let Ok(frame) = framing::encode(&cancelled) {
-                let _ = self.connection.outgoing.try_send(frame);
+                let _ = self.connection.outgoing.try_send(Outgoing::Frame(frame));
             }
         }
     }
@@ -385,7 +536,7 @@ pub(crate) fn remote(error: &Value) -> McpError {
 async fn read<R: AsyncRead + Unpin>(
     mut frames: Frames<R>,
     shared: Arc<Shared>,
-    outgoing: mpsc::Sender<Vec<u8>>,
+    outgoing: OutgoingQueue,
 ) {
     let cause = loop {
         let bytes = match frames.next().await {
@@ -396,7 +547,7 @@ async fn read<R: AsyncRead + Unpin>(
         let Ok(message) = serde_json::from_slice::<Value>(&bytes) else {
             break McpError::Malformed("a frame from the MCP server is not JSON".into());
         };
-        if let Some(cause) = deliver(&message, &shared, &outgoing) {
+        if let Some(cause) = deliver(&message, &shared, &outgoing, None) {
             break cause;
         }
     };
@@ -404,7 +555,12 @@ async fn read<R: AsyncRead + Unpin>(
 }
 
 /// Apply one JSON-RPC message. `Some` ends the connection with that cause.
-fn deliver(message: &Value, shared: &Shared, outgoing: &mpsc::Sender<Vec<u8>>) -> Option<McpError> {
+fn deliver(
+    message: &Value,
+    shared: &Shared,
+    outgoing: &OutgoingQueue,
+    reply: Option<super::http::ReplyContext>,
+) -> Option<McpError> {
     let method = message.get("method").and_then(Value::as_str);
     let id = message.get("id").filter(|id| !id.is_null());
     match (method, id) {
@@ -420,7 +576,30 @@ fn deliver(message: &Value, shared: &Shared, outgoing: &mpsc::Sender<Vec<u8>>) -
             // Never awaited: waiting here for room in a queue the server
             // is not draining would stop reading what it writes.
             if let Ok(frame) = framing::encode(&answer) {
-                let _ = outgoing.try_send(frame);
+                match reply {
+                    Some(context) => {
+                        match outgoing.try_send(Outgoing::PeerReply { frame, context }) {
+                            Ok(()) => {}
+                            Err(TrySendError::Full(_)) => {
+                                return Some(McpError::TooLarge("queued MCP control frames"));
+                            }
+                            Err(TrySendError::Closed(_)) => {
+                                return Some(
+                                    shared
+                                        .state
+                                        .lock()
+                                        .expect("connection state")
+                                        .ended
+                                        .clone()
+                                        .unwrap_or(McpError::ServerGone),
+                                );
+                            }
+                        }
+                    }
+                    None => {
+                        let _ = outgoing.try_send(Outgoing::Frame(frame));
+                    }
+                }
             }
         }
         (Some(method), None) => {
@@ -453,9 +632,10 @@ fn deliver(message: &Value, shared: &Shared, outgoing: &mpsc::Sender<Vec<u8>>) -
 /// The HTTP reader's loop: one JSON message at a time, the same correlation
 /// as [`read`].
 async fn read_messages(
-    mut incoming: mpsc::Receiver<Result<Vec<u8>, McpError>>,
+    mut incoming: mpsc::Receiver<Result<super::http::HttpMessage, McpError>>,
     shared: Arc<Shared>,
-    outgoing: mpsc::Sender<Vec<u8>>,
+    outgoing: OutgoingQueue,
+    session: Weak<HttpSession>,
 ) {
     let cause = loop {
         let bytes = match incoming.recv().await {
@@ -466,9 +646,16 @@ async fn read_messages(
         let Ok(message) = serde_json::from_slice::<Value>(&bytes) else {
             break McpError::Malformed("a frame from the MCP server is not JSON".into());
         };
-        if let Some(cause) = deliver(&message, &shared, &outgoing) {
+        if let Some(cause) = deliver(&message, &shared, &outgoing, bytes.reply) {
             break cause;
         }
     };
+    if let Some(session) = session.upgrade() {
+        session.shutdown();
+    }
     shared.end(cause);
 }
+
+#[cfg(all(test, unix))]
+#[path = "../../../tests/infrastructure/mcp/connection_end.rs"]
+mod end_tests;

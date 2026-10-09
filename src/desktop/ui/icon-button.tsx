@@ -3,6 +3,7 @@ import {
   type ButtonHTMLAttributes,
   type ComponentProps,
   type ElementType,
+  type ReactElement,
 } from "react"
 import { DesktopIcon, type DesktopIconRole } from "./icons"
 import type { TooltipSide } from "../model/tooltip-placement"
@@ -24,12 +25,14 @@ export type IconButtonTone = "muted" | "faint" | "ink"
  * here rather than styling its own.
  *
  * `as` renders another button-shaped component — the kit's sidebar toggle —
- * in this one's clothes.
+ * in this one's clothes. `icon` is a role from the icon families, or — for a
+ * glyph of its own, such as the side rail's, whose parts move on hover — the
+ * glyph itself, drawn at the button's glyph size.
  */
 export const IconButton = forwardRef<
   HTMLButtonElement,
   Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children"> & {
-    icon: DesktopIconRole
+    icon: DesktopIconRole | ReactElement
     label: string
     shortcut?: string
     size?: IconButtonSize
@@ -66,7 +69,7 @@ export const IconButton = forwardRef<
       {...tooltip(label, { shortcut, side: tooltipSide })}
       {...props}
     >
-      <DesktopIcon name={icon} />
+      {typeof icon === "string" ? <DesktopIcon name={icon} /> : icon}
     </Element>
   )
 })

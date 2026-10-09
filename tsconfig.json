@@ -25,8 +25,17 @@
       "node"
     ],
     "paths": {
+      "@nessa-ui/react/styles.css": [
+        "./node_modules/@nessa-ui/react/src/styles.css"
+      ],
       "@nessa-ui/react/app-shell": [
         "./node_modules/@nessa-ui/react/src/composites/app-shell"
+      ],
+      "@nessa-ui/react/theme.css": [
+        "./node_modules/@nessa-ui/react/src/theme.css"
+      ],
+      "@nessa-ui/react/app.css": [
+        "./node_modules/@nessa-ui/react/src/app.css"
       ],
       "@nessa-ui/react/lib/*": [
         "./node_modules/@nessa-ui/react/src/lib/*"

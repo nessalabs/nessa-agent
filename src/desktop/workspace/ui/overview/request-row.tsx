@@ -3,12 +3,10 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react"
-import { DesktopIcon } from "../../../ui/icons"
-import { tooltip } from "../../../ui/tooltip"
 import { useNow } from "../../adapters/dom/clock"
 import { isMac } from "../../../adapters/platform"
 import { matchesChord } from "../../../model/keyboard"
-import { labelOf } from "../../adapters/dom/shortcuts"
+import { shortcutOf } from "../../adapters/dom/shortcuts"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
   selectAnswer,
@@ -23,15 +21,11 @@ import { agentName, agentOf } from "../../model/workspace-index"
 import { AgentTile } from "../chrome/agent-tile"
 import { failureCopy, readFailureCopy } from "../failure-copy"
 import { offersChoice, optionOf } from "../../model/transcript"
-import {
-  answerTips,
-  approvalReason,
-  approvalRequest,
-} from "../transcript/approval-request"
+import { approvalReason, approvalRequest } from "../transcript/approval-request"
 import { named, Saying, shownCommand, shownName, spoken } from "../transcript/said"
 import { overviewKeys } from "./overview-keys"
 import { SessionPeek } from "./session-peek"
-import { answeredLabels, type OnAnswer, type Settling } from "./settling"
+import type { OnAnswer, Settling } from "./settling"
 
 /**
  * One session waiting on the person, as a row of the list: its title, one
@@ -39,8 +33,12 @@ import { answeredLabels, type OnAnswer, type Settling } from "./settling"
  * The review's answers wait at its end until the row is pointed at or has
  * the keyboard. Where the review offers always as well as once, holding ⌥
  * turns the once button into that answer, as ⌥ shows the other choice in a
- * Mac menu. Answered, the buttons give way to what became of it;
- * then the row fades, and the list closes over where it was.
+ * Mac menu. The buttons say what they do and carry no tooltip; each names
+ * its chord to assistive technology (`aria-keyshortcuts`). Answered and
+ * taken, the row waits, quiet, for the session to move on; then it
+ * dematerializes here as the session's row materializes in its new group,
+ * in the same beat (`leaveInPlace`), and the rows after it close the gap.
+ * What became of it is said to a screen reader by the overview.
  */
 export const RequestRow = memo(function RequestRow({
   sessionId,
@@ -227,9 +225,7 @@ export const RequestRow = memo(function RequestRow({
                   data-answer={option.choice}
                   tabIndex={current && answerable ? 0 : -1}
                   disabled={!answerable}
-                  {...tooltip(answerTips[approval.ask].deny, {
-                    shortcut: labelOf(overviewKeys, "deny"),
-                  })}
+                  aria-keyshortcuts={shortcutOf(overviewKeys, "deny")}
                   onClick={(event) => {
                     if (answerable) onAnswer(summary, approval, option, event.timeStamp)
                   }}
@@ -246,12 +242,7 @@ export const RequestRow = memo(function RequestRow({
                   data-primary
                   tabIndex={current && answerable ? 0 : -1}
                   disabled={!answerable}
-                  {...tooltip(
-                    foldedAlways && option === onceOptions[0]
-                      ? `${answerTips[approval.ask].once}. Hold ⌥ to always allow it`
-                      : answerTips[approval.ask].once,
-                    { shortcut: labelOf(overviewKeys, "once") },
-                  )}
+                  aria-keyshortcuts={shortcutOf(overviewKeys, "once")}
                   onClick={(event) => {
                     if (!answerable) return
                     const chosen =
@@ -278,9 +269,7 @@ export const RequestRow = memo(function RequestRow({
                   data-primary
                   tabIndex={current && answerable ? 0 : -1}
                   disabled={!answerable}
-                  {...tooltip(option.label, {
-                    shortcut: labelOf(overviewKeys, "always"),
-                  })}
+                  aria-keyshortcuts={shortcutOf(overviewKeys, "always")}
                   onClick={(event) => {
                     if (answerable) onAnswer(summary, approval, option, event.timeStamp)
                   }}
@@ -296,21 +285,11 @@ export const RequestRow = memo(function RequestRow({
                 className="workspace-button agents-request-button"
                 data-primary
                 tabIndex={current ? 0 : -1}
-                {...tooltip("Open the session to reply", {
-                  shortcut: labelOf(overviewKeys, "open"),
-                })}
+                aria-keyshortcuts={shortcutOf(overviewKeys, "open")}
                 onClick={() => onOpen(sessionId)}
               >
                 Reply
               </button>
-            </span>
-          ) : null}
-          {settling ? (
-            <span className="agents-request-settled" aria-hidden="true">
-              <span className="agents-request-settled-mark">
-                <DesktopIcon name={settling.choice === "deny" ? "close" : "check"} />
-              </span>
-              {answeredLabels[settling.choice]}
             </span>
           ) : null}
         </span>

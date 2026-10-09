@@ -91,7 +91,7 @@ it("starts an inline column title after the window's controls wherever they stan
     ],
     [
       read("./settings/ui/settings.css"),
-      '.settings[data-sidebar="closed"] .settings-content > .desktop-column-bar {',
+      '.settings[data-sidebar="closed"] .settings-bar {',
     ],
     // The sidebar's own action, in the row the controls stand over.
     [
@@ -189,9 +189,14 @@ it("names what a flight restyles, so beginning one restyles a few elements, not 
   // The marks a flight and a preview set, as split-panes publishes them.
   const marked = (name: string) =>
     sheet.match(new RegExp(String.raw`^[^{}/]*\[${name}\][^{]*\{`, "gm")) ?? []
-  for (const name of [marks.flipping, marks.reflow])
+  for (const name of [marks.flipping, marks.measuring, marks.flying, marks.reflow])
     expect(marked(name).length, name).toBeGreaterThan(0)
-  const flightRules = [...marked(marks.flipping), ...marked(marks.reflow)]
+  const flightRules = [
+    marks.flipping,
+    marks.measuring,
+    marks.flying,
+    marks.reflow,
+  ].flatMap(marked)
   for (const rule of flightRules) expect(rule, rule).not.toMatch(/(?:>|\s)\*\s*(?:,|\{)/)
 })
 
@@ -245,12 +250,8 @@ it("lifts a drag's copy without painting a shadow", () => {
   expect(picture).toMatch(/container-name:\s*none\s*!important/)
   expect(picture).toMatch(/box-shadow:\s*none\s*!important/)
   expect(picture).toMatch(/(?:^|[;\n])\s*filter:\s*none\s*!important/)
-  const panes = readFileSync(
-    new URL("./workspace/ui/panes/panes.css", import.meta.url),
-    "utf8",
-  )
-  const bodyHidden = panes
-    .slice(panes.indexOf(".split-panes-ghost .workspace-pane-body {"))
+  const bodyHidden = sheet
+    .slice(sheet.indexOf(".split-panes-ghost .workspace-pane-body {"))
     .split("}")[0]
   expect(bodyHidden).toMatch(/content-visibility:\s*hidden/)
 })
@@ -275,13 +276,13 @@ it("holds the ambient blur still while panes travel", () => {
   expect(body).toMatch(/animation-play-state:\s*paused/)
 })
 
-it("drops the composer's blur while a drag is carried, and leaves the sidebar's blur up", () => {
+it("drops the composer's blur while a drag is carried and keeps the sidebar treatment stable", () => {
   const selector = ":root[data-drag-pressing] .desktop-composer {"
   expect(styles).toContain(selector)
   const body = styles.slice(styles.indexOf(selector)).split("}")[0]
   expect(body).toMatch(/backdrop-filter:\s*none/)
   expect(body).toMatch(/background:\s*var\(--background\)/)
-  // Turning the sidebar's blur off and back on was a long frame. It stays.
+  // The sidebar's treatment does not change on each gesture.
   expect(styles).not.toContain(":root[data-drag-pressing]\n  :is(.workspace-sidebar")
   expect(styles).not.toContain(
     ".workspace[data-overview-glass]\n  :is(.workspace-sidebar",
@@ -290,21 +291,25 @@ it("drops the composer's blur while a drag is carried, and leaves the sidebar's 
     .slice(styles.indexOf(":root[data-drag-pressing] .desktop-grain {"))
     .split("}")[0]
   expect(grain).toMatch(/visibility:\s*hidden/)
-  // The resting shadow stays. A hairline in its place rastered a new blur
-  // on the release.
+  // The resting shadow stays rather than changing on release.
   expect(styles).not.toContain(":root[data-drag-pressing] .workspace-sidebar {")
   const rows = readFileSync(
     new URL("./workspace/ui/source-list/source-list.css", import.meta.url),
     "utf8",
   )
+  // Every sidebar row: the kit's (`[data-size]` on its control) and the sessions' ListRow.
   const row = rows
-    .slice(rows.indexOf(".workspace[data-overview-glass] .workspace-row {"))
+    .slice(
+      rows.indexOf(
+        '.workspace[data-overview-glass]\n  .workspace-sidebar\n  :is([data-slot="sidebar-menu-item-row"] > [data-size], .workspace-thread-row) {',
+      ),
+    )
     .split("}")[0]
   expect(row).toMatch(/transition:\s*none/)
   const quiet = rows
     .slice(
       rows.indexOf(
-        ".workspace[data-overview-glass] .workspace-row[data-active]:not(.agents-overview-entry)",
+        '> [data-size][data-active="true"]:not(.agents-overview-entry),\n.workspace[data-overview-glass] .workspace-sidebar .workspace-thread-row[data-selected] {',
       ),
     )
     .split("}")[0]
@@ -323,17 +328,22 @@ it("does not paint a carried pane's conversation on the frame it lifts", () => {
     new URL("./workspace/ui/panes/panes.css", import.meta.url),
     "utf8",
   )
-  const lifted = sheet
+  const normalized = sheet.replace(/\s+/g, " ")
+  const lifted = normalized
     .slice(
-      sheet.indexOf(
-        ".workspace-pane[data-drag-lifted] > .workspace-pane-header,\n.workspace-pane[data-drag-lifted] > .workspace-pane-body {",
+      normalized.indexOf(
+        ".workspace:not([data-drag-card]) .workspace-pane[data-drag-lifted] > .workspace-pane-header,",
       ),
     )
     .split("}")[0]
   expect(lifted).toMatch(/content-visibility:\s*hidden/)
   expect(lifted).not.toMatch(/opacity/)
   const slot = sheet
-    .slice(sheet.indexOf(".workspace-pane[data-drag-lifted] {"))
+    .slice(
+      sheet.indexOf(
+        ".workspace:not([data-drag-card]) .workspace-pane[data-drag-lifted] {",
+      ),
+    )
     .split("}")[0]
   expect(slot).toMatch(/transition:\s*none/)
 })
@@ -358,11 +368,7 @@ it("skips pane bodies on the frame a drop commits them", () => {
     .split("}")[0]
   expect(mask).toMatch(/mask-image:\s*none/)
   const travelling = sheet
-    .slice(
-      sheet.indexOf(
-        ".workspace:is([data-split-flipping], [data-drag-reflow]) .workspace-pane {",
-      ),
-    )
+    .slice(sheet.indexOf(".workspace-pane[data-split-flying] {"))
     .split("}")[0]
   expect(travelling).toMatch(/background:\s*var\(--background\)/)
 })
@@ -454,10 +460,7 @@ it("paints nothing of a pane under the window's controls: its content below the 
   )
   // While panes travel, it waits out of sight.
   expect(
-    body(
-      panes,
-      ".workspace:is([data-split-flipping], [data-drag-reflow]) .desktop-header[data-sliver] {",
-    ),
+    body(panes, ".workspace-pane[data-split-flying] .desktop-header[data-sliver] {"),
   ).toMatch(/opacity:\s*0/)
 })
 
@@ -468,6 +471,23 @@ it("moves Settings' sidebar by transform, never by animating its width", () => {
   )
   const body = sheet.slice(sheet.indexOf(".settings-sidebar {")).split("}")[0]
   expect(body).not.toMatch(/transition/)
+})
+
+it("keeps pane bodies out of layout during a flight and staged restoration", () => {
+  const sheet = readFileSync(
+    new URL("./workspace/ui/panes/panes.css", import.meta.url),
+    "utf8",
+  )
+  const rule = sheet
+    .slice(
+      sheet.indexOf(
+        `.workspace[${marks.measuring}] .workspace-pane > .workspace-pane-body,`,
+      ),
+    )
+    .split("}")[0]
+  expect(rule).toContain(`.workspace-pane[${marks.restoring}] > .workspace-pane-body`)
+  expect(rule).toContain(`.workspace-pane[${marks.flying}] > .workspace-pane-body`)
+  expect(rule).toMatch(/content-visibility:\s*hidden/)
 })
 
 it("draws a pill, a short fade and a focus ring from the window's tokens, not from literals", () => {
@@ -546,4 +566,34 @@ it("draws every key cap with the kit's Kbd: no raw <kbd> outside Settings and on
     })
   for (const path of sources(root))
     expect(readFileSync(path, "utf8"), relative(root, path)).not.toMatch(/<kbd[\s>]/)
+})
+
+it("says !important in the workspace's stylesheets only where a rule waits on its owner", () => {
+  // #657 took the count from 52 to these. The rest wait on their owners: the
+  // pills and the sidebar's group headers on the kit (nessalabs/nessa_ui#124),
+  // and the side rail's reduced motion, which must beat every animation.
+  // A new `!important` is a rule fighting another of the window's own: give
+  // it the weight it needs instead (a reset is `:where(...)`).
+  const root = fileURLToPath(new URL("./workspace", import.meta.url))
+  const sheets = (dir: string): string[] =>
+    readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name)
+      if (statSync(path).isDirectory()) return sheets(path)
+      return name.endsWith(".css") ? [path] : []
+    })
+  const counts = Object.fromEntries(
+    sheets(root)
+      .map((path) => [
+        relative(root, path),
+        (readFileSync(path, "utf8").match(/!important/g) ?? []).length,
+      ])
+      .filter(([, count]) => count !== 0),
+  )
+  expect(counts).toEqual({
+    "ui/chrome/chrome.css": 5,
+    "ui/chrome/side-rail.css": 2,
+    "ui/overview/overview.css": 7,
+    "ui/source-list/source-list.css": 6,
+    "ui/transcript/approval-card.css": 1,
+  })
 })

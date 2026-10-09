@@ -133,7 +133,9 @@ Every surface, browser and native, uses the same titlebar, laid over the split
 view. The sidebar toggle sits at its leading edge (after the traffic lights on
 macOS) and the right-panel toggle at its trailing edge, and neither moves when a
 sidebar opens or closes. The lowercase nessaStudio wordmark in the sidebar
-footer is the only identity. Both sidebars are inset, rounded panes of
+footer is the only identity; with the side rail turned on (a preview in
+Settings › Advanced › Experimental), the rail's toggle beside it, in the
+corner, doubles as its mark. Both sidebars are inset, rounded panes of
 translucent glass: the middle's colour is the base everywhere, and a pane is
 that base lifted by a faint tint, so it sits on top while the ambient light
 still carries through and the window reads as one surface; their content begins below the
@@ -164,7 +166,7 @@ pane's rim, stopping where its corners curve. The ambient light, resize glow,
 focus halo, and text selection take their colours from a light theme:
 `model/theme.ts` lists the themes (Graphite, the neutral default; Ocean; Ember;
 Dusk), and each is three custom properties under its `[data-desktop-theme]`
-block in `styles.css`. The palette button in the sidebar footer switches them;
+block in `styles.css`. Settings › Appearance switches them;
 `adapters/theme-preference.ts` remembers the choice in the webview's storage and
 falls back to the default when storage is unavailable or holds an unknown name.
 A fine grain over the light keeps its falloff from banding.

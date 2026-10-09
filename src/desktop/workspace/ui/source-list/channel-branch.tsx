@@ -1,4 +1,5 @@
 import { memo } from "react"
+import { SidebarMenuItem } from "@nessa-ui/react/sidebar"
 import { shallowEqual } from "react-redux"
 import { DesktopIcon } from "../../../ui/icons"
 import {
@@ -18,7 +19,7 @@ import {
   selectShowAll,
 } from "../../adapters/store/selectors"
 import { useBesideKey } from "../session-actions"
-import { branchCap } from "../../model/session-groups"
+import { branchCap, statusLabels } from "../../model/session-groups"
 import { IconButton } from "../../../ui/icon-button"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { ThreadRow } from "./thread-row"
@@ -52,56 +53,66 @@ export const ChannelBranch = memo(function ChannelBranch({
   )
   if (!channel) return null
   const label = `New session in #${channel.name}`
+  // Folded, what waits or runs is said with the row's name: the kit lays it beside the control.
+  const summary =
+    !expanded && (activity.waiting > 0 || activity.running)
+      ? statusLabels[activity.waiting > 0 ? "needs-you" : "running"]
+      : null
   return (
-    <li className="workspace-branch">
-      <div className="workspace-branch-head">
-        <button
-          type="button"
-          className="workspace-row"
-          data-row="channel"
-          data-channel={channel.id}
-          data-current={current || undefined}
-          data-unread={activity.unread || undefined}
-          aria-expanded={expanded}
-          {...tooltip(channel.topic)}
+    <SidebarMenuItem
+      size="xs"
+      containerClassName="workspace-branch"
+      data-row="channel"
+      data-channel={channel.id}
+      data-current={current || undefined}
+      unread={activity.unread}
+      aria-expanded={expanded}
+      aria-label={summary ? `${channel.name} ${summary}` : undefined}
+      {...tooltip(channel.topic)}
+      onClick={(event) => {
+        const beside = besideKey.asks(event)
+        dispatch(
+          openChannel({
+            channelId: channel.id,
+            beside,
+          }),
+        )
+      }}
+      icon={
+        <span
+          className="workspace-disclosure"
           onClick={(event) => {
-            const beside = besideKey.asks(event)
-            dispatch(
-              openChannel({
-                channelId: channel.id,
-                beside,
-              }),
-            )
+            event.stopPropagation()
+            dispatch(toggleChannel({ channelId: channel.id }))
           }}
         >
-          <span
-            className="workspace-disclosure"
-            aria-hidden="true"
-            onClick={(event) => {
-              event.stopPropagation()
-              dispatch(toggleChannel({ channelId: channel.id }))
-            }}
-          >
-            <DesktopIcon name={channel.private ? "privateChannel" : "channel"} />
-            <DesktopIcon name="chevronRight" />
-          </span>
-          <span className="workspace-truncate">{channel.name}</span>
-        </button>
-        {!expanded && (activity.waiting > 0 || activity.running) ? (
-          <span className="workspace-branch-summary">
-            <StatusGlyph status={activity.waiting > 0 ? "needs-you" : "running"} />
-          </span>
-        ) : null}
+          <DesktopIcon name={channel.private ? "privateChannel" : "channel"} />
+          <DesktopIcon name="chevronRight" />
+        </span>
+      }
+      // Folded, it still says whether something waits or runs, in the slot
+      // its + takes under the pointer.
+      badge={
+        summary ? (
+          <StatusGlyph
+            status={activity.waiting > 0 ? "needs-you" : "running"}
+            decorative
+          />
+        ) : undefined
+      }
+      trailing={
         <IconButton
-          className="workspace-branch-add"
           icon="add"
           label={label}
           tabIndex={-1}
           onClick={() => dispatch(newSession({ channelId: channel.id }))}
         />
-      </div>
-      {expanded ? <BranchSessions channelId={channel.id} /> : null}
-    </li>
+      }
+      showTrailingOnHover
+      submenu={expanded ? <BranchSessions channelId={channel.id} /> : undefined}
+    >
+      {channel.name}
+    </SidebarMenuItem>
   )
 })
 
@@ -123,30 +134,26 @@ function BranchSessions({ channelId }: { channelId: string }) {
         />
       ))}
       {branch.hidden > 0 || (showAll && branch.total > branchCap) ? (
-        <li>
-          <button
-            type="button"
-            className="workspace-row workspace-more"
-            data-row="more"
-            data-parent={channelId}
-            onClick={() => dispatch(toggleShowAll({ channelId }))}
-          >
-            {showAll ? "Show fewer" : `Show all ${branch.total}`}
-          </button>
-        </li>
+        <SidebarMenuItem
+          size="xs"
+          className="workspace-more"
+          data-row="more"
+          data-parent={channelId}
+          onClick={() => dispatch(toggleShowAll({ channelId }))}
+        >
+          {showAll ? "Show fewer" : `Show all ${branch.total}`}
+        </SidebarMenuItem>
       ) : null}
       {branch.total === 0 ? (
-        <li>
-          <button
-            type="button"
-            className="workspace-row workspace-more"
-            data-row="more"
-            data-parent={channelId}
-            onClick={() => dispatch(newSession({ channelId }))}
-          >
-            Start a session
-          </button>
-        </li>
+        <SidebarMenuItem
+          size="xs"
+          className="workspace-more"
+          data-row="more"
+          data-parent={channelId}
+          onClick={() => dispatch(newSession({ channelId }))}
+        >
+          Start a session
+        </SidebarMenuItem>
       ) : null}
     </ul>
   )

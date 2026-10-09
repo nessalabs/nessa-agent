@@ -1,0 +1,68 @@
+{
+  "check": "drag",
+  "ok": false,
+  "started": "2026-10-07T10:06:59.839Z",
+  "finished": "2026-10-07T10:07:23.699Z",
+  "target": {
+    "url": "http://127.0.0.1:58955/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:58955/favicon.ico)"
+      ]
+    },
+    {
+      "ok": false,
+      "failures": [
+        "sweeping left at top+30px picked a vertical zone: Swap with Notarize the macOS build → Move above Notarize the macOS build",
+        "sweeping left at top+50px picked a vertical zone: Swap with Notarize the macOS build → Move above Notarize the macOS build",
+        "sweeping left at top+90px picked a vertical zone: Swap with Notarize the macOS build → Move above Notarize the macOS build"
+      ],
+      "name": "sideways-top",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": false,
+      "failures": [
+        "sweeping left at top+30px picked a vertical zone: Swap with Notarize the macOS build → Move above Notarize the macOS build",
+        "sweeping left at top+50px picked a vertical zone: Swap with Notarize the macOS build → Move above Notarize the macOS build",
+        "sweeping left at top+90px picked a vertical zone: Swap with Notarize the macOS build → Move above Notarize the macOS build"
+      ],
+      "name": "sideways-top",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700"
+    },
+    {
+      "ok": false,
+      "failures": [
+        "sweeping left at top+30px picked a vertical zone: Swap with Notarize the macOS build → Move above Notarize the macOS build",
+        "sweeping left at top+50px picked a vertical zone: Swap with Notarize the macOS build → Move above Notarize the macOS build",
+        "sweeping left at top+90px picked a vertical zone: Swap with Notarize the macOS build → Move above Notarize the macOS build"
+      ],
+      "name": "sideways-top",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1000x700"
+    },
+    {
+      "ok": false,
+      "failures": [
+        "sweeping left at top+30px picked a vertical zone: Swap with Notarize the macOS build → Move above Notarize the macOS build",
+        "sweeping left at top+50px picked a vertical zone: Swap with Notarize the macOS build → Move above Notarize the macOS build",
+        "sweeping left at top+90px picked a vertical zone: Swap with Notarize the macOS build → Move above Notarize the macOS build"
+      ],
+      "name": "sideways-top",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700"
+    }
+  ]
+}

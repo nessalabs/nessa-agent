@@ -1,0 +1,286 @@
+{
+  "source": "95f393cfd91f4a63cd8c5e75c0c855a5aeec60b2",
+  "base": "cffdabba64f821c012b2df04c2f02e5754511df3",
+  "command": "node verification/desktop/scripts/perf-budget.mjs --mode prod --headed --channel bundled --runs 3",
+  "machine": {
+    "system": "macOS-26.6-arm64-arm-64bit",
+    "cpuCount": 10,
+    "model": "Mac17,3",
+    "memoryBytes": 25769803776
+  },
+  "extraCpuWorkers": 0,
+  "concurrentVerificationJobs": 0,
+  "budgetMs": 50,
+  "held": 19,
+  "total": 35,
+  "interactionHeld": 17,
+  "interactions": 33,
+  "rows": [
+    {
+      "name": "split-right",
+      "layout": "columns",
+      "held": false,
+      "medianMs": 51,
+      "maxMs": 51.899999999999864,
+      "framesOver50": 3
+    },
+    {
+      "name": "split-down",
+      "layout": "columns",
+      "held": false,
+      "medianMs": 50,
+      "maxMs": 50.100000000000136,
+      "framesOver50": 1
+    },
+    {
+      "name": "move",
+      "layout": "columns",
+      "held": true,
+      "medianMs": 19,
+      "maxMs": 32.799999999999955,
+      "framesOver50": 0
+    },
+    {
+      "name": "close",
+      "layout": "columns",
+      "held": true,
+      "medianMs": 19,
+      "maxMs": 33.40000000000009,
+      "framesOver50": 0
+    },
+    {
+      "name": "sidebar",
+      "layout": "columns",
+      "held": true,
+      "medianMs": 34,
+      "maxMs": 35.200000000000045,
+      "framesOver50": 0
+    },
+    {
+      "name": "session-list",
+      "layout": "columns",
+      "held": false,
+      "medianMs": 33,
+      "maxMs": 51.899999999999864,
+      "framesOver50": 1
+    },
+    {
+      "name": "send-home",
+      "layout": "columns",
+      "held": false,
+      "medianMs": 67,
+      "maxMs": 66.80000000000018,
+      "framesOver50": 3
+    },
+    {
+      "name": "typing",
+      "layout": "columns",
+      "held": true,
+      "medianMs": 19,
+      "maxMs": 33.299999999999955,
+      "framesOver50": 0
+    },
+    {
+      "name": "stream-1-of-4",
+      "layout": "columns",
+      "held": true,
+      "medianMs": 33,
+      "maxMs": 33.5,
+      "framesOver50": 0
+    },
+    {
+      "name": "drag-drop",
+      "layout": "columns",
+      "held": false,
+      "medianMs": 67,
+      "maxMs": 81.69999999999982,
+      "framesOver50": 6
+    },
+    {
+      "name": "drag-cancel",
+      "layout": "columns",
+      "held": false,
+      "medianMs": 50,
+      "maxMs": 65,
+      "framesOver50": 3
+    },
+    {
+      "name": "thinking-walk",
+      "layout": "columns",
+      "held": true,
+      "medianMs": 19,
+      "maxMs": 18.700000000000273,
+      "framesOver50": 0
+    },
+    {
+      "name": "thinking-drag",
+      "layout": "columns",
+      "held": true,
+      "medianMs": 19,
+      "maxMs": 18.700000000000273,
+      "framesOver50": 0
+    },
+    {
+      "name": "overview-open",
+      "layout": "columns",
+      "held": false,
+      "medianMs": 184,
+      "maxMs": 216.69999999999982,
+      "framesOver50": 6
+    },
+    {
+      "name": "overview-select",
+      "layout": "columns",
+      "held": true,
+      "medianMs": 19,
+      "maxMs": 33.40000000000009,
+      "framesOver50": 0
+    },
+    {
+      "name": "overview-answer",
+      "layout": "columns",
+      "held": true,
+      "medianMs": 32,
+      "maxMs": 32.799999999999955,
+      "framesOver50": 0
+    },
+    {
+      "name": "overview-leave",
+      "layout": "columns",
+      "held": false,
+      "medianMs": 65,
+      "maxMs": 101.10000000000014,
+      "framesOver50": 3
+    },
+    {
+      "name": "split-right",
+      "layout": "sidebar",
+      "held": false,
+      "medianMs": 66,
+      "maxMs": 100.09999999999991,
+      "framesOver50": 5
+    },
+    {
+      "name": "split-down",
+      "layout": "sidebar",
+      "held": false,
+      "medianMs": 67,
+      "maxMs": 67.40000000000009,
+      "framesOver50": 4
+    },
+    {
+      "name": "move",
+      "layout": "sidebar",
+      "held": true,
+      "medianMs": 34,
+      "maxMs": 49.80000000000018,
+      "framesOver50": 0
+    },
+    {
+      "name": "close",
+      "layout": "sidebar",
+      "held": true,
+      "medianMs": 48,
+      "maxMs": 48.80000000000018,
+      "framesOver50": 0
+    },
+    {
+      "name": "sidebar",
+      "layout": "sidebar",
+      "held": true,
+      "medianMs": 48,
+      "maxMs": 48.40000000000009,
+      "framesOver50": 0
+    },
+    {
+      "name": "send-home",
+      "layout": "sidebar",
+      "held": false,
+      "medianMs": 69,
+      "maxMs": 101.20000000000027,
+      "framesOver50": 3
+    },
+    {
+      "name": "typing",
+      "layout": "sidebar",
+      "held": true,
+      "medianMs": 19,
+      "maxMs": 18.700000000000273,
+      "framesOver50": 0
+    },
+    {
+      "name": "stream-1-of-4",
+      "layout": "sidebar",
+      "held": true,
+      "medianMs": 19,
+      "maxMs": 33.79999999999973,
+      "framesOver50": 0
+    },
+    {
+      "name": "drag-drop",
+      "layout": "sidebar",
+      "held": false,
+      "medianMs": 66,
+      "maxMs": 81.80000000000018,
+      "framesOver50": 4
+    },
+    {
+      "name": "drag-cancel",
+      "layout": "sidebar",
+      "held": false,
+      "medianMs": 68,
+      "maxMs": 68.5,
+      "framesOver50": 7
+    },
+    {
+      "name": "thinking-walk",
+      "layout": "sidebar",
+      "held": true,
+      "medianMs": 19,
+      "maxMs": 18.700000000000728,
+      "framesOver50": 0
+    },
+    {
+      "name": "thinking-drag",
+      "layout": "sidebar",
+      "held": true,
+      "medianMs": 19,
+      "maxMs": 34.90000000000009,
+      "framesOver50": 0
+    },
+    {
+      "name": "overview-open",
+      "layout": "sidebar",
+      "held": false,
+      "medianMs": 148,
+      "maxMs": 148.60000000000014,
+      "framesOver50": 5
+    },
+    {
+      "name": "overview-select",
+      "layout": "sidebar",
+      "held": true,
+      "medianMs": 34,
+      "maxMs": 34.90000000000009,
+      "framesOver50": 0
+    },
+    {
+      "name": "overview-answer",
+      "layout": "sidebar",
+      "held": false,
+      "medianMs": 52,
+      "maxMs": 51.899999999999864,
+      "framesOver50": 2
+    },
+    {
+      "name": "overview-leave",
+      "layout": "sidebar",
+      "held": false,
+      "medianMs": 50,
+      "maxMs": 50.700000000000045,
+      "framesOver50": 2
+    }
+  ],
+  "started": "2026-10-07T10:35:53.892Z",
+  "finished": "2026-10-07T10:43:12.197Z"
+}

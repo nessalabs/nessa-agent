@@ -189,6 +189,13 @@
   container-name: none !important;
 }
 
+/* The conversation stays in the copy and out of its paint: laying the body out
+   on the press, or rastering it on each shape change, misses the frame budget
+   (`styles.test.ts`). The title stays, so the copy can still be told apart. */
+.split-panes-ghost .workspace-pane-body {
+  content-visibility: hidden;
+}
+
 /*
  * Where the drop would land: a calm placeholder at exactly the rect the pane
  * will take — a soft fill and a hairline in the theme's edge light, a pane's

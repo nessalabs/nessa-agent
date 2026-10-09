@@ -5,10 +5,11 @@
  * which silently drops any class the app writes for itself; compiling from
  * source gives the app the full utility set and the same tokens.
  *
- * When the package ships to npm, this becomes `@import "@nessa-ui/react/app.css"`
- * again.
+ * `@import "@nessa-ui/react/app.css"` is that source file. The path table
+ * (`scripts/nessa-ui-paths.mjs`) sends the package's exported stylesheet
+ * names to `src/`, not to `dist/` and not to `src/components/`.
  */
-@import "../node_modules/@nessa-ui/react/src/app.css";
+@import "@nessa-ui/react/app.css";
 @source "./";
 
 html,

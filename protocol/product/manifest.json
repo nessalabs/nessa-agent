@@ -2,59 +2,218 @@
   "version": 1,
   "path": "/session",
   "methods": {
-    "session.authenticate": "SessionAuthenticateParams",
-    "auth.session": null,
-    "server.health": null,
-    "credential.issue": "CredentialIssueParams",
-    "credential.list": null,
-    "credential.revoke": "CredentialRevokeParams",
-    "conversation.create": "ConversationCreateParams",
-    "conversation.read": "ConversationReadParams",
-    "conversation.recordsHead": "ConversationRecordsHeadParams",
-    "conversation.recordsPage": "ConversationRecordsPageParams",
-    "conversation.list": "ConversationListParams",
-    "conversation.observe": "ConversationObserveParams",
-    "conversation.send": "ConversationSendParams",
-    "conversation.steer": "ConversationSendParams",
-    "conversation.remove": "ConversationRemoveParams",
-    "conversation.stop": "ConversationStopParams",
-    "conversation.receipt": "ConversationReceiptParams",
-    "conversation.answer": "ConversationAnswerParams",
-    "conversation.answerQuestion": "ConversationAnswerQuestionParams",
-    "conversation.cancel": "ConversationCancelParams",
-    "conversation.close": "ConversationCloseParams",
-    "conversation.archive": "ConversationArchiveParams",
-    "conversation.unarchive": "ConversationArchiveParams",
-    "conversation.delete": "ConversationDeleteParams",
-    "conversation.reorder": "ConversationReorderParams",
-    "attachment.begin": "AttachmentBeginParams",
-    "agents.list": null,
-    "conversation.setApprovalMode": "ConversationSetApprovalModeParams",
-    "agents.installOptions": null,
-    "agents.install": "AgentInstallParams",
-    "conversation.catalogueHead": "ConversationCatalogueHeadParams",
-    "conversation.catalogueManifest": "ConversationCatalogueManifestParams",
-    "conversation.catalogueResolve": "ConversationCatalogueResolveParams",
-    "mcp.callTool": "McpCallToolParams",
-    "mcp.readResource": "McpReadResourceParams",
-    "mcp.releaseApp": "McpReleaseAppParams",
-    "mcp.sendMessage": "McpSendMessageParams",
-    "mcp.updateModelContext": "McpUpdateModelContextParams",
-    "mcpServers.list": null,
-    "mcpServers.save": "McpServersSaveParams",
-    "mcpServers.remove": "McpServersRemoveParams",
-    "mcpServers.inspect": "McpServersInspectParams",
-    "mcpServers.authorize": "McpServersAuthorizeParams",
-    "mcpServers.revoke": "McpServersRevokeParams",
-    "pairing.create": null,
-    "pairing.pending": null,
-    "pairing.status": "PairingInvitationParams",
-    "pairing.approve": "PairingApproveParams",
-    "pairing.deny": "PairingInvitationParams",
-    "pairing.cancel": "PairingInvitationParams",
-    "conversation.watchRecords": "ConversationWatchRecordsParams",
-    "conversation.watchCatalogue": "ConversationWatchCatalogueParams",
-    "conversation.unwatch": "ConversationUnwatchParams"
+    "session.authenticate": {
+      "params": "SessionAuthenticateParams",
+      "grant": null
+    },
+    "auth.session": {
+      "params": null,
+      "grant": null
+    },
+    "server.health": {
+      "params": null,
+      "grant": "server.read"
+    },
+    "credential.issue": {
+      "params": "CredentialIssueParams",
+      "grant": "credential.manage"
+    },
+    "credential.list": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "credential.revoke": {
+      "params": "CredentialRevokeParams",
+      "grant": "credential.manage"
+    },
+    "conversation.create": {
+      "params": "ConversationCreateParams",
+      "grant": "conversation.write"
+    },
+    "conversation.read": {
+      "params": "ConversationReadParams",
+      "grant": "conversation.write"
+    },
+    "conversation.recordsHead": {
+      "params": "ConversationRecordsHeadParams",
+      "grant": "conversation.read"
+    },
+    "conversation.recordsPage": {
+      "params": "ConversationRecordsPageParams",
+      "grant": "conversation.read"
+    },
+    "conversation.list": {
+      "params": "ConversationListParams",
+      "grant": "conversation.write"
+    },
+    "conversation.observe": {
+      "params": "ConversationObserveParams",
+      "grant": "conversation.write"
+    },
+    "conversation.send": {
+      "params": "ConversationSendParams",
+      "grant": "conversation.write"
+    },
+    "conversation.steer": {
+      "params": "ConversationSendParams",
+      "grant": "conversation.write"
+    },
+    "conversation.remove": {
+      "params": "ConversationRemoveParams",
+      "grant": "conversation.write"
+    },
+    "conversation.stop": {
+      "params": "ConversationStopParams",
+      "grant": "conversation.write"
+    },
+    "conversation.receipt": {
+      "params": "ConversationReceiptParams",
+      "grant": "conversation.write"
+    },
+    "conversation.answer": {
+      "params": "ConversationAnswerParams",
+      "grant": "conversation.write"
+    },
+    "conversation.answerQuestion": {
+      "params": "ConversationAnswerQuestionParams",
+      "grant": "conversation.write"
+    },
+    "conversation.cancel": {
+      "params": "ConversationCancelParams",
+      "grant": "conversation.write"
+    },
+    "conversation.close": {
+      "params": "ConversationCloseParams",
+      "grant": "conversation.write"
+    },
+    "conversation.archive": {
+      "params": "ConversationArchiveParams",
+      "grant": "conversation.write"
+    },
+    "conversation.unarchive": {
+      "params": "ConversationArchiveParams",
+      "grant": "conversation.write"
+    },
+    "conversation.delete": {
+      "params": "ConversationDeleteParams",
+      "grant": "conversation.write"
+    },
+    "conversation.reorder": {
+      "params": "ConversationReorderParams",
+      "grant": "conversation.write"
+    },
+    "attachment.begin": {
+      "params": "AttachmentBeginParams",
+      "grant": "conversation.write"
+    },
+    "agents.list": {
+      "params": null,
+      "grant": "server.read"
+    },
+    "conversation.setApprovalMode": {
+      "params": "ConversationSetApprovalModeParams",
+      "grant": "conversation.write"
+    },
+    "agents.installOptions": {
+      "params": null,
+      "grant": "server.read"
+    },
+    "agents.install": {
+      "params": "AgentInstallParams",
+      "grant": "conversation.write"
+    },
+    "conversation.catalogueHead": {
+      "params": "ConversationCatalogueHeadParams",
+      "grant": "conversation.read"
+    },
+    "conversation.catalogueManifest": {
+      "params": "ConversationCatalogueManifestParams",
+      "grant": "conversation.read"
+    },
+    "conversation.catalogueResolve": {
+      "params": "ConversationCatalogueResolveParams",
+      "grant": "conversation.read"
+    },
+    "mcp.callTool": {
+      "params": "McpCallToolParams",
+      "grant": "conversation.write"
+    },
+    "mcp.readResource": {
+      "params": "McpReadResourceParams",
+      "grant": "conversation.write"
+    },
+    "mcp.releaseApp": {
+      "params": "McpReleaseAppParams",
+      "grant": "conversation.write"
+    },
+    "mcp.sendMessage": {
+      "params": "McpSendMessageParams",
+      "grant": "conversation.write"
+    },
+    "mcp.updateModelContext": {
+      "params": "McpUpdateModelContextParams",
+      "grant": "conversation.write"
+    },
+    "mcpServers.list": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "mcpServers.save": {
+      "params": "McpServersSaveParams",
+      "grant": "credential.manage"
+    },
+    "mcpServers.remove": {
+      "params": "McpServersRemoveParams",
+      "grant": "credential.manage"
+    },
+    "mcpServers.inspect": {
+      "params": "McpServersInspectParams",
+      "grant": "credential.manage"
+    },
+    "mcpServers.authorize": {
+      "params": "McpServersAuthorizeParams",
+      "grant": "credential.manage"
+    },
+    "mcpServers.revoke": {
+      "params": "McpServersRevokeParams",
+      "grant": "credential.manage"
+    },
+    "pairing.create": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "pairing.pending": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "pairing.status": {
+      "params": "PairingInvitationParams",
+      "grant": "credential.manage"
+    },
+    "pairing.approve": {
+      "params": "PairingApproveParams",
+      "grant": "credential.manage"
+    },
+    "pairing.deny": {
+      "params": "PairingInvitationParams",
+      "grant": "credential.manage"
+    },
+    "pairing.cancel": {
+      "params": "PairingInvitationParams",
+      "grant": "credential.manage"
+    },
+    "conversation.watchRecords": {
+      "params": "ConversationWatchRecordsParams",
+      "grant": null
+    },
+    "conversation.watchCatalogue": {
+      "params": "ConversationWatchCatalogueParams",
+      "grant": null
+    },
+    "conversation.unwatch": {
+      "params": "ConversationUnwatchParams",
+      "grant": null
+    }
   },
   "events": {
     "session.challenge": "SessionChallenge",

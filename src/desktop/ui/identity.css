@@ -1,0 +1,82 @@
+/*
+ * The window's name at a sidebar's foot (`identity.tsx`): "nessa Studio",
+ * and in Settings "‹ nessa Agent" in the same place. The row is one corner
+ * control tall, the pill the corner controls' size and radius, concentric
+ * with the card's corner (`styles.css`).
+ */
+
+.desktop-identity {
+  display: flex;
+  min-width: 200px;
+  height: calc(var(--desktop-control-size) + 2 * var(--desktop-control-inset));
+  flex: none;
+  align-items: center;
+  padding: 0 10px 0 var(--desktop-control-inset);
+  font-size: var(--desktop-text-body);
+  letter-spacing: -0.01em;
+}
+
+.desktop-identity-button {
+  display: flex;
+  min-width: 0;
+  height: var(--desktop-control-size);
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--desktop-control-radius);
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  line-height: var(--desktop-control-size);
+  letter-spacing: inherit;
+  white-space: nowrap;
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: background-color var(--desktop-fast) ease;
+}
+
+.desktop-identity-button:hover {
+  background: var(--desktop-hover);
+}
+
+.desktop-identity-words {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.desktop-identity-words > b {
+  font-weight: 600;
+}
+
+.desktop-identity-words > span {
+  color: var(--desktop-muted);
+  transition: color var(--desktop-fast) ease;
+}
+
+.desktop-identity-button:hover .desktop-identity-words > span {
+  color: var(--foreground);
+}
+
+/* "‹ nessa Agent": the chevron leads, and steps back under the pointer. */
+.desktop-identity-button[data-back] {
+  padding-left: 4px;
+}
+
+.desktop-identity-back {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--desktop-muted);
+  transition:
+    transform var(--desktop-medium) var(--desktop-out),
+    color var(--desktop-fast) ease;
+}
+
+.desktop-identity-button:hover .desktop-identity-back {
+  transform: translateX(-2px);
+  color: var(--foreground);
+}

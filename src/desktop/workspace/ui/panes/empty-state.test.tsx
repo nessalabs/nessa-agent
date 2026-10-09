@@ -46,16 +46,16 @@ async function shown(reason: "signed-out" | "unavailable" | undefined) {
 
 it("S8: signed out, it says the window is not signed in", async () => {
   await shown("signed-out")
-  expect(host.querySelector("[role=status] p")?.textContent).toBe(
-    "This window isn’t signed in to the local server.",
-  )
+  expect(
+    host.querySelector('[role=status] [data-slot="empty-state-title"]')?.textContent,
+  ).toBe("This window isn’t signed in to the local server.")
 })
 
 it("S8: with no answer, it says what it could not read and from where", async () => {
   await shown("unavailable")
-  expect(host.querySelector("[role=status] p")?.textContent).toBe(
-    "Nessa couldn’t read the local server’s conversations just now.",
-  )
+  expect(
+    host.querySelector('[role=status] [data-slot="empty-state-title"]')?.textContent,
+  ).toBe("Nessa couldn’t read the local server’s conversations just now.")
 })
 
 it("S8: Try Again reads the index again, and a read that answers opens the workspace", async () => {

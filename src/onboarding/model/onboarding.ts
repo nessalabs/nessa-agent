@@ -1,3 +1,5 @@
+import type { LingerView } from "./linger"
+
 /** First-run setup: which agent runs a conversation, and how far setup has got.
  *
  * This is the panel's own chrome state, not product state: it decides what the
@@ -92,10 +94,10 @@ export const AGENT_CHOICES: readonly AgentChoice[] = Object.freeze([
 
 /** Ordered first-run steps. `done` means the panel shows the conversation.
  *
- * There is no step after the shortcut lesson. Finishing it is already the good
- * news, and a screen whose only job is to say so again is a screen between
- * someone and the thing they came for. */
-export type OnboardingStep = "welcome" | "agent" | "summon" | "done"
+ * Linux may ask about linger after the shortcut. That question is a host read,
+ * not a second lesson: a host that answers `not-applicable` never shows it, and
+ * finishing from the shortcut is still a completed setup. */
+export type OnboardingStep = "welcome" | "agent" | "summon" | "linger" | "done"
 
 /**
  * How setup stopped being on screen.
@@ -153,6 +155,11 @@ export interface OnboardingState {
    * not find out" is never shown as a fact about an agent.
    */
   readinessFailure?: AgentReadinessFailure
+  /**
+   * What the host last reported about linger. Present only on the linger step.
+   * The screen says this and does not derive a claim of its own.
+   */
+  linger?: LingerView
 }
 
 /** The state a panel with no completed setup starts from. */
@@ -281,23 +288,48 @@ export function dismissOnboarding(state: OnboardingState): OnboardingState {
 }
 
 /**
- * Finish setup from the last step, keeping the agent that was chosen.
+ * Show the linger step from the shortcut, when the host has something to say.
  *
- * The shortcut lesson is what the step is for; it is not what setup is for.
+ * `not-applicable` is a host with no logind API. It stays on the shortcut so
+ * finishing there completes setup, the way it does everywhere else.
+ */
+export function showLinger(state: OnboardingState, view: LingerView): OnboardingState {
+  if (state.step !== "summon" || view.shown === "not-applicable") return state
+  return {
+    step: "linger",
+    agent: state.agent,
+    readiness: state.readiness,
+    readinessFailure: state.readinessFailure,
+    linger: view,
+  }
+}
+
+/** Replace the linger report. A step that is not asking, and a host that says
+ * this question does not apply, leave the state as it was. */
+export function recordLinger(state: OnboardingState, view: LingerView): OnboardingState {
+  if (state.step !== "linger" || view.shown === "not-applicable") return state
+  return { ...state, linger: view }
+}
+
+/**
+ * Finish setup from the shortcut, or from the linger step, keeping the agent.
+ *
+ * The shortcut lesson is what that step is for; it is not what setup is for.
  * Requiring it to finish made setup impossible to complete for a configuration
  * that registers no summon accelerator, and for anyone who cannot hold a chord
  * — with no way out but abandoning setup, which records nothing and starts over
  * next launch. Whether the lesson landed is in `summonTaught`, and the surface
  * decides what to offer on the strength of it; refusing to finish is not that
  * decision. The lesson does not travel into the finished state — it was about
- * the step, not the setup.
+ * the step, not the setup. Linger, when the host offered it, finishes the same
+ * way: the agent is kept and the report is not.
  *
  * The finish is recorded in the state itself. Which of the two ways out was
  * taken decides whether setup is written off for good, and that is a fact about
  * the setup rather than about the order a surface's callbacks ran in.
  */
 export function completeOnboarding(state: OnboardingState): OnboardingState {
-  if (state.step !== "summon") return state
+  if (state.step !== "summon" && state.step !== "linger") return state
   return { step: "done", outcome: "completed", agent: state.agent }
 }
 

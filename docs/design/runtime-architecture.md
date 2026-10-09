@@ -12,7 +12,7 @@ builds on [0008](../adr/todo/0008-agent-client-api.md) (runtime),
 delivery), [0010](../adr/done/0010-local-authentication.md) (identity),
 [483](../adr/done/483-protocol-and-client-core-crates.md) (crate direction),
 [0014](../adr/todo/0014-nessa-owned-policy-hooks.md) (policy),
-[344](../adr/todo/344-mcp-ui.md) and [392](../adr/todo/392-remote-mcp-servers.md)
+[344](../adr/done/344-mcp-ui.md) and [392](../adr/todo/392-remote-mcp-servers.md)
 (extensions), and the sync lanes under #257, #263, #267, #270 and #273. It
 redefines none of their protocols. Nothing here authorizes a runtime rewrite;
 each slice is an issue of its own.ead

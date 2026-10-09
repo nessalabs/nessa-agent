@@ -39,6 +39,7 @@ import {
   type OnboardingState,
 } from "../model/onboarding"
 import { revealChunks } from "../model/reveal-text"
+import type { LingerShown, LingerView } from "../model/linger"
 
 /** Setup's primary action, sized the same on every step. */
 const PILL =
@@ -48,67 +49,8 @@ const PILL =
  * dialog with its own heading, so there is exactly one of these on screen. */
 export const SETUP_HEADING_ID = "nessa-setup-heading"
 
-/**
- * The wash every setup step is painted on.
- *
- * It is decorative: inert to the pointer, hidden from assistive technology by
- * the component, and still under a reduced-motion preference. Its pigments
- * travel, so anything laid straight on it has to stay legible wherever they
- * go — plain white type over the palette's own lighter stops measures about
- * 1.7:1, which is why the type carries a stacked shadow rather than one soft
- * one: a tight, near-opaque layer close to the glyph for an edge that holds
- * regardless of what is behind it, and a wider, softer one for depth.
- */
-function SetupStage({ children }: { children: React.ReactNode }) {
-  return (
-    <MorphingMeshGradient
-      colors={morphingMeshGradientPresets.glass}
-      type="mesh"
-      speed={1.1}
-      blur={88}
-      className="nessa-setup-stage size-full"
-    >
-      {/* Setup's controls are always the light treatment: a dark pill over
-        these pigments reads as a hole punched in the wash, and the light
-        palette is what the design system's own components are built against
-        here. Headings set their colour explicitly for the same reason. */}
-      <div className="nessa-setup-light relative flex size-full min-h-0 items-center justify-center p-5">
-        {children}
-      </div>
-    </MorphingMeshGradient>
-  )
-}
-
-/**
- * The glass pane for a step that carries more than a line and a button.
- *
- * A list of options cannot be read off the moving wash, so it gets a surface.
- * The pane is scoped to the light palette because a dark slab over these
- * pigments reads as a hole rather than glass, and because its own components
- * then keep the contrast they were built for.
- *
- * It scrolls rather than clips. At a large text size or a high UI scale the
- * list and its Continue button are taller than the window, and a pane that
- * hid the button made setup impossible to finish.
- */
-const SetupPanel = React.forwardRef<HTMLDivElement, { children: React.ReactNode }>(
-  function SetupPanel({ children }, ref) {
-    return (
-      <div
-        ref={ref}
-        tabIndex={-1}
-        className="nessa-setup-light relative flex max-h-full w-full max-w-sm flex-col gap-5 overflow-y-auto rounded-2xl border border-white/40 bg-background/60 p-6 text-foreground shadow-2xl ring-1 ring-black/5 outline-none backdrop-blur-2xl backdrop-saturate-150"
-      >
-        {/* The lit top edge that reads as a pane of glass catching light. */}
-        <span
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/45 to-transparent"
-        />
-        {children}
-      </div>
-    )
-  },
-)
+/** Every button in a setup pane: one height, one width, one shape. */
+const PANE_BUTTON = "h-11 w-full rounded-full nessa-text-3 font-medium"
 
 /**
  * What the summon step says, which is a different thing at each press.
@@ -242,10 +184,6 @@ function readinessNote(
   return { text: "Checking…", Icon: LoaderCircle, spin: true }
 }
 
-/** Every button in the picker pane: one height, one width, one shape, so the
- * ones that stack under the list line up as a single column. */
-const PANE_BUTTON = "h-11 w-full rounded-full nessa-text-3 font-medium"
-
 /** One listed agent: its mark, its name, and what it is waiting on. An agent
  * that cannot run is shown with the reason rather than hidden — a missing
  * Claude is a question, and a Claude that says it needs signing in is an
@@ -327,6 +265,195 @@ function AgentOption({
 }
 
 /**
+ * The wash every setup step is painted on.
+ *
+ * It is decorative: inert to the pointer, hidden from assistive technology by
+ * the component, and still under a reduced-motion preference. Its pigments
+ * travel, so anything laid straight on it has to stay legible wherever they
+ * go — plain white type over the palette's own lighter stops measures about
+ * 1.7:1, which is why the type carries a stacked shadow rather than one soft
+ * one: a tight, near-opaque layer close to the glyph for an edge that holds
+ * regardless of what is behind it, and a wider, softer one for depth.
+ */
+function SetupStage({ children }: { children: React.ReactNode }) {
+  return (
+    <MorphingMeshGradient
+      colors={morphingMeshGradientPresets.glass}
+      type="mesh"
+      speed={1.1}
+      blur={88}
+      className="nessa-setup-stage size-full"
+    >
+      {/* Setup's controls are always the light treatment: a dark pill over
+        these pigments reads as a hole punched in the wash, and the light
+        palette is what the design system's own components are built against
+        here. Headings set their colour explicitly for the same reason. */}
+      <div className="nessa-setup-light relative flex size-full min-h-0 items-center justify-center p-5">
+        {children}
+      </div>
+    </MorphingMeshGradient>
+  )
+}
+
+/**
+ * The glass pane for a step that carries more than a line and a button.
+ *
+ * A list of options cannot be read off the moving wash, so it gets a surface.
+ * The pane is scoped to the light palette because a dark slab over these
+ * pigments reads as a hole rather than glass, and because its own components
+ * then keep the contrast they were built for.
+ *
+ * It scrolls rather than clips. At a large text size or a high UI scale the
+ * list and its Continue button are taller than the window, and a pane that
+ * hid the button made setup impossible to finish.
+ */
+const SetupPanel = React.forwardRef<HTMLDivElement, { children: React.ReactNode }>(
+  function SetupPanel({ children }, ref) {
+    return (
+      <div
+        ref={ref}
+        tabIndex={-1}
+        className="nessa-setup-light relative flex max-h-full w-full max-w-sm flex-col gap-5 overflow-y-auto rounded-2xl border border-white/40 bg-background/60 p-6 text-foreground shadow-2xl ring-1 ring-black/5 outline-none backdrop-blur-2xl backdrop-saturate-150"
+      >
+        {/* The lit top edge that reads as a pane of glass catching light. */}
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/45 to-transparent"
+        />
+        {children}
+      </div>
+    )
+  },
+)
+
+/** Sentences for one host tag. `enabled` is the only claim of logged-out operation. */
+function lingerCopy(shown: LingerShown): { heading: string; detail: string } {
+  switch (shown) {
+    case "offer":
+      return {
+        heading: "Keep Nessa running when you log out?",
+        detail: "The gateway stops when you log out unless this account lingers.",
+      }
+    case "enabled":
+      return {
+        heading: "Nessa keeps running when you log out",
+        detail: "This account lingers, so the gateway stays running after you log out.",
+      }
+    case "refused":
+      return {
+        heading: "Nessa runs while you are signed in",
+        detail: "Staying on after logout was not turned on.",
+      }
+    case "failed":
+      return {
+        heading: "Nessa runs while you are signed in",
+        detail: "Nessa could not turn that on.",
+      }
+    case "unsupported":
+      return {
+        heading: "Nessa cannot stay running after you log out",
+        detail: "This system has no login service to ask.",
+      }
+    case "not-applicable":
+      return {
+        heading: "Nessa could not confirm that",
+        detail: "Login did not say whether this account lingers.",
+      }
+  }
+}
+
+/** The linger step. What it says is the host's `shown` tag. */
+export const LingerStep = React.forwardRef<
+  HTMLDivElement,
+  {
+    view: LingerView | undefined
+    pending: boolean
+    onAccept: () => void
+    onFinish: () => void
+  }
+>(function LingerStep({ view, pending, onAccept, onFinish }, ref) {
+  const shown: LingerShown = view?.shown ?? "failed"
+  const claim = shown === "enabled" && !pending ? "yes" : "no"
+  const { heading, detail } = lingerCopy(shown)
+  const manual = shown === "refused" || shown === "failed"
+  return (
+    <SetupStage>
+      <SetupPanel ref={ref}>
+        <div
+          className="flex flex-col gap-3 text-center"
+          data-linger={shown}
+          data-linger-claim={claim}
+        >
+          <h1
+            id={SETUP_HEADING_ID}
+            className="nessa-text-6 font-semibold text-foreground"
+          >
+            {heading}
+          </h1>
+          <p
+            role="status"
+            aria-live="polite"
+            className="nessa-text-3 text-muted-foreground"
+          >
+            {detail}
+          </p>
+          {manual ? (
+            <p className="nessa-text-3 text-muted-foreground">
+              You can run <code>loginctl enable-linger</code>.
+            </p>
+          ) : null}
+        </div>
+        {shown === "offer" ? (
+          <>
+            <Button
+              size="lg"
+              className={PANE_BUTTON}
+              disabled={pending}
+              onClick={onAccept}
+            >
+              Keep it running
+            </Button>
+            <Button
+              size="lg"
+              className={PANE_BUTTON}
+              disabled={pending}
+              onClick={onFinish}
+            >
+              Only while I’m signed in
+            </Button>
+          </>
+        ) : null}
+        {shown === "refused" || shown === "failed" ? (
+          <>
+            <Button
+              size="lg"
+              className={PANE_BUTTON}
+              disabled={pending}
+              onClick={onAccept}
+            >
+              Try again
+            </Button>
+            <Button
+              size="lg"
+              className={PANE_BUTTON}
+              disabled={pending}
+              onClick={onFinish}
+            >
+              Start using Nessa
+            </Button>
+          </>
+        ) : null}
+        {shown === "enabled" || shown === "unsupported" || shown === "not-applicable" ? (
+          <Button size="lg" className={PANE_BUTTON} disabled={pending} onClick={onFinish}>
+            Start using Nessa
+          </Button>
+        ) : null}
+      </SetupPanel>
+    </SetupStage>
+  )
+})
+
+/**
  * First-run setup for the panel.
  *
  * This renders and dispatches; it holds no state and decides nothing. Choosing
@@ -343,6 +470,8 @@ export function Onboarding({
   onChoose,
   onConfirm,
   onFinish,
+  onAcceptLinger,
+  lingerPending = false,
   onRecheck,
   onRetryGateway,
   checking = false,
@@ -360,6 +489,10 @@ export function Onboarding({
   onChoose: (id: AgentId) => void
   onConfirm: () => void
   onFinish: () => void
+  /** Enable linger. Absent on a surface that never reaches the step. */
+  onAcceptLinger?: () => void
+  /** True while that enable has not returned. The buttons stop taking presses. */
+  lingerPending?: boolean
   /** Ask the runtimes again, for whoever has just fixed what was wrong. */
   onRecheck: () => void
   /** Ask the native owner to reconcile the gateway again after a failure. */
@@ -483,6 +616,18 @@ export function Onboarding({
           ) : null}
         </SetupStep>
       </SetupStage>
+    )
+  }
+
+  if (state.step === "linger") {
+    return (
+      <LingerStep
+        ref={step}
+        view={state.linger}
+        pending={lingerPending}
+        onAccept={onAcceptLinger ?? (() => {})}
+        onFinish={onFinish}
+      />
     )
   }
 

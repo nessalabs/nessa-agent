@@ -7,7 +7,7 @@ HTTP `/health` reports process liveness only.
 
 | Source | Purpose |
 | --- | --- |
-| [product/manifest.json](product/manifest.json) | Authenticated method and event catalog |
+| [product/manifest.json](product/manifest.json) | Authenticated method and event catalog. Each method declares the grant Cedar is asked for, or `null` when another owner admits it |
 | [product/v1.json](product/v1.json) | Session, credential, and termination payloads |
 | [manifest.json](manifest.json) | Shared health method schema |
 | [schemas/v1/](schemas/v1/) | Shared payloads, frames, and shortcut documents |

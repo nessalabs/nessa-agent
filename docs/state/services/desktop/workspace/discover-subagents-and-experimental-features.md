@@ -11,7 +11,7 @@ sources:
   - "src/desktop/widgets/fixture/sample-widgets.ts"
   - "src/desktop/widgets/application/registry.test.ts"
   - "src/desktop/workspace/model/pane-item.test.ts"
-  - "docs/adr/todo/326-widgets.md"
+  - "docs/adr/done/326-widgets.md"
 diagramLinks: {}
 ---
 

@@ -1,4 +1,4 @@
-//! Generated from protocol/product/v1.json. Do not edit.
+//! Generated from protocol/product/v1.json and manifest.json. Do not edit.
 //! Bounds are validated at the transport boundary; these are payload types only.
 //! Variant names are the schema's wire spellings, so a shared prefix is the wire's.
 #![allow(dead_code, clippy::enum_variant_names)]
@@ -2263,5 +2263,66 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.watchCatalogue",
     "conversation.unwatch",
 ];
+/// The grant Cedar is asked for before this method is dispatched.
+///
+/// Generated from `protocol/product/manifest.json`. Writing
+/// to a conversation, including answering its question, uploading into it, and
+/// an app's calls, asks for `conversation.write`. Reading its records or
+/// catalogue asks for `conversation.read`. Running a configured server with
+/// the gateway's authority, and enrolling a device, asks for
+/// `credential.manage`; Auth asks again for the exact consent. `None`
+/// means another owner admits the method: the handshake, `auth.session`, or
+/// a watch.
+pub fn action_for_method(method: &str) -> Option<&'static str> {
+    match method {
+        "server.health" | "agents.list" | "agents.installOptions" => Some("server.read"),
+        "credential.issue"
+        | "credential.list"
+        | "credential.revoke"
+        | "mcpServers.list"
+        | "mcpServers.save"
+        | "mcpServers.remove"
+        | "mcpServers.inspect"
+        | "mcpServers.authorize"
+        | "mcpServers.revoke"
+        | "pairing.create"
+        | "pairing.pending"
+        | "pairing.status"
+        | "pairing.approve"
+        | "pairing.deny"
+        | "pairing.cancel" => Some("credential.manage"),
+        "conversation.create"
+        | "conversation.read"
+        | "conversation.list"
+        | "conversation.observe"
+        | "conversation.send"
+        | "conversation.steer"
+        | "conversation.remove"
+        | "conversation.stop"
+        | "conversation.receipt"
+        | "conversation.answer"
+        | "conversation.answerQuestion"
+        | "conversation.cancel"
+        | "conversation.close"
+        | "conversation.archive"
+        | "conversation.unarchive"
+        | "conversation.delete"
+        | "conversation.reorder"
+        | "attachment.begin"
+        | "conversation.setApprovalMode"
+        | "agents.install"
+        | "mcp.callTool"
+        | "mcp.readResource"
+        | "mcp.releaseApp"
+        | "mcp.sendMessage"
+        | "mcp.updateModelContext" => Some("conversation.write"),
+        "conversation.recordsHead"
+        | "conversation.recordsPage"
+        | "conversation.catalogueHead"
+        | "conversation.catalogueManifest"
+        | "conversation.catalogueResolve" => Some("conversation.read"),
+        _ => None,
+    }
+}
 pub const PRODUCT_VERSION: u64 = 1;
 pub const PRODUCT_SESSION_PATH: &str = "/session";

@@ -1,0 +1,37 @@
+
+ RUN  v3.2.7 /Users/nessa/.codex/worktrees/616-transcript-followups/nessa-agent
+
+ ❯ src/desktop/ui/composer.test.tsx (4 tests | 1 failed) 357ms
+   × does not measure an empty draft, closes its page, and still measures nonempty drafts 218ms
+     → expected 1 to be +0 // Object.is equality
+   ✓ sends on a press of Return, and nothing on its repeats 48ms
+   ✓ shows the model it is given, and only that 47ms
+   ✓ offers Fast and the levels only where the catalogue records them for the model 43ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/desktop/ui/composer.test.tsx > does not measure an empty draft, closes its page, and still measures nonempty drafts
+AssertionError: expected 1 to be +0 // Object.is equality
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ src/desktop/ui/composer.test.tsx:56:19
+     54|   try {
+     55|     await render(false, "")
+     56|     expect(reads).toBe(0)
+       |                   ^
+     57|     expect(changes).toEqual([])
+     58|     await render(true, "")
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 3 passed (4)
+   Start at  01:26:12
+   Duration  4.12s (transform 1.36s, setup 0ms, collect 2.04s, tests 357ms, environment 973ms, prepare 125ms)
+

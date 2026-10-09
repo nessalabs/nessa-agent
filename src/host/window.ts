@@ -93,6 +93,23 @@ export async function quitNessa(): Promise<void> {
 }
 
 /**
+ * What logind says about linger for this account, and what this process has
+ * chosen. A browser has no logind; the no-op is not a claim that linger is on.
+ */
+export async function lingerStatus(): Promise<unknown> {
+  if (!inTauri) return { shown: "not-applicable" }
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke("linger_status")
+}
+
+/** Ask logind to enable linger. The answer is the confirming read. */
+export async function lingerAccept(): Promise<unknown> {
+  if (!inTauri) return { shown: "not-applicable" }
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke("linger_accept")
+}
+
+/**
  * The latest gateway startup transition retained by the host.
  *
  * The browser has no native gateway lifecycle. Its same-origin server is

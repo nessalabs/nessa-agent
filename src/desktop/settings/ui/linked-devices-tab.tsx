@@ -81,9 +81,10 @@ export function LinkedDevicesTab() {
         data-pending
         data-found={found || undefined}
         data-linked="pending"
+        data-title="hidden"
       >
         <h2>Linked devices</h2>
-        <p className="settings-footnote">{sentences.unavailableHere}</p>
+        <p className="settings-nothing">{sentences.unavailableHere}</p>
       </section>
     )
   return <ManagedDevices gateway={gateway} found={found} />
@@ -458,9 +459,9 @@ function DevicesGroup({
   dispatch: Dispatch
 }) {
   return (
-    <SettingsGroup title="Linked devices">
+    <SettingsGroup title="Your devices">
       {state.devices.length === 0 ? (
-        <SettingsRow label="Linked devices" detail={sentences.empty} />
+        <SettingsRow label={sentences.empty} />
       ) : (
         state.devices.map((device) => (
           <DeviceRow

@@ -1,6 +1,7 @@
+use super::super::passive_read::PUBLISHED_PASSIVE_READ_GRANTS;
 use crate::conversation::application::{
     access_refusal, AdmitPassiveRead, CatalogueChangeWatch, CatalogueWatchError,
-    CatalogueWatchState,
+    CatalogueWatchState, PassiveRead,
 };
 use crate::product::socket::close_reason;
 use crate::product::state::ProductRouteState;
@@ -165,6 +166,9 @@ impl WatchSelector {
             .passive_read
             .as_ref()
             .ok_or(WatchRefusal::Unavailable)?;
+        // Watch methods publish no grant of their own. A records watch is
+        // admitted as a record head, and a catalogue watch as a catalogue head:
+        // the same read the watch follows.
         let admission = AdmitPassiveRead {
             authorization: AuthorizeAction {
                 access: state.access.as_ref(),
@@ -174,6 +178,7 @@ impl WatchSelector {
             gateway: &state.gateway,
             receivers: receivers.as_ref(),
             conversations: conversations.as_ref(),
+            grants: &PUBLISHED_PASSIVE_READ_GRANTS,
         };
         let admitted = match self {
             Self::Records {
@@ -182,14 +187,20 @@ impl WatchSelector {
                 epoch,
             } => {
                 admission
-                    .execute(session, conversation, receiver, *epoch)
+                    .execute(
+                        session,
+                        conversation,
+                        receiver,
+                        *epoch,
+                        PassiveRead::RecordHead,
+                    )
                     .await
                     .map_err(WatchRefusal::Read)?;
                 Admitted::Records(conversation.clone())
             }
             Self::Catalogue { receiver, epoch } => Admitted::Catalogue(
                 admission
-                    .catalogue(session, receiver, *epoch)
+                    .catalogue(session, receiver, *epoch, PassiveRead::CatalogueHead)
                     .await
                     .map_err(WatchRefusal::Read)?,
             ),

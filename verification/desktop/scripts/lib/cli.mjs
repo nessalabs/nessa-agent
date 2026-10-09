@@ -130,9 +130,7 @@ export const devServerOnlyChecks = [
   "committed-transcript",
   "app-review",
   "gateway-states",
-  // The sandbox proxy listens only from Vite's configureServer. A production
-  // preview has no origin to mount the fixture app, so the whole check is
-  // left out. The script refuses --mode prod before it builds one.
+  // The sandbox proxy is provided by the dev server, not vite preview.
   "mcp-apps",
 ]
 

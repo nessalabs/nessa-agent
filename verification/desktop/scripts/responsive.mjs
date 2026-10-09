@@ -19,7 +19,7 @@
  *                   inspection open, `mcp-servers-gateway.mjs --only narrow`)
  *   list-gutter     the session list's search field and a row sit as far from what
  *                   is on their left — the sidebar's card, or with the sidebar
- *                   away the window's edge — as from the panes on their right
+ *                   away the workspace's edge — as from the panes on their right
  *   overview-header the Agents overview's header holds its place while its list
  *                   scrolls to the end, the list begins below it, and the list's
  *                   top edge fades (its mask) rather than cutting a row
@@ -66,6 +66,32 @@
  *                   needs you" heads the list, the one looked at still listed
  *                   and chosen beneath; its count, let go at nought from the
  *                   keyboard, gives the keyboard to the list, whose arrows walk
+ *   overview-row-answers a request row shows its title and time, its why and
+ *                   its command, and no answers — nor room kept for them: the
+ *                   why and the command run on to the time; pointed at (or the
+ *                   keyboard visibly on it — one row at a time, never just the
+ *                   chosen one), Deny and Allow Once take the time's place with
+ *                   the row's height and the list unchanged; no tooltips;
+ *                   Allow Once names its chord; labels at ≥ 4.5:1; with less
+ *                   motion they show at once
+ *   overview-leave  answered, a row says nothing on itself and nothing is drawn
+ *                   around it in any frame; it dematerializes where it stood as
+ *                   the session's row materializes in Working, the arrival's
+ *                   first visible frame within one frame of the departure's;
+ *                   its copy is gone in ≤ 400ms and the gap closes; the live
+ *                   region says "Allowed: …" / "Denied: …"; with less motion,
+ *                   no copy, no blur or scale
+ *   overview-edge   the edge between the list and the peek beside it: at rest
+ *                   nothing of it shows (no fill, shadow, border or glow);
+ *                   hovered, it glows; dragged +120px the boundary moves 120px;
+ *                   ← moves it 16px; a double-click restores the even split;
+ *                   dragged past its limits the list keeps 340px and the peek
+ *                   320px, and so they stay as the window narrows; at every
+ *                   one of those, the peek's content is one column centred in
+ *                   it (gaps ±2px, header, status, story and reply sharing
+ *                   edges ±1px); what the peek says scrolls in a region that
+ *                   ends above its reply pill and fades there, so nothing is
+ *                   drawn behind the pill and its last line scrolls clear
  *   overview-story  the peek tells the turn top to bottom — the source's line
  *                   of what is going on, the person's latest message, where
  *                   there is more above, the agent's latest work in order, the
@@ -529,6 +555,15 @@ const checks = {
     const settling = () =>
       page.evaluate(() => window.__homeSettling.splice(0, window.__homeSettling.length))
     const settles = async (tag, name) => {
+      // ResizeObserver and animationstart are separate browser deliveries.
+      // Wait on the owner's event instead of assuming two RAFs delivered it.
+      if (name)
+        await until(
+          page,
+          (expected) => window.__homeSettling.some((event) => event.name === expected),
+          name,
+          1_000,
+        )
       const moved = await settling()
       if (!name) {
         if (moved.length)
@@ -766,7 +801,10 @@ checks["list-gutter"] = async ({ page, engine, layout, options }) => {
       const box = (element) => element?.getBoundingClientRect() ?? null
       const sidebar = document.querySelector(sel.workspace)?.dataset.sidebar
       const left =
-        sidebar === "open" ? box(document.querySelector(sel.sidebar))?.right : 0
+        sidebar === "open"
+          ? box(document.querySelector(sel.sidebar))?.right
+          : // The workspace's own edge: anything beside it (the side rail) is not its gutter.
+            box(document.querySelector(sel.workspace))?.left
       const panes = [...document.querySelectorAll(sel.pane)].map((pane) => box(pane).left)
       const search = box(document.querySelector(sel.listSearch))
       const row = box(document.querySelector(`${sel.sessionList} ${sel.sessionRow}`))
@@ -1296,6 +1334,9 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
 checks["overview-counts"] = async ({ page, engine, options }) => {
   await page.keyboard.press(keys.overview)
   await need(page, css.overview, "the Agents overview")
+  // The header draws its counts a few frames after the overview opens
+  // (`overview.tsx`); WebKit's frames can outrun two.
+  await need(page, css.overviewCount, "the header's counts")
   await frames(page, 2)
   await settled(page)
   const read = () =>
@@ -1538,6 +1579,8 @@ checks["overview-story"] = async ({ page, engine, options }) => {
   await page.setViewportSize({ width: 1440, height: 640 })
   await page.keyboard.press(keys.overview)
   await need(page, css.overview, "the Agents overview")
+  // The list arrives a row a frame (`data-overview-listed` once it has).
+  await need(page, css.overviewListed, "the overview's whole list")
   const item = page.locator(`[data-overview-item="${names.storySessionId}"]`)
   if (!(await item.count()))
     throw new CannotRun(`no overview item ${names.storySessionId}`)
@@ -1547,7 +1590,7 @@ checks["overview-story"] = async ({ page, engine, options }) => {
   await settled(page)
   const read = () =>
     page.evaluate((sel) => {
-      const peek = document.querySelector(sel.overviewPeek)
+      const peek = document.querySelector(sel.overviewPeekScroll)
       const top = (e) => (e ? e.getBoundingClientRect().top : null)
       const story = peek.querySelector(sel.peekStory)
       const summary = peek.querySelector(sel.peekSummary)
@@ -1591,7 +1634,7 @@ checks["overview-story"] = async ({ page, engine, options }) => {
   if (before.room < 40)
     failures.push(`the peek scrolls only ${before.room}px at 1440 × 640`)
   await page.evaluate((sel) => {
-    const peek = document.querySelector(sel.overviewPeek)
+    const peek = document.querySelector(sel.overviewPeekScroll)
     peek.scrollTop = peek.scrollHeight
   }, css)
   await frames(page, 2)
@@ -1607,7 +1650,7 @@ checks["overview-story"] = async ({ page, engine, options }) => {
   if (before.steps > 24)
     failures.push(`the peek draws ${before.steps} steps, over its bound`)
   await page.evaluate((sel) => {
-    document.querySelector(sel.overviewPeek).scrollTop = 0
+    document.querySelector(sel.overviewPeekScroll).scrollTop = 0
   }, css)
   await frames(page, 2)
   await shot(options, page, `overview-story-${engine}`)
@@ -1682,6 +1725,764 @@ checks["overview-story"] = async ({ page, engine, options }) => {
     room: before.room,
     steps: before.steps,
     beneath: { overflow: beneath.overflow, presses, ...scrolled },
+    failures,
+  }
+}
+
+// The request rows' parts, as page.evaluate can carry them.
+const rowSelectors = {
+  request: css.overviewRequest,
+  actions: css.overviewRequestActions,
+  item: css.overviewRowItem,
+  row: css.overviewRow,
+  group: css.overviewGroup,
+}
+
+/** Every item of the list as laid out: its key, top and height, rounded to a tenth. */
+const listRects = (page) =>
+  page.evaluate((sel) => {
+    const column = document.querySelector(sel)
+    return [...column.querySelectorAll("[data-reflow]")].map((item) => {
+      const r = item.getBoundingClientRect()
+      return `${item.dataset.reflow} ${Math.round(r.top * 10) / 10} ${Math.round(r.height * 10) / 10}`
+    })
+  }, css.overviewColumn)
+
+/**
+ * A request row as drawn: its box, the right edges of its why and command
+ * lines, its time, and its answers — whether they show, and each button.
+ */
+const requestRow = (page, index) =>
+  page.evaluate(
+    ([sel, index]) => {
+      const row = document.querySelectorAll(sel.request)[index]
+      const right = (selector) =>
+        row.querySelector(selector)?.getBoundingClientRect().right ?? null
+      const r = row.getBoundingClientRect()
+      const time = row.querySelector(".agents-row-time")
+      const actions = row.querySelector(sel.actions)
+      return {
+        id: row.dataset.overviewItem,
+        height: r.height,
+        why: right(".agents-request-why"),
+        command: right(".agents-request-command"),
+        time: time
+          ? {
+              left: time.getBoundingClientRect().left,
+              opacity: Number(getComputedStyle(time).opacity),
+            }
+          : null,
+        gap: parseFloat(getComputedStyle(row).columnGap),
+        shown: actions?.checkVisibility() === true,
+        buttons: actions
+          ? [...actions.querySelectorAll("button")].map((button) => ({
+              answer: button.dataset.answer,
+              keys: button.getAttribute("aria-keyshortcuts"),
+              tooltip: button.dataset.tooltip ?? null,
+            }))
+          : [],
+      }
+    },
+    [rowSelectors, index],
+  )
+
+/**
+ * Per request row: its id, whether its answers show — drawn at their size, not
+ * clipped away (at rest they are there for a screen reader, out of sight) —
+ * and whether a screen reader can reach them (in the accessibility tree).
+ */
+const answersShown = (page) =>
+  page.evaluate(
+    (sel) =>
+      [...document.querySelectorAll(sel.request)].map((row) => {
+        const actions = row.querySelector(sel.actions)
+        const box = actions?.getBoundingClientRect()
+        const clipped = actions ? getComputedStyle(actions).clipPath !== "none" : true
+        return {
+          id: row.dataset.overviewItem,
+          shown:
+            actions?.checkVisibility() === true &&
+            !clipped &&
+            box.width > 1 &&
+            box.height > 1,
+          reachable: actions ? getComputedStyle(actions).display !== "none" : false,
+        }
+      }),
+    rowSelectors,
+  )
+
+/** WCAG contrast of `fg` over `bg` (sRGB 0–255, fg may carry alpha 0–1). */
+function contrast(fg, bg) {
+  const mix = fg.slice(0, 3).map((c, i) => c * fg[3] + bg[i] * (1 - fg[3]))
+  const lum = (rgb) => {
+    const [r, g, b] = rgb.map((c) => {
+      const v = c / 255
+      return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
+    })
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+  }
+  const [a, b] = [lum(mix), lum(bg)].sort((x, y) => y - x)
+  return (a + 0.05) / (b + 0.05)
+}
+
+/**
+ * The contrast of each of a row's answer labels against what is drawn behind
+ * it: the page's pixels just inside the button's edge, read from a screenshot
+ * through a canvas, and the label's colour as the canvas resolves it.
+ */
+async function answerContrast(page, index) {
+  const buttons = await page.evaluate(
+    ([sel, index]) => {
+      const row = document.querySelectorAll(sel.request).item(index)
+      return [...row.querySelectorAll(`${sel.actions} button`)].map((button) => {
+        const r = button.getBoundingClientRect()
+        return {
+          label: button.textContent.trim(),
+          color: getComputedStyle(button).color,
+          x: r.left + 3,
+          y: r.top + r.height / 2,
+        }
+      })
+    },
+    [rowSelectors, index],
+  )
+  const shot = (await page.screenshot()).toString("base64")
+  const scale = await page.evaluate(() => window.devicePixelRatio)
+  return page.evaluate(
+    async ([png, buttons, scale]) => {
+      const image = new Image()
+      image.src = `data:image/png;base64,${png}`
+      await image.decode()
+      const canvas = document.createElement("canvas")
+      canvas.width = image.width
+      canvas.height = image.height
+      const ctx = canvas.getContext("2d")
+      ctx.drawImage(image, 0, 0)
+      const swatch = document.createElement("canvas").getContext("2d")
+      return buttons.map((button) => {
+        const bg = [
+          ...ctx.getImageData(
+            Math.round(button.x * scale),
+            Math.round(button.y * scale),
+            1,
+            1,
+          ).data,
+        ].slice(0, 3)
+        swatch.clearRect(0, 0, 1, 1)
+        swatch.fillStyle = button.color
+        swatch.fillRect(0, 0, 1, 1)
+        const [r, g, b, a] = swatch.getImageData(0, 0, 1, 1).data
+        return { label: button.label, fg: [r, g, b, a / 255], bg }
+      })
+    },
+    [shot, buttons, scale],
+  )
+}
+
+checks["overview-row-answers"] = async ({ page, engine, options }) => {
+  const failures = []
+  await page.locator(css.overviewEntry).click()
+  await need(page, css.overviewRequest, "a request in the Agents overview")
+  await need(page, css.overviewListed, "the overview's whole list")
+  await frames(page, 2)
+  await settled(page)
+  const rows = page.locator(css.overviewRequest)
+  if ((await rows.count()) < 4) throw new CannotRun("fewer than four requests listed")
+  await page.mouse.move(5, 890)
+  await page.waitForTimeout(300)
+
+  // At rest: the title with its time, the why, the command — and no answers,
+  // nor room kept for them: the why and the command run on to the time.
+  const rest = await requestRow(page, 1)
+  const restList = await listRects(page)
+  await shot(options, page, `overview-row-rest-${engine}`, rows.nth(1))
+  const resting = (await answersShown(page))
+    .filter((row) => row.shown)
+    .map((row) => row.id)
+  if (resting.length) failures.push(`at rest answers show on [${resting}]`)
+  // Out of sight at rest, but there for a screen reader: every row but the
+  // one whose peek is open beneath it carries them.
+  const unreachable = (await answersShown(page))
+    .filter((row) => !row.reachable)
+    .map((row) => row.id)
+  if (unreachable.length > 1)
+    failures.push(`at rest a screen reader finds no answers on [${unreachable}]`)
+  if (rest.why === null || rest.command === null)
+    failures.push("at rest the row does not show its why and its command")
+  for (const [line, edge] of [
+    ["why", rest.why],
+    ["command", rest.command],
+  ])
+    if (edge !== null && Math.abs(rest.time.left - edge - rest.gap) > 4)
+      failures.push(
+        `at rest the ${line} ends ${Math.round(rest.time.left - edge)}px before the time (the row's gap is ${rest.gap}px)`,
+      )
+
+  // Pointed at: its answers at its end in the time's place, the row's height
+  // and the list as they were; no tooltips; chords named; labels readable.
+  await rows.nth(1).hover({ position: { x: 80, y: 10 } })
+  await page.waitForTimeout(400)
+  const over = await requestRow(page, 1)
+  const overList = await listRects(page)
+  await shot(options, page, `overview-row-hover-${engine}`, rows.nth(1))
+  if (!over.shown) failures.push("pointed at, the row shows no answers")
+  if (over.time.opacity > 0) failures.push("pointed at, the time still shows")
+  if (Math.abs(over.height - rest.height) > 0.5)
+    failures.push(
+      `pointed at, the row's height went from ${rest.height} to ${over.height}`,
+    )
+  if (restList.join("\n") !== overList.join("\n"))
+    failures.push(
+      `pointed at, the list moved: ${restList
+        .filter((line, i) => line !== overList[i])
+        .slice(0, 3)
+        .join("; ")}`,
+    )
+  if (!over.buttons.some((button) => button.answer === "once" && button.keys))
+    failures.push("Allow Once names no keyboard shortcut")
+  if (over.buttons.some((button) => button.tooltip !== null))
+    failures.push("an answer carries a tooltip")
+  for (const answer of ["deny", "once"]) {
+    const button = rows.nth(1).locator(`[data-answer="${answer}"]`).first()
+    await button.hover()
+    await page.waitForTimeout(800)
+    const tips = await page.evaluate(
+      (sel) =>
+        [...document.querySelectorAll(sel)].filter((tip) => tip.checkVisibility()).length,
+      css.tooltip,
+    )
+    if (tips > 0) failures.push(`hovering ${answer} for 800ms showed a tooltip`)
+  }
+  const ratios = (await answerContrast(page, 1)).map((label) => ({
+    label: label.label,
+    ratio: Math.round(contrast(label.fg, label.bg) * 100) / 100,
+  }))
+  for (const { label, ratio } of ratios)
+    if (ratio < 4.5) failures.push(`${label}'s label has contrast ${ratio} (≥ 4.5)`)
+
+  // One row at a time: chosen by a click, the pointer on another row, only
+  // that one shows them; the pointer away, the chosen row shows none.
+  const showing = (list) => list.filter((row) => row.shown).map((row) => row.id)
+  await rows.nth(2).click({ position: { x: 80, y: 10 } })
+  await rows.nth(1).hover({ position: { x: 80, y: 10 } })
+  await page.waitForTimeout(300)
+  const hovered = await answersShown(page)
+  if (showing(hovered).join() !== hovered[1].id)
+    failures.push(`pointer on ${hovered[1].id}, answers shown on [${showing(hovered)}]`)
+  await page.mouse.move(5, 890)
+  await page.waitForTimeout(300)
+  const away = await answersShown(page)
+  if (showing(away).length > 0)
+    failures.push(`pointer away, the chosen row's answers show: [${showing(away)}]`)
+  // The keyboard's row shows them — until the pointer is on another.
+  await page.keyboard.press(keys.down)
+  await page.waitForTimeout(300)
+  const walked = await answersShown(page)
+  if (showing(walked).join() !== walked[3]?.id)
+    failures.push(`↓ to ${walked[3]?.id}, answers shown on [${showing(walked)}]`)
+  await rows.nth(0).hover({ position: { x: 80, y: 10 } })
+  await page.waitForTimeout(300)
+  const both = await answersShown(page)
+  if (showing(both).join() !== both[0].id)
+    failures.push(
+      `keyboard on ${both[3]?.id}, pointer on ${both[0].id}: answers shown on [${showing(both)}]`,
+    )
+  // A button the keyboard is on is seen, wherever the pointer rests.
+  await rows.nth(3).locator('[data-answer="once"]').first().focus()
+  await rows.nth(0).hover({ position: { x: 80, y: 10 } })
+  await page.waitForTimeout(300)
+  const keyboard = await page.evaluate(() =>
+    document.activeElement.matches(":focus-visible"),
+  )
+  const focusedRow = (await answersShown(page))[3]
+  if (!keyboard) failures.push("Allow Once, focused after ↓, is not :focus-visible")
+  else if (!focusedRow?.shown)
+    failures.push(
+      `pointer on another row, ${focusedRow?.id}'s focused Allow Once is hidden`,
+    )
+
+  // Less motion: they are there at once.
+  await page.mouse.move(5, 890)
+  await page.emulateMedia({ reducedMotion: "reduce" })
+  await page.waitForTimeout(300)
+  await rows.nth(1).hover({ position: { x: 80, y: 10 } })
+  await frames(page, 1)
+  const still = await page.evaluate(
+    ([sel]) => {
+      const actions = document.querySelectorAll(sel.request)[1].querySelector(sel.actions)
+      return {
+        opacity: Number(getComputedStyle(actions).opacity),
+        running: actions.getAnimations().filter((a) => a.playState === "running").length,
+      }
+    },
+    [rowSelectors],
+  )
+  if (still.opacity < 1 || still.running > 0)
+    failures.push(`with less motion the answers slid in: ${JSON.stringify(still)}`)
+  return {
+    measured: {
+      rest: {
+        reach: Math.round(rest.time.left - Math.max(rest.why, rest.command)),
+        gap: rest.gap,
+        height: rest.height,
+      },
+      over: { height: over.height, buttons: over.buttons },
+      ratios,
+      hovered: showing(hovered),
+      away: showing(away),
+      walked: showing(walked),
+      both: showing(both),
+      still,
+    },
+    failures,
+  }
+}
+
+/**
+ * Answers a request row by its button (`choice`: "once" or "deny") and
+ * records every frame for 1.2s: the row's phase and whether it says what
+ * became of it; the copy it leaves where it stood (`[data-departing]`) and
+ * how visible it is; the session's row in another group and how visible it
+ * is; any ring drawn on the row or its copy (a box shadow, an outline, a
+ * visible ::after); and where the row after it sits.
+ */
+async function answerAndWatch(page, index, choice) {
+  const rows = page.locator(css.overviewRequest)
+  const id = await rows.nth(index).getAttribute("data-overview-item")
+  const nextId = await rows.nth(index + 1).getAttribute("data-overview-item")
+  // Where it stands within the list, which may scroll as the keyboard moves on.
+  const stoodAt = await rows
+    .nth(index)
+    .evaluate(
+      (row) =>
+        row.getBoundingClientRect().top -
+        row.closest(".agents-overview-column").getBoundingClientRect().top,
+    )
+  await page.evaluate(
+    ([id, nextId, sel]) => {
+      const log = (window.__overviewLeave = [])
+      window.__overviewLeaveDone = false
+      const start = performance.now()
+      const ringOf = (element) => {
+        if (!element) return null
+        const style = getComputedStyle(element)
+        const after = getComputedStyle(element, "::after")
+        const rings = []
+        if (style.boxShadow !== "none") rings.push(`box-shadow ${style.boxShadow}`)
+        if (style.outlineStyle !== "none" && parseFloat(style.outlineWidth) > 0)
+          rings.push(`outline ${style.outlineWidth}`)
+        if (
+          after.content !== "none" &&
+          Number(after.opacity) > 0 &&
+          after.boxShadow !== "none"
+        )
+          rings.push(`::after ${after.boxShadow}`)
+        return rings.length ? rings.join("; ") : null
+      }
+      const tick = () => {
+        const at = Math.round(performance.now() - start)
+        const found = [
+          ...document.querySelectorAll(`[data-overview-item="${CSS.escape(id)}"]`),
+        ]
+        const request = found.find((element) => element.matches(sel.request))
+        const row = found.find((element) => element.matches(sel.row))
+        const ghosts = [...document.querySelectorAll("[data-departing]")]
+        const ghost = ghosts[0]?.querySelector(sel.request) ?? null
+        const next = document.querySelector(
+          `[data-overview-item="${CSS.escape(nextId)}"]`,
+        )
+        log.push({
+          at,
+          phase: request ? (request.dataset.phase ?? "asking") : null,
+          says: request ? /Allowed|Denied/.test(request.textContent ?? "") : false,
+          ghosts: ghosts.length,
+          ghostOpacity: ghosts[0] ? Number(getComputedStyle(ghosts[0]).opacity) : null,
+          ghostFilter: ghosts[0] ? getComputedStyle(ghosts[0]).filter : null,
+          arrivedIn: row
+            ? row.closest(sel.group)?.querySelector("h2")?.textContent
+            : null,
+          arrivalOpacity: row
+            ? Number(getComputedStyle(row.closest(sel.item)).opacity)
+            : null,
+          arrivalFilter: row ? getComputedStyle(row.closest(sel.item)).filter : null,
+          ring: ringOf(request) ?? ringOf(ghost),
+          nextTop: next
+            ? next.getBoundingClientRect().top -
+              next.closest(".agents-overview-column").getBoundingClientRect().top
+            : null,
+        })
+        // Until its copy has gone and the list has rested a while, or 3.5s.
+        const busy = log.findLast((frame) => frame.phase !== null || frame.ghosts > 0)
+        if (at < 3500 && !(busy && at - busy.at > 600)) requestAnimationFrame(tick)
+        else window.__overviewLeaveDone = true
+      }
+      requestAnimationFrame(tick)
+    },
+    [id, nextId, rowSelectors],
+  )
+  await rows.nth(index).hover({ position: { x: 60, y: 10 } })
+  await rows.nth(index).locator(`[data-answer="${choice}"]`).first().click()
+  await page.mouse.move(5, 890)
+  await page.waitForFunction(() => window.__overviewLeaveDone === true, undefined, {
+    timeout: 8000,
+  })
+  const log = await page.evaluate(() => window.__overviewLeave)
+  const frameOf = (test) => log.findIndex(test)
+  // Departure begins when its copy starts to fade, not when it is laid over the row.
+  const departs = frameOf(
+    (frame) => frame.ghostOpacity !== null && frame.ghostOpacity < 1,
+  )
+  const laid = frameOf((frame) => frame.ghosts > 0)
+  const arrives = frameOf(
+    (frame) => frame.arrivalOpacity !== null && frame.arrivalOpacity > 0,
+  )
+  const gone = frameOf((frame, i) => i > laid && laid >= 0 && frame.ghosts === 0)
+  const rowGone = frameOf((frame, i) => i > 0 && frame.phase === null)
+  return {
+    id,
+    stoodAt: Math.round(stoodAt),
+    phases: [...new Set(log.map((frame) => frame.phase))],
+    said: log.some((frame) => frame.says),
+    departs,
+    departsAt: log[departs]?.at ?? null,
+    arrives,
+    arrivesAt: log[arrives]?.at ?? null,
+    arrivedIn: log.find((frame) => frame.arrivedIn)?.arrivedIn ?? null,
+    firstArrival: log[arrives]
+      ? { opacity: log[arrives].arrivalOpacity, filter: log[arrives].arrivalFilter }
+      : null,
+    ghostGoneAfter: gone >= 0 && laid >= 0 ? log[gone].at - log[laid].at : null,
+    laid,
+    ghostFilters: [...new Set(log.map((frame) => frame.ghostFilter).filter(Boolean))]
+      .length,
+    leftoverGhosts: log.at(-1).ghosts,
+    rowGoneAt: log[rowGone]?.at ?? null,
+    rings: [...new Set(log.map((frame) => frame.ring).filter(Boolean))],
+    nextEndsAt: Math.round(log.at(-1).nextTop ?? -1),
+    announced: await page.evaluate(
+      (sel) => document.querySelector(sel)?.textContent ?? "",
+      css.overviewSaid,
+    ),
+  }
+}
+
+checks["overview-leave"] = async ({ page, engine, options }) => {
+  const failures = []
+  await page.locator(css.overviewEntry).click()
+  await need(page, css.overviewRequest, "a request in the Agents overview")
+  await need(page, css.overviewListed, "the overview's whole list")
+  await frames(page, 2)
+  await settled(page)
+  const common = (what, moving, word) => {
+    // No label on the row, and nothing drawn around it: no ring, no box.
+    if (moving.said) failures.push(`${what}: the row said what became of it`)
+    if (moving.rings.length)
+      failures.push(`${what}: a border was drawn on the row or its copy: ${moving.rings}`)
+    if (!moving.announced.startsWith(`${word}: `))
+      failures.push(`${what}: the live region says ${JSON.stringify(moving.announced)}`)
+    if (moving.rowGoneAt === null) failures.push(`${what}: the row never left Needs you`)
+    if (moving.leftoverGhosts > 0) failures.push(`${what}: its copy was left on the page`)
+    // The gap closes: the row after it ends where the answered row stood.
+    if (Math.abs(moving.nextEndsAt - moving.stoodAt) > 1)
+      failures.push(
+        `${what}: the next row ends at ${moving.nextEndsAt}, the answered row stood at ${moving.stoodAt}`,
+      )
+  }
+  const moving = await answerAndWatch(page, 1, "once")
+  common("allowed", moving, "Allowed")
+  // It leaves and arrives in the same beat: the arrival's first visible frame
+  // is within one frame of the departure's first.
+  if (moving.laid < 0) failures.push("allowed: the row left no copy to dematerialize")
+  else if (moving.arrives < 0 || Math.abs(moving.arrives - moving.departs) > 1)
+    failures.push(
+      `allowed: departure began at frame ${moving.departs} (${moving.departsAt}ms), arrival at frame ${moving.arrives} (${moving.arrivesAt}ms)`,
+    )
+  if (moving.arrivedIn !== "Working")
+    failures.push(`allowed: the row arrived in ${moving.arrivedIn}, not Working`)
+  if (moving.ghostGoneAfter === null || moving.ghostGoneAfter > 400)
+    failures.push(`allowed: its copy took ${moving.ghostGoneAfter}ms to go (≤ 400)`)
+  if (moving.firstArrival && moving.firstArrival.opacity >= 1)
+    failures.push(
+      `allowed: the arrival did not fade in (${JSON.stringify(moving.firstArrival)})`,
+    )
+  await shot(options, page, `overview-leave-${engine}`)
+
+  // Denied: it leaves the same way, wherever its session goes.
+  const denied = await answerAndWatch(page, 1, "deny")
+  common("denied", denied, "Denied")
+  if (denied.laid < 0) failures.push("denied: the row left no copy to dematerialize")
+
+  // Less motion: no copy, no blur or scale; the row is simply where it now belongs.
+  await page.emulateMedia({ reducedMotion: "reduce" })
+  await frames(page, 2)
+  const still = await answerAndWatch(page, 1, "once")
+  common("less motion", still, "Allowed")
+  if (still.laid >= 0) failures.push("less motion: the row left a copy dematerializing")
+  if (
+    still.firstArrival &&
+    (still.firstArrival.opacity < 1 || still.firstArrival.filter !== "none")
+  )
+    failures.push(
+      `less motion: the arrival animated (${JSON.stringify(still.firstArrival)})`,
+    )
+  return { measured: { allowed: moving, denied, reduced: still }, failures }
+}
+
+/**
+ * The peek beside the list as one centred column: the gaps either side of
+ * its content within the peek's padded box, and the left and right edges of
+ * its header, its story (or where it stands) and its reply.
+ */
+const peekColumn = (page) =>
+  page.evaluate((peek) => {
+    const aside = document.querySelector(peek)
+    const article = aside.querySelector(".agents-peek")
+    const style = getComputedStyle(aside)
+    const box = aside.getBoundingClientRect()
+    const content = article.getBoundingClientRect()
+    const edges = [
+      ".agents-peek-head",
+      ".agents-peek-now",
+      ".agents-peek-story",
+      ".agents-reply",
+    ]
+      .map((sel) => article.querySelector(sel))
+      .filter((part) => part && part.checkVisibility())
+      .map((part) => {
+        const r = part.getBoundingClientRect()
+        return { part: part.className.split(" ")[0], left: r.left, right: r.right }
+      })
+    return {
+      width: Math.round(box.width),
+      left: content.left - (box.left + parseFloat(style.paddingLeft)),
+      right: box.right - parseFloat(style.paddingRight) - content.right,
+      edges,
+    }
+  }, css.overviewPeek)
+
+/** Failures when the peek's content is not one column centred in it. */
+function peekCentredFailures(where, column) {
+  const failures = []
+  if (Math.abs(column.left - column.right) > 2)
+    failures.push(
+      `${where}: the peek's content is ${Math.round(column.left)}px from its left and ${Math.round(column.right)}px from its right`,
+    )
+  const [first, ...rest] = column.edges
+  for (const part of rest)
+    if (Math.abs(part.left - first.left) > 1 || Math.abs(part.right - first.right) > 1)
+      failures.push(`${where}: ${part.part} does not share ${first.part}'s edges`)
+  return failures
+}
+
+checks["overview-edge"] = async ({ page, engine, options }) => {
+  const failures = []
+  await page.locator(css.overviewEntry).click()
+  await need(page, css.overviewPeek, "the peek beside the list")
+  await need(page, css.overviewEdge, "the edge between the list and the peek")
+  await frames(page, 3)
+  await settled(page)
+  const read = () =>
+    page.evaluate(
+      ([edge, side, surface]) => {
+        const e = document.querySelector(edge)
+        const glow = getComputedStyle(e, "::before")
+        const style = getComputedStyle(e)
+        const s = document.querySelector(side).getBoundingClientRect()
+        const r = document.querySelector(surface).getBoundingClientRect()
+        return {
+          boundary: s.right,
+          list: s.width,
+          peek: r.right - s.right,
+          background: style.backgroundColor,
+          image: style.backgroundImage,
+          shadow: style.boxShadow,
+          border: style.borderLeftWidth + style.borderRightWidth,
+          glow: Number(glow.opacity),
+          valuenow: Number(e.getAttribute("aria-valuenow")),
+          valuemin: Number(e.getAttribute("aria-valuemin")),
+          valuemax: Number(e.getAttribute("aria-valuemax")),
+          rect: (({ left, width }) => ({ left, width }))(e.getBoundingClientRect()),
+        }
+      },
+      [css.overviewEdge, css.overviewSide, css.overviewSurface],
+    )
+  await page.mouse.move(5, 890)
+  await frames(page, 2)
+  const rest = await read()
+  await shot(options, page, `overview-edge-rest-${engine}`)
+  // At rest nothing of it shows: the hairline the peek draws is all there is.
+  if (rest.background !== "rgba(0, 0, 0, 0)" || rest.image !== "none")
+    failures.push(`at rest the edge has a fill: ${rest.background} ${rest.image}`)
+  if (rest.shadow !== "none")
+    failures.push(`at rest the edge has a shadow: ${rest.shadow}`)
+  if (rest.border !== "0px0px")
+    failures.push(`at rest the edge has a border: ${rest.border}`)
+  if (rest.glow !== 0) failures.push(`at rest the edge glows (${rest.glow})`)
+  if (Math.abs(rest.rect.left + rest.rect.width / 2 - rest.boundary) > 1)
+    failures.push(
+      `the edge is centred at ${rest.rect.left + rest.rect.width / 2}, the boundary at ${rest.boundary}`,
+    )
+  if (Math.abs(rest.valuenow - rest.list) > 1)
+    failures.push(`aria-valuenow ${rest.valuenow}, the list is ${rest.list}px`)
+  const edge = page.locator(css.overviewEdge)
+  const box = await edge.boundingBox()
+  const x = box.x + box.width / 2
+  const y = box.y + box.height / 2
+  // Hovered: the glow.
+  await page.mouse.move(x, y)
+  await page.waitForTimeout(250)
+  const hovered = await read()
+  await shot(options, page, `overview-edge-hover-${engine}`)
+  if (hovered.glow < 0.99) failures.push(`hovered, the edge's glow is ${hovered.glow}`)
+  // Dragged 120px right: the boundary follows.
+  await page.mouse.down()
+  for (let step = 1; step <= 6; step++) await page.mouse.move(x + step * 20, y)
+  await page.mouse.up()
+  await frames(page, 3)
+  const dragged = await read()
+  if (Math.abs(dragged.boundary - rest.boundary - 120) > 1)
+    failures.push(
+      `dragged +120px, the boundary moved ${dragged.boundary - rest.boundary}px`,
+    )
+  if (Math.abs(dragged.valuenow - dragged.list) > 1)
+    failures.push(
+      `dragged, aria-valuenow ${dragged.valuenow}, the list is ${dragged.list}px`,
+    )
+  // An arrow key moves it 16px.
+  await edge.focus()
+  await page.keyboard.press("ArrowLeft")
+  await frames(page, 3)
+  const keyed = await read()
+  if (Math.abs(keyed.boundary - dragged.boundary + 16) > 1)
+    failures.push(`← moved the boundary ${keyed.boundary - dragged.boundary}px, not -16`)
+  // A double-click restores the even split.
+  await page.mouse.dblclick(keyed.boundary, y)
+  await frames(page, 3)
+  const reset = await read()
+  if (Math.abs(reset.boundary - rest.boundary) > 1)
+    failures.push(
+      `double-clicked, the boundary is at ${reset.boundary}, not ${rest.boundary}`,
+    )
+  // The reply pill sits below what the peek says, never over it: the story
+  // scrolls in a region that ends above the pill (fading at its edges, as a
+  // pane's transcript does above its composer), so at any scroll nothing is
+  // drawn behind the pill and the last line scrolls clear of it.
+  const reply = async (where) => {
+    const at = await page.evaluate(
+      ([scroll, peek, where]) => {
+        const scroller = document.querySelector(scroll)
+        const pill = document.querySelector(`${peek} .agents-reply`)
+        if (!scroller || !pill) return null
+        scroller.scrollTop =
+          where === "bottom" ? scroller.scrollHeight : scroller.scrollHeight / 2
+        const last = scroller.lastElementChild
+        return {
+          room: scroller.scrollHeight - scroller.clientHeight,
+          scrollerBottom: scroller.getBoundingClientRect().bottom,
+          lastBottom: last.getBoundingClientRect().bottom,
+          pillTop: pill.getBoundingClientRect().top,
+          mask:
+            getComputedStyle(scroller).maskImage ||
+            getComputedStyle(scroller).webkitMaskImage ||
+            "",
+        }
+      },
+      [css.overviewPeekScroll, css.overviewPeek, where],
+    )
+    await frames(page, 2)
+    return at
+  }
+  const middle = await reply("middle")
+  const bottom = await reply("bottom")
+  await shot(
+    options,
+    page,
+    `overview-edge-peek-bottom-${engine}`,
+    page.locator(css.overviewPeek),
+  )
+  if (!middle || !bottom) failures.push("the peek draws no reply pill below what it says")
+  else {
+    if (middle.room < 40)
+      failures.push(
+        `the peek scrolls only ${middle.room}px: nothing to check under the pill`,
+      )
+    if (middle.scrollerBottom > middle.pillTop + 0.5)
+      failures.push(
+        `mid-scroll, what the peek says runs ${Math.round(middle.scrollerBottom - middle.pillTop)}px under the pill`,
+      )
+    if (!middle.mask.includes("gradient"))
+      failures.push("what the peek says does not fade at its foot")
+    if (bottom.lastBottom > bottom.pillTop + 0.5)
+      failures.push(
+        `scrolled to the end, the last line ends ${Math.round(bottom.lastBottom - bottom.pillTop)}px under the pill`,
+      )
+  }
+
+  // Dragged past its limits, it is held: the peek keeps 320px, the list 340px.
+  const far = async (dx) => {
+    const from = await edge.boundingBox()
+    const ex = from.x + from.width / 2
+    await page.mouse.move(ex, y)
+    await page.mouse.down()
+    await page.mouse.move(ex + dx / 2, y)
+    await page.mouse.move(ex + dx, y)
+    await page.mouse.up()
+    await frames(page, 3)
+    return read()
+  }
+  const widest = await far(2000)
+  failures.push(
+    ...peekCentredFailures("the peek at its narrowest", await peekColumn(page)),
+  )
+  if (widest.peek < 319)
+    failures.push(`dragged far right, the peek is ${widest.peek}px (≥ 320)`)
+  if (Math.abs(widest.valuenow - widest.valuemax) > 1)
+    failures.push(
+      `at its widest, aria-valuenow ${widest.valuenow} is not its max ${widest.valuemax}`,
+    )
+  const narrowest = await far(-2000)
+  const wide = await peekColumn(page)
+  failures.push(...peekCentredFailures("the peek at its widest", wide))
+  await shot(
+    options,
+    page,
+    `overview-edge-peek-wide-${engine}`,
+    page.locator(css.overviewSurface),
+  )
+  if (Math.abs(narrowest.list - 340) > 1)
+    failures.push(`dragged far left, the list is ${narrowest.list}px (340)`)
+  // Kept within its limits as the window narrows, and as it was when it widens again.
+  await far(2000)
+  const sizes = []
+  for (const width of [1320, 1220, 1440]) {
+    await page.setViewportSize({ width, height: 900 })
+    await frames(page, 3)
+    await settled(page)
+    const now = await page.evaluate(
+      (sel) => document.querySelector(sel) !== null,
+      css.overviewEdge,
+    )
+    if (!now)
+      throw new CannotRun(`at ${width}px wide the peek is no longer beside the list`)
+    const at = await read()
+    sizes.push({ width, list: Math.round(at.list), peek: Math.round(at.peek) })
+    failures.push(...peekCentredFailures(`at ${width}px wide`, await peekColumn(page)))
+    if (at.list < 339 || at.peek < 319)
+      failures.push(
+        `at ${width}px wide the list is ${at.list}px and the peek ${at.peek}px`,
+      )
+  }
+  return {
+    measured: {
+      rest,
+      hovered: hovered.glow,
+      dragged: dragged.boundary - rest.boundary,
+      keyed: keyed.boundary - dragged.boundary,
+      reset: reset.boundary - rest.boundary,
+      widest: widest.peek,
+      narrowest: narrowest.list,
+      sizes,
+    },
     failures,
   }
 }

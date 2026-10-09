@@ -98,6 +98,9 @@ export const SourceList = memo(function SourceList({
       id="workspace-sidebar"
       className="workspace-sidebar"
       data-variant={variant}
+      // Slides, by transform, when the side rail opens or closes beside it.
+      data-flip="slide"
+      data-flip-id="sidebar"
       aria-label="Sidebar"
       // Folded, it is only there while revealed from the window's edge.
       inert={!open && !revealed}
@@ -144,7 +147,7 @@ function TreeTop() {
     <>
       <button
         type="button"
-        className="workspace-row workspace-search-button"
+        className="workspace-search-button"
         onClick={() => frame.openSwitcher("open")}
       >
         <DesktopIcon name="search" />

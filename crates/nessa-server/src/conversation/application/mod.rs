@@ -138,7 +138,7 @@ pub use mcp_apps::{
     MAX_HELD_RESOURCE_BYTES, MAX_HELD_TICKETS, RESOURCE_TICKET_LIFETIME_MS,
 };
 pub(crate) use passive_read::access_refusal;
-pub use passive_read::{AdmitPassiveRead, ReceiverAuthority};
+pub use passive_read::{AdmitPassiveRead, PassiveRead, PassiveReadGrants, ReceiverAuthority};
 pub use ports::{
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreation,
     ConversationCreationAudit, ConversationCreationAuditRecord, ConversationCreationCause,

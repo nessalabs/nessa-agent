@@ -4,6 +4,10 @@
  * This table is the one owner of every name and description Settings shows
  * and of what its search can find; `ui/` beside it only lays them out.
  *
+ * Every word here is on screen, so each earns its place: a category's `dek`
+ * only where its name alone would leave someone unsure what it holds, and a
+ * setting's `detail` only where its label would.
+ *
  * ```text
  * category (sidebar) ──▶ tab (strip under the title) ──▶ setting (a row)
  * ```
@@ -18,7 +22,12 @@ export const settingsCategories = [
     id: "general",
     label: "General",
     tabs: [
-      { id: "general", label: "General", keywords: "startup login menu bar window" },
+      // Named for what it holds, not "General" again under General.
+      {
+        id: "general",
+        label: "Startup",
+        keywords: "general login menu bar window launch",
+      },
       { id: "notifications", label: "Notifications", keywords: "alerts sound banner" },
       { id: "updates", label: "Updates", keywords: "version release channel beta" },
     ],
@@ -77,6 +86,7 @@ export const settingsCategories = [
     // that would do nothing.
     id: "advanced",
     label: "Advanced",
+    dek: "Early features you can try before they are finished.",
     tabs: [
       {
         id: "experimental",
@@ -93,6 +103,8 @@ export const settingsCategories = [
 ] as const satisfies readonly {
   id: string
   label: string
+  /** One short line under the title, only where the name alone does not say what the category is for. */
+  dek?: string
   tabs: readonly [SettingsTabShape, ...SettingsTabShape[]]
 }[]
 
@@ -121,11 +133,11 @@ interface SettingShape {
    */
   pending?: true
   /**
-   * The one workspace layout it applies in — what it changes is drawn only
+   * The workspace layouts it applies in — what it changes is drawn only
    * there. In any other its control is disabled and its row says where it
    * applies, so it never looks as if it works where it does nothing.
    */
-  layout?: WorkspaceLayoutId
+  layouts?: readonly WorkspaceLayoutId[]
 }
 
 export const settingsEntries = [
@@ -135,7 +147,6 @@ export const settingsEntries = [
     pending: true,
     tab: "general",
     label: "Open at login",
-    detail: "Nessa starts in the menu bar when you log in.",
     keywords: "startup launch",
   },
   {
@@ -143,8 +154,7 @@ export const settingsEntries = [
     pending: true,
     tab: "general",
     label: "Show in menu bar",
-    detail: "The panel stays one click away while the window is closed.",
-    keywords: "tray status",
+    keywords: "tray status panel",
   },
   {
     id: "window-opens-to",
@@ -194,14 +204,18 @@ export const settingsEntries = [
     keywords: "beta stable",
   },
   // Appearance › Theme
-  { id: "theme-light", tab: "theme", label: "Light", keywords: "theme colour color" },
+  {
+    id: "theme-colour",
+    tab: "theme",
+    label: "Colour",
+    keywords: "theme color light graphite ocean ember dusk",
+  },
   { id: "icon-family", tab: "theme", label: "Icons", keywords: "symbols glyphs lucide" },
   // Appearance › Header
   {
     id: "tint-from-picture",
     tab: "header",
     label: "Tint app from header picture",
-    detail: "The window borrows its colours from your picture.",
     keywords: "colour color image palette",
   },
   {
@@ -242,9 +256,9 @@ export const settingsEntries = [
   {
     id: "show-session-list",
     tab: "layout",
-    layout: "columns",
+    layouts: ["columns"],
     label: "Show session list",
-    detail: "The column of a channel's sessions, beside the sidebar.",
+    detail: "The column of sessions beside the sidebar.",
   },
   {
     id: "cmd-click-beside",
@@ -264,7 +278,7 @@ export const settingsEntries = [
   {
     id: "running-first",
     tab: "sessions",
-    layout: "columns",
+    layouts: ["columns"],
     label: "Keep running sessions at the top",
     keywords: "sort order",
   },
@@ -350,8 +364,8 @@ export const settingsEntries = [
     id: "default-access",
     pending: true,
     tab: "access",
-    label: "Access",
-    keywords: "permission ask edit full",
+    label: "By default, agents may",
+    keywords: "access permission ask edit full",
   },
   {
     id: "remember-approvals",
@@ -387,6 +401,16 @@ export const settingsEntries = [
     keywords: "delegation children agents panel",
   },
   // About
+  // Advanced › Experimental
+  {
+    id: "side-rail",
+    tab: "experimental",
+    // Classic has no workspace shell to stand beside.
+    layouts: ["columns", "sidebar"],
+    label: "Side rail",
+    detail: "A strip at the window's edge for places beside Agents.",
+    keywords: "rail plugins places apps strip",
+  },
   { id: "version", tab: "about", label: "Version", keywords: "build release" },
 ] as const satisfies readonly SettingShape[]
 
@@ -438,14 +462,29 @@ export function tabsOf(category: SettingsCategoryId): readonly SettingsTab[] {
 }
 
 /**
- * Whether a category's page shows its tabs across the top: when it has more
- * than one, or when its one tab is named other than the category (Advanced ›
- * Experimental) — otherwise the tab would be a name nobody sees. Search
- * names the tab in its trail by the same rule.
+ * Whether a category's page shows its tabs across the top: only when it has
+ * more than one. A strip of one tab is a name with nothing to choose; the
+ * page's title (and its dek, where it has one) already says what is there.
+ * Search names the tab in its trail by the same rule.
  */
 export function showsTabs(category: SettingsCategoryId): boolean {
-  const { tabs, label } = settingsCategory(category)
-  return tabs.length > 1 || tabs[0].label !== label
+  return settingsCategory(category).tabs.length > 1
+}
+
+/** The one line under a category's title, where it has one. */
+export function dekOf(category: SettingsCategoryId): string | undefined {
+  const entry = settingsCategory(category)
+  return "dek" in entry ? entry.dek : undefined
+}
+
+/**
+ * Whether a setting has its tab's own name (Connections › Agents › Agents):
+ * its group then needs no title on screen — the tab above already says it —
+ * though the title still names the group for assistive technology.
+ */
+export function namesItsTab(id: SettingId): boolean {
+  const entry = setting(id)
+  return entry.label === settingsTab(entry.tab).label
 }
 
 /** Where a category's page opens before a tab has been chosen. */

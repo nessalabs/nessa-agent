@@ -44,7 +44,7 @@ replaces an update's content collection, as an adapter does when a harness
 reports a result outside ACP content. The names are the harness's spelling:
 Claude's replaces characters outside `[A-Za-z0-9_-]` in a tool name with `_`. It is identity for display and
 correlation, not access to the server. Which harness can say what is recorded in
-[ADR 344](../../../../docs/adr/todo/344-mcp-ui.md#what-each-harness-passes-through-acp):
+[ADR 344](../../../../docs/adr/done/344-mcp-ui.md#what-each-harness-passes-through-acp):
 Claude's name is split at the one configured server prefix it starts with, Codex's
 comes exactly from `rawInput`, and Opencode's cannot be split, so it names none.
 No harness passes a tool's own `_meta` (its MCP Apps UI resource) through ACP.

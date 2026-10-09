@@ -14,6 +14,7 @@ import { elapsed, sessionTime, ReadOnlyTranscript } from "../../workspace"
 import { plural } from "../../model/counts"
 import { progressFraction, rowStatus, type Subagent } from "../model/subagent"
 import { tagline } from "../model/tagline"
+import { stackItem } from "./stack-item"
 import { useSubagentsPanel, type SubagentsPanelModel } from "./use-subagents-panel"
 import "./subagents.css"
 
@@ -68,14 +69,7 @@ function SubagentList({
         <AvatarStack
           max={Infinity}
           label={plural(model.ordered.length, "agent")}
-          items={model.ordered.map((subagent) => ({
-            seed: subagent.seed,
-            name:
-              subagent.lifecycle === "open" && subagent.activity === "working"
-                ? `${subagent.name}, working`
-                : subagent.name,
-            busy: subagent.lifecycle === "open" && subagent.activity === "working",
-          }))}
+          items={model.ordered.map(stackItem)}
         />
       </div>
       <p className="subagents-summary" data-subagent-summary>

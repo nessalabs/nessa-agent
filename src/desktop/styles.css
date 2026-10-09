@@ -1,4 +1,4 @@
-@import "../../node_modules/@nessa-ui/react/src/app.css";
+@import "@nessa-ui/react/app.css";
 @source "./";
 
 html,
@@ -157,6 +157,8 @@ body {
   --desktop-text-read: 14.5px;
   --desktop-text-title: 17px;
   --desktop-text-display: 20px;
+  /* A row holding something not yet seen, in every list (`shared-controls.mjs`, `rows`); the sidebar's current row's weight too, so moving between them does not reflow a label. */
+  --desktop-unread-weight: 600;
 
   /* Ink and fills, from loud to quiet. */
   --desktop-ink-2: color-mix(in oklab, var(--foreground) 82%, transparent);
@@ -168,6 +170,9 @@ body {
   --desktop-selected: color-mix(in oklab, var(--foreground) 8.5%, transparent);
   --desktop-press: color-mix(in oklab, var(--foreground) 11%, transparent);
   --desktop-rim: color-mix(in oklab, var(--foreground) 7%, transparent);
+  /* The one edge of a card set into a surface: a code block, a command, a widget's card, "Nothing needs you". A pane's glass takes `--desktop-rim`. */
+  --desktop-card-rim: inset 0 0 0 0.5px
+    color-mix(in oklab, var(--foreground) 10%, transparent);
   --desktop-focus-ring: color-mix(in oklab, var(--desktop-light-edge) 42%, transparent);
   /* The one outline recipe; a surface says only its `outline-offset`. (Two inset box-shadow rings remain: the picture band's adjust state and the Agents peek story.) */
   --desktop-focus-outline: 1.5px solid var(--desktop-focus-ring);
@@ -338,8 +343,7 @@ html:not(.dark) [data-surface] {
 }
 
 /* The composer's blur would be sampled again on every frame the copy moves.
-   The sidebar keeps its blur and its resting shadow: turning the blur off
-   and back on, or swapping the shadow for a hairline, was a long frame
+   The sidebar's tint and resting shadow stay unchanged through the gesture
    (`styles.test.ts`). */
 :root[data-drag-pressing] .desktop-composer {
   backdrop-filter: none;
@@ -500,21 +504,78 @@ html:not(.dark) [data-surface] {
   transform: translateX(12px) scale(0.985);
 }
 
-.desktop-empty-note {
-  padding: 4px 8px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: color-mix(in oklab, var(--foreground) 38%, transparent);
+/* ——— Empty states: the kit's EmptyState in the window's inks ——— */
+
+/*
+ * What a surface outside Settings shows when it has nothing to show is the
+ * kit's `EmptyState`; this gives it the window's type once.
+ * `compact` is the quiet line — a faint sentence, and the way forward 12px
+ * under it (the kit's gap and its action's margin). `default` is the
+ * titled one: a title at reading size, a muted sentence under it. Where one
+ * sits — its margins and padding — is its surface's. `shared-controls.mjs`
+ * (`empty`) measures them.
+ */
+[data-surface] [data-slot="empty-state"] {
+  font-family: inherit;
+  letter-spacing: inherit;
 }
 
-.desktop-identity[data-slot="sidebar-footer"] {
+[data-surface]
+  [data-slot="empty-state"]
+  > :is([data-slot="empty-state-title"], [data-slot="empty-state-description"]) {
+  letter-spacing: inherit;
+}
+
+[data-surface] [data-variant="compact"] > [data-slot="empty-state-title"] {
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-footnote);
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+[data-surface] [data-slot="empty-state"][data-variant="default"] {
+  gap: 4px;
+}
+
+[data-surface] [data-variant="default"] > [data-slot="empty-state-title"] {
+  color: var(--foreground);
+  font-size: var(--desktop-text-read);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+[data-surface] [data-variant="default"] > [data-slot="empty-state-description"] {
+  max-width: 320px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  line-height: 1.5;
+  text-wrap: wrap;
+}
+
+/* The classic shell's notes: "Nothing open", and Recents' line, which keeps to its group's start. */
+.desktop-empty-note {
+  padding: 4px 8px;
+}
+
+.desktop-empty-note[data-align="start"] {
+  align-items: flex-start;
+  text-align: left;
+}
+
+/* The classic shell's foot: its mark, "nessa Studio" (`identity.tsx`), and the theme menu at the end. */
+.desktop-sidebar-footer[data-slot="sidebar-footer"] {
   flex-direction: row;
   align-items: center;
-  gap: 8px;
-  padding: 12px 16px 14px;
+  gap: 0;
+  /* The name's pill is 28px, the theme menu's 26: a pixel less above and below keeps the foot 52px. */
+  padding: 11px 16px 13px;
   border-top: 0;
   font-size: 13px;
   letter-spacing: -0.01em;
+}
+
+.desktop-sidebar-footer[data-slot="sidebar-footer"] > :last-child {
+  margin-left: auto;
 }
 
 .desktop-mark {
@@ -1090,6 +1151,11 @@ html:not(.dark) [data-surface] {
   animation: none;
 }
 
+/* A static window has no offscreen copies to travel through, in either motion mode. */
+:root .desktop-night-scene[data-still] .desktop-night-scene-rain > span {
+  transform: none;
+}
+
 .split-panes-grid[data-split-multi]
   .workspace-pane:not([data-focused])
   .desktop-header[data-sliver] {
@@ -1609,6 +1675,17 @@ html:not(.dark) .desktop-tooltip {
   --desktop-tooltip-from: 2px;
 }
 
+/* Beside a control, it arrives from the control's side. */
+.desktop-tooltip[data-side="right"] {
+  --desktop-tooltip-from: 0;
+  --desktop-tooltip-from-x: -2px;
+}
+
+.desktop-tooltip[data-side="left"] {
+  --desktop-tooltip-from: 0;
+  --desktop-tooltip-from-x: 2px;
+}
+
 /* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
 :root[data-motion="reduced"] .desktop-tooltip[data-shown] {
   animation: none;
@@ -1617,7 +1694,7 @@ html:not(.dark) .desktop-tooltip {
 @keyframes desktop-tooltip-in {
   from {
     opacity: 0;
-    translate: 0 var(--desktop-tooltip-from, -2px);
+    translate: var(--desktop-tooltip-from-x, 0) var(--desktop-tooltip-from, -2px);
   }
 }
 

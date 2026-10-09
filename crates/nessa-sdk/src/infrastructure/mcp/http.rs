@@ -7,7 +7,7 @@
 //!        ▲                                              ├── POST modern, or legacy endpoint
 //!        │                                              ├── HttpExchange
 //!        │                                              ├── bounded owned POST readers (abort/join on close)
-//!        └── reader ◀── inbound JSON messages ─────────┴── optional GET stream
+//!        └── reader ◀── JSON + immutable reply context ─┴── optional GET stream
 //! ```
 //!
 //! Arrows are messages. One [`HttpSession`] is one local opening. It keeps the
@@ -15,30 +15,39 @@
 //! opening of the same URL already holds, and DELETE that id at most once on
 //! close. A 404 on a session-bound request fails that request with
 //! [`McpError::SessionExpired`] and starts one fresh `initialize` without the
-//! old id; the failed request is not replayed. Legacy mode records that DELETE
+//! old id under its registered startup owner. Early peer answers retain a bounded
+//! provisional binding without publishing validated readiness (ADR 392 J17–J19).
+//! Initial and recovery POSTs share authorization/status policy (J20).
+//! Ordinary frames and initialized
+//! use the connection writer; the failed request is not replayed.
+//! Legacy mode records that DELETE
 //! does not apply.
 //!
-//! POST event streams are session-owned and separately bounded. A request reader
+//! Streamed POST bodies (JSON and SSE, including initialize) are session-owned
+//! and separately bounded. An SSE request reader
 //! forwards notices/requests until its matching result/error, then drops the body
-//! even if the peer leaves it open (ADR 392 P1–P14 and `tests::post_streams`).
+//! even if the peer leaves it open (ADR 392 P1–P14/J1–J20,
+//! `tests::post_streams` and `tests::http_progress`).
 //!
 //! Dropping the session aborts its GET and POST streams and asks for the same single
 //! DELETE. The DELETE itself is best-effort and bounded by the exchange.
 #![deny(missing_docs)]
 
 use super::authorization::{Bearer, RemoteAuthorization};
+use super::connection::{Outgoing, OutgoingQueue};
 use super::framing::MAX_FRAME_BYTES;
 use super::http_exchange::{HttpExchange, HttpMethod, HttpRequest, HttpResponse};
 use super::remote::RemoteMcpUrl;
 use super::sse::{self, SseError, SseParser};
-use super::wire::{self, SUPPORTED_VERSIONS};
+use super::wire;
 use super::McpError;
+use crate::infrastructure::clock::{within, Clock, ClockInstant};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use tokio::runtime::Handle;
-use tokio::sync::{mpsc, watch, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{mpsc, oneshot, watch, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -84,29 +93,78 @@ impl SessionClaims {
     }
 }
 
+#[derive(Debug)]
+struct SessionBinding {
+    id: Option<String>,
+}
+
+/// Immutable HTTP evidence accompanying a peer request's generated answer.
+#[derive(Clone, Debug)]
+pub(crate) struct ReplyContext {
+    binding: Option<Arc<SessionBinding>>,
+    version: Option<String>,
+}
+
+/// One received JSON frame, retaining transport evidence for a generated reply.
+/// The connection owns JSON framing; HTTP owns the private binding evidence.
+#[derive(Debug)]
+pub(crate) struct HttpMessage {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) reply: Option<ReplyContext>,
+}
+impl std::ops::Deref for HttpMessage {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+impl From<Vec<u8>> for HttpMessage {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self { bytes, reply: None }
+    }
+}
+
 struct Phase {
-    /// `None` when the server omitted `Mcp-Session-Id`.
-    session_id: Option<String>,
+    /// One claimed binding, provisional until `open` records validated initialize.
+    binding: Option<Arc<SessionBinding>>,
     version: Option<String>,
     /// Set once the initial POST took the legacy path.
     legacy_post: Option<String>,
-    /// The id was claimed in [`SessionClaims`].
-    claimed: bool,
-    /// One 404 recovery has been spent.
-    recovery_used: bool,
+    recovery: Recovery,
     open: bool,
+}
+
+/// Identity publication and replacement call admission are distinct transitions.
+#[derive(Clone, PartialEq, Eq)]
+enum Recovery {
+    Available,
+    Initializing,
+    ReadyForWriter,
+    Completed,
+    Failed(McpError),
+}
+
+impl Recovery {
+    fn blocks_requests(&self) -> bool {
+        match self {
+            Self::Available | Self::Completed => false,
+            Self::Initializing | Self::ReadyForWriter | Self::Failed(_) => true,
+        }
+    }
 }
 
 /// One remote opening's HTTP session.
 pub struct HttpSession {
     local: u64,
+    weak: Weak<Self>,
+    writer: Mutex<Option<HttpWriter>>,
     runtime: Handle,
     server: Uuid,
     url: RemoteMcpUrl,
     exchange: Arc<dyn HttpExchange>,
     authorization: Arc<dyn RemoteAuthorization>,
     claims: Arc<SessionClaims>,
-    inbound: mpsc::Sender<Result<Vec<u8>, McpError>>,
+    inbound: mpsc::Sender<Result<HttpMessage, McpError>>,
     phase: Mutex<Phase>,
     closing: AtomicBool,
     delete_started: AtomicBool,
@@ -117,7 +175,13 @@ pub struct HttpSession {
     finished: watch::Sender<bool>,
 }
 
-/// Retained POST readers, independent of pending JSON-RPC call capacity.
+#[derive(Clone)]
+struct HttpWriter {
+    outgoing: OutgoingQueue,
+    clock: Arc<dyn Clock>,
+}
+
+/// Retained POST body/startup readers, independent of pending JSON-RPC call capacity.
 pub(crate) const MAX_POST_STREAMS: usize = 256;
 
 #[derive(Default)]
@@ -155,16 +219,18 @@ impl HttpSession {
     /// # Panics
     ///
     /// Panics when called outside a Tokio runtime.
-    pub fn open(
+    pub(crate) fn open(
         server: Uuid,
         url: RemoteMcpUrl,
         exchange: Arc<dyn HttpExchange>,
         authorization: Arc<dyn RemoteAuthorization>,
         claims: Arc<SessionClaims>,
-    ) -> (Arc<Self>, mpsc::Receiver<Result<Vec<u8>, McpError>>) {
+    ) -> (Arc<Self>, mpsc::Receiver<Result<HttpMessage, McpError>>) {
         let (inbound, incoming) = mpsc::channel(64);
-        let session = Arc::new(Self {
+        let session = Arc::new_cyclic(|weak| Self {
             local: NEXT_LOCAL.fetch_add(1, Ordering::Relaxed),
+            weak: weak.clone(),
+            writer: Mutex::new(None),
             runtime: Handle::current(),
             server,
             url,
@@ -173,11 +239,10 @@ impl HttpSession {
             claims,
             inbound,
             phase: Mutex::new(Phase {
-                session_id: None,
+                binding: None,
                 version: None,
                 legacy_post: None,
-                claimed: false,
-                recovery_used: false,
+                recovery: Recovery::Available,
                 open: false,
             }),
             closing: AtomicBool::new(false),
@@ -200,12 +265,12 @@ impl HttpSession {
     /// Legacy sessions and sessions with no id record that DELETE does not
     /// apply and do not send one.
     pub fn shutdown(&self) {
-        if self.delete_started.swap(true, Ordering::SeqCst) {
-            return;
-        }
         let (readers, get_task): (Vec<_>, _) = {
             let mut readers = self.readers.lock().expect("http readers");
             self.closing.store(true, Ordering::SeqCst);
+            if self.delete_started.swap(true, Ordering::SeqCst) {
+                return;
+            }
             (
                 std::mem::take(&mut readers.post),
                 std::mem::take(&mut readers.get),
@@ -220,15 +285,13 @@ impl HttpSession {
         let phase = self.phase.lock().expect("http phase");
         let legacy = phase.legacy_post.is_some();
         let session_id = phase
-            .session_id
-            .clone()
-            .filter(|_| phase.claimed && !legacy);
+            .binding
+            .as_ref()
+            .filter(|_| !legacy)
+            .and_then(|binding| binding.id.clone());
         let url = self.url.as_str().to_owned();
-        if phase.claimed {
-            if let Some(id) = &phase.session_id {
-                self.claims.release(&url, id, self.local);
-            }
-        }
+        let claims = self.claims.clone();
+        let local = self.local;
         drop(phase);
 
         let exchange = self.exchange.clone();
@@ -248,7 +311,7 @@ impl HttpSession {
                 return;
             };
             let mut headers = vec![
-                ("Mcp-Session-Id".into(), session_id),
+                ("Mcp-Session-Id".into(), session_id.clone()),
                 (
                     "Accept".into(),
                     "application/json, text/event-stream".into(),
@@ -264,12 +327,22 @@ impl HttpSession {
                 body: Vec::new(),
             };
             let _ = exchange.exchange(request).await;
+            claims.release(&url, &session_id, local);
             finished.send_replace(true);
         });
     }
 
     /// Send one newline-framed JSON-RPC message.
     pub async fn dispatch(&self, frame: &[u8]) -> SendOutcome {
+        self.dispatch_frame(frame, PostPurpose::Ordinary).await
+    }
+
+    pub(crate) async fn dispatch_reply(&self, frame: &[u8], context: ReplyContext) -> SendOutcome {
+        self.dispatch_frame(frame, PostPurpose::PeerReply(context))
+            .await
+    }
+
+    async fn dispatch_frame(&self, frame: &[u8], purpose: PostPurpose) -> SendOutcome {
         if self.closing.load(Ordering::SeqCst) {
             return SendOutcome::End(McpError::Closed);
         }
@@ -286,7 +359,10 @@ impl HttpSession {
             .get("method")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        let id = message.get("id").and_then(Value::as_u64);
+        let peer_reply = matches!(purpose, PostPurpose::PeerReply(_));
+        let id = (!peer_reply)
+            .then(|| message.get("id").and_then(Value::as_u64))
+            .flatten();
         if method.as_deref() == Some("notifications/cancelled") {
             if let Some(id) = message
                 .get("params")
@@ -296,12 +372,25 @@ impl HttpSession {
                 self.cancel_post(id);
             }
         }
+        if method.is_some()
+            && id.is_some()
+            && self
+                .phase
+                .lock()
+                .expect("http phase")
+                .recovery
+                .blocks_requests()
+        {
+            return SendOutcome::FailCall {
+                id,
+                error: McpError::Busy,
+            };
+        }
         let legacy = self.phase.lock().expect("http phase").legacy_post.clone();
         if let Some(post) = legacy {
             return self.post_legacy(&post, bytes, id).await;
         }
-        let permit = if id.is_some() && method.is_some() && method.as_deref() != Some("initialize")
-        {
+        let permit = if id.is_some() && method.is_some() {
             self.reap_post_readers();
             match self.post_capacity.clone().try_acquire_owned() {
                 Ok(permit) => Some(permit),
@@ -315,13 +404,20 @@ impl HttpSession {
         } else {
             None
         };
-        match self.post_modern(bytes, method.as_deref(), id).await {
-            Ok(Modern::Response(body)) => {
-                self.deliver_body(body, method.as_deref(), id, permit).await
+        match self.post_modern(bytes, purpose).await {
+            Ok(Modern::Response(attempt)) => {
+                self.deliver_body(attempt, method.as_deref(), id, permit)
+                    .await
             }
             Ok(Modern::Accepted) => SendOutcome::Done,
             Ok(Modern::Legacy) => self.enter_legacy(bytes, id).await,
-            Err(error) => self.terminal(id, error),
+            Err(error) => {
+                if peer_reply {
+                    SendOutcome::End(error)
+                } else {
+                    self.terminal(id, error)
+                }
+            }
         }
     }
 
@@ -351,157 +447,163 @@ impl HttpSession {
 
     async fn deliver_body(
         &self,
-        response: HttpResponse,
+        attempt: PostResponse,
         method: Option<&str>,
         id: Option<u64>,
         permit: Option<OwnedSemaphorePermit>,
     ) -> SendOutcome {
+        let PostResponse {
+            response,
+            context,
+            origin,
+            failure,
+        } = attempt;
         let status = response.status;
         if status == 202 {
             return SendOutcome::Done;
         }
-        if status == 401 {
-            return SendOutcome::End(McpError::Unauthorized);
-        }
-        if status == 403 {
-            let challenge = response
-                .header("www-authenticate")
-                .unwrap_or("Bearer")
-                .to_owned();
-            self.authorization
-                .insufficient_scope(self.server, &challenge)
-                .await;
-            return SendOutcome::End(McpError::InsufficientScope);
-        }
-        if status == 404 && self.has_session_id() && method != Some("initialize") {
-            return self.recover(id).await;
-        }
-        if matches!(status, 400 | 404 | 405) && method == Some("initialize") && !self.is_open() {
-            return SendOutcome::Done; // caller enters legacy; unused path
-        }
-        if !(200..300).contains(&status) {
-            // 5xx means the server accepted the request. Only `initialize`
-            // is still a definite miss: no session exists to have run anything.
-            if status >= 500 {
-                return server_error(method == Some("initialize"), id);
+        if let Some(error) = failure {
+            if matches!(
+                context,
+                ResponseContext::PeerReplyBound | ResponseContext::PeerReplyStateless
+            ) {
+                return SendOutcome::End(error);
             }
-            let error = McpError::Malformed(format!("HTTP {status}"));
-            return if method == Some("initialize") {
+            if error == McpError::SessionExpired {
+                return self.recover(id, permit);
+            }
+            return if status == 401 || method == Some("initialize") {
                 SendOutcome::End(error)
             } else {
                 SendOutcome::FailCall { id, error }
             };
         }
         let content_type = response.header("content-type").map(str::to_owned);
-        let session_header = response.header("mcp-session-id").map(str::to_owned);
-        if sse::is_event_stream(content_type.as_deref()) {
-            // A streamed tools/call stays open while the server asks for a
-            // ping on the next POST. Reading it on the writer would stall
-            // that answer. Initialize still waits, so the session id is known
-            // before the opening returns.
-            let streamed = matches!(response.body, super::http_exchange::HttpBody::Stream(_));
-            if streamed && method != Some("initialize") {
-                let request_id = method.and(id);
-                let mut readers = self.readers.lock().expect("http readers");
-                readers.post.retain(|reader| !reader.task.is_finished());
-                if self.closing.load(Ordering::SeqCst) {
-                    return SendOutcome::End(McpError::Closed);
-                }
-                let permit = permit.or_else(|| self.post_capacity.clone().try_acquire_owned().ok());
-                let Some(permit) = permit else {
-                    return SendOutcome::End(McpError::Unconfirmed);
-                };
-                let inbound = self.inbound.clone();
-                let task = self
-                    .runtime
-                    .spawn(forward_open_sse(response, inbound, request_id));
-                readers.post.push(PostReader {
-                    request_id,
-                    task,
-                    _permit: permit,
-                });
-                return SendOutcome::Done;
-            }
-            return self
-                .read_sse_body(response, method, id, session_header)
-                .await;
-        }
-        if content_type.is_some() && !sse::is_json(content_type.as_deref()) {
+        let event_stream = sse::is_event_stream(content_type.as_deref());
+        if !event_stream && content_type.is_some() && !sse::is_json(content_type.as_deref()) {
             return SendOutcome::End(McpError::Malformed(
                 "the MCP response content type is neither JSON nor event-stream".into(),
             ));
         }
-        let bytes = match response.bytes(MAX_FRAME_BYTES).await {
-            Ok(bytes) => bytes,
-            Err(super::http_exchange::BodyRead::TooLarge) => {
-                return SendOutcome::End(McpError::TooLarge("an HTTP response body"))
+        if matches!(response.body, super::http_exchange::HttpBody::Stream(_)) {
+            let request_id = method.and(id);
+            let mut readers = self.readers.lock().expect("http readers");
+            readers.post.retain(|reader| !reader.task.is_finished());
+            if self.closing.load(Ordering::SeqCst) {
+                return SendOutcome::End(McpError::Closed);
             }
-            Err(super::http_exchange::BodyRead::Closed) => {
-                return SendOutcome::End(McpError::Unconfirmed)
-            }
-        };
-        if let Err(error) = self.note_response(&bytes, method, id, session_header.as_deref()) {
-            return SendOutcome::End(error);
+            let permit = permit.or_else(|| self.post_capacity.clone().try_acquire_owned().ok());
+            let Some(permit) = permit else {
+                return SendOutcome::End(McpError::Unconfirmed);
+            };
+            let inbound = self.inbound.clone();
+            let weak = self.weak.clone();
+            let initialize = method == Some("initialize");
+            let task = self.runtime.spawn(async move {
+                match consume_body(
+                    response,
+                    event_stream,
+                    BodyPurpose::public(request_id, initialize),
+                    &weak,
+                    &inbound,
+                    &origin,
+                )
+                .await
+                {
+                    Ok(_) => {}
+                    Err(error) => {
+                        let _ = inbound.send(Err(error)).await;
+                    }
+                }
+            });
+            readers.post.push(PostReader {
+                request_id,
+                task,
+                _permit: permit,
+            });
+            return SendOutcome::Done;
         }
-        self.push_inbound(bytes).await
-    }
-
-    async fn post_modern(
-        &self,
-        body: &[u8],
-        method: Option<&str>,
-        id: Option<u64>,
-    ) -> Result<Modern, McpError> {
-        let bearer = self.authorization.bearer(self.server).await?;
-        let first = self.exchange(body, bearer.as_ref()).await?;
-        if first.status == 401 {
-            let challenge = first
-                .header("www-authenticate")
-                .unwrap_or("Bearer")
-                .to_owned();
-            // Drop the body without treating 401 as legacy.
-            drop(first);
-            if let Some(retry) = self.authorization.rejected(self.server, &challenge).await? {
-                let second = self.exchange(body, Some(&retry)).await?;
-                return self.classify(second, method, id).await;
-            }
-            return Err(McpError::Unauthorized);
+        if self.closing.load(Ordering::SeqCst) {
+            return SendOutcome::End(McpError::Closed);
         }
-        self.classify(first, method, id).await
-    }
-
-    async fn classify(
-        &self,
-        response: HttpResponse,
-        method: Option<&str>,
-        _id: Option<u64>,
-    ) -> Result<Modern, McpError> {
-        if matches!(response.status, 400 | 404 | 405)
-            && method == Some("initialize")
-            && !self.is_open()
-            && self.phase.lock().expect("http phase").session_id.is_none()
+        // Buffered bodies use the same correlation/EOF owner. Queue faults after
+        // preceding messages so an observed neighboring reply keeps its outcome.
+        match consume_body(
+            response,
+            event_stream,
+            BodyPurpose::public(method.and(id), method == Some("initialize")),
+            &self.weak,
+            &self.inbound,
+            &origin,
+        )
+        .await
         {
-            return Ok(Modern::Legacy);
+            Ok(_) => SendOutcome::Done,
+            Err(error) => match self.inbound.send(Err(error)).await {
+                Ok(()) => SendOutcome::Done,
+                Err(_) => SendOutcome::End(McpError::ServerGone),
+            },
         }
-        if response.status == 202 {
-            return Ok(Modern::Accepted);
-        }
-        Ok(Modern::Response(response))
     }
 
-    async fn exchange(
+    async fn post_modern(&self, body: &[u8], purpose: PostPurpose) -> Result<Modern, McpError> {
+        authorized_modern_post(
+            &self.weak,
+            self.exchange.clone(),
+            self.authorization.clone(),
+            self.server,
+            body,
+            purpose,
+        )
+        .await
+    }
+
+    /// Build evidence synchronously; external I/O holds no upgraded session.
+    fn modern_request(
         &self,
         body: &[u8],
         bearer: Option<&Bearer>,
-    ) -> Result<HttpResponse, McpError> {
+        purpose: &PostPurpose,
+    ) -> Result<(HttpRequest, ResponseContext, ReplyContext), McpError> {
+        let _readers = self.readers.lock().expect("http readers");
         if self.closing.load(Ordering::SeqCst) {
             return Err(McpError::Closed);
         }
-        let (session_id, version) = {
-            let phase = self.phase.lock().expect("http phase");
-            (phase.session_id.clone(), phase.version.clone())
+        let phase = self.phase.lock().expect("http phase");
+        let initialize = body_is_initialize(body);
+        let binding = match purpose {
+            PostPurpose::PeerReply(reply) => {
+                check_reply_binding(&phase, reply)?;
+                reply.binding.clone()
+            }
+            PostPurpose::RecoveryInitialize => {
+                if let Recovery::Failed(error) = &phase.recovery {
+                    return Err(error.clone());
+                }
+                None
+            }
+            PostPurpose::Ordinary => phase.binding.clone(),
         };
-        let include_version = version.is_some() && !body_is_initialize(body);
+        let version = if initialize {
+            None
+        } else {
+            match purpose {
+                PostPurpose::PeerReply(reply) => reply.version.clone(),
+                _ => phase.version.clone(),
+            }
+        };
+        let mut context = if initialize {
+            ResponseContext::Initialize {
+                legacy_allowed: matches!(purpose, PostPurpose::Ordinary)
+                    && !phase.open
+                    && phase.binding.is_none()
+                    && matches!(phase.recovery, Recovery::Available),
+            }
+        } else if matches!(purpose, PostPurpose::PeerReply(_)) {
+            ResponseContext::PeerReplyStateless
+        } else {
+            ResponseContext::Stateless
+        };
         let mut headers = vec![
             (
                 "Accept".into(),
@@ -509,28 +611,32 @@ impl HttpSession {
             ),
             ("Content-Type".into(), "application/json".into()),
         ];
-        if include_version {
-            if let Some(version) = version {
-                headers.push(("MCP-Protocol-Version".into(), version));
+        if !initialize {
+            if let Some(id) = binding.as_ref().and_then(|binding| binding.id.as_ref()) {
+                headers.push(("Mcp-Session-Id".into(), id.clone()));
+                context = if matches!(purpose, PostPurpose::PeerReply(_)) {
+                    ResponseContext::PeerReplyBound
+                } else {
+                    ResponseContext::SessionBound
+                };
             }
-        }
-        if let Some(session_id) = session_id {
-            if !body_is_initialize(body) {
-                headers.push(("Mcp-Session-Id".into(), session_id));
+            if let Some(version) = &version {
+                headers.push(("MCP-Protocol-Version".into(), version.clone()));
             }
         }
         if let Some(bearer) = bearer {
             headers.push(("Authorization".into(), format!("Bearer {}", bearer.token())));
         }
-        self.exchange
-            .exchange(HttpRequest {
+        Ok((
+            HttpRequest {
                 method: HttpMethod::Post,
                 url: self.url.as_str().to_owned(),
                 headers,
                 body: body.to_vec(),
-            })
-            .await
-            .map_err(|_| lost_exchange(body))
+            },
+            context,
+            ReplyContext { binding, version },
+        ))
     }
 
     async fn enter_legacy(&self, initialize: &[u8], id: Option<u64>) -> SendOutcome {
@@ -567,9 +673,12 @@ impl HttpSession {
             if self.closing.load(Ordering::SeqCst) {
                 return SendOutcome::End(McpError::Closed);
             }
-            let task = self
-                .runtime
-                .spawn(read_legacy_stream(response, inbound, Some(endpoint_tx)));
+            let task = self.runtime.spawn(read_legacy_stream(
+                response,
+                inbound,
+                Some(endpoint_tx),
+                None,
+            ));
             readers.stop_get();
             readers.get.push(task);
         }
@@ -675,209 +784,99 @@ impl HttpSession {
         SendOutcome::End(McpError::InsufficientScope)
     }
 
-    async fn read_sse_body(
+    fn publish_initialize(
         &self,
-        response: HttpResponse,
-        method: Option<&str>,
-        id: Option<u64>,
-        session_header: Option<String>,
-    ) -> SendOutcome {
-        let mut stream = match response.body {
-            super::http_exchange::HttpBody::Stream(stream) => stream,
-            super::http_exchange::HttpBody::Buffered(bytes) => {
-                return self
-                    .finish_sse_bytes(&bytes, method, id, session_header)
-                    .await
-            }
-        };
-        let mut parser = SseParser::bounded();
-        let mut saw = false;
-        loop {
-            let chunk = match stream.next().await {
-                Ok(Some(chunk)) => chunk,
-                Ok(None) => break,
-                Err(_) => return SendOutcome::End(McpError::Unconfirmed),
-            };
-            let events = match parser.push(&chunk) {
-                Ok(events) => events,
-                Err(SseError::TooLarge) => {
-                    return SendOutcome::End(McpError::TooLarge("an SSE event"))
-                }
-                Err(SseError::Utf8) => {
-                    return SendOutcome::End(McpError::Malformed(
-                        "an SSE event is not UTF-8".into(),
-                    ))
-                }
-            };
-            for event in events {
-                if event.data.is_empty() {
-                    continue;
-                }
-                if let Err(error) =
-                    self.note_response(event.data.as_bytes(), method, id, session_header.as_deref())
-                {
-                    return SendOutcome::End(error);
-                }
-                saw = true;
-                if let SendOutcome::End(error) = self.push_inbound(event.data.into_bytes()).await {
-                    return SendOutcome::End(error);
-                }
-            }
-        }
-        if saw {
-            SendOutcome::Done
-        } else {
-            SendOutcome::FailCall {
-                id,
-                error: McpError::Unconfirmed,
-            }
-        }
-    }
-
-    async fn finish_sse_bytes(
-        &self,
-        bytes: &[u8],
-        method: Option<&str>,
-        id: Option<u64>,
-        session_header: Option<String>,
-    ) -> SendOutcome {
-        let mut parser = SseParser::bounded();
-        let events = match parser.push(bytes) {
-            Ok(events) => events,
-            Err(SseError::TooLarge) => return SendOutcome::End(McpError::TooLarge("an SSE event")),
-            Err(SseError::Utf8) => {
-                return SendOutcome::End(McpError::Malformed("an SSE event is not UTF-8".into()))
-            }
-        };
-        // A buffered body may not end with a blank line. Parse a trailing event.
-        let mut events = events;
-        if !bytes.ends_with(b"\n\n") {
-            let mut extra = parser;
-            if let Ok(more) = extra.push(b"\n\n") {
-                events.extend(more);
-            }
-        }
-        if events.is_empty() {
-            return SendOutcome::FailCall {
-                id,
-                error: McpError::Malformed("an SSE response carried no event".into()),
-            };
-        }
-        for event in events {
-            if event.data.is_empty() {
-                continue;
-            }
-            if let Err(error) =
-                self.note_response(event.data.as_bytes(), method, id, session_header.as_deref())
-            {
-                return SendOutcome::End(error);
-            }
-            if let SendOutcome::End(error) = self.push_inbound(event.data.into_bytes()).await {
-                return SendOutcome::End(error);
-            }
-        }
-        SendOutcome::Done
-    }
-
-    /// Recovery `initialize` answered with SSE. The JSON is inside `data:`,
-    /// so the raw body is not the session record.
-    async fn note_sse_initialize(
-        &self,
-        response: HttpResponse,
+        result: &Value,
         session_header: Option<&str>,
     ) -> Result<(), McpError> {
-        let bytes = match response.bytes(MAX_FRAME_BYTES).await {
-            Ok(bytes) => bytes,
-            Err(_) => return Err(McpError::SessionExpired),
-        };
-        let mut parser = SseParser::bounded();
-        let mut events = parser.push(&bytes).map_err(|error| match error {
-            SseError::TooLarge => McpError::TooLarge("an SSE event"),
-            SseError::Utf8 => McpError::Malformed("an SSE event is not UTF-8".into()),
-        })?;
-        if !bytes.ends_with(b"\n\n") {
-            if let Ok(more) = parser.push(b"\n\n") {
-                events.extend(more);
-            }
-        }
-        let mut noted = false;
-        for event in events {
-            if event.data.is_empty() {
-                continue;
-            }
-            noted |= self.note_response(
-                event.data.as_bytes(),
-                Some("initialize"),
-                Some(0),
-                session_header,
-            )?;
-        }
-        if noted {
-            Ok(())
-        } else {
-            Err(McpError::SessionExpired)
-        }
-    }
-
-    fn note_response(
-        &self,
-        body: &[u8],
-        method: Option<&str>,
-        request_id: Option<u64>,
-        session_header: Option<&str>,
-    ) -> Result<bool, McpError> {
-        if method != Some("initialize") {
-            return Ok(false);
-        }
-        let message: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-        if !request_id.is_some_and(|id| is_response_to(&message, id))
-            || message.get("result").is_none()
-        {
-            return Ok(false);
-        }
         let mut readers = self.readers.lock().expect("http readers");
         if self.closing.load(Ordering::SeqCst) {
             return Err(McpError::Closed);
         }
         if self.phase.lock().expect("http phase").open {
-            return Ok(true);
+            return Ok(());
         }
-        if let Some(version) = message
-            .get("result")
-            .and_then(|result| result.get("protocolVersion"))
-            .and_then(Value::as_str)
-        {
-            if SUPPORTED_VERSIONS.contains(&version) {
-                self.phase.lock().expect("http phase").version = Some(version.to_owned());
-            }
-        }
-        let Some(session_id) = session_header.filter(|id| !id.is_empty()) else {
-            self.phase.lock().expect("http phase").open = true;
-            self.start_get(None, &mut readers);
-            return Ok(true);
-        };
-        if session_id.len() > 1024 {
-            return Err(McpError::TooLarge("Mcp-Session-Id"));
-        }
-        if !self.claims.claim(self.url.as_str(), session_id, self.local) {
-            return Err(McpError::SessionCollision);
-        }
+        wire::initialized(result)?;
+        let version = result["protocolVersion"].as_str().map(str::to_owned);
         let mut phase = self.phase.lock().expect("http phase");
-        phase.session_id = Some(session_id.to_owned());
-        phase.claimed = true;
+        let binding = self.claim_binding(&mut phase, session_header)?;
+        phase.version = version;
         phase.open = true;
         drop(phase);
-        self.start_get(Some(session_id.to_owned()), &mut readers);
-        Ok(true)
+        self.start_get(binding, &mut readers);
+        Ok(())
     }
 
-    fn start_get(&self, session_id: Option<String>, readers: &mut ReaderTasks) {
+    fn claim_binding(
+        &self,
+        phase: &mut Phase,
+        header: Option<&str>,
+    ) -> Result<Option<Arc<SessionBinding>>, McpError> {
+        let id = bounded_session_id(header)?;
+        if let Some(binding) = &phase.binding {
+            return if binding.id.as_deref() == id {
+                Ok(Some(binding.clone()))
+            } else {
+                Err(McpError::Malformed(
+                    "initialize changed its response binding".into(),
+                ))
+            };
+        }
+        if let Some(id) = id {
+            if !self.claims.claim(self.url.as_str(), id, self.local) {
+                return Err(McpError::SessionCollision);
+            }
+        }
+        let binding = Arc::new(SessionBinding {
+            id: id.map(str::to_owned),
+        });
+        phase.binding = Some(binding.clone());
+        Ok(Some(binding))
+    }
+
+    fn peer_reply_context(
+        &self,
+        purpose: BodyPurpose,
+        header: Option<&str>,
+        origin: &ReplyContext,
+    ) -> Result<ReplyContext, McpError> {
+        let _readers = self.readers.lock().expect("http readers");
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(McpError::Closed);
+        }
+        let mut phase = self.phase.lock().expect("http phase");
+        if let Recovery::Failed(error) = &phase.recovery {
+            return Err(error.clone());
+        }
+        if matches!(
+            purpose,
+            BodyPurpose::Initialize(_) | BodyPurpose::RecoveryInitialize
+        ) {
+            Ok(ReplyContext {
+                binding: self.claim_binding(&mut phase, header)?,
+                version: phase.version.clone(),
+            })
+        } else {
+            check_reply_binding(&phase, origin)?;
+            Ok(origin.clone())
+        }
+    }
+
+    fn start_get(&self, binding: Option<Arc<SessionBinding>>, readers: &mut ReaderTasks) {
         if self.phase.lock().expect("http phase").legacy_post.is_some() {
             return;
         }
-        let Some(session_id) = session_id else {
+        let Some(binding) = binding else {
             return;
         };
+        let Some(session_id) = binding.id.clone() else {
+            return;
+        };
+        let origin = ReplyContext {
+            binding: Some(binding),
+            version: self.phase.lock().expect("http phase").version.clone(),
+        };
+        let weak = self.weak.clone();
         let exchange = self.exchange.clone();
         let url = self.url.as_str().to_owned();
         let version = self.phase.lock().expect("http phase").version.clone();
@@ -908,125 +907,258 @@ impl HttpSession {
             if response.status == 405 || response.status != 200 {
                 return;
             }
-            read_legacy_stream(response, inbound, None).await;
+            read_legacy_stream(response, inbound, None, Some((weak, origin))).await;
         });
         readers.stop_get();
         readers.get.push(task);
     }
 
-    async fn recover(&self, id: Option<u64>) -> SendOutcome {
-        let (old, claimed) = {
-            let mut phase = self.phase.lock().expect("http phase");
-            if phase.recovery_used {
-                return SendOutcome::End(McpError::SessionExpired);
-            }
-            phase.recovery_used = true;
-            let old = phase.session_id.take();
-            let claimed = phase.claimed;
-            phase.claimed = false;
-            phase.open = false;
-            phase.version = None;
-            (old, claimed)
-        };
-        if claimed {
-            if let Some(old) = &old {
-                self.claims.release(self.url.as_str(), old, self.local);
-            }
-        }
-        self.readers.lock().expect("http readers").stop_get();
+    pub(crate) fn set_writer(&self, writer: OutgoingQueue, clock: Arc<dyn Clock>) {
+        *self.writer.lock().expect("http writer") = Some(HttpWriter {
+            outgoing: writer,
+            clock,
+        });
+    }
+
+    fn recover(&self, id: Option<u64>, permit: Option<OwnedSemaphorePermit>) -> SendOutcome {
+        let mut readers = self.readers.lock().expect("http readers");
         if self.closing.load(Ordering::SeqCst) {
             return SendOutcome::End(McpError::Closed);
         }
-        let bearer = match self.authorization.bearer(self.server).await {
-            Ok(bearer) => bearer,
-            Err(error) => return SendOutcome::End(error),
-        };
-        let body = serde_json::to_vec(&json!({
-            "jsonrpc": "2.0",
-            "id": 0,
-            "method": "initialize",
-            "params": wire::initialize_params(),
-        }))
-        .unwrap_or_default();
-        let response = match self.exchange(&body, bearer.as_ref()).await {
-            Ok(response) => response,
-            Err(error) => return SendOutcome::End(error),
-        };
-        if !(200..300).contains(&response.status) || response.status == 202 {
+        let mut phase = self.phase.lock().expect("http phase");
+        if phase.recovery != Recovery::Available {
             return SendOutcome::End(McpError::SessionExpired);
         }
-        let header = response.header("mcp-session-id").map(str::to_owned);
-        if sse::is_event_stream(response.header("content-type")) {
-            if let Err(error) = self.note_sse_initialize(response, header.as_deref()).await {
-                return SendOutcome::End(error);
-            }
-        } else {
-            let bytes = match response.bytes(MAX_FRAME_BYTES).await {
-                Ok(bytes) => bytes,
-                Err(_) => return SendOutcome::End(McpError::SessionExpired),
-            };
-            match self.note_response(&bytes, Some("initialize"), Some(0), header.as_deref()) {
-                Ok(true) => {}
-                Ok(false) => return SendOutcome::End(McpError::SessionExpired),
-                Err(error) => return SendOutcome::End(error),
+        phase.recovery = Recovery::Initializing;
+        if let Some(old) = phase.binding.take() {
+            if let Some(id) = &old.id {
+                self.claims.release(self.url.as_str(), id, self.local);
             }
         }
-        if self.closing.load(Ordering::SeqCst) {
-            if let Some(new_id) = &header {
-                self.delete_id(new_id);
-            }
-            return SendOutcome::End(McpError::Closed);
-        }
-        let note = serde_json::to_vec(&json!({
-            "jsonrpc": "2.0",
-            "method": "notifications/initialized"
-        }))
-        .unwrap_or_default();
-        let notified = match self.authorization.bearer(self.server).await {
-            Ok(bearer) => bearer,
-            Err(error) => return SendOutcome::End(error),
+        phase.open = false;
+        phase.version = None;
+        drop(phase);
+        readers.stop_get();
+        let Some(HttpWriter {
+            outgoing: writer,
+            clock,
+        }) = self.writer.lock().expect("http writer").clone()
+        else {
+            return SendOutcome::End(McpError::SessionExpired);
         };
-        let _ = self.exchange(&note, notified.as_ref()).await;
+        let Some(permit) = permit.or_else(|| self.post_capacity.clone().try_acquire_owned().ok())
+        else {
+            return SendOutcome::End(McpError::Unconfirmed);
+        };
+        let exchange = self.exchange.clone();
+        let authorization = self.authorization.clone();
+        let server = self.server;
+        let weak = self.weak.clone();
+        let inbound = self.inbound.clone();
+        let deadline = clock.now() + super::servers::INITIALIZE_TIMEOUT;
+        let (registered, registration) = oneshot::channel();
+        let task = self.runtime.spawn(async move {
+            if registration.await.is_err() {
+                return;
+            }
+            let startup = async {
+                let body = serde_json::to_vec(&json!({
+                    "jsonrpc": "2.0", "id": 0, "method": "initialize",
+                    "params": wire::initialize_params(),
+                }))
+                .unwrap_or_default();
+                let attempt = match authorized_modern_post(
+                    &weak,
+                    exchange,
+                    authorization,
+                    server,
+                    &body,
+                    PostPurpose::RecoveryInitialize,
+                )
+                .await?
+                {
+                    Modern::Response(attempt) => attempt,
+                    Modern::Accepted => return Err(McpError::SessionExpired),
+                    Modern::Legacy => {
+                        return Err(McpError::Malformed(
+                            "recovery initialize selected legacy transport".into(),
+                        ))
+                    }
+                };
+                if let Some(error) = attempt.failure {
+                    return Err(error);
+                }
+                let response = attempt.response;
+                let origin = attempt.origin;
+                let content_type = response.header("content-type");
+                let event_stream = sse::is_event_stream(content_type);
+                if !event_stream && content_type.is_some() && !sse::is_json(content_type) {
+                    return Err(McpError::SessionExpired);
+                }
+                if !consume_body(
+                    response,
+                    event_stream,
+                    BodyPurpose::RecoveryInitialize,
+                    &weak,
+                    &inbound,
+                    &origin,
+                )
+                .await
+                .map_err(|error| match error {
+                    McpError::Unconfirmed => McpError::SessionExpired,
+                    other => other,
+                })? {
+                    return Err(McpError::SessionExpired);
+                }
+                {
+                    let session = weak.upgrade().ok_or(McpError::Closed)?;
+                    let _readers = session.readers.lock().expect("http readers");
+                    if session.closing.load(Ordering::SeqCst) {
+                        return Err(McpError::Closed);
+                    }
+                    session.phase.lock().expect("http phase").recovery = Recovery::ReadyForWriter;
+                }
+                let (completed, completion) = oneshot::channel();
+                writer
+                    .send(Outgoing::RecoveryReady {
+                        deadline,
+                        completed,
+                    })
+                    .await
+                    .map_err(|_| McpError::Unconfirmed)?;
+                completion.await.map_err(|_| McpError::Unconfirmed)?
+            };
+            let result = within(&*clock, deadline, startup)
+                .await
+                .unwrap_or(Err(McpError::Timeout));
+            if let Err(error) = result {
+                let result = weak
+                    .upgrade()
+                    .map_or(Err(error.clone()), |session| session.fail_recovery(error));
+                if let Err(error) = result {
+                    let _ = inbound.send(Err(error)).await;
+                }
+            }
+        });
+        readers.post.push(PostReader {
+            request_id: None,
+            task,
+            _permit: permit,
+        });
+        let _ = registered.send(());
         SendOutcome::FailCall {
             id,
             error: McpError::SessionExpired,
         }
     }
 
-    fn delete_id(&self, session_id: &str) {
-        let exchange = self.exchange.clone();
-        let url = self.url.as_str().to_owned();
-        let session_id = session_id.to_owned();
-        let authorization = self.authorization.clone();
-        let server = self.server;
-        tokio::spawn(async move {
-            let mut headers = vec![("Mcp-Session-Id".into(), session_id)];
-            if let Ok(Some(bearer)) = authorization.bearer(server).await {
-                headers.push(("Authorization".into(), format!("Bearer {}", bearer.token())));
+    pub(crate) async fn finish_recovery(
+        &self,
+        deadline: ClockInstant,
+        completed: oneshot::Sender<Result<(), McpError>>,
+    ) -> SendOutcome {
+        let clock = self
+            .writer
+            .lock()
+            .expect("http writer")
+            .as_ref()
+            .expect("installed HTTP writer")
+            .clock
+            .clone();
+        if let Err(error) = self.check_handoff(&*clock, deadline, &completed) {
+            return self.complete_recovery(&*clock, deadline, completed, Err(error));
+        }
+        let body =
+            serde_json::to_vec(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
+                .unwrap_or_default();
+        let sending = async {
+            match self.post_modern(&body, PostPurpose::Ordinary).await {
+                Ok(Modern::Accepted) => SendOutcome::Done,
+                Ok(Modern::Response(attempt)) => {
+                    SendOutcome::End(attempt.failure.unwrap_or_else(|| {
+                        McpError::Malformed("recovery initialized was not accepted".into())
+                    }))
+                }
+                Ok(Modern::Legacy) => SendOutcome::End(McpError::Malformed(
+                    "recovery initialized selected legacy transport".into(),
+                )),
+                Err(error) => SendOutcome::End(error),
             }
-            let _ = exchange
-                .exchange(HttpRequest {
-                    method: HttpMethod::Delete,
-                    url,
-                    headers,
-                    body: Vec::new(),
-                })
-                .await;
-        });
+        };
+        let outcome = within(&*clock, deadline, sending)
+            .await
+            .unwrap_or(SendOutcome::End(McpError::Timeout));
+        let result = match outcome {
+            SendOutcome::Done => Ok(()),
+            SendOutcome::End(error) | SendOutcome::FailCall { error, .. } => Err(error),
+        };
+        self.complete_recovery(&*clock, deadline, completed, result)
     }
 
-    fn has_session_id(&self) -> bool {
-        self.phase.lock().expect("http phase").session_id.is_some()
+    /// Startup failure cannot overwrite the writer's committed completion.
+    fn fail_recovery(&self, error: McpError) -> Result<(), McpError> {
+        let _readers = self.readers.lock().expect("http readers");
+        recovery_failure(&mut self.phase.lock().expect("http phase"), error)
     }
 
-    fn is_open(&self) -> bool {
-        self.phase.lock().expect("http phase").open
+    fn check_handoff(
+        &self,
+        clock: &dyn Clock,
+        deadline: ClockInstant,
+        completed: &oneshot::Sender<Result<(), McpError>>,
+    ) -> Result<(), McpError> {
+        let _readers = self.readers.lock().expect("http readers");
+        let phase = self.phase.lock().expect("http phase");
+        validate_handoff(
+            &phase,
+            self.closing.load(Ordering::SeqCst),
+            clock.now(),
+            deadline,
+        )?;
+        if completed.is_closed() {
+            Err(McpError::Unconfirmed)
+        } else {
+            Ok(())
+        }
     }
 
-    async fn push_inbound(&self, bytes: Vec<u8>) -> SendOutcome {
-        match self.inbound.send(Ok(bytes)).await {
+    /// Delivery and admission have one terminal owner and no asynchronous gap.
+    fn complete_recovery(
+        &self,
+        clock: &dyn Clock,
+        deadline: ClockInstant,
+        completed: oneshot::Sender<Result<(), McpError>>,
+        result: Result<(), McpError>,
+    ) -> SendOutcome {
+        let _readers = self.readers.lock().expect("http readers");
+        let mut phase = self.phase.lock().expect("http phase");
+        let result = validate_handoff(
+            &phase,
+            self.closing.load(Ordering::SeqCst),
+            clock.now(),
+            deadline,
+        )
+        .and(result);
+        let error = match result {
+            Ok(()) => {
+                if completed.send(Ok(())).is_ok() {
+                    phase.recovery = Recovery::Completed;
+                    return SendOutcome::Done;
+                }
+                if clock.now() >= deadline {
+                    McpError::Timeout
+                } else {
+                    McpError::Unconfirmed
+                }
+            }
+            Err(error) => {
+                let _ = completed.send(Err(error.clone()));
+                error
+            }
+        };
+        match recovery_failure(&mut phase, error) {
             Ok(()) => SendOutcome::Done,
-            Err(_) => SendOutcome::End(McpError::ServerGone),
+            Err(error) => SendOutcome::End(error),
         }
     }
 }
@@ -1037,60 +1169,169 @@ impl Drop for HttpSession {
     }
 }
 
-/// Read a POST's event stream off the writer task. Release its body before
-/// publishing any terminal uncertainty or parse failure to the connection.
-async fn forward_open_sse(
+/// The task owns the body; weak upgrades end before asynchronous delivery.
+async fn consume_body(
     response: HttpResponse,
-    inbound: mpsc::Sender<Result<Vec<u8>, McpError>>,
-    request_id: Option<u64>,
-) {
-    if let Err(error) = consume_open_sse(response, &inbound, request_id).await {
-        let _ = inbound.send(Err(error)).await;
+    event_stream: bool,
+    purpose: BodyPurpose,
+    weak: &Weak<HttpSession>,
+    inbound: &mpsc::Sender<Result<HttpMessage, McpError>>,
+    origin: &ReplyContext,
+) -> Result<bool, McpError> {
+    let header = if matches!(
+        purpose,
+        BodyPurpose::Initialize(_) | BodyPurpose::RecoveryInitialize
+    ) {
+        bounded_session_id(response.header("mcp-session-id"))?.map(str::to_owned)
+    } else {
+        None
+    };
+    if !event_stream {
+        let bytes = response
+            .bytes(MAX_FRAME_BYTES)
+            .await
+            .map_err(|error| match error {
+                super::http_exchange::BodyRead::TooLarge => {
+                    McpError::TooLarge("an HTTP response body")
+                }
+                super::http_exchange::BodyRead::Closed => McpError::Unconfirmed,
+            })?;
+        return match receive_message(bytes, purpose, header.as_deref(), weak, inbound, origin)
+            .await?
+        {
+            MessageOutcome::Terminal { initialized } => Ok(initialized),
+            MessageOutcome::Continue => {
+                completed_body(purpose.request_id(), false)?;
+                Ok(false)
+            }
+        };
     }
-}
-
-/// Matching replies settle normally. EOF without a request's reply cannot
-/// establish its outcome; an uncorrelated stream has no pending reply to settle.
-async fn consume_open_sse(
-    response: HttpResponse,
-    inbound: &mpsc::Sender<Result<Vec<u8>, McpError>>,
-    request_id: Option<u64>,
-) -> Result<(), McpError> {
     let mut stream = match response.body {
         super::http_exchange::HttpBody::Stream(stream) => stream,
-        super::http_exchange::HttpBody::Buffered(_) => return Ok(()),
+        super::http_exchange::HttpBody::Buffered(mut bytes) => {
+            bytes.extend_from_slice(b"\n\n");
+            Box::new(BufferedChunks(Some(bytes))) as Box<dyn super::http_exchange::HttpChunks>
+        }
     };
     let mut parser = SseParser::bounded();
     loop {
-        let chunk = match stream.next().await {
-            Ok(Some(chunk)) => chunk,
-            Ok(None) if request_id.is_some() => return Err(McpError::Unconfirmed),
-            Ok(None) => return Ok(()),
-            Err(_) => return Err(McpError::Unconfirmed),
+        let Some(chunk) = stream.next().await.map_err(|_| McpError::Unconfirmed)? else {
+            completed_body(purpose.request_id(), false)?;
+            return Ok(false);
         };
         let mut chunk = chunk.as_slice();
         loop {
-            let event = match parser.next_event(&mut chunk) {
-                Ok(Some(event)) => event,
-                Ok(None) => break,
-                Err(SseError::TooLarge) => return Err(McpError::TooLarge("an SSE event")),
-                Err(SseError::Utf8) => {
-                    return Err(McpError::Malformed("an SSE event is not UTF-8".into()));
-                }
+            let event = parser.next_event(&mut chunk).map_err(|error| match error {
+                SseError::TooLarge => McpError::TooLarge("an SSE event"),
+                SseError::Utf8 => McpError::Malformed("an SSE event is not UTF-8".into()),
+            })?;
+            let Some(event) = event else {
+                break;
             };
             if event.data.is_empty() {
                 continue;
             }
-            let matched = request_id.is_some_and(|id| {
-                serde_json::from_str::<Value>(&event.data)
-                    .ok()
-                    .is_some_and(|message| is_response_to(&message, id))
-            });
-            if inbound.send(Ok(event.data.into_bytes())).await.is_err() || matched {
-                return Ok(());
+            if let MessageOutcome::Terminal { initialized } = receive_message(
+                event.data.into_bytes(),
+                purpose,
+                header.as_deref(),
+                weak,
+                inbound,
+                origin,
+            )
+            .await?
+            {
+                return Ok(initialized);
             }
         }
     }
+}
+
+struct BufferedChunks(Option<Vec<u8>>);
+#[async_trait::async_trait]
+impl super::http_exchange::HttpChunks for BufferedChunks {
+    async fn next(&mut self) -> Result<Option<Vec<u8>>, super::http_exchange::HttpFailure> {
+        Ok(self.0.take())
+    }
+}
+
+/// Both codecs settle unanswered correlated bodies at completion; uncorrelated
+/// bodies have no request to fail (ADR 392 P3 and J2).
+fn completed_body(id: Option<u64>, matched: bool) -> Result<(), McpError> {
+    if id.is_some() && !matched {
+        Err(McpError::Unconfirmed)
+    } else {
+        Ok(())
+    }
+}
+
+/// Framing hands every message to this policy, regardless of codec or storage.
+#[derive(Clone, Copy)]
+enum BodyPurpose {
+    Protocol(Option<u64>),
+    Initialize(Option<u64>),
+    RecoveryInitialize,
+}
+impl BodyPurpose {
+    fn public(id: Option<u64>, initialize: bool) -> Self {
+        if initialize {
+            Self::Initialize(id)
+        } else {
+            Self::Protocol(id)
+        }
+    }
+    fn request_id(self) -> Option<u64> {
+        match self {
+            Self::Protocol(id) | Self::Initialize(id) => id,
+            Self::RecoveryInitialize => Some(0),
+        }
+    }
+}
+enum MessageOutcome {
+    Continue,
+    Terminal { initialized: bool },
+}
+async fn receive_message(
+    bytes: Vec<u8>,
+    purpose: BodyPurpose,
+    header: Option<&str>,
+    weak: &Weak<HttpSession>,
+    inbound: &mpsc::Sender<Result<HttpMessage, McpError>>,
+    origin: &ReplyContext,
+) -> Result<MessageOutcome, McpError> {
+    let message: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    let matched = purpose
+        .request_id()
+        .is_some_and(|id| is_response_to(&message, id));
+    let initialized =
+        matched && !matches!(purpose, BodyPurpose::Protocol(_)) && message.get("result").is_some();
+    if initialized {
+        weak.upgrade()
+            .ok_or(McpError::Closed)?
+            .publish_initialize(&message["result"], header)?;
+    }
+    if !matched || !matches!(purpose, BodyPurpose::RecoveryInitialize) {
+        let reply = if message.get("method").and_then(Value::as_str).is_some()
+            && message.get("id").is_some_and(|id| !id.is_null())
+        {
+            Some(
+                weak.upgrade()
+                    .ok_or(McpError::Closed)?
+                    .peer_reply_context(purpose, header, origin)?,
+            )
+        } else {
+            None
+        };
+        inbound
+            .send(Ok(HttpMessage { bytes, reply }))
+            .await
+            .map_err(|_| McpError::ServerGone)?;
+    }
+    Ok(if matched {
+        MessageOutcome::Terminal { initialized }
+    } else {
+        MessageOutcome::Continue
+    })
 }
 
 /// Correlation and terminal shape shared by POST retirement and initialization.
@@ -1100,22 +1341,94 @@ fn is_response_to(message: &Value, id: u64) -> bool {
         && (message.get("result").is_some() ^ message.get("error").is_some())
 }
 
+/// The response retains the context of its own emitted request headers.
+struct PostResponse {
+    response: HttpResponse,
+    context: ResponseContext,
+    origin: ReplyContext,
+    failure: Option<McpError>,
+}
+
 enum Modern {
-    Response(HttpResponse),
+    Response(PostResponse),
     Accepted,
     Legacy,
 }
 
-/// HTTP 5xx. `initialize` still failed before a session existed. A later
-/// request was accepted by the server, so its effect is unconfirmed.
-fn server_error(initialize: bool, id: Option<u64>) -> SendOutcome {
-    if initialize {
-        SendOutcome::End(McpError::Unreachable)
-    } else {
-        SendOutcome::FailCall {
-            id,
-            error: McpError::Unconfirmed,
+#[derive(Clone, Copy)]
+enum ResponseContext {
+    Initialize { legacy_allowed: bool },
+    SessionBound,
+    PeerReplyBound,
+    PeerReplyStateless,
+    Stateless,
+}
+
+/// Typed HTTP failures are independent of ordinary or recovery dispatch.
+fn response_failure(status: u16, context: ResponseContext) -> Option<McpError> {
+    match status {
+        401 => Some(McpError::Unauthorized),
+        404 if matches!(
+            context,
+            ResponseContext::SessionBound | ResponseContext::PeerReplyBound
+        ) =>
+        {
+            Some(McpError::SessionExpired)
         }
+        500.. => Some(if matches!(context, ResponseContext::Initialize { .. }) {
+            McpError::Unreachable
+        } else {
+            McpError::Unconfirmed
+        }),
+        200..=299 => None,
+        _ => Some(McpError::Malformed(format!("HTTP {status}"))),
+    }
+}
+
+/// Legacy dispatch uses the same typed 5xx classifier.
+fn server_error(initialize: bool, id: Option<u64>) -> SendOutcome {
+    let error = response_failure(
+        500,
+        if initialize {
+            ResponseContext::Initialize {
+                legacy_allowed: false,
+            }
+        } else {
+            ResponseContext::Stateless
+        },
+    )
+    .expect("5xx failure");
+    if initialize {
+        SendOutcome::End(error)
+    } else {
+        SendOutcome::FailCall { id, error }
+    }
+}
+
+/// Both terminal contenders use this transition while holding the registry fence.
+fn recovery_failure(phase: &mut Phase, error: McpError) -> Result<(), McpError> {
+    match &phase.recovery {
+        Recovery::Completed => Ok(()),
+        Recovery::Failed(first) => Err(first.clone()),
+        _ => {
+            phase.recovery = Recovery::Failed(error.clone());
+            Err(error)
+        }
+    }
+}
+
+fn validate_handoff(
+    phase: &Phase,
+    closing: bool,
+    now: ClockInstant,
+    deadline: ClockInstant,
+) -> Result<(), McpError> {
+    match &phase.recovery {
+        Recovery::Failed(first) => Err(first.clone()),
+        _ if closing => Err(McpError::Closed),
+        _ if now >= deadline => Err(McpError::Timeout),
+        Recovery::ReadyForWriter => Ok(()),
+        _ => Err(McpError::Unconfirmed),
     }
 }
 
@@ -1144,8 +1457,9 @@ fn body_is_initialize(body: &[u8]) -> bool {
 
 async fn read_legacy_stream(
     response: HttpResponse,
-    inbound: mpsc::Sender<Result<Vec<u8>, McpError>>,
+    inbound: mpsc::Sender<Result<HttpMessage, McpError>>,
     mut endpoint: Option<tokio::sync::oneshot::Sender<String>>,
+    modern: Option<(Weak<HttpSession>, ReplyContext)>,
 ) {
     let mut stream = match response.body {
         super::http_exchange::HttpBody::Stream(stream) => stream,
@@ -1158,7 +1472,16 @@ async fn read_legacy_stream(
                             let _ = tx.send(event.data);
                         }
                     } else if !event.data.is_empty() {
-                        let _ = inbound.send(Ok(event.data.into_bytes())).await;
+                        if let Err(error) = forward_stream_message(
+                            event.data.into_bytes(),
+                            &inbound,
+                            modern.as_ref(),
+                        )
+                        .await
+                        {
+                            let _ = inbound.send(Err(error)).await;
+                            return;
+                        }
                     }
                 }
             }
@@ -1197,9 +1520,131 @@ async fn read_legacy_stream(
             if event.data.is_empty() {
                 continue;
             }
-            if inbound.send(Ok(event.data.into_bytes())).await.is_err() {
+            if let Err(error) =
+                forward_stream_message(event.data.into_bytes(), &inbound, modern.as_ref()).await
+            {
+                let _ = inbound.send(Err(error)).await;
                 return;
             }
         }
     }
 }
+
+fn check_reply_binding(phase: &Phase, reply: &ReplyContext) -> Result<(), McpError> {
+    if let Recovery::Failed(error) = &phase.recovery {
+        return Err(error.clone());
+    }
+    match (&phase.binding, &reply.binding) {
+        (None, None) => Ok(()),
+        (Some(current), Some(captured)) if Arc::ptr_eq(current, captured) => Ok(()),
+        _ => Err(McpError::SessionExpired),
+    }
+}
+
+#[derive(Clone)]
+enum PostPurpose {
+    Ordinary,
+    PeerReply(ReplyContext),
+    RecoveryInitialize,
+}
+
+async fn authorized_modern_post(
+    weak: &Weak<HttpSession>,
+    exchange: Arc<dyn HttpExchange>,
+    authorization: Arc<dyn RemoteAuthorization>,
+    server: Uuid,
+    body: &[u8],
+    purpose: PostPurpose,
+) -> Result<Modern, McpError> {
+    let mut bearer = authorization.bearer(server).await?;
+    for attempt_index in 0..2 {
+        let (request, context, origin) = {
+            let session = weak.upgrade().ok_or(McpError::Closed)?;
+            session.modern_request(body, bearer.as_ref(), &purpose)?
+        };
+        let response = exchange
+            .exchange(request)
+            .await
+            .map_err(|_| lost_exchange(body))?;
+        if response.status == 401 && attempt_index == 0 {
+            let challenge = response
+                .header("www-authenticate")
+                .unwrap_or("Bearer")
+                .to_owned();
+            drop(response);
+            bearer = authorization.rejected(server, &challenge).await?;
+            if bearer.is_some() {
+                continue;
+            }
+            return Err(McpError::Unauthorized);
+        }
+        if response.status == 403 {
+            let challenge = response
+                .header("www-authenticate")
+                .unwrap_or("Bearer")
+                .to_owned();
+            drop(response);
+            authorization.insufficient_scope(server, &challenge).await;
+            return Err(McpError::InsufficientScope);
+        }
+        if matches!(response.status, 400 | 404 | 405)
+            && matches!(
+                context,
+                ResponseContext::Initialize {
+                    legacy_allowed: true
+                }
+            )
+        {
+            return Ok(Modern::Legacy);
+        }
+        if response.status == 202 {
+            return Ok(Modern::Accepted);
+        }
+        let failure = response_failure(response.status, context);
+        return Ok(Modern::Response(PostResponse {
+            response,
+            context,
+            origin,
+            failure,
+        }));
+    }
+    unreachable!("the second authorization attempt returns its classified response")
+}
+
+/// The single initialize identity bound, applied before copying authoritative headers.
+fn bounded_session_id(header: Option<&str>) -> Result<Option<&str>, McpError> {
+    let id = header.filter(|id| !id.is_empty());
+    if id.is_some_and(|id| id.len() > 1024) {
+        Err(McpError::TooLarge("Mcp-Session-Id"))
+    } else {
+        Ok(id)
+    }
+}
+
+async fn forward_stream_message(
+    bytes: Vec<u8>,
+    inbound: &mpsc::Sender<Result<HttpMessage, McpError>>,
+    modern: Option<&(Weak<HttpSession>, ReplyContext)>,
+) -> Result<(), McpError> {
+    if let Some((weak, origin)) = modern {
+        receive_message(
+            bytes,
+            BodyPurpose::Protocol(None),
+            None,
+            weak,
+            inbound,
+            origin,
+        )
+        .await?;
+        Ok(())
+    } else {
+        inbound
+            .send(Ok(bytes.into()))
+            .await
+            .map_err(|_| McpError::ServerGone)
+    }
+}
+
+#[cfg(all(test, unix))]
+#[path = "../../../tests/infrastructure/mcp/http_shutdown.rs"]
+mod shutdown_tests;

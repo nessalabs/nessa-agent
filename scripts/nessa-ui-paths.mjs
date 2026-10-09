@@ -22,6 +22,12 @@
  *
  * - `@nessa-ui/react/app-shell`, the one composite: a whole specifier, matched
  *   exactly by all three tools, so none of them reads `app-shell/…` into it.
+ * - `@nessa-ui/react/app.css`, `styles.css` and `theme.css`: the stylesheets
+ *   the package exports, also whole specifiers, sent to those files in
+ *   `src/`. The package's `exports` point the same names at `dist/`, which
+ *   only contains utilities the library itself uses; the app compiles the
+ *   source. A prefix would send `@nessa-ui/react/app.css` to
+ *   `src/components/app.css`, which is not a file.
  * - `@nessa-ui/react/lib/<name>`: the registry libraries, such as the shared
  *   size observer, which the package's entry does not export.
  * - `@nessa-ui/react/<component>`: everything else under the namespace.
@@ -46,6 +52,9 @@ export const nessaUiPaths = [
     directory: "composites/app-shell",
     whole: true,
   },
+  { specifier: "@nessa-ui/react/app.css", directory: "app.css", whole: true },
+  { specifier: "@nessa-ui/react/styles.css", directory: "styles.css", whole: true },
+  { specifier: "@nessa-ui/react/theme.css", directory: "theme.css", whole: true },
   { specifier: "@nessa-ui/react/lib/", directory: "lib/" },
   { specifier: "@nessa-ui/react/", directory: "components/" },
   { specifier: "@/components/", directory: "components/" },

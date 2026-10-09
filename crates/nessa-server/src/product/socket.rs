@@ -35,10 +35,10 @@ use nessa_auth::domain::{Action, AudienceId, CredentialId};
 #[cfg(test)]
 use nessa_protocol::product::generated::wire_shape_product_session_ready;
 use nessa_protocol::product::generated::{
-    CredentialIssueParams, CredentialListParams, CredentialListResult, CredentialRevokeParams,
-    CredentialRevokeResult, ExistingCredentialResult, IssuedCredentialResult, ProductSessionReady,
-    SessionAuthenticateParams, SessionChallenge, SessionTermination,
-    MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
+    action_for_method, CredentialIssueParams, CredentialListParams, CredentialListResult,
+    CredentialRevokeParams, CredentialRevokeResult, ExistingCredentialResult,
+    IssuedCredentialResult, ProductSessionReady, SessionAuthenticateParams, SessionChallenge,
+    SessionTermination, MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
     MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS, PRODUCT_VERSION,
 };
 use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
@@ -1608,63 +1608,6 @@ pub(super) fn success<T: serde::Serialize>(request_id: &str, payload: &T) -> Out
         .unwrap_or_else(|_| failure(request_id, "internal_error"))
 }
 
-fn action_for_method(method: &str) -> Option<&'static str> {
-    match method {
-        "server.health" | "agents.list" | "agents.installOptions" => Some("server.read"),
-        "conversation.recordsHead" | "conversation.recordsPage" | "conversation.catalogueHead" | "conversation.catalogueManifest" | "conversation.catalogueResolve" => Some("conversation.read"),
-        "agents.install"
-        | "conversation.create"
-        | "conversation.setApprovalMode"
-        | "conversation.read"
-        | "conversation.list"
-        | "conversation.observe"
-        | "conversation.send"
-        | "conversation.steer"
-        | "conversation.stop"
-        | "conversation.receipt"
-        | "conversation.remove"
-        | "conversation.reorder"
-        | "conversation.answer"
-        // Answering the agent's own question is input to the conversation, so
-        // it is writing to it like any other reply.
-        | "conversation.answerQuestion"
-        | "conversation.cancel"
-        | "conversation.close"
-        | "conversation.archive"
-        | "conversation.unarchive"
-        | "conversation.delete"
-        // Uploading into a conversation is writing to it.
-        | "attachment.begin"
-        // An app acts in its conversation, on its caller's behalf.
-        | "mcp.callTool"
-        | "mcp.readResource"
-        | "mcp.sendMessage"
-        | "mcp.updateModelContext"
-        | "mcp.releaseApp" => Some("conversation.write"),
-        "credential.issue" | "credential.list" | "credential.revoke" => Some("credential.manage"),
-        // A configured MCP server is started with the gateway's authority
-        // and given its variables, credentials among them (#391).
-        // Inspecting runs a stored server's executable with those variables.
-        "mcpServers.list"
-        | "mcpServers.save"
-        | "mcpServers.remove"
-        | "mcpServers.inspect"
-        | "mcpServers.authorize"
-        | "mcpServers.revoke" => {
-            Some("credential.manage")
-        }
-        // Enrolling a device creates a credential for it; Auth asks again for
-        // the exact consent inside the runtime.
-        "pairing.create"
-        | "pairing.pending"
-        | "pairing.status"
-        | "pairing.approve"
-        | "pairing.deny"
-        | "pairing.cancel" => Some("credential.manage"),
-        _ => None,
-    }
-}
-
 // Which request to blame for a frame that did not decode. Answer
 // `invalid_request` when the envelope parser reads one JSON object, no decoded
 // envelope name appears twice, `type` is `req`, and `id` is one Unicode string
@@ -2080,8 +2023,9 @@ mod tests {
         BrowserSessionOrigin, BrowserSessionState,
     };
     use crate::conversation::application::{
-        ConversationRepository, ReceiverAuthority, ReceiverBinding, RecordReadError,
-        RecordReadFuture, RecordReadOperation, RecordReadResponse, RecordReadSource,
+        CatalogueReadFuture, CatalogueReadOperation, CatalogueReadSource, ConversationRepository,
+        ReceiverAuthority, ReceiverBinding, RecordReadError, RecordReadFuture, RecordReadOperation,
+        RecordReadResponse, RecordReadSource,
     };
     use crate::conversation::domain::Conversation;
     use crate::conversation::infrastructure::{LocalConversationStore, NessaRecordReadSource};
@@ -2105,7 +2049,9 @@ mod tests {
     use nessa_protocol::conversation::domain::{
         ConversationApprovalMode, ConversationId, ConversationModelId,
     };
-    use nessa_protocol::conversation::read_scope::{ReadRefusal, ReceiverReadScope};
+    use nessa_protocol::conversation::read_scope::{
+        CatalogueReadScope, ReadRefusal, ReceiverReadScope,
+    };
     use nessa_protocol::product::generated::{
         ConversationRecordsPageResult, RecordPageRequest, RecordScope, RecordWireRecord,
         MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
@@ -2201,6 +2147,155 @@ mod tests {
                 action_for_method(method).is_some(),
                 "advertised method has no authorization/dispatch path: {method}"
             );
+        }
+    }
+
+    /// The manifest is the only declaration of each method's grant.
+    /// A method with no `grant` field fails here, and so does a generated
+    /// mapping that answers something else.
+    #[test]
+    fn action_for_method_is_the_manifest_grant() {
+        let manifest: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../protocol/product/manifest.json"
+        )))
+        .unwrap();
+        for (method, spec) in manifest["methods"].as_object().unwrap() {
+            assert!(
+                spec.get("grant").is_some(),
+                "{method} has no declared grant"
+            );
+            assert_eq!(
+                action_for_method(method),
+                spec["grant"].as_str(),
+                "{method}"
+            );
+        }
+    }
+
+    /// The five passive reads skip ordinary dispatch, so their Cedar check is
+    /// the action `Admit passiveRead` asks for. That action is each method's
+    /// manifest grant: a hardcoded grant would fail here once the manifest moved.
+    #[tokio::test]
+    async fn passive_read_gateway_asks_for_the_manifest_grant() {
+        let manifest: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../protocol/product/manifest.json"
+        )))
+        .unwrap();
+        let grants = manifest["methods"].as_object().unwrap();
+        let routed = PRODUCT_READY_METHODS
+            .iter()
+            .copied()
+            .filter(|method| matches!(ResponseClass::for_method(method), ResponseClass::Record))
+            .collect::<std::collections::BTreeSet<_>>();
+        let expected = [
+            "conversation.recordsHead",
+            "conversation.recordsPage",
+            "conversation.catalogueHead",
+            "conversation.catalogueManifest",
+            "conversation.catalogueResolve",
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(routed, expected);
+        let conversation_id = Uuid::new_v4().to_string();
+        for method in routed {
+            let policy = Arc::new(RecordingGrantPolicy {
+                asked: Mutex::new(Vec::new()),
+            });
+            let (mut state, _) = fixture(MembershipRole::Member);
+            state.policy = policy.clone();
+            let state = state
+                .with_passive_read(
+                    Arc::new(RecordBinding),
+                    Arc::new(MemoryRepository::default()),
+                )
+                .with_record_source(Arc::new(UnreachableRecordSource))
+                .with_catalogue_source(Arc::new(UnreachableCatalogueSource));
+            let session = authenticate(&state).await;
+            let mut frame = request("grant", method);
+            frame.params = passive_read_params(method, &conversation_id);
+            let (response, lease) = dispatch_passive_read(
+                &state,
+                &session,
+                frame,
+                RecordReadLease::new(()),
+                Instant::now() + PASSIVE_READ_TIMEOUT,
+            )
+            .await;
+            assert!(lease.is_none(), "{method}");
+            let WireResponse::Ordinary(message) = response else {
+                panic!("{method}: ordinary refusal expected");
+            };
+            let OutgoingMessage::Response(response) = *message else {
+                panic!("{method}: refusal expected");
+            };
+            assert_eq!(response.error.unwrap().code, "forbidden", "{method}");
+            let grant = grants[method]["grant"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{method} has no manifest grant"));
+            let asked = policy
+                .asked
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone();
+            assert_eq!(asked, vec![grant.to_owned()], "{method}");
+        }
+    }
+
+    fn passive_read_params(method: &str, conversation_id: &str) -> Value {
+        let scope = json!({
+            "receiver": "receiver",
+            "origin": "origin",
+            "stream": "stream",
+            "incarnation": "incarnation",
+            "schema": "schema",
+            "accessEpoch": "epoch-3",
+        });
+        let pass = json!({
+            "scope": scope,
+            "completed": "0",
+            "boundary": "5",
+            "generation": "1",
+        });
+        match method {
+            "conversation.recordsHead" => json!({
+                "conversationId": conversation_id,
+                "receiverId": "receiver",
+                "accessEpoch": "3",
+            }),
+            "conversation.recordsPage" => json!({
+                "conversationId": conversation_id,
+                "accessEpoch": "3",
+                "request": {
+                    "scope": scope,
+                    "after": "0",
+                    "target": "2",
+                    "maxRecords": 16,
+                    "maxPayloadBytes": MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+                    "maxRecordBytes": MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+                },
+            }),
+            "conversation.catalogueHead" => json!({
+                "receiverId": "receiver",
+                "accessEpoch": "3",
+            }),
+            "conversation.catalogueManifest" => json!({
+                "accessEpoch": "3",
+                "request": { "pass": pass, "maxEntries": 1 },
+            }),
+            "conversation.catalogueResolve" => json!({
+                "accessEpoch": "3",
+                "pass": pass,
+                "descriptor": {
+                    "key": { "creation": "1", "id": "entry" },
+                    "revision": "2",
+                    "deleted": false,
+                },
+                "maxPayloadBytes": 1,
+            }),
+            _ => panic!("{method} is not a passive read"),
         }
     }
 
@@ -3498,6 +3593,39 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    struct RecordingGrantPolicy {
+        asked: Mutex<Vec<String>>,
+    }
+
+    impl PolicyEvaluator for RecordingGrantPolicy {
+        fn evaluate(
+            &self,
+            _: &AuthContext,
+            action: &Action,
+            _: &Resource,
+            _: &AccessSnapshot,
+        ) -> Result<Decision, AccessError> {
+            self.asked
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push(action.as_str().to_owned());
+            Ok(Decision::Deny)
+        }
+    }
+
+    struct UnreachableCatalogueSource;
+
+    impl CatalogueReadSource for UnreachableCatalogueSource {
+        fn read(
+            &self,
+            _: CatalogueReadScope,
+            _: CatalogueReadOperation,
+            _: RecordReadLease,
+        ) -> CatalogueReadFuture<'_> {
+            panic!("grant check must refuse before catalogue source admission");
+        }
     }
 
     struct UnavailablePolicy;

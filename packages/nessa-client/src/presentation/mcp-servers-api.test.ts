@@ -1,10 +1,15 @@
+import { readFileSync } from "node:fs"
 import { describe, expect, it, vi } from "vitest"
 
 import { NessaMcpServersError } from "../application/mcp-servers-error.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import type { RequestDeadline } from "../application/session-port.js"
-import { McpServersErrorCode, mcpServerInspect } from "../generated/product.js"
-import { createMcpServersApi } from "./mcp-servers-api.js"
+import {
+  McpServersErrorCode,
+  mcpServerInspect,
+  productMethodGrants,
+} from "../generated/product.js"
+import { carriesMcpServersGrant, createMcpServersApi } from "./mcp-servers-api.js"
 
 const entry = {
   kind: "stdio",
@@ -354,5 +359,81 @@ describe("NessaMcpServersError narrows the refusal", () => {
     const error = await failure(api.save({} as never))
     expect(error.cause).toBe(lost)
     expect(error.refusal).toBeUndefined()
+  })
+})
+
+describe("carriesMcpServersGrant", () => {
+  const manifest = JSON.parse(
+    readFileSync(
+      new URL("../../../../protocol/product/manifest.json", import.meta.url),
+      "utf8",
+    ),
+  ) as {
+    methods: Record<string, { params: string | null; grant?: string | null }>
+  }
+  const connected = { gatewayId: "gateway", organizationId: "org" }
+  const grantOf = (
+    action: string,
+    resource: { organizationId: string; id: string } = {
+      organizationId: connected.organizationId,
+      id: connected.gatewayId,
+    },
+  ) => ({ action, resource })
+
+  function publishedGrant(): string {
+    const declared = Object.fromEntries(
+      Object.entries(manifest.methods).map(([method, spec]) => {
+        expect(Object.hasOwn(spec, "grant"), method).toBe(true)
+        return [method, spec.grant]
+      }),
+    )
+    expect(productMethodGrants).toEqual(declared)
+    const mcpServers = Object.entries(declared).filter(([method]) =>
+      method.startsWith("mcpServers."),
+    )
+    const required = mcpServers[0]?.[1]
+    if (typeof required !== "string")
+      throw new Error("mcpServers methods have no published grant")
+    expect(mcpServers.every(([, grant]) => grant === required)).toBe(true)
+    return required
+  }
+
+  it("follows the manifest, and the window does not keep its own copy", () => {
+    const required = publishedGrant()
+    const source = readFileSync(new URL("./mcp-servers-api.ts", import.meta.url), "utf8")
+    expect(source).not.toContain(`"${required}"`)
+    expect(carriesMcpServersGrant({ ...connected, grants: [grantOf(required)] })).toBe(
+      true,
+    )
+    expect(
+      carriesMcpServersGrant({
+        ...connected,
+        grants: [grantOf("conversation.read"), grantOf("conversation.write")],
+      }),
+    ).toBe(false)
+    expect(carriesMcpServersGrant({ ...connected, grants: [] })).toBe(false)
+  })
+
+  it("is false when the same action names another resource", () => {
+    const required = publishedGrant()
+    expect(
+      carriesMcpServersGrant({
+        ...connected,
+        grants: [
+          grantOf(required, {
+            organizationId: connected.organizationId,
+            id: "other-gateway",
+          }),
+        ],
+      }),
+    ).toBe(false)
+    expect(
+      carriesMcpServersGrant({
+        ...connected,
+        grants: [
+          grantOf(required, { organizationId: "other-org", id: connected.gatewayId }),
+        ],
+      }),
+    ).toBe(false)
   })
 })

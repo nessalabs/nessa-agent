@@ -8,6 +8,7 @@ import { sessionTime } from "../../model/time-labels"
 import { agentName, agentOf } from "../../model/workspace-index"
 import { AgentTile } from "../chrome/agent-tile"
 import { StatusGlyph } from "../chrome/status-glyph"
+import { ListRow } from "../../../ui/list-row"
 import { overviewKeys } from "./overview-keys"
 import { SessionPeek } from "./session-peek"
 import type { OnAnswer } from "./settling"
@@ -59,12 +60,14 @@ export const SessionRow = memo(function SessionRow({
 
   return (
     <li className="agents-row-item" data-reflow={`row:${sessionId}`}>
-      <button
-        type="button"
+      <ListRow
+        as="button"
         className="agents-row"
         data-kind={kind}
         data-overview-item={sessionId}
-        data-selected={selected || undefined}
+        selected={selected}
+        // Finished and not yet looked at, as unread reads everywhere in the window.
+        unread={kind === "finished"}
         aria-expanded={expanded}
         tabIndex={current ? 0 : -1}
         aria-label={`${summary.title}. ${agentName(agentOf(summary.model))}, ${kind}.`}
@@ -72,18 +75,17 @@ export const SessionRow = memo(function SessionRow({
         onKeyDown={onKeyDown}
         onClick={() => onChoose(sessionId)}
         onDoubleClick={() => onOpen(sessionId)}
-      >
-        <AgentTile model={summary.model} size={24} />
-        <span className="agents-row-text">
-          <span className="agents-row-title agents-truncate">{summary.title}</span>
-          <span className="agents-row-preview agents-truncate">{summary.preview}</span>
-        </span>
-        {kind === "working" ? (
-          <StatusGlyph status="running" />
-        ) : (
-          <span className="agents-row-time">{sessionTime(summary.updatedAt, now)}</span>
-        )}
-      </button>
+        leading={<AgentTile model={summary.model} size={24} />}
+        title={summary.title}
+        description={summary.preview}
+        trailing={
+          kind === "working" ? (
+            <StatusGlyph status="running" />
+          ) : (
+            <span className="agents-row-time">{sessionTime(summary.updatedAt, now)}</span>
+          )
+        }
+      />
       {expanded ? (
         <div className="agents-inline-peek">
           <SessionPeek

@@ -69,12 +69,13 @@ export const css = {
   homePage: ".desktop-home[data-page]", // class: a home whose long draft opened the page
   homeCustomize: ".workspace-pane-home .desktop-header-customize", // class: the scene's Customize control
   dragLayer: ".split-panes-layer", // class: what is carried is drawn in it, below the titlebar row
+  dragTitle: ".workspace-drag-title", // class: the compact carried title
   dragGhost: ".split-panes-ghost", // class: the opaque copy the pointer carries
   dragCarrier: ".split-panes-carrier", // class: holds the copy at the pointer
   dragPlaceholder: ".split-panes-placeholder", // class: where a drop would land
   dragShield: ".split-panes-shield", // class: holds the pointer while carrying
   lifted: "[data-drag-lifted]",
-  dragging: "[data-workspace][data-drag-carrying]",
+  dragging: "[data-workspace][data-drag-carrying], [data-workspace][data-drag-card]",
   dropAnnouncer: '[data-workspace] [role="status"][aria-live="polite"]',
 
   // Widgets (ADR 326) and the sample plugin that shows them (src/desktop/widgets/fixture/)
@@ -84,7 +85,7 @@ export const css = {
   widgetWindow: "[data-widget-window]", // the window: a widget over the panes
   chatArea: ".workspace-chat", // class: the content region the panes, and the window, are drawn in
   workspaceEmpty: '.workspace-empty[role="status"]', // class: why the workspace has nothing to show
-  workspaceEmptyText: '.workspace-empty[role="status"] p', // class: its sentence
+  workspaceEmptyText: '.workspace-empty[role="status"] [data-slot="empty-state-title"]', // class: its sentence
   workspaceEmptyRetry: '.workspace-empty[role="status"] button', // class: its Try Again
   transcriptNote: '.workspace-transcript-note[role="status"]', // class: why a shown conversation could not be read
   transcriptNoteText: ".workspace-transcript-note p", // class: that note's sentence
@@ -104,6 +105,9 @@ export const css = {
   subagentScroll: "[data-subagent-scroll]", // the conversation's scroller
   subagentMessages: "[data-subagent-messages]", // the messages that scroller follows
   subagentSummary: "[data-subagent-summary]", // the list's counts
+  subagentStack: "[data-subagent-stack]", // the conversation's subagents, in its pane header
+  avatarFace: '[data-slot="random-avatar-paint"]', // one face; aria-label is its name
+  avatarMore: '[data-slot="avatar-stack-more"]', // the count of faces the stack does not show
 
   // MCP Apps (ADR 344, #349) and the fixture app the sample workspace registers (src/desktop/widgets/app/fixture/)
   appFrame: "[data-app-frame]", // an app's sandbox proxy frame; its value is the place it is drawn in
@@ -118,10 +122,32 @@ export const css = {
 
   // Shared controls (#632): the kit's components, by the slot each draws
   keyCap: "kbd", // every key cap; each must be the kit's (data-slot="kbd")
+  kitRow: '[data-slot="sidebar-menu-item-row"] > [data-size]', // the kit's SidebarMenuItem control (data-size is always written; a context menu's trigger replaces data-slot)
+  kitRowFrame: '[data-slot="sidebar-menu-item-row"]', // the kit's row around its control and what it lays beside it
+  rowLabel: '[data-slot="sidebar-menu-item-label"], .desktop-list-row-label', // class: a row's words, in either row component
+  listRow: ".desktop-list-row", // class: the window's ListRow (src/desktop/ui/list-row.tsx)
+  segmentedControl: '[data-slot="segmented-control"]', // the kit's SegmentedControl
+  emptyTitle: '[data-slot="empty-state-title"]', // the kit's EmptyState's words
+  identityRow: ".desktop-identity", // class: the row holding the identity
+  identityProduct: ".desktop-identity-words > span", // class: the identity's word after "nessa"
+  identityButton: ".desktop-identity-button", // class: "nessa Studio" / "‹ nessa Agent" (src/desktop/ui/identity.tsx)
+  emptyState: '[data-slot="empty-state"]', // the kit's EmptyState
+  countBadge: ".workspace-badge", // class: a sidebar row's count, the kit's Badge
+  litPoint: '.workspace-status:is([data-status="needs-you"], [data-status="unread"])', // class: StatusGlyph's lit points
+  needsYouHeading: "#agents-needs-you", // the overview's Needs you heading
+  codeBlock: ".workspace-code", // class: a code block in a transcript
+  allClear: ".agents-clear", // class: the overview's "Nothing needs you" card
 
   // Side columns
   sidebar: ".workspace-sidebar", // class
   sessionList: ".workspace-list", // class
+  chat: ".workspace-chat", // class: the chat area, the panes' column
+  sideRail: ".side-rail", // class: the rail beside the workspace
+  workspaceWindow: ".workspace-window", // class: the frame holding the rail and the workspace; data-rail, data-sidebar
+  titlebarSidebarToggle: '.workspace-titlebar [aria-controls="workspace-sidebar"]', // the titlebar's Show/Hide Sidebar
+  sideRailToggle: ".side-rail-toggle", // class: shows or hides the rail; aria-expanded
+  studio: ".workspace-identity .desktop-identity-button", // class: "nessa Studio", which opens Settings
+  peekEdge: ".desktop-peek-edge", // class: the strip at the folded sidebar's edge a hover reveals it from
   listSearch: ".workspace-list .workspace-search", // class: the session list's search field
   listScroll: ".workspace-list-scroll", // class: the session list's scroller
   sessionListRow: ".workspace-list [data-session-row]", // a row of the session list, not a sidebar thread
@@ -151,6 +177,12 @@ export const css = {
   overviewListed: "[data-overview-listed]",
   overviewRequest: ".agents-request", // class
   overviewCommand: ".agents-request-command", // class: the command on a request row
+  overviewRequestActions: ".agents-request-actions", // class: a request row's answers, at its end while pointed at or the keyboard is visibly on it
+  overviewRowItem: ".agents-row-item", // class: a listed row's item
+  overviewEdge: ".agents-overview-edge", // class: the resize edge between the list and the peek beside it (role=separator)
+  overviewSide: ".agents-overview-side", // class: the list's side of the overview, whose right is the edge
+  overviewSurface: ".agents-overview-surface", // class: the overview's card, holding the list and the peek
+  overviewSaid: ".agents-overview-said", // class: the overview's live region, which says what became of an answer
   overviewRow: ".agents-row", // class
   overviewReplyPill: ".agents-reply-pill", // class
   overviewReplyField: "[data-reply-for] textarea", // data-reply-for is the session replied to
@@ -166,10 +198,12 @@ export const css = {
   peekEarlier: ".agents-peek-earlier", // class: says the turn holds more above what the peek draws
   transcriptStep: ".workspace-steps li", // class: one step the agent took, in a message
   overviewColumn: ".agents-overview-column", // class: the list the arrow keys walk
-  overviewResting: ".agents-overview-resting", // class: a quiet line in the list ("Nothing needs you")
+  overviewResting: ".agents-overview-resting", // class: a group shown alone that lists nothing ("Nothing needs you"), the kit's EmptyState
+  overviewFootnote: ".agents-overview-footnote", // class: how many sessions the view leaves out, and Show All
   inlinePeek: ".agents-inline-peek", // class: the peek opened beneath its row
   overviewTitle: ".agents-overview-title", // class: the overview's heading and filter
   peekAsk: ".agents-peek-ask", // class: the request in full, after the story
+  overviewPeekScroll: ".agents-overview-peek .agents-peek-scroll", // class: what the peek beside the list says, scrolling above its reply pill
 
   // The composer's thinking control (src/desktop/ui/thinking-control.tsx): a chip
   // opening a popover holding a slider; the levels are read from
@@ -199,9 +233,19 @@ export const css = {
   settingsHeading: "#settings-heading", // the open category's name
   settingsTab: '.settings-tabs [role="tab"]',
   settingsPanel: "#settings-panel", // the open tab's page
-  settingsCard: ".settings-card", // class: a card on a Settings page, which what it holds must lie inside
+  settingsCard: '[data-slot="settings-group-card"]', // the UI kit's card on a Settings page, which what it holds must lie inside
+  settingsFormCard: ".settings-card", // class: a card Settings draws itself (Integrations' form and inspection), there only while open
   settingsGroupHeading: ".settings-group > h2", // class: a group's heading on a Settings page
   settingsScrollers: ".settings-content, .settings-scroll, .settings-panel", // class: what scrolls in Settings, which must not scroll sideways
+  settingsScroll: ".settings-scroll", // class: the page's scroller, below its bar
+  settingsBar: ".settings-bar", // class: the page's titlebar row (drag strip); data-condensed on .settings-content once the masthead's title has scrolled under it
+  settingsBarTitle: ".settings-bar-title", // class: the page's name, small, in that row
+  settingsContent: ".settings-content", // class
+  settingsMasthead: ".settings-masthead", // class: the page's head: title, dek, tabs
+  settingsDek: ".settings-dek", // class: the one line under a title, where a category has one
+  settingsRow: '[data-slot="settings-row"]', // the UI kit's row, on any Settings page
+  settingsFound: "[data-setting][data-found]", // where a search just landed
+  settingsSearch: 'input[aria-label="Search settings"]',
   control: 'button, input, select, textarea, [role="switch"]',
 
   // Settings › Connections › Integrations: the gateway's MCP servers
@@ -225,7 +269,7 @@ export const css = {
   mcpShared: "[data-mcp-shared]", // a group's "N servers share this name…"
   mcpSharedRow: "[data-mcp-shared-row]", // one read-only server of a group
   mcpManagedRow: "[data-mcp-server][data-managed]",
-  mcpRowText: ".settings-row-text", // class: a row's name, command and variables
+  mcpRowText: 'div:has(> [data-slot="settings-row-label"])', // a row's name with its command and variables (the kit's row's text column)
   mcpRowActions: ".settings-server-actions", // class: a row's buttons and switch
   mcpEmpty: "[data-mcp-empty]",
   mcpTooLarge: "[data-mcp-too-large]", // a list too large to show: its sentence and the remove-by-name field (U44)
@@ -267,6 +311,7 @@ export const css = {
 
 /** Parameterized selectors, built before passing their strings to the page. */
 export const selectorFor = {
+  railItem: (id) => `[data-rail-item="${id}"]`, // a place on the side rail: agents, notes, …
   appFrameIn: (place) => `[data-app-frame="${place}"]`, // the app's frame in one place: inline, pane, window
   fixtureControl: (name) => `[data-fixture="${name}"]`, // a control inside the fixture app's own document
   fixtureState: (state) => `body[data-fixture-state="${state}"]`, // the fixture app saying where it is
@@ -335,6 +380,7 @@ export const storage = {
   theme: "nessa.desktop.theme",
   pictureInConversations: "nessa.desktop.picture-in-conversations",
   greeting: "nessa.desktop.greeting",
+  sideRail: "nessa.desktop.side-rail", // "on" offers the side rail (Advanced › Experimental)
 }
 
 /** The same-window event a stored preference announces a change on. */

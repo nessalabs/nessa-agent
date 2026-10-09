@@ -117,7 +117,7 @@ export type {
 
 export type { SessionTermination } from "./generated/product.js"
 export { RecordReadErrorCode } from "./generated/product.js"
-export { mcpAppCallTiming } from "./generated/product.js"
+export { mcpAppCallTiming, productMethodGrants } from "./generated/product.js"
 export type {
   ConversationRecordsHeadResult,
   RecordScope,
@@ -171,7 +171,10 @@ export {
   type McpResourceDescription,
 } from "./presentation/mcp-apps-api.js"
 export { NessaMcpAppError } from "./application/mcp-app-call.js"
-export { type McpServersApi } from "./presentation/mcp-servers-api.js"
+export {
+  carriesMcpServersGrant,
+  type McpServersApi,
+} from "./presentation/mcp-servers-api.js"
 export { type PairingApi } from "./presentation/pairing-api.js"
 export {
   NessaPairingError,

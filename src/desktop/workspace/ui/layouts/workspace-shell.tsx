@@ -25,6 +25,7 @@ import { reducedMotion } from "../../../adapters/motion-preference"
 import { useThemePreference } from "../../../adapters/theme-preference"
 import { useEdgePeek } from "../../../adapters/use-edge-peek"
 import { useWindowWidth } from "../../../adapters/window-width"
+import { useSideRailPreference } from "../../../adapters/window-preferences"
 import { draggedEdge } from "../../../model/side-column"
 import { EdgePeekStrip } from "../../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../../ui/history-buttons"
@@ -79,13 +80,26 @@ import {
   type Direction,
 } from "../../../split-panes/model/pane-layout"
 import type { SwitcherRow } from "../../model/session-search"
-import { columnWidth, sessionListLimits, type ColumnLimits } from "../../model/window-fit"
+import {
+  columnWidth,
+  railFits,
+  sessionListLimits,
+  type ColumnLimits,
+} from "../../model/window-fit"
 import { IconButton } from "../../../ui/icon-button"
+import {
+  SideRail,
+  SideRailButton,
+  RailView,
+  railItems,
+  RAIL_WIDTH,
+} from "../chrome/side-rail"
 import { WorkspaceTitlebar } from "../chrome/workspace-titlebar"
 import { OverviewLayer } from "../overview/overview-layer"
 import { PaneGrid } from "../panes/pane-grid"
 import { QuickSwitcher, type SwitcherMode } from "../quick-switcher/quick-switcher"
 import { SessionList } from "../session-list/session-list"
+import { OverviewQuietProvider } from "../source-list/overview-quiet"
 import { SourceList } from "../source-list/source-list"
 import {
   ListedChannelProvider,
@@ -262,15 +276,44 @@ export function WorkspaceShell({
   const listOpen = region.sessionList && listDrawn
   const view = useWorkspaceSelector(selectView)
   const columns = useWorkspaceSelector(selectColumnCount)
-  const windowWidth = useWindowWidth()
+  const [railOpen, setRailOpen] = useState(true)
+  const [railItem, setRailItem] = useState("agents")
+  // A preview, off until turned on in Settings › Advanced › Experimental.
+  const [railFlag] = useSideRailPreference()
+  const railOffered = railFlag === "on"
+  // Turned off, it forgets the place it had open: turned on again, it opens on Agents.
+  if (!railOffered && railItem !== "agents") setRailItem("agents")
+  // An item other than Agents has the window: the workspace under it is inert.
+  const shownRailItem = railOffered
+    ? railItems.find((each) => each.id === railItem && each.id !== "agents")
+    : undefined
+  const fullWidth = useWindowWidth()
   const sidebarWidth = columnWidth(
     chrome.sidebarWidth ?? region.sidebar.defaultWidth,
     region.sidebar.limits,
-    windowWidth,
+    fullWidth,
   )
   const listWidth = region.sessionList
-    ? columnWidth(chrome.sessionListWidth, sessionListLimits, windowWidth)
+    ? columnWidth(chrome.sessionListWidth, sessionListLimits, fullWidth)
     : 0
+  // The rail is the first column to give way for room (`railFits`): it is drawn
+  // only where it folds nothing the person has open. A full view has no columns.
+  const railRoom =
+    shownRailItem !== undefined ||
+    railFits(
+      {
+        sidebarOpen: chrome.sidebar.open,
+        sessionListOpen: region.sessionList && chrome.sessionList.open,
+        sidebarWidth,
+        sessionListWidth: listWidth,
+      },
+      fullWidth,
+      columns,
+      RAIL_WIDTH,
+    )
+  const railDrawn = railOffered && railOpen && railRoom
+  // The rail stands beside the workspace, not in it: the columns fit what is left.
+  const windowWidth = fullWidth - (railDrawn ? RAIL_WIDTH : 0)
   useFitOnResize(windowWidth, columns, (width) =>
     dispatch(
       fitToWindow({ windowWidth: width, sidebarWidth, sessionListWidth: listWidth }),
@@ -280,45 +323,48 @@ export function WorkspaceShell({
   const [switcher, setSwitcher] = useState<SwitcherMode | null>(null)
   const frame = useWindowFrame(root, workspaceShortcuts, setSwitcher)
   // While the switcher is up it has the keyboard, but for ⌘K, which closes it.
+  // Under an item's full view the workspace answers no keys at all.
   useWorkspaceKeys(
-    {
-      switcher: () => setSwitcher((open) => (open ? null : "open")),
-      // Offered as "beside" only where a pane could open there; else it is a jump.
-      openBeside: () =>
-        switcher ? false : setSwitcher(dispatch(canOpenBeside()) ? "split" : "open"),
-      toggleSessionList: () => {
-        if (!region.sessionList) return false
-        dispatch(toggleSessionList())
-      },
-      // A place to go, as the sidebar's entry is: asked again, it stays; Escape in it leaves.
-      showOverview: () => {
-        if (switcher) return false
-        dispatch(showContent({ content: "agents" }))
-      },
-      // Searching the list brings it back first; with no list, it is a jump.
-      search: () => {
-        if (switcher) return false
-        if (!region.sessionList) return setSwitcher("open")
-        dispatch(toggleSessionList({ open: true }))
-        requestAnimationFrame(() =>
-          root.current
-            ?.querySelector<HTMLInputElement>(".workspace-search input")
-            ?.focus(),
-        )
-      },
-    },
-    switcher !== null,
+    shownRailItem !== undefined
+      ? {}
+      : {
+          switcher: () => setSwitcher((open) => (open ? null : "open")),
+          // Offered as "beside" only where a pane could open there; else it is a jump.
+          openBeside: () =>
+            switcher ? false : setSwitcher(dispatch(canOpenBeside()) ? "split" : "open"),
+          toggleSessionList: () => {
+            if (!region.sessionList) return false
+            dispatch(toggleSessionList())
+          },
+          // A place to go, as the sidebar's entry is: asked again, it stays; Escape in it leaves.
+          showOverview: () => {
+            if (switcher) return false
+            dispatch(showContent({ content: "agents" }))
+          },
+          // Searching the list brings it back first; with no list, it is a jump.
+          search: () => {
+            if (switcher) return false
+            if (!region.sessionList) return setSwitcher("open")
+            dispatch(toggleSessionList({ open: true }))
+            requestAnimationFrame(() =>
+              root.current
+                ?.querySelector<HTMLInputElement>(".workspace-search input")
+                ?.focus(),
+            )
+          },
+        },
+    switcher !== null || shownRailItem !== undefined,
   )
   useFocusFollowsPane(store, root)
   // The panes' drag spans the window: sessions are picked up from its lists.
   const splitPanes = useMemo(() => workspaceSplitPanes(store), [store])
-  const dragOptions = useMemo(() => workspaceDragOptions(store), [store])
+  const dragOptions = useMemo(workspaceDragOptions, [])
   useSplitPanesDrag(root, splitPanes, dragOptions)
   const peek = useEdgePeek(!sidebarOpen, sidebarOpen)
   // Each widget host on the page, by scope, for Escape to find (`widget-escape.ts`).
   const [escapeScopes] = useState<EscapeScopes>(() => new Map())
   useWidgetEscape({ store, root, scopes: escapeScopes })
-  const shape = useMotionShape(sidebarOpen, listOpen)
+  const shape = useMotionShape(sidebarOpen, listOpen, railDrawn)
 
   // Beside where the room allows it, in the focused pane's place where not —
   // what ⌘-click does — so a pick never goes nowhere, and a typed message is
@@ -362,97 +408,134 @@ export function WorkspaceShell({
     [region.sidebar.variant, compose, composeShortcut],
   )
   return (
-    <WorkspaceFrameProvider value={frame}>
-      <EscapeScopesProvider value={escapeScopes}>
-        <ListedChannelProvider value={listOpen ? view.channelId : null}>
-          <SidebarPeekProvider value={peek}>
-            <FlipScope shape={shape} root={root}>
-              <div
-                ref={root}
-                className="workspace"
-                data-workspace
-                data-host={hostKind}
-                data-surface={browserSurface ? "browser" : "window"}
-                data-desktop-theme={theme}
-                data-peek={(peek.shown && !peek.handedOff) || undefined}
-                data-sidebar={sidebarOpen ? "open" : "closed"}
-                data-list={
-                  region.sessionList ? (listOpen ? "open" : "closed") : undefined
-                }
-                data-panes-alone={(!sidebarOpen && !listOpen) || undefined}
-                style={
-                  {
-                    "--workspace-sidebar-width": `${sidebarWidth}px`,
-                    ...(region.sessionList
-                      ? { "--workspace-list-width": `${listWidth}px` }
-                      : {}),
-                  } as CSSProperties
-                }
-              >
-                <div className="desktop-ambient" aria-hidden="true">
-                  <span className="desktop-grain" />
+    <OverviewQuietProvider store={store} root={root}>
+      <WorkspaceFrameProvider value={frame}>
+        <EscapeScopesProvider value={escapeScopes}>
+          <ListedChannelProvider value={listOpen ? view.channelId : null}>
+            <SidebarPeekProvider value={peek}>
+              <FlipScope shape={shape} root={root}>
+                <div
+                  className="workspace-window"
+                  data-rail={!railOffered ? "off" : railDrawn ? "open" : "closed"}
+                  data-rail-view={shownRailItem?.id}
+                  data-host={hostKind}
+                  data-surface={browserSurface ? "browser" : "window"}
+                  data-desktop-theme={theme}
+                  data-sidebar={sidebarOpen ? "open" : "closed"}
+                  // The person's own choice, apart from a fold for room: the
+                  // rail's toggle hides only with a sidebar they closed.
+                  data-sidebar-chosen={chrome.sidebar.open ? "open" : "closed"}
+                  style={{ "--rail-width": `${RAIL_WIDTH}px` } as CSSProperties}
+                >
+                  {railOffered ? (
+                    <>
+                      <SideRail
+                        open={railDrawn}
+                        active={railItem}
+                        onPick={(id) => {
+                          // Picking a place is leaving whatever had the keyboard here.
+                          setSwitcher(null)
+                          setRailItem(id)
+                        }}
+                      />
+                      <SideRailButton
+                        open={railDrawn}
+                        room={railRoom}
+                        toggle={() => setRailOpen((open) => !open)}
+                      />
+                    </>
+                  ) : null}
+                  <div
+                    ref={root}
+                    className="workspace"
+                    // Under an item's full view it takes no focus, pointer or Escape.
+                    inert={shownRailItem !== undefined || undefined}
+                    data-workspace
+                    data-host={hostKind}
+                    data-surface={browserSurface ? "browser" : "window"}
+                    data-desktop-theme={theme}
+                    data-peek={(peek.shown && !peek.handedOff) || undefined}
+                    data-sidebar={sidebarOpen ? "open" : "closed"}
+                    data-list={
+                      region.sessionList ? (listOpen ? "open" : "closed") : undefined
+                    }
+                    data-panes-alone={(!sidebarOpen && !listOpen) || undefined}
+                    style={
+                      {
+                        "--workspace-sidebar-width": `${sidebarWidth}px`,
+                        ...(region.sessionList
+                          ? { "--workspace-list-width": `${listWidth}px` }
+                          : {}),
+                      } as CSSProperties
+                    }
+                  >
+                    <div className="desktop-ambient" aria-hidden="true">
+                      <span className="desktop-grain" />
+                    </div>
+                    {sidebarOpen ? null : (
+                      <EdgePeekStrip
+                        peek={peek}
+                        onDragOut={() => dispatch(toggleSidebar({ open: true }))}
+                      />
+                    )}
+                    <WorkspaceTitlebar>
+                      <IconButton
+                        icon="sidebar"
+                        label={`${sidebarOpen ? "Hide" : "Show"} Sidebar`}
+                        shortcut={frame.shortcut("toggleSidebar")}
+                        aria-expanded={sidebarOpen}
+                        aria-controls="workspace-sidebar"
+                        onClick={() => dispatch(toggleSidebar())}
+                      />
+                      <HistoryButtons />
+                      {region.sessionList ? (
+                        <IconButton
+                          icon="sessionList"
+                          label={`${listOpen ? "Hide" : "Show"} Session List`}
+                          shortcut={frame.shortcut("toggleSessionList")}
+                          aria-expanded={listOpen}
+                          onClick={() => dispatch(toggleSessionList())}
+                        />
+                      ) : (
+                        <IconButton
+                          className="workspace-titlebar-compose"
+                          icon="newSession"
+                          label="New Session"
+                          shortcut={composeShortcut}
+                          tabIndex={sidebarOpen ? -1 : 0}
+                          aria-hidden={sidebarOpen || undefined}
+                          onClick={compose}
+                        />
+                      )}
+                    </WorkspaceTitlebar>
+                    <ContentMark root={root} />
+                    <Columns
+                      region={region}
+                      root={root}
+                      sidebarOpen={sidebarOpen}
+                      listOpen={listOpen}
+                      sidebarWidth={sidebarWidth}
+                      listWidth={listWidth}
+                      top={top}
+                      splitPanes={splitPanes}
+                    />
+                    <OverviewLayer root={root} />
+                    {switcher ? (
+                      <SwitcherHost
+                        mode={switcher}
+                        onClose={() => setSwitcher(null)}
+                        onPick={pick}
+                      />
+                    ) : null}
+                  </div>
+                  {shownRailItem ? <RailView item={shownRailItem} /> : null}
                 </div>
-                {sidebarOpen ? null : (
-                  <EdgePeekStrip
-                    peek={peek}
-                    onDragOut={() => dispatch(toggleSidebar({ open: true }))}
-                  />
-                )}
-                <WorkspaceTitlebar>
-                  <IconButton
-                    icon="sidebar"
-                    label={`${sidebarOpen ? "Hide" : "Show"} Sidebar`}
-                    shortcut={frame.shortcut("toggleSidebar")}
-                    aria-expanded={sidebarOpen}
-                    aria-controls="workspace-sidebar"
-                    onClick={() => dispatch(toggleSidebar())}
-                  />
-                  <HistoryButtons />
-                  {region.sessionList ? (
-                    <IconButton
-                      icon="sessionList"
-                      label={`${listOpen ? "Hide" : "Show"} Session List`}
-                      shortcut={frame.shortcut("toggleSessionList")}
-                      aria-expanded={listOpen}
-                      onClick={() => dispatch(toggleSessionList())}
-                    />
-                  ) : (
-                    <IconButton
-                      className="workspace-titlebar-compose"
-                      icon="newSession"
-                      label="New Session"
-                      shortcut={composeShortcut}
-                      tabIndex={sidebarOpen ? -1 : 0}
-                      aria-hidden={sidebarOpen || undefined}
-                      onClick={compose}
-                    />
-                  )}
-                </WorkspaceTitlebar>
-                <ContentMark root={root} />
-                <Columns
-                  region={region}
-                  root={root}
-                  sidebarOpen={sidebarOpen}
-                  listOpen={listOpen}
-                  sidebarWidth={sidebarWidth}
-                  listWidth={listWidth}
-                  top={top}
-                  splitPanes={splitPanes}
-                />
-                <OverviewLayer root={root} />
-                {switcher ? (
-                  <SwitcherHost
-                    mode={switcher}
-                    onClose={() => setSwitcher(null)}
-                    onPick={pick}
-                  />
-                ) : null}
-              </div>
-            </FlipScope>
-          </SidebarPeekProvider>
-        </ListedChannelProvider>
-      </EscapeScopesProvider>
-    </WorkspaceFrameProvider>
+              </FlipScope>
+            </SidebarPeekProvider>
+          </ListedChannelProvider>
+        </EscapeScopesProvider>
+      </WorkspaceFrameProvider>
+    </OverviewQuietProvider>
   )
 }
 
@@ -526,27 +609,32 @@ const Columns = memo(function Columns({
           onMove={dragSidebar}
         />
       ) : null}
-      {region.sessionList ? <SessionList /> : null}
-      {region.sessionList && (listOpen || sidebarOpen) ? (
-        <ResizeEdge
-          label="Resize Session List"
-          className={
-            listOpen ? "workspace-list-edge" : "workspace-list-edge workspace-edge-folded"
-          }
-          value={{
-            now: listOpen ? listWidth : 0,
-            min: sessionListLimits.min,
-            max: sessionListLimits.max,
-          }}
-          onStart={() =>
-            (listFrom.current = listOpen
-              ? drawnWidth(root.current, ".workspace-list")
-              : null)
-          }
-          onMove={dragList}
-        />
-      ) : null}
-      <PaneGrid source={splitPanes} />
+      {/* What the Agents overview covers, and makes inert (`overview-layer.tsx`). */}
+      <div className="workspace-content">
+        {region.sessionList ? <SessionList /> : null}
+        {region.sessionList && (listOpen || sidebarOpen) ? (
+          <ResizeEdge
+            label="Resize Session List"
+            className={
+              listOpen
+                ? "workspace-list-edge"
+                : "workspace-list-edge workspace-edge-folded"
+            }
+            value={{
+              now: listOpen ? listWidth : 0,
+              min: sessionListLimits.min,
+              max: sessionListLimits.max,
+            }}
+            onStart={() =>
+              (listFrom.current = listOpen
+                ? drawnWidth(root.current, ".workspace-list")
+                : null)
+            }
+            onMove={dragList}
+          />
+        ) : null}
+        <PaneGrid source={splitPanes} />
+      </div>
     </>
   )
 })
