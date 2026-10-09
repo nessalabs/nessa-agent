@@ -229,8 +229,9 @@ function assertHeader(fit, failures, when) {
 
 /**
  * The open's frames. Production Chromium calibrates, proves a frame of known
- * cost is measured, throttles, then measures `perform`. Other runs measure
- * the same click with no budget.
+ * cost is measured, throttles, then measures `perform`. The throttle is
+ * cleared if that measurement throws, so a later step is not still at 4×.
+ * Other runs measure the same click with no budget.
  */
 async function measureOpening(page, label, perform) {
   const failures = []
@@ -250,7 +251,12 @@ async function measureOpening(page, label, perform) {
       )
     cdp = await throttle(page.context(), page, 4)
   }
-  const opening = await measure(page, perform, 800)
+  let opening
+  try {
+    opening = await measure(page, perform, 800)
+  } finally {
+    if (cdp) await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 })
+  }
   if (
     label.mode === "prod" &&
     label.engine === "chromium" &&
@@ -259,7 +265,6 @@ async function measureOpening(page, label, perform) {
     failures.push(
       `longest frame ${opening.maxFrame} ms > ${budgetMs} ms (over: ${opening.over})`,
     )
-  if (cdp) await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 })
   return {
     failures,
     calibration,
