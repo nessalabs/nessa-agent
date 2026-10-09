@@ -187,6 +187,20 @@ describe("a card in a message", () => {
 })
 
 describe("the widget pane", () => {
+  it("answers with its shell on the open, and fills its body on the next frame", async () => {
+    const store = await render()
+    await act(async () => {
+      void store.dispatch(
+        openWidget({ widget: sampleWidgets.trail, place: "pane", origin: "a" }),
+      )
+    })
+    const pane = host.querySelector("[data-widget-pane]")
+    expect(pane?.querySelector("nav")?.textContent).toBe("Session aSample trail")
+    expect(pane?.querySelector("[data-widget-body]")).toBeNull()
+    await frames()
+    expect(pane?.querySelector("[data-sample-view='trail']")).not.toBeNull()
+  })
+
   it("goes back to its conversation: focusing the pane showing it, or opening it beside", async () => {
     const store = await render()
     const pane = await openTrailBeside(store)

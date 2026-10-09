@@ -13,6 +13,7 @@ sources:
   - "src/desktop/widgets/ui/inline-widget.tsx"
   - "src/desktop/workspace/adapters/store/widget-hosts.ts"
   - "src/desktop/workspace/ui/panes/widget-pane.tsx"
+  - "src/desktop/workspace/ui/panes/use-filled-on-next-frame.ts"
   - "src/desktop/workspace/ui/panes/widget-window.tsx"
   - "src/desktop/workspace/model/pane-item.ts"
   - "src/desktop/widgets/application/registry.test.ts"
