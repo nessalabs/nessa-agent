@@ -3,6 +3,8 @@
  *
  * Owns the socket lifecycle hooks, pending RPC registry, and raw response byte
  * ceiling. A larger record response is accepted only for a pending record read.
+ * Push delivery snapshots subscribers and skips removed callbacks or a closed
+ * transport; consumer failures are isolated (`wire-session-lifecycle.test.ts`).
  * Does not know
  * connect handshake order or the public `NessaClient` API.
  *

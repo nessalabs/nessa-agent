@@ -21,6 +21,87 @@ function fixture() {
   return { session, close }
 }
 
+it("a throwing event subscriber does not suppress another subscriber's update", () => {
+  const { session } = fixture()
+  const received = vi.fn()
+  session.onEvent("conversation.changed", () => {
+    throw new Error("consumer failed")
+  })
+  session.onEvent("conversation.changed", received)
+  expect(() =>
+    session.dispatchFrame({
+      type: "event",
+      event: "conversation.changed",
+      payload: { conversationId: "chat" },
+      seq: 1,
+      stateVersion: 0,
+    }),
+  ).not.toThrow()
+  expect(received).toHaveBeenCalledWith({ conversationId: "chat" })
+  session.close()
+})
+
+it("event subscriptions added during delivery start with the next event", () => {
+  const { session } = fixture()
+  const late = vi.fn()
+  session.onEvent("conversation.changed", () => {
+    session.onEvent("conversation.changed", late)
+  })
+  const frame = {
+    type: "event" as const,
+    event: "conversation.changed",
+    payload: {},
+    seq: 1,
+    stateVersion: 0,
+  }
+  session.dispatchFrame(frame)
+  expect(late).not.toHaveBeenCalled()
+  session.dispatchFrame(frame)
+  expect(late).toHaveBeenCalledOnce()
+  session.close()
+})
+
+it("an event subscriber removed before its turn does not receive the event", () => {
+  const { session } = fixture()
+  const received = vi.fn()
+  session.onEvent("conversation.changed", () => off())
+  const off = session.onEvent("conversation.changed", received)
+  session.dispatchFrame({
+    type: "event",
+    event: "conversation.changed",
+    payload: {},
+    seq: 1,
+    stateVersion: 0,
+  })
+  expect(received).not.toHaveBeenCalled()
+  session.close()
+})
+
+it.each(["client", "transport"] as const)(
+  "%s closure during an event stops remaining and later event delivery",
+  (closure) => {
+    const { session } = fixture()
+    const received = vi.fn()
+    session.onEvent("conversation.changed", () => {
+      if (closure === "client") session.close()
+      else session.dispatchClose(1006, "connection lost")
+    })
+    session.onEvent("conversation.changed", received)
+    const frame = {
+      type: "event" as const,
+      event: "conversation.changed",
+      payload: {},
+      seq: 1,
+      stateVersion: 0,
+    }
+    session.dispatchFrame(frame)
+    session.onEvent("conversation.changed", received)
+    session.dispatchFrame(frame)
+    expect(received).not.toHaveBeenCalled()
+    expect(session.termination?.code).toBe(closure === "client" ? 1000 : 1006)
+  },
+)
+
 it.each(["client", "transport"] as const)(
   "%s closure cleans up a busy session without affecting another session",
   async (closure) => {

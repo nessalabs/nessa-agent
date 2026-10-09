@@ -210,7 +210,15 @@ export class WireSession {
   private dispatchEvent(event: string, payload: unknown): void {
     const handlers = this.eventListeners.get(event)
     if (!handlers) return
-    for (const handler of handlers) handler(payload)
+    for (const handler of [...handlers]) {
+      if (this.closedError) break
+      if (!handlers.has(handler)) continue
+      try {
+        handler(payload)
+      } catch {
+        // Consumer failures are isolated, as they are for close observers.
+      }
+    }
   }
 
   /** @internal Test seam for close behavior and pending-request cleanup. */
