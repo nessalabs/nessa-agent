@@ -10,14 +10,14 @@
 //!
 //! Every batch is admitted by [`authorize_batch`] and nothing else.
 
-use super::delivery::{Outgoing, SubscriptionDeliveries};
+use super::delivery::{Deadline, Outgoing, SubscriptionDeliveries};
 use crate::conversation::application::{
     error_code, CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, ConversationError,
     ConversationService, ReadOpening,
 };
 use crate::product::{
     conversation::{caller, read_list, read_view},
-    passive_read::deadlines::RECORD_SEND_TIMEOUT,
+    passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT},
     read_access,
     socket::{admit_now, failure, success},
     state::{note_limit, ProductRouteState},
@@ -316,13 +316,14 @@ fn retry_after(error: &ConversationError, attempt: u32) -> Option<Duration> {
 }
 
 /// The subscription's first read, refused `unavailable` when it has not
-/// finished by the subscribe request's reply deadline (row S25): the reply
-/// waits on it, and a reply is owed by then.
+/// finished by `read_by`, the passive read deadline of the subscribe request
+/// (row S25): the reply waits on it, and leaves the rest of the request's
+/// delivery budget for the reply's own write (row S31), as a record read does.
 async fn by_reply<T>(
-    reply_by: Instant,
+    read_by: Instant,
     read: impl std::future::Future<Output = Result<T, String>>,
 ) -> Result<T, String> {
-    timeout_at(reply_by, read)
+    timeout_at(read_by, read)
         .await
         .unwrap_or_else(|_| Err(code_of(&ConversationError::Unavailable)))
 }
@@ -403,6 +404,9 @@ pub(super) struct Run {
     pub slot: Arc<OwnedSemaphorePermit>,
     /// The first read answers by here or the subscription is refused, so a
     /// first read that never returns cannot hold the request's slot past
+    /// the passive read budget (row S25).
+    pub read_by: Instant,
+    /// The reply is written by here or the socket closes (row S31): within
     /// the passive delivery budget, which a client's call outlasts.
     pub reply_by: Instant,
 }
@@ -430,6 +434,7 @@ impl Run {
             target,
             deliveries,
             slot,
+            read_by: received_at + PASSIVE_READ_TIMEOUT,
             reply_by: received_at + RECORD_SEND_TIMEOUT,
         }
     }
@@ -444,9 +449,9 @@ struct Sent {
     /// Where the last read of a view got to, sent or not.
     read_through: Option<Cursor>,
     /// How many catalogue changes a list has been woken by. Part of an
-    /// incomplete list's key, so a change to a row the frame left out is
-    /// sent though the rows it carries are the same, and the client walks
-    /// the catalogue for it (row L5).
+    /// incomplete list's key, with every row the service read, so a change
+    /// to a row the frame left out is sent though the rows it carries are
+    /// the same, and the client walks the catalogue for it (row L5).
     catalogue: u64,
 }
 
@@ -463,7 +468,7 @@ impl Sent {
                 },
                 payload,
             },
-            None,
+            Deadline::None,
             None,
         );
         tokio::pin!(written);
@@ -504,7 +509,7 @@ impl Sent {
                 name: product_event::CONVERSATION_SUBSCRIPTION_ENDED,
                 payload,
             },
-            Some(Instant::now() + DELIVERY_TIMEOUT),
+            Deadline::Last(Instant::now() + DELIVERY_TIMEOUT),
             None,
         ));
     }
@@ -552,15 +557,21 @@ impl Sent {
                 })
             }
             Batch::List(list) => {
+                // Every row the service read, not only those the frame
+                // keeps: a row cut from the frame whose `running` changed by
+                // a commit alone (no catalogue change) is still a change. A
+                // complete list is the frame's own, uncut. One more
+                // serialization of a list the service bounds, per read.
+                let read = serde_json::to_value(&list).expect("generated list serializes");
                 let payload = serde_json::to_value(ConversationListed {
                     subscription_id: self.id.clone(),
                     list: fitted(list, &self.id),
                 })
                 .expect("generated payload serializes");
                 let key = if payload["list"]["complete"] == true {
-                    payload["list"].clone()
+                    read
                 } else {
-                    serde_json::json!([payload["list"], self.catalogue])
+                    serde_json::json!([read, self.catalogue])
                 };
                 Framed::Frame(Frame {
                     payload,
@@ -675,13 +686,14 @@ pub(super) async fn run(run: Run) {
         target,
         deliveries,
         slot,
+        read_by,
         reply_by,
     } = run;
     let refuse = |code: &str, slot: Arc<OwnedSemaphorePermit>| {
         drop(deliveries.offer(
             &id,
             Outgoing::Reply(failure(&request, code)),
-            Some(Instant::now() + DELIVERY_TIMEOUT),
+            Deadline::Last(Instant::now() + DELIVERY_TIMEOUT),
             Some(slot),
         ));
     };
@@ -710,7 +722,7 @@ pub(super) async fn run(run: Run) {
     loop {
         let batch = if reply.is_some() {
             by_reply(
-                reply_by,
+                read_by,
                 read_batch(&state, &service, &session, &target, &request),
             )
             .await
@@ -736,9 +748,18 @@ pub(super) async fn run(run: Run) {
                     },
                 );
                 // The reply is this subscription's first frame, so it is
-                // written before any event of it (row S1).
+                // written before any event of it (row S1). It is owed by
+                // the request's reply deadline, as a watch's reply is: one
+                // written later than the client waits would leave it a live
+                // subscription it cannot name, so missing it closes the
+                // socket (row S31).
                 if deliveries
-                    .offer(&id, Outgoing::Reply(answer), None, Some(slot))
+                    .offer(
+                        &id,
+                        Outgoing::Reply(answer),
+                        Deadline::Reply(reply_by),
+                        Some(slot),
+                    )
                     .await
                     .is_err()
                 {
@@ -820,6 +841,35 @@ mod tests {
         assert!(fits(&payload));
     }
 
+    /// Row L5: a row cut from an incomplete frame whose `running` changed by
+    /// a commit alone (no catalogue change) changes the frame's key, though
+    /// the rows the frame carries are the same, so the frame is sent and the
+    /// client walks the catalogue.
+    #[test]
+    fn a_commit_to_a_row_the_frame_cut_is_still_a_change() {
+        let deliveries = Arc::new(SubscriptionDeliveries::new(Arc::new(
+            EventSequence::default(),
+        )));
+        let mut sent = sent(&deliveries);
+        let list = |running: bool| {
+            let mut rows: Vec<_> = (0..500).map(|n| row(n, 400)).collect();
+            rows[499].running = running;
+            Batch::List(ConversationListResult {
+                conversations: rows,
+                complete: true,
+            })
+        };
+        let key = |sent: &mut Sent, batch| match sent.frame(batch) {
+            Framed::Frame(frame) => (frame.payload["list"].clone(), frame.key),
+            Framed::Behind { .. } => panic!("a list is never behind"),
+        };
+        let (idle_rows, idle) = key(&mut sent, list(false));
+        let (running_rows, running) = key(&mut sent, list(true));
+        assert_eq!(idle_rows["complete"], false, "cut");
+        assert_eq!(idle_rows, running_rows, "the frame carries the same rows");
+        assert_ne!(idle, running);
+    }
+
     fn sent(deliveries: &Arc<SubscriptionDeliveries>) -> Sent {
         Sent {
             deliveries: deliveries.clone(),
@@ -833,7 +883,7 @@ mod tests {
 
     fn ended(deliveries: &SubscriptionDeliveries) -> Value {
         let frame = deliveries.take().expect("a terminal frame");
-        assert!(frame.terminal.is_some());
+        assert!(frame.deadline.last());
         let OutgoingMessage::Event(event) = frame.message else {
             panic!("an event")
         };

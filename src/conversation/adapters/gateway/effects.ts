@@ -408,8 +408,6 @@ export function gatewayEffects(
   chosenAgent: () => Promise<string | undefined> = async () => undefined,
 ): ConversationEffects {
   const creations = new Map<string, Promise<{ conversationId: string }>>()
-  // The follow of each conversation: following it again stops this one first.
-  const follows = new Map<string, () => void>()
   const connected = () => {
     const current = client()
     if (
@@ -489,7 +487,6 @@ export function gatewayEffects(
         })
     },
     follow(conversationId, follower) {
-      follows.get(conversationId)?.()
       let stopped = false
       // The open whose frames apply: anything an earlier open brings is dropped.
       let token = {}
@@ -561,10 +558,8 @@ export function gatewayEffects(
       const stop = () => {
         if (stopped) return
         stopped = true
-        if (follows.get(conversationId) === stop) follows.delete(conversationId)
         giveUp?.abort()
       }
-      follows.set(conversationId, stop)
       open()
       return stop
     },

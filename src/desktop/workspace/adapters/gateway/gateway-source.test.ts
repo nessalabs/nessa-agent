@@ -321,6 +321,50 @@ describe("the index and the list subscription", () => {
     ])
   })
 
+  it("D18: a walk that fails leaves the list unapplied, a gap, and walks again on the retry clock", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    for (const id of ["a", "b", "c", "d"])
+      gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
+    gateway.listLimit = 2
+    gateway.observePageSize = 10
+    gateway.once("observe", () => Promise.reject(rpcCode("unavailable")))
+    follow()
+    await expect(source.index()).rejects.toMatchObject({ reason: "unavailable" })
+    expect(gateway.count("observe")).toBe(1)
+    updates.length = 0
+    await advance(timing.retryMs - 1)
+    expect(gateway.count("observe")).toBe(1)
+    await advance(1)
+    // The same subscription; its frame walked again, and the gap resynced.
+    expect(gateway.count("subscribeList")).toBe(1)
+    expect(gateway.count("observe")).toBe(2)
+    expect(updates).toContainEqual({ kind: "resync" })
+    expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+    ])
+  })
+
+  it("D18: an index asked after a walk failed walks again at once", async () => {
+    const { gateway, source } = started()
+    for (const id of ["a", "b", "c", "d"])
+      gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
+    gateway.listLimit = 2
+    gateway.observePageSize = 10
+    gateway.once("observe", () => Promise.reject(rpcCode("unavailable")))
+    await expect(source.index()).rejects.toMatchObject({ reason: "unavailable" })
+    expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+    ])
+    expect(gateway.count("subscribeList")).toBe(1)
+    expect(gateway.count("observe")).toBe(2)
+  })
+
   it("a listener who leaves during an observe walk is asked no further page", async () => {
     const { gateway, source, follow } = started()
     gateway.rows.set("a", row("a", { updatedAtMs: 1 }))
@@ -706,7 +750,7 @@ describe("conversations", () => {
     expect(ids.filter((id) => gateway.live(id) === 1)).toHaveLength(8)
   })
 
-  it("D23: a conversation let go while its open is on its way is subscribed again only after that open is closed", async () => {
+  it("D23, D25: a conversation let go while its open is on its way is subscribed again only after that open is closed, and so is the one that took its place", async () => {
     const { gateway, source, follow } = started()
     const ids = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"]
     for (const id of ids) {
@@ -719,9 +763,13 @@ describe("conversations", () => {
     gateway.once("subscribe", (normal) => held.promise.then(normal))
     const first = source.transcript("c0").catch((error: unknown) => error)
     for (const id of ids.slice(1, 8)) await source.transcript(id)
-    // Past the limit: c0, still opening, is let go; then it is opened again.
-    await source.transcript("c8")
+    // Past the limit: c0, still opening, is let go. The gateway counts it
+    // until it is answered and closed, so c8 waits for that (D25).
+    const eighth = source.transcript("c8")
     expect(await first).toMatchObject({ reason: "unavailable" })
+    await flush()
+    expect(subscribesOf(gateway, "c8")).toHaveLength(0)
+    // Opened again (c1, answered, is let go and closed at once).
     const again = source.transcript("c0")
     await flush()
     expect(subscribesOf(gateway, "c0")).toHaveLength(1)
@@ -733,11 +781,15 @@ describe("conversations", () => {
     await flush()
     expect(gateway.count("unsubscribe")).toBe(before + 1)
     expect(subscribesOf(gateway, "c0")).toHaveLength(1)
+    expect(subscribesOf(gateway, "c8")).toHaveLength(0)
     closing.resolve()
     await again
+    await eighth
     await flush()
     expect(subscribesOf(gateway, "c0")).toHaveLength(2)
+    expect(subscribesOf(gateway, "c8")).toHaveLength(1)
     expect(gateway.live("c0")).toBe(1)
+    expect(gateway.live("c8")).toBe(1)
   })
 
   it("D24: the last listener leaving while the list and a conversation are opening, then one back before they are answered, opens both again once the old opens are closed", async () => {

@@ -319,13 +319,16 @@ export const closeTab = createAsyncThunk<void, string, ThunkConfig>(
 )
 
 /**
- * The follow each tab holds, by tab id: what stops it. Outside the state,
- * which holds only what is serializable; `readRequest` names the follow whose
- * views apply. One table per store (its thunk dependencies), so two stores
- * never see each other's follows.
+ * The follow each tab has open, by tab id, a single read included: what stops
+ * it, and whether it is a single read. Outside the state, which holds only
+ * what is serializable; `readRequest` names the follow whose views apply. One
+ * table per store (its thunk dependencies), so two stores never see each
+ * other's follows. The one place a follow is replaced: a new follow of a tab
+ * stops the one it had, which settles that one's caller (P8).
  */
-const followTables = new WeakMap<ThunkConfig["extra"], Map<string, () => void>>()
-function followsOf(extra: ThunkConfig["extra"]): Map<string, () => void> {
+type HeldFollow = { stop: () => void; once: boolean }
+const followTables = new WeakMap<ThunkConfig["extra"], Map<string, HeldFollow>>()
+function followsOf(extra: ThunkConfig["extra"]): Map<string, HeldFollow> {
   let table = followTables.get(extra)
   if (!table) followTables.set(extra, (table = new Map()))
   return table
@@ -339,9 +342,10 @@ type FollowApi = Pick<
 /**
  * Follows a tab's conversation under `requestId`: every view the gateway
  * sends while that is the tab's `readRequest` applies. Settles once the first
- * view or failure is applied, or the follow is stopped first. A tab's follow
- * (`once` false) replaces the one it held and goes on until stopped; a single
- * read (`once` true) is held by nobody and stops itself after its first word.
+ * view or failure is applied, or the follow is stopped first. Either kind
+ * replaces the follow the tab had, stopping it; a tab's follow (`once` false)
+ * goes on until stopped, and a single read (`once` true) stops itself after
+ * its first word.
  */
 async function followTab(id: string, once: boolean, api: FollowApi): Promise<void> {
   const { dispatch, getState, extra, requestId } = api
@@ -349,7 +353,7 @@ async function followTab(id: string, once: boolean, api: FollowApi): Promise<voi
   if (!current?.serverConversationId) return
   const serverId = current.serverConversationId
   const follows = followsOf(extra)
-  if (!once) follows.get(id)?.()
+  follows.get(id)?.stop()
   dispatch(readStarted({ id, requestId }))
   await new Promise<void>((settled) => {
     let stopping = () => {}
@@ -395,10 +399,10 @@ async function followTab(id: string, once: boolean, api: FollowApi): Promise<voi
       if (stopped) return
       stopped = true
       stop()
-      if (follows.get(id) === stopping) follows.delete(id)
+      if (follows.get(id)?.stop === stopping) follows.delete(id)
       settled()
     }
-    if (!once) follows.set(id, stopping)
+    follows.set(id, { stop: stopping, once })
   })
 }
 
@@ -423,14 +427,14 @@ export const followConversation = createAsyncThunk<void, string, ThunkConfig>(
  */
 export const refollowConversation = createAsyncThunk<void, string, ThunkConfig>(
   "conversation/refollow",
-  (id, api) => followTab(id, !followsOf(api.extra).has(id), api),
+  (id, api) => followTab(id, followsOf(api.extra).get(id)?.once ?? true, api),
 )
 
 /** Stops following a tab's conversation: nothing it says applies after. */
 export const unfollowConversation = createAsyncThunk<void, string, ThunkConfig>(
   "conversation/unfollow",
   async (id, { dispatch, extra }) => {
-    followsOf(extra).get(id)?.()
+    followsOf(extra).get(id)?.stop()
     dispatch(invalidateRead(id))
   },
 )

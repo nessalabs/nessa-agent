@@ -64,7 +64,8 @@ sequenceDiagram
 | Observing | Page `complete: true` | Applied | Sessions the observe rows do not name. The list is not membership |
 | Observing | Page `complete: false` and a cursor strictly later in the same incarnation and boundary | Observing, that cursor | Nothing yet. Rows from the page are kept |
 | Observing | Page `complete: false` and no cursor, or a cursor that does not advance | Applied incomplete | Nothing. Rows already seen stay |
-| Any | The list subscription was let go, or the walk's budget ran out | The walk fails | Nothing. The rows the frame named still apply |
+| Any | The list subscription was let go | The walk ends | Nothing |
+| Observing | A page refused, or the walk's budget ran out | Unapplied, a gap; the frame is walked again on the retry clock, or at once by the next index, unless a newer frame walks first | Nothing. The rows the frame named still apply |
 
 Creation revisions compare as integers, so a cursor of `"10"` is after `"9"`. One `within()` budget covers every observe page of a walk. Before each page the walk also asks whether its list subscription is still the current one; a listener who has left is not asked another page (`a listener who leaves during an observe walk is asked no further page`). A stored row that cannot be read back makes that observe page unfinished and nameless as a cursor, so the index keeps the list and does not drop the rows the page left out (`an_unreadable_summary_leaves_the_page_unfinished_and_keeps_the_others`). A list frame has no second page. An incomplete list of 500, with an observe pass that does not finish, is not a 10,000-chat success.
 

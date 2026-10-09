@@ -742,17 +742,17 @@ async fn write_authenticated<S>(
                     let SubscriptionFrame {
                         id,
                         message,
-                        terminal,
+                        deadline,
                         written,
                     } = *frame;
-                    let result = match terminal {
+                    let result = match deadline.at() {
                         Some(deadline) => {
                             within_deadline(deadline, send(write_timeout, &mut sink, message)).await
                         }
                         None => Some(send(write_timeout, &mut sink, message).await),
                     };
                     if matches!(result, Some(Ok(()))) {
-                        subscriptions.sent(&id, terminal.is_some());
+                        subscriptions.sent(&id, deadline.last());
                         written.told();
                         true
                     } else {

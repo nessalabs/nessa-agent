@@ -1055,6 +1055,52 @@ async fn a_grant_revoked_while_a_batch_waits_for_capacity_ends_it_before_the_rea
     client.close().await;
 }
 
+/// Row S31: the subscribe reply is owed by the request's reply deadline, as
+/// a watch's is. A writer held past it closes the socket rather than write
+/// the identity after the client stopped waiting for it, which would leave
+/// a live subscription the client cannot name and every retry refused
+/// `subscription_duplicate`.
+#[tokio::test]
+async fn a_subscribe_reply_not_written_by_its_deadline_closes_the_socket() {
+    let (captured, _guard) = limit_log();
+    let fixture = SubscriptionFixture::new().await;
+    // A write timeout well past the reply deadline, so only that deadline
+    // can close the socket in time.
+    let settings = SessionSettings::new(
+        Duration::from_secs(10),
+        RECORD_SEND_TIMEOUT * 4,
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    let mut client = connect(fixture.state.clone().with_settings(settings), &fixture.session);
+    fixture.stall(&mut client).await;
+    client.send(
+        "subscribe",
+        "conversation.subscribe",
+        json!({"conversationId": fixture.id.to_string()}),
+    );
+    // The first read finishes and its reply waits behind the held writer;
+    // from here only timers move, so the clock may run ahead.
+    let received = Instant::now();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::pause();
+    timeout(RECORD_SEND_TIMEOUT * 2, &mut client.socket)
+        .await
+        .expect("closed by the reply deadline, before the write timeout")
+        .unwrap();
+    // At the reply's deadline: not earlier, as a first read refused at its
+    // own deadline would close it.
+    let closed = received.elapsed();
+    assert!(
+        closed >= RECORD_SEND_TIMEOUT - Duration::from_secs(1)
+            && closed <= RECORD_SEND_TIMEOUT + Duration::from_secs(1),
+        "{closed:?}"
+    );
+    let logged = limit_text(&captured);
+    assert!(logged.contains("socket.subscription_delivery_deadline"), "{logged}");
+    assert!(!logged.contains("socket.write_timeout"), "{logged}");
+}
+
 /// Row S15.
 #[tokio::test]
 async fn deleting_the_conversation_ends_its_subscription() {

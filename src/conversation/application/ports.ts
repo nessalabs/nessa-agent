@@ -56,9 +56,10 @@ export interface ConversationEffects {
   /**
    * Follow a conversation: `follower.view` is told the gateway's bounded view
    * now and again whenever it changes, until the returned function stops it;
-   * nothing is told after. A conversation is followed at most once: following
-   * it again stops the earlier follow first, and the new one's first view is
-   * read after the call (so after any command answered before it). A view
+   * nothing is told after. Each follow is stopped only by its own function:
+   * the caller stops the earlier follow of a conversation before following it
+   * again, and the new one's first view is read after the call (so after any
+   * command answered before it), once the earlier one is closed. A view
    * that cannot be had is `follower.failed`, with the panel's own word for
    * why, and the follow keeps trying unless the word says nothing will
    * change (`deleted`). No caller looks at a wire code or a sentence.
