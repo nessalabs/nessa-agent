@@ -3,9 +3,9 @@
 use crate::conversation::application::{
     AdmitPassiveRead, CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation,
     CatalogueReadResponse, CatalogueReadSource, CatalogueReadValue, ConversationRepository,
-    ReadCatalogue, ReadRecords, ReceiverAuthority, ReceiverBinding, RecordHead, RecordReadError,
-    RecordReadFuture, RecordReadLease, RecordReadOperation, RecordReadResponse, RecordReadSource,
-    RecordReadValue,
+    PassiveRead, PassiveReadGrants, ReadCatalogue, ReadRecords, ReceiverAuthority, ReceiverBinding,
+    RecordHead, RecordReadError, RecordReadFuture, RecordReadLease, RecordReadOperation,
+    RecordReadResponse, RecordReadSource, RecordReadValue,
 };
 use crate::conversation::domain::Conversation;
 use crate::conversation::infrastructure::LocalConversationStore;
@@ -13,12 +13,12 @@ use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::application::authorization::AuthorizeAction;
 use nessa_auth::application::ports::{
     AccessError, AccessReader, AccessSnapshot, Clock, CredentialEvidence, CredentialVerifier,
-    PortFuture, VerifiedCredential,
+    Decision, PolicyEvaluator, PortFuture, VerifiedCredential,
 };
 use nessa_auth::application::session::AuthenticateSession;
 use nessa_auth::domain::{
-    Action, AudienceId, Credential, CredentialId, Grant, Membership, MembershipId, MembershipRole,
-    MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
+    Action, AudienceId, AuthContext, Credential, CredentialId, Grant, Membership, MembershipId,
+    MembershipRole, MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
 };
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
@@ -134,6 +134,7 @@ async fn record_use_case_admits_before_metadata_and_rechecks_each_request() {
             gateway: &gateway,
             receivers: &bindings,
             conversations: &conversations,
+            grants: &CONVERSATION_READ_GRANT,
         },
         source: &source,
     };
@@ -338,11 +339,12 @@ async fn passive_admission_preserves_unverifiable_authority_failures() {
             gateway: &gateway,
             receivers: &bindings,
             conversations: &conversations,
+            grants: &CONVERSATION_READ_GRANT,
         };
         let calls = AtomicUsize::new(0);
         assert_eq!(
             admit
-                .catalogue_with(&session, "receiver", 7, |_| {
+                .catalogue_with(&session, "receiver", 7, PassiveRead::CatalogueHead, |_| {
                     calls.fetch_add(1, Ordering::SeqCst);
                     async { Ok::<(), ()>(()) }
                 })
@@ -383,6 +385,16 @@ impl ReceiverAuthority for Bindings {
         Box::pin(async { self.0.lock().unwrap().clone() })
     }
 }
+struct ConversationReadGrant;
+
+impl PassiveReadGrants for ConversationReadGrant {
+    fn grant(&self, _: PassiveRead) -> Option<&'static str> {
+        Some("conversation.read")
+    }
+}
+
+static CONVERSATION_READ_GRANT: ConversationReadGrant = ConversationReadGrant;
+
 fn access() -> Access {
     let org = OrganizationId::new("org").unwrap();
     let owner = PrincipalId::new("owner").unwrap();
@@ -475,6 +487,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
         gateway: &gateway,
         receivers: &bindings,
         conversations: &conversations,
+        grants: &CONVERSATION_READ_GRANT,
     };
     let calls = AtomicUsize::new(0);
     let source = |_: ReceiverReadScope| {
@@ -482,44 +495,76 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
         async { Ok::<(), ()>(()) }
     };
     assert_eq!(
-        admit.read_with(&session, &id, "receiver", 7, source).await,
+        admit
+            .read_with(
+                &session,
+                &id,
+                "receiver",
+                7,
+                PassiveRead::RecordHead,
+                source
+            )
+            .await,
         Ok(())
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(
         admit
-            .read_with(&session, &id, "receiver", 7, |_| async {
-                Err::<(), _>(ReadRefusal::Forbidden)
-            })
+            .read_with(
+                &session,
+                &id,
+                "receiver",
+                7,
+                PassiveRead::RecordHead,
+                |_| async { Err::<(), _>(ReadRefusal::Forbidden) }
+            )
             .await,
         Err(ReadRefusal::Unverifiable)
     );
     assert_eq!(
         admit
-            .catalogue_with(&session, "receiver", 7, |_| async {
-                Err::<(), _>(ReadRefusal::WrongOwner)
-            })
+            .catalogue_with(
+                &session,
+                "receiver",
+                7,
+                PassiveRead::CatalogueHead,
+                |_| async { Err::<(), _>(ReadRefusal::WrongOwner) }
+            )
             .await,
         Err(ReadRefusal::Unverifiable)
     );
     assert_eq!(
         admit
-            .read_with(&session, &id, "receiver", 7, |_| {
-                *bindings.0.lock().unwrap() = Ok(Some(ReceiverBinding {
-                    active: false,
-                    ..binding()
-                }));
-                async { Ok::<(), ()>(()) }
-            })
+            .read_with(
+                &session,
+                &id,
+                "receiver",
+                7,
+                PassiveRead::RecordHead,
+                |_| {
+                    *bindings.0.lock().unwrap() = Ok(Some(ReceiverBinding {
+                        active: false,
+                        ..binding()
+                    }));
+                    async { Ok::<(), ()>(()) }
+                }
+            )
             .await,
         Ok(())
     );
     assert_eq!(
         admit
-            .read_with(&session, &id, "receiver", 7, |_| {
-                calls.fetch_add(1, Ordering::SeqCst);
-                async { Ok::<(), ()>(()) }
-            })
+            .read_with(
+                &session,
+                &id,
+                "receiver",
+                7,
+                PassiveRead::RecordHead,
+                |_| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    async { Ok::<(), ()>(()) }
+                }
+            )
             .await,
         Err(ReadRefusal::Unauthorized)
     );
@@ -532,10 +577,17 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
     ] {
         assert_eq!(
             admit
-                .read_with(&session, &id, receiver, epoch, |_| {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    async { Ok::<(), ()>(()) }
-                })
+                .read_with(
+                    &session,
+                    &id,
+                    receiver,
+                    epoch,
+                    PassiveRead::RecordHead,
+                    |_| {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        async { Ok::<(), ()>(()) }
+                    }
+                )
                 .await,
             Err(expected)
         );
@@ -560,14 +612,24 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
         .unwrap();
     assert_eq!(
         admit
-            .read_with(&session, &other, "receiver", 7, |_| {
-                calls.fetch_add(1, Ordering::SeqCst);
-                async { Ok::<(), ()>(()) }
-            })
+            .read_with(
+                &session,
+                &other,
+                "receiver",
+                7,
+                PassiveRead::RecordHead,
+                |_| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    async { Ok::<(), ()>(()) }
+                }
+            )
             .await,
         Err(ReadRefusal::WrongOwner)
     );
-    let catalogue = admit.catalogue(&session, "receiver", 7).await.unwrap();
+    let catalogue = admit
+        .catalogue(&session, "receiver", 7, PassiveRead::CatalogueHead)
+        .await
+        .unwrap();
     assert_eq!(catalogue.owner_id, PrincipalId::new("owner").unwrap());
     assert_eq!(
         catalogue.organization_id,
@@ -575,7 +637,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
     );
     assert_eq!(
         admit
-            .catalogue_with(&session, "wrong", 7, |_| {
+            .catalogue_with(&session, "wrong", 7, PassiveRead::CatalogueHead, |_| {
                 calls.fetch_add(1, Ordering::SeqCst);
                 async { Ok::<(), ()>(()) }
             })
@@ -588,16 +650,23 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
     }));
     assert_eq!(
         admit
-            .read_with(&session, &id, "receiver", 7, |_| {
-                calls.fetch_add(1, Ordering::SeqCst);
-                async { Ok::<(), ()>(()) }
-            })
+            .read_with(
+                &session,
+                &id,
+                "receiver",
+                7,
+                PassiveRead::RecordHead,
+                |_| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    async { Ok::<(), ()>(()) }
+                }
+            )
             .await,
         Err(ReadRefusal::WrongOwner)
     );
     assert_eq!(
         admit
-            .catalogue_with(&session, "receiver", 7, |_| {
+            .catalogue_with(&session, "receiver", 7, PassiveRead::CatalogueHead, |_| {
                 calls.fetch_add(1, Ordering::SeqCst);
                 async { Ok::<(), ()>(()) }
             })
@@ -607,10 +676,17 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
     *bindings.0.lock().unwrap() = Err(ReadRefusal::Unverifiable);
     assert_eq!(
         admit
-            .read_with(&session, &id, "receiver", 7, |_| {
-                calls.fetch_add(1, Ordering::SeqCst);
-                async { Ok::<(), ()>(()) }
-            })
+            .read_with(
+                &session,
+                &id,
+                "receiver",
+                7,
+                PassiveRead::RecordHead,
+                |_| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    async { Ok::<(), ()>(()) }
+                }
+            )
             .await,
         Err(ReadRefusal::Unverifiable)
     );
@@ -620,35 +696,56 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
     }));
     assert_eq!(
         admit
-            .read_with(&session, &id, "receiver", 7, |_| {
-                calls.fetch_add(1, Ordering::SeqCst);
-                async { Ok::<(), ()>(()) }
-            })
+            .read_with(
+                &session,
+                &id,
+                "receiver",
+                7,
+                PassiveRead::RecordHead,
+                |_| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    async { Ok::<(), ()>(()) }
+                }
+            )
             .await,
         Err(ReadRefusal::Unauthorized)
     );
     *bindings.0.lock().unwrap() = Ok(Some(binding()));
     assert_eq!(
         admit
-            .read_with(&session, &id, "receiver", 7, |_| {
-                access
-                    .0
-                    .lock()
-                    .unwrap()
-                    .credential
-                    .revoke(151, nessa_auth::domain::Initiator::LocalOperator)
-                    .unwrap();
-                async { Ok::<(), ()>(()) }
-            })
+            .read_with(
+                &session,
+                &id,
+                "receiver",
+                7,
+                PassiveRead::RecordHead,
+                |_| {
+                    access
+                        .0
+                        .lock()
+                        .unwrap()
+                        .credential
+                        .revoke(151, nessa_auth::domain::Initiator::LocalOperator)
+                        .unwrap();
+                    async { Ok::<(), ()>(()) }
+                }
+            )
             .await,
         Ok(())
     );
     assert_eq!(
         admit
-            .read_with(&session, &id, "receiver", 7, |_| {
-                calls.fetch_add(1, Ordering::SeqCst);
-                async { Ok::<(), ()>(()) }
-            })
+            .read_with(
+                &session,
+                &id,
+                "receiver",
+                7,
+                PassiveRead::RecordHead,
+                |_| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    async { Ok::<(), ()>(()) }
+                }
+            )
             .await,
         Err(ReadRefusal::Unauthorized)
     );
@@ -715,6 +812,7 @@ async fn catalogue_use_case_correlates_admitted_selector_and_operation_before_re
             gateway: &gateway,
             receivers: &bindings,
             conversations: &conversations,
+            grants: &CONVERSATION_READ_GRANT,
         },
         source: &source,
     };
@@ -890,4 +988,196 @@ async fn catalogue_use_case_correlates_admitted_selector_and_operation_before_re
         Err(CatalogueReadError::Admission(ReadRefusal::Unauthorized))
     ));
     assert_eq!(source.reads.load(Ordering::SeqCst), calls);
+}
+
+/// A page is not admitted on the head grant, and a manifest or resolve is not
+/// admitted on the catalogue-head grant. The operation being executed selects
+/// the grant.
+#[tokio::test]
+async fn each_operation_asks_for_its_own_grant() {
+    let asked = AskedActions(Mutex::new(Vec::new()));
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let conversations = LocalConversationStore::open(&private.join("metadata.sqlite3")).unwrap();
+    let access = access();
+    let clock = FixedClock;
+    let gateway = Resource::new(
+        OrganizationId::new("org").unwrap(),
+        ResourceId::new("gateway").unwrap(),
+    );
+    let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
+    let session = AuthenticateSession {
+        verifier: &access,
+        access: &access,
+        clock: &clock,
+    }
+    .execute(
+        &CredentialEvidence::new(b"secret".to_vec()).unwrap(),
+        &AudienceId::new("gateway").unwrap(),
+    )
+    .await
+    .unwrap();
+    let admission = AdmitPassiveRead {
+        authorization: AuthorizeAction {
+            access: &access,
+            clock: &clock,
+            policy: &asked,
+        },
+        gateway: &gateway,
+        receivers: &bindings,
+        conversations: &conversations,
+        grants: &OPERATION_GRANTS,
+    };
+    let records = RecordSpy::default();
+    let read = ReadRecords {
+        admission,
+        source: &records,
+    };
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let scope = Scope::new(
+        Id::new("receiver").unwrap(),
+        Id::new("origin").unwrap(),
+        Id::new("stream").unwrap(),
+        Id::new("incarnation").unwrap(),
+        Id::new("schema").unwrap(),
+        Id::new("epoch-7").unwrap(),
+    );
+    let page = PageRequest {
+        scope: scope.clone(),
+        after: 0,
+        target: 1,
+        max_records: 1,
+        max_payload_bytes: 1,
+        max_record_bytes: 1,
+    };
+    for (operation, grant) in [
+        (RecordReadOperation::Head, "record.head"),
+        (RecordReadOperation::Page(page), "record.page"),
+    ] {
+        asked.0.lock().unwrap().clear();
+        let result = read
+            .execute(
+                &session,
+                &id,
+                "receiver",
+                7,
+                operation,
+                RecordReadLease::new(()),
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(RecordReadError::Admission(ReadRefusal::Forbidden))
+        ));
+        assert_eq!(asked.0.lock().unwrap().as_slice(), &[grant]);
+    }
+    assert_eq!(records.reads.load(Ordering::SeqCst), 0);
+
+    let catalogues = CatalogueSpy {
+        reads: AtomicUsize::new(0),
+        reply: Mutex::new(None),
+    };
+    let admission = AdmitPassiveRead {
+        authorization: AuthorizeAction {
+            access: &access,
+            clock: &clock,
+            policy: &asked,
+        },
+        gateway: &gateway,
+        receivers: &bindings,
+        conversations: &conversations,
+        grants: &OPERATION_GRANTS,
+    };
+    let catalogue = ReadCatalogue {
+        admission,
+        source: &catalogues,
+    };
+    let pass = CataloguePass {
+        scope,
+        completed: 0,
+        boundary: 5,
+        cursor: None,
+        generation: 1,
+    };
+    let descriptor = ManifestEntry {
+        key: EntryKey {
+            creation: 1,
+            id: Id::new("entry").unwrap(),
+        },
+        revision: 2,
+        deleted: false,
+    };
+    let operations = [
+        (CatalogueReadOperation::Head, "catalogue.head"),
+        (
+            CatalogueReadOperation::Manifest(ManifestRequest {
+                pass: pass.clone(),
+                max_entries: 1,
+            }),
+            "catalogue.manifest",
+        ),
+        (
+            CatalogueReadOperation::Resolve {
+                pass,
+                descriptor,
+                max_payload_bytes: 1,
+            },
+            "catalogue.resolve",
+        ),
+    ];
+    for (operation, grant) in operations {
+        asked.0.lock().unwrap().clear();
+        let result = catalogue
+            .execute(&session, "receiver", 7, operation, RecordReadLease::new(()))
+            .await;
+        assert!(
+            matches!(
+                result,
+                Err(CatalogueReadError::Admission(ReadRefusal::Forbidden))
+            ),
+            "{grant}"
+        );
+        assert_eq!(asked.0.lock().unwrap().as_slice(), &[grant], "{grant}");
+    }
+    assert_eq!(catalogues.reads.load(Ordering::SeqCst), 0);
+}
+
+struct OperationGrants;
+
+impl PassiveReadGrants for OperationGrants {
+    fn grant(&self, read: PassiveRead) -> Option<&'static str> {
+        Some(match read {
+            PassiveRead::RecordHead => "record.head",
+            PassiveRead::RecordPage => "record.page",
+            PassiveRead::CatalogueHead => "catalogue.head",
+            PassiveRead::CatalogueManifest => "catalogue.manifest",
+            PassiveRead::CatalogueResolve => "catalogue.resolve",
+        })
+    }
+}
+
+static OPERATION_GRANTS: OperationGrants = OperationGrants;
+
+struct AskedActions(Mutex<Vec<&'static str>>);
+
+impl PolicyEvaluator for AskedActions {
+    fn evaluate(
+        &self,
+        _: &AuthContext,
+        action: &Action,
+        _: &Resource,
+        _: &AccessSnapshot,
+    ) -> Result<Decision, AccessError> {
+        let grant = match action.as_str() {
+            "record.head" => "record.head",
+            "record.page" => "record.page",
+            "catalogue.head" => "catalogue.head",
+            "catalogue.manifest" => "catalogue.manifest",
+            "catalogue.resolve" => "catalogue.resolve",
+            other => panic!("unexpected grant {other}"),
+        };
+        self.0.lock().unwrap().push(grant);
+        Ok(Decision::Deny)
+    }
 }
