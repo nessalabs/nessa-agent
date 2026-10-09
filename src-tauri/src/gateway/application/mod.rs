@@ -1,6 +1,8 @@
 //! Retryable desktop gateway reconciliation; native effects enter through the owned port.
 //! ClaudePublication serializes live/durable directory changes through ClaudeDirectorySettings;
-//! its guard completes rollback before another directory publication can begin.
+//! its owned transaction waits for native settlement, then completes any rollback
+//! before another directory publication can begin. Tests mirror it in
+//! `tests/gateway/application/claude_publication.rs`.
 mod ports;
 mod service;
 pub use crate::gateway::domain::value_objects::ReconciliationHistoryFact;

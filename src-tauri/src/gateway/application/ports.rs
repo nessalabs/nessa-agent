@@ -487,6 +487,8 @@ pub enum ClaudeSettingsPublishError {
 /// Durable Claude directory publication, serialized by the gateway publication owner.
 pub trait ClaudeDirectorySettings: Send + Sync {
     /// Publish the requested directory and return the durable value it replaced.
+    /// Once a store callback provides the prior value, an unconfirmed write
+    /// (including a panic) returns `NotConfirmed` with that value for rollback.
     fn publish(
         &self,
         directory: Option<PathBuf>,
