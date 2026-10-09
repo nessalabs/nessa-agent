@@ -2,6 +2,7 @@
 //! read or send after a stop (#541, #542). Rows of the tables in
 //! docs/design/conversation-admission.md.
 use super::*;
+use crate::conversation::application::lease_tests::{FailingRecords, RecordsLease};
 use crate::conversation::application::{AttachmentReleaseCause, SubmittedMessage};
 use crate::conversation_test_support::{
     mode_agents, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit,
@@ -12,7 +13,7 @@ use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationApprovalMode;
 use nessa_protocol::conversation::view::ConversationMessageStatus;
 use nessa_sdk::application::agent_execution::sessions::{
-    CommittedSession, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+    CommittedSession, LeaseRecord, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
 };
 use nessa_sdk::domain::agent_execution::prompts::ImageReference;
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
@@ -34,10 +35,13 @@ struct OpeningLog {
     opened: Notify,
     measure: AtomicBool,
     measured_from: StdMutex<Option<std::time::Instant>>,
+    /// Lease records whose saves are refused while it is set.
+    failing: FailingRecords,
 }
 impl OpeningLog {
     fn new() -> Self {
         Self {
+            failing: Arc::new(StdMutex::new(None)),
             inner: InMemoryStorage::new(),
             opens: AtomicUsize::new(0),
             opened: Notify::new(),
@@ -80,13 +84,24 @@ impl SessionStorage for OpeningLog {
                 *from = Some(std::time::Instant::now());
             }
         }
-        self.inner.open(id)
+        let failing = self.failing.clone();
+        Box::pin(async move {
+            Ok(
+                Box::new(RecordsLease::failing(self.inner.open(id).await?, failing))
+                    as Box<dyn SessionStorageLease>,
+            )
+        })
     }
     fn open_existing(
         &self,
         id: SessionId,
     ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
-        self.inner.open_existing(id)
+        let failing = self.failing.clone();
+        Box::pin(async move {
+            Ok(self.inner.open_existing(id).await?.map(|inner| {
+                Box::new(RecordsLease::failing(inner, failing)) as Box<dyn SessionStorageLease>
+            }))
+        })
     }
 }
 
@@ -572,6 +587,46 @@ async fn a_pending_mode_close_within_its_budget_releases_uploads_once() {
         .unwrap();
     let release = one_close_release(&fixture).await;
     assert_closer(&fixture, "close", &release);
+    fixture.service.shutdown().await.unwrap();
+}
+
+/// A close that let its agent go but could not save the record of that
+/// answers the failure, and lets go as a confirmed close does: the carry-on
+/// lets the uploads go once, in the caller's name, then the slot.
+#[tokio::test(start_paused = true)]
+async fn a_pending_mode_close_whose_cleanup_record_cannot_be_saved_lets_the_uploads_go_once() {
+    let fixture = Fixture::new(short_stop()).await;
+    fixture.live().await;
+    fixture.leave_mode_pending().await;
+    fixture.hold_upload();
+    *fixture.storage.failing.lock().unwrap() = Some(|record| {
+        matches!(
+            record,
+            LeaseRecord::Ended { .. } | LeaseRecord::CleanupReported { .. }
+        )
+    });
+    let stopped = fixture
+        .service
+        .close(fixture.id.clone(), fixture.caller("close"))
+        .await;
+    assert!(
+        matches!(
+            &stopped,
+            Err(ConversationError::Agent(AgentError::StorageDuringClose { cleanup_result, .. }))
+                if cleanup_result.is_ok()
+        ),
+        "{stopped:?}"
+    );
+    let release = one_close_release(&fixture).await;
+    assert_closer(&fixture, "close", &release);
+    tokio::time::timeout(BOUND, async {
+        while fixture.owns_slot().await {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the slot goes once the uploads are let go");
+    assert_eq!(fixture.attachments.releases.lock().unwrap().len(), 1);
     fixture.service.shutdown().await.unwrap();
 }
 

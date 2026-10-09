@@ -479,10 +479,19 @@ fn next_revision(current: Option<&CurrentLease>, accounting: &[LeaseRecord]) -> 
 fn confirmed_cleanup(result: &Result<CloseOutcome, AgentError>) -> Option<CloseOutcome> {
     match result {
         Ok(outcome) => Some(*outcome),
-        Err(AgentError::StorageDuringClose { cleanup_result, .. }) => {
+        Err(error) => confirmed_despite(error),
+    }
+}
+
+/// The cleanup a close that failed with `error` still confirmed: only saving
+/// the evidence of it failed. Its agent holds nothing then, whatever the
+/// close answers.
+pub(crate) fn confirmed_despite(error: &AgentError) -> Option<CloseOutcome> {
+    match error {
+        AgentError::StorageDuringClose { cleanup_result, .. } => {
             cleanup_result.as_ref().as_ref().ok().copied()
         }
-        Err(_) => None,
+        _ => None,
     }
 }
 
@@ -507,9 +516,16 @@ impl LiveLease {
     /// Interrupted, and a close confirmed later accounts for it (row L8).
     ///
     /// The caller runs this on a task of its own, so a caller that stops
-    /// waiting does not stop the lease from being accounted for. A lease
-    /// record that cannot be saved does not stop the close; it is logged and
-    /// stays retained for the next save.
+    /// waiting does not stop the lease from being accounted for.
+    ///
+    /// A lease record that cannot be saved does not stop the close, and it
+    /// stays retained. The close then writes every record still retained,
+    /// those of an earlier close that failed to save included, and answers
+    /// success only once they are durable. Otherwise a close that confirmed
+    /// cleanup answers [`AgentError::StorageDuringClose`] carrying that
+    /// cleanup: its agent is let go, and the lease, which the records do not
+    /// show ended, is accounted for by the next opening, as one an earlier
+    /// run left (`l7_a_close_whose_cleanup_record_cannot_be_saved_says_so_and_the_next_opening_accounts_for_it`).
     pub(crate) async fn close(
         &self,
         agent: &Agent,
@@ -520,15 +536,18 @@ impl LiveLease {
         let manager = agent.session_manager();
         let lease = self.lease.clone();
         let ending_actor = actor.clone();
-        self.record(manager, move |held| match held.map(Lease::phase) {
-            Some(LeasePhase::Live) => vec![LeaseRecord::Ending {
-                lease,
-                cause,
-                actor: Some(ending_actor),
-            }],
-            _ => Vec::new(),
-        })
-        .await;
+        // Logged where it fails; whether it was saved in the end is answered
+        // below, once the close has made every record it makes.
+        let _ = self
+            .record(manager, move |held| match held.map(Lease::phase) {
+                Some(LeasePhase::Live) => vec![LeaseRecord::Ending {
+                    lease,
+                    cause,
+                    actor: Some(ending_actor),
+                }],
+                _ => Vec::new(),
+            })
+            .await;
         self.fence.ending();
         let close = agent.close(actor);
         tokio::pin!(close);
@@ -555,7 +574,23 @@ impl LiveLease {
         // (`l8_a_turn_running_past_the_cleanup_deadline_settles_and_the_lease_is_accounted`).
         self.fence.close();
         self.record_drops(manager).await;
-        result
+        let saved = manager.save_retained_lease_records().await;
+        match (result, saved) {
+            (result, Ok(())) => result,
+            (Ok(outcome), Err(error)) => {
+                tracing::error!(lease = self.lease.as_str(), %error, "a close's lease records were not saved");
+                Err(AgentError::StorageDuringClose {
+                    error,
+                    cleanup_result: Box::new(Ok(outcome)),
+                })
+            }
+            // The close failed already, which is what it answers; the
+            // records stay retained for the next close.
+            (Err(failure), Err(error)) => {
+                tracing::error!(lease = self.lease.as_str(), %error, "a close's lease records were not saved");
+                Err(failure)
+            }
+        }
     }
 
     /// Record the close's confirmation as this lease's cleanup evidence.
@@ -564,39 +599,43 @@ impl LiveLease {
         let cleanup = LeaseCleanup::Confirmed {
             forced: outcome.forced,
         };
-        self.record(manager, move |held| match held.map(Lease::phase) {
-            Some(LeasePhase::Ending { .. }) => vec![LeaseRecord::Ended { lease, cleanup }],
-            Some(LeasePhase::Interrupted {
-                late_cleanup: None, ..
-            }) => vec![LeaseRecord::CleanupReported { lease, cleanup }],
-            _ => Vec::new(),
-        })
-        .await;
+        let _ = self
+            .record(manager, move |held| match held.map(Lease::phase) {
+                Some(LeasePhase::Ending { .. }) => vec![LeaseRecord::Ended { lease, cleanup }],
+                Some(LeasePhase::Interrupted {
+                    late_cleanup: None, ..
+                }) => vec![LeaseRecord::CleanupReported { lease, cleanup }],
+                _ => Vec::new(),
+            })
+            .await;
     }
 
     async fn interrupt(&self, manager: &SessionManager) {
         let lease = self.lease.clone();
-        self.record(manager, move |held| match held.map(Lease::phase) {
-            Some(LeasePhase::Ending { .. }) => vec![LeaseRecord::Interrupted { lease }],
-            _ => Vec::new(),
-        })
-        .await;
+        let _ = self
+            .record(manager, move |held| match held.map(Lease::phase) {
+                Some(LeasePhase::Ending { .. }) => vec![LeaseRecord::Interrupted { lease }],
+                _ => Vec::new(),
+            })
+            .await;
     }
 
     async fn record_drops(&self, manager: &SessionManager) {
         let drops = self.fence.take_drops();
         if !drops.is_empty() {
-            self.record(manager, move |_| drops).await;
+            let _ = self.record(manager, move |_| drops).await;
         }
     }
 
     /// Commit what `decide` makes of this lease, as it now stands, and log a
-    /// failure. `decide` sees the lease only while it is this one.
+    /// failure, which it also answers. `decide` sees the lease only while it
+    /// is this one. A record retained but not saved is written by the close's
+    /// last save, which decides what the close answers.
     async fn record(
         &self,
         manager: &SessionManager,
         decide: impl FnOnce(Option<&Lease>) -> Vec<LeaseRecord>,
-    ) {
+    ) -> Result<(), LeaseRecordError> {
         let lease = &self.lease;
         let commit = manager
             .record_lease(|current| {
@@ -607,13 +646,14 @@ impl LiveLease {
             })
             .await;
         let failure = match commit {
-            Ok(LeaseCommit { saved: Ok(()), .. }) => return,
+            Ok(LeaseCommit { saved: Ok(()), .. }) => return Ok(()),
             Ok(LeaseCommit {
                 saved: Err(error), ..
             })
             | Err(error) => error,
         };
         tracing::error!(lease = lease.as_str(), %failure, "a lease record was not saved");
+        Err(failure)
     }
 }
 

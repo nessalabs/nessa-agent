@@ -362,12 +362,12 @@ their rows; the fold's are named for what they show.
 | Row | Domain | Fold | In process |
 | --- | --- | --- | --- |
 | L1 | yes | yes | yes: the lease is Live with the harness default before the first turn |
-| L2 | yes | yes | yes: a profile the environment cannot hold is refused, nothing runs; the deadline half is not reachable, as L3 |
+| L2 | yes | yes | yes: a profile the environment cannot hold is refused, nothing runs; a refusal that cannot be saved answers a storage failure and is asked again once storage recovers (see below); the deadline half is not reachable, as L3 |
 | L3 | yes | | not reachable: in-process leases carry no deadline |
 | L4 | yes | | not reachable, as L3 |
-| L5 | yes | | yes: a person's close and a desktop stop each record their cause first |
+| L5 | yes | | yes: a person's close and a desktop stop each record their cause first; an opening whose lease cannot be saved holds nothing and opens again, and a stop whose cleanup record cannot be saved still lets the conversation open again (see below) |
 | L6 | yes | | yes, as far as it can arise: a stop during a close waits behind it and records nothing more; the join is the aggregate's |
-| L7 | yes | yes | yes |
+| L7 | yes | yes | yes: a close whose cleanup record cannot be saved says so, and the next opening accounts for the lease (see below) |
 | L8 | yes | yes | yes: a close past its deadline, with or without a turn running, and a close that fails, interrupt; late confirmation accounts once |
 | L9 | yes | yes | fence: events settle while Ending and are dropped with lease, turn and cursor once closed (see below) |
 | L10 | yes | | not reachable: in process there is no control channel to lose |
@@ -381,7 +381,7 @@ their rows; the fold's are named for what they show.
 | L18 | | | not in slice A, as L17 |
 | L19 | | | not in slice A: low-disk pause is an environment limit from B |
 | L20 | | | not in slice A: the lease does not watch the harness; the client words Live as "Allowed to run" |
-| L21 | | yes: the fold keeps it Unreadable and accepts a later revision after it | yes: the opening is refused as `conversation_state_unreadable` and nothing is written |
+| L21 | | yes: the fold keeps it Unreadable and accepts a later revision after it | yes: the opening is refused as `conversation_state_unreadable` and nothing is written, a refusal included |
 
 A row marked "not in slice A" is not implemented, under the rule above.
 
@@ -407,6 +407,24 @@ an earlier run started is killed when its handle drops, which a crash skips,
 so whether one outlived the gateway is not known. A passive reader of the
 committed records sees the last lease recorded until the conversation next
 opens.
+
+How slice A keeps lease records durable. One rule: a lease record a
+command made is saved, or that command answers a storage failure. A record
+that fails to save stays retained and is written by the next save while
+the Agent lives. A refusal is reported as the refusal only once its record
+is durable. A close or stop answers success only once every record it made
+is durable. When it confirmed cleanup but could not save that, it answers a
+storage failure carrying the cleanup it confirmed, and its agent is let go
+all the same, since it holds nothing: the records then show the lease
+still Live or Ending, and the next opening accounts for it as it does a
+lease an earlier run left (L11), so it ends `not_held` rather than with the
+confirmed cleanup that was never saved. A delete does not answer that
+failure, because the record belongs to the history it erases; until the
+erasure finishes, which the tombstone retries, the history shows the lease
+as the stop left it. What a failed opening still holds is the Agent's own
+fact, not whether its close succeeded: an opening whose only failure is a
+record it could not save holds nothing, so the next command opens the
+conversation again instead of being answered from the failure.
 
 ## Three transports, one contract
 

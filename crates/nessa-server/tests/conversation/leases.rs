@@ -108,11 +108,17 @@ impl Environment for Substitute {
     }
 }
 
+/// Which lease records a save is refused for while it is set.
+pub(super) type FailingRecords = Arc<Mutex<Option<fn(&LeaseRecord) -> bool>>>;
+
 /// The record store, refusing the next save that issues or refuses a lease
-/// while `fail_issue` is set, as a disk that went away for a moment would.
+/// while `fail_issue` is set, as a disk that went away for a moment would,
+/// and every save holding a record `failing` names while it is set, as a disk
+/// that stays away would.
 struct Records {
     inner: RecordStorage,
     fail_issue: Arc<AtomicBool>,
+    failing: FailingRecords,
 }
 impl SessionStorage for Records {
     fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
@@ -123,9 +129,14 @@ impl SessionStorage for Records {
     }
     fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
         let fail_issue = self.fail_issue.clone();
+        let failing = self.failing.clone();
         Box::pin(async move {
             let inner = self.inner.open(id).await?;
-            Ok(Box::new(RecordsLease { inner, fail_issue }) as Box<dyn SessionStorageLease>)
+            Ok(Box::new(RecordsLease {
+                inner,
+                fail_issue,
+                failing,
+            }) as Box<dyn SessionStorageLease>)
         })
     }
     fn open_existing(
@@ -133,16 +144,33 @@ impl SessionStorage for Records {
         id: SessionId,
     ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
         let fail_issue = self.fail_issue.clone();
+        let failing = self.failing.clone();
         Box::pin(async move {
             Ok(self.inner.open_existing(id).await?.map(|inner| {
-                Box::new(RecordsLease { inner, fail_issue }) as Box<dyn SessionStorageLease>
+                Box::new(RecordsLease {
+                    inner,
+                    fail_issue,
+                    failing,
+                }) as Box<dyn SessionStorageLease>
             }))
         })
     }
 }
-struct RecordsLease {
+pub(super) struct RecordsLease {
     inner: Box<dyn SessionStorageLease>,
     fail_issue: Arc<AtomicBool>,
+    failing: FailingRecords,
+}
+impl RecordsLease {
+    /// `inner`, refusing every save holding a record `failing` names while
+    /// it is set; for another test's store.
+    pub(super) fn failing(inner: Box<dyn SessionStorageLease>, failing: FailingRecords) -> Self {
+        Self {
+            inner,
+            fail_issue: Arc::new(AtomicBool::new(false)),
+            failing,
+        }
+    }
 }
 impl SessionStorageLease for RecordsLease {
     fn load(&self) -> StorageFuture<'_, SessionLoad> {
@@ -163,7 +191,14 @@ impl SessionStorageLease for RecordsLease {
                     SessionChange::Lease(LeaseRecord::Issued { .. } | LeaseRecord::Refused { .. })
                 )
             });
-        if issues && self.fail_issue.swap(false, Ordering::SeqCst) {
+        let failing = *self.failing.lock().unwrap();
+        let refused = failing.is_some_and(|failing| {
+            units
+                .iter()
+                .flat_map(SessionSaveUnit::changes)
+                .any(|change| matches!(change, SessionChange::Lease(record) if failing(record)))
+        });
+        if refused || (issues && self.fail_issue.swap(false, Ordering::SeqCst)) {
             return Box::pin(async { Err(StorageError::Io("the disk went away".into())) });
         }
         self.inner.save_changes(binding, snapshot, units)
@@ -211,6 +246,7 @@ fn harness(
     let storage = Arc::new(Records {
         inner: RecordStorage::new(root.join("sessions")).unwrap(),
         fail_issue: Arc::new(AtomicBool::new(false)),
+        failing: Arc::new(Mutex::new(None)),
     });
     let service = ConversationService::new(
         ConversationDependencies {
@@ -745,6 +781,14 @@ async fn l8_a_turn_running_past_the_cleanup_deadline_settles_and_the_lease_is_ac
 
 #[tokio::test]
 async fn l21_a_latest_lease_this_build_cannot_read_is_never_issued_over() {
+    // Whether or not the environment would refuse the opening: a refusal is
+    // not written over a lease this build cannot read either.
+    for profiles in [SandboxProfiles::HARNESS_DEFAULT, SandboxProfiles::NONE] {
+        a_latest_lease_this_build_cannot_read_is_never_issued_over(profiles).await;
+    }
+}
+
+async fn a_latest_lease_this_build_cannot_read_is_never_issued_over(profiles: SandboxProfiles) {
     let root = tempfile::tempdir().unwrap();
     let harness = in_process(root.path(), DELETION_BUDGETS.stop);
     harness.create().await;
@@ -778,7 +822,7 @@ async fn l21_a_latest_lease_this_build_cannot_read_is_never_issued_over() {
     let provider = harness.provider.clone();
     harness.service.shutdown().await.unwrap();
     drop(harness);
-    let substitute = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    let substitute = Arc::new(Substitute::new(profiles));
     let restarted = harness_on(root.path(), substitute.clone(), provider.clone());
     let opened = provider.open_calls.load(Ordering::SeqCst);
     let refused = restarted
@@ -796,7 +840,10 @@ async fn l21_a_latest_lease_this_build_cannot_read_is_never_issued_over() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(refused, ConversationError::LeaseUnreadable));
+    assert!(
+        matches!(refused, ConversationError::LeaseUnreadable),
+        "{refused:?}"
+    );
     assert_eq!(
         crate::conversation::application::error_code(&refused),
         ConversationErrorCode::ConversationStateUnreadable
@@ -925,6 +972,245 @@ async fn l2_a_refusal_whose_record_failed_to_save_is_still_the_refusal() {
         unreachable!()
     };
     assert_eq!(*refusal, LeaseRefusal::SandboxUnavailable);
+}
+
+#[tokio::test]
+async fn l2_a_refusal_that_cannot_be_saved_is_a_storage_failure_and_is_retried_once_storage_recovers(
+) {
+    let root = tempfile::tempdir().unwrap();
+    let provider = Arc::new(ProviderFactory::default());
+    let substitute = Arc::new(Substitute::new(SandboxProfiles::NONE));
+    let binding = Arc::new(Provider::new(provider.clone()));
+    let harness = harness(
+        root.path(),
+        substitute,
+        DELETION_BUDGETS.stop,
+        provider.clone(),
+        binding,
+    );
+    // The disk stays away for the refusal: its write and the retry fail.
+    *harness.storage.failing.lock().unwrap() =
+        Some(|record| matches!(record, LeaseRecord::Refused { .. }));
+    let failed = harness
+        .service
+        .create(
+            harness.id.clone(),
+            caller("create"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap_err();
+    // A refusal the records do not hold is not reported as if they did.
+    assert!(
+        matches!(failed, ConversationError::Storage(_)),
+        "{failed:?}"
+    );
+    // Nothing was attached, so nothing holds the conversation: once the disk
+    // is back the next command opens it again rather than being answered
+    // from the failure.
+    *harness.storage.failing.lock().unwrap() = None;
+    let refused = harness
+        .service
+        .read(harness.id.clone(), caller("read"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            refused,
+            ConversationError::LeaseRefused(LeaseRefusal::SandboxUnavailable)
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(kinds(&harness.lease().await), ["refused"]);
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+}
+
+/// A conversation that has run a turn, whose next cleanup records cannot be
+/// saved.
+async fn with_cleanup_records_failing(
+    root: &Path,
+    failing: fn(&LeaseRecord) -> bool,
+) -> (Harness, Arc<Substitute>) {
+    let provider = Arc::new(ProviderFactory::default());
+    let substitute = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    let binding = Arc::new(Provider::new(provider.clone()));
+    let harness = harness(
+        root,
+        substitute.clone(),
+        DELETION_BUDGETS.stop,
+        provider,
+        binding,
+    );
+    harness.create().await;
+    harness.turn("turn-1").await;
+    *harness.storage.failing.lock().unwrap() = Some(failing);
+    (harness, substitute)
+}
+
+/// Once the disk is back, the conversation opens again, and that opening
+/// accounts for the lease the records do not show ended, before it issues
+/// the next.
+async fn opens_again_and_accounts_for_the_lease(harness: &Harness, substitute: &Substitute) {
+    assert_eq!(harness.provider.close_calls.load(Ordering::SeqCst), 1);
+    *harness.storage.failing.lock().unwrap() = None;
+    harness.turn("turn-2").await;
+    assert_eq!(substitute.accounted.lock().unwrap().len(), 1);
+    harness
+        .service
+        .close(harness.id.clone(), caller("close-again"))
+        .await
+        .unwrap();
+    let lease = harness.lease().await;
+    assert_eq!(lease.revision(), Some(LeaseRevision::new(2).unwrap()));
+    assert_eq!(kinds(&lease), ["issued", "ending", "ended"]);
+}
+
+#[tokio::test]
+async fn l7_a_close_whose_cleanup_record_cannot_be_saved_says_so_and_the_next_opening_accounts_for_it(
+) {
+    let root = tempfile::tempdir().unwrap();
+    // The records keep the lease Ending.
+    let (harness, substitute) = with_cleanup_records_failing(root.path(), |record| {
+        matches!(
+            record,
+            LeaseRecord::Ended { .. } | LeaseRecord::CleanupReported { .. }
+        )
+    })
+    .await;
+    // The agent is let go of, but the evidence of it is not saved: the close
+    // does not answer as if it were.
+    let failed = harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            &failed,
+            ConversationError::Agent(AgentError::StorageDuringClose { cleanup_result, .. })
+                if cleanup_result.is_ok()
+        ),
+        "{failed:?}"
+    );
+    opens_again_and_accounts_for_the_lease(&harness, &substitute).await;
+}
+
+#[tokio::test]
+async fn l5_a_desktop_stop_whose_cleanup_record_cannot_be_saved_says_so_and_the_conversation_opens_again(
+) {
+    let root = tempfile::tempdir().unwrap();
+    // The records keep the lease Live: not even its Ending is saved.
+    let (harness, substitute) = with_cleanup_records_failing(root.path(), |record| {
+        matches!(
+            record,
+            LeaseRecord::Ending { .. }
+                | LeaseRecord::Interrupted { .. }
+                | LeaseRecord::Ended { .. }
+                | LeaseRecord::CleanupReported { .. }
+        )
+    })
+    .await;
+    let failed = harness.service.stop_active_agents().await.unwrap_err();
+    assert!(
+        matches!(
+            &failed,
+            ConversationError::Retirement(failures)
+                if matches!(failures.as_slice(), [(_, AgentError::StorageDuringClose { .. })])
+        ),
+        "{failed:?}"
+    );
+    // The stopped agent is not kept marked as stopping: the next message
+    // opens the conversation again rather than being refused.
+    opens_again_and_accounts_for_the_lease(&harness, &substitute).await;
+}
+
+#[tokio::test]
+async fn l5_l11_an_opening_whose_lease_cannot_be_saved_holds_nothing_and_opens_again_once_storage_recovers(
+) {
+    let root = tempfile::tempdir().unwrap();
+    let harness = in_process(root.path(), DELETION_BUDGETS.stop);
+    harness.create().await;
+    harness.turn("turn-1").await;
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    // The disk stays away for the next opening's lease: neither the issue
+    // nor the close that ends it can be saved.
+    *harness.storage.failing.lock().unwrap() = Some(|record| {
+        matches!(
+            record,
+            LeaseRecord::Issued { .. } | LeaseRecord::Ending { .. } | LeaseRecord::Ended { .. }
+        )
+    });
+    let failed = harness
+        .service
+        .submit(
+            harness.id.clone(),
+            caller("turn-2"),
+            "turn-2".into(),
+            SubmittedMessage {
+                text: "hello".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
+            SubmissionMode::Queue,
+        )
+        .await;
+    assert!(
+        matches!(failed, Err(ConversationError::Storage(_))),
+        "{failed:?}"
+    );
+    // Nothing was attached, so the failure is not kept: once the disk is
+    // back the conversation opens again and its turn runs.
+    *harness.storage.failing.lock().unwrap() = None;
+    harness.turn("turn-3").await;
+    harness
+        .service
+        .close(harness.id.clone(), caller("close-again"))
+        .await
+        .unwrap();
+    // The failed opening's lease never became durable and does not surface
+    // later: the lease now recorded is the third turn's, at the revision
+    // after the first.
+    let lease = harness.lease().await;
+    assert_eq!(kinds(&lease), ["issued", "ending", "ended"]);
+    let LeaseRecord::Issued {
+        revision, actor, ..
+    } = &lease.records()[0]
+    else {
+        panic!("the lease is issued first: {:?}", lease.records());
+    };
+    assert_eq!(*revision, LeaseRevision::new(2).unwrap());
+    assert_eq!(actor.request_id(), "turn-3");
+}
+
+#[tokio::test]
+async fn l7_a_delete_whose_cleanup_record_cannot_be_saved_still_erases_the_history() {
+    let root = tempfile::tempdir().unwrap();
+    let harness = in_process(root.path(), DELETION_BUDGETS.stop);
+    harness.create().await;
+    harness.turn("turn-1").await;
+    *harness.storage.failing.lock().unwrap() = Some(|record| {
+        matches!(
+            record,
+            LeaseRecord::Ended { .. } | LeaseRecord::CleanupReported { .. }
+        )
+    });
+    // The agent's cleanup is confirmed. The record of it is in the history
+    // the delete erases, so its durability is not what the delete waits for.
+    assert!(harness
+        .service
+        .delete(harness.id.clone(), caller("delete"))
+        .await
+        .unwrap());
+    assert_eq!(harness.provider.close_calls.load(Ordering::SeqCst), 1);
+    // Its history is erased, and nothing holds it.
+    let session = SessionId::new(harness.id.to_string()).unwrap();
+    if let Some(lease) = harness.storage.open_existing(session).await.unwrap() {
+        assert!(lease.load().await.unwrap().snapshot().is_none());
+    }
 }
 
 #[tokio::test]

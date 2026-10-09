@@ -3,7 +3,9 @@ mod mutation;
 use super::session_key::conversation_session;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
-    environment::{issue, open_lease, Environment, LeaseIssueError, LeaseRequest, LiveLease},
+    environment::{
+        confirmed_despite, issue, open_lease, Environment, LeaseIssueError, LeaseRequest, LiveLease,
+    },
     locks::ConversationLocks,
     mcp_apps::{McpAppError, McpAppInitiator, McpAppPorts, McpAppRef},
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
@@ -1401,25 +1403,42 @@ impl ConversationService {
                                 );
                             let refused = match (issued, opening.refusal) {
                                 (Ok(()), None) => None,
-                                // Nothing ran and the refusal is the cause,
-                                // whether or not its record was saved.
-                                (issued, Some(refusal)) => {
-                                    if let Err(error) = issued {
-                                        tracing::error!(conversation_id = %id, %error, "a refused lease could not be recorded");
-                                        // A refused opening is never attached, so
-                                        // its close saves nothing: what the failed
-                                        // write left retained is written here, so
-                                        // the refusal is in the records
-                                        // (`l2_a_refusal_whose_record_failed_to_save_is_still_the_refusal`).
-                                        if let Err(error) = agent
-                                            .session_manager()
-                                            .save_retained_lease_records()
-                                            .await
-                                        {
-                                            tracing::error!(conversation_id = %id, %error, "a refused lease could not be saved");
+                                // Nothing ran. The refusal is the cause once its
+                                // record is durable; until then the cause is the
+                                // storage failure, as for an issued lease whose
+                                // record failed (one rule: a lease record a
+                                // command made is saved, or it answers a storage
+                                // failure).
+                                // Any other failure to issue falls through to
+                                // its own answer below: nothing was retained, so
+                                // nothing of the refusal is in the records.
+                                (
+                                    issued @ (Ok(())
+                                    | Err(LeaseIssueError::Record(LeaseRecordError::Storage(_)))),
+                                    Some(refusal),
+                                ) => {
+                                    let saved = match issued {
+                                        Ok(()) => Ok(()),
+                                        Err(error) => {
+                                            tracing::error!(conversation_id = %id, %error, "a refused lease could not be recorded");
+                                            // A refused opening is never attached,
+                                            // so its close saves nothing: what the
+                                            // failed write left retained is written
+                                            // here
+                                            // (`l2_a_refusal_whose_record_failed_to_save_is_still_the_refusal`).
+                                            agent
+                                                .session_manager()
+                                                .save_retained_lease_records()
+                                                .await
                                         }
-                                    }
-                                    Some(ConversationError::LeaseRefused(refusal))
+                                    };
+                                    Some(match saved {
+                                        Ok(()) => ConversationError::LeaseRefused(refusal),
+                                        Err(error) => {
+                                            tracing::error!(conversation_id = %id, %error, ?refusal, "a refused lease could not be saved");
+                                            ConversationError::Storage(error)
+                                        }
+                                    })
                                 }
                                 (Err(error), _) => {
                                     tracing::error!(conversation_id = %id, %error, "a lease could not be recorded");
@@ -1459,7 +1478,16 @@ impl ConversationService {
                                 } else {
                                     agent.close(actor.clone()).await
                                 };
-                                let holds = closed.is_err();
+                                if let Err(error) = &closed {
+                                    tracing::error!(conversation_id = %id, %error, "a failed opening's close did not finish");
+                                }
+                                // What it holds is the Agent's own fact, not the
+                                // close's diagnostic: a close whose only failure
+                                // is a record it could not save holds nothing, and
+                                // a failed opening that holds nothing is let go,
+                                // so the next command opens it again
+                                // (`l2_a_refusal_that_cannot_be_saved_is_a_storage_failure_and_is_retried_once_storage_recovers`).
+                                let holds = agent.may_hold_provider_resources();
                                 return Err(OpeningFailure { cause, holds });
                             }
                             let lease = LiveLease::new(&opening);
@@ -1610,9 +1638,16 @@ impl ConversationService {
             // Past the budget the stop carries on and lets the slot go once
             // the close is confirmed. Leaving it would keep the reopened
             // agent, and the next submission would be admitted there.
+            // An agent let go whose record only was not saved answers that
+            // failure: the mode is not uncertain, the records are.
             self.stop_and_release(id, slot, &actor, &McpAppInitiator::System)
                 .await
-                .map_err(|_| ConversationError::ApprovalModeUncertain)?;
+                .map_err(|stop| match stop {
+                    StopFailure::Failed(error) if confirmed_despite(&error).is_some() => {
+                        ConversationError::Agent(error)
+                    }
+                    _ => ConversationError::ApprovalModeUncertain,
+                })?;
         }
         Ok(())
     }
@@ -2998,6 +3033,14 @@ impl ConversationService {
                         PendingClose::Stopped(StopFailure::OverBudget) => {
                             (Err(ConversationError::ApprovalModeUncertain), Ok(()))
                         }
+                        // The agent was let go, and only the record of it was
+                        // not saved: the carry-on lets the uploads go, then
+                        // the slot, and the close answers the failure.
+                        PendingClose::Stopped(StopFailure::Failed(error))
+                            if confirmed_despite(&error).is_some() =>
+                        {
+                            (Err(ConversationError::Agent(error)), Ok(()))
+                        }
                         PendingClose::Stopped(_) => {
                             if service.inner.attachments.is_some() {
                                 tracing::warn!(
@@ -3017,7 +3060,15 @@ impl ConversationService {
                         let result = service
                             .close_leased(&live, LeaseEndCause::Closed, actor)
                             .await;
-                        if result.is_ok() {
+                        // Let go once its cleanup is confirmed, even when the
+                        // record of that was not saved: the close answers that
+                        // failure, and the next opening accounts for the lease
+                        // (`l7_a_close_whose_cleanup_record_cannot_be_saved_says_so_and_the_next_opening_accounts_for_it`).
+                        let closed = match &result {
+                            Ok(_) => true,
+                            Err(error) => confirmed_despite(error).is_some(),
+                        };
+                        if closed {
                             let _ = live.join_attachment_owner().await;
                             service.release_live_slot(&id, &live).await;
                         }
@@ -3026,7 +3077,7 @@ impl ConversationService {
                         // need the files. An agent that did not close keeps its
                         // saved invocations, and one of those may be a turn that
                         // names images and has not settled.
-                        let may_release = result.is_ok() || !awaits_images(snapshot.as_ref());
+                        let may_release = closed || !awaits_images(snapshot.as_ref());
                         (
                             result.map(|_| ()).map_err(ConversationError::Agent),
                             may_release,
@@ -3510,16 +3561,34 @@ impl ConversationService {
             // awaits anything, so retirement winning loses none of them
             // (`c15_a_delete_cut_short_by_retirement_records_each_drop_once`).
             let stopped = tokio::select! {
-                stopped = self.stop_slot(&id, slot, &actor, deleted_by, LeaseEndCause::Closed) => stopped,
+                stopped = self.stop_slot(
+                    &id,
+                    slot,
+                    StopBy {
+                        actor: &actor,
+                        ended_by: deleted_by,
+                        cause: LeaseEndCause::Closed,
+                    },
+                ) => stopped,
                 () = self.retired() => Err(StopFailure::Failed(AgentError::Closed)),
             };
-            if let Err(stop) = stopped {
-                return Err(ConversationError::DeletionIncomplete(Box::new(
-                    DeletionFailures {
-                        stop: Some(stop),
-                        ..DeletionFailures::default()
-                    },
-                )));
+            match stopped {
+                Ok(()) => {}
+                // The agent was let go and only the record of it was not
+                // saved. That record is in the history this erases, so it is
+                // not what the delete waits for
+                // (`l7_a_delete_whose_cleanup_record_cannot_be_saved_still_erases_the_history`).
+                Err(StopFailure::Failed(error)) if confirmed_despite(&error).is_some() => {
+                    tracing::warn!(conversation_id = %id, %error, "a deletion's stop confirmed cleanup whose record was not saved");
+                }
+                Err(stop) => {
+                    return Err(ConversationError::DeletionIncomplete(Box::new(
+                        DeletionFailures {
+                            stop: Some(stop),
+                            ..DeletionFailures::default()
+                        },
+                    )))
+                }
             }
         }
         let mut failures = DeletionFailures::default();
@@ -4044,9 +4113,11 @@ impl ConversationService {
                     self.stop_slot(
                         &id,
                         slot,
-                        actor,
-                        &McpAppInitiator::System,
-                        LeaseEndCause::Stopped,
+                        StopBy {
+                            actor,
+                            ended_by: &McpAppInitiator::System,
+                            cause: LeaseEndCause::Stopped,
+                        },
                     )
                     .await
                 }
@@ -4078,7 +4149,9 @@ impl ConversationService {
     }
 
     /// Stop one owner, waiting for it to finish opening if it has not, and
-    /// release its slot once it is confirmed closed. Bounded by
+    /// release its slot once its cleanup is confirmed ([`let_go`]), which a
+    /// stop that answers a failure to save that cleanup's record has also
+    /// done. Bounded by
     /// [`ConversationDeletionBudgets::stop`]: running out of time is
     /// [`StopFailure::OverBudget`], its own outcome and never the stop's own
     /// error, which means only that cleanup is unconfirmed; the slot and
@@ -4095,23 +4168,11 @@ impl ConversationService {
         &self,
         id: &ConversationId,
         slot: Arc<Slot>,
-        actor: &ActionContext,
-        ended_by: &McpAppInitiator,
-        cause: LeaseEndCause,
+        by: StopBy<'_>,
     ) -> Result<(), StopFailure> {
         match tokio::time::timeout(
             self.inner.deletion_budgets.stop,
-            self.stopping(
-                id,
-                slot,
-                None,
-                StopBy {
-                    actor,
-                    ended_by,
-                    cause,
-                },
-                ConfirmedClose::ReleaseSlot,
-            ),
+            self.stopping(id, slot, None, by, ConfirmedClose::ReleaseSlot),
         )
         .await
         {
@@ -4254,7 +4315,7 @@ impl ConversationService {
                     ConfirmedClose::HoldSlot,
                 )
                 .await;
-            let confirmed = stopped.is_ok();
+            let confirmed = let_go(&stopped);
             let _ = confirmed_tx.send(stopped);
             if !confirmed {
                 return;
@@ -4368,16 +4429,22 @@ impl ConversationService {
                         // ended, and is M10
                         // (`m10_a_message_after_a_desktop_stops_mark_is_refused_and_opens_nothing`).
                         drop(submissions.take());
-                        match self.close_leased(live, cause, actor.clone()).await {
-                            Ok(_) => {
-                                let _ = live.join_attachment_owner().await;
-                                if on_confirm == ConfirmedClose::ReleaseSlot {
-                                    self.release_slot(id, &slot).await;
-                                }
-                                Ok(())
+                        let closed = self
+                            .close_leased(live, cause, actor.clone())
+                            .await
+                            .map(|_| ());
+                        // Its cleanup confirmed, the agent holds nothing, and
+                        // the slot goes even when the record of that was not
+                        // saved: the stop answers that failure, and the next
+                        // opening accounts for the lease
+                        // (`l5_a_desktop_stop_whose_cleanup_record_cannot_be_saved_says_so_and_the_conversation_opens_again`).
+                        if let_go(&closed) {
+                            let _ = live.join_attachment_owner().await;
+                            if on_confirm == ConfirmedClose::ReleaseSlot {
+                                self.release_slot(id, &slot).await;
                             }
-                            Err(error) => Err(error),
                         }
+                        closed
                     }
                     // One rule for a failed opening: while it may still hold
                     // what it launched, its stop cannot be confirmed.
@@ -4450,7 +4517,9 @@ enum PendingClose {
         uploads: Result<(), ConversationError>,
     },
     /// The close did not confirm within the budget, or it failed. Over budget,
-    /// the carry-on lets the uploads go and then releases the slot.
+    /// or failed having confirmed the cleanup it could not record
+    /// ([`let_go`]), the carry-on lets the uploads go and then releases the
+    /// slot; the caller lets nothing go.
     Stopped(StopFailure),
 }
 
@@ -4461,6 +4530,15 @@ struct StopBy<'a> {
     actor: &'a ActionContext,
     ended_by: &'a McpAppInitiator,
     cause: LeaseEndCause,
+}
+
+/// Whether a stop let its agent go: it closed, or it confirmed the cleanup
+/// and only saving the record of it failed.
+fn let_go(stopped: &Result<(), AgentError>) -> bool {
+    match stopped {
+        Ok(()) => true,
+        Err(error) => confirmed_despite(error).is_some(),
+    }
 }
 
 /// Whether a confirmed close releases its slot here.
