@@ -19,8 +19,9 @@
 //! integration tests; inherited private codec/allocation fixtures remain limited
 //! implementation observations, not public acceptance.
 //! TranscriptFold validates unit checkpoints through the one SDK session fold. A
-//! committed read cache advances from a fixed head and remains separate from
-//! the writer's observed state.
+//! semantic unit this build cannot read is skipped and noted; the fold continues
+//! with the records it can read. A committed read cache advances from a fixed
+//! head and remains separate from the writer's observed state.
 //!
 //! ```text
 //! SessionStorage::open -> SessionStorageLease <- SessionManager
@@ -52,6 +53,7 @@ mod record_lifecycle;
 mod record_source;
 mod record_writer;
 mod save_group;
+mod skipped;
 mod snapshot;
 mod stream_fact;
 mod terminal_discovery;
@@ -65,6 +67,7 @@ pub use record_source::{
 };
 pub use terminal_discovery::RecordReadStatus;
 mod transcript;
+pub use skipped::{SkipReason, SkippedRecord};
 pub use transcript::{
     TranscriptCheckpoint, TranscriptError, TranscriptFold, TranscriptTransaction,
     MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES,

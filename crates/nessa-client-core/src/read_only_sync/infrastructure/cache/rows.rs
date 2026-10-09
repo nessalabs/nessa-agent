@@ -209,7 +209,7 @@ pub(super) fn checkpoint(
             .map_err(database_error)?;
         chunks.push(bytes);
     }
-    TranscriptCheckpoint::from_chunks(chunks).map_err(super::records::checkpoint_cache_error)
+    TranscriptCheckpoint::from_chunks(chunks).map_err(super::records::checkpoint_body_error)
 }
 
 pub(super) fn save_progress(

@@ -61,11 +61,12 @@ pub enum StorageError {
     /// The saved record is a format version this build does not read.
     ///
     /// `found` is the record's `schemaVersion` when that integer is not
-    /// [`Self::SCHEMA_VERSION`]. `None` means the field is absent. Alpha does
-    /// not read an unmarked record. The stored bytes are left unchanged, and
-    /// other conversations continue. A record at this build's version whose
-    /// body cannot be parsed is [`Self::Corrupt`]. A marker that is not an
-    /// unsigned integer is [`Self::Corrupt`].
+    /// [`Self::SCHEMA_VERSION`]. `None` means the field is absent. The reader
+    /// skips the record and continues with the ones it can read. Alpha does
+    /// not interpret an unmarked record. The stored bytes are left unchanged.
+    /// A record at this build's version whose body cannot be parsed is
+    /// [`Self::Corrupt`], and that record is skipped the same way. A marker
+    /// that is not an unsigned integer is [`Self::Corrupt`].
     AnotherVersion {
         /// The `schemaVersion` integer in the record, if it has one.
         found: Option<u64>,
@@ -752,9 +753,9 @@ impl StorageError {
     /// This build reads this version and writes it on every batch and checkpoint.
     /// A record with no marker is [`Self::AnotherVersion`], as is any other
     /// unsigned integer. During alpha there is no migration and no reader for
-    /// an unmarked record: the bytes stay where they are, and that record's
-    /// operations fail. Semantic batches and transcript checkpoints share this
-    /// number: a change to either shape bumps both.
+    /// an unmarked record: the record is skipped, the bytes stay where they
+    /// are, and the conversation continues. Semantic batches and transcript
+    /// checkpoints share this number: a change to either shape bumps both.
     pub const SCHEMA_VERSION: u64 = 1;
 
     /// Aggregate retained diagnostic text budget; structural slots are accounted separately.

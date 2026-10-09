@@ -14,7 +14,7 @@ use nessa_sdk::{
 use nessa_sync::replication::{
     application::{ReplicaStore, StoreError},
     catalogue::CatalogueStore,
-    domain::{Limits, Record, Scope},
+    domain::{Checkpoint, Limits, Record, Scope},
     infrastructure::{MAX_PAGE_PAYLOAD, MAX_PAGE_RECORDS},
 };
 use std::sync::Arc;
@@ -374,106 +374,123 @@ fn corrupt_checkpoint_is_preserved() {
     assert_eq!(ordinal, 1);
 }
 
-/// A cached checkpoint is disposable. Another version clears the loaded fold
-/// the same way a corrupt checkpoint does, and the stored bytes stay.
-#[test]
-fn another_version_checkpoint_is_dropped_and_the_bytes_stay() {
-    let root = tempfile::tempdir().unwrap();
+fn table_rows(cache: &ReadOnlyCache, table: &str) -> i64 {
+    cache
+        .connection
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+}
 
-    let future_path = cache_path(root.path(), "future.sqlite3");
-    let mut first = cache(&future_path);
+fn unreadable_checkpoint_rebuilds(name: &str, edit: impl FnOnce(&mut serde_json::Value)) {
+    let root = tempfile::tempdir().unwrap();
+    let path = cache_path(root.path(), &format!("{name}.sqlite3"));
+    let mut first = cache(&path);
     first.observe_head(&scope(), 0).unwrap();
     let original: Vec<u8> = first
         .connection
         .query_row("SELECT payload FROM transcript_checkpoints", [], |row| {
             row.get(0)
         })
+        .unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    edit(&mut value);
+    let payload = serde_json::to_vec(&value).unwrap();
+    first
+        .connection
+        .execute(
+            "UPDATE transcript_checkpoints SET payload = ?1",
+            params![&payload],
+        )
+        .unwrap();
+    drop(first);
+    let mut reopened = cache(&path);
+    assert_eq!(reopened.load(&scope()).unwrap(), None, "{name}");
+    assert_eq!(reopened.take_refusal(), None, "{name}");
+    assert_eq!(table_rows(&reopened, "transcript_checkpoints"), 0, "{name}");
+    assert_eq!(table_rows(&reopened, "transcript_progress"), 0, "{name}");
+    assert_eq!(table_rows(&reopened, "transcript_records"), 0, "{name}");
+    reopened.observe_head(&scope(), 0).unwrap();
+    assert_eq!(
+        reopened.load(&scope()).unwrap(),
+        Some(Checkpoint::new(scope(), 0)),
+        "{name}"
+    );
+    let rebuilt: Vec<u8> = reopened
+        .connection
+        .query_row("SELECT payload FROM transcript_checkpoints", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let rebuilt: serde_json::Value = serde_json::from_slice(&rebuilt).unwrap();
+    assert_eq!(
+        rebuilt["schemaVersion"],
+        StorageError::SCHEMA_VERSION,
+        "{name}"
+    );
+}
+
+/// A cached checkpoint this build cannot read is dropped. The load succeeds
+/// with no progress, and a later head observation rebuilds the checkpoint.
+/// An ordinal-tampered checkpoint is a different case and stays on disk.
+#[test]
+fn an_unreadable_checkpoint_is_dropped_and_rebuilt() {
+    unreadable_checkpoint_rebuilds("future", |value| {
+        value["schemaVersion"] = serde_json::json!(StorageError::SCHEMA_VERSION + 1);
+    });
+    unreadable_checkpoint_rebuilds("unmarked-today", |value| {
+        assert_eq!(value["schemaVersion"], StorageError::SCHEMA_VERSION);
+        value.as_object_mut().unwrap().remove("schemaVersion");
+    });
+    unreadable_checkpoint_rebuilds("earlier-shape", |value| {
+        value.as_object_mut().unwrap().remove("schemaVersion");
+        value["snapshot"] = serde_json::json!("not a snapshot");
+    });
+    unreadable_checkpoint_rebuilds("broken-body", |value| {
+        value["snapshot"] = serde_json::json!("not a snapshot");
+    });
+
+    let root = tempfile::tempdir().unwrap();
+    let shared = cache_path(root.path(), "shared.sqlite3");
+    let mut first = cache(&shared);
+    let other = Scope::new(
+        id("receiver"),
+        id("origin"),
+        id("00000000-0000-0000-0000-000000000002"),
+        id("incarnation"),
+        physical_record_schema(),
+        id("epoch"),
+    );
+    first.observe_head(&scope(), 0).unwrap();
+    first.observe_head(&other, 0).unwrap();
+    let original: Vec<u8> = first
+        .connection
+        .query_row(
+            "SELECT payload FROM transcript_checkpoints WHERE stream = ?1",
+            params![scope().stream().as_str()],
+            |row| row.get(0),
+        )
         .unwrap();
     let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
     value["schemaVersion"] = serde_json::json!(StorageError::SCHEMA_VERSION + 1);
-    let future = serde_json::to_vec(&value).unwrap();
     first
         .connection
         .execute(
-            "UPDATE transcript_checkpoints SET payload = ?1",
-            params![&future],
+            "UPDATE transcript_checkpoints SET payload = ?1 WHERE stream = ?2",
+            params![
+                serde_json::to_vec(&value).unwrap(),
+                scope().stream().as_str()
+            ],
         )
         .unwrap();
     drop(first);
-    let mut reopened = cache(&future_path);
-    assert_eq!(reopened.load(&scope()), Err(StoreError::Failed));
-    assert_eq!(reopened.take_refusal(), Some(CacheError::Corrupt));
-    let kept: Vec<u8> = reopened
-        .connection
-        .query_row("SELECT payload FROM transcript_checkpoints", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    assert_eq!(kept, future);
-
-    let unmarked_path = cache_path(root.path(), "unmarked-today.sqlite3");
-    let mut first = cache(&unmarked_path);
-    first.observe_head(&scope(), 0).unwrap();
-    let original: Vec<u8> = first
-        .connection
-        .query_row("SELECT payload FROM transcript_checkpoints", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
-    assert_eq!(value["schemaVersion"], StorageError::SCHEMA_VERSION);
-    value.as_object_mut().unwrap().remove("schemaVersion");
-    let unmarked = serde_json::to_vec(&value).unwrap();
-    first
-        .connection
-        .execute(
-            "UPDATE transcript_checkpoints SET payload = ?1",
-            params![&unmarked],
-        )
-        .unwrap();
-    drop(first);
-    let mut reopened = cache(&unmarked_path);
-    assert_eq!(reopened.load(&scope()), Err(StoreError::Failed));
-    assert_eq!(reopened.take_refusal(), Some(CacheError::Corrupt));
-    let kept: Vec<u8> = reopened
-        .connection
-        .query_row("SELECT payload FROM transcript_checkpoints", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    assert_eq!(kept, unmarked);
-
-    let earlier_path = cache_path(root.path(), "earlier-shape.sqlite3");
-    let mut first = cache(&earlier_path);
-    first.observe_head(&scope(), 0).unwrap();
-    let original: Vec<u8> = first
-        .connection
-        .query_row("SELECT payload FROM transcript_checkpoints", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
-    value.as_object_mut().unwrap().remove("schemaVersion");
-    value["snapshot"] = serde_json::json!("not a snapshot");
-    let earlier = serde_json::to_vec(&value).unwrap();
-    first
-        .connection
-        .execute(
-            "UPDATE transcript_checkpoints SET payload = ?1",
-            params![&earlier],
-        )
-        .unwrap();
-    drop(first);
-    let mut reopened = cache(&earlier_path);
-    assert_eq!(reopened.load(&scope()), Err(StoreError::Failed));
-    assert_eq!(reopened.take_refusal(), Some(CacheError::Corrupt));
-    let kept: Vec<u8> = reopened
-        .connection
-        .query_row("SELECT payload FROM transcript_checkpoints", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    assert_eq!(kept, earlier);
+    let mut reopened = cache(&shared);
+    assert_eq!(reopened.load(&scope()).unwrap(), None);
+    assert_eq!(
+        reopened.load(&other).unwrap(),
+        Some(Checkpoint::new(other.clone(), 0))
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

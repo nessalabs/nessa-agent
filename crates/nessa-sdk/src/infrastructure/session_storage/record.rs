@@ -3187,12 +3187,12 @@ mod tests {
 
     /// P5 of "The values, saved and sent" (`docs/design/mcp-app-calls.md`).
     /// A version-1 input without `user_app` or `user_app_model_context` is
-    /// `Corrupt` for its own conversation. A record with no `schemaVersion`
-    /// is `AnotherVersion` for its own conversation, including today's shape
-    /// with only the marker removed. Siblings in the same store open, and a
-    /// refusal leaves the stored rows unchanged.
+    /// corrupt and is skipped. A record with no `schemaVersion` is another
+    /// version and is skipped, including today's shape with only the marker
+    /// removed. The conversation opens on the records that remain. Siblings
+    /// in the same store open, and the stored rows stay unchanged.
     #[tokio::test]
-    async fn an_input_saved_without_its_app_fields_is_corrupt_for_its_conversation_only() {
+    async fn an_unreadable_input_is_skipped_and_the_conversation_still_opens() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("sessions");
         let storage = RecordStorage::new(&root).unwrap();
@@ -3309,25 +3309,19 @@ mod tests {
         let before = record_rows(&root);
 
         let reopened = RecordStorage::new(&root).unwrap();
-        for older in ["without-user-app", "without-contexts"] {
-            assert!(
-                matches!(
-                    reopened.open_existing(SessionId::new(older).unwrap()).await,
-                    Err(StorageError::Corrupt(_))
-                ),
-                "{older}"
-            );
-        }
-        for unmarked in ["unmarked-today", "before-app-fields"] {
-            assert!(
-                matches!(
-                    reopened
-                        .open_existing(SessionId::new(unmarked).unwrap())
-                        .await,
-                    Err(StorageError::AnotherVersion { found: None })
-                ),
-                "{unmarked}"
-            );
+        for skipped_id in [
+            "without-user-app",
+            "without-contexts",
+            "unmarked-today",
+            "before-app-fields",
+        ] {
+            let id = SessionId::new(skipped_id).unwrap();
+            let lease = reopened.open_existing(id.clone()).await.unwrap().unwrap();
+            let loaded = lease.load().await.unwrap();
+            assert_eq!(loaded.state(), SessionLoadState::Published, "{skipped_id}");
+            let (_, opening_snapshot) = opening(&id);
+            assert_eq!(loaded.snapshot(), Some(&opening_snapshot), "{skipped_id}");
+            drop(lease);
         }
         for sibling in ["framed-unchanged", "written"] {
             let id = SessionId::new(sibling).unwrap();

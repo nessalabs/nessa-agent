@@ -4,6 +4,7 @@ use super::{
     record_changes::RecordChanges,
     save_batch::SaveCommits,
     save_group::{GroupProgress, Header, SaveIdentity, EMPTY_CHAIN, HEADER_BYTES},
+    skipped::{self, SkipReason},
     snapshot,
     stream_fact::{self, FactCommitError, FactRead, FramedFact},
 };
@@ -154,18 +155,21 @@ impl RecordWriter {
                     .map_or(ProviderContext::Absent, |state| {
                         state.provider_context.clone()
                     });
-                let changes =
-                    snapshot::decode_semantic_batch(&fact.body[HEADER_BYTES..], &context)?;
-                self.staged.apply_unit(&changes)?;
-                if self
-                    .staged
-                    .snapshot
-                    .as_ref()
-                    .is_some_and(|state| state.id != self.id)
-                {
-                    return Err(StorageError::IdentityMismatch);
+                match snapshot::decode_semantic_batch(&fact.body[HEADER_BYTES..], &context) {
+                    Ok(changes) => {
+                        self.staged.apply_unit(&changes)?;
+                        if self
+                            .staged
+                            .snapshot
+                            .as_ref()
+                            .is_some_and(|state| state.id != self.id)
+                        {
+                            return Err(StorageError::IdentityMismatch);
+                        }
+                        self.unfinished = true;
+                    }
+                    Err(error) => self.note_unreadable(cursor.offset, error)?,
                 }
-                self.unfinished = true;
             }
             FactKind::SaveComplete => {
                 self.committed = self.staged.snapshot.clone();
@@ -191,6 +195,19 @@ impl RecordWriter {
             }
         }
         self.cursor = cursor;
+        Ok(())
+    }
+
+    /// Consume one unit whose body cannot be decoded. The save stays published
+    /// when every new unit in the open group was skipped, so opening the
+    /// conversation does not turn into an unfinished recovery. A decoded unit
+    /// is applied or refuses the replay. Any other storage error still refuses
+    /// the replay.
+    fn note_unreadable(&mut self, position: u64, error: StorageError) -> Result<(), StorageError> {
+        let Some(reason) = SkipReason::classify(&error) else {
+            return Err(error);
+        };
+        skipped::warn_skipped(self.id.as_str(), position, reason);
         Ok(())
     }
 
