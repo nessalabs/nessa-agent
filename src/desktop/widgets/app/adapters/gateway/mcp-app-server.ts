@@ -119,6 +119,7 @@ const outcomes: Readonly<Record<ConversationErrorCode, Outcome>> = {
   [ConversationErrorCode.AttachmentStorageUnavailable]: "failed",
   [ConversationErrorCode.AttachmentCleanupUnavailable]: "failed",
   [ConversationErrorCode.ConversationErasureIncomplete]: "failed",
+  [ConversationErrorCode.NotBound]: "failed",
 }
 
 /** What an app asked for: its server's tool or resource, or its conversation. */

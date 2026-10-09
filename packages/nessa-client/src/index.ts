@@ -117,7 +117,7 @@ export type {
 
 export type { SessionTermination } from "./generated/product.js"
 export { RecordReadErrorCode } from "./generated/product.js"
-export { mcpAppCallTiming, productMethodGrants } from "./generated/product.js"
+export { bounds, mcpAppCallTiming, productMethodGrants } from "./generated/product.js"
 export type {
   ConversationRecordsHeadResult,
   RecordScope,

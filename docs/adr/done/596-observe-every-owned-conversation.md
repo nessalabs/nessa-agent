@@ -9,7 +9,7 @@ linked reader. The order of the walk is the table in
 [UI workspace load](../../design/ui-workspace-load.md#how-the-desktop-observes-every-owned-summary).
 
 - **Date:** 2026-10-06
-- **Status:** accepted
+- **Status:** accepted. The local panel surface now has a receiver binding for commit watches ([676](676-desktop-follows-commits.md)). This walk remains how an incomplete list is finished when that watch is not held.
 
 ## Context
 

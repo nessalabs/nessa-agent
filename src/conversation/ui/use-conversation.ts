@@ -40,6 +40,9 @@ export function useConversation() {
   const gatewayAvailable = useConversationSelector((state) =>
     canUseGateway(state.session),
   )
+  const commitFollow = useConversationSelector(
+    (state) => state.conversationHistory.commitFollow,
+  )
   const conversations = tabs.conversations
   const active = activeConversation(tabs)
   const pollingDelay = useEffectEvent(() =>
@@ -47,7 +50,7 @@ export function useConversation() {
   )
 
   useEffect(() => {
-    if (!active.serverReady || !gatewayAvailable) return
+    if (!active.serverReady || !gatewayAvailable || commitFollow !== "poll") return
     return pollConversation(
       () => dispatch(refreshConversation(active.id)),
       () => {
@@ -55,7 +58,7 @@ export function useConversation() {
       },
       pollingDelay,
     )
-  }, [dispatch, active.id, active.serverReady, gatewayAvailable])
+  }, [dispatch, active.id, active.serverReady, gatewayAvailable, commitFollow])
 
   return {
     setApprovalMode: (id: string, mode: ApprovalMode) =>

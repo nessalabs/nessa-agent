@@ -23,6 +23,16 @@ export { ConversationList } from "./ui/conversation-list"
 export { commandErrorCleared } from "./adapters/store/history"
 export { Transcript } from "./ui/transcript"
 export { useConversation } from "./ui/use-conversation"
+export { ConversationFollow } from "./ui/commit-follow"
+export {
+  MAX_RECORD_WATCHES,
+  createCommitFollower,
+  isCommitSocket,
+  type CatalogueRow,
+  type CommitCheckpoint,
+  type CommitFollower,
+  type CommitSocket,
+} from "./adapters/gateway/sync-path"
 
 export { fromEditor, toEditor, pastedTextLabel } from "./ui/composer-content"
 

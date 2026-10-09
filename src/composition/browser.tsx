@@ -2,7 +2,11 @@ import { useCallback, useEffect, useState } from "react"
 import { NessaRpcError } from "@nessa/client"
 import { isAuthenticationFailure } from "../session/adapters/client/authentication-failure"
 import { Provider } from "react-redux"
-import { conversationTabSnapshot, restoreConversations } from "../conversation"
+import {
+  ConversationFollow,
+  conversationTabSnapshot,
+  restoreConversations,
+} from "../conversation"
 import { createTabStorage } from "../conversation/adapters/browser/tab-storage"
 import { App } from "../panel"
 import {
@@ -99,6 +103,7 @@ function BrowserSession({
         dependencies={scope.dependencies}
         onTerminalFailure={onTerminalFailure}
       />
+      <ConversationFollow session={scope.dependencies.session} />
       <App
         attachmentResources={scope.dependencies.attachments}
         canChoosePaths={scope.dependencies.canChoosePaths}

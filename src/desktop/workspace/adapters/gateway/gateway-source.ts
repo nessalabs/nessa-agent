@@ -5,12 +5,14 @@
  * The design and its orderings are a table on #248; each row has a test in
  * `gateway-source.test.ts`. In short:
  *
- * - **No push stream.** The gateway sends no conversation events, so the
- *   stream is a poller, running while anyone listens: `conversation.list`
- *   for summaries, and `conversation.observe` when that list is not the whole
- *   catalogue; independent `conversation.read` calls for conversations the window
- *   has read (`transcript`) that runs, waits on the person, has an app's
- *   call unanswered (`appCall`, #436), or changed since.
+ * - **Commit watch, with the poller behind it.** A session with a receiver
+ *   binding follows `conversation.changed`: one catalogue watch for the list,
+ *   and a record watch per open conversation up to three, then a head check
+ *   and one `conversation.read` when that head moved. The poller — `conversation.list`
+ *   each second, `conversation.observe` when that list is not the whole catalogue,
+ *   and `conversation.read` while a followed conversation runs, waits, or has an
+ *   app call unanswered — runs when the watch cannot be registered or the
+ *   catalogue watch ends. A full refetch waits for a scope reset.
  * - **Revisions are minted here.** The gateway's view revision is opaque and
  *   its list rows carry none, so this adapter counts: one counter per
  *   session's summary, one per conversation, each from 1, moved on when what
@@ -87,6 +89,15 @@ import {
   type ConversationSummary,
   type ConversationView,
 } from "@nessa/client"
+import {
+  MAX_RECORD_WATCHES,
+  createCommitFollower,
+  isCommitSocket,
+  type CatalogueRow,
+  type CommitCheckpoint,
+  type CommitFollower,
+  type CommitSocket,
+} from "../../../../conversation"
 import { HostRefusalError } from "../../../../host/startup-refusals"
 import { isSignedOut } from "../../../../session"
 import { agentForProvider } from "../../../model/composer-options"
@@ -114,7 +125,16 @@ export interface GatewayClient {
   readonly conversation: Pick<
     ConversationApi,
     "list" | "observe" | "read" | "create" | "send" | "answer" | "archive"
-  >
+  > &
+    Partial<Pick<ConversationApi, "binding">>
+  /** Present when this client can follow commits. Absent, the poller runs. */
+  readonly records?: CommitSocket["records"]
+  readonly catalogue?: CommitSocket["catalogue"]
+  readonly watches?: CommitSocket["watches"]
+  on?(
+    event: "conversation.changed" | "conversation.watchEnded",
+    handler: (payload: { watchId: string; reason?: string }) => void,
+  ): () => void
   readonly connectionState: ConnectionState
   onConnectionStateChange(handler: (state: ConnectionState) => void): () => void
   close(): void
@@ -344,6 +364,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     })
 
   // The connection: one client at a time, connected on first need.
+  let usingSync = false
+  let revokedFollow = false
+  let follower: CommitFollower | undefined
   let current: { client: C; off: () => void } | undefined
   let connecting: Promise<C> | undefined
   let connectedBefore = false
@@ -371,6 +394,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         // gap. A list still in flight is applied and does not resync.
         current.off()
         current = undefined
+        if (usingSync) void rejoin()
       }
     })
     current = { client: connected, off }
@@ -633,6 +657,26 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     transcriptCounts.set(sessionId, revision)
     const transcript = transcriptFrom(view, revision, seenIn(sessionId))
     reads.set(sessionId, { view, transcript, against })
+    // The list row owns `running` while polling: copying it from the view
+    // makes this read look stale against itself (R7) and republishes the
+    // summary after the transcript. The catalogue has no running flag, so
+    // only a commit follow learns it from the view.
+    if (usingSync) {
+      const running = view.messages.some(
+        (turn) => turn.status === "running" || turn.status === "queued",
+      )
+      const listed = rows.get(sessionId)
+      if (listed && listed.running !== running) {
+        rows.set(sessionId, { ...listed, running })
+        if (
+          against !== undefined &&
+          against.updatedAtMs === listed.updatedAtMs &&
+          against.conversationId === listed.conversationId
+        ) {
+          reads.set(sessionId, { view, transcript, against: { ...against, running } })
+        }
+      }
+    }
     tellApps(() => options.apps?.observe(view))
     emit({ kind: "transcript", transcript })
     // The summary follows what the read says: an approval waiting, the model it runs on.
@@ -804,12 +848,186 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         scheduleActive()
       })
   }
+  const summaryRow = (
+    row: CatalogueRow,
+    previous: ConversationSummary | undefined,
+  ): ConversationSummary => ({
+    conversationId: row.conversationId,
+    title: row.title,
+    preview: row.preview,
+    createdAtMs: row.createdAtMs,
+    updatedAtMs: row.updatedAtMs,
+    archived: row.archived,
+    running: previous?.running ?? false,
+  })
+  const applyCatalogue = (update: {
+    reset: boolean
+    rows: CatalogueRow[]
+    removedIds: string[]
+  }) => {
+    if (update.reset) {
+      applyList({
+        conversations: update.rows
+          .filter((row) => !row.archived)
+          .map((row) => summaryRow(row, rows.get(row.conversationId))),
+        complete: true,
+      })
+      return
+    }
+    for (const id of update.removedIds) remove(id)
+    for (const row of update.rows) {
+      if (row.archived) {
+        remove(row.conversationId)
+        continue
+      }
+      rows.set(row.conversationId, summaryRow(row, rows.get(row.conversationId)))
+      publish(row.conversationId)
+    }
+  }
+  let startingFollow = false
+  let followEpoch = 0
+  const beginFollow = async (
+    socket: CommitSocket,
+    checkpoint?: CommitCheckpoint,
+  ): Promise<boolean> => {
+    if (follower) return true
+    const epoch = ++followEpoch
+    usingSync = true
+    stopPolling()
+    const extras: CommitSocket[] = []
+    startingFollow = true
+    const currentFollow = () => epoch === followEpoch
+    const next = createCommitFollower({
+      client: socket,
+      checkpoint,
+      openRecordConnection: () =>
+        new Promise((resolve) => {
+          let settled = false
+          const finish = (opened: CommitSocket | undefined) => {
+            if (settled) return
+            settled = true
+            resolve(opened)
+          }
+          const cancel = clock.after(timing.callMs, () => finish(undefined))
+          void options.connect().then(
+            (extra) => {
+              cancel()
+              const opened = isCommitSocket(extra) ? extra : undefined
+              if (settled || !opened || !currentFollow() || disposed) {
+                extra.close()
+                finish(undefined)
+                return
+              }
+              extras.push(opened)
+              finish(opened)
+            },
+            () => {
+              cancel()
+              finish(undefined)
+            },
+          )
+        }),
+      targets: () => [...watched].slice(0, MAX_RECORD_WATCHES),
+      onView: (id, seen) => {
+        if (currentFollow()) applyRead(id, seen, rows.get(id))
+      },
+      onCatalogue: (update) => {
+        if (currentFollow()) applyCatalogue(update)
+      },
+      onFallback: () => {
+        if (!currentFollow()) return
+        usingSync = false
+        if (startingFollow) return
+        next.stop()
+        if (follower === next) follower = undefined
+        for (const extra of extras) extra.close()
+        schedule()
+      },
+      onRevoked: () => {
+        if (!currentFollow()) return
+        revokedFollow = true
+        usingSync = false
+        next.stop()
+        if (follower === next) follower = undefined
+        for (const extra of extras) extra.close()
+      },
+    })
+    follower = next
+    let outcome: "sync" | "fallback" | "revoked"
+    try {
+      outcome = await next.start()
+    } catch {
+      outcome = "fallback"
+    }
+    if (!currentFollow()) {
+      next.stop()
+      for (const extra of extras) extra.close()
+      return false
+    }
+    startingFollow = false
+    if (outcome === "sync") return true
+    next.stop()
+    if (follower === next) follower = undefined
+    for (const extra of extras) extra.close()
+    usingSync = false
+    if (outcome === "revoked") revokedFollow = true
+    return false
+  }
+  const rejoinOnce = async () => {
+    if (disposed || !usingSync) return
+    try {
+      const connected = await client("poller")
+      const socket = isCommitSocket(connected) ? connected : undefined
+      if (!socket) {
+        usingSync = false
+        follower?.stop()
+        follower = undefined
+        schedule()
+        return
+      }
+      const saved = follower?.checkpoint()
+      follower?.stop()
+      follower = undefined
+      const adopted = await beginFollow(socket, saved)
+      if (!adopted && !revokedFollow && !usingSync) schedule()
+    } catch {
+      usingSync = false
+      follower?.stop()
+      follower = undefined
+      if (!revokedFollow) schedule()
+    }
+  }
+  let rejoining = false
+  let rejoinAgain = false
+  async function rejoin() {
+    if (rejoining) {
+      rejoinAgain = true
+      return
+    }
+    rejoining = true
+    try {
+      do {
+        rejoinAgain = false
+        await rejoinOnce()
+      } while (rejoinAgain && !disposed)
+    } finally {
+      rejoining = false
+    }
+  }
   const round = async () => {
     polling = true
     const live = followingNow()
     try {
-      await list("poller", live)
+      if (usingSync || revokedFollow) return
+      const connected = await client("poller")
       if (!live()) return
+      if (isCommitSocket(connected)) {
+        const adopted = await beginFollow(connected)
+        if (adopted || revokedFollow) return
+      }
+      const still = followingNow()
+      await list("poller", still)
+      if (!still()) return
       if (gap) resync()
       for (const sessionId of watched) {
         if (stale(sessionId)) pollRead(sessionId)
@@ -823,14 +1041,29 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     }
   }
   const schedule = () => {
-    if (disposed || listeners.size === 0 || polling || cancelPoll) return
+    if (
+      disposed ||
+      usingSync ||
+      revokedFollow ||
+      listeners.size === 0 ||
+      polling ||
+      cancelPoll
+    )
+      return
     cancelPoll = clock.after(timing.pollMs, () => {
       cancelPoll = undefined
       void round()
     })
   }
   const scheduleActive = () => {
-    if (disposed || listeners.size === 0 || cancelActive || ![...watched].some(active))
+    if (
+      disposed ||
+      usingSync ||
+      revokedFollow ||
+      listeners.size === 0 ||
+      cancelActive ||
+      ![...watched].some(active)
+    )
       return
     cancelActive = clock.after(timing.activePollMs, () => {
       cancelActive = undefined
@@ -924,7 +1157,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         // A read sends no `create`. The session is followed from now on —
         // a read that fails is mended by the poller's next one — unless it is
         // gone: one taken out is refused and not followed (R3, R8).
-        if (!takenOut(sessionId)) watched.add(sessionId)
+        if (!takenOut(sessionId)) {
+          watched.add(sessionId)
+          follower?.retarget()
+        }
         scheduleActive()
         try {
           return await read(sessionId, "person", live)
@@ -940,7 +1176,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       scheduleActive()
       return () => {
         listeners.delete(listener)
-        if (listeners.size === 0) stopPolling()
+        if (listeners.size === 0) {
+          stopPolling()
+          usingSync = false
+          follower?.stop()
+          follower = undefined
+        }
       }
     },
     send: (message) =>
@@ -1039,6 +1280,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     dispose() {
       disposed = true
       stopPolling()
+      usingSync = false
+      follower?.stop()
+      follower = undefined
       listeners.clear()
       current?.off()
       current?.client.close()
@@ -1279,7 +1523,8 @@ function reasonFor(
     case ConversationErrorCode.ConversationConfigurationChanged:
       return uncertain ? "unavailable" : "not-supported"
     // Not done now, or not known to be: busy, starting, stopped, storage or
-    // audit that did not answer, an outcome the gateway could not settle.
+    // audit that did not answer, an outcome the gateway could not settle,
+    // or a session that has no receiver binding yet.
     case ConversationErrorCode.ApprovalModeNotApplied:
     case ConversationErrorCode.ApprovalModeUncertain:
     case ConversationErrorCode.ApprovalRequestConflict:
@@ -1298,6 +1543,7 @@ function reasonFor(
     case ConversationErrorCode.AttachmentStorageUnavailable:
     case ConversationErrorCode.AttachmentCleanupUnavailable:
     case ConversationErrorCode.ConversationErasureIncomplete:
+    case ConversationErrorCode.NotBound:
       return "unavailable"
     // An MCP App's own calls: this source makes none, so none of these can
     // answer it; one that did would be no answer it knows.

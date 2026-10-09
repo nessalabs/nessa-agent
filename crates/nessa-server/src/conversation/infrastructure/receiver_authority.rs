@@ -187,6 +187,36 @@ impl LocalReceiverAuthority {
         }
     }
 
+    /// The local owner surface's receiver, minted once for this credential.
+    ///
+    /// An active binding for the same organization and owner is returned as it
+    /// stands. An inactive binding, or one held for a different organization or
+    /// owner, is left alone: revocation is not regranted from startup. A
+    /// credential with no row is paired under `local-surface:<credential>`,
+    /// which repeats as the same receipt.
+    pub fn ensure_local_surface(
+        &self,
+        credential_id: CredentialId,
+        organization_id: OrganizationId,
+        owner_id: PrincipalId,
+    ) -> Result<Option<ReceiverBinding>, ReceiverChangeError> {
+        if let Some(existing) = self.binding(&credential_id)? {
+            let same = existing.active
+                && existing.organization_id == organization_id
+                && existing.owner_id == owner_id;
+            return Ok(same.then_some(existing));
+        }
+        let request_id = format!("local-surface:{}", credential_id.as_str());
+        self.pair_now(
+            credential_id,
+            organization_id,
+            owner_id.clone(),
+            owner_id,
+            request_id,
+        )
+        .map(Some)
+    }
+
     /// The current binding of a credential, on the calling thread.
     pub fn binding(
         &self,
@@ -728,6 +758,62 @@ mod tests {
 
     fn open(path: &Path, revision: &str) -> Result<LocalReceiverAuthority, OpenError> {
         LocalReceiverAuthority::open(path, revision, Arc::new(FixedClock))
+    }
+
+    #[tokio::test]
+    async fn local_surface_pairs_once_and_leaves_a_revoked_binding_alone() {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("conversations");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("receiver-access.sqlite3");
+        let store = open(&path, "policy-one").unwrap();
+        let credential = CredentialId::new("panel-credential").unwrap();
+        let organization = OrganizationId::new("org").unwrap();
+        let owner = PrincipalId::new("surface:nessa-panel").unwrap();
+        let first = store
+            .ensure_local_surface(credential.clone(), organization.clone(), owner.clone())
+            .unwrap()
+            .unwrap();
+        let second = store
+            .ensure_local_surface(credential.clone(), organization.clone(), owner.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(first, second);
+        assert!(first.active);
+        assert_eq!(first.owner_id, owner);
+        assert!(store
+            .ensure_local_surface(
+                credential.clone(),
+                organization.clone(),
+                PrincipalId::new("surface:other").unwrap(),
+            )
+            .unwrap()
+            .is_none());
+        assert_eq!(store.binding(&credential).unwrap().unwrap(), first);
+        store
+            .change(
+                first.receiver_id.clone(),
+                None,
+                false,
+                owner.clone(),
+                "revoke-panel".into(),
+            )
+            .await
+            .unwrap();
+        assert!(store
+            .ensure_local_surface(credential, organization.clone(), owner.clone())
+            .unwrap()
+            .is_none());
+        let other = store
+            .ensure_local_surface(
+                CredentialId::new("other-panel").unwrap(),
+                organization,
+                owner,
+            )
+            .unwrap()
+            .unwrap();
+        assert_ne!(other.receiver_id, first.receiver_id);
+        assert!(other.active);
     }
 
     #[tokio::test]

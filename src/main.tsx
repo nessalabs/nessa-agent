@@ -9,6 +9,7 @@ import "./styles.css"
 import { SetupGate } from "./onboarding"
 import { nativeAgentApiKeys } from "./onboarding/adapters/agent-api-key"
 import { App } from "./panel"
+import { ConversationFollow } from "./conversation"
 import { SessionLifecycle } from "./session"
 import { makeStore } from "./store"
 import { createDependencies } from "./composition/dependencies"
@@ -58,6 +59,9 @@ const panel = (
       agentInstallations={dependencies.agentInstallations}
     />
     {dependencies.usesLocalSession && <SessionLifecycle dependencies={dependencies} />}
+    {dependencies.usesLocalSession && (
+      <ConversationFollow session={dependencies.session} />
+    )}
   </Provider>
 )
 

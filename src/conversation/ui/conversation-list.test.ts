@@ -8,7 +8,7 @@ import { createDependencies } from "../../composition/dependencies"
 import { sessionReady } from "../../session/testing"
 import { makeStore } from "../../store"
 import { ControlFailedError, ConversationReadFailedError } from "../application/ports"
-import { listConversations } from "../adapters/store/history"
+import { catalogueApplied, listConversations } from "../adapters/store/history"
 import { openListed, refreshConversation } from "../adapters/store/slice"
 import { scenarioEffects } from "../testing"
 import { ConversationList } from "./conversation-list"
@@ -89,6 +89,37 @@ it("lists what the gateway holds, including a conversation no tab has open", asy
     serverConversationId: written,
     title: null,
   } satisfies RosterTarget)
+})
+
+it("shows a chat created elsewhere without listing again", async () => {
+  const { store, list } = await gatewayWithClosedConversation()
+  await render(store)
+  const calls = list.mock.calls.length
+  const elsewhere = "0b8f1c2e-1111-4a4a-8b8b-000000000099"
+  await React.act(async () => {
+    store.dispatch(
+      catalogueApplied({
+        reset: false,
+        removedIds: [],
+        rows: [
+          {
+            conversationId: elsewhere,
+            title: "From the other window",
+            preview: "hello",
+            updatedAtMs: 5_000,
+            running: false,
+            archived: false,
+          },
+        ],
+      }),
+    )
+  })
+  expect(list.mock.calls).toHaveLength(calls)
+  expect(
+    rows()
+      .map((row) => row.textContent)
+      .join("\n"),
+  ).toContain("From the other window")
 })
 
 it("reads the list again once the gateway arrives", async () => {

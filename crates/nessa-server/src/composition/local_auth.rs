@@ -59,7 +59,7 @@ use nessa_auth::{
         pairing::PairingStore,
         ports::{Clock, PortFuture},
     },
-    domain::{AudienceId, OrganizationId, Resource, ResourceId},
+    domain::{AudienceId, CredentialId, OrganizationId, PrincipalId, Resource, ResourceId},
 };
 use nessa_local_database::OpenError;
 use nessa_protocol::clock::Clock as ServerClock;
@@ -220,6 +220,12 @@ pub(super) async fn product_state(
     } else {
         None
     };
+    // The panel credential is the desktop's session. Pair it with a receiver
+    // so watches and record reads use the same admission as a linked device.
+    // A credential that is not the panel, or is not issued yet, is left alone.
+    if let Some(receivers) = &receivers {
+        bind_local_surface(receivers, &store)?;
+    }
     // Before any socket is bound: the key is restored or first published,
     // this gateway's unfinished enrollments are settled, and ended ones have
     // their receivers settled (design rows S3–S8).
@@ -498,6 +504,50 @@ pub(super) fn mcp_app_ports(
         tickets: mcp.resource_tickets.clone(),
         dropped,
     }
+}
+
+/// Pair each unrevoked `nessa-panel` credential with its own receiver.
+///
+/// The desktop authenticates as that credential and has no device enrollment.
+/// The binding is the same row a paired receiver has: server-minted id, epoch,
+/// and the credential's organization and principal. Startup does not regrant a
+/// binding that was revoked. A gateway with no panel credential yet does nothing.
+fn bind_local_surface(
+    receivers: &LocalReceiverAuthority,
+    store: &LocalCredentialStore,
+) -> Result<(), RunError> {
+    let identity = store.identity().map_err(|error| {
+        RunError::Authentication(format!("could not read the local organization: {error}"))
+    })?;
+    let Some(organization) = identity.organization_ids.into_iter().next() else {
+        return Err(RunError::Authentication(
+            "local gateway has no organization".into(),
+        ));
+    };
+    let credentials = store
+        .list_sync(&ListCredentialsRequest {
+            organization_id: organization,
+        })
+        .map_err(|error| {
+            RunError::Authentication(format!("could not list surface credentials: {error}"))
+        })?;
+    for credential in credentials {
+        if credential.principal_id != "surface:nessa-panel" || credential.revoked_at.is_some() {
+            continue;
+        }
+        let credential_id = CredentialId::new(credential.id).map_err(setup_error)?;
+        let organization_id =
+            OrganizationId::new(credential.organization_id).map_err(setup_error)?;
+        let owner_id = PrincipalId::new(credential.principal_id).map_err(setup_error)?;
+        receivers
+            .ensure_local_surface(credential_id, organization_id, owner_id)
+            .map_err(|error| {
+                RunError::Agent(format!(
+                    "could not bind the local surface receiver: {error:?}"
+                ))
+            })?;
+    }
+    Ok(())
 }
 
 /// Open the namespace's receiver journal.
