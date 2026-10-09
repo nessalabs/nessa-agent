@@ -674,7 +674,7 @@ async fn output_a_binding_does_not_read_is_bounded_and_stops_the_harness() {
     let HarnessProcess {
         mut input,
         output: _unread,
-        control: _control,
+        mut control,
     } = host.start(HarnessLaunch::default()).unwrap();
     // Far more output than the pipe and the queue hold, never read.
     input.write_all(b"flood").await.unwrap();
@@ -689,6 +689,56 @@ async fn output_a_binding_does_not_read_is_bounded_and_stops_the_harness() {
         |event| matches!(event, EnvironmentEvent::OutputOverflow { lease, channel, .. }
             if lease == id.as_str() && *channel == 1)
     ));
+    // The binding's own stop, after the host already stopped it, is answered
+    // with the host's evidence, never left uncertain.
+    assert_eq!(
+        control
+            .cleanup(Duration::from_millis(10), Duration::from_millis(100))
+            .await
+            .unwrap(),
+        CloseOutcome { forced: false }
+    );
+    assert_eq!(connector.stopped.load(Ordering::SeqCst), 1);
+}
+
+/// A grant the host does not answer in time is refused here and ended there:
+/// the host never keeps a lease nobody holds.
+#[tokio::test]
+async fn a_grant_not_answered_in_time_is_ended_on_the_host() {
+    let connector = Connector::new(Reach::Scripted(vec![hello_body(VERSION)]));
+    let environment = SshEnvironment::new(
+        devbox(),
+        connector.clone(),
+        Arc::new(Audit::default()),
+        SshTimings {
+            connect: Duration::from_secs(5),
+            answer: Duration::from_millis(50),
+        },
+    );
+    let id = lease();
+    assert_eq!(
+        environment
+            .open(&id, &terms("claude"), binding_only())
+            .await
+            .err(),
+        Some(LeaseRefusal::EnvironmentUnreachable)
+    );
+    let end = nessa_protocol::lease::encode(&nessa_protocol::lease::ToEnvironment::End {
+        lease: id.as_str().into(),
+    })
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let received = connector.received.lock().unwrap().clone();
+            if received.windows(end.len()).any(|window| window == end) {
+                break;
+            }
+            drop(received);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the unanswered lease is ended on the host");
 }
 
 /// The destination comes after every option and the remote command is

@@ -89,7 +89,10 @@ impl LeaseLedger for MemoryLedger {
         let mut ended = None;
         for entry in entries.iter() {
             match entry {
-                LedgerEntry::Granted { lease: id, .. } if id == lease => granted = true,
+                LedgerEntry::Granted { lease: id, .. } if id == lease => {
+                    granted = true;
+                    ended = None;
+                }
                 LedgerEntry::Ended {
                     lease: id, cleanup, ..
                 } if id == lease => ended = Some(*cleanup),
@@ -466,6 +469,35 @@ async fn grants_are_refused_with_their_reason() {
             reason: GrantRefusal::Duplicate,
         }
     );
+    // Ended, its id still names it: never granted again, on this
+    // connection or a later one sharing the host's audit.
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Ended { .. }
+    ));
+    for _ in 0..2 {
+        gateway
+            .send(ToEnvironment::Grant {
+                lease: LEASE.into(),
+                agent: "claude".into(),
+            })
+            .await;
+        assert_eq!(
+            gateway.next().await,
+            FromEnvironment::Refused {
+                lease: LEASE.into(),
+                reason: GrantRefusal::Duplicate,
+            }
+        );
+        let ledger = gateway.ledger.clone();
+        gateway = Gateway::with(ledger);
+        assert_eq!(gateway.next().await, hello());
+    }
     gateway.ledger.failing.store(true, Ordering::SeqCst);
     gateway
         .send(ToEnvironment::Grant {
@@ -525,6 +557,77 @@ async fn a_stop_is_answered_with_the_harness_cleanup() {
             (2, Cleanup::NotHeld)
         ]
     );
+    // Asked again, a stopped harness is answered with its own cleanup,
+    // never as one that held nothing, and its channel is not started again.
+    gateway
+        .send(ToEnvironment::Stop {
+            lease: LEASE.into(),
+            channel: 1,
+            grace_ms: 10,
+            kill_ms: 100,
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Stopped {
+            lease: LEASE.into(),
+            channel: 1,
+            cleanup: Cleanup::Confirmed { forced: false },
+        }
+    );
+    gateway
+        .send(ToEnvironment::Start {
+            lease: LEASE.into(),
+            channel: 1,
+            environment: BTreeMap::new(),
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::StartFailed {
+            lease: LEASE.into(),
+            channel: 1,
+            reason: StartFailure::NotGranted,
+        }
+    );
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 1);
+    assert_eq!(gateway.launcher.launched.lock().unwrap().len(), 1);
+}
+
+/// A second stop that arrives while the first is still stopping the harness
+/// waits for that stop's cleanup instead of answering that nothing ran.
+#[tokio::test]
+async fn a_stop_asked_twice_while_stopping_answers_the_same_cleanup() {
+    let mut gateway = Gateway::start();
+    assert_eq!(gateway.next().await, hello());
+    gateway.granted(LEASE).await;
+    gateway
+        .send(ToEnvironment::Start {
+            lease: LEASE.into(),
+            channel: 1,
+            environment: BTreeMap::new(),
+        })
+        .await;
+    for _ in 0..2 {
+        gateway
+            .send(ToEnvironment::Stop {
+                lease: LEASE.into(),
+                channel: 1,
+                grace_ms: 10,
+                kill_ms: 100,
+            })
+            .await;
+    }
+    let mut answers = Vec::new();
+    while answers.len() < 2 {
+        match gateway.next().await {
+            FromEnvironment::Stopped { cleanup, .. } => answers.push(cleanup),
+            FromEnvironment::OutputClosed { .. } => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    assert_eq!(answers, [Cleanup::Confirmed { forced: false }; 2]);
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

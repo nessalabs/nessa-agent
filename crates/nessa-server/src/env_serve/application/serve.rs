@@ -37,14 +37,14 @@ use nessa_sdk::application::agent_execution::{
 use nessa_sdk::domain::agent_execution::leases::LeaseId;
 use serde::Serialize;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     io,
     sync::Arc,
     time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    sync::mpsc,
+    sync::{mpsc, watch},
     task::JoinHandle,
 };
 
@@ -189,6 +189,7 @@ pub(crate) async fn serve<R, W>(
         .await;
     let mut served = Served {
         leases: HashMap::new(),
+        granted: HashSet::new(),
         ending: Vec::new(),
         frames,
         launcher,
@@ -249,12 +250,20 @@ struct Held {
     /// The agent it was granted for; every harness under it is that agent's.
     agent: String,
     channels: HashMap<u32, Channel>,
+    /// Each harness the gateway asked to stop, by channel: its cleanup once
+    /// known. A channel is never started again, and a second stop of it is
+    /// answered with the same cleanup, never as holding nothing while the
+    /// first is still stopping it.
+    stopped: HashMap<u32, watch::Receiver<Option<Cleanup>>>,
     /// Stops already under way, each answering its harness's cleanup.
     stops: Vec<JoinHandle<Cleanup>>,
 }
 
 struct Served {
     leases: HashMap<String, Held>,
+    /// Every lease id granted on this connection, ended ones included: an id
+    /// is granted once.
+    granted: HashSet<String>,
     /// Leases ending, to be waited for before serving returns.
     ending: Vec<JoinHandle<()>>,
     frames: mpsc::Sender<FromEnvironment>,
@@ -290,16 +299,39 @@ impl Served {
             } => {
                 let grace = Duration::from_millis(grace_ms).min(MAX_STOP_WAIT);
                 let kill = Duration::from_millis(kill_ms).min(MAX_STOP_WAIT);
-                let taken = self
-                    .leases
-                    .get_mut(&lease)
-                    .and_then(|held| held.channels.remove(&channel));
+                let held = self.leases.get_mut(&lease);
+                let taken = held.and_then(|held| match held.channels.remove(&channel) {
+                    Some(running) => Some(Ok(running)),
+                    None => held.stopped.get(&channel).cloned().map(Err),
+                });
                 match taken {
-                    Some(running) => {
-                        let stop = self.stop(lease.clone(), channel, running, grace, kill, true);
+                    Some(Ok(running)) => {
+                        let (done, cleanup) = watch::channel(None);
+                        let stop =
+                            self.stop(lease.clone(), channel, running, grace, kill, Some(done));
                         if let Some(held) = self.leases.get_mut(&lease) {
+                            held.stopped.insert(channel, cleanup);
                             held.stops.push(stop);
                         }
+                    }
+                    // Already stopping, or stopped: answered with what that
+                    // took, once it is known.
+                    Some(Err(mut cleanup)) => {
+                        let frames = self.frames.clone();
+                        tokio::spawn(async move {
+                            let known = match cleanup.wait_for(Option::is_some).await {
+                                Ok(known) => *known,
+                                Err(_) => return,
+                            };
+                            let Some(cleanup) = known else { return };
+                            let _ = frames
+                                .send(FromEnvironment::Stopped {
+                                    lease,
+                                    channel,
+                                    cleanup,
+                                })
+                                .await;
+                        });
                     }
                     None => {
                         self.dropped(Some(&lease), Some(channel), "stop");
@@ -372,8 +404,10 @@ impl Served {
     }
 
     async fn grant(&mut self, lease: String, agent: String) {
-        let refusal = if LeaseId::new(lease.clone()).is_err() || self.leases.contains_key(&lease) {
+        let refusal = if LeaseId::new(lease.clone()).is_err() || self.granted.contains(&lease) {
             Some(GrantRefusal::Duplicate)
+        } else if let Some(refusal) = self.recorded_before(&lease) {
+            Some(refusal)
         } else if !self.launcher.runs(&agent) {
             Some(GrantRefusal::AgentUnavailable)
         } else {
@@ -390,11 +424,13 @@ impl Served {
         };
         match refusal {
             None => {
+                self.granted.insert(lease.clone());
                 self.leases.insert(
                     lease.clone(),
                     Held {
                         agent,
                         channels: HashMap::new(),
+                        stopped: HashMap::new(),
                         stops: Vec::new(),
                     },
                 );
@@ -415,11 +451,24 @@ impl Served {
         }
     }
 
+    /// Why a lease id this host's audit already records, from this
+    /// connection or an earlier one, is not granted again: a lease is
+    /// granted once, and its id never names a second one.
+    fn recorded_before(&self, lease: &str) -> Option<GrantRefusal> {
+        match self.ledger.accounted(lease) {
+            Ok(Cleanup::NotHeld) => None,
+            Ok(_) => Some(GrantRefusal::Duplicate),
+            Err(error) => {
+                tracing::error!(lease, %error, "the lease audit could not be read; the lease is refused");
+                Some(GrantRefusal::AuditUnavailable)
+            }
+        }
+    }
+
     async fn start(&mut self, lease: String, channel: u32, environment: &BTreeMap<String, String>) {
-        let free = self
-            .leases
-            .get(&lease)
-            .is_some_and(|held| !held.channels.contains_key(&channel));
+        let free = self.leases.get(&lease).is_some_and(|held| {
+            !held.channels.contains_key(&channel) && !held.stopped.contains_key(&channel)
+        });
         if !free {
             self.dropped(Some(&lease), Some(channel), "start");
             return self
@@ -507,7 +556,8 @@ impl Served {
     }
 
     /// Stop one harness on a task of its own, recording what that took and,
-    /// when `reply`, answering it.
+    /// when the gateway asked for it (`done`), answering it and keeping it
+    /// for a second ask.
     fn stop(
         &self,
         lease: String,
@@ -515,7 +565,7 @@ impl Served {
         running: Channel,
         grace: Duration,
         kill: Duration,
-        reply: bool,
+        done: Option<watch::Sender<Option<Cleanup>>>,
     ) -> JoinHandle<Cleanup> {
         let ledger = self.ledger.clone();
         let frames = self.frames.clone();
@@ -552,7 +602,8 @@ impl Served {
                     Cleanup::Uncertain
                 }
             };
-            if reply {
+            if let Some(done) = done {
+                done.send_replace(Some(cleanup));
                 let _ = frames
                     .send(FromEnvironment::Stopped {
                         lease,
@@ -577,7 +628,7 @@ impl Served {
                 running,
                 self.timings.grace,
                 self.timings.kill,
-                false,
+                None,
             ));
         }
         let ledger = self.ledger.clone();

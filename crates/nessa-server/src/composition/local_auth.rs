@@ -1093,8 +1093,8 @@ async fn conversations(
         message_commit_clock: Arc::new(
             nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
         ),
-        clock,
-        environment: environments(&root, &ssh_hosts)?,
+        clock: clock.clone(),
+        environment: environments(&root, &ssh_hosts, clock.clone())?,
     };
     let workspace = Some(agents.workspace.to_string_lossy().into_owned());
     // With MCP servers, an app's calls go through the conversation's own
@@ -1158,7 +1158,11 @@ fn setup_error(error: impl std::fmt::Display) -> RunError {
 /// reaches it; placements are kept either way, so a conversation placed on
 /// a host since removed from the configuration is refused rather than run
 /// here.
-fn environments(root: &Path, hosts: &[SshDestination]) -> Result<Environments, RunError> {
+fn environments(
+    root: &Path,
+    hosts: &[SshDestination],
+    clock: Arc<dyn Clock>,
+) -> Result<Environments, RunError> {
     use crate::conversation::infrastructure::{
         ssh_environment::{DurableEnvironmentAudit, OpenSshConnector, SshEnvironment, SshTimings},
         FilePlacements,
@@ -1168,7 +1172,7 @@ fn environments(root: &Path, hosts: &[SshDestination]) -> Result<Environments, R
     let mut environments: BTreeMap<String, Arc<dyn crate::conversation::application::Environment>> =
         BTreeMap::new();
     if !hosts.is_empty() {
-        let audit = DurableEnvironmentAudit::new(root.join("audit").join("environments"))
+        let audit = DurableEnvironmentAudit::new(root.join("audit").join("environments"), clock)
             .map_err(|error| RunError::Agent(error.to_string()))?;
         let connector = Arc::new(OpenSshConnector);
         for host in hosts {

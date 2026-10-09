@@ -93,8 +93,9 @@ pub enum GrantRefusal {
     /// The host has no runtime configured for the agent, or none it can
     /// start there.
     AgentUnavailable,
-    /// The lease is already granted on this connection, or its id is not one
-    /// a lease can have.
+    /// The lease id was already granted here, on this connection or an
+    /// earlier one whose grant the host recorded, or it is not one a lease
+    /// can have.
     Duplicate,
     /// The environment could not record the lease in its own audit, so it
     /// does not run it.

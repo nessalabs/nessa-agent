@@ -289,8 +289,7 @@ struct SshControl {
 impl HarnessControl for SshControl {
     fn cleanup(&mut self, grace: Duration, kill_timeout: Duration) -> HarnessCleanupFuture<'_> {
         Box::pin(async move {
-            self.cleaned = true;
-            match self
+            let outcome = match self
                 .link
                 .stop(&self.lease, self.channel, grace, kill_timeout)
                 .await
@@ -298,7 +297,11 @@ impl HarnessControl for SshControl {
                 Some(Cleanup::Confirmed { forced }) => Ok(CloseOutcome { forced }),
                 Some(Cleanup::NotHeld) => Ok(CloseOutcome { forced: false }),
                 Some(Cleanup::Uncertain) | None => Err(AgentError::CleanupUncertain),
-            }
+            };
+            // Only a confirmation lets go of it: anything less, or a cleanup
+            // dropped part-way, still asks the host to stop it when dropped.
+            self.cleaned = outcome.is_ok();
+            outcome
         })
     }
 }

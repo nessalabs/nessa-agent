@@ -517,13 +517,13 @@ binary over pipes) and `tests/conversation/leases.rs` (service).
 | S1 | Grant answered Granted | Live; the binding starts its harness through the lease | adapter `a_lease_runs_its_harness_on_the_host_and_ends_with_the_hosts_evidence`, binary `a_lease_runs_its_harness_on_the_host_and_ends_with_evidence_in_the_ledger` |
 | S2 | Hello names another build | Refused `environment_version_mismatch`; nothing sent; audited | adapter `another_build_is_refused_and_sent_nothing` |
 | S3 | Host serving another connection, or not configured | Hello, then Unavailable; refused `environment_unavailable` | adapter `a_host_serving_another_gateway_is_busy`, host `a_host_that_cannot_serve_says_its_build_then_why`, binary `a_host_with_no_agents_configured_says_so_after_its_hello` |
-| S4 | Agent the host or the binding cannot run, or a duplicate grant | Refused with its reason; nothing ran | adapter `an_agent_the_host_or_its_binding_cannot_run_is_refused`, host `grants_are_refused_with_their_reason`, binary (duplicate) |
-| S5 | Host unreachable, or no answer in time | Refused `environment_unreachable` at opening; at an end, Unanswered, so Interrupted | adapter `with_the_host_unreachable_a_lost_lease_has_no_evidence` |
-| S6 | Stop, close or delete while Live | Stop and End frames; Ended with the host's cleanup | adapter S1 test, host `a_stop_is_answered_with_the_harness_cleanup`, service `b_a_conversation_created_on_a_host_runs_there_and_its_lease_names_the_host` |
+| S4 | Agent the host or the binding cannot run, or a grant of a lease id the host already granted, on this connection or an earlier one | Refused with its reason; nothing ran | adapter `an_agent_the_host_or_its_binding_cannot_run_is_refused`, host `grants_are_refused_with_their_reason`, binary (duplicate) |
+| S5 | Host unreachable, or no answer in time | Refused `environment_unreachable` at opening, and a grant answered late is ended on the host; at an end, Unanswered, so Interrupted | adapter `with_the_host_unreachable_a_lost_lease_has_no_evidence`, `a_grant_not_answered_in_time_is_ended_on_the_host` |
+| S6 | Stop, close or delete while Live | Stop and End frames; Ended with the host's cleanup. A stop asked again, or while the first is still stopping, is answered with that stop's cleanup, and its channel is never started again | adapter S1 test, host `a_stop_is_answered_with_the_harness_cleanup`, `a_stop_asked_twice_while_stopping_answers_the_same_cleanup`, service `b_a_conversation_created_on_a_host_runs_there_and_its_lease_names_the_host` |
 | S7 | Connection lost while Live | The host ends every lease as lost and records it; the gateway stops the conversation as lost, asks a new connection, and ends the lease with what was recorded, or Interrupted | adapter `a_lost_connection_is_seen_and_the_end_is_accounted_on_a_new_one`, host `the_gateway_gone_ends_every_lease_as_lost_with_recorded_cleanup`, binary `a_lease_held_when_the_gateways_stream_ends_is_ended_as_lost_and_accounted_after`, service `b_gate2_a_lost_connection_stops_the_conversation_and_ends_its_lease_as_lost` |
 | S8 | A frame naming a lease or channel not held, or unreadable | Dropped and audited on the side that received it | adapter and host `frames_naming_nothing_held_are_dropped_with_evidence` |
-| S9 | Account for a lease from an earlier connection | What the ledger recorded, `not_held` when it recorded nothing | host `account_answers_only_what_was_recorded` |
-| S10 | A binding stops reading its harness's output | Overflow audited, harness stopped | adapter `output_a_binding_does_not_read_is_bounded_and_stops_the_harness` |
+| S9 | Account for a lease from an earlier connection | What the ledger recorded for its last grant, `not_held` when it recorded nothing | host `account_answers_only_what_was_recorded`, ledger `accounting_answers_the_last_grant_s_end` |
+| S10 | A binding stops reading its harness's output | Overflow audited, harness stopped; the binding's own stop after it is answered with the host's cleanup | adapter `output_a_binding_does_not_read_is_bounded_and_stops_the_harness` |
 | S11 | No host named, unknown host, host no longer configured | Here, never SSH; refused `environment_not_configured`; refused, never run here | service `b_gate5_a_conversation_naming_no_host_never_reaches_one`, `b_a_host_the_configuration_does_not_name_is_refused_and_nothing_is_created`, `b_a_conversation_whose_host_is_no_longer_configured_is_refused_never_run_here` |
 
 Slice B's lease rows, beside slice A's above:
@@ -536,7 +536,7 @@ Slice B's lease rows, beside slice A's above:
 | L9 | yes: S8 on both sides, and the lease's own fence as slice A |
 | L10 | in part: a lost connection ends the lease as lost at once (S7); there is no reconnect budget and no resume at a cursor |
 | L11, L12 | yes: the next opening asks the host (`Account`), as slice A asks the in-process environment |
-| L13 | yes: the gateway's one slot per conversation, and the host refuses a second grant of a lease id (S4) |
+| L13 | yes: the gateway's one slot per conversation, and the host refuses a second grant of a lease id its audit records (S4) |
 | L17 to L19 | not in slice B: no idle sleep and no low-disk pause yet |
 
 **Not in slice B.** First-use install (the host's `PATH` must already have

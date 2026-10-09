@@ -49,6 +49,9 @@ const MAX_RECORDED_DROPS: u32 = 64;
 /// How long a stop waits beyond the harness's own budgets for the host's
 /// answer.
 const STOP_MARGIN: Duration = Duration::from_secs(5);
+/// Each forced step's budget for a harness stopped without its binding's
+/// own budgets: one let go, or one whose output overflowed.
+const ABANDON_KILL_MS: u64 = 5_000;
 
 /// One harness under a lease, as the demux routes to it.
 struct ChannelRoute {
@@ -56,6 +59,9 @@ struct ChannelRoute {
     output: Option<mpsc::Sender<Vec<u8>>>,
     /// Waiting for the host's `Stopped`.
     stopped: Option<oneshot::Sender<Cleanup>>,
+    /// The host's `Stopped`, once it came: kept, so a stop asked after the
+    /// host already stopped it (an output overflow's) is answered with it.
+    cleanup: Option<Cleanup>,
     /// The host said it never started.
     start_failed: bool,
 }
@@ -262,6 +268,11 @@ impl HostLink {
             Ok(Ok(Ok(()))) => Ok(()),
             refused => {
                 self.routes().leases.remove(lease);
+                if refused.is_err() {
+                    // No answer in time: the host may still admit it, so it
+                    // is ended there rather than held for nobody.
+                    self.abandon_lease(lease);
+                }
                 Err(match refused {
                     Ok(Ok(Err(GrantRefusal::AgentUnavailable))) => LeaseRefusal::AgentUnavailable,
                     _ => LeaseRefusal::EnvironmentUnreachable,
@@ -305,6 +316,7 @@ impl HostLink {
                 ChannelRoute {
                     output: Some(output_sender),
                     stopped: None,
+                    cleanup: None,
                     start_failed: false,
                 },
             );
@@ -357,6 +369,9 @@ impl HostLink {
             if route.start_failed {
                 return Some(Cleanup::NotHeld);
             }
+            if let Some(cleanup) = route.cleanup {
+                return Some(cleanup);
+            }
             let (answer, answered) = oneshot::channel();
             route.stopped = Some(answer);
             answered
@@ -370,7 +385,9 @@ impl HostLink {
             })
             .await
             .ok()?;
-        let bound = grace + kill + kill + STOP_MARGIN;
+        // The host's own steps: the grace, a signal and a forced kill, then
+        // the harness's output ending, each step within `kill`.
+        let bound = grace + kill * 3 + STOP_MARGIN;
         tokio::time::timeout(bound, answered).await.ok()?.ok()
     }
 
@@ -381,7 +398,7 @@ impl HostLink {
             lease: lease.into(),
             channel,
             grace_ms: 0,
-            kill_ms: 5_000,
+            kill_ms: ABANDON_KILL_MS,
         });
     }
 
@@ -518,11 +535,19 @@ impl Shared {
                     lease: lease.clone(),
                     channel,
                 });
-                let _ = self.frames.try_send(ToEnvironment::Stop {
-                    lease,
-                    channel,
-                    grace_ms: 0,
-                    kill_ms: 5_000,
+                // Sent even when the host's queue is full just now: a
+                // harness whose output is no longer read is never left
+                // running for want of room.
+                let frames = self.frames.clone();
+                tokio::spawn(async move {
+                    let _ = frames
+                        .send(ToEnvironment::Stop {
+                            lease,
+                            channel,
+                            grace_ms: 0,
+                            kill_ms: ABANDON_KILL_MS,
+                        })
+                        .await;
                 });
             }
         }
@@ -632,8 +657,12 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
             let Some(route) = routes.leases.get_mut(&lease) else {
                 return Routed::Dropped;
             };
-            match route.channels.remove(&channel) {
-                Some(mut channel) => {
+            // Kept until the lease ends: a channel number is never used
+            // again under it, and a later stop is answered from it.
+            match route.channels.get_mut(&channel) {
+                Some(channel) => {
+                    channel.output = None;
+                    channel.cleanup = Some(cleanup);
                     if let Some(waiter) = channel.stopped.take() {
                         let _ = waiter.send(cleanup);
                     }

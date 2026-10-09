@@ -85,7 +85,11 @@ impl LeaseLedger for FileLedger {
                 continue;
             }
             match line.kind.as_str() {
-                "granted" => granted = true,
+                // A grant after an end is a lease not yet ended again.
+                "granted" => {
+                    granted = true;
+                    ended = None;
+                }
                 "ended" => ended = line.cleanup,
                 _ => {}
             }
@@ -97,3 +101,7 @@ impl LeaseLedger for FileLedger {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/env_serve/ledger.rs"]
+mod tests;
