@@ -69,6 +69,8 @@ Checks, per engine and layout (--only <names> to pick):
            the header, and the title keeps a positive width. A production
            Chromium run fails when the click's longest frame exceeds the
            frame budget (budgetMs).
+  card-open the card's Open, at the same size, measured the same way. A
+           production Chromium run fails on the same budget.
 
 The panel check waits on the sample's follow-up lines, so it takes about
 half a minute.`,
@@ -225,6 +227,58 @@ function assertHeader(fit, failures, when) {
   if (!fit.titleBeforeStack) failures.push(`the stack overlaps the title ${when}`)
 }
 
+/**
+ * The open's frames. Production Chromium calibrates, proves a frame of known
+ * cost is measured, throttles, then measures `perform`. The throttle is
+ * cleared if that measurement throws, so a later step is not still at 4×.
+ * Other runs measure the same click with no budget.
+ */
+async function measureOpening(page, label, perform) {
+  const failures = []
+  let calibration
+  let frame
+  let cdp
+  if (label.mode === "prod" && label.engine === "chromium") {
+    calibration = await calibrate(page.context(), page, 4)
+    if (!calibration.ok)
+      failures.push(`calibration did not hold: ${JSON.stringify(calibration)}`)
+    // Unthrottled, after the ratio check: one frame of known cost must be
+    // measured and attributed, or the click's numbers are not evidence.
+    frame = await calibrationFrame(page)
+    if (!frame.ok)
+      failures.push(
+        `a ${frame.cost} ms frame measured ${frame.measuredMs} ms (attributed: ${frame.attributed})`,
+      )
+    cdp = await throttle(page.context(), page, 4)
+  }
+  let opening
+  try {
+    opening = await measure(page, perform, 800)
+  } finally {
+    if (cdp) await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 })
+  }
+  if (
+    label.mode === "prod" &&
+    label.engine === "chromium" &&
+    exceedsFrameBudget(opening.maxFrame)
+  )
+    failures.push(
+      `longest frame ${opening.maxFrame} ms > ${budgetMs} ms (over: ${opening.over})`,
+    )
+  return {
+    failures,
+    calibration,
+    calibrationFrame: frame,
+    opening: {
+      maxFrame: opening.maxFrame,
+      over: opening.over,
+      frames: opening.frames,
+      noLoaf: opening.noLoaf,
+      slow: opening.slow,
+    },
+  }
+}
+
 const checks = {
   panel: async (page, label) => {
     const failures = []
@@ -321,36 +375,10 @@ const checks = {
     if (!before.present) return { before, failures }
 
     const panesBefore = await paneCount(page)
-    let calibration
-    let frame
-    let cdp
-    if (label.mode === "prod" && label.engine === "chromium") {
-      calibration = await calibrate(page.context(), page, 4)
-      if (!calibration.ok)
-        failures.push(`calibration did not hold: ${JSON.stringify(calibration)}`)
-      // Unthrottled, after the ratio check: one frame of known cost must be
-      // measured and attributed, or the click's numbers are not evidence.
-      frame = await calibrationFrame(page)
-      if (!frame.ok)
-        failures.push(
-          `a ${frame.cost} ms frame measured ${frame.measuredMs} ms (attributed: ${frame.attributed})`,
-        )
-      cdp = await throttle(page.context(), page, 4)
-    }
-    const opening = await measure(
-      page,
-      () => page.locator(css.subagentStack).click(),
-      800,
+    const measured = await measureOpening(page, label, () =>
+      page.locator(css.subagentStack).click(),
     )
-    if (
-      label.mode === "prod" &&
-      label.engine === "chromium" &&
-      exceedsFrameBudget(opening.maxFrame)
-    )
-      failures.push(
-        `longest frame ${opening.maxFrame} ms > ${budgetMs} ms (over: ${opening.over})`,
-      )
-    if (cdp) await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 })
+    failures.push(...measured.failures)
     if (!(await paneCountIs(page, panesBefore + 1)))
       failures.push(
         `expected ${panesBefore + 1} panes after the stack, found ${await paneCount(page)}`,
@@ -385,21 +413,48 @@ const checks = {
       before,
       after,
       fit,
-      opening: {
-        maxFrame: opening.maxFrame,
-        over: opening.over,
-        frames: opening.frames,
-        noLoaf: opening.noLoaf,
-        slow: opening.slow,
-      },
-      calibration,
-      calibrationFrame: frame,
+      opening: measured.opening,
+      calibration: measured.calibration,
+      calibrationFrame: measured.calibrationFrame,
+      failures,
+    }
+  },
+
+  "card-open": async (page, label) => {
+    const failures = []
+    // Start the frame loop before the click, so the sample is not the loop's first gap.
+    await page.evaluate(observers)
+    const open = page
+      .locator(css.widgetCard)
+      .getByRole("button", { name: names.openWidget })
+    // In view before the sample, so the measured click is the open.
+    await open.scrollIntoViewIfNeeded()
+    await settled(page)
+    const panesBefore = await paneCount(page)
+    const measured = await measureOpening(page, label, () => open.click())
+    failures.push(...measured.failures)
+    if (!(await paneCountIs(page, panesBefore + 1)))
+      failures.push(
+        `expected ${panesBefore + 1} panes after Open, found ${await paneCount(page)}`,
+      )
+    await need(page, css.subagentList, "the subagent list")
+    await settled(page)
+    return {
+      opening: measured.opening,
+      calibration: measured.calibration,
+      calibrationFrame: measured.calibrationFrame,
       failures,
     }
   },
 }
 
-const sizes = { narrow: { width: 1000, height: 560 } }
+const sizes = {
+  narrow: { width: 1000, height: 560 },
+  "card-open": { width: 1000, height: 560 },
+}
+
+/** Production repeats for the two opens the frame budget covers. */
+const budgetedOpens = new Set(["narrow", "card-open"])
 
 await main(meta, async ({ options, rep, url }) => {
   const only = options.only ? options.list(options.only) : Object.keys(checks)
@@ -411,7 +466,7 @@ await main(meta, async ({ options, rep, url }) => {
         const size = Object.hasOwn(sizes, name)
           ? sizes[name]
           : { width: 1440, height: 900 }
-        const repeats = options.mode === "prod" && name === "narrow" ? 3 : 1
+        const repeats = options.mode === "prod" && budgetedOpens.has(name) ? 3 : 1
         for (let run = 1; run <= repeats; run++) {
           let opened
           await attempt(rep, { engine, layout, name, run }, async () => {

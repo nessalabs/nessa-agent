@@ -153,6 +153,7 @@ export function samplePlugin(origin: string): NativeWidgetPlugin {
       return useMemo(() => sampleState(id, origin), [id])
     },
     views: { pane: SampleView, window: SampleView, inline: SampleCard },
+    readsHostSize: true,
     SessionAccessory: sampleAccessory(origin),
   }
 }

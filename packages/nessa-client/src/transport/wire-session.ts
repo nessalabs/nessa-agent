@@ -54,7 +54,10 @@ type PendingRequest = {
  */
 export class WireSession {
   private readonly pending = new Map<string, PendingRequest>()
-  private readonly eventListeners = new Map<string, Set<(payload: unknown) => void>>()
+  private readonly eventListeners = new Map<
+    string,
+    Map<(payload: unknown) => void, symbol>
+  >()
   private readonly closeListeners = new Set<(error: NessaConnectionClosedError) => void>()
   private closedError: NessaConnectionClosedError | undefined
   private requestSeq = 0
@@ -134,10 +137,14 @@ export class WireSession {
 
   /** Subscribe to a server push event by name. */
   onEvent(event: string, handler: (payload: unknown) => void): () => void {
-    const set = this.eventListeners.get(event) ?? new Set()
-    set.add(handler)
-    this.eventListeners.set(event, set)
-    return () => set.delete(handler)
+    const registrations =
+      this.eventListeners.get(event) ?? new Map<(payload: unknown) => void, symbol>()
+    const registration = registrations.get(handler) ?? Symbol()
+    registrations.set(handler, registration)
+    this.eventListeners.set(event, registrations)
+    return () => {
+      if (registrations.get(handler) === registration) registrations.delete(handler)
+    }
   }
 
   onClose(handler: (error: NessaConnectionClosedError) => void): () => void {
@@ -208,9 +215,17 @@ export class WireSession {
   }
 
   private dispatchEvent(event: string, payload: unknown): void {
-    const handlers = this.eventListeners.get(event)
-    if (!handlers) return
-    for (const handler of handlers) handler(payload)
+    const registrations = this.eventListeners.get(event)
+    if (!registrations) return
+    for (const [handler, registration] of [...registrations]) {
+      if (this.closedError) break
+      if (registrations.get(handler) !== registration) continue
+      try {
+        handler(payload)
+      } catch {
+        // Consumer failures are isolated, as they are for close observers.
+      }
+    }
   }
 
   /** @internal Test seam for close behavior and pending-request cleanup. */

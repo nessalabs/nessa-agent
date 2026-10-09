@@ -75,7 +75,22 @@ export interface NativeWidgetPlugin {
     readonly inline?: ComponentType<WidgetViewProps>
     readonly window?: ComponentType<WidgetViewProps>
   }
+  /**
+   * The view reads `context.size`. The host measures the place only then;
+   * otherwise `context.size` stays null and the place is not laid out to learn it.
+   */
+  readonly readsHostSize?: true
   readonly SessionAccessory?: ComponentType<SessionAccessoryProps>
+}
+
+/**
+ * Whether the host measures a place for this plugin. A native view reads
+ * `context.size` only when it says so. An app always does: the bridge sends
+ * the place's box. With no plugin yet, nothing is measured.
+ */
+export function readsHostSize(plugin: WidgetPlugin | undefined): boolean {
+  if (plugin?.kind === "app") return true
+  return plugin?.readsHostSize === true
 }
 
 /**
