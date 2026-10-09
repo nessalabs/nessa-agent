@@ -356,4 +356,27 @@ describe("subscription API", () => {
       subscriptionId: "1",
     })
   })
+
+  it("leaves no listener on its signal once closed", async () => {
+    // A long-lived signal across many opens would otherwise collect one
+    // listener for each.
+    const wire = port()
+    const stopped = new AbortController()
+    const added = vi.spyOn(stopped.signal, "addEventListener")
+    const removed = vi.spyOn(stopped.signal, "removeEventListener")
+    const subscription = await createSubscriptionApi(wire.session).view(
+      conversationId,
+      viewHandlers(),
+      { signal: stopped.signal },
+    )
+    await subscription.close()
+    const listener = added.mock.calls.find(([type]) => type === "abort")?.[1]
+    expect(listener).toBeDefined()
+    expect(removed).toHaveBeenCalledWith("abort", listener)
+    stopped.abort()
+    const unsubscribes = wire.request.mock.calls.filter(
+      ([method]) => method === ProductMethod.ConversationUnsubscribe,
+    )
+    expect(unsubscribes).toHaveLength(1)
+  })
 })

@@ -263,6 +263,12 @@ interface Followed<T> {
   /** Whether a frame of the current open has been applied. */
   applied: boolean
   opening: Promise<void> | undefined
+  /**
+   * The current open's subscribe, settled once the client has answered it
+   * and, when given up, closed it: what an open past the limit waits for
+   * (D25). Never rejects.
+   */
+  subscribing: Promise<void> | undefined
   token: object
   readonly waiters: Set<Waiter<T>>
 }
@@ -272,6 +278,7 @@ const followed = <T>(): Followed<T> => ({
   giveUp: undefined,
   applied: false,
   opening: undefined,
+  subscribing: undefined,
   token: {},
   waiters: new Set(),
 })
@@ -288,6 +295,7 @@ const letGo = <T>(follow: Followed<T>) => {
   follow.giveUp = undefined
   follow.handle = undefined
   follow.opening = undefined
+  follow.subscribing = undefined
   follow.applied = false
 }
 
@@ -575,6 +583,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   // Sessions whose archive is on its way: a list frame that arrives meanwhile
   // may have been read before it, and does not list them again (W6).
   const archiving = new Set<string>()
+  // The subscribes of conversations let go past the limit while on their
+  // way: the gateway counts one against the limit until it is answered and
+  // closed, so the next open waits for them (D25).
+  let evicted: Promise<void> | undefined
   // How many list frames have come: only the newest queued is applied (D18).
   let listFrames = 0
 
@@ -895,6 +907,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     // Ended, even before its open finished: that open is let go.
     follow.handle = undefined
     follow.opening = undefined
+    follow.subscribing = undefined
     follow.applied = false
     follow.token = {}
     if (end.reason === "disconnected") return
@@ -941,9 +954,13 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       async (live) => {
         const connected = await client(who)
         if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
+        if (evicted) {
+          await evicted
+          if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
+        }
         let handle: Subscription
         try {
-          handle = await subscribe(connected, reads.get(sessionId)?.cursor).catch(
+          const subscribing = subscribe(connected, reads.get(sessionId)?.cursor).catch(
             (error: unknown) => {
               if (!(error instanceof NessaRpcError) || error.code !== "cursor_ahead")
                 throw error
@@ -953,6 +970,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
               return subscribe(connected, undefined)
             },
           )
+          follow.subscribing = subscribing.then(noop, noop)
+          handle = await subscribing
         } catch (error) {
           // Given up on its way: the answer of an open let go once answered,
           // as for the list.
@@ -995,6 +1014,16 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       follow = followed<Transcript>()
       while (views.size >= subscriptionLimits.conversationTargets) {
         const [oldest] = views.keys()
+        // Answered and closed before this one is subscribed (D25); one
+        // already answered is closed at once, ahead of the next subscribe.
+        const leaving = views.get(oldest)
+        if (leaving?.opening && leaving.subscribing) {
+          const waiting = Promise.all([evicted, leaving.subscribing]).then(noop)
+          evicted = waiting
+          void waiting.then(() => {
+            if (evicted === waiting) evicted = undefined
+          })
+        }
         unfollow(oldest, new WorkspaceSourceError("unavailable"))
         // Not followed, it says only what its row says (`needs-you` is a frame's).
         reads.delete(oldest)

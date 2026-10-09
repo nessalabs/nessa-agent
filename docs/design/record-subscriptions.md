@@ -157,7 +157,10 @@ kept busy with its own traffic for the whole timeout can end a subscription
 `lagging` too; the client resumes it the same way. A write that has started
 and stalls past the socket's write timeout closes the socket, as every other
 frame does. The terminal frame itself must be written by its deadline or the
-socket closes, as a watch's terminal notice does.
+socket closes, as a watch's terminal notice does; so must the subscribe reply,
+by the request's reply deadline, as a watch's reply (row S31): written after
+the client stopped waiting, it would name a live subscription the client never
+learns, and every subscribe again would be refused `subscription_duplicate`.
 
 Nothing a producer does waits on a socket: a commit flips a dirty bit
 (SDK `RecordChanges::publish`), a live change bumps a `tokio::sync::watch`
@@ -227,17 +230,18 @@ otherwise.
 | S22 | A frame larger than the frame bound | Ended `too_large` | `an_oversized_view_ends_the_subscription_as_too_large` (unit, `product/subscription/target.rs`) |
 | S23 | A read refused for want of a storage read slot | Tried again with a doubling wait, then refused | `a_read_without_a_storage_slot_is_tried_again_then_refused` (unit, `product/subscription/target.rs`) |
 | S24 | The writer took a frame and is still writing it when its delivery deadline passes | Written; not ended `lagging` | `a_frame_taken_as_its_deadline_passes_is_written_and_ends_nothing` (unit, `product/subscription/target.rs`) |
-| S25 | The first read has not finished by the subscribe request's reply deadline | Refused `unavailable`; its wake sources go with it | `a_first_read_past_the_reply_deadline_is_refused_unavailable` (unit, `product/subscription/target.rs`) |
+| S25 | The first read has not finished by the subscribe request's passive read deadline (`readTimeoutMs`), so the rest of its delivery budget is left for the reply (S31) | Refused `unavailable`; its wake sources go with it | `a_first_read_past_the_reply_deadline_is_refused_unavailable` (unit, `product/subscription/target.rs`) |
 | S26 | A followed conversation is closed or stopped (its agent let go) | One frame: the same history, read-only, lifecycle `absent`; the agent is not opened again until a send opens it | `a_closed_conversation_is_shown_let_go_and_not_opened_again` |
 | S27 | A followed conversation has an unfinished approval-mode change | The view shows the change pending; recovery is not run and the agent is not opened | `a_pending_mode_change_is_shown_not_recovered_by_a_follower` |
 | S28 | The agent's opening fails while a follower waits on it (or failed and holds its slot) | The follower is shown the committed history, read-only; `conversation.read` and a send report the failure | `a_failed_opening_holding_its_slot_is_read_by_a_follower_as_its_history` (`tests/conversation/desktop_stop.rs`) |
 | S29 | A subscribe or unsubscribe the session may not make (grant, presence, or no longer current) | Refused with the admission's code; a subscribe takes no watch from the shared pools first | `a_forbidden_subscribe_is_refused_before_it_takes_a_watch`, `a_forbidden_unsubscribe_is_refused` |
 | S30 | Every request permit taken when a batch is woken; the grant is revoked while it waits for one | Ended `refused` with `forbidden`; no frame is read under the old grant, because a batch is admitted only once it holds its capacity, as `dispatch` admits a request | `a_grant_revoked_while_a_batch_waits_for_capacity_ends_it_before_the_read` |
+| S31 | The subscribe reply is not written by the request's reply deadline (the writer held behind other traffic) | The socket closes, as for a watch's reply; the client reconnects and subscribes again, never left with a live subscription it cannot name | `a_subscribe_reply_not_written_by_its_deadline_closes_the_socket`; `the_reply_and_the_last_frame_carry_a_deadline_through_their_write` (unit, `product/subscription/delivery.rs`) |
 | L1 | List subscription; a catalogue change | A new list frame | `a_list_subscription_follows_the_catalogue` |
 | L2 | A turn starts or ends without a summary change | A new list frame with `running` changed | `a_turn_without_a_summary_change_updates_the_list` |
 | L3 | A list larger than one frame | Cut newest first, `complete: false` | `a_list_too_large_for_one_frame_is_cut_and_marked_incomplete` (unit) |
 | L4 | A stream of commits under a list subscription | List frames no closer than `LIST_REREAD_FLOOR` | `list_frames_come_no_closer_than_the_reread_floor` |
-| L5 | An incomplete list; the owner's catalogue changes in a row the frame left out (archived, deleted), so the rows it carries are the same | A frame all the same, so the client walks the catalogue (D18); a commit that changes nothing it carries sends none; notices already waiting when a list reads are taken by that read | `a_change_the_incomplete_list_leaves_out_is_still_sent`; `a_list_takes_every_waiting_notice_before_it_reads` (unit, `product/subscription/target.rs`) |
+| L5 | An incomplete list; a row the frame left out changes: by the catalogue (archived, deleted), or by a commit alone (its `running`, within the service's bound), so the rows it carries are the same | A frame all the same, so the client walks the catalogue (D18); a commit that changes no row the service read sends none; notices already waiting when a list reads are taken by that read | `a_change_the_incomplete_list_leaves_out_is_still_sent`; `a_commit_to_a_row_the_frame_cut_is_still_a_change`, `a_list_takes_every_waiting_notice_before_it_reads` (unit, `product/subscription/target.rs`) |
 
 Desktop rows (`src/desktop/workspace/adapters/gateway/gateway-source.test.ts`;
 the test names begin with the row id). The adapter subscribes only: it sends
@@ -270,9 +274,10 @@ asks of the client does not offer them.
 | D22 | `dispose` | Every subscription closed; nothing applies after |
 | D23 | A conversation let go past the limit while its open is on its way, then opened again | The open is given up (its `signal`); subscribed again only once it has been answered and its close finished, so the gateway does not refuse it `subscription_duplicate` |
 | D24 | The last listener leaves while the list or a conversation is opening, and one comes back before it is answered (StrictMode) | Every open on its way is given up as in D23, list and conversation alike; both are opened again once the old opens are closed, and a transcript waiting for a frame is answered by the new one; an index call that awaited the old list open is refused `unavailable` and asked again |
+| D25 | A conversation let go past the limit while its open is on its way, and the one that took its place | The new one is subscribed only once the old open is answered and closed: the gateway counts an open on its way against the limit, and would refuse it `subscription_capacity` |
 
-Conversation panel rows (`src/conversation/adapters/gateway/effects.test.ts`
-and `adapters/store/slice.test.ts`; the test names begin with the row id).
+Conversation panel rows (`src/conversation/adapters/gateway/effects.test.ts`,
+`adapters/store/slice.test.ts` and `adapters/store/follow-replacement.test.ts`; the test names begin with the row id).
 The tab on screen follows its conversation through `ConversationEffects.follow`;
 the panel's poller is gone, and nothing it does asks on a timer while a view
 subscription is open.
@@ -286,6 +291,7 @@ subscription is open.
 | P5 | A command answered (send, control, stop) | A followed tab is followed again, so its next view is read after the answer; a tab not on screen is read once and left unfollowed |
 | P6 | A frame identical to the last one this follow applied | Not applied again, so what is on screen keeps its references; any other frame applies, whatever its revision |
 | P7 | The tab switched, closed or unmounted | Its follow stopped; nothing it says applies after |
+| P8 | A tab followed while its after-command single read is on its way (switched to before its first frame) | The single read is stopped by the follow that replaces it, and settles, so the command it was reading for finishes; the store is the one place a tab's follow is replaced, a single read included, and the effects stop a follow only by its own function |
 
 Client rows (`packages/nessa-client/src/presentation/subscription-api.test.ts`;
 the test names begin with the row id).

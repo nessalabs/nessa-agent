@@ -15,12 +15,18 @@
  * aborting its signal later closes it. An open that is refused or answered
  * live lets the next one go at once: a second open of a live target is the
  * caller's duplicate, and the gateway says so.
+ *
+ * The open it returns closes as the sent one does, and, closed, no longer
+ * listens to its `signal`.
  */
-export type SubscriptionGate = <S extends { close(): Promise<void> }>(
+export type SubscriptionGate = (
   target: string,
   signal: AbortSignal | undefined,
-  send: () => Promise<S>,
-) => Promise<S>
+  send: () => Promise<GatedSubscription>,
+) => Promise<GatedSubscription>
+
+/** What the gate opens: a subscription with its identity and its close. */
+export type GatedSubscription = { readonly id: string; close(): Promise<void> }
 
 export function createSubscriptionGate(): SubscriptionGate {
   // The last open of each target still in its way: the next waits for it.
@@ -45,9 +51,16 @@ export function createSubscriptionGate(): SubscriptionGate {
         await opened.close().catch(() => undefined)
         signal.throwIfAborted()
       }
+      if (!signal) return opened
       const close = () => void opened.close().catch(() => undefined)
-      signal?.addEventListener("abort", close, { once: true })
-      return opened
+      signal.addEventListener("abort", close, { once: true })
+      return {
+        id: opened.id,
+        close: () => {
+          signal.removeEventListener("abort", close)
+          return opened.close()
+        },
+      }
     } finally {
       release()
     }

@@ -332,8 +332,10 @@ it("P4: a follow stopped before its open is answered is closed before the next f
   const effects = effectsOf(() => gateway.client)
   const first = told()
   const second = told()
-  effects.follow("server", first.follower)
+  const stopFirst = effects.follow("server", first.follower)
   await settle()
+  // Its caller stops it, then follows again (the store's one rule, P8).
+  stopFirst()
   const stop = effects.follow("server", second.follower)
   await settle()
   expect(gateway.log).toEqual(["subscribe server"])
@@ -351,21 +353,21 @@ it("P4: a follow stopped before its open is answered is closed before the next f
   stop()
 })
 
-it("P4: follows a conversation once: following it again stops the earlier follow", async () => {
+it("P8: a follow is stopped only by its own function: following the conversation again leaves it to its caller", async () => {
   const gateway = subscribing()
   const effects = effectsOf(() => gateway.client)
   const first = told()
-  const second = told()
-  effects.follow("server", first.follower)
+  const stopFirst = effects.follow("server", first.follower)
   await settle()
-  const stop = effects.follow("server", second.follower)
+  expect(gateway.opens).toHaveLength(1)
+  // Its caller replaces it by stopping it first; the effects do not.
+  const stopSecond = effects.follow("server", told().follower)
   await settle()
-  expect(gateway.opens[0]!.close).toHaveBeenCalledOnce()
+  expect(gateway.opens[0]!.close).not.toHaveBeenCalled()
   gateway.opens[0]!.handlers.view({ cursor: cursor("1"), view: gatewayView() })
-  gateway.opens[1]!.handlers.view({ cursor: cursor("1"), view: gatewayView() })
-  expect(first.said).toEqual([])
-  expect(second.said).toHaveLength(1)
-  stop()
+  expect(first.said).toHaveLength(1)
+  stopFirst()
+  stopSecond()
 })
 
 it("asks the host again after a failed answer instead of keeping the failure", async () => {

@@ -35,7 +35,11 @@ export type { ServerApi } from "./server-api.js"
 export type { CatalogueReadApi } from "./catalogue-read-api.js"
 
 export type { ChangeWatchApi } from "./change-watch-api.js"
-export { createSubscriptionGate, type SubscriptionGate } from "./subscription-gate.js"
+export {
+  createSubscriptionGate,
+  type GatedSubscription,
+  type SubscriptionGate,
+} from "./subscription-gate.js"
 export type {
   ListSubscriptionHandlers,
   Subscription,

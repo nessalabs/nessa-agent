@@ -14,6 +14,7 @@
 import {
   NessaRpcError,
   createSubscriptionGate,
+  subscriptionLimits,
   type ConnectionState,
   type ConversationListResult,
   type ConversationSummary,
@@ -182,6 +183,8 @@ export function fakeGateway(): FakeGateway {
   const observers = new Set<(state: ConnectionState) => void>()
   const positions = new Map<string, number>()
   const subscriptions = new Map<string, Live>()
+  // View subscribes on their way, which the gateway counts against its limit.
+  let openingViews = 0
   const gated = createSubscriptionGate()
   let state: ConnectionState = { status: "connected" }
   let closed = false
@@ -323,10 +326,20 @@ export function fakeGateway(): FakeGateway {
     },
     subscriptions: {
       view: (conversationId, handlers, { signal, ...options } = {}) =>
-        gated(
-          `view:${conversationId}`,
-          signal,
-          () =>
+        gated(`view:${conversationId}`, signal, () => {
+          // As the gateway counts: a subscribe on its way holds its place
+          // until it is answered, and one past the limit is refused.
+          const inUse =
+            openingViews +
+            [...subscriptions.values()].filter((live) => live.kind === "view").length
+          if (inUse >= subscriptionLimits.conversationTargets) {
+            calls.push({ method: "subscribe", args: [conversationId, options] })
+            return Promise.reject(
+              new NessaRpcError("subscription_capacity", "Past the subscription limit"),
+            )
+          }
+          openingViews += 1
+          return (
             answer("subscribe", [conversationId, options], () => {
               if (!views.has(conversationId)) notFound()
               const after = options.after
@@ -339,8 +352,11 @@ export function fakeGateway(): FakeGateway {
               const handle = opened({ target: conversationId, kind: "view", handlers })
               sendView(handle.id)
               return handle
-            }) as Promise<Subscription>,
-        ) as never,
+            }) as Promise<Subscription>
+          ).finally(() => {
+            openingViews -= 1
+          })
+        }) as never,
       list: (handlers, { signal, ...options } = {}) =>
         gated(
           `list:${options.archived ?? false}`,
