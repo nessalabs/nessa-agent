@@ -30,6 +30,10 @@ pub use save::{
 };
 
 /// Failure to acquire access, read, validate, or persist a session.
+///
+/// The variants are exhaustive. Matching every one is part of the contract, so
+/// [`Self::AnotherVersion`] is a variant a caller names. [`Self::SCHEMA_VERSION`]
+/// stays on this type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StorageError {
     /// Storage shutdown has closed admission.
@@ -611,6 +615,25 @@ pub trait SessionStorage: Send + Sync {
     ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
         Box::pin(async move { self.open(id).await.map(Some) })
     }
+
+    /// Remove history this build cannot open, without folding it.
+    ///
+    /// Legacy JSONL and a stream whose replay refuses are not a prefix a
+    /// reader can open. Deleting that chat still finishes: this drops the
+    /// JSONL file and resets the stream without reading its bytes. The
+    /// default reports nothing to remove. [`RecordStorage`] removes both.
+    /// Adapters that can refuse a record must override this, or a delete
+    /// treats the history as already gone.
+    ///
+    /// # Errors
+    /// [`StorageError::Busy`] when another owner holds the session. A backend
+    /// error when the file or the reset cannot be acknowledged.
+    ///
+    /// [`RecordStorage`]: crate::infrastructure::session_storage::RecordStorage
+    fn discard_unreadable(&self, id: SessionId) -> StorageFuture<'_, ()> {
+        let _ = id;
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// Exclusive storage access to one local session, owned by its session manager.
@@ -753,8 +776,9 @@ impl StorageError {
     /// This build reads this version and writes it on every batch and checkpoint.
     /// A record with no marker is [`Self::AnotherVersion`], as is any other
     /// unsigned integer. During alpha there is no migration and no reader for
-    /// an unmarked record: the record is skipped, the bytes stay where they
-    /// are, and the conversation continues. Semantic batches and transcript
+    /// an unmarked record. The reader stops at that record and the chat opens
+    /// on the prefix folded before it. The stored bytes stay where they are.
+    /// Nothing after the gap is folded. Semantic batches and transcript
     /// checkpoints share this number: a change to either shape bumps both.
     pub const SCHEMA_VERSION: u64 = 1;
 

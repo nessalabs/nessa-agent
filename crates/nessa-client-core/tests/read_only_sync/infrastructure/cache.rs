@@ -351,8 +351,10 @@ async fn cache_quota_does_not_acknowledge_work() {
     assert_eq!(reopened.load(&scope).unwrap(), None);
 }
 
+/// An ordinal-tampered checkpoint is disposable cache. The rows are dropped
+/// and a later head observation rebuilds an empty fold.
 #[test]
-fn corrupt_checkpoint_is_preserved() {
+fn a_tampered_checkpoint_is_dropped_and_rebuilt() {
     let root = tempfile::tempdir().unwrap();
     let path = cache_path(root.path(), "cache.sqlite3");
     let mut first = cache(&path);
@@ -363,15 +365,15 @@ fn corrupt_checkpoint_is_preserved() {
         .unwrap();
     drop(first);
     let mut reopened = cache(&path);
-    assert_eq!(reopened.load(&scope()), Err(StoreError::Failed));
-    assert_eq!(reopened.take_refusal(), Some(CacheError::Corrupt));
-    let ordinal: i64 = reopened
-        .connection
-        .query_row("SELECT ordinal FROM transcript_checkpoints", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    assert_eq!(ordinal, 1);
+    assert_eq!(reopened.load(&scope()).unwrap(), None);
+    assert_eq!(reopened.take_refusal(), None);
+    assert_eq!(table_rows(&reopened, "transcript_checkpoints"), 0);
+    assert_eq!(table_rows(&reopened, "transcript_progress"), 0);
+    reopened.observe_head(&scope(), 0).unwrap();
+    assert_eq!(
+        reopened.load(&scope()).unwrap(),
+        Some(Checkpoint::new(scope(), 0))
+    );
 }
 
 fn table_rows(cache: &ReadOnlyCache, table: &str) -> i64 {
@@ -433,7 +435,7 @@ fn unreadable_checkpoint_rebuilds(name: &str, edit: impl FnOnce(&mut serde_json:
 
 /// A cached checkpoint this build cannot read is dropped. The load succeeds
 /// with no progress, and a later head observation rebuilds the checkpoint.
-/// An ordinal-tampered checkpoint is a different case and stays on disk.
+/// An ordinal-tampered checkpoint is dropped the same way.
 #[test]
 fn an_unreadable_checkpoint_is_dropped_and_rebuilt() {
     unreadable_checkpoint_rebuilds("future", |value| {
@@ -1236,4 +1238,254 @@ async fn hot_cache_page_does_not_clone_pending_prefix() {
         snapshot
     );
     assert_eq!(store.transcript(&scope).unwrap().downloaded(), 21);
+}
+
+fn retarget_record(record: &Record, position: u64) -> Record {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+    let mut payload = record.payload.clone();
+    assert_eq!(payload[0], 1, "inline start frame");
+    let id_len = u16::from_be_bytes([payload[3], payload[4]]) as usize;
+    let attempt_at = 13 + id_len;
+    payload[attempt_at..attempt_at + 8].copy_from_slice(&position.to_be_bytes());
+    let mut identity = payload[2..attempt_at].to_vec();
+    identity.extend_from_slice(&position.to_be_bytes());
+    let digest = Sha256::digest(&identity);
+    let mut event_id = String::from("nessa-fact-");
+    for byte in digest {
+        write!(event_id, "{byte:02x}").unwrap();
+    }
+    event_id.push_str("-start");
+    Record {
+        position,
+        id: id(&event_id),
+        scope: record.scope.clone(),
+        payload,
+    }
+}
+
+fn another_version_record(record: &Record) -> Record {
+    use sha2::{Digest, Sha256};
+    let mut payload = record.payload.clone();
+    assert_eq!(payload.first().copied(), Some(1), "start frame");
+    let id_len = u16::from_be_bytes([payload[3], payload[4]]) as usize;
+    let attempt_at = 13 + id_len;
+    let body_len =
+        u64::from_be_bytes(payload[attempt_at + 8..attempt_at + 16].try_into().unwrap()) as usize;
+    let digest_at = attempt_at + 20;
+    let mode_at = digest_at + 32;
+    assert_eq!(payload[mode_at], 0, "inline frame");
+    let body_at = mode_at + 1;
+    assert_eq!(
+        body_at + body_len,
+        payload.len(),
+        "inline body fills the frame"
+    );
+    // The fact body is a 136-byte save header followed by the semantic batch.
+    // A completion envelope has no batch. Leaving it intact is enough: the
+    // unit ahead of it is the gap, and this frame stays physically valid.
+    const HEADER_BYTES: usize = 136;
+    let json_at = body_at + HEADER_BYTES;
+    let marker = b"{\"schemaVersion\":1";
+    if payload.len() < json_at + marker.len() || payload[json_at..json_at + marker.len()] != *marker
+    {
+        return Record {
+            payload,
+            ..record.clone()
+        };
+    }
+    payload[json_at + marker.len() - 1] = b'2';
+    let payload_hash = Sha256::digest(&payload[json_at..]);
+    payload[body_at + 104..body_at + HEADER_BYTES].copy_from_slice(&payload_hash);
+    let frame_hash = Sha256::digest(&payload[body_at..]);
+    payload[digest_at..digest_at + 32].copy_from_slice(&frame_hash);
+    Record {
+        payload,
+        ..record.clone()
+    }
+}
+
+/// A gap's unread records are not kept. Restore does not re-read them, a
+/// later continuation is, and further gap pages do not grow the table.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cache_restore_after_a_gap_drops_the_unread_tail() {
+    use nessa_sdk::application::agent_execution::{
+        providers::ProviderIdentity,
+        sessions::{SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage},
+    };
+    use nessa_sdk::domain::agent_execution::sessions::{
+        ExecutionSessionId, ProviderContext, SessionId,
+    };
+    use nessa_sdk::infrastructure::session_storage::{RecordReadStatus, RecordStorage};
+    use nessa_sync::replication::domain::PageRequest;
+
+    async fn read_records(storage: &RecordStorage, session: &SessionId) -> (Scope, Vec<Record>) {
+        let mut source = storage
+            .record_source(session, id("origin"))
+            .await
+            .unwrap()
+            .unwrap();
+        let scope = source.scope(id("receiver"), id("epoch"));
+        let returned = tokio::task::spawn_blocking(move || {
+            let target = loop {
+                if let RecordReadStatus::Ready(head) = source.bounded_head(&scope).unwrap() {
+                    break head;
+                }
+            };
+            let mut records = vec![];
+            let mut after = 0;
+            while after < target {
+                let limits = policy().suffix_page();
+                let request = PageRequest {
+                    scope: scope.clone(),
+                    after,
+                    target,
+                    max_records: limits.max_records(),
+                    max_payload_bytes: limits.max_payload_bytes(),
+                    max_record_bytes: limits.max_record_bytes(),
+                };
+                let RecordReadStatus::Ready(page) = source.bounded_page(&request).unwrap() else {
+                    panic!("head validated the captured prefix");
+                };
+                after = page.records.last().unwrap().position;
+                records.extend(page.records);
+            }
+            drop(source);
+            (scope, records)
+        })
+        .await
+        .unwrap();
+        returned
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(root.path().join("source")).unwrap();
+    storage.initialize().await.unwrap();
+    let session = SessionId::new("00000000-0000-0000-0000-000000000001").unwrap();
+    let provider = ProviderIdentity::new("provider", "model", "workspace").unwrap();
+    let lease = storage.open(session.clone()).await.unwrap();
+    let opened = SessionSnapshot {
+        id: session.clone(),
+        provider: provider.clone(),
+        provider_context: ProviderContext::Absent,
+        invocations: vec![],
+        queue_history: vec![],
+    };
+    lease
+        .save_changes(
+            lease.load().await.unwrap().binding().clone(),
+            opened,
+            vec![SessionSaveUnit::new(vec![SessionChange::Opened {
+                id: session.clone(),
+                provider: provider.clone(),
+                context: ProviderContext::Absent,
+            }])
+            .unwrap()],
+        )
+        .await
+        .unwrap();
+    drop(lease);
+    let (scope, prefix) = read_records(&storage, &session).await;
+    let lease = storage.open(session.clone()).await.unwrap();
+    let kept = ProviderContext::Recorded(ExecutionSessionId::new("kept-after-gap").unwrap());
+    lease
+        .save_changes(
+            lease.load().await.unwrap().binding().clone(),
+            SessionSnapshot {
+                id: session.clone(),
+                provider: provider.clone(),
+                provider_context: kept.clone(),
+                invocations: vec![],
+                queue_history: vec![],
+            },
+            vec![SessionSaveUnit::new(vec![SessionChange::ProviderContext {
+                before: ProviderContext::Absent,
+                after: kept.clone(),
+            }])
+            .unwrap()],
+        )
+        .await
+        .unwrap();
+    drop(lease);
+    let (_, all) = read_records(&storage, &session).await;
+    storage.shutdown().await.unwrap();
+    let suffix = &all[prefix.len()..];
+    assert!(!suffix.is_empty());
+    let mut gap = suffix
+        .iter()
+        .map(another_version_record)
+        .collect::<Vec<_>>();
+    let mut cursor = gap.last().unwrap().position;
+    for _ in 0..3 {
+        for record in suffix {
+            cursor += 1;
+            gap.push(another_version_record(&retarget_record(record, cursor)));
+        }
+    }
+    let mut continuation = Vec::new();
+    for record in suffix {
+        cursor += 1;
+        continuation.push(retarget_record(record, cursor));
+    }
+    let path = cache_path(root.path(), "gap.sqlite3");
+    let mut store = cache(&path);
+    let mut page = prefix.clone();
+    page.extend(gap);
+    let mut after = 0u64;
+    for chunk in page.chunks(8) {
+        store.apply(plan(&scope, after, chunk.to_vec())).unwrap();
+        after = chunk.last().unwrap().position;
+    }
+    let kept_rows = table_rows(&store, "transcript_records");
+    assert_eq!(kept_rows, prefix.len() as i64);
+    assert!(store.transcript(&scope).unwrap().snapshot().is_some());
+    assert!(matches!(
+        store
+            .transcript(&scope)
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .provider_context,
+        ProviderContext::Absent
+    ));
+    assert_eq!(store.transcript(&scope).unwrap().downloaded(), after);
+    let progress = store.cached_progress(&scope).unwrap();
+    drop(store);
+
+    let mut restored = cache(&path);
+    assert_eq!(restored.cached_progress(&scope).unwrap(), progress);
+    assert_eq!(table_rows(&restored, "transcript_records"), kept_rows);
+    assert_eq!(restored.transcript(&scope).unwrap().downloaded(), after);
+    assert!(matches!(
+        restored
+            .transcript(&scope)
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .provider_context,
+        ProviderContext::Absent
+    ));
+    restored
+        .apply(plan(&scope, after, continuation.clone()))
+        .unwrap();
+    match &restored
+        .transcript(&scope)
+        .unwrap()
+        .snapshot()
+        .unwrap()
+        .provider_context
+    {
+        ProviderContext::Recorded(session) => assert_eq!(session.as_str(), "kept-after-gap"),
+        other => panic!("continuation missing from the restored view: {other:?}"),
+    }
+    assert_eq!(
+        table_rows(&restored, "transcript_records"),
+        kept_rows + continuation.len() as i64
+    );
+    let retry = plan(&scope, 0, page);
+    assert_eq!(restored.apply(retry), Ok(()));
+    assert_eq!(
+        table_rows(&restored, "transcript_records"),
+        kept_rows + continuation.len() as i64
+    );
 }

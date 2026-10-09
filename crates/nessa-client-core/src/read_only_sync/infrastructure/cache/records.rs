@@ -415,7 +415,9 @@ impl ReadOnlyCache {
         raw_records::check_ids(&transaction, &plan)?;
         let downloaded = current.as_ref().map_or(0, |progress| progress.downloaded);
         if downloaded >= plan.next().position() {
-            if raw_records::exact_saved_plan(&transaction, &plan)? {
+            if raw_records::exact_saved_plan(&transaction, &plan, |position| {
+                loaded.fold.retains(position)
+            })? {
                 if loaded.progress != current {
                     self.loaded = None;
                 }
@@ -426,6 +428,7 @@ impl ReadOnlyCache {
         if downloaded != plan.expected().position() || loaded.progress != current {
             return Err(CacheError::Stale);
         }
+        let gap_before = loaded.fold.gap_through();
         let mut candidate = loaded.fold.transaction();
         candidate.apply(plan.records()).map_err(transcript_error)?;
         if candidate.downloaded() != plan.next().position() {
@@ -433,7 +436,8 @@ impl ReadOnlyCache {
         }
         let checkpoint = if current.as_ref().is_none_or(|saved| {
             saved.applied != candidate.applied() || saved.facts != candidate.fact_count()
-        }) {
+        }) || candidate.gap_through() != gap_before
+        {
             Some(
                 candidate
                     .checkpoint_with_limit(self.policy.checkpoint_bytes())
@@ -453,7 +457,7 @@ impl ReadOnlyCache {
                 .ok_or(CacheError::Quota)?,
         };
         rows::save_progress(&transaction, &progress)?;
-        raw_records::insert_records(&transaction, &plan)?;
+        raw_records::insert_records(&transaction, &plan, |position| candidate.retains(position))?;
         if let Some(checkpoint) = checkpoint {
             rows::save_checkpoint(&transaction, scope, &checkpoint, self.policy)?;
         }
@@ -537,9 +541,9 @@ enum CachedCheckpoint {
     Refusal(CacheError),
 }
 
-/// A checkpoint whose body this build cannot read is disposable. An ordinal
-/// or length mismatch is [`CacheError::Corrupt`] from the row reader and is
-/// not this function's input: those rows stay.
+/// A checkpoint whose body this build cannot read, or whose rows were
+/// tampered, is disposable. Quota and database failures are not: those rows
+/// stay.
 fn disposable_checkpoint(error: &TranscriptError) -> bool {
     match error {
         TranscriptError::Decision(

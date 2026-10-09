@@ -14,6 +14,13 @@ pub(super) fn restore_suffix(
 ) -> Result<(), CacheError> {
     let scope = &progress.scope;
     let limit = policy.suffix_page();
+    if let Some(through) = fold.gap_through() {
+        if through > progress.downloaded {
+            return Err(CacheError::Corrupt);
+        }
+        fold.resume_downloaded(through)
+            .map_err(super::records::transcript_error)?;
+    }
     while fold.downloaded() < progress.downloaded {
         let mut statement = connection
             .prepare(
@@ -117,6 +124,7 @@ pub(super) fn restore_suffix(
 pub(super) fn exact_saved_plan(
     connection: &Connection,
     plan: &CommitPlan,
+    retains: impl Fn(u64) -> bool,
 ) -> Result<bool, CacheError> {
     let scope = plan.expected().scope();
     for record in plan.records() {
@@ -153,6 +161,12 @@ pub(super) fn exact_saved_plan(
             .optional()
             .map_err(database_error)?
             .transpose()?;
+        // An unread span is not stored. Absence there is the saved plan.
+        // A row that is present still has to match, and every retained
+        // record has to be present and exact.
+        if !retains(record.position) && exact.is_none() {
+            continue;
+        }
         if exact != Some(true) {
             return Ok(false);
         }
@@ -185,9 +199,16 @@ pub(super) fn check_ids(connection: &Connection, plan: &CommitPlan) -> Result<()
     Ok(())
 }
 
-pub(super) fn insert_records(connection: &Connection, plan: &CommitPlan) -> Result<(), CacheError> {
+pub(super) fn insert_records(
+    connection: &Connection,
+    plan: &CommitPlan,
+    retains: impl Fn(u64) -> bool,
+) -> Result<(), CacheError> {
     let scope = plan.expected().scope();
     for record in plan.records() {
+        if !retains(record.position) {
+            continue;
+        }
         connection
             .execute(
                 "INSERT INTO transcript_records

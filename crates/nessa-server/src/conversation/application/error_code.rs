@@ -67,6 +67,13 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
             audit: None,
             storage: None,
         } => ConversationErrorCode::AgentOperationFailed,
+        // Legacy JSONL and a predecessor stream refuse to open. That refusal
+        // is permanent on every path, including delete: trying again cannot
+        // read the bytes. Delete discards the container instead of returning
+        // this. A lease someone else holds, and I/O, stay the retryable code.
+        ConversationError::Storage(
+            StorageError::Corrupt(_) | StorageError::AnotherVersion { .. },
+        ) => ConversationErrorCode::ConversationStateUnreadable,
         ConversationError::Metadata | ConversationError::Storage(_) => {
             ConversationErrorCode::ConversationStorageUnavailable
         }

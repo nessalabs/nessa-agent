@@ -242,6 +242,29 @@ fn state_this_gateway_cannot_read_is_permanent_and_says_so_on_the_wire() {
         ConversationErrorCode::ConversationConfigurationChanged
     );
 
+    // The same permanence on a path that is not an agent command. Legacy
+    // JSONL and a predecessor stream surface here. A retryable storage
+    // failure does not.
+    for permanent in [
+        StorageError::Corrupt("legacy conversation history requires explicit removal".into()),
+        StorageError::AnotherVersion { found: None },
+        StorageError::AnotherVersion { found: Some(2) },
+    ] {
+        assert_eq!(
+            error_code(&ConversationError::Storage(permanent)),
+            ConversationErrorCode::ConversationStateUnreadable
+        );
+    }
+    for transient in [
+        StorageError::Busy,
+        StorageError::Io("the disk is full".into()),
+    ] {
+        assert_eq!(
+            error_code(&ConversationError::Storage(transient)),
+            ConversationErrorCode::ConversationStorageUnavailable
+        );
+    }
+
     // Storage failures that are *not* about unreadable state keep the general
     // code, because trying them again genuinely can differ: a lease somebody
     // else holds is given up, and an I/O failure can clear.

@@ -211,6 +211,51 @@ impl RecordStorage {
         .await
         .map_err(|error| StorageError::Io(error.to_string()))?
     }
+
+    /// Drop a legacy JSONL file and reset a stream without replaying it.
+    /// Replay is what refuses a predecessor record. The replacement stream is
+    /// empty, so a later open does not read the refused bytes.
+    async fn discard_unreadable_inner(&self, id: SessionId) -> Result<(), StorageError> {
+        let reservation = Reservation::acquire(self.owner.clone(), id.as_str())?;
+        let journal = SessionPaths::new(&self.root, &id).journal;
+        tokio::task::spawn_blocking(move || match std::fs::remove_file(&journal) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(StorageError::Io(error.to_string())),
+        })
+        .await
+        .map_err(|error| StorageError::Io(error.to_string()))??;
+        let runtime = self.runtime().await?.clone();
+        let stream_id =
+            StreamId::new(id.as_str()).map_err(|error| StorageError::Corrupt(error.to_string()))?;
+        let Some(stream) = runtime.find_stream(&stream_id).await.map_err(store_error)? else {
+            drop(reservation);
+            return Ok(());
+        };
+        let mut digest = Sha256::new();
+        digest.update(stream.id.as_str().as_bytes());
+        digest.update(stream.incarnation.0);
+        let operation = format!("nessa-discard-{:x}", digest.finalize());
+        runtime
+            .change_lifecycle(LifecycleRequest {
+                operation_id: LifecycleOperationId::new(operation)
+                    .map_err(|error| StorageError::Corrupt(error.to_string()))?,
+                expected: stream,
+                action: LifecycleAction::Reset,
+            })
+            .await
+            .map_err(store_error)?;
+        const MAX_CLEANUP_PASSES: usize = 1024;
+        for _ in 0..MAX_CLEANUP_PASSES {
+            let progress = runtime.cleanup_retired().await.map_err(store_error)?;
+            if !progress.remaining {
+                drop(reservation);
+                return Ok(());
+            }
+        }
+        drop(reservation);
+        Err(StorageError::Unresolved)
+    }
 }
 
 impl SessionStorage for RecordStorage {
@@ -272,6 +317,10 @@ impl SessionStorage for RecordStorage {
         id: SessionId,
     ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
         Box::pin(async move { self.open_inner(id, true).await })
+    }
+
+    fn discard_unreadable(&self, id: SessionId) -> StorageFuture<'_, ()> {
+        Box::pin(async move { self.discard_unreadable_inner(id).await })
     }
     fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
         Box::pin(contain_caller_wake("record committed read", async move {
@@ -3353,25 +3402,45 @@ mod tests {
         payload: &[u8],
         with_complete: bool,
     ) -> Vec<NewEvent> {
+        framed_units(binding, &[payload], binding.base(), with_complete)
+    }
+
+    /// `physical_base` is the cursor the frames append after. It differs from
+    /// `binding.base()` when the save continues a prefix that sits before a gap.
+    fn framed_units(
+        binding: &SessionSaveGeneration,
+        payloads: &[&[u8]],
+        physical_base: u64,
+        with_complete: bool,
+    ) -> Vec<NewEvent> {
         let identity = SaveIdentity::binding(binding).unwrap();
-        let unit = Header::unit(identity.clone(), 0, EMPTY_CHAIN, payload);
-        let mut frames = stream_fact::frame_fact(
-            &FramedFact {
-                key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
-                body: unit.encode(payload),
-            },
-            binding.base() + 1,
-        )
-        .unwrap();
-        if with_complete {
-            let complete = Header::unit(identity, 1, unit.chain(payload.len() as u64), &[]);
+        let mut chain = EMPTY_CHAIN;
+        let mut frames = Vec::new();
+        let mut ordinal = 0u64;
+        for payload in payloads {
+            let header = Header::unit(identity.clone(), ordinal, chain, payload);
+            chain = header.chain(payload.len() as u64);
             frames.extend(
                 stream_fact::frame_fact(
                     &FramedFact {
-                        key: FactKey::new(FactKind::SaveComplete, None, 1).unwrap(),
-                        body: complete.encode(&[]),
+                        key: FactKey::new(FactKind::SaveUnit, None, ordinal).unwrap(),
+                        body: header.encode(payload),
                     },
-                    binding.base() + frames.len() as u64 + 1,
+                    physical_base + frames.len() as u64 + 1,
+                )
+                .unwrap(),
+            );
+            ordinal += 1;
+        }
+        if with_complete {
+            let header = Header::unit(identity, ordinal, chain, &[]);
+            frames.extend(
+                stream_fact::frame_fact(
+                    &FramedFact {
+                        key: FactKey::new(FactKind::SaveComplete, None, ordinal).unwrap(),
+                        body: header.encode(&[]),
+                    },
+                    physical_base + frames.len() as u64 + 1,
                 )
                 .unwrap(),
             );
@@ -3519,6 +3588,451 @@ mod tests {
         assert_eq!(restored_load.snapshot(), Some(&sent));
         drop(tail);
         restored.shutdown().await.unwrap();
+    }
+
+    fn message(name: &str) -> SessionChange {
+        accepted_input(
+            ExecutionId::new(name).unwrap(),
+            SubmissionMode::Immediate,
+            vec![],
+        )
+    }
+
+    fn invocation_names(snapshot: &SessionSnapshot) -> Vec<&str> {
+        snapshot
+            .invocations
+            .iter()
+            .map(|record| record.request.execution_id.as_str())
+            .collect()
+    }
+
+    /// Every record unmarked, then a send. The new opening and message are
+    /// written at the physical tail from binding `(0, 0)` and survive reopen.
+    #[tokio::test]
+    async fn an_unmarked_chat_accepts_a_send_and_keeps_it_after_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("all-unmarked-send").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let binding = lease.load().await.unwrap().binding().clone();
+        drop(lease);
+        let (opened, _) = opening(&id);
+        append_frames(
+            &storage,
+            &id,
+            framed_group(&binding, &without_marker(&opened), true),
+        )
+        .await;
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage.open_existing(id.clone()).await.unwrap().unwrap();
+        let loaded = lease.load().await.unwrap();
+        assert_eq!(loaded.state(), SessionLoadState::Published);
+        assert!(loaded.snapshot().is_none());
+        let (opened, opened_snapshot) = opening(&id);
+        let sent_change = message("sent");
+        let sent =
+            records::fold_changes(Some(&opened_snapshot), std::slice::from_ref(&sent_change))
+                .unwrap();
+        lease
+            .save_changes(
+                loaded.binding().clone(),
+                sent.clone(),
+                vec![
+                    SessionSaveUnit::new(vec![opened]).unwrap(),
+                    SessionSaveUnit::new(vec![sent_change]).unwrap(),
+                ],
+            )
+            .await
+            .unwrap();
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage.open_existing(id).await.unwrap().unwrap();
+        let loaded = lease.load().await.unwrap();
+        assert_eq!(loaded.state(), SessionLoadState::Published);
+        assert_eq!(loaded.snapshot(), Some(&sent));
+        assert_eq!(invocation_names(loaded.snapshot().unwrap()), ["sent"]);
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    /// A bad record in the middle, then a send. Reopen shows the prefix and
+    /// the new message. The valid group that followed the gap stays dropped.
+    #[tokio::test]
+    async fn a_middle_gap_then_a_send_survives_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("middle-send").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, snapshot) = opening(&id);
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                snapshot.clone(),
+                vec![SessionSaveUnit::new(vec![opened]).unwrap()],
+            )
+            .await
+            .unwrap();
+        let next = lease.load().await.unwrap().binding().clone();
+        drop(lease);
+        let dropped = message("dropped");
+        let bad = framed_group(&next, &without_marker(&dropped), true);
+        let after_bad = next.base() + bad.len() as u64;
+        append_frames(&storage, &id, bad).await;
+        let later = SessionSaveGeneration::new(next.backend().clone(), after_bad, 2);
+        append_frames(
+            &storage,
+            &id,
+            framed_group(
+                &later,
+                &snapshot::encode_semantic_batch(std::slice::from_ref(&dropped)).unwrap(),
+                true,
+            ),
+        )
+        .await;
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage.open_existing(id.clone()).await.unwrap().unwrap();
+        let loaded = lease.load().await.unwrap();
+        assert_eq!(loaded.snapshot(), Some(&snapshot));
+        let sent_change = message("kept");
+        let sent =
+            records::fold_changes(Some(&snapshot), std::slice::from_ref(&sent_change)).unwrap();
+        lease
+            .save_changes(
+                loaded.binding().clone(),
+                sent.clone(),
+                vec![SessionSaveUnit::new(vec![sent_change]).unwrap()],
+            )
+            .await
+            .unwrap();
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage.open_existing(id).await.unwrap().unwrap();
+        let loaded = lease.load().await.unwrap();
+        assert_eq!(loaded.state(), SessionLoadState::Published);
+        assert_eq!(loaded.snapshot(), Some(&sent));
+        assert_eq!(invocation_names(loaded.snapshot().unwrap()), ["kept"]);
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    /// Two sends after a gap. Each reopen keeps both messages, in order.
+    #[tokio::test]
+    async fn two_sends_after_a_gap_each_survive_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("two-sends").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, snapshot) = opening(&id);
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                snapshot.clone(),
+                vec![SessionSaveUnit::new(vec![opened]).unwrap()],
+            )
+            .await
+            .unwrap();
+        let next = lease.load().await.unwrap().binding().clone();
+        drop(lease);
+        append_frames(
+            &storage,
+            &id,
+            framed_group(&next, &without_marker(&message("gap")), false),
+        )
+        .await;
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage.open_existing(id.clone()).await.unwrap().unwrap();
+        let first_change = message("first");
+        let first =
+            records::fold_changes(Some(&snapshot), std::slice::from_ref(&first_change)).unwrap();
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                first.clone(),
+                vec![SessionSaveUnit::new(vec![first_change]).unwrap()],
+            )
+            .await
+            .unwrap();
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage.open_existing(id.clone()).await.unwrap().unwrap();
+        let loaded = lease.load().await.unwrap();
+        assert_eq!(invocation_names(loaded.snapshot().unwrap()), ["first"]);
+        let second_change = message("second");
+        let second =
+            records::fold_changes(Some(&first), std::slice::from_ref(&second_change)).unwrap();
+        lease
+            .save_changes(
+                loaded.binding().clone(),
+                second.clone(),
+                vec![SessionSaveUnit::new(vec![second_change]).unwrap()],
+            )
+            .await
+            .unwrap();
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage.open_existing(id).await.unwrap().unwrap();
+        let loaded = lease.load().await.unwrap();
+        assert_eq!(loaded.state(), SessionLoadState::Published);
+        assert_eq!(loaded.snapshot(), Some(&second));
+        assert_eq!(
+            invocation_names(loaded.snapshot().unwrap()),
+            ["first", "second"]
+        );
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    /// A crash after the post-gap unit is durable and before its completion.
+    /// Reopen is unfinished on the prefix. The same save confirms and stays.
+    #[tokio::test]
+    async fn a_crash_before_a_post_gap_save_confirms_on_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("crash-confirm").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, snapshot) = opening(&id);
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                snapshot.clone(),
+                vec![SessionSaveUnit::new(vec![opened]).unwrap()],
+            )
+            .await
+            .unwrap();
+        let next = lease.load().await.unwrap().binding().clone();
+        drop(lease);
+        let gap = framed_group(&next, &without_marker(&message("gap")), false);
+        let tail = next.base() + gap.len() as u64;
+        append_frames(&storage, &id, gap).await;
+        let sent_change = message("confirmed");
+        let payload = snapshot::encode_semantic_batch(std::slice::from_ref(&sent_change)).unwrap();
+        append_frames(
+            &storage,
+            &id,
+            framed_units(&next, &[payload.as_slice()], tail, false),
+        )
+        .await;
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage.open_existing(id.clone()).await.unwrap().unwrap();
+        let loaded = lease.load().await.unwrap();
+        assert_eq!(loaded.state(), SessionLoadState::Unfinished);
+        assert_eq!(loaded.snapshot(), Some(&snapshot));
+        assert_eq!(loaded.binding(), &next);
+        let sent =
+            records::fold_changes(Some(&snapshot), std::slice::from_ref(&sent_change)).unwrap();
+        lease
+            .save_changes(
+                next,
+                sent.clone(),
+                vec![SessionSaveUnit::new(vec![sent_change]).unwrap()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(lease.load().await.unwrap().snapshot(), Some(&sent));
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage.open_existing(id).await.unwrap().unwrap();
+        let loaded = lease.load().await.unwrap();
+        assert_eq!(loaded.state(), SessionLoadState::Published);
+        assert_eq!(loaded.snapshot(), Some(&sent));
+        assert_eq!(invocation_names(loaded.snapshot().unwrap()), ["confirmed"]);
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    /// Unit 0 of a save is readable and unit 1 is not. The open group is
+    /// dropped with the gap. The opening remains. The completion after the
+    /// gap is not folded.
+    #[tokio::test]
+    async fn a_gap_inside_a_multi_part_save_drops_the_open_group() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("multi-part-gap").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, snapshot) = opening(&id);
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                snapshot.clone(),
+                vec![SessionSaveUnit::new(vec![opened]).unwrap()],
+            )
+            .await
+            .unwrap();
+        let next = lease.load().await.unwrap().binding().clone();
+        drop(lease);
+        let kept_out = message("kept-out");
+        let valid = snapshot::encode_semantic_batch(std::slice::from_ref(&kept_out)).unwrap();
+        let bad = without_marker(&message("bad-part"));
+        append_frames(
+            &storage,
+            &id,
+            framed_units(
+                &next,
+                &[valid.as_slice(), bad.as_slice()],
+                next.base(),
+                true,
+            ),
+        )
+        .await;
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage.open_existing(id).await.unwrap().unwrap();
+        let loaded = lease.load().await.unwrap();
+        assert_eq!(loaded.state(), SessionLoadState::Published);
+        assert_eq!(loaded.snapshot(), Some(&snapshot));
+        assert!(loaded.snapshot().unwrap().invocations.is_empty());
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    /// A fact saved for another chat ends this chat's history there.
+    #[tokio::test]
+    async fn another_chats_identity_ends_the_readable_prefix() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("ours").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, snapshot) = opening(&id);
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                snapshot.clone(),
+                vec![SessionSaveUnit::new(vec![opened]).unwrap()],
+            )
+            .await
+            .unwrap();
+        let next = lease.load().await.unwrap().binding().clone();
+        drop(lease);
+        let other = SessionId::new("theirs").unwrap();
+        let other_lease = storage.open(other).await.unwrap();
+        let foreign = SessionSaveGeneration::new(
+            other_lease
+                .load()
+                .await
+                .unwrap()
+                .binding()
+                .backend()
+                .clone(),
+            next.base(),
+            next.generation(),
+        );
+        drop(other_lease);
+        let theirs = message("theirs");
+        append_frames(
+            &storage,
+            &id,
+            framed_group(
+                &foreign,
+                &snapshot::encode_semantic_batch(std::slice::from_ref(&theirs)).unwrap(),
+                true,
+            ),
+        )
+        .await;
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage.open_existing(id).await.unwrap().unwrap();
+        let loaded = lease.load().await.unwrap();
+        assert_eq!(loaded.state(), SessionLoadState::Published);
+        assert_eq!(loaded.snapshot(), Some(&snapshot));
+        assert!(loaded.snapshot().unwrap().invocations.is_empty());
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn discard_unreadable_removes_legacy_jsonl_and_resets_a_predecessor_stream() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let legacy_id = SessionId::new("legacy-jsonl").unwrap();
+        let journal = SessionPaths::new(&root, &legacy_id).journal;
+        std::fs::write(&journal, b"old\n").unwrap();
+        assert!(matches!(
+            storage.open_existing(legacy_id.clone()).await,
+            Err(StorageError::Corrupt(_))
+        ));
+        storage.discard_unreadable(legacy_id.clone()).await.unwrap();
+        assert!(!journal.exists());
+        assert!(storage.open_existing(legacy_id).await.unwrap().is_none());
+
+        let id = SessionId::new("predecessor").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (change, snapshot) = opening(&id);
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                snapshot,
+                vec![SessionSaveUnit::new(vec![change]).unwrap()],
+            )
+            .await
+            .unwrap();
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let unsupported = include_bytes!(
+            "../../../tests/infrastructure/session_storage/fixtures/retired-opening.bin"
+        );
+        Connection::open(root.join("records.sqlite3"))
+            .unwrap()
+            .execute(
+                "UPDATE event_records SET event_id=?1,payload=?2 WHERE offset=?3",
+                rusqlite::params![
+                    "nessa-fact-d819b917251c1029a94eeb8cafc383ec1e913cab2f92e9b3215c04cbaa787787-start",
+                    unsupported,
+                    1u64.to_be_bytes().as_slice()
+                ],
+            )
+            .unwrap();
+        let storage = RecordStorage::new(&root).unwrap();
+        assert!(matches!(
+            storage.open_existing(id.clone()).await,
+            Err(StorageError::Corrupt(_))
+        ));
+        storage.discard_unreadable(id.clone()).await.unwrap();
+        let lease = storage.open_existing(id).await.unwrap().unwrap();
+        let loaded = lease.load().await.unwrap();
+        assert_eq!(loaded.state(), SessionLoadState::Published);
+        assert!(loaded.snapshot().is_none());
+        drop(lease);
+        storage.shutdown().await.unwrap();
     }
 
     #[ignore = "child process probe"]

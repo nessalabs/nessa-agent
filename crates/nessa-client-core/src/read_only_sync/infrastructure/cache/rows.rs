@@ -181,7 +181,7 @@ pub(super) fn checkpoint(
         .collect::<Result<Vec<_>, _>>()
         .map_err(database_error)?;
     if metadata.is_empty() {
-        return Err(CacheError::Corrupt.into());
+        return Err(CheckpointReadError::Body(TranscriptError::Checkpoint));
     }
     if metadata.len() > maximum_chunks {
         return Err(CacheError::Quota.into());
@@ -194,7 +194,7 @@ pub(super) fn checkpoint(
             || length > MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES
             || (index + 1 != metadata.len() && length != MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES)
         {
-            return Err(CacheError::Corrupt.into());
+            return Err(CheckpointReadError::Body(TranscriptError::Checkpoint));
         }
         total = total.checked_add(length).ok_or(CacheError::Quota)?;
         if total > policy.checkpoint_bytes() {

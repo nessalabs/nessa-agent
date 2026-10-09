@@ -176,6 +176,7 @@ impl RecordWriter {
         header.ordinal == 0
             && header.identity.base == self.next.base()
             && header.identity.generation == self.next.generation()
+            && header.identity.matches_stream(&self.stream)
     }
 
     fn fold_fact(&mut self, fact: FramedFact, cursor: Cursor) -> Result<(), StorageError> {

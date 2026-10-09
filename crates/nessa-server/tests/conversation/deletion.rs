@@ -2961,6 +2961,102 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
         .exists());
 }
 
+fn base32hex_nopad(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUV";
+    let mut out = String::new();
+    let mut buffer = 0u32;
+    let mut bits = 0u32;
+    for &byte in bytes {
+        buffer = (buffer << 8) | u32::from(byte);
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            let index = ((buffer >> bits) & 0x1f) as usize;
+            out.push(ALPHABET[index] as char);
+        }
+    }
+    if bits > 0 {
+        let index = ((buffer << (5 - bits)) & 0x1f) as usize;
+        out.push(ALPHABET[index] as char);
+    }
+    out.to_ascii_lowercase()
+}
+
+/// A legacy JSONL history cannot be opened. Delete still finishes, and the
+/// file is gone. The answer is not the retryable storage failure.
+#[tokio::test]
+async fn deleting_a_legacy_jsonl_chat_removes_it() {
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path();
+    nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
+    let repository = Arc::new(
+        LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3")).unwrap(),
+    );
+    let clock: Arc<dyn Clock> = Arc::new(TestClock);
+    let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: only(Arc::new(Provider::new(
+                Arc::new(ProviderFactory::default()),
+            ))),
+            storage: storage.clone(),
+            metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            deletion_audit: Arc::new(
+                DurableConversationDeletionAudit::new(root.join("deletion"), clock.clone())
+                    .unwrap(),
+            ),
+            attachments: None,
+            summaries: repository.clone(),
+            listing: repository.clone(),
+            provider_sessions: claude_erasers(),
+            deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+            clock,
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = new_id();
+    repository
+        .create(
+            Conversation::new(
+                id.clone(),
+                OrganizationId::new("org").unwrap(),
+                PrincipalId::new("person").unwrap(),
+                "panel".into(),
+                "create".into(),
+                1,
+                AgentId::Claude,
+                ConversationModelId::new("test-model").unwrap(),
+                ConversationApprovalMode::Ask,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let journal = root.join("sessions").join(format!(
+        "s-{}.jsonl",
+        base32hex_nopad(id.to_string().as_bytes())
+    ));
+    std::fs::write(&journal, b"legacy\n").unwrap();
+    assert!(service
+        .delete(id.clone(), caller("delete-legacy"))
+        .await
+        .unwrap());
+    assert!(!journal.exists());
+    assert!(storage
+        .open_existing(SessionId::new(id.to_string()).unwrap())
+        .await
+        .unwrap()
+        .is_none());
+}
+
 #[tokio::test]
 async fn a_reply_waiting_to_be_summarized_does_not_keep_a_deleted_history_leased() {
     let fixture = deleting();

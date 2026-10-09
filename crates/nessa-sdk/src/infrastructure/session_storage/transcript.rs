@@ -19,7 +19,7 @@ use crate::{
 use event_stream::{EventId, NewEvent, Payload};
 use nessa_sync::replication::domain::{Id, Record, Scope};
 use serde::{Deserialize, Serialize};
-use std::{ops::Deref, sync::Arc};
+use std::{mem, ops::Deref, sync::Arc};
 mod pending;
 use pending::PendingBody;
 mod checkpoint;
@@ -61,6 +61,23 @@ struct SavedFold<S = snapshot::checkpoint::Snapshot> {
     facts: u64,
     snapshot: Option<S>,
     group: Option<GroupCheckpoint>,
+    /// The fold stopped. A later continuation clears this. The unread span
+    /// below can remain so a cache does not retain the gap.
+    truncated: bool,
+    /// Last folded position at the stop. Records after this and at or before
+    /// `gap_through` are not retained.
+    gap_prefix: Option<u64>,
+    /// Last physical position inside the unread span.
+    gap_through: Option<u64>,
+}
+
+/// Physical records after `prefix_end` and at or before `through` were
+/// downloaded and not folded. A cache drops them. A continuation sits after
+/// `through`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct UnreadSpan {
+    prefix_end: u64,
+    through: u64,
 }
 
 /// One source-scoped, effect-free semantic transcript receiver. `apply` stages
@@ -91,9 +108,12 @@ pub struct TranscriptFold {
     /// A record ended the fold. Later bytes are consumed and not applied,
     /// except a save that continues from the published prefix.
     truncated: bool,
-    /// Transaction-start continuation, kept only when sealing discards an open
-    /// group that an earlier commit had already staged. A hard refusal of this
-    /// batch restores it. `None` outside that window.
+    /// Unread positions. Stays after a continuation so those bytes are not
+    /// retained or folded again.
+    gap: Option<UnreadSpan>,
+    /// Continuation moved aside when sealing discards an open group that an
+    /// earlier commit had already staged. A hard refusal of this batch puts
+    /// it back. `None` outside that window. Moved, not cloned.
     deep_restore: Option<CommittedTranscript>,
 }
 
@@ -122,6 +142,7 @@ impl TranscriptFold {
             loaded: false,
             freshness: CommittedFreshness::Current,
             truncated: false,
+            gap: None,
             deep_restore: None,
         })
     }
@@ -268,6 +289,7 @@ impl TranscriptFold {
             loaded: self.loaded,
             freshness: self.freshness,
             truncated: self.truncated,
+            gap: self.gap,
             #[cfg(test)]
             semantic_decodes: self.semantic_decodes,
         };
@@ -318,6 +340,9 @@ impl TranscriptFold {
             FrameStep::Aborted => {
                 self.pending.clear();
                 self.groups.reset_frame();
+                if self.truncated {
+                    self.extend_gap(record.position);
+                }
             }
             FrameStep::Complete {
                 key: physical_key,
@@ -332,6 +357,7 @@ impl TranscriptFold {
                     }
                 };
                 if self.truncated && !self.continuation_unit(&physical_key, body) {
+                    self.extend_gap(record.position);
                     self.pending.clear();
                 } else {
                     self.truncated = false;
@@ -391,7 +417,7 @@ impl TranscriptFold {
             self.scope.stream().as_str(),
             self.scope.incarnation().as_str(),
         ) {
-            return Err(TranscriptError::Scope);
+            return Err(TranscriptError::Decision(StorageError::IdentityMismatch));
         }
         match physical_key.kind() {
             FactKind::SaveUnit => {
@@ -415,7 +441,7 @@ impl TranscriptFold {
                     .snapshot()
                     .is_some_and(|state| state.id.as_str() != self.scope.stream().as_str())
                 {
-                    return Err(TranscriptError::Scope);
+                    return Err(TranscriptError::Decision(StorageError::IdentityMismatch));
                 }
             }
             FactKind::SaveComplete => {
@@ -443,21 +469,38 @@ impl TranscriptFold {
     ) -> Result<(), TranscriptError> {
         let (applied, facts) = self.committed.seal_open_group(semantic, self.publication);
         if self.committed.snapshot() != self.published.as_deref() {
-            self.deep_restore = Some(self.committed.clone());
-            self.committed = CommittedTranscript::restore(
+            let restored = CommittedTranscript::restore(
                 self.published.as_ref().map(|snapshot| (**snapshot).clone()),
                 applied,
                 facts,
             )
             .map_err(|_| TranscriptError::Checkpoint)?;
+            self.deep_restore = Some(mem::replace(&mut self.committed, restored));
         }
         self.groups = self.groups_at_publication.clone();
         self.pending.clear();
+        let prefix_end = self.groups.published();
+        self.gap = Some(match self.gap {
+            Some(gap) => UnreadSpan {
+                prefix_end: gap.prefix_end,
+                through: gap.through.max(position),
+            },
+            None => UnreadSpan {
+                prefix_end,
+                through: position,
+            },
+        });
         if !self.truncated {
             super::warn_truncated(self.scope.stream().as_str(), position, error);
         }
         self.truncated = true;
         Ok(())
+    }
+
+    fn extend_gap(&mut self, position: u64) {
+        if let Some(gap) = &mut self.gap {
+            gap.through = gap.through.max(position);
+        }
     }
 
     #[cfg(test)]
@@ -525,6 +568,43 @@ impl TranscriptFold {
     /// Last validated durable outer-save completion position.
     pub fn applied(&self) -> u64 {
         self.groups.published()
+    }
+
+    /// Whether a downloaded record at `position` belongs in a cache.
+    ///
+    /// Records inside an unread span are omitted. The prefix at or before the
+    /// stop, and a continuation after the span, are kept. With no span, every
+    /// position is kept.
+    pub fn retains(&self, position: u64) -> bool {
+        match self.gap {
+            None => true,
+            Some(gap) => position <= gap.prefix_end || position > gap.through,
+        }
+    }
+
+    /// End of the unread span, when one exists.
+    pub fn gap_through(&self) -> Option<u64> {
+        self.gap.map(|gap| gap.through)
+    }
+
+    /// Move the downloaded cursor forward across bytes that are not stored.
+    ///
+    /// A restored fold resumes at the applied prefix. The unread span is not
+    /// in the cache, so the caller jumps to its end before reading what was
+    /// kept after it.
+    ///
+    /// # Errors
+    /// Returns [`TranscriptError::Position`] when `offset` is behind the
+    /// cursor.
+    pub fn resume_downloaded(&mut self, offset: u64) -> Result<(), TranscriptError> {
+        if offset < self.downloaded() {
+            return Err(TranscriptError::Position);
+        }
+        if offset > self.downloaded() {
+            self.frames = FrameValidator::after(offset);
+            self.pending.clear();
+        }
+        Ok(())
     }
 
     /// Number of semantic units in published saves; completion envelopes and aborts add none.
@@ -617,6 +697,9 @@ impl TranscriptFold {
             facts: self.fact_count(),
             snapshot: self.snapshot().map(snapshot::checkpoint::SnapshotRef),
             group: self.groups.checkpoint(),
+            truncated: self.truncated,
+            gap_prefix: self.gap.map(|gap| gap.prefix_end),
+            gap_through: self.gap.map(|gap| gap.through),
         };
         let mut output = ChunkWriter::with_limit(max_bytes);
         if serde_json::to_writer(&mut output, &saved).is_err() {
@@ -648,9 +731,8 @@ impl TranscriptFold {
         // walk the bytes again.
         let saved: SavedFold = serde_json::from_reader(checkpoint.reader())
             .map_err(|_| TranscriptError::Checkpoint)?;
-        // `from_chunks` already required this build's marker. The field stays
-        // so the checkpoint still decodes; it is not a second version decision.
-        let _ = saved.schema_version;
+        // `from_chunks` already required this build's marker. This is not a
+        // second version decision.
         debug_assert_eq!(saved.schema_version, StorageError::SCHEMA_VERSION);
         if saved.applied != expected_applied {
             return Err(TranscriptError::Checkpoint);
@@ -683,7 +765,24 @@ impl TranscriptFold {
         {
             return Err(TranscriptError::Checkpoint);
         }
+        let gap = match (saved.gap_prefix, saved.gap_through) {
+            (None, None) if !saved.truncated => None,
+            (Some(prefix), Some(through))
+                if through > prefix
+                    && prefix <= saved.applied
+                    && (!saved.truncated || prefix == saved.applied)
+                    && (saved.truncated || saved.applied > through) =>
+            {
+                Some(UnreadSpan {
+                    prefix_end: prefix,
+                    through,
+                })
+            }
+            _ => return Err(TranscriptError::Checkpoint),
+        };
         let mut fold = Self::new(scope)?;
+        fold.truncated = saved.truncated;
+        fold.gap = gap;
         fold.published = snapshot.as_ref().map(|snapshot| Arc::new(snapshot.clone()));
         fold.published_facts = saved.facts;
         fold.groups = GroupProgress::restore(
@@ -719,6 +818,7 @@ struct ReceiverBackup {
     loaded: bool,
     freshness: CommittedFreshness,
     truncated: bool,
+    gap: Option<UnreadSpan>,
     #[cfg(test)]
     semantic_decodes: usize,
 }
@@ -760,6 +860,7 @@ impl TranscriptTransaction<'_> {
             self.fold.loaded = backup.loaded;
             self.fold.freshness = backup.freshness;
             self.fold.truncated = backup.truncated;
+            self.fold.gap = backup.gap;
             #[cfg(test)]
             {
                 self.fold.semantic_decodes = backup.semantic_decodes;
@@ -1314,6 +1415,8 @@ mod tests {
             assert_eq!(fold.snapshot().unwrap().invocations[0].events.len(), total);
         }
         let before = fold.checkpoint().unwrap();
+        let published = fold.snapshot().cloned();
+        let applied = fold.applied();
         let rejected = group_suffix(
             &fold,
             (0..64)
@@ -1332,7 +1435,12 @@ mod tests {
         );
         assert_eq!(VALIDATION_CALLS.with(|counter| counter.get()), (0, 0));
         assert_eq!(SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.get()), 0);
-        assert_eq!(fold.checkpoint().unwrap(), before);
+        // The published history is unchanged. The checkpoint records the stop,
+        // so it is not byte-identical.
+        assert_eq!(fold.snapshot(), published.as_ref());
+        assert_eq!(fold.applied(), applied);
+        assert!(fold.gap_through().is_some());
+        assert_ne!(fold.checkpoint().unwrap(), before);
         fold.committed.assert_retained_accounting();
     }
 
@@ -3081,5 +3189,174 @@ mod tests {
             fold.snapshot().unwrap().invocations[3].result,
             Some(Err(_))
         ));
+    }
+
+    fn without_marker(change: &SessionChange) -> Vec<u8> {
+        let mut saved: Value = serde_json::from_slice(
+            &snapshot::encode_semantic_batch(std::slice::from_ref(change)).unwrap(),
+        )
+        .unwrap();
+        saved.as_object_mut().unwrap().remove("schemaVersion");
+        serde_json::to_vec(&saved).unwrap()
+    }
+
+    #[test]
+    fn another_chats_identity_ends_the_client_prefix() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        let foreign = Scope::new(
+            scope.receiver().clone(),
+            scope.origin().clone(),
+            id("other-conversation"),
+            scope.incarnation().clone(),
+            physical_record_schema(),
+            scope.access_epoch().clone(),
+        );
+        fold.apply(&records(
+            &scope,
+            1,
+            &save_frames_in(&foreign, opened(), 0, 0),
+        ))
+        .unwrap();
+        assert!(fold.snapshot().is_none());
+        assert_eq!(fold.applied(), 0);
+        assert!(fold.downloaded() > 0);
+        assert!(!fold.retains(fold.downloaded()));
+        let skipped = fold.downloaded();
+        let later = save_group_at(&scope, &without_marker(&opened()), skipped, 1, skipped);
+        fold.apply(&records(&scope, skipped + 1, &later)).unwrap();
+        assert!(fold.snapshot().is_none());
+        let message = snapshot::encode_semantic_batch(&[opened()]).unwrap();
+        let downloaded = fold.downloaded();
+        fold.apply(&records(
+            &scope,
+            downloaded + 1,
+            &save_group_at(&scope, &message, 0, 0, downloaded),
+        ))
+        .unwrap();
+        assert_eq!(fold.snapshot().unwrap().id.as_str(), "conversation");
+        assert!(fold.retains(fold.downloaded()));
+        assert!(!fold.retains(skipped));
+    }
+
+    #[test]
+    fn a_snapshot_for_another_chat_ends_the_client_prefix() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        let mut other = opened();
+        if let SessionChange::Opened { id, .. } = &mut other {
+            *id = SessionId::new("other-conversation").unwrap();
+        }
+        fold.apply(&records(&scope, 1, &save_frames(other, 0, 0)))
+            .unwrap();
+        assert!(fold.snapshot().is_none());
+        assert_eq!(fold.applied(), 0);
+        assert!(fold.gap_through().is_some());
+    }
+
+    #[test]
+    fn the_client_view_shows_a_message_saved_after_a_gap() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let applied = fold.applied();
+        let bad = save_payload_frames(&scope, &without_marker(&accepted_input("gap")), applied, 1);
+        fold.apply(&records(&scope, applied + 1, &bad)).unwrap();
+        assert_eq!(fold.applied(), applied);
+        assert!(fold.snapshot().unwrap().invocations.is_empty());
+        let dropped = snapshot::encode_semantic_batch(&[accepted_input("dropped")]).unwrap();
+        let downloaded = fold.downloaded();
+        fold.apply(&records(
+            &scope,
+            downloaded + 1,
+            &save_group_at(&scope, &dropped, downloaded, 2, downloaded),
+        ))
+        .unwrap();
+        assert!(fold.snapshot().unwrap().invocations.is_empty());
+        let kept = snapshot::encode_semantic_batch(&[accepted_input("kept")]).unwrap();
+        let downloaded = fold.downloaded();
+        fold.apply(&records(
+            &scope,
+            downloaded + 1,
+            &save_group_at(&scope, &kept, applied, 1, downloaded),
+        ))
+        .unwrap();
+        assert_eq!(
+            fold.snapshot()
+                .unwrap()
+                .invocations
+                .iter()
+                .map(|record| record.request.execution_id.as_str())
+                .collect::<Vec<_>>(),
+            ["kept"]
+        );
+        let through = fold.gap_through().unwrap();
+        assert!(fold.downloaded() > through);
+        assert!(!fold.retains(through));
+        assert!(fold.retains(fold.downloaded()));
+    }
+
+    #[test]
+    fn a_gap_across_a_page_boundary_keeps_the_later_message() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        let open = records(&scope, 1, &save_frames(opened(), 0, 0));
+        fold.apply(&open).unwrap();
+        let applied = fold.applied();
+        let first_gap = records(
+            &scope,
+            applied + 1,
+            &save_payload_frames(&scope, &without_marker(&accepted_input("gap")), applied, 1),
+        );
+        {
+            let mut page = fold.transaction();
+            page.apply(&first_gap).unwrap();
+            page.commit().unwrap();
+        }
+        assert_eq!(fold.applied(), applied);
+        assert!(fold.snapshot().unwrap().invocations.is_empty());
+        let after_first = fold.downloaded();
+        let more_gap = records(
+            &scope,
+            after_first + 1,
+            &save_group_at(
+                &scope,
+                &without_marker(&accepted_input("more")),
+                after_first,
+                2,
+                after_first,
+            ),
+        );
+        let after_more = after_first + more_gap.len() as u64;
+        let kept = snapshot::encode_semantic_batch(&[accepted_input("kept")]).unwrap();
+        let continuation = records(
+            &scope,
+            after_more + 1,
+            &save_group_at(&scope, &kept, applied, 1, after_more),
+        );
+        {
+            let mut page = fold.transaction();
+            page.apply(&more_gap).unwrap();
+            page.apply(&continuation).unwrap();
+            page.commit().unwrap();
+        }
+        assert_eq!(
+            fold.snapshot()
+                .unwrap()
+                .invocations
+                .iter()
+                .map(|record| record.request.execution_id.as_str())
+                .collect::<Vec<_>>(),
+            ["kept"]
+        );
+        assert!(!fold.retains(after_first));
+        assert!(fold.retains(fold.downloaded()));
+        let restored =
+            TranscriptFold::restore(scope, fold.applied(), &fold.checkpoint().unwrap()).unwrap();
+        assert_eq!(restored.snapshot(), fold.snapshot());
+        assert_eq!(restored.gap_through(), fold.gap_through());
+        assert_eq!(restored.applied(), fold.applied());
+        assert!(restored.applied() > applied);
     }
 }

@@ -304,9 +304,8 @@ pub(crate) fn decode_batch(
     // body is mapped into this build's types.
     super::decode::preflight_semantic_batch(bytes)?;
     let batch: WireBatch = serde_json::from_slice(bytes).map_err(corrupt)?;
-    // Preflight already required this build's marker. Read the field so it is
-    // not dead, and do not decide the version a second time.
-    let _ = batch.schema_version;
+    // Preflight already required this build's marker. This is not a second
+    // version decision.
     debug_assert_eq!(batch.schema_version, StorageError::SCHEMA_VERSION);
     let mut context = context.clone();
     let changes = batch

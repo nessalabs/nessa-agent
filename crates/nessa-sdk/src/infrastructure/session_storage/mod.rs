@@ -76,8 +76,9 @@ use crate::application::agent_execution::sessions::StorageError;
 
 /// A saved record that cannot join the prefix already folded.
 ///
-/// Unmarked bytes, another format version, a corrupt body, and a unit that
-/// contradicts the prefix stop the fold. The chat stays open on that prefix.
+/// Unmarked bytes, another format version, a corrupt body, another chat's
+/// identity, a body past the size limit, and a unit that contradicts the
+/// prefix stop the fold. The chat stays open on that prefix.
 pub(super) fn truncates_history(error: &StorageError) -> bool {
     matches!(
         error,
@@ -97,6 +98,7 @@ pub(super) fn warn_truncated(session: &str, position: u64, error: &StorageError)
     };
     let reason = match error {
         StorageError::AnotherVersion { .. } => "another_version",
+        StorageError::IdentityMismatch => "identity",
         _ => "unreadable",
     };
     tracing::warn!(
