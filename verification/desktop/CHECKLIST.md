@@ -972,6 +972,15 @@ it is redesigned on its own branch.
   engine and layout, on load and with the switcher open). Rule: `chrome.css` ›
   Keys. At the base commit the session list's and the switcher's keys were
   bare text, unlike the sidebar's cap.
+- [ ] **The session list's search and the group captions are the kit's
+  (#657).** Columns only — the sidebar layout folds the list, and the check
+  holds without measuring it. The search is `SearchField`: 32px tall, 13px
+  type, the window's 12px corner, and a missing input fails. A caption is
+  `GroupHeader` (11px/600; 16.5px in the list, 27px in the switcher),
+  `aria-hidden`, inside a `group` whose accessible name is that caption, so
+  the listbox exposes groups and options. _Check:_ `shared-controls.mjs`
+  (`list`, per engine). Rules: `session-list.css` › search and group label,
+  `quick-switcher.css` › `.workspace-results-group`.
 - [ ] **Every list row is one of two components, answering the same way
   (#657).** The sidebar's channels, its Agents entry and "Show all" are the
   kit's `SidebarMenuItem` (`xs`); the sidebar's sessions, the session list,
@@ -1010,6 +1019,14 @@ it is redesigned on its own branch.
   sample never is: their type is held by #657's before/after shots
   (`evidence/657/empty-*`, `rims-all-clear-*`), not by a script. Rule: `styles.css` › Empty states. Settings' own are left to
   its redesign.
+- [ ] **The empty list's New Session and a failed workspace's Try Again are
+  the kit's tinted pill (#657).** 28px tall, the kit's full round
+  (`shape="pill"`, not the window's 999px pill), filled with
+  `--desktop-selected`, and a press scales to 0.97. The old
+  `.workspace-button`, a missing button, another corner, another fill, or a
+  press that does not scale fails. _Check:_ `shared-controls.mjs` (`empty`,
+  columns: the writing channel's one session is archived, then New Session);
+  `gateway-states.mjs` (signed out, Try Again). Rule: `ui/pill-ink.css`.
 - [ ] **Counts are the kit's `Badge`; lit points are `StatusGlyph`'s (#657).**
   A sidebar row's count is the kit's `Badge` as the row's caption (16px tall,
   at least 18 wide, no border, the needs light for what waits); the session

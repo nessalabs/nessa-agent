@@ -151,6 +151,7 @@ export const css = {
   peekEdge: ".desktop-peek-edge", // class: the strip at the folded sidebar's edge a hover reveals it from
   listSearch: ".workspace-list .workspace-search", // class: the session list's search field
   listScroll: ".workspace-list-scroll", // class: the session list's scroller
+  listEmptyAction: ".workspace-list-empty button", // the empty list's New Session, the kit's tinted pill
   sessionListRow: ".workspace-list [data-session-row]", // a row of the session list, not a sidebar thread
   sessionRow: "[data-drag-item]", // a session a drag can carry to a pane
   sidebarEdge: '[role="separator"][aria-label="Resize Sidebar"]',

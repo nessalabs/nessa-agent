@@ -1,0 +1,11 @@
+/*
+ * The kit's tinted pill, mapped onto the window's `.workspace-button`
+ * (28px, 8.5% rest, 13% hover, press scale). Settings and the side rail
+ * keep their own buttons.
+ */
+.desktop-pill-ink {
+  --nessa-button-tinted-rest: var(--desktop-selected);
+  --nessa-button-tinted-ink: var(--desktop-ink-2);
+  --nessa-button-tinted-hover: color-mix(in oklab, var(--foreground) 13%, transparent);
+  --nessa-button-tinted-press: var(--desktop-press);
+}

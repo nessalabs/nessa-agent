@@ -1,7 +1,9 @@
 import { memo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { shallowEqual } from "react-redux"
+import { Button } from "@nessa-ui/react/button"
 import { EmptyState } from "@nessa-ui/react/empty-state"
-import { Kbd } from "@nessa-ui/react/kbd"
+import { GroupHeader } from "@nessa-ui/react/group-header"
+import { SearchField } from "@nessa-ui/react/search-field"
 import { useRunningFirstPreference } from "../../../adapters/window-preferences"
 import { DesktopIcon } from "../../../ui/icons"
 import { newSession, openSession } from "../../adapters/store/commands"
@@ -33,6 +35,7 @@ import { ListRow } from "../../../ui/list-row"
 import { SessionMenuItems, useOpenFromRow } from "../session-actions"
 import { useWorkspaceFrame } from "../workspace-frame"
 import "./session-list.css"
+import "../../../ui/pill-ink.css"
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "../../../ui/menu"
 
 /**
@@ -108,23 +111,24 @@ export const SessionList = memo(function SessionList() {
             />
           }
         >
-          <label className="workspace-search">
-            <DesktopIcon name="search" />
-            <input
-              type="search"
-              placeholder="Search sessions"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                // With a query, Escape clears it and goes no further: a widget
-                // in the window is left only by the next one (ADR 326).
-                if (event.key !== "Escape" || !query) return
-                event.preventDefault()
-                setQuery("")
-              }}
-            />
-            {query || !shortcut ? null : <Kbd>{shortcut}</Kbd>}
-          </label>
+          <SearchField
+            className="workspace-search"
+            size="md"
+            aria-label="Search sessions"
+            placeholder="Search sessions"
+            value={query}
+            onValueChange={setQuery}
+            icon={<DesktopIcon name="search" />}
+            shortcut={shortcut}
+            onKeyDown={(event) => {
+              // With a query, Escape clears it and goes no further: a widget
+              // in the window is left only by the next one (ADR 326). The
+              // field sees this preventDefault and leaves the clear to us.
+              if (event.key !== "Escape" || !query) return
+              event.preventDefault()
+              setQuery("")
+            }}
+          />
         </ColumnHeader>
         <div
           className="workspace-list-scroll"
@@ -135,28 +139,43 @@ export const SessionList = memo(function SessionList() {
         >
           {ordered.length === 0 ? (
             <EmptyState
+              className="workspace-list-empty desktop-pill-ink"
               variant="compact"
-              className="workspace-list-empty"
               title={query ? "No sessions match." : "No sessions here yet."}
               action={
-                query ? null : (
-                  <button
-                    type="button"
-                    className="workspace-button"
+                query ? undefined : (
+                  <Button
+                    variant="tinted"
+                    size="28"
+                    shape="pill"
+                    press="scale"
                     onClick={() => dispatch(newSession())}
                   >
                     New Session
-                  </button>
+                  </Button>
                 )
               }
             />
           ) : null}
           {groups.map((group, index) => (
-            <div key={group.id} role="group" aria-label={group.label}>
-              <h3 className="workspace-group-label" data-first={index === 0 || undefined}>
-                {group.label}
-                <span>{group.ids.length}</span>
-              </h3>
+            <div
+              key={group.id}
+              role="group"
+              aria-label={`${group.label} ${group.ids.length}`}
+            >
+              {/* The kit caption is a heading. Hidden here, so the listbox
+                  exposes the group and its options; the group's name keeps
+                  the count the heading would have said. */}
+              <GroupHeader
+                aria-hidden="true"
+                className="workspace-group-label"
+                data-first={index === 0 || undefined}
+                level={3}
+                size="dense"
+                tone="quiet"
+                label={group.label}
+                count={group.ids.length}
+              />
               {group.ids.map((sessionId) => (
                 <SessionRow
                   key={sessionId}

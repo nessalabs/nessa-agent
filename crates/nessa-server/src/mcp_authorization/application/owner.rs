@@ -547,7 +547,7 @@ impl AuthorizationOwner {
                     .await;
             }
         };
-        self.publish_token(slot, &response.body, &reply).await
+        self.publish_token(slot, &response.body, &reply, None).await
     }
 
     /// Apply `command` only while `reply` is still the live attempt. A
@@ -575,6 +575,7 @@ impl AuthorizationOwner {
         slot: &Arc<Mutex<Slot>>,
         body: &str,
         reply: &Reply,
+        previous_refresh: Option<String>,
     ) -> AuthorizeAnswer {
         if !self.reply_current(slot, reply).await {
             return AuthorizeAnswer::AuthorizationIncomplete;
@@ -626,7 +627,8 @@ impl AuthorizationOwner {
         });
         let material = TokenMaterial {
             access_token: access.clone(),
-            refresh_token: parsed.refresh,
+            // RFC 6749 §6: a successful refresh need not replace its token.
+            refresh_token: parsed.refresh.or(previous_refresh),
             generation,
         };
         let server = server_of(slot).await;
@@ -938,7 +940,9 @@ impl AuthorizationOwner {
             }
             Ok(response) => response,
         };
-        let answer = self.publish_token(&slot, &outcome.body, &reply).await;
+        let answer = self
+            .publish_token(&slot, &outcome.body, &reply, Some(refresh_token))
+            .await;
         let result = match answer {
             AuthorizeAnswer::Ready { generation } => {
                 self.release_bearer(&slot, server, generation).await

@@ -6,6 +6,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react"
+import { GroupHeader } from "@nessa-ui/react/group-header"
 import { Kbd } from "@nessa-ui/react/kbd"
 import { DesktopIcon } from "../../../ui/icons"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
@@ -183,7 +184,6 @@ export function QuickSwitcher({
     }
   }
 
-  let lastGroup: string | null = null
   return (
     <div
       className="workspace-overlay"
@@ -229,32 +229,48 @@ export function QuickSwitcher({
           role="listbox"
           ref={listRef}
         >
-          {rows.map((row, index) => {
-            const heading = row.group && row.group !== lastGroup ? row.group : null
-            lastGroup = row.group
+          {resultGroups(rows).map((group) => {
+            const options = group.items.map(({ row, index }) => (
+              <ListRow
+                key={rowKey(row)}
+                id={`workspace-result-${index}`}
+                role="option"
+                aria-selected={index === clamped}
+                selected={index === clamped}
+                data-index={index}
+                className="workspace-result"
+                onPointerMove={() => index !== clamped && setActive(index)}
+                onClick={(event) =>
+                  choose(row, mode === "split" || commandKey(event, isMac))
+                }
+                {...rowParts(row)}
+              >
+                {index === clamped ? <RowKeys mode={mode} /> : null}
+              </ListRow>
+            ))
+            // A row with no group (the bare "new session" line) stays an option
+            // of the listbox. A named group owns its caption and its options.
+            if (!group.label)
+              return <Fragment key={`open-${group.items[0].index}`}>{options}</Fragment>
             return (
-              <Fragment key={rowKey(row)}>
-                {heading ? (
-                  <div className="workspace-results-group" role="presentation">
-                    {heading}
-                  </div>
-                ) : null}
-                <ListRow
-                  id={`workspace-result-${index}`}
-                  role="option"
-                  aria-selected={index === clamped}
-                  selected={index === clamped}
-                  data-index={index}
-                  className="workspace-result"
-                  onPointerMove={() => index !== clamped && setActive(index)}
-                  onClick={(event) =>
-                    choose(row, mode === "split" || commandKey(event, isMac))
-                  }
-                  {...rowParts(row)}
-                >
-                  {index === clamped ? <RowKeys mode={mode} /> : null}
-                </ListRow>
-              </Fragment>
+              <div
+                key={`${group.label}-${group.items[0].index}`}
+                role="group"
+                aria-label={group.label}
+              >
+                {/* The kit caption is a heading. A listbox may expose only
+                    groups and options, so the heading is hidden and the group
+                    carries its name. */}
+                <GroupHeader
+                  aria-hidden="true"
+                  className="workspace-results-group"
+                  level={3}
+                  size="dense"
+                  tone="quiet"
+                  label={group.label}
+                />
+                {options}
+              </div>
             )
           })}
         </div>
@@ -284,6 +300,17 @@ function RowKeys({ mode }: { mode: SwitcherMode }) {
       )}
     </span>
   )
+}
+
+/** Consecutive results that share a caption, in list order. */
+function resultGroups(rows: readonly SwitcherRow[]) {
+  const groups: { label: string; items: { row: SwitcherRow; index: number }[] }[] = []
+  for (const [index, row] of rows.entries()) {
+    const last = groups[groups.length - 1]
+    if (last && last.label === row.group) last.items.push({ row, index })
+    else groups.push({ label: row.group, items: [{ row, index }] })
+  }
+  return groups
 }
 
 function rowKey(row: SwitcherRow): string {
