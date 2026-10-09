@@ -332,7 +332,7 @@ async fn shared_discovery_finishes_smaller_capture_before_larger_requests() {
 }
 
 #[tokio::test]
-async fn malformed_completion_remains_refused_after_physical_validator_advanced() {
+async fn malformed_completion_publishes_nothing_after_physical_validator_advanced() {
     let directory = tempfile::tempdir().unwrap();
     let storage = RecordStorage::new(directory.path().join("records")).unwrap();
     let id = SessionId::new("conversation").unwrap();
@@ -425,13 +425,13 @@ async fn malformed_completion_remains_refused_after_physical_validator_advanced(
         })
         .await
         .unwrap();
-        assert_eq!(result, Err(SourceError::Unavailable), "attempt={attempt}");
+        assert_eq!(result, Ok(RecordReadStatus::Ready(0)), "attempt={attempt}");
     }
     storage.shutdown().await.unwrap();
 }
 
 #[tokio::test]
-async fn historical_miss_preserves_known_forward_failure_and_clean_head() {
+async fn historical_miss_keeps_the_last_publication_when_the_tail_is_corrupt() {
     for malformed in [true, false] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("records");
@@ -495,7 +495,7 @@ async fn historical_miss_preserves_known_forward_failure_and_clean_head() {
         tokio::task::spawn_blocking(move || {
             let scope = newer.scope(sid("newer"), sid("epoch"));
             let expected = if malformed {
-                Err(SourceError::Unavailable)
+                Ok(RecordReadStatus::Ready(192))
             } else {
                 Ok(RecordReadStatus::Ready(194))
             };
