@@ -25,6 +25,8 @@ use crate::{
     },
     domain::agent_execution::sessions::SessionId,
 };
+#[cfg(any(test, feature = "test-support"))]
+use event_stream::EventSink;
 use event_stream::{
     infrastructure::SqliteOptions, EventConfig, EventReader, EventRuntime, LifecycleAction,
     LifecycleOperationId, LifecycleRequest, PersistenceProfile, RuntimeConfig, StreamId,
@@ -241,6 +243,128 @@ impl RecordStorage {
         .await
         .map_err(|error| StorageError::Io(error.to_string()))?
     }
+
+    /// Drop a legacy JSONL file and reset a stream without replaying it.
+    /// Replay is what refuses a record this build cannot read. The replacement
+    /// stream is empty, so a later open does not read the refused bytes.
+    /// The reset is published to committed-change watches after the lifecycle
+    /// receipt, before retired rows are cleaned up. The writer reservation
+    /// stays until this function returns, including when the reset is refused.
+    async fn discard_unreadable_inner(&self, id: SessionId) -> Result<(), StorageError> {
+        let _reservation = Reservation::acquire(self.owner.clone(), id.as_str())?;
+        let journal = SessionPaths::new(&self.root, &id).journal;
+        tokio::task::spawn_blocking(move || match std::fs::remove_file(&journal) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(StorageError::Io(error.to_string())),
+        })
+        .await
+        .map_err(|error| StorageError::Io(error.to_string()))??;
+        let runtime = self.runtime().await?.clone();
+        let stream_id =
+            StreamId::new(id.as_str()).map_err(|error| StorageError::Corrupt(error.to_string()))?;
+        let Some(stream) = runtime.find_stream(&stream_id).await.map_err(store_error)? else {
+            return Ok(());
+        };
+        let mut digest = Sha256::new();
+        digest.update(stream.id.as_str().as_bytes());
+        digest.update(stream.incarnation.0);
+        let operation = format!("nessa-discard-{:x}", digest.finalize());
+        runtime
+            .change_lifecycle(LifecycleRequest {
+                operation_id: LifecycleOperationId::new(operation)
+                    .map_err(|error| StorageError::Corrupt(error.to_string()))?,
+                expected: stream,
+                action: LifecycleAction::Reset,
+            })
+            .await
+            .map_err(store_error)?;
+        // Same order as an erasure: the receipt is durable before cleanup, and
+        // a watcher re-reads after this notice.
+        self.changes.publish(&id);
+        const MAX_CLEANUP_PASSES: usize = 1024;
+        for _ in 0..MAX_CLEANUP_PASSES {
+            let progress = runtime.cleanup_retired().await.map_err(store_error)?;
+            if !progress.remaining {
+                return Ok(());
+            }
+        }
+        Err(StorageError::Unresolved)
+    }
+
+    /// Append one already-encoded semantic batch and its completion.
+    ///
+    /// Compiled with the `test-support` feature, and with this crate's tests.
+    /// Production writes go through [`SessionStorageLease::save_changes`], which
+    /// stamps the current `schemaVersion`. This installs `payload` as stored,
+    /// so a test can plant a batch this build did not write. The caller must
+    /// not hold `id`'s lease. The method opens the session, reads the binding,
+    /// drops that lease, and appends. The next open replays the batch.
+    ///
+    /// # Errors
+    /// [`StorageError::Busy`] when another owner holds the session.
+    /// [`StorageError::Corrupt`] when the batch cannot be framed. A backend
+    /// error when the append is not acknowledged.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn append_encoded_batch(
+        &self,
+        id: SessionId,
+        payload: &[u8],
+    ) -> Result<(), StorageError> {
+        let payload = payload.to_vec();
+        let session = id.clone();
+        let lease = self.open(id).await?;
+        let binding = lease.load().await?.binding().clone();
+        drop(lease);
+        let identity = super::save_group::SaveIdentity::binding(&binding)?;
+        let unit = super::save_group::Header::unit(
+            identity.clone(),
+            0,
+            super::save_group::EMPTY_CHAIN,
+            &payload,
+        );
+        let mut frames = super::stream_fact::frame_fact(
+            &super::stream_fact::FramedFact {
+                key: crate::application::agent_execution::sessions::records::FactKey::new(
+                    crate::application::agent_execution::sessions::records::FactKind::SaveUnit,
+                    None,
+                    0,
+                )
+                .ok_or_else(|| StorageError::Corrupt("save unit key".into()))?,
+                body: unit.encode(&payload),
+            },
+            binding.base() + 1,
+        )
+        .map_err(|error| StorageError::Corrupt(format!("{error:?}")))?;
+        let complete =
+            super::save_group::Header::unit(identity, 1, unit.chain(payload.len() as u64), &[]);
+        frames.extend(super::stream_fact::frame_fact(
+            &super::stream_fact::FramedFact {
+                key: crate::application::agent_execution::sessions::records::FactKey::new(
+                    crate::application::agent_execution::sessions::records::FactKind::SaveComplete,
+                    None,
+                    1,
+                )
+                .ok_or_else(|| StorageError::Corrupt("save completion key".into()))?,
+                body: complete.encode(&[]),
+            },
+            binding.base() + frames.len() as u64 + 1,
+        )
+        .map_err(|error| StorageError::Corrupt(format!("{error:?}")))?);
+        let runtime = self.runtime().await?.clone();
+        let stream = runtime
+            .find_stream(
+                &StreamId::new(session.as_str())
+                    .map_err(|error| StorageError::Corrupt(error.to_string()))?,
+            )
+            .await
+            .map_err(store_error)?
+            .ok_or_else(|| StorageError::Corrupt("created stream was absent".into()))?;
+        for frame in frames {
+            runtime.append(&stream, frame).await.map_err(store_error)?;
+        }
+        Ok(())
+    }
 }
 
 impl SessionStorage for RecordStorage {
@@ -302,6 +426,10 @@ impl SessionStorage for RecordStorage {
         id: SessionId,
     ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
         Box::pin(async move { self.open_inner(id, true).await })
+    }
+
+    fn discard_unreadable(&self, id: SessionId) -> StorageFuture<'_, ()> {
+        Box::pin(async move { self.discard_unreadable_inner(id).await })
     }
     fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
         Box::pin(contain_caller_wake("record committed read", async move {
@@ -3205,8 +3333,8 @@ mod tests {
     /// an accepted input saved without `user_app` or
     /// `user_app_model_context`, as one saved before #390, is `Corrupt` for
     /// its own conversation only. Its siblings in the same store open: one
-    /// saved by the writer, and one whose input went through this test's own
-    /// framing unchanged, which shows the refusal is the missing field's.
+    /// saved by the writer, and one whose input was planted unchanged, which
+    /// shows the refusal is the missing field's.
     #[tokio::test]
     async fn an_input_saved_without_its_app_fields_is_corrupt_for_its_conversation_only() {
         let directory = tempfile::tempdir().unwrap();
@@ -3234,7 +3362,6 @@ mod tests {
                     )
                     .await
                     .unwrap();
-                let binding = lease.load().await.unwrap().binding().clone();
                 drop(lease);
                 let mut saved: serde_json::Value = serde_json::from_slice(
                     &snapshot::encode_semantic_batch(std::slice::from_ref(&input)).unwrap(),
@@ -3248,37 +3375,10 @@ mod tests {
                 if let Some(field) = edit {
                     metadata.remove(field).unwrap();
                 }
-                let payload = serde_json::to_vec(&saved).unwrap();
-                let identity = SaveIdentity::binding(&binding).unwrap();
-                let unit = Header::unit(identity.clone(), 0, EMPTY_CHAIN, &payload);
-                let mut frames = stream_fact::frame_fact(
-                    &FramedFact {
-                        key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
-                        body: unit.encode(&payload),
-                    },
-                    binding.base() + 1,
-                )
-                .unwrap();
-                let complete = Header::unit(identity, 1, unit.chain(payload.len() as u64), &[]);
-                frames.extend(
-                    stream_fact::frame_fact(
-                        &FramedFact {
-                            key: FactKey::new(FactKind::SaveComplete, None, 1).unwrap(),
-                            body: complete.encode(&[]),
-                        },
-                        binding.base() + frames.len() as u64 + 1,
-                    )
-                    .unwrap(),
-                );
-                let runtime = storage.runtime().await.unwrap();
-                let stream = runtime
-                    .find_stream(&StreamId::new(id.as_str()).unwrap())
+                storage
+                    .append_encoded_batch(id, &serde_json::to_vec(&saved).unwrap())
                     .await
-                    .unwrap()
                     .unwrap();
-                for frame in frames {
-                    runtime.append(&stream, frame).await.unwrap();
-                }
             }
         };
         save_raw("without-user-app", Some("user_app")).await;
@@ -3334,6 +3434,195 @@ mod tests {
             drop(lease);
         }
         reopened.shutdown().await.unwrap();
+    }
+
+    /// One chat whose saved batch is unmarked, another version, or an invalid
+    /// marker does not open. A sibling written by the same store still does.
+    #[tokio::test]
+    async fn a_record_this_build_cannot_read_leaves_the_other_chat_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let readable = SessionId::new("readable").unwrap();
+        let lease = storage.open(readable.clone()).await.unwrap();
+        let (change, snapshot) = opening(&readable);
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                snapshot,
+                vec![SessionSaveUnit::new(vec![change]).unwrap()],
+            )
+            .await
+            .unwrap();
+        drop(lease);
+
+        let append = |name: &'static str, edit: fn(&mut serde_json::Value)| {
+            let storage = &storage;
+            async move {
+                let id = SessionId::new(name).unwrap();
+                let (change, _) = opening(&id);
+                let mut saved: serde_json::Value = serde_json::from_slice(
+                    &snapshot::encode_semantic_batch(std::slice::from_ref(&change)).unwrap(),
+                )
+                .unwrap();
+                edit(&mut saved);
+                storage
+                    .append_encoded_batch(id, &serde_json::to_vec(&saved).unwrap())
+                    .await
+                    .unwrap();
+            }
+        };
+        // The unmarked chat is the batch main writes, not a field deleted
+        // from this build's encoder.
+        storage
+            .append_encoded_batch(
+                SessionId::new("unmarked").unwrap(),
+                crate::infrastructure::session_storage::UNMARKED_SESSION_BATCH,
+            )
+            .await
+            .unwrap();
+        append("other-version", |saved| {
+            saved["schemaVersion"] = serde_json::json!(StorageError::SCHEMA_VERSION + 1);
+        })
+        .await;
+        append("invalid-marker", |saved| {
+            saved["schemaVersion"] = serde_json::json!("no");
+        })
+        .await;
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let reopened = RecordStorage::new(&root).unwrap();
+        let unmarked = SessionId::new("unmarked").unwrap();
+        assert!(matches!(
+            reopened.open_existing(unmarked.clone()).await,
+            Err(StorageError::AnotherVersion { found: None })
+        ));
+        assert!(matches!(
+            reopened.read_committed(unmarked).await,
+            Err(StorageError::AnotherVersion { found: None })
+        ));
+        assert!(matches!(
+            reopened
+                .open_existing(SessionId::new("other-version").unwrap())
+                .await,
+            Err(StorageError::AnotherVersion { found: Some(found) })
+                if found == StorageError::SCHEMA_VERSION + 1
+        ));
+        assert!(matches!(
+            reopened
+                .open_existing(SessionId::new("invalid-marker").unwrap())
+                .await,
+            Err(StorageError::Corrupt(_))
+        ));
+        let lease = reopened
+            .open_existing(readable.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(lease.load().await.unwrap().snapshot().unwrap().id, readable);
+        drop(lease);
+        reopened.shutdown().await.unwrap();
+    }
+
+    /// An unmarked chat is reset without being read. A writer reservation
+    /// already held refuses that reset and wakes nobody. After the reset, the
+    /// chat's watch and a watch of every session are dirty, and a sibling
+    /// that holds a lease is unchanged.
+    #[tokio::test]
+    async fn discard_unreadable_resets_an_unmarked_chat_without_reading_it() {
+        use crate::application::agent_execution::sessions::LeaseRecord;
+        use crate::domain::agent_execution::leases::{
+            AgentWork, EnvironmentRef, LeaseDeadline, LeaseGrants, LeaseId, LeaseRevision,
+            LeaseTerms, LeaseWork, SandboxProfile,
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let sibling = SessionId::new("sibling").unwrap();
+        let (opened, opened_snapshot) = opening(&sibling);
+        let issued = LeaseRecord::Issued {
+            lease: LeaseId::new("lease-1").unwrap(),
+            revision: LeaseRevision::FIRST,
+            terms: LeaseTerms {
+                environment: EnvironmentRef::Here,
+                work: LeaseWork::Agent(AgentWork::new("claude", "sonnet").unwrap()),
+                sandbox: SandboxProfile::HarnessDefault,
+                grants: LeaseGrants::Opening,
+                deadline: LeaseDeadline::UntilEnded,
+            },
+            actor: ActionContext::new("person", "desktop", "send").unwrap(),
+        };
+        let with_lease = records::fold_changes(
+            Some(&opened_snapshot),
+            &[SessionChange::Lease(issued.clone())],
+        )
+        .unwrap();
+        let lease = storage.open(sibling.clone()).await.unwrap();
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                with_lease,
+                vec![
+                    SessionSaveUnit::new(vec![opened]).unwrap(),
+                    SessionSaveUnit::new(vec![SessionChange::Lease(issued)]).unwrap(),
+                ],
+            )
+            .await
+            .unwrap();
+        drop(lease);
+
+        let id = SessionId::new("unmarked").unwrap();
+        storage
+            .append_encoded_batch(
+                id.clone(),
+                crate::infrastructure::session_storage::UNMARKED_SESSION_BATCH,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            storage.open_existing(id.clone()).await,
+            Err(StorageError::AnotherVersion { found: None })
+        ));
+        let mut unmarked_watch = storage.watch_committed(&id).unwrap();
+        let mut sibling_watch = storage.watch_committed(&sibling).unwrap();
+        let mut any_watch = storage.watch_any_committed().unwrap();
+        watch_pending(&mut unmarked_watch);
+        watch_pending(&mut sibling_watch);
+        watch_pending(&mut any_watch);
+
+        let held = Reservation::acquire(storage.owner.clone(), id.as_str()).unwrap();
+        assert!(matches!(
+            storage.discard_unreadable(id.clone()).await,
+            Err(StorageError::Busy)
+        ));
+        watch_pending(&mut unmarked_watch);
+        watch_pending(&mut any_watch);
+        drop(held);
+        assert!(matches!(
+            storage.open_existing(id.clone()).await,
+            Err(StorageError::AnotherVersion { found: None })
+        ));
+
+        storage.discard_unreadable(id.clone()).await.unwrap();
+        assert_eq!(watch_ready(&mut unmarked_watch), ChangeWatchState::Dirty);
+        assert_eq!(watch_ready(&mut any_watch), ChangeWatchState::Dirty);
+        watch_pending(&mut sibling_watch);
+        let sibling_lease = storage.open_existing(sibling).await.unwrap().unwrap();
+        assert!(sibling_lease
+            .load()
+            .await
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .lease
+            .is_some());
+        drop(sibling_lease);
+        let lease = storage.open_existing(id).await.unwrap().unwrap();
+        assert!(lease.load().await.unwrap().snapshot().is_none());
+        drop(lease);
+        storage.shutdown().await.unwrap();
     }
 
     #[ignore = "child process probe"]

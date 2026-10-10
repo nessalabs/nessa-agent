@@ -46,6 +46,10 @@ pub enum TranscriptError {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SavedFold<S = snapshot::checkpoint::Snapshot> {
+    /// Required. A checkpoint with no `schemaVersion` is refused in preflight
+    /// as another version.
+    #[serde(rename = "schemaVersion")]
+    schema_version: u64,
     receiver: String,
     origin: String,
     stream: String,
@@ -500,6 +504,7 @@ impl TranscriptFold {
         max_bytes: Option<usize>,
     ) -> Result<TranscriptCheckpoint, TranscriptError> {
         let saved = SavedFold {
+            schema_version: StorageError::SCHEMA_VERSION,
             receiver: self.scope.receiver().as_str().into(),
             origin: self.scope.origin().as_str().into(),
             stream: self.scope.stream().as_str().into(),
@@ -530,17 +535,23 @@ impl TranscriptFold {
     /// Save checkpoint and applied position in one receiver transaction.
     ///
     /// # Errors
-    /// Returns `Checkpoint` for malformed or inconsistent saved content, or
-    /// `Scope` when its exact identity differs.
+    /// Returns [`TranscriptError::Decision`] carrying
+    /// [`StorageError::AnotherVersion`] when `schemaVersion` is missing or is
+    /// another unsigned integer. Returns `Checkpoint` for a current-version
+    /// body that is malformed or inconsistent, or `Scope` when its identity
+    /// differs.
     pub fn restore(
         scope: Scope,
         expected_applied: u64,
         checkpoint: &TranscriptCheckpoint,
     ) -> Result<Self, TranscriptError> {
         snapshot::decode::preflight_checkpoint(checkpoint.reader())
-            .map_err(|_| TranscriptError::Checkpoint)?;
+            .map_err(checkpoint::storage_refusal)?;
         let saved: SavedFold = serde_json::from_reader(checkpoint.reader())
             .map_err(|_| TranscriptError::Checkpoint)?;
+        // Preflight already classified `schemaVersion`. The field stays so a
+        // body without it cannot deserialize.
+        let _ = saved.schema_version;
         if saved.applied != expected_applied {
             return Err(TranscriptError::Checkpoint);
         }
@@ -1921,6 +1932,47 @@ mod tests {
         let restored =
             TranscriptFold::restore(fold.scope().clone(), fold.applied(), &checkpoint).unwrap();
         assert_eq!(restored.snapshot(), fold.snapshot());
+    }
+
+    #[test]
+    fn a_checkpoint_writes_schema_version_and_refuses_another() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let value: Value = serde_json::from_reader(checkpoint.reader()).unwrap();
+        assert_eq!(value["schemaVersion"], StorageError::SCHEMA_VERSION);
+        assert_eq!(
+            TranscriptCheckpoint::from_chunks(vec![
+                crate::infrastructure::session_storage::UNMARKED_SESSION_CHECKPOINT.to_vec()
+            ]),
+            Err(TranscriptError::Decision(StorageError::AnotherVersion {
+                found: None
+            }))
+        );
+        let found = StorageError::SCHEMA_VERSION + 1;
+        let mut future = value.clone();
+        future["schemaVersion"] = serde_json::json!(found);
+        assert_eq!(
+            TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&future).unwrap()]),
+            Err(TranscriptError::Decision(StorageError::AnotherVersion {
+                found: Some(found)
+            }))
+        );
+        for marker in [
+            serde_json::json!("1"),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!(null),
+        ] {
+            let mut changed = value.clone();
+            changed["schemaVersion"] = marker;
+            assert!(matches!(
+                TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&changed).unwrap()]),
+                Err(TranscriptError::Checkpoint)
+            ));
+        }
     }
 
     #[test]

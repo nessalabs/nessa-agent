@@ -32,6 +32,9 @@ tracing = "0.1"
 tungstenite = "0.29"
 uuid = { version = "1", features = ["v4"] }
 [dev-dependencies]
+# The unmarked checkpoint fixture. A production build of this crate does not
+# enable it.
+nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }
 # Existing cache corruption and private-key fixtures need these test-only values.
 sha2 = "0.10"
 zeroize = "=1.9.0"

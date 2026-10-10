@@ -94,6 +94,14 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
             audit: None,
             storage: None,
         } => ConversationErrorCode::AgentOperationFailed,
+        // A record this build cannot read will not become readable later.
+        // `AnotherVersion` is that marker. `Corrupt` on this path is stored
+        // data that does not decode. Opening that chat answers the permanent
+        // code the panel already shows as can't-open. A fold race is `Io`,
+        // and a lease someone else holds stays the retryable code.
+        ConversationError::Storage(
+            StorageError::Corrupt(_) | StorageError::AnotherVersion { .. },
+        ) => ConversationErrorCode::ConversationStateUnreadable,
         ConversationError::Metadata | ConversationError::Storage(_) => {
             ConversationErrorCode::ConversationStorageUnavailable
         }
@@ -143,7 +151,7 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
             // could offers a retry that can only ever return this.
             // `IdentityMismatch` is answered above as a changed configuration,
             // which is what it means and already says "start a new one".
-            AgentError::Storage(StorageError::Corrupt(_)) => {
+            AgentError::Storage(StorageError::Corrupt(_) | StorageError::AnotherVersion { .. }) => {
                 ConversationErrorCode::ConversationStateUnreadable
             }
             _ => ConversationErrorCode::AgentOperationFailed,

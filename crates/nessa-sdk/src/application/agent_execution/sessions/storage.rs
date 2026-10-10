@@ -48,6 +48,14 @@ pub enum StorageError {
     Io(String),
     /// Stored evidence is invalid; the string describes the validation failure.
     Corrupt(String),
+    /// The record's `schemaVersion` is missing or is not [`Self::SCHEMA_VERSION`].
+    ///
+    /// The reader does not decode the rest of that record. `found` is the
+    /// integer when the field is present. `None` means the field was absent.
+    AnotherVersion {
+        /// The `schemaVersion` integer in the record, when the field is present.
+        found: Option<u64>,
+    },
     /// The session or provider identity differs from the requested context.
     IdentityMismatch,
     /// This adapter requires the semantic SDK decisions with the candidate snapshot.
@@ -605,6 +613,31 @@ pub trait SessionStorage: Send + Sync {
     ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
         Box::pin(async move { self.open(id).await.map(Some) })
     }
+
+    /// Remove history this build cannot open, without reading it.
+    ///
+    /// Delete calls this when opening the history returns
+    /// [`StorageError::AnotherVersion`] or [`StorageError::Corrupt`]. The
+    /// default refuses, so an adapter that can hold that history must
+    /// override it or the delete stays incomplete. The record adapter drops
+    /// a legacy journal if one is there and resets the stream without replay.
+    /// After that reset is acknowledged it publishes to the session's
+    /// committed-change watches, then releases the writer reservation. Lease
+    /// records in the refused stream are not read. A reservation already held
+    /// for the session refuses the reset and publishes nothing.
+    ///
+    /// # Errors
+    /// The default returns [`StorageError::Corrupt`]. [`StorageError::Busy`]
+    /// when another owner holds the session. A backend error when the reset
+    /// cannot be acknowledged.
+    fn discard_unreadable(&self, id: SessionId) -> StorageFuture<'_, ()> {
+        let _ = id;
+        Box::pin(async {
+            Err(StorageError::Corrupt(
+                "this storage does not discard unreadable history".into(),
+            ))
+        })
+    }
 }
 
 /// Exclusive storage access to one local session, owned by its session manager.
@@ -744,6 +777,15 @@ impl SessionSnapshot {
 impl StorageError {
     /// Aggregate retained diagnostic text budget; structural slots are accounted separately.
     pub(crate) const DIAGNOSTIC_BYTES: usize = 4096;
+    /// `schemaVersion` written on every session-record batch and transcript checkpoint.
+    ///
+    /// A finished object with no marker, or with any other unsigned integer, is
+    /// [`Self::AnotherVersion`]. A marker that is not an unsigned integer is
+    /// [`Self::Corrupt`]. A missing marker together with a body the walk
+    /// refuses is also [`Self::Corrupt`]: the broken body is reported, not
+    /// another version. This build reads only this value. Old files are
+    /// deleted by hand. Nothing is migrated.
+    pub const SCHEMA_VERSION: u64 = 1;
     fn measure(
         mut pending: Vec<(&StorageError, usize)>,
         mut usage: StorageErrorUsage,

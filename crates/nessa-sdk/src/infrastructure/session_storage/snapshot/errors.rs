@@ -148,6 +148,9 @@ impl From<StorageError> for StorageFailure {
             StorageError::IdentityMismatch => Self::IdentityMismatch,
             StorageError::Io(value) => Self::Io(value),
             StorageError::Corrupt(value) => Self::Corrupt(value),
+            // A failed save never records another version. Keeping that variant
+            // out of the saved failure leaves the acknowledgement shape unchanged.
+            StorageError::AnotherVersion { .. } => Self::Corrupt("record version".into()),
             StorageError::ChangesRequired => Self::ChangesRequired,
             StorageError::Unresolved => Self::Unresolved,
             StorageError::TooLarge => Self::TooLarge,
@@ -692,6 +695,19 @@ mod storage_failure_tests {
         .is_err());
         assert!(serde_json::from_value::<StorageFailure>(serde_json::json!({
             "ShutdownFailures": {"read": "r", "runtime": "c", "success": true}
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn another_version_is_saved_as_corrupt() {
+        let encoded = serde_json::to_value(StorageFailure::from(StorageError::AnotherVersion {
+            found: None,
+        }))
+        .unwrap();
+        assert_eq!(encoded, serde_json::json!({"Corrupt": "record version"}));
+        assert!(serde_json::from_value::<StorageFailure>(serde_json::json!({
+            "AnotherVersion": {"found": null}
         }))
         .is_err());
     }

@@ -13,7 +13,7 @@ use nessa_local_database::{
 };
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::projection::retained_view;
-use nessa_sdk::application::agent_execution::sessions::CommittedStatus;
+use nessa_sdk::application::agent_execution::sessions::{CommittedStatus, StorageError};
 use nessa_sdk::infrastructure::session_storage::{
     TranscriptError, TranscriptFold, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
 };
@@ -308,14 +308,27 @@ impl ReadOnlyCache {
         self.loaded = None;
         let fold = match &saved {
             None => TranscriptFold::new(scope.clone()).map_err(transcript_error)?,
-            Some(progress) => {
-                let checkpoint = rows::checkpoint(&transaction, scope, self.policy)?;
-                let mut fold =
-                    TranscriptFold::restore(scope.clone(), progress.applied, &checkpoint)
-                        .map_err(transcript_error)?;
-                raw_records::restore_suffix(&transaction, progress, &mut fold, self.policy)?;
-                fold
-            }
+            Some(progress) => match rows::checkpoint(&transaction, scope, self.policy)? {
+                rows::CheckpointBody::Unreadable(error) if disposable_checkpoint(&error) => {
+                    drop(transaction);
+                    return self.drop_cached_transcript(scope);
+                }
+                rows::CheckpointBody::Unreadable(error) => return Err(transcript_error(error)),
+                rows::CheckpointBody::Read(checkpoint) => {
+                    let mut fold =
+                        match TranscriptFold::restore(scope.clone(), progress.applied, &checkpoint)
+                        {
+                            Ok(fold) => fold,
+                            Err(error) if disposable_checkpoint(&error) => {
+                                drop(transaction);
+                                return self.drop_cached_transcript(scope);
+                            }
+                            Err(error) => return Err(transcript_error(error)),
+                        };
+                    raw_records::restore_suffix(&transaction, progress, &mut fold, self.policy)?;
+                    fold
+                }
+            },
         };
         transaction.commit().map_err(rows::database_error)?;
         self.loaded = Some(LoadedTranscript {
@@ -427,6 +440,30 @@ impl ReadOnlyCache {
         self.refusal = Some(error);
         refusal
     }
+
+    /// Delete one conversation's cached transcript and continue with an empty
+    /// fold. A checkpoint this build cannot read is not the truth store. A
+    /// later head observation writes a new checkpoint.
+    fn drop_cached_transcript(&mut self, scope: &Scope) -> Result<(), CacheError> {
+        tracing::warn!(
+            session = scope.stream().as_str(),
+            "dropped a cached checkpoint this build cannot read"
+        );
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(rows::database_error)?;
+        if rows::fenced(&transaction, scope)? {
+            return Err(CacheError::Fenced);
+        }
+        raw_records::clear_transcript(&transaction, scope)?;
+        transaction.commit().map_err(|_| CacheError::Uncertain)?;
+        self.loaded = Some(LoadedTranscript {
+            progress: None,
+            fold: TranscriptFold::new(scope.clone()).map_err(transcript_error)?,
+        });
+        Ok(())
+    }
 }
 
 impl ReplicaStore for ReadOnlyCache {
@@ -457,6 +494,18 @@ impl TranscriptCache for ReadOnlyCache {
     fn mark_unknown(&mut self, scope: &Scope) -> Result<(), CacheError> {
         ReadOnlyCache::mark_unknown(self, scope)
     }
+}
+
+/// A cached checkpoint this build cannot use is disposable. That is a missing
+/// or other `schemaVersion`, a marker that is not an unsigned integer, and a
+/// body the fold refuses as [`TranscriptError::Checkpoint`]. Quota, a fenced
+/// row, and database failures are not.
+fn disposable_checkpoint(error: &TranscriptError) -> bool {
+    matches!(
+        error,
+        TranscriptError::Decision(StorageError::AnotherVersion { .. })
+            | TranscriptError::Checkpoint
+    )
 }
 
 pub(super) fn transcript_error(error: TranscriptError) -> CacheError {

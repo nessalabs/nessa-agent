@@ -6,6 +6,12 @@ rust-version = "1.89"
 description = "Reusable agent application contracts for Nessa"
 publish = false
 
+[features]
+# Unmarked session-record bytes and the append that plants them. Production
+# builds leave this off. Server and client tests enable it from their
+# dev-dependencies. This crate's own tests compile the same items.
+test-support = []
+
 [dependencies]
 async-trait = "=0.1.92"
 data-encoding = "2.11"
