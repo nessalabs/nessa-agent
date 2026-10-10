@@ -621,10 +621,15 @@ impl HostLink {
     }
 
     /// Tell the host what became of a file it published under `lease`,
-    /// unless the lease is no longer held here, when the host already
-    /// answered it as ended. Always sent, behind what is queued.
+    /// unless the lease is no longer held here or its End is already on its
+    /// way, when the host answers it as ended. Always sent, behind what is queued.
     pub(crate) fn collected(&self, lease: &str, artifact: u32, outcome: Collection) {
-        if self.routes().leases.contains_key(lease) {
+        let held = self
+            .routes()
+            .leases
+            .get(lease)
+            .is_some_and(|route| !route.end_sent);
+        if held {
             deliver(
                 &self.frames,
                 None,

@@ -1125,7 +1125,8 @@ impl SessionManager {
     }
     /// Record that the conversation holds an artifact, under the same lock as
     /// [`Self::record_lease`], so a lease cannot end between the check and the
-    /// record (row L5).
+    /// record (row L5). A file the conversation already records under the
+    /// same lease is answered `Ok` and recorded once.
     ///
     /// The record is checked against the conversation's current lease as
     /// observed, including facts retained but not yet durable: `record.lease`
@@ -1165,6 +1166,16 @@ impl SessionManager {
                 }
                 ArtifactRefusal::UnknownTurn => ArtifactRecordError::UnknownTurn,
             })?;
+        // The same file recorded again under the same lease is already
+        // recorded: nothing is added, so publishing one file over and over
+        // never fills the conversation.
+        if snapshot
+            .artifacts
+            .iter()
+            .any(|recorded| recorded.lease == record.lease && recorded.file == record.file)
+        {
+            return Ok(());
+        }
         snapshot.artifacts.push(record.clone());
         evidence.append_unit(vec![SessionChange::Artifact(record)]);
         self.save_observed(&mut evidence)

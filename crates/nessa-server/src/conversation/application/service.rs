@@ -1740,7 +1740,7 @@ impl ConversationService {
                 let Some(live) = live.upgrade() else {
                     continue;
                 };
-                collector.collect(offer, &live.agent).await;
+                collector.collect(offer, &live.agent, &live.lease).await;
             }
         });
     }

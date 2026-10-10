@@ -19,7 +19,7 @@
 //! against the digest the host published, and a hold is made only once
 //! its bytes are; a record is made only for a file the conversation holds.
 //! Every offer is answered, by its answer's drop if by nothing else.
-use super::{ArtifactKept, ConversationAttachments, PublishedArtifact};
+use super::{environment::LiveLease, ArtifactKept, ConversationAttachments, PublishedArtifact};
 use nessa_auth::domain::OrganizationId;
 use nessa_protocol::{
     conversation::domain::ConversationId,
@@ -163,14 +163,19 @@ impl ArtifactCollector {
         }
     }
 
-    /// Keep `offer` for the conversation `agent` runs, and answer it.
-    pub(crate) async fn collect(&mut self, offer: ArtifactOffer, agent: &Agent) {
+    /// Keep `offer` for the conversation `agent` runs under `lease`, and
+    /// answer it. Nothing is read once the lease stops being Live.
+    pub(crate) async fn collect(&mut self, offer: ArtifactOffer, agent: &Agent, lease: &LiveLease) {
         let ArtifactOffer {
             file,
             bytes,
             answer,
         } = offer;
-        let outcome = match self.keep(file, bytes, agent).await {
+        let outcome = match lease.is_live() {
+            false => Err(CollectionRefusal::LeaseEnded),
+            true => self.keep(file, lease.while_live(bytes), agent).await,
+        };
+        let outcome = match outcome {
             Ok(ArtifactKept::Held) => Collection::Held,
             Ok(ArtifactKept::AlreadyHeld) => Collection::AlreadyHeld,
             Err(reason) => Collection::Refused { reason },
@@ -218,9 +223,13 @@ impl ArtifactCollector {
                 bytes,
             })
             .await?;
-        if kept == ArtifactKept::Held {
-            self.spent = (files.saturating_add(1), spent.saturating_add(size));
-        }
+        // Every file kept counts toward the lease's files, one already held
+        // too; only bytes read count toward its bytes.
+        let read = match kept {
+            ArtifactKept::Held => size,
+            ArtifactKept::AlreadyHeld => 0,
+        };
+        self.spent = (files.saturating_add(1), spent.saturating_add(read));
         let record = |turn| ArtifactRecord {
             lease: self.lease.clone(),
             turn,

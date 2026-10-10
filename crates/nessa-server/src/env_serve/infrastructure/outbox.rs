@@ -5,7 +5,7 @@
 //! <data>/environment/outbox/            swept when serving starts
 //!   <lease's digest>/<artifact>         one staged copy, 0600, synced
 //! <private temporary directory>/        0700, one per serving process
-//!   <8 hex digits of the lease>         the lease's publish point (a Unix socket)
+//!   <16 hex digits of the lease>        the lease's publish point (a Unix socket)
 //!
 //! stage(path) ──▶ absolute? ──▶ every link followed ──▶ inside the workspace?
 //!   ──▶ open without following a last link ──▶ a regular file, the one checked?
@@ -101,7 +101,7 @@ impl FileOutbox {
 
     fn socket(&self, lease: &str) -> PathBuf {
         let digest = Sha256::digest(lease.as_bytes());
-        let name: String = digest[..4]
+        let name: String = digest[..8]
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();

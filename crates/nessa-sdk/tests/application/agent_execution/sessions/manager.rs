@@ -1418,6 +1418,26 @@ mod artifact_records {
     }
 
     #[tokio::test]
+    async fn a_file_recorded_again_under_its_lease_is_recorded_once() {
+        let (manager, lease) = leased().await;
+        manager
+            .record_artifact(artifact("lease-1", Some("active")))
+            .await
+            .unwrap();
+        let saves = lease.changes.lock().unwrap().len();
+        let mut renamed = artifact("lease-1", None);
+        renamed.name = ArtifactName::new("again.pdf").unwrap();
+        assert_eq!(manager.record_artifact(renamed).await, Ok(()));
+        assert_eq!(lease.changes.lock().unwrap().len(), saves);
+        assert_eq!(observed_artifacts(&manager).await.len(), 1);
+        // Still refused under a lease that is not this one.
+        assert_eq!(
+            manager.record_artifact(artifact("lease-2", None)).await,
+            Err(ArtifactRecordError::NotThisLease)
+        );
+    }
+
+    #[tokio::test]
     async fn a_refused_artifact_retains_nothing() {
         let (manager, lease) = leased().await;
         let saves = lease.changes.lock().unwrap().len();

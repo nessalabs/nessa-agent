@@ -3289,3 +3289,50 @@ async fn a_published_file_already_held_is_never_read() {
         }]
     );
 }
+
+/// An upload kept normalized does not hold the file it came from: the
+/// same original published under a lease is read and kept as it is, and
+/// a later upload of that original is still normalized, never answered by
+/// the published hold.
+#[tokio::test]
+async fn a_normalized_upload_and_a_published_original_never_stand_for_each_other() {
+    let original = b"a very large heic photograph";
+    let fixture = Fixture::with_normalizer(
+        AttachmentLimits::default(),
+        StubNormalizer::producing(b"small jpeg", "image/jpeg"),
+    );
+    let normalized = fixture.upload(CONVERSATION, original, "image/heic").await;
+    let raw = attachment(original, "image/heic");
+    let published = PublishedFile::new(
+        organization("org"),
+        conversation(CONVERSATION),
+        raw.clone(),
+        Caller::new(principal("owner"), "phone", "request-1").unwrap(),
+        LEASE,
+    )
+    .unwrap();
+    assert_eq!(
+        fixture
+            .service
+            .keep_published(published, ChannelBody::of(original, 7))
+            .await,
+        Ok(PublishKept::Held(raw.clone()))
+    );
+    assert_eq!(fixture.store.blob(raw.digest()).unwrap(), original);
+    // An upload of the same original is normalized as any upload is.
+    let mut request = begin_request(CONVERSATION, original, "image/heic");
+    request.request_id = "begin-2".into();
+    let outcome = fixture
+        .service
+        .begin(caller("org", "owner"), request)
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            outcome,
+            BeginOutcome::Stored(ref stored) if *stored == normalized
+        ) || matches!(outcome, BeginOutcome::UploadRequired { .. }),
+        "{outcome:?}"
+    );
+    assert!(!matches!(outcome, BeginOutcome::Stored(ref stored) if *stored == raw));
+}

@@ -903,8 +903,8 @@ sequenceDiagram
   a host holds at most `artifact.host_in_flight` unanswered publishes per
   lease; a conversation records at most `artifact.conversation_records`.
   Past any of them the file is refused unread, never truncated. Reads are
-  32 KiB with at most 16 outstanding, so at most 512 KiB of a file is held
-  in memory, and the whole read is bounded by `artifact.publish_deadline`.
+  32 KiB with at most 16 outstanding, so at most 640 KiB of a file is held
+  in memory, read-ahead included, and the whole read is bounded by `artifact.publish_deadline`.
   The values are in [docs/limits.md](../limits.md).
 - **Resumption.** Within a live lease, a channel that fails is reopened
   and the read goes on from the offset already received, at most

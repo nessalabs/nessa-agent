@@ -592,6 +592,9 @@ impl AttachmentService {
             )
             .await
             .map_err(|_| BeginError::Storage)?
+            // A published file is kept as it was published, never as an
+            // upload is (normalized): it does not stand for one.
+            .filter(|hold| hold.lease().is_none())
         {
             return Ok(BeginOutcome::Stored(hold.stored().clone()));
         }
@@ -1089,6 +1092,9 @@ impl AttachmentService {
                 published.file(),
             )
             .await;
+        // Already kept only when what the conversation keeps is these very
+        // bytes: an upload kept normalized does not hold what was published.
+        let existing = existing.map(|found| found.filter(|hold| hold.stored() == published.file()));
         match existing {
             Ok(Some(hold)) => {
                 let stored = hold.stored().clone();

@@ -1389,3 +1389,23 @@ impl crate::env_serve::application::ArtifactOutbox for NoOutbox {
     fn discard(&self, _lease: &str, _artifact: u32) {}
     fn close(&self, _lease: &str) {}
 }
+
+#[test]
+fn an_artifact_channel_rides_the_lease_connection_and_asks_for_no_forwarding() {
+    let host = devbox();
+    let arguments = super::connector::channel_arguments(&host, "/tmp/c0");
+    for option in [
+        "ControlMaster=no",
+        "ProxyCommand=false",
+        "BatchMode=yes",
+        "ClearAllForwardings=yes",
+        "ForwardAgent=no",
+        "ForwardX11=no",
+    ] {
+        let at = arguments.iter().position(|word| *word == option);
+        assert!(at.is_some_and(|at| arguments[at - 1] == "-o"), "{option}");
+    }
+    let separator = arguments.iter().position(|word| *word == "--").unwrap();
+    assert_eq!(&arguments[separator + 1..], ["devbox", "sftp"]);
+    assert_eq!(&arguments[..2], ["-S", "/tmp/c0"]);
+}

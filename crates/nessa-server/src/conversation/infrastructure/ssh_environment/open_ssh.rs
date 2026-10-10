@@ -14,7 +14,7 @@ use super::connector::{
 use nessa_sdk::domain::agent_execution::leases::SshDestination;
 use std::{
     fs, io,
-    os::unix::fs::DirBuilderExt,
+    os::unix::fs::{DirBuilderExt, MetadataExt},
     path::PathBuf,
     process::Stdio,
     sync::{
@@ -50,7 +50,18 @@ impl OpenSshConnector {
     fn control(&self) -> io::Result<String> {
         match fs::DirBuilder::new().mode(0o700).create(&self.sockets) {
             Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            // Made by this connector before: used again only while it is
+            // still this user's own directory that nobody else may enter.
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                let found = fs::symlink_metadata(&self.sockets)?;
+                // SAFETY: geteuid has no preconditions and cannot fail.
+                let user = unsafe { libc::geteuid() };
+                if !found.is_dir() || found.uid() != user || found.mode() & 0o077 != 0 {
+                    return Err(io::Error::other(
+                        "the control socket directory is not this user's own",
+                    ));
+                }
+            }
             Err(error) => return Err(error),
         }
         let number = self.next.fetch_add(1, Ordering::Relaxed);

@@ -12,7 +12,8 @@
 //!                         its artifact channels }
 //! artifact channel (issue #701), on that same SSH connection:
 //!   ──▶ ssh -S <control socket> -o ControlMaster=no -o ProxyCommand=false
-//!          -o BatchMode=yes -T -s -- <host> sftp
+//!          -o BatchMode=yes -o ClearAllForwardings=yes -o ForwardAgent=no
+//!          -o ForwardX11=no -T -s -- <host> sftp
 //! ```
 //!
 //! Arrows are what is run and what is handed back. The destination is an
@@ -115,7 +116,9 @@ pub(crate) fn master_arguments(control: &str) -> Vec<&str> {
 /// connection of its own. `ssh` falls back to connecting directly when the
 /// socket does not answer; that fallback is made to fail (a proxy command
 /// that exits at once, given first so the person's own proxy settings do
-/// not replace it), so a channel is the lease connection's or nothing.
+/// not replace it), so a channel is the lease connection's or nothing. It
+/// asks the master for no forwarding of the person's own configuration
+/// either: a forward that could not be opened would also make it fall back.
 pub(crate) fn channel_arguments<'a>(host: &'a SshDestination, control: &'a str) -> Vec<&'a str> {
     vec![
         "-S",
@@ -126,6 +129,12 @@ pub(crate) fn channel_arguments<'a>(host: &'a SshDestination, control: &'a str) 
         "ProxyCommand=false",
         "-o",
         "BatchMode=yes",
+        "-o",
+        "ClearAllForwardings=yes",
+        "-o",
+        "ForwardAgent=no",
+        "-o",
+        "ForwardX11=no",
         "-T",
         "-s",
         "--",
