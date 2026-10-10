@@ -8,11 +8,14 @@
 //! ```
 //! Arrows are calls. The product socket has already asked Cedar for
 //! `credential.manage`; nothing here decides who may ask.
-use super::records::{PeerEntry, PeerRecords, SlotRefusal};
+use super::records::{PeerEntry, PeerRecords, PeerSlot, SlotRefusal};
 use nessa_auth::{
     adapters::pairing::{ManualCode, OsEntropy, PairingCryptoError},
     application::pairing::PrivateStateError,
-    domain::pairing::{ConsentClass, DeviceKey},
+    domain::{
+        pairing::{ConsentClass, DeviceKey},
+        PrincipalId,
+    },
 };
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
 use nessa_protocol::clock::Clock as MonotonicClock;
@@ -31,7 +34,8 @@ const CONNECT: Duration = Duration::from_secs(5);
 pub enum PeerError {
     /// Another enrollment is running on this gateway.
     Busy,
-    /// Nothing answered at the address, or the connection failed.
+    /// Nothing answered at the address, the connection failed, or what
+    /// answered is not a gateway enrolling peers.
     Unreachable,
     /// The peer refused: no open invitation, an expired, used or wrong code,
     /// or no attempts left. The peer does not say which.
@@ -67,12 +71,42 @@ impl PeerCommands {
         }
     }
     /// Enroll this gateway, with its own key, into the peer invitation that
-    /// `code` opens at `address`. The record is saved, pending, before the
-    /// claim is confirmed; the peer's owner approves on the peer.
+    /// `code` opens at `address`, for `initiator`. The record is saved,
+    /// pending, before the claim is confirmed; the peer's owner approves on
+    /// the peer. The outcome is logged with the peer's key, the address and
+    /// the initiator; never the code or any key material.
     pub async fn enroll(
         &self,
         address: SocketAddr,
         code: ManualCode,
+        initiator: &PrincipalId,
+    ) -> Result<PeerEntry, PeerError> {
+        let slot = Arc::new(self.records.enrolling(address));
+        let outcome = self.enroll_with(address, code, slot.clone()).await;
+        let peer = slot.peer().map(|key| hex(&key)).unwrap_or_default();
+        match &outcome {
+            Ok(entry) => tracing::info!(
+                peer = %hex(entry.key()),
+                address = %address,
+                initiator = initiator.as_str(),
+                outcome = "pending",
+                "peer gateway enrolled"
+            ),
+            Err(error) => tracing::info!(
+                peer = %peer,
+                address = %address,
+                initiator = initiator.as_str(),
+                outcome = ?error,
+                "peer gateway enrollment refused"
+            ),
+        }
+        outcome
+    }
+    async fn enroll_with(
+        &self,
+        address: SocketAddr,
+        code: ManualCode,
+        slot: Arc<PeerSlot>,
     ) -> Result<PeerEntry, PeerError> {
         let _permit = self.enrolling.try_acquire().map_err(|_| PeerError::Busy)?;
         let stream =
@@ -80,7 +114,6 @@ impl PeerCommands {
                 .await
                 .map_err(|_| PeerError::Unavailable)?
                 .map_err(|_| PeerError::Unreachable)?;
-        let slot = Arc::new(self.records.enrolling(address));
         let client = NativeEnrollmentClient::enrolling(
             ConsentClass::PeerRead,
             slot.clone(),
@@ -109,12 +142,37 @@ impl PeerCommands {
     pub async fn list(&self) -> Result<Vec<PeerEntry>, PeerError> {
         self.blocking(|records| records.list()).await
     }
-    /// Remove the record for `key` and return what it was. Local only: the
-    /// peer's owner revokes the credential on the peer.
-    pub async fn forget(&self, key: DeviceKey) -> Result<PeerEntry, PeerError> {
-        self.blocking(move |records| records.forget(&key))
-            .await?
-            .ok_or(PeerError::NotFound)
+    /// Remove the record for `key` and return what it was, for `initiator`.
+    /// Local only: the peer's owner revokes the credential on the peer.
+    /// Refused `Busy` while an enrollment runs, which may be saving that very
+    /// record: removing it then would spend the peer's invitation for nothing.
+    pub async fn forget(
+        &self,
+        key: DeviceKey,
+        initiator: &PrincipalId,
+    ) -> Result<PeerEntry, PeerError> {
+        let outcome = match self.enrolling.try_acquire() {
+            Err(_) => Err(PeerError::Busy),
+            Ok(_permit) => self
+                .blocking(move |records| records.forget(&key))
+                .await
+                .and_then(|entry| entry.ok_or(PeerError::NotFound)),
+        };
+        tracing::info!(
+            peer = %hex(&key),
+            address = outcome
+                .as_ref()
+                .ok()
+                .and_then(|entry| match entry {
+                    PeerEntry::Readable(record) => Some(record.address().to_string()),
+                    PeerEntry::Unreadable(_) => None,
+                })
+                .unwrap_or_default(),
+            initiator = initiator.as_str(),
+            outcome = ?outcome.as_ref().map(|_| "forgotten"),
+            "peer gateway forget"
+        );
+        outcome
     }
     async fn blocking<T: Send + 'static>(
         &self,
@@ -130,6 +188,11 @@ impl PeerCommands {
 
 /// A failed enrollment as the owner can act on it. Total over the client's
 /// failures, so a new one does not compile until it is given a meaning.
+///
+/// Only what a gateway enrolling peers says is told apart. Everything else the
+/// far end does — closing, answering with something that is not TLS, a
+/// handshake or a frame that is not this protocol — is `Unreachable`, so the
+/// answer does not tell an open port from a closed one.
 fn enrollment_refusal(error: NativeClientError) -> PeerError {
     match error {
         NativeClientError::Refused
@@ -138,19 +201,28 @@ fn enrollment_refusal(error: NativeClientError) -> PeerError {
             PeerError::InvitationRefused
         }
         NativeClientError::OtherEnrollee => PeerError::WrongInvitation,
-        NativeClientError::Io(_) => PeerError::Unreachable,
+        NativeClientError::Io(_)
+        | NativeClientError::Handshake(_)
+        | NativeClientError::Crypto(_)
+        | NativeClientError::Wire(_)
+        | NativeClientError::Phase => PeerError::Unreachable,
+        // This gateway's own state, or a client operation the peer
+        // commands never start.
         NativeClientError::Busy
         | NativeClientError::PendingExists
         | NativeClientError::Enrolled
         | NativeClientError::OriginalNotRetryable
         | NativeClientError::NoPending
         | NativeClientError::Storage(_)
-        | NativeClientError::Crypto(_)
-        | NativeClientError::Wire(_)
-        | NativeClientError::Phase
         | NativeClientError::Entropy
-        | NativeClientError::WorkerFault(_) => {
-            PeerError::Unavailable
-        }
+        | NativeClientError::WorkerFault(_) => PeerError::Unavailable,
     }
+}
+
+/// A peer key as its record's file is named: lowercase hex.
+fn hex(key: &DeviceKey) -> String {
+    key.bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }

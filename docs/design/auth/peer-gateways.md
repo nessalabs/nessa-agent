@@ -221,6 +221,18 @@ sequenceDiagram
   approval happens on A. The credential reaches the record when B next reads
   its pinned status, which the next part's poller does. `peer.list` shows
   every kept peer; `peer.forget` removes B's record only.
+- **It dials what the owner names.** `peer.enroll` connects from this
+  gateway's host to whatever IP address and port the owner gives, which is
+  why it is owner-only (`credential.manage`) and why every failure that is
+  not the peer protocol's own answer is `peer_unreachable`: an open port and
+  a closed one answer alike. The client keeps a failed TLS handshake
+  (`NativeClientError::Handshake`) apart from a failed PAKE proof, so a
+  service that is not a gateway never reads as a wrong code.
+- **Enrolling and forgetting take turns.** One enrollment runs at a time, and
+  `peer.forget` is `peer_busy` while it does, so it cannot remove the record
+  that enrollment is saving and spend the peer's invitation for nothing.
+  Each enrollment and forget is logged with the peer's key, the address, the
+  outcome and the initiator; never the code or key material.
 - **Forgetting is local.** A gateway principal can never hold
   `credential.manage`, so B cannot revoke what A issued it. A's owner revokes
   it on A (`credential.revoke`), which is what stops B reading.
@@ -233,10 +245,11 @@ sequenceDiagram
 | P4 | `peer.forget` | The record is removed; a second forget is `peer_not_found` | same |
 | P5 | A device invitation's code | `peer_wrong_invitation`, before the PAKE; nothing saved | `a_refused_or_wrong_class_invitation_saves_nothing`, `a_composed_gateway_enrolls_into_another_with_its_own_key` |
 | P6 | A wrong code, or a cancelled invitation | `peer_invitation_refused`; nothing saved | `a_refused_or_wrong_class_invitation_saves_nothing` |
-| P7 | Nothing at the address; a peer already kept | `peer_unreachable`; `peer_exists`, the kept record unchanged | same |
+| P7 | Nothing at the address; a peer already kept | `peer_unreachable`; `peer_exists`, the kept record unchanged byte for byte | same |
 | P8 | No native pairing; a member; malformed params | `peer_not_configured`; `forbidden`; `invalid_request`, before any effect | `peer_routes_refuse_before_any_effect` |
 | P9 | A pending save with any key but the gateway's own, or for a pin that is the gateway's own key | Refused, nothing written; the second is `peer_own_gateway` | `a_record_takes_only_the_gateways_key_and_an_unreadable_one_can_be_forgotten` |
-| P10 | A record of another shape or another gateway key | Listed `unreadable`; enrolling into that peer is `peer_exists`; `peer.forget` removes it | same |
+| P10 | A record of another shape, or a valid one whose `gatewayKey` is not this gateway's | Listed `unreadable`; its credential does not load (`Corrupt`); enrolling into that peer is `peer_exists` and leaves it as it was; `peer.forget` removes it | same |
+| P11 | `peer.forget` while an enrollment runs | `peer_busy`; once the enrollment ends, forget runs | `forgetting_waits_for_a_running_enrollment` |
 
 ## What this part does not do
 

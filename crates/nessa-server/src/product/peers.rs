@@ -10,7 +10,10 @@ use super::{
     state::ProductRouteState,
 };
 use crate::peer_gateways::infrastructure::{PeerEntry, PeerError, PeerPhase};
-use nessa_auth::{adapters::pairing::ManualCode, domain::pairing::DeviceKey};
+use nessa_auth::{
+    adapters::pairing::ManualCode, application::session::AuthenticatedSession,
+    domain::pairing::DeviceKey,
+};
 use nessa_protocol::product::generated::{
     PeerEnrollParams, PeerErrorCode, PeerForgetParams, PeerGateway, PeerListResult,
     PeerPhase as WirePhase,
@@ -19,7 +22,12 @@ use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use serde_json::json;
 use std::net::SocketAddr;
 
-pub(super) async fn dispatch(state: &ProductRouteState, frame: RequestFrame) -> OutgoingMessage {
+pub(super) async fn dispatch(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+) -> OutgoingMessage {
+    let initiator = session.context().principal_id();
     let Some(peers) = state.peers.as_ref() else {
         return failure(&frame.id, PeerErrorCode::PeerNotConfigured.as_str());
     };
@@ -35,7 +43,7 @@ pub(super) async fn dispatch(state: &ProductRouteState, frame: RequestFrame) -> 
             let Ok(code) = ManualCode::parse(params.code.as_bytes()) else {
                 return failure(&id, "invalid_request");
             };
-            peers.enroll(address, code).await
+            peers.enroll(address, code, initiator).await
         }
         "peer.list" => {
             if frame.params != json!({}) {
@@ -55,7 +63,9 @@ pub(super) async fn dispatch(state: &ProductRouteState, frame: RequestFrame) -> 
             let Ok(params) = serde_json::from_value::<PeerForgetParams>(frame.params) else {
                 return failure(&id, "invalid_request");
             };
-            peers.forget(DeviceKey::new(params.peer_key)).await
+            peers
+                .forget(DeviceKey::new(params.peer_key), initiator)
+                .await
         }
         _ => return failure(&id, "unknown_method"),
     };

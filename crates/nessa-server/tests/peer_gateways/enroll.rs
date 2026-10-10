@@ -1,7 +1,7 @@
 //! The dialing side of a peer gateway over the real `/session` route, Cedar,
 //! and a real peer: gateway B enrolls, with its own native key, into gateway
 //! A's peer invitation, keeping a reference to that key and never a copy.
-//! Rows P1–P10 in `docs/design/auth/peer-gateways.md` ("The dialing side").
+//! Rows P1–P11 in `docs/design/auth/peer-gateways.md` ("The dialing side").
 use super::product_client::ProductClient;
 use super::support::{private_root, Fixture, Time, WAIT};
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -326,9 +326,15 @@ async fn a_refused_or_wrong_class_invitation_saves_nothing() {
     let (code, id) = invite(&fixture, ConsentClass::PeerRead).await;
     assert_eq!(enroll(&code)["ok"], true);
     cancel(&fixture, id).await;
+    let kept = dialing.files();
+    assert_eq!(kept.len(), 1);
     let (again, _) = invite(&fixture, ConsentClass::PeerRead).await;
     assert_eq!(refused(enroll(&again)), "peer_exists");
-    assert_eq!(dialing.files().len(), 1, "the kept record is unchanged");
+    assert_eq!(
+        dialing.files(),
+        kept,
+        "the kept record is unchanged, byte for byte"
+    );
     stop.send(()).unwrap();
     listener.await.unwrap().unwrap();
 }
@@ -541,4 +547,82 @@ async fn a_record_takes_only_the_gateways_key_and_an_unreadable_one_can_be_forgo
         owner.ok("peer.forget", json!({"peerKey": &pin[12..]}));
     });
     assert!(dialing.files().is_empty());
+
+    // A valid record, then the same record naming another key as the one this
+    // gateway enrolled with: it is not this gateway's any more.
+    let (native, stop, listener, _) = fixture.listener().await;
+    let a_pin = pin_at(native).await;
+    let a = DeviceKey::new(a_pin[12..].try_into().unwrap());
+    dialing
+        .records
+        .enrolling(native)
+        .save_pending(dialing.identity.key_material(), &a_pin, intent, None)
+        .unwrap();
+    assert!(matches!(
+        dialing.records.list().unwrap().as_slice(),
+        [PeerEntry::Readable(_)]
+    ));
+    let a_hex: String = a_pin[12..]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let path = dialing.directory.join(format!("{a_hex}.json"));
+    let mut record: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    record["gatewayKey"] = json!(STANDARD.encode(other.public_spki()));
+    std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    assert_eq!(
+        dialing.records.list().unwrap(),
+        vec![PeerEntry::Unreadable(a)]
+    );
+    assert_eq!(
+        dialing.records.slot(a).load_credential().err(),
+        Some(PrivateStateError::Corrupt)
+    );
+    let tampered = std::fs::read(&path).unwrap();
+    let (code, _) = invite(&fixture, ConsentClass::PeerRead).await;
+    let frame = blocking(|| {
+        ProductClient::connect(dialing.product, &token).call(
+            "peer.enroll",
+            json!({"address": native.to_string(), "code": code}),
+        )
+    });
+    assert_eq!(frame["error"]["code"], "peer_exists", "{frame}");
+    assert_eq!(std::fs::read(&path).unwrap(), tampered);
+    stop.send(()).unwrap();
+    listener.await.unwrap().unwrap();
+}
+
+/// Row P11: forgetting while an enrollment runs is `peer_busy`, so it cannot
+/// remove the record that enrollment is saving; once it ends, forget runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn forgetting_waits_for_a_running_enrollment() {
+    let fixture = Fixture::new().await;
+    let dialing = Dialing::new(&fixture).await;
+    let token = fixture.owner_token.clone();
+    // Accepts and never speaks: the enrollment is held mid-handshake.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = silent.local_addr().unwrap();
+    let product = dialing.product;
+    let enrolling = {
+        let token = token.clone();
+        std::thread::spawn(move || {
+            ProductClient::connect(product, &token).call(
+                "peer.enroll",
+                json!({"address": address.to_string(), "code": "ABCD-2345"}),
+            )
+        })
+    };
+    let (held, _) = blocking(|| silent.accept().unwrap());
+    let key = vec![7; 32];
+    let busy = blocking(|| {
+        ProductClient::connect(product, &token).refused("peer.forget", json!({"peerKey": key}))
+    });
+    assert_eq!(busy, "peer_busy");
+    drop(held);
+    let ended = blocking(|| enrolling.join().unwrap());
+    assert_eq!(ended["error"]["code"], "peer_unreachable", "{ended}");
+    let after = blocking(|| {
+        ProductClient::connect(product, &token).refused("peer.forget", json!({"peerKey": key}))
+    });
+    assert_eq!(after, "peer_not_found");
 }
