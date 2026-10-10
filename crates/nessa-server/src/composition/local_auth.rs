@@ -341,9 +341,7 @@ pub(super) async fn product_state(
     product.browser_http_allowed = config.browser_http_allowed();
     let native = match native {
         Some((prepared, commands, peers)) => {
-            product = product
-                .with_pairing(Arc::new(commands))
-                .with_peers(peers);
+            product = product.with_pairing(Arc::new(commands)).with_peers(peers);
             Some(prepared)
         }
         None => None,

@@ -57,7 +57,11 @@ impl ReadOnlyCache {
             let selected = statement
                 .query_map(
                     params![receiver.as_str(), rows::MAX_STORED_ID_BYTES as i64],
-                    |row| Ok((|| Ok((rows::identifier(row, 0)?, rows::identifier(row, 1)?)))()),
+                    |row| {
+                        Ok((|| {
+                            Ok((rows::identifier(row, 0)?, rows::identifier(row, 1)?))
+                        })())
+                    },
                 )
                 .map_err(rows::database_error)?;
             selected

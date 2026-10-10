@@ -28,12 +28,7 @@ use nessa_auth::{
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
 use nessa_client_core::retained::{ReadFailure, ReadReport, ReadStop, ReaderAccess, RetainedCache};
 use nessa_protocol::pairing::wire::NativePairingStatus;
-use std::{
-    collections::HashMap,
-    net::TcpStream,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
     sync::watch,
     task::JoinHandle,
@@ -44,8 +39,6 @@ use tokio::{
 pub const POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// The longest a failing peer waits before it is tried again.
 pub const POLL_BACKOFF_CAP: Duration = Duration::from_secs(15 * 60);
-/// How long a TCP connect for a status read may take.
-const CONNECT: Duration = Duration::from_secs(5);
 /// How this gateway names itself to a peer's product session.
 const CLIENT_ID: &str = "nessa-peer-gateway";
 
@@ -286,20 +279,20 @@ impl Poller {
     /// The peer's pinned status through its record. `None` when stopped.
     async fn status(&self, record: &PeerRecord) -> Option<Result<Status, NativeClientError>> {
         let address = record.address();
-        let stream = match tokio::task::spawn_blocking(move || {
-            TcpStream::connect_timeout(&address, CONNECT)
-        })
-        .await
-        {
-            Ok(Ok(stream)) => stream,
-            Ok(Err(error)) => return Some(Err(NativeClientError::Io(error.kind()))),
-            Err(_) => return Some(Err(NativeClientError::Phase)),
+        let mut stopped = self.stopped.clone();
+        // The same connect as an enrollment's: the injected connector, bounded
+        // by the injected deadline clock.
+        let stream = tokio::select! {
+            connected = self.commands.connect(address) => match connected {
+                Ok(stream) => stream,
+                Err(_) => return Some(Err(NativeClientError::Io(std::io::ErrorKind::TimedOut))),
+            },
+            _ = until_stopped(&mut stopped) => return None,
         };
         let client = NativeEnrollmentClient::new(
             Arc::new(self.commands.records.slot(*record.key())),
             self.commands.clock.clone(),
         );
-        let mut stopped = self.stopped.clone();
         let status = tokio::select! {
             status = client.status(stream, None) => Some(status),
             _ = until_stopped(&mut stopped) => None,
@@ -463,7 +456,10 @@ async fn until_stopped(stopped: &mut watch::Receiver<bool>) {
 
 /// What a status read said, as the poller acts on it.
 enum Status {
-    Active { receiver: String, access_epoch: u64 },
+    Active {
+        receiver: String,
+        access_epoch: u64,
+    },
     /// The peer ended this enrollment, for the cause given.
     Ended(String),
     /// Still pending on the peer.

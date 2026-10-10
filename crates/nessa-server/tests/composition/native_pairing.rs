@@ -322,6 +322,11 @@ async fn faulted_listener_join_reports_the_fault_without_reconciling() {
         gateway: bound.gateway.clone(),
         stop: None,
         task: tokio::spawn(async { panic!("native listener fault") }),
+        poller: PeerPoller::start(
+            bound.peers.clone(),
+            PollPolicy::default(),
+            bound.clock.clone(),
+        ),
     };
     assert_eq!(
         tokio::time::timeout(WAIT, running.join()).await.unwrap(),

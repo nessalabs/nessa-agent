@@ -28,9 +28,7 @@ use crate::read_only_sync::application::{
     CachePolicy, Cancellation, GatewayConnector, GatewayError, GatewayPolicy, GatewayStream,
 };
 use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
-use crate::read_only_sync::infrastructure::gateway::{
-    DeviceEvidence, GatewayConnection, Session,
-};
+use crate::read_only_sync::infrastructure::gateway::{DeviceEvidence, GatewayConnection, Session};
 use nessa_auth::adapters::pairing::NativeIdentity;
 use nessa_auth::application::ports::Clock as WallClock;
 use nessa_protocol::clock::Clock as MonotonicClock;
@@ -290,9 +288,7 @@ impl RetainedCache {
         let epoch = access.access_epoch;
 
         let mut catalogue = connection.catalogue(receiver.clone(), epoch);
-        let discovery = connection
-            .run(|| catalogue.discover())
-            .map_err(failure)?;
+        let discovery = connection.run(|| catalogue.discover()).map_err(failure)?;
         let (scope, head) = match (discovery.result, discovery.outcome.failure) {
             (_, Some(error)) => return Err(failure(error)),
             (Some(Ok(found)), None) => found,
@@ -324,7 +320,15 @@ impl RetainedCache {
         let mut authorizer = catalogue.authorizer();
         let cache = &mut self.cache;
         let attempt = connection
-            .run(|| run_catalogue(&scope, &mut authorizer, &mut catalogue, cache, CATALOGUE_PAGES))
+            .run(|| {
+                run_catalogue(
+                    &scope,
+                    &mut authorizer,
+                    &mut catalogue,
+                    cache,
+                    CATALOGUE_PAGES,
+                )
+            })
             .map_err(failure)?;
         let mut complete = match (attempt.result, attempt.outcome.failure) {
             (_, Some(error)) => return Err(failure(error)),
@@ -462,11 +466,15 @@ impl RetainedCache {
 
 /// What one conversation's read came to.
 enum Conversation {
-    Read { complete: bool },
+    Read {
+        complete: bool,
+    },
     /// The gateway no longer grants it.
     Withdrawn,
     /// Not read this time; the next read tries again.
-    Unread { connection_kept: bool },
+    Unread {
+        connection_kept: bool,
+    },
 }
 
 /// A conversation that could not be read: the reader's authority, the

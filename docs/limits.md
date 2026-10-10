@@ -33,5 +33,7 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | conversation.read_grants | fixed | 64 | MAX_READ_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/read_grants.rs, the schema's ConversationSharesResult maxItems | the paired devices one conversation is shared with; one more conversation.share is refused invalid_request, so a conversation.shares answer always fits one frame |
 | record.read_work_budget | configured | 200 | config.json limits.readWorkBudgetMs | a cold read still preparing at this budget answers that it is preparing |
 | record.discovery_steps | fixed | 128 | record read DISCOVERY_STEPS_PER_READ | a cold read that uses every discovery step answers that the source is preparing |
+| peer.poll_interval | fixed | 30000 | POLL_INTERVAL in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs | how often each up-to-date peer gateway is read, jittered 80 to 120 percent; what a peer shares or unshares reaches this gateway's cache within about one interval |
+| peer.poll_backoff_cap | fixed | 900000 | POLL_BACKOFF_CAP in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs | the longest a peer that keeps failing waits before it is read again; the wait doubles from the interval up to this |
 
 | client.preparing_attempts | client | the client's own | `PREPARING_ATTEMPTS` in `crates/nessa-client-core/src/read_only_sync/application/watch.rs` | how many times a preparing read is asked again |
