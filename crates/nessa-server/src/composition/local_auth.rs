@@ -1172,7 +1172,9 @@ fn environments(
     clock: Arc<dyn Clock>,
 ) -> Result<Environments, RunError> {
     use crate::conversation::infrastructure::{
-        ssh_environment::{DurableEnvironmentAudit, OpenSshConnector, SshEnvironment, SshTimings},
+        ssh_environment::{
+            DurableEnvironmentAudit, HostInstaller, OpenSshConnector, SshEnvironment, SshTimings,
+        },
         FilePlacements,
     };
     let placements = FilePlacements::new(root.join("placements"))
@@ -1183,6 +1185,7 @@ fn environments(
         let audit = DurableEnvironmentAudit::new(root.join("audit").join("environments"), clock)
             .map_err(|error| RunError::Agent(error.to_string()))?;
         let connector = Arc::new(OpenSshConnector);
+        let installer = Arc::new(HostInstaller::this_build(connector.clone()));
         for host in hosts {
             environments.insert(
                 host.as_str().to_owned(),
@@ -1190,6 +1193,7 @@ fn environments(
                     host.clone(),
                     connector.clone(),
                     audit.clone(),
+                    installer.clone(),
                     SshTimings::default(),
                 )),
             );

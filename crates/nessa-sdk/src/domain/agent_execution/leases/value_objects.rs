@@ -287,6 +287,12 @@ pub enum LeaseRefusal {
     /// The environment is already serving another connection, and serves one
     /// at a time.
     EnvironmentBusy,
+    /// The environment had no copy of this build, and runs on a system or
+    /// processor this build cannot run on, so none was installed there.
+    EnvironmentPlatformUnsupported,
+    /// The environment had no copy of this build, and installing one failed:
+    /// what arrived did not verify, did not run, or could not be stored.
+    EnvironmentInstallFailed,
     /// The environment cannot run this agent: its binding cannot start its
     /// harness elsewhere, or the environment has no runtime configured for it.
     AgentUnavailable,
