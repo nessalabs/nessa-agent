@@ -140,9 +140,12 @@ impl CommandRunner for ShepherdCommands {
                     (end, output, true)
                 })
                 .await;
-            let (end, output, started) = scope
-                .result
-                .expect("a scope with no initial process cannot fail to spawn one");
+            // A scope with no initial process has none to fail to spawn;
+            // were it ever to, nothing ran.
+            let (end, output, started) =
+                scope
+                    .result
+                    .unwrap_or((CommandEnd::NotStarted, None, false));
             let cleanup = match (&scope.termination, started) {
                 (_, false) => Cleanup::NotHeld,
                 (Ok(report), true) if report.all_verified() => Cleanup::Confirmed {

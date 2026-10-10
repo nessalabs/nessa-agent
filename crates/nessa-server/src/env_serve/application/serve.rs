@@ -1089,7 +1089,13 @@ impl Served {
             // Its answer goes before anything that waits for its end, so a
             // gateway's `End` of it is answered after its `Ran`.
             if !lost {
-                let _ = frames.send(ran(lease, outcome)).await;
+                // A gateway taken as gone while this waits for room to say
+                // it is not waited on: its end is recorded either way.
+                let mut gone = stopped.clone();
+                tokio::select! {
+                    _ = frames.send(ran(lease, outcome)) => {}
+                    _ = gone.wait_for(|stop| *stop == Some(CommandStop::Lost)) => {}
+                }
             }
             done.send_replace(Some(cleanup));
         });
