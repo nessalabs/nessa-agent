@@ -65,6 +65,13 @@ pub enum LeaseError {
     Busy,
     /// No revision after the previous one can be represented.
     RevisionsExhausted,
+    /// The lease already runs [`Lease::MAX_LIVE_COMMANDS`] commands.
+    CommandsFull,
+    /// The command lease is already live under this lease, or takes this
+    /// lease's own identity.
+    DuplicateCommand,
+    /// No command lease of that identity is live under this lease.
+    UnknownCommand,
 }
 impl fmt::Display for LeaseError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -79,6 +86,9 @@ impl fmt::Display for LeaseError {
             Self::EventsAccepted => "the lease still accepts events",
             Self::Busy => "the conversation already holds a live lease",
             Self::RevisionsExhausted => "no further lease revision can be issued",
+            Self::CommandsFull => "the lease already runs as many commands as it may",
+            Self::DuplicateCommand => "that command lease is already live",
+            Self::UnknownCommand => "no such command lease is live",
         })
     }
 }
@@ -117,8 +127,13 @@ pub struct Lease {
     terms: LeaseTerms,
     phase: LeasePhase,
     dropped_events: u64,
+    /// The command leases live under it, oldest first (row L14).
+    commands: Vec<LeaseId>,
 }
 impl Lease {
+    /// Most command leases live under one lease at once.
+    pub const MAX_LIVE_COMMANDS: usize = 4;
+
     /// The revision a new lease takes after `prior`, the conversation's
     /// previous lease, if it has one: one past it, and the first without one
     /// (row L16). A prior lease still Live or Ending refuses with
@@ -144,6 +159,7 @@ impl Lease {
             terms,
             phase: LeasePhase::Live,
             dropped_events: 0,
+            commands: Vec::new(),
         }
     }
     /// Its identity.
@@ -196,6 +212,7 @@ impl Lease {
             LeasePhase::Live => Err(LeaseError::NotEnding),
             LeasePhase::Ending { cause } => {
                 self.phase = LeasePhase::Ended { cause, cleanup };
+                self.commands.clear();
                 Ok(CleanupDecision::Ended)
             }
             LeasePhase::Ended { .. } => Err(LeaseError::Final),
@@ -221,6 +238,7 @@ impl Lease {
                     cause,
                     late_cleanup: None,
                 };
+                self.commands.clear();
                 Ok(())
             }
             LeasePhase::Live => Err(LeaseError::NotEnding),
@@ -253,6 +271,41 @@ impl Lease {
             LeaseDeadline::UntilEnded => Err(LeaseError::NoDeadline),
             LeaseDeadline::At(deadline) if now < deadline => Err(LeaseError::NotDue),
             LeaseDeadline::At(_) => Ok(self.end(LeaseEndCause::Expired)),
+        }
+    }
+    /// The command leases live under it, oldest first.
+    pub fn commands(&self) -> &[LeaseId] {
+        &self.commands
+    }
+    /// Admit `command` as a command lease under this one (row L14): only while
+    /// this lease is Live, at most [`Self::MAX_LIVE_COMMANDS`] at once, and
+    /// never an identity already live or this lease's own.
+    pub fn admit_command(&mut self, command: LeaseId) -> Result<(), LeaseError> {
+        if self.phase != LeasePhase::Live {
+            return Err(LeaseError::NotLive);
+        }
+        if command == self.id || self.commands.contains(&command) {
+            return Err(LeaseError::DuplicateCommand);
+        }
+        if self.commands.len() >= Self::MAX_LIVE_COMMANDS {
+            return Err(LeaseError::CommandsFull);
+        }
+        self.commands.push(command);
+        Ok(())
+    }
+    /// `command` ended: with its command, its timeout, or a stop (rows L14,
+    /// L15). While this lease is Live or Ending only a command lease live
+    /// under it can end. Once this lease is final its end already ended every
+    /// command, so a command's end that arrives after it is late evidence and
+    /// changes nothing.
+    pub fn end_command(&mut self, command: &LeaseId) -> Result<(), LeaseError> {
+        match self.commands.iter().position(|live| live == command) {
+            Some(at) => {
+                self.commands.remove(at);
+                Ok(())
+            }
+            None if self.phase.is_final() => Ok(()),
+            None => Err(LeaseError::UnknownCommand),
         }
     }
     /// Count one event that arrived after the lease stopped accepting them

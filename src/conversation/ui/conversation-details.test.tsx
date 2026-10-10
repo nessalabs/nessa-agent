@@ -189,6 +189,21 @@ it("says where the agent runs and the sandbox around it, from its lease", () => 
   expect(group("Where it runs")).toBe(
     "Where it runsComputerThis computerSandboxThe agent's ownStatusAllowed to run",
   )
+
+  show(
+    attached({
+      lease: {
+        state: "live",
+        revision: 1,
+        environment: "here",
+        sandbox: "none",
+        droppedEvents: 0,
+      },
+    }),
+  )
+  expect(group("Where it runs")).toBe(
+    "Where it runsComputerThis computerSandboxNoneStatusAllowed to run",
+  )
 })
 
 it("says why a lease ended, and of a refused one only why nothing runs", () => {

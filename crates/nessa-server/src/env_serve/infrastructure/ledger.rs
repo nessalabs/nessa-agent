@@ -86,7 +86,7 @@ impl LeaseLedger for FileLedger {
             }
             match line.kind.as_str() {
                 // A grant after an end is a lease not yet ended again.
-                "granted" => {
+                "granted" | "command_granted" => {
                     granted = true;
                     ended = None;
                 }

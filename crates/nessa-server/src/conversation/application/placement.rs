@@ -18,6 +18,7 @@
 //! alone (ADR 202, record scope). A placement naming a host the configuration
 //! no longer names is refused the same way, never run somewhere else.
 use super::{ConversationError, Environment, EnvironmentFuture};
+use crate::conversation::domain::CommandPolicy;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::agent_execution::leases::EnvironmentRef;
 use std::{collections::BTreeMap, sync::Arc};
@@ -73,6 +74,9 @@ pub(crate) struct Environments {
     here: Arc<dyn Environment>,
     hosts: BTreeMap<String, Arc<dyn Environment>>,
     placements: Option<Arc<dyn ConversationPlacements>>,
+    /// Which commands an agent may run, and on which hosts; `None` when this
+    /// gateway grants none, and the environment tools are absent.
+    commands: Option<CommandPolicy>,
 }
 
 impl From<Arc<dyn Environment>> for Environments {
@@ -83,6 +87,7 @@ impl From<Arc<dyn Environment>> for Environments {
             here,
             hosts: BTreeMap::new(),
             placements: None,
+            commands: None,
         }
     }
 }
@@ -100,7 +105,25 @@ impl Environments {
             here,
             hosts,
             placements: Some(placements),
+            commands: None,
         }
+    }
+
+    /// These environments, with commands granted by `policy`.
+    #[cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
+    pub(crate) fn with_commands(mut self, policy: CommandPolicy) -> Self {
+        self.commands = Some(policy);
+        self
+    }
+
+    /// Which commands an agent may run, and where; `None` when none.
+    pub(crate) fn command_policy(&self) -> Option<&CommandPolicy> {
+        self.commands.as_ref()
+    }
+
+    /// The configured hosts, by the destination each is named by.
+    pub(crate) fn hosts(&self) -> &BTreeMap<String, Arc<dyn Environment>> {
+        &self.hosts
     }
 
     /// Record where a conversation about to be created runs: on `requested`,

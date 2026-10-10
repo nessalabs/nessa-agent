@@ -111,6 +111,10 @@ pub enum SandboxProfile {
     /// Whatever the harness does by default, configured by nothing Nessa sets.
     /// It encloses only what the harness itself encloses.
     HarnessDefault,
+    /// Nothing encloses the work: it runs as the environment's account. What
+    /// a command lease's environment holds, since a command has no harness to
+    /// sandbox it.
+    None,
 }
 
 /// The sandbox profiles a binding can set up, or an environment can enforce.
@@ -119,20 +123,30 @@ pub enum SandboxProfile {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SandboxProfiles {
     harness_default: bool,
+    none: bool,
 }
 impl SandboxProfiles {
     /// No profile at all: every request is refused.
     pub const NONE: Self = Self {
         harness_default: false,
+        none: false,
     };
     /// Only the harness's own default. What every pinned binding declares today.
     pub const HARNESS_DEFAULT: Self = Self {
         harness_default: true,
+        none: false,
+    };
+    /// Only [`SandboxProfile::None`]: what an environment declares for the
+    /// commands it runs, which nothing encloses.
+    pub const UNENCLOSED: Self = Self {
+        harness_default: false,
+        none: true,
     };
     /// Whether `profile` is in the set.
     pub fn contains(self, profile: SandboxProfile) -> bool {
         match profile {
             SandboxProfile::HarnessDefault => self.harness_default,
+            SandboxProfile::None => self.none,
         }
     }
     /// The profiles both sets hold: what a binding can set up and an
@@ -140,6 +154,7 @@ impl SandboxProfiles {
     pub fn intersect(self, other: Self) -> Self {
         Self {
             harness_default: self.harness_default && other.harness_default,
+            none: self.none && other.none,
         }
     }
     /// Grant `requested` when this set holds it, or refuse it with
@@ -202,6 +217,232 @@ pub enum LeaseWork {
     /// One conversation's agent, across its successive turns while the lease
     /// is live.
     Agent(AgentWork),
+}
+
+/// One bounded command a command lease runs: its argument vector, the
+/// directory beneath the environment's workspace it runs in, and how long it
+/// may take. Never a shell line: `argv[0]` is the program, and each argument
+/// reaches it as given.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CommandWork {
+    argv: Vec<Box<str>>,
+    cwd: Option<Box<str>>,
+    timeout_ms: u64,
+}
+impl CommandWork {
+    /// Most arguments, the program included.
+    pub const MAX_ARGS: usize = 256;
+    /// Most bytes of all arguments together: with every record field around
+    /// them, a lease record of the command stays within its stored bound
+    /// however its arguments encode.
+    pub const MAX_ARGV_BYTES: usize = 4 * 1024;
+    /// Longest working directory.
+    pub const MAX_CWD_BYTES: usize = 1024;
+    /// Longest a command may run.
+    pub const MAX_TIMEOUT_MS: u64 = 3_600_000;
+    /// How long a command may run when its caller names no timeout.
+    pub const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+
+    /// `argv` run in `cwd` within `timeout_ms`.
+    ///
+    /// `cwd` is relative to the environment's workspace, `None` for the
+    /// workspace itself: a path of plain components, never absolute and never
+    /// `.` or `..`, so it cannot name a directory outside the workspace by its
+    /// spelling. An empty `argv`, or a blank program, is
+    /// [`ExecutionError::EmptyValue`]; one past its bounds
+    /// [`ExecutionError::TooManyValues`] or [`ExecutionError::ValueTooLong`];
+    /// a control character other than newline or tab in an argument,
+    /// [`ExecutionError::InvalidCommandArgument`]; a `cwd` that is not such a
+    /// path, [`ExecutionError::InvalidPath`]; a timeout of zero or past
+    /// [`Self::MAX_TIMEOUT_MS`] [`ExecutionError::InvalidCommandTimeout`].
+    pub fn new(
+        argv: Vec<String>,
+        cwd: Option<String>,
+        timeout_ms: u64,
+    ) -> Result<Self, ExecutionError> {
+        if argv.first().is_none_or(|program| program.trim().is_empty()) {
+            return Err(ExecutionError::EmptyValue("command program"));
+        }
+        if argv.len() > Self::MAX_ARGS {
+            return Err(ExecutionError::TooManyValues {
+                field: "command arguments",
+                max: Self::MAX_ARGS,
+            });
+        }
+        if argv.iter().map(String::len).sum::<usize>() > Self::MAX_ARGV_BYTES {
+            return Err(ExecutionError::ValueTooLong {
+                field: "command arguments",
+                max_bytes: Self::MAX_ARGV_BYTES,
+            });
+        }
+        if argv.iter().any(|argument| {
+            argument
+                .chars()
+                .any(|c| c.is_control() && c != '\n' && c != '\t')
+        }) {
+            return Err(ExecutionError::InvalidCommandArgument);
+        }
+        let cwd = match cwd {
+            None => None,
+            Some(cwd) if cwd.len() > Self::MAX_CWD_BYTES => {
+                return Err(ExecutionError::ValueTooLong {
+                    field: "command working directory",
+                    max_bytes: Self::MAX_CWD_BYTES,
+                })
+            }
+            Some(cwd) if !plain_relative(&cwd) => return Err(ExecutionError::InvalidPath),
+            Some(cwd) => Some(cwd.into_boxed_str()),
+        };
+        if timeout_ms == 0 || timeout_ms > Self::MAX_TIMEOUT_MS {
+            return Err(ExecutionError::InvalidCommandTimeout);
+        }
+        Ok(Self {
+            argv: argv.into_iter().map(String::into_boxed_str).collect(),
+            cwd,
+            timeout_ms,
+        })
+    }
+    /// The program and its arguments.
+    pub fn argv(&self) -> &[Box<str>] {
+        &self.argv
+    }
+    /// The program: the first argument.
+    pub fn program(&self) -> &str {
+        &self.argv[0]
+    }
+    /// The directory beneath the workspace, or `None` for the workspace.
+    pub fn cwd(&self) -> Option<&str> {
+        self.cwd.as_deref()
+    }
+    /// How long it may run, in milliseconds.
+    pub fn timeout_ms(&self) -> u64 {
+        self.timeout_ms
+    }
+}
+
+/// Whether `path` is relative and made only of plain components separated
+/// by single slashes: no empty, `.` or `..` component, no control character.
+fn plain_relative(path: &str) -> bool {
+    !path.is_empty()
+        && path
+            .split('/')
+            .all(|part| !matches!(part, "" | "." | "..") && !part.chars().any(char::is_control))
+}
+
+/// What a command lease runs, where, and enclosed by what: its terms, as
+/// granted. A command lease is a child of its conversation's agent lease and
+/// lapses with its command's timeout or its parent's end.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CommandTerms {
+    /// Where it runs.
+    pub environment: EnvironmentRef,
+    /// What it runs.
+    pub command: CommandWork,
+    /// The sandbox the environment enforces around it.
+    pub sandbox: SandboxProfile,
+}
+
+/// How a command lease's command ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CommandExit {
+    /// It exited by itself with this status.
+    Exited {
+        /// Its exit status.
+        code: i32,
+    },
+    /// A signal ended it that its environment did not send.
+    Signalled {
+        /// The signal's number.
+        signal: i32,
+    },
+    /// Its timeout passed and its environment stopped it.
+    TimedOut,
+    /// It was stopped before it finished: its caller went away, or its
+    /// parent lease ended.
+    Stopped {
+        /// Why.
+        cause: LeaseEndCause,
+    },
+    /// Its program could not be started; nothing ran.
+    NotStarted,
+    /// Its environment did not say how it ended: the connection to it was lost,
+    /// or no answer came in time.
+    Unanswered,
+}
+
+/// What a command printed, as kept in its lease's record: how much of each
+/// stream there was, how much of it was dropped past the capture bound, and
+/// the last bytes of each, as text.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CommandOutput {
+    stdout_bytes: u64,
+    stderr_bytes: u64,
+    dropped_bytes: u64,
+    stdout_tail: Box<str>,
+    stderr_tail: Box<str>,
+}
+impl CommandOutput {
+    /// Most bytes of each stream's tail a record keeps.
+    pub const MAX_TAIL_BYTES: usize = 2 * 1024;
+
+    /// `stdout_bytes` and `stderr_bytes` captured, `dropped_bytes` not
+    /// captured past the bound, and the last of each stream. A tail is kept as
+    /// at most [`Self::MAX_TAIL_BYTES`] of its end, cut at a character
+    /// boundary, with every control character but newline and tab shown as
+    /// U+FFFD, so a record of it stays within its bound however it encodes.
+    pub fn new(
+        stdout_bytes: u64,
+        stderr_bytes: u64,
+        dropped_bytes: u64,
+        stdout_tail: &str,
+        stderr_tail: &str,
+    ) -> Self {
+        Self {
+            stdout_bytes,
+            stderr_bytes,
+            dropped_bytes,
+            stdout_tail: tail(stdout_tail),
+            stderr_tail: tail(stderr_tail),
+        }
+    }
+    /// Bytes its standard output carried.
+    pub fn stdout_bytes(&self) -> u64 {
+        self.stdout_bytes
+    }
+    /// Bytes its standard error carried.
+    pub fn stderr_bytes(&self) -> u64 {
+        self.stderr_bytes
+    }
+    /// Bytes not captured past the bound.
+    pub fn dropped_bytes(&self) -> u64 {
+        self.dropped_bytes
+    }
+    /// The last of its standard output.
+    pub fn stdout_tail(&self) -> &str {
+        &self.stdout_tail
+    }
+    /// The last of its standard error.
+    pub fn stderr_tail(&self) -> &str {
+        &self.stderr_tail
+    }
+}
+
+/// The end of `text`, at most [`CommandOutput::MAX_TAIL_BYTES`] once its
+/// control characters are replaced, starting at a character boundary.
+fn tail(text: &str) -> Box<str> {
+    let shown: String = text
+        .chars()
+        .map(|c| match c {
+            '\n' | '\t' => c,
+            c if c.is_control() => char::REPLACEMENT_CHARACTER,
+            c => c,
+        })
+        .collect();
+    let mut start = shown.len().saturating_sub(CommandOutput::MAX_TAIL_BYTES);
+    while !shown.is_char_boundary(start) {
+        start += 1;
+    }
+    shown[start..].into()
 }
 
 /// What a lease lets its environment reach beyond the agent itself.
@@ -290,4 +531,24 @@ pub enum LeaseRefusal {
     /// The environment cannot run this agent: its binding cannot start its
     /// harness elsewhere, or the environment has no runtime configured for it.
     AgentUnavailable,
+}
+
+/// Why a command lease was not issued: the refusals every lease can meet, and
+/// those only a command meets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CommandRefusal {
+    /// The environment refused it as it refuses any lease: a sandbox profile
+    /// it cannot enforce, unreachable, another build, or busy.
+    Environment(LeaseRefusal),
+    /// The caller holds no grant to run commands on the environment it named,
+    /// or names an environment this gateway does not know.
+    EnvironmentNotGranted,
+    /// The caller's tool policy does not allow this command.
+    CommandDenied,
+    /// Past a budget: as many commands already run under the agent's lease as
+    /// it may hold at once.
+    BudgetExceeded,
+    /// The environment runs no commands: it does not serve them, or it is
+    /// this gateway's own machine, whose commands go through its shell tool.
+    CommandsUnavailable,
 }

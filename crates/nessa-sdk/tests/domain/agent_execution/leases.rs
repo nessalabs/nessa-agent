@@ -9,7 +9,7 @@
 
 use nessa_sdk::domain::agent_execution::{
     leases::{
-        AgentWork, CleanupDecision, EndDecision, EnvironmentRef, Lease, LeaseCleanup,
+        AgentWork, CleanupDecision, CommandOutput, CommandWork, EndDecision, EnvironmentRef, Lease, LeaseCleanup,
         LeaseDeadline, LeaseEndCause, LeaseError, LeaseGrants, LeaseId, LeasePhase, LeaseRefusal,
         LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile, SandboxProfiles, SshDestination,
     },
@@ -386,10 +386,174 @@ fn every_lease_error_explains_itself() {
         LeaseError::EventsAccepted,
         LeaseError::Busy,
         LeaseError::RevisionsExhausted,
+        LeaseError::CommandsFull,
+        LeaseError::DuplicateCommand,
+        LeaseError::UnknownCommand,
     ];
     let messages: std::collections::HashSet<String> =
         errors.iter().map(ToString::to_string).collect();
     assert_eq!(messages.len(), errors.len());
     let error: &dyn std::error::Error = &LeaseError::Busy;
     assert!(error.source().is_none());
+}
+
+fn command(id: &str) -> LeaseId {
+    LeaseId::new(id).unwrap()
+}
+
+#[test]
+fn l14_a_live_lease_admits_a_bounded_number_of_distinct_commands() {
+    let mut lease = live(LeaseDeadline::UntilEnded);
+    assert!(lease.commands().is_empty());
+    for n in 0..Lease::MAX_LIVE_COMMANDS {
+        lease.admit_command(command(&format!("cmd-{n}"))).unwrap();
+    }
+    assert_eq!(
+        lease.admit_command(command("cmd-x")),
+        Err(LeaseError::CommandsFull)
+    );
+    assert_eq!(
+        lease.admit_command(command("cmd-0")),
+        Err(LeaseError::DuplicateCommand)
+    );
+    assert_eq!(
+        lease.admit_command(command("lease-1")),
+        Err(LeaseError::DuplicateCommand)
+    );
+    lease.end_command(&command("cmd-1")).unwrap();
+    assert_eq!(
+        lease.end_command(&command("cmd-1")),
+        Err(LeaseError::UnknownCommand)
+    );
+    lease.admit_command(command("cmd-x")).unwrap();
+    let live: Vec<&str> = lease.commands().iter().map(LeaseId::as_str).collect();
+    assert_eq!(live, ["cmd-0", "cmd-2", "cmd-3", "cmd-x"]);
+}
+
+#[test]
+fn l14_only_a_live_lease_admits_a_command_and_its_end_ends_them_all() {
+    let mut lease = live(LeaseDeadline::UntilEnded);
+    lease.admit_command(command("cmd-0")).unwrap();
+    assert_eq!(lease.end(LeaseEndCause::Stopped), EndDecision::Began);
+    assert_eq!(
+        lease.admit_command(command("cmd-1")),
+        Err(LeaseError::NotLive)
+    );
+    // While it ends, a command it already runs is still running.
+    assert_eq!(lease.commands().len(), 1);
+    lease.report_cleanup(CONFIRMED).unwrap();
+    assert!(lease.commands().is_empty());
+
+    let mut lease = ending(LeaseEndCause::Closed);
+    let mut with_command = live(LeaseDeadline::UntilEnded);
+    with_command.admit_command(command("cmd-0")).unwrap();
+    with_command.end(LeaseEndCause::Closed);
+    with_command.interrupt().unwrap();
+    assert!(with_command.commands().is_empty());
+    lease.interrupt().unwrap();
+    assert_eq!(
+        lease.end_command(&command("cmd-0")),
+        Err(LeaseError::UnknownCommand)
+    );
+}
+
+#[test]
+fn a_command_is_an_argument_vector_bounded_so_its_record_always_fits() {
+    let ok = |argv: &[&str]| argv.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+    let work = CommandWork::new(ok(&["cargo", "test", "-p", "a b"]), Some("crates/x".into()), 1)
+        .unwrap();
+    assert_eq!(work.program(), "cargo");
+    assert_eq!(work.argv().len(), 4);
+    assert_eq!(work.cwd(), Some("crates/x"));
+    assert_eq!(work.timeout_ms(), 1);
+    let work = CommandWork::new(ok(&["ls"]), None, CommandWork::MAX_TIMEOUT_MS).unwrap();
+    assert_eq!(work.cwd(), None);
+    // Newline and tab are what an argument such as a commit message needs.
+    assert!(CommandWork::new(ok(&["git", "commit", "-m", "a\n\tb"]), None, 1).is_ok());
+
+    for argv in [vec![], ok(&[" "]), ok(&["", "x"])] {
+        assert_eq!(
+            CommandWork::new(argv, None, 1),
+            Err(ExecutionError::EmptyValue("command program"))
+        );
+    }
+    assert!(matches!(
+        CommandWork::new(vec!["a".into(); CommandWork::MAX_ARGS + 1], None, 1),
+        Err(ExecutionError::TooManyValues { .. })
+    ));
+    assert!(CommandWork::new(vec!["a".into(); CommandWork::MAX_ARGS], None, 1).is_ok());
+    assert!(matches!(
+        CommandWork::new(ok(&["a", &"b".repeat(CommandWork::MAX_ARGV_BYTES)]), None, 1),
+        Err(ExecutionError::ValueTooLong { .. })
+    ));
+    for bad in ["\u{0}", "\r", "\u{1b}[2J", "\u{85}"] {
+        assert_eq!(
+            CommandWork::new(ok(&["echo", bad]), None, 1),
+            Err(ExecutionError::InvalidCommandArgument),
+            "{bad:?}"
+        );
+    }
+    for cwd in ["", "/etc", "../up", "a/../b", "./a", "a//b", "a/", "a\nb"] {
+        assert_eq!(
+            CommandWork::new(ok(&["ls"]), Some(cwd.into()), 1),
+            Err(ExecutionError::InvalidPath),
+            "{cwd:?}"
+        );
+    }
+    assert!(matches!(
+        CommandWork::new(ok(&["ls"]), Some("a".repeat(CommandWork::MAX_CWD_BYTES + 1)), 1),
+        Err(ExecutionError::ValueTooLong { .. })
+    ));
+    for timeout in [0, CommandWork::MAX_TIMEOUT_MS + 1] {
+        assert_eq!(
+            CommandWork::new(ok(&["ls"]), None, timeout),
+            Err(ExecutionError::InvalidCommandTimeout)
+        );
+    }
+    assert!(CommandWork::DEFAULT_TIMEOUT_MS <= CommandWork::MAX_TIMEOUT_MS);
+}
+
+#[test]
+fn a_command_output_keeps_the_last_of_each_stream_as_showable_text() {
+    let output = CommandOutput::new(10, 20, 3, "ok\n\tdone", "warn\r\u{1b}[0m");
+    assert_eq!(
+        (output.stdout_bytes(), output.stderr_bytes(), output.dropped_bytes()),
+        (10, 20, 3)
+    );
+    assert_eq!(output.stdout_tail(), "ok\n\tdone");
+    assert_eq!(output.stderr_tail(), "warn\u{fffd}\u{fffd}[0m");
+
+    let long = format!("{}{}", "x".repeat(10), "é".repeat(CommandOutput::MAX_TAIL_BYTES));
+    let output = CommandOutput::new(0, 0, 0, &long, "");
+    assert!(output.stdout_tail().len() <= CommandOutput::MAX_TAIL_BYTES);
+    assert!(output.stdout_tail().chars().all(|c| c == 'é'));
+    assert_eq!(output.stdout_tail().len(), CommandOutput::MAX_TAIL_BYTES);
+    // A cut that would split a character starts after it instead.
+    let odd = format!("ab{}x", "é".repeat(CommandOutput::MAX_TAIL_BYTES / 2));
+    let output = CommandOutput::new(0, 0, 0, "", &odd);
+    assert_eq!(output.stderr_tail().len(), CommandOutput::MAX_TAIL_BYTES - 1);
+    assert!(output.stderr_tail().ends_with("éx"));
+}
+
+#[test]
+fn a_command_sandbox_is_only_ever_granted_by_an_environment_that_holds_it() {
+    assert!(SandboxProfiles::UNENCLOSED.contains(SandboxProfile::None));
+    assert!(!SandboxProfiles::UNENCLOSED.contains(SandboxProfile::HarnessDefault));
+    assert!(!SandboxProfiles::HARNESS_DEFAULT.contains(SandboxProfile::None));
+    assert_eq!(
+        SandboxProfiles::UNENCLOSED.admit(SandboxProfile::None),
+        Ok(SandboxProfile::None)
+    );
+    assert_eq!(
+        SandboxProfiles::UNENCLOSED.admit(SandboxProfile::HarnessDefault),
+        Err(LeaseRefusal::SandboxUnavailable)
+    );
+    assert_eq!(
+        SandboxProfiles::UNENCLOSED.intersect(SandboxProfiles::HARNESS_DEFAULT),
+        SandboxProfiles::NONE
+    );
+    assert_eq!(
+        SandboxProfiles::UNENCLOSED.intersect(SandboxProfiles::UNENCLOSED),
+        SandboxProfiles::UNENCLOSED
+    );
 }

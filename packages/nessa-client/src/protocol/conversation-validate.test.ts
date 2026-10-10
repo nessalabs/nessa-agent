@@ -802,12 +802,21 @@ describe("the view's lease", () => {
         droppedEvents: 0,
       },
       {
+        state: "live",
+        revision: 1,
+        environment: "here",
+        sandbox: "none",
+        droppedEvents: 0,
+        commands: 4,
+      },
+      {
         state: "ending",
         revision: 2,
         environment: "here",
         sandbox: "harness_default",
         cause: "closed",
         droppedEvents: 0,
+        commands: 1,
       },
       {
         state: "ended",
@@ -881,6 +890,9 @@ describe("the view's lease", () => {
       [{ state: "live" }, /lease droppedEvents/],
       [{ ...live, droppedEvents: -1 }, /lease droppedEvents/],
       [{ ...live, droppedEvents: Number.MAX_SAFE_INTEGER + 1 }, /lease droppedEvents/],
+      [{ ...live, commands: 0 }, /lease commands/],
+      [{ ...live, commands: 5 }, /lease commands/],
+      [{ ...live, commands: 1.5 }, /lease commands/],
       [null, /Invalid conversation response/],
     ]
     for (const [lease, error] of refused)
@@ -896,6 +908,8 @@ describe("the view's lease", () => {
       [{ ...live, cause: "closed" }, /lease cause/],
       [{ ...live, cleanup: "confirmed" }, /lease cleanup/],
       [{ ...live, droppedEvents: 1 }, /lease droppedEvents/],
+      [{ ...ended, commands: 1 }, /lease commands/],
+      [{ ...refusedLease, commands: 1 }, /lease commands/],
       [unnumbered, /lease revision/],
       [{ ...live, state: "ending" }, /lease cause/],
       [

@@ -426,6 +426,9 @@ fn kinds(lease: &CurrentLease) -> Vec<&'static str> {
             LeaseRecord::CleanupReported { .. } => "cleanup_reported",
             LeaseRecord::EventDropped { .. } => "event_dropped",
             LeaseRecord::Unreadable { .. } => "unreadable",
+            LeaseRecord::CommandIssued { .. } => "command_issued",
+            LeaseRecord::CommandRefused { .. } => "command_refused",
+            LeaseRecord::CommandEnded { .. } => "command_ended",
         })
         .collect()
 }

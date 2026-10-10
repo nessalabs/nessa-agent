@@ -28,10 +28,10 @@ use crate::mcp_authorization::infrastructure::{
     TransportAuthorization,
 };
 use crate::mcp_servers::{
-    application::{McpServerSettings, Unfinished},
+    application::{BuiltInServer, McpServerSettings, Unfinished},
     domain::{relay_arguments, ConfigurationKey},
     infrastructure::{
-        bind, launch_digest, BoundRelay, ConfigCheck, ConfigFiles, ConfigJsonStore,
+        bind, built_in_digest, launch_digest, BoundRelay, ConfigCheck, ConfigFiles, ConfigJsonStore,
         ConversationGrants, DurableMcpServerAudit, LaunchSettings, LiveMcpServers,
         McpServerInspector, OsConfigFiles, OsTokens, Relay, ResourceTicketStore, TicketEvent,
         TokenSource,
@@ -208,17 +208,26 @@ pub(super) fn stand_ins(
     gateway: &str,
     socket: &str,
     key: &ConfigurationKey,
+    built_in: Option<&dyn BuiltInServer>,
 ) -> Vec<StdioMcpServer> {
+    // The built-in server takes its name: a configured one of the same name
+    // is not offered beside it.
+    let taken = built_in.map(BuiltInServer::name);
     let mut stand_ins: Vec<StdioMcpServer> = servers
         .configured()
         .iter()
+        .filter(|launch| Some(launch.server.name.as_str()) != taken)
         .map(|launch| StdioMcpServer {
             name: launch.server.name.clone(),
             command: gateway.into(),
             args: relay_arguments(socket, &launch.server.name, &launch_digest(key, launch)),
         })
         .collect();
-    for remote in servers.configured_remotes() {
+    for remote in servers
+        .configured_remotes()
+        .into_iter()
+        .filter(|remote| Some(remote.name()) != taken)
+    {
         stand_ins.push(StdioMcpServer {
             name: remote.name().to_owned(),
             command: gateway.into(),
@@ -233,6 +242,13 @@ pub(super) fn stand_ins(
             ),
         });
     }
+    if let Some(server) = built_in {
+        stand_ins.push(StdioMcpServer {
+            name: server.name().to_owned(),
+            command: gateway.into(),
+            args: relay_arguments(socket, server.name(), &built_in_digest(key, server)),
+        });
+    }
     stand_ins
 }
 
@@ -244,6 +260,8 @@ pub(super) struct StandIns {
     gateway: String,
     socket: String,
     key: ConfigurationKey,
+    /// The server the gateway serves itself, offered beside the configured.
+    built_in: Option<Arc<dyn BuiltInServer>>,
 }
 impl StandIns {
     /// Stand-ins for `servers`, run by `gateway` over `socket`, their digests
@@ -261,12 +279,25 @@ impl StandIns {
             gateway: gateway.to_str()?.to_owned(),
             socket: socket.to_str()?.to_owned(),
             key,
+            built_in: None,
         })
+    }
+
+    /// These stand-ins, with `server`'s beside them.
+    pub(super) fn with_built_in(mut self, server: Option<Arc<dyn BuiltInServer>>) -> Self {
+        self.built_in = server;
+        self
     }
 }
 impl McpServerSource for StandIns {
     fn servers(&self) -> Vec<StdioMcpServer> {
-        stand_ins(&self.servers, &self.gateway, &self.socket, &self.key)
+        stand_ins(
+            &self.servers,
+            &self.gateway,
+            &self.socket,
+            &self.key,
+            self.built_in.as_deref(),
+        )
     }
 }
 
@@ -299,6 +330,7 @@ pub(super) async fn compose(
     gateway: &Path,
     environment: BTreeMap<OsString, OsString>,
     bundled: bool,
+    built_in: Option<Arc<dyn BuiltInServer>>,
 ) -> Result<Option<McpComposition>, RunError> {
     let configured = std::mem::take(&mut agents.mcp_servers);
     let launches = LaunchSettings::new(&configured, bundled, agents.workspace.clone(), environment);
@@ -324,7 +356,9 @@ pub(super) async fn compose(
         );
         return Ok(None);
     };
-    let Some(stand_ins) = StandIns::new(servers.clone(), gateway, socket, key.clone()) else {
+    let Some(stand_ins) = StandIns::new(servers.clone(), gateway, socket, key.clone())
+        .map(|stand_ins| stand_ins.with_built_in(built_in.clone()))
+    else {
         tracing::error!(socket = %socket.display(), gateway = %gateway.display(), "MCP servers are off this run: the gateway's or the relay socket's path is not UTF-8");
         return Ok(None);
     };
@@ -340,7 +374,12 @@ pub(super) async fn compose(
     agents.stand_ins = StandInSessions::granted_by(Arc::new(grants.clone()));
     let (ticket_ends, ticket_events) = unbounded_channel();
     Ok(Some(McpComposition {
-        relay: Arc::new(Relay::new(servers.clone(), grants, key.clone())),
+        relay: Arc::new(match built_in {
+            Some(server) => {
+                Relay::new(servers.clone(), grants, key.clone()).with_built_in(server)
+            }
+            None => Relay::new(servers.clone(), grants, key.clone()),
+        }),
         key,
         servers,
         launches,

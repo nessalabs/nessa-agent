@@ -76,6 +76,9 @@ regex = "1"
 [target.'cfg(unix)'.dependencies]
 # Opening the gateway log without following a link where it should be.
 libc = "0.2"
+# `nessa env serve` runs command leases' commands in process scopes of their
+# own, as the Nessa MCP shell tool does; the same pinned revision.
+shepherd = { git = "https://github.com/nessalabs/shepherd", rev = "26bd7cb8843c1bc6c3eccfbbae8be926f8c49103" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Nessa-owned agent API keys live in the login keychain. This crate is already

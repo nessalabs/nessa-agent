@@ -8,6 +8,7 @@
 //! becomes a launch), the inspector that starts one server once and looks at
 //! it, and the durable audit of each change and inspection.
 mod apps;
+mod built_in;
 mod config_store;
 mod grants;
 mod http_client;
@@ -41,8 +42,9 @@ pub use inspector::McpServerInspector;
 pub use live_set::{sdk_server, LaunchSettings, LiveMcpServers};
 #[cfg(unix)]
 pub use relay::{bind, BoundRelay};
+pub use built_in::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_BYTES};
 pub use relay::{
-    launch_digest, read_line, write_line, Answer, Hello, Refusal, Relay, ANSWER_TIMEOUT,
+    built_in_digest, launch_digest, read_line, write_line, Answer, Hello, Refusal, Relay, ANSWER_TIMEOUT,
     HELLO_TIMEOUT, MAX_HELLO_BYTES,
 };
 #[cfg(unix)]

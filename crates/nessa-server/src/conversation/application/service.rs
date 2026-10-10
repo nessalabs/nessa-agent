@@ -5294,6 +5294,11 @@ fn awaits_images(snapshot: Option<&SessionSnapshot>) -> bool {
     })
 }
 
+mod environment_tools;
+pub use environment_tools::{
+    CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE,
+};
+
 mod app_calls;
 pub use app_calls::{
     McpAppCall, McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource, MAX_APP_CALLS,

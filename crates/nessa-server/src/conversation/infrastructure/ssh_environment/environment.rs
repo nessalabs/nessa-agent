@@ -13,6 +13,10 @@
 //! LiveLease::close ──▶ SshHold::end ──▶ End ──▶ Ended{cleanup}
 //!   connection lost? ──▶ a new connection ──▶ Account ──▶ what the host recorded
 //! account(lease) ──▶ Account ──▶ Accounted{cleanup}
+//! a command: grant ──▶ link.grant_command ──▶ SshCommand
+//!   SshCommand::run ──▶ Run ──▶ Ran{end, output, cleanup}
+//!   stop said ──▶ End (not waited for) ──▶ Ran{Stopped} ──▶ Ended
+//!   no Ran within its timeout and COMMAND_STOP_WAIT ──▶ unanswered
 //! ```
 //!
 //! Arrows are calls and frames, in order. The binding — the agent protocol,
@@ -24,13 +28,15 @@
 use super::{
     audit::EnvironmentAudit,
     connector::LeaseConnector,
-    link::{HostLink, StartError},
+    link::{AdmissionRefused, CommandAnswer, HostLink, StartError},
 };
 use crate::conversation::application::{
-    Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, LeaseHold,
-    LeaseRelease,
+    CommandEnvironment, CommandHold, CommandResult, Environment, EnvironmentDeclaration,
+    EnvironmentFuture, EnvironmentLease, LeaseHold, LeaseRelease,
 };
-use nessa_protocol::lease::{Cleanup, KEEPALIVE_INTERVAL};
+use nessa_protocol::lease::{
+    Cleanup, CommandEnd, GrantRefusal, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL,
+};
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     providers::{
@@ -39,8 +45,8 @@ use nessa_sdk::application::agent_execution::{
     },
 };
 use nessa_sdk::domain::agent_execution::leases::{
-    EnvironmentRef, LeaseCleanup, LeaseEndCause, LeaseId, LeaseRefusal, LeaseTerms, LeaseWork,
-    SandboxProfiles, SshDestination,
+    CommandExit, CommandRefusal, CommandWork, EnvironmentRef, LeaseCleanup, LeaseEndCause,
+    LeaseId, LeaseRefusal, LeaseTerms, LeaseWork, SandboxProfiles, SshDestination,
 };
 use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 use tokio::sync::{watch, Mutex};
@@ -185,6 +191,145 @@ impl Environment for SshEnvironment {
 
     fn account<'a>(&'a self, lease: &'a LeaseId) -> EnvironmentFuture<'a, Option<LeaseCleanup>> {
         Box::pin(self.inner.account(lease.as_str()))
+    }
+
+    fn commands(&self) -> Option<&dyn CommandEnvironment> {
+        Some(self)
+    }
+}
+
+impl CommandEnvironment for SshEnvironment {
+    fn reachable(&self) -> Option<bool> {
+        let held = self.inner.link.try_lock().ok()?;
+        held.as_ref()
+            .is_some_and(|link| link.is_open())
+            .then_some(true)
+    }
+
+    fn grant<'a>(
+        &'a self,
+        lease: &'a LeaseId,
+        command: &'a CommandWork,
+    ) -> EnvironmentFuture<'a, Result<Box<dyn CommandHold>, CommandRefusal>> {
+        Box::pin(async move {
+            let link = self
+                .inner
+                .link()
+                .await
+                .map_err(CommandRefusal::Environment)?;
+            link.grant_command(
+                lease.as_str(),
+                command.argv().iter().map(|argument| argument.to_string()).collect(),
+                command.cwd().map(Into::into),
+                command.timeout_ms(),
+                self.inner.timings.answer,
+            )
+            .await
+            .map_err(|refused| command_refusal(&self.inner.host, refused))?;
+            Ok(Box::new(SshCommand {
+                inner: self.inner.clone(),
+                link,
+                lease: lease.as_str().into(),
+                timeout: Duration::from_millis(command.timeout_ms()),
+            }) as Box<dyn CommandHold>)
+        })
+    }
+}
+
+/// A host's refusal of a command lease, as the gateway's.
+fn command_refusal(host: &SshDestination, refused: AdmissionRefused) -> CommandRefusal {
+    match refused {
+        AdmissionRefused::Host(GrantRefusal::CommandsUnavailable) => {
+            CommandRefusal::CommandsUnavailable
+        }
+        // The gateway checked it against the same bounds: a host that
+        // disagrees has another reading of its workspace, so it is not run.
+        AdmissionRefused::Host(GrantRefusal::InvalidCommand) => {
+            tracing::warn!(host = host.as_str(), "the host refused a command the gateway admitted");
+            CommandRefusal::CommandDenied
+        }
+        AdmissionRefused::Host(
+            GrantRefusal::AgentUnavailable | GrantRefusal::Duplicate | GrantRefusal::AuditUnavailable,
+        )
+        | AdmissionRefused::Unreachable => {
+            CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable)
+        }
+    }
+}
+
+/// The gateway's side of one command lease on a host. Dropped, it ends the
+/// lease there unless its run already did.
+struct SshCommand {
+    inner: Arc<Inner>,
+    link: Arc<HostLink>,
+    lease: String,
+    timeout: Duration,
+}
+
+impl CommandHold for SshCommand {
+    fn run(
+        self: Box<Self>,
+        mut stop: watch::Receiver<Option<LeaseEndCause>>,
+    ) -> EnvironmentFuture<'static, CommandResult> {
+        Box::pin(async move {
+            // The host answers within the command's timeout and what stopping
+            // it takes; a stop asked shortens nothing the host already owes.
+            let bound = self.timeout + COMMAND_STOP_WAIT + self.inner.timings.answer;
+            let mut stopped = None;
+            let answer = tokio::time::timeout(bound, async {
+                let run = self.link.run(&self.lease);
+                tokio::pin!(run);
+                loop {
+                    tokio::select! {
+                        answer = &mut run => break answer,
+                        Ok(cause) = stop.wait_for(Option::is_some), if stopped.is_none() => {
+                            stopped = *cause;
+                            // Its End stops it; its Ran still answers.
+                            self.link.abandon_lease(&self.lease);
+                        }
+                    }
+                }
+            })
+            .await
+            .ok()
+            .flatten();
+            match answer {
+                Some(answer) => command_result(answer, stopped),
+                None => CommandResult {
+                    cleanup: self.inner.account(&self.lease).await,
+                    ..CommandResult::unanswered()
+                },
+            }
+        })
+    }
+}
+
+impl Drop for SshCommand {
+    fn drop(&mut self) {
+        self.link.abandon_lease(&self.lease);
+        self.link.forget(&self.lease);
+    }
+}
+
+/// What a host's `Ran` says, as the command's result. A stop the gateway
+/// asked is the cause it was asked for.
+fn command_result(answer: CommandAnswer, stopped: Option<LeaseEndCause>) -> CommandResult {
+    let exit = match answer.end {
+        CommandEnd::Exited { code } => CommandExit::Exited { code },
+        CommandEnd::Signalled { signal } => CommandExit::Signalled { signal },
+        CommandEnd::TimedOut => CommandExit::TimedOut,
+        CommandEnd::Stopped => CommandExit::Stopped {
+            cause: stopped.unwrap_or(LeaseEndCause::Lost),
+        },
+        CommandEnd::NotStarted => CommandExit::NotStarted,
+        CommandEnd::Unknown => CommandExit::Unanswered,
+    };
+    CommandResult {
+        exit,
+        stdout: answer.stdout,
+        stderr: answer.stderr,
+        dropped_bytes: answer.dropped_bytes,
+        cleanup: evidence(answer.cleanup),
     }
 }
 

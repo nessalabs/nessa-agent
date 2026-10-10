@@ -232,6 +232,7 @@ impl LeaseConnector for Connector {
                     VERSION,
                     LEASE_PROTOCOL,
                     self.launcher.clone(),
+                    None,
                     self.ledger.clone(),
                     ServeTimings {
                         grace: Duration::from_millis(10),

@@ -530,3 +530,31 @@ pub trait ServerInspector: Send + Sync {
         launch: LaunchBegun,
     ) -> InspectFuture<'_>;
 }
+
+/// One tool call a [`BuiltInServer`] answers, as MCP's `CallToolResult`.
+pub type BuiltInFuture = Pin<Box<dyn Future<Output = serde_json::Value> + Send + 'static>>;
+
+/// A tool server the gateway serves itself, in its own process, to an open
+/// conversation's harness through the relay, as it relays a configured
+/// server's (issue #700). Its stand-in is listed beside the configured
+/// servers' and admitted the same way; its tools run here.
+pub trait BuiltInServer: Send + Sync {
+    /// Its name, as its stand-in names it to the harness.
+    fn name(&self) -> &str;
+    /// What its stand-in's digest is taken over: anything that changes the
+    /// tools it lists or what they may do, so a stand-in handed out before a
+    /// change is refused.
+    fn configuration(&self) -> Vec<String>;
+    /// Its tools, as `tools/list` lists them.
+    fn tools(&self) -> Vec<serde_json::Value>;
+    /// Call `tool` with `arguments` for the open of SDK session `session`,
+    /// as tool call `call`. `stop` turns true once its caller is gone.
+    fn call(
+        &self,
+        session: &nessa_sdk::domain::agent_execution::sessions::SessionId,
+        call: String,
+        tool: String,
+        arguments: serde_json::Value,
+        stop: watch::Receiver<bool>,
+    ) -> BuiltInFuture;
+}

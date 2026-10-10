@@ -14,7 +14,7 @@ mod ports;
 mod settings;
 
 pub use ports::{
-    AuditUnavailable, AuditedServer, InspectBounds, InspectCut, InspectFailure, InspectFuture,
+    AuditUnavailable, AuditedServer, BuiltInFuture, BuiltInServer, InspectBounds, InspectCut, InspectFailure, InspectFuture,
     InspectStop, InspectedTool, InspectedUi, Inspection, LaunchBegun, LiveServerSet, LiveSetKept,
     LiveSetOutcome, McpServerAction, McpServerAudit, McpServerAuditPhase, McpServerAuditRecord,
     McpServerCause, McpServerChangeRequest, McpServerInitiator, McpServerOutcome, McpServerStore,

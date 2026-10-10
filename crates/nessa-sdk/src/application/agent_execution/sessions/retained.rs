@@ -10,7 +10,7 @@ use crate::{
     },
     domain::agent_execution::{
         executions::{ExecutionId, ExecutionOutcome, QueueMutation},
-        leases::{LeaseTerms, LeaseWork},
+        leases::{CommandTerms, EnvironmentRef, LeaseTerms, LeaseWork},
         prompts::{AppModelContext, MessageSender},
     },
 };
@@ -101,8 +101,51 @@ fn lease_record(record: &LeaseRecord) -> usize {
         LeaseRecord::EventDropped { lease, turn, .. } => {
             lease.as_str().len().saturating_add(turn.as_str().len())
         }
+        LeaseRecord::CommandIssued {
+            lease,
+            parent,
+            terms,
+            actor: who,
+        }
+        | LeaseRecord::CommandRefused {
+            lease,
+            parent,
+            terms,
+            actor: who,
+            ..
+        } => lease
+            .as_str()
+            .len()
+            .saturating_add(parent.as_str().len())
+            .saturating_add(command_terms(terms))
+            .saturating_add(actor(who)),
+        LeaseRecord::CommandEnded {
+            lease,
+            parent,
+            output,
+            ..
+        } => lease
+            .as_str()
+            .len()
+            .saturating_add(parent.as_str().len())
+            .saturating_add(output.stdout_tail().len())
+            .saturating_add(output.stderr_tail().len()),
         LeaseRecord::Unreadable { kind, body } => kind.len().saturating_add(body.len()),
     })
+}
+
+fn command_terms(terms: &CommandTerms) -> usize {
+    let environment = match &terms.environment {
+        EnvironmentRef::Here => 0,
+        EnvironmentRef::Ssh(host) => host.as_str().len(),
+    };
+    terms
+        .command
+        .argv()
+        .iter()
+        .map(|argument| argument.len())
+        .fold(environment, usize::saturating_add)
+        .saturating_add(terms.command.cwd().map_or(0, str::len))
 }
 
 // Header and outer slots have one lifetime, separate from element payloads.

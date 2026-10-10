@@ -7,9 +7,12 @@
 //! the domain decides which progress is possible and which request decided it.
 //! The conversation's identity, its summary and the catalogue stream identity
 //! are `nessa_protocol::conversation::domain`, read by gateway and device alike.
+//! Which commands its agent may run where is its [`CommandPolicy`].
+mod command_policy;
 mod entities;
 mod receiver;
 mod value_objects;
+pub use command_policy::CommandPolicy;
 pub use entities::{Conversation, ConversationRefusal};
 pub use receiver::{
     PairedReceiver, ReceiverBinding, ReceiverInitiator, ReceiverIntent, ReceiverTransition,
