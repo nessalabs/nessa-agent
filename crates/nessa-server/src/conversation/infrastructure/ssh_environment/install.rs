@@ -17,7 +17,8 @@
 //!              ──▶ refused version ──▶ InstallRefused ──▶ environment_version_mismatch
 //!              ──▶ no answer ──▶ probe again: present ──▶ InstallFound ──▶ Installed
 //!                                           (unrecorded ──▶ environment_install_failed)
-//!                                           otherwise ──▶ InstallRefused{unanswered}
+//!                                           otherwise ──▶ InstallUnsettled (its script
+//!                                                         may yet place the copy)
 //!                                                         ──▶ environment_unreachable
 //! ```
 //!
@@ -358,11 +359,24 @@ impl HostInstaller {
                 Some(step),
                 LeaseRefusal::EnvironmentInstallFailed,
             ),
-            None => (
-                InstallRefusal::Unanswered,
-                None,
-                LeaseRefusal::EnvironmentUnreachable,
-            ),
+            // Not refused: the host may still be running the upload and
+            // place the copy after this, so the record says it is unsettled.
+            None => {
+                let unsettled = EnvironmentEvent::InstallUnsettled {
+                    host: name.into(),
+                    lease: lease.into(),
+                    protocol: self.protocol.into(),
+                    digest,
+                };
+                tracing::warn!(host = name, lease, "the upload's outcome is not known");
+                return Err(match audit.record(&unsettled) {
+                    Ok(()) => LeaseRefusal::EnvironmentUnreachable,
+                    Err(error) => {
+                        tracing::error!(%error, "an unsettled install could not be recorded");
+                        LeaseRefusal::EnvironmentInstallFailed
+                    }
+                });
+            }
         };
         Err(refused(audit, name, lease, reason, seen, refusal))
     }

@@ -73,6 +73,17 @@ pub(crate) enum EnvironmentEvent {
         lease: String,
         protocol: String,
     },
+    /// The upload's answer did not come, or was not one it gives, and the
+    /// probe after it found no copy. Its script may still be running on the
+    /// host, and may yet place a copy it verified, which a later lease then
+    /// serves (recorded `Connected`): so this says neither installed nor
+    /// refused.
+    InstallUnsettled {
+        host: String,
+        lease: String,
+        protocol: String,
+        digest: String,
+    },
     /// Nothing was installed, and why; `seen` is what the host said, where
     /// that is the reason (its platform, the digest it saw, the protocol the
     /// copy spoke).
@@ -102,8 +113,6 @@ pub(crate) enum InstallRefusal {
     DigestTool,
     /// A step on the host failed: a directory, a file, its mode, the rename.
     Failed,
-    /// The host's answer did not come, or was not one of these.
-    Unanswered,
 }
 
 /// Where those records go.

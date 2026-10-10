@@ -1696,11 +1696,6 @@ async fn an_install_the_host_refuses_is_refused_with_its_reason() {
             LeaseRefusal::EnvironmentInstallFailed,
             (InstallRefusal::Failed, Some("publish")),
         ),
-        (
-            "Connection closed by remote host",
-            LeaseRefusal::EnvironmentUnreachable,
-            (InstallRefusal::Unanswered, None),
-        ),
     ];
     for (answer, refusal, (reason, seen)) in cases {
         let connector = Connector::new(Reach::Silent);
@@ -1887,6 +1882,42 @@ async fn an_executable_replaced_since_it_was_measured_is_not_sent() {
         audit.events(),
         [refused(&lease, InstallRefusal::Source, None)]
     );
+}
+
+/// An upload whose answer is lost, and whose copy the probe then does not
+/// find, is not recorded refused: the host may still be running it and
+/// place the copy later, so it is recorded unsettled, and the lease is
+/// refused as unreachable.
+#[tokio::test]
+async fn an_upload_neither_answered_nor_found_is_unsettled_not_refused() {
+    for answer in ["Connection closed by remote host", ""] {
+        let connector = Connector::new(Reach::Silent);
+        let shell = Shell::new("absent Linux x86_64 gnu", answer, connector.clone());
+        let audit = Arc::new(Audit::default());
+        let environment = installing(connector.clone(), shell.clone(), audit.clone());
+        let lease = lease();
+        assert_eq!(
+            environment
+                .open(&lease, &terms("claude"), binding_only())
+                .await
+                .err(),
+            Some(LeaseRefusal::EnvironmentUnreachable),
+            "{answer:?}"
+        );
+        assert_eq!(shell.runs().len(), 3, "probe, upload, probe");
+        let events = audit.events();
+        assert_eq!(events.len(), 2, "{answer:?}");
+        assert!(matches!(events[0], EnvironmentEvent::InstallStarted { .. }));
+        assert_eq!(
+            events[1],
+            EnvironmentEvent::InstallUnsettled {
+                host: "devbox".into(),
+                lease: lease.as_str().into(),
+                protocol: LEASE_PROTOCOL.into(),
+                digest: this_digest(),
+            }
+        );
+    }
 }
 
 /// An upload whose answer is lost after the host put the copy in place is
